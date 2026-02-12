@@ -8,10 +8,10 @@ webmail app that behaves like a native client.
 ```mermaid
 flowchart LR
     subgraph Stack Principles
-        A["SMALL RUNTIME / BIG CAPABILITY\nPush heavy work to workers.\nLoad features on demand."]
-        B["LOCAL-FIRST BY DEFAULT\nIndexedDB is the source of truth.\nThe API only supplies deltas."]
-        C["DETERMINISTIC UPDATES\nStatic shell. SW controls updates.\nNo surprises mid-session."]
-        D["SECURITY AS BASELINE\nSanitize HTML, encrypt secrets,\nzero third-party tracking."]
+        A["SMALL RUNTIME / BIG CAPABILITY<br/>Push heavy work to workers.<br/>Load features on demand."]
+        B["LOCAL-FIRST BY DEFAULT<br/>IndexedDB is the source of truth.<br/>The API only supplies deltas."]
+        C["DETERMINISTIC UPDATES<br/>Static shell. SW controls updates.<br/>No surprises mid-session."]
+        D["SECURITY AS BASELINE<br/>Sanitize HTML, encrypt secrets,<br/>zero third-party tracking."]
     end
 ```
 
@@ -19,7 +19,7 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    A["Svelte 5\nCompile-time reactivity\nwith runes"] --> B["Vite 5\nFast dev HMR + build\nVendor split"] --> C["Workbox 7\nPrecache app shell\nSW updates"]
+    A["Svelte 5<br/>Compile-time reactivity<br/>with runes"] --> B["Vite 5<br/>Fast dev HMR + build<br/>Vendor split"] --> C["Workbox 7<br/>Precache app shell<br/>SW updates"]
 ```
 
 | Layer       | Tool         | Version           | Why                                                                        |
@@ -38,9 +38,9 @@ flowchart LR
 ```mermaid
 flowchart LR
     subgraph DATA LAYER
-        A["Dexie 4\nIndexedDB wrapper\n13 tables, per-account"]
-        B["FlexSearch\nFull-text search\nindex, per-account"]
-        C["Mutation Queue\nOffline actions\nmeta table"]
+        A["Dexie 4<br/>IndexedDB wrapper<br/>13 tables, per-account"]
+        B["FlexSearch<br/>Full-text search<br/>index, per-account"]
+        C["Mutation Queue<br/>Offline actions<br/>meta table"]
     end
 ```
 
@@ -56,9 +56,9 @@ flowchart LR
 ```mermaid
 flowchart TD
     subgraph Workers & Concurrency
-        MT["Main Thread\nUI + Stores"] --> SW["sync.worker\nAPI fetch, PostalMime, OpenPGP"]
-        MT --> DW["db.worker\nDexie CRUD, Schema"]
-        MT --> SEW["search.worker\nFlexSearch, Indexing, Queries"]
+        MT["Main Thread<br/>UI + Stores"] --> SW["sync.worker<br/>API fetch, PostalMime, OpenPGP"]
+        MT --> DW["db.worker<br/>Dexie CRUD, Schema"]
+        MT --> SEW["search.worker<br/>FlexSearch, Indexing, Queries"]
         SVC["+ Service Worker (Workbox) for asset caching"]
     end
 ```
@@ -84,10 +84,10 @@ contention, no UI stalls.
 ```mermaid
 flowchart LR
     subgraph SECURITY LAYERS
-        A["DOMPurify\nHTML email sanitized\nbefore display"]
-        B["Sandboxed Iframe\nEmail body rendered\nisolated"]
-        C["OpenPGP\nEnd-to-end encryption\nin sync worker"]
-        D["+ Local-first storage (no server-side UI state)\n+ Static hosting (immutable, no server-rendered HTML)\n+ Zero third-party tracking\n+ CSP headers via Cloudflare Worker"]
+        A["DOMPurify<br/>HTML email sanitized<br/>before display"]
+        B["Sandboxed Iframe<br/>Email body rendered<br/>isolated"]
+        C["OpenPGP<br/>End-to-end encryption<br/>in sync worker"]
+        D["+ Local-first storage (no server-side UI state)<br/>+ Static hosting (immutable, no server-rendered HTML)<br/>+ Zero third-party tracking<br/>+ CSP headers via Cloudflare Worker"]
     end
 ```
 
@@ -109,8 +109,8 @@ flowchart LR
 flowchart TD
     subgraph PERFORMANCE TARGETS
         direction TB
-        T["Lighthouse: 90+\nFirst Paint: < 1s\nCached Boot: < 200ms\nMain Thread Work: Minimal\nBundle (gzipped): Chunked"]
-        H["HOW WE HIT THEM:\nSvelte compiles away the framework\nVendor chunk: svelte, dexie, ky, openpgp, tiptap\nLazy routes: calendar, contacts, compose\nVirtual scrolling for message lists\nWorkers for all CPU-heavy operations"]
+        T["Lighthouse: 90+<br/>First Paint: < 1s<br/>Cached Boot: < 200ms<br/>Main Thread Work: Minimal<br/>Bundle (gzipped): Chunked"]
+        H["HOW WE HIT THEM:<br/>Svelte compiles away the framework<br/>Vendor chunk: svelte, dexie, ky, openpgp, tiptap<br/>Lazy routes: calendar, contacts, compose<br/>Virtual scrolling for message lists<br/>Workers for all CPU-heavy operations"]
     end
 ```
 

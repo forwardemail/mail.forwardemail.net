@@ -24,8 +24,8 @@ flowchart LR
     style Traditional fill:#f9f9f9,stroke:#999
     style ForwardEmail fill:#e6f3ff,stroke:#369
 
-    T1["Every click = network round-trip\nOffline = blank page\nServer holds all state"]
-    T2["App shell cached at edge + locally\nMail state lives in IndexedDB\nOffline = fully functional\nServer only provides deltas"]
+    T1["Every click = network round-trip<br/>Offline = blank page<br/>Server holds all state"]
+    T2["App shell cached at edge + locally<br/>Mail state lives in IndexedDB<br/>Offline = fully functional<br/>Server only provides deltas"]
 
     Traditional --- T1
     ForwardEmail --- T2
@@ -41,10 +41,10 @@ These are the constraints we refuse to break:
 ```mermaid
 flowchart TD
     NS["Architectural North Stars"]
-    P1["1. PWA Shell from CDN\nHTML/JS/CSS are static, versioned,\ncached at the edge"]
-    P2["2. IndexedDB as Product Memory\nMailbox state, drafts, settings, and\nsearch indexes live locally.\nIndexedDB is not a cache — it IS the product"]
-    P3["3. Workers over Main Thread\nParsing, sync, and indexing never block the UI.\nThree dedicated workers handle all heavy lifting"]
-    P4["4. API as Data Pipe\nThe server provides deltas and validation,\nnever UI state. The client decides what to show"]
+    P1["1. PWA Shell from CDN<br/>HTML/JS/CSS are static, versioned,<br/>cached at the edge"]
+    P2["2. IndexedDB as Product Memory<br/>Mailbox state, drafts, settings, and<br/>search indexes live locally.<br/>IndexedDB is not a cache — it IS the product"]
+    P3["3. Workers over Main Thread<br/>Parsing, sync, and indexing never block the UI.<br/>Three dedicated workers handle all heavy lifting"]
+    P4["4. API as Data Pipe<br/>The server provides deltas and validation,<br/>never UI state. The client decides what to show"]
 
     NS --> P1
     NS --> P2
@@ -64,12 +64,12 @@ From cold start to rendered inbox in under 200ms (cached):
 
 ```mermaid
 flowchart TD
-    CDN["CDN / Edge (Cloudflare R2)\nindex.html | assets/*.js | assets/*.css"]
-    SW["Service Worker\nWorkbox precache"]
+    CDN["CDN / Edge (Cloudflare R2)<br/>index.html | assets/*.js | assets/*.css"]
+    SW["Service Worker<br/>Workbox precache"]
     CACHE_NOTE["(2) Cache shell for next visit"]
-    UI["Main UI Thread\nSvelte 5 components + stores\nKeyboard shortcuts + routing\nOrchestrates workers"]
-    IDB["IndexedDB (Dexie 4)\n13 tables, per-account"]
-    API["Forward Email API\napi.forwardemail.net\nREST + JSON, Data only"]
+    UI["Main UI Thread<br/>Svelte 5 components + stores<br/>Keyboard shortcuts + routing<br/>Orchestrates workers"]
+    IDB["IndexedDB (Dexie 4)<br/>13 tables, per-account"]
+    API["Forward Email API<br/>api.forwardemail.net<br/>REST + JSON, Data only"]
     MERGE["Merge + update cache"]
     RENDER["Render inbox"]
 
@@ -108,21 +108,21 @@ flowchart TD
     end
 
     subgraph Business["BUSINESS LOGIC LAYER"]
-        BStores["mailboxStore | mailboxActions | mailService\nsettingsStore | searchStore | conversationStore\nviewStore | folderStore | messageStore"]
+        BStores["mailboxStore | mailboxActions | mailService<br/>settingsStore | searchStore | conversationStore<br/>viewStore | folderStore | messageStore"]
         BCaps["Threading | Search parsing | Filtering | Security checks"]
     end
 
     subgraph Data["DATA LAYER"]
-        DB["db.worker\nDexie 4 / IndexedDB\n13 tables"]
-        SYNC["sync.worker\nAPI fetch / PostalMime\nOpenPGP"]
-        SEARCH["search.worker\nFlexSearch\nFull-text indexing"]
+        DB["db.worker<br/>Dexie 4 / IndexedDB<br/>13 tables"]
+        SYNC["sync.worker<br/>API fetch / PostalMime<br/>OpenPGP"]
+        SEARCH["search.worker<br/>FlexSearch<br/>Full-text indexing"]
         SYNC -->|writes| DB
         SYNC -->|indexes| SEARCH
     end
 
     subgraph Service["SERVICE LAYER"]
-        SW["Service Worker (Workbox)\nAsset precaching\nSPA fallback routing"]
-        BG["Background Sync (sw-sync.js)\nOffline mutation replay\nOutbox queue processing"]
+        SW["Service Worker (Workbox)<br/>Asset precaching<br/>SPA fallback routing"]
+        BG["Background Sync (sw-sync.js)<br/>Offline mutation replay<br/>Outbox queue processing"]
     end
 
     Presentation --> Business
@@ -141,15 +141,15 @@ flowchart TD
 flowchart LR
     subgraph Row1[" "]
         direction LR
-        F1["OFFLINE PARITY\n\nRead, search, compose,\nand queue actions\nwithout a network."]
-        F2["FAST SEARCH\n\nFlexSearch runs locally.\nNo server round-trips\nfor instant results."]
-        F3["NATIVE FEEL\n\nUI stays at 60fps.\nWorkers handle all\nheavy lifting off-thread."]
+        F1["OFFLINE PARITY<br/><br/>Read, search, compose,<br/>and queue actions<br/>without a network."]
+        F2["FAST SEARCH<br/><br/>FlexSearch runs locally.<br/>No server round-trips<br/>for instant results."]
+        F3["NATIVE FEEL<br/><br/>UI stays at 60fps.<br/>Workers handle all<br/>heavy lifting off-thread."]
     end
     subgraph Row2[" "]
         direction LR
-        F4["PRIVACY FIRST\n\nStatic hosting,\nno tracking, local-first\ndata storage."]
-        F5["MULTI-ACCOUNT\n\nPer-account IndexedDB keys,\ninstant switch with\npreloaded cache."]
-        F6["PGP BUILT-IN\n\nClient-side decryption\nvia OpenPGP in the\nsync worker."]
+        F4["PRIVACY FIRST<br/><br/>Static hosting,<br/>no tracking, local-first<br/>data storage."]
+        F5["MULTI-ACCOUNT<br/><br/>Per-account IndexedDB keys,<br/>instant switch with<br/>preloaded cache."]
+        F6["PGP BUILT-IN<br/><br/>Client-side decryption<br/>via OpenPGP in the<br/>sync worker."]
     end
 
     Row1 ~~~ Row2

@@ -9,7 +9,7 @@
   import { forceDeleteAllDatabases } from '../utils/db-recovery.js';
   import { refreshSyncWorkerPgpKeys } from '../utils/sync-worker-client.js';
   import { initPerfObservers } from '../utils/perf-logger.ts';
-  import { mailService, clearPgpKeyCache } from '../stores/mailService';
+  import { mailService, clearPgpKeyCache, invalidatePgpCachedBodies } from '../stores/mailService';
   import { searchStore } from '../stores/searchStore';
   const { health: healthStore, stats: searchStatsStore } = searchStore.state;
   const { checkHealth, rebuildFromCache } = searchStore.actions;
@@ -875,6 +875,7 @@
     Local.set(`pgp_keys_${currentAcct}`, JSON.stringify(pgpKeys));
     refreshSyncWorkerPgpKeys();
     clearPgpKeyCache();
+    invalidatePgpCachedBodies(currentAcct);
   };
 
   const cancelKeyForm = () => {
@@ -902,6 +903,7 @@
     Local.set(`pgp_keys_${currentAcct}`, JSON.stringify(pgpKeys));
     refreshSyncWorkerPgpKeys();
     clearPgpKeyCache();
+    invalidatePgpCachedBodies(currentAcct);
     cancelKeyForm();
     setSuccess('Encryption key saved locally.');
   };

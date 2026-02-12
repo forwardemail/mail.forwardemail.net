@@ -733,16 +733,25 @@ const createMailboxStore = () => {
         if (activeNow !== account) {
           return;
         }
-        const nextCached = shouldAppend ? mergeMessagePages(get(messages), cachedPage) : cachedPage;
-        messages.set(nextCached);
-        loading.set(false);
+        // Only update the store if LRU didn't already provide data — avoids
+        // a redundant messages.set() that causes visible flicker during sync.
+        if (!memCached?.messages?.length) {
+          const nextCached = shouldAppend
+            ? mergeMessagePages(get(messages), cachedPage)
+            : cachedPage;
+          messages.set(nextCached);
+          loading.set(false);
+          if (
+            allowAutoSelect &&
+            (!get(selectedMessage) || get(selectedMessage)?.folder !== folder)
+          ) {
+            selectedMessage.set(findFirstMessage(nextCached, currentSort));
+          }
+        }
         folderMessageCache.set(memKey, {
           messages: cachedPage,
           hasNextPage: get(hasNextPage),
         });
-        if (allowAutoSelect && (!get(selectedMessage) || get(selectedMessage)?.folder !== folder)) {
-          selectedMessage.set(findFirstMessage(nextCached, currentSort));
-        }
         if (isBasicQuery) {
           try {
             const totalCount = await db.messages
@@ -1090,6 +1099,7 @@ const createMailboxStore = () => {
       if ((Local.get('email') || 'default') !== account) return;
       if (get(selectedFolder) !== folder) return;
       if (get(loading)) return;
+      if (inFlightMessageListRequest) return; // Don't compete with user pagination
       lastSyncRefresh = { account, folder, at: Date.now() };
       loadMessages();
     }, 150);

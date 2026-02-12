@@ -8,10 +8,10 @@ paths, and operational checklists.
 
 ```mermaid
 flowchart TB
-    Main["Main Thread\nUI + Svelte Stores"]
-    Main -- "MessageChannel" --> DB["db.worker\nDexie 4\nIndexedDB\n13 tables"]
-    Main -- "MessageChannel" --> Sync["sync.worker\nAPI + Parse\nPostalMime\nOpenPGP"]
-    Main -- "MessageChannel" --> Search["search.worker\nFlexSearch\nIndexing\nQueries"]
+    Main["Main Thread<br/>UI + Svelte Stores"]
+    Main -- "MessageChannel" --> DB["db.worker<br/>Dexie 4<br/>IndexedDB<br/>13 tables"]
+    Main -- "MessageChannel" --> Sync["sync.worker<br/>API + Parse<br/>PostalMime<br/>OpenPGP"]
+    Main -- "MessageChannel" --> Search["search.worker<br/>FlexSearch<br/>Indexing<br/>Queries"]
     Sync -- "MessagePort" --> DB
     Sync -- "MessagePort" --> Search
 ```
@@ -57,8 +57,8 @@ flowchart TB
 flowchart TD
     A["Main thread"] --> B["initializeDatabase()"]
     B --> C["db.worker: open Dexie"]
-    A --> D["Load settings from IDB\n(settingsStore)"]
-    A --> E["Load folders, labels, messages\n(mailboxStore/Actions)"]
+    A --> D["Load settings from IDB<br/>(settingsStore)"]
+    A --> E["Load folders, labels, messages<br/>(mailboxStore/Actions)"]
     A --> F["startInitialSync()"]
     F --> G["sync.worker: connect db port"]
     F --> H["sync.worker: connect search port"]
@@ -96,7 +96,7 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    A["sync.worker writes messages to db.worker"] --> B["Forward batch to search.worker\n(MessagePort)"]
+    A["sync.worker writes messages to db.worker"] --> B["Forward batch to search.worker<br/>(MessagePort)"]
     B --> C["Load bodies from db.worker if includeBody"]
     B --> D["Update FlexSearch index"]
     B --> E["Persist index to IndexedDB"]
@@ -108,10 +108,10 @@ flowchart TD
 flowchart TD
     A["Settings UI"] --> B["settingsStore.updateSetting()"]
     B --> B1["PUT /v1/account"]
-    B --> B2["Cache to db.worker\n(settings/settingsLabels)"]
+    B --> B2["Cache to db.worker<br/>(settings/settingsLabels)"]
 
     C["Mailbox labels dropdown"] --> D["mailboxActions.loadLabels()"]
-    D --> D1["Merge: settings labels +\ncached labels + message-derived labels"]
+    D --> D1["Merge: settings labels +<br/>cached labels + message-derived labels"]
 ```
 
 ## Message Passing Contracts
@@ -199,8 +199,8 @@ flowchart TD
             T13["settingsLabels"]
         end
     end
-    Note1["Other workers NEVER open IndexedDB directly.\nThey always send requests to db.worker."] -.-> DBWorker
-    Note2["Exception: sw-sync.js uses raw IndexedDB API\n(service workers cannot import Dexie)"] -.-> DBWorker
+    Note1["Other workers NEVER open IndexedDB directly.<br/>They always send requests to db.worker."] -.-> DBWorker
+    Note2["Exception: sw-sync.js uses raw IndexedDB API<br/>(service workers cannot import Dexie)"] -.-> DBWorker
 ```
 
 ## Fallback & Resilience

@@ -41,8 +41,8 @@ flowchart LR
     SW --> folders["folders"]
     SW --> syncManifests["syncManifests"]
 
-    MT["main thread\n(fallback + user actions)"] --> messagesMain["messages\n(flags, labels, folder)"]
-    MT --> messageBodiesMain["messageBodies\n(fallback writes)"]
+    MT["main thread<br/>(fallback + user actions)"] --> messagesMain["messages<br/>(flags, labels, folder)"]
+    MT --> messageBodiesMain["messageBodies<br/>(fallback writes)"]
     MT --> settings["settings, settingsLabels"]
     MT --> outbox["outbox, drafts"]
 
@@ -56,38 +56,38 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-    Start["Message List Request"] --> Step1{"1. In-memory\nLRU cache"}
+    Start["Message List Request"] --> Step1{"1. In-memory<br/>LRU cache"}
     Step1 -- HIT --> Return1["Return (0ms)"]
-    Step1 -- MISS --> Step2{"2. IndexedDB query\nmessages.where([account+folder])\n.sortBy(date)"}
+    Step1 -- MISS --> Step2{"2. IndexedDB query<br/>messages.where([account+folder])<br/>.sortBy(date)"}
     Step2 -- HIT --> Render["Render list (5ms)"]
-    Step2 -- MISS --> Step3["3. API delta fetch (background)\nsync.worker -> /v1/messages?folder=..."]
+    Step2 -- MISS --> Step3["3. API delta fetch (background)<br/>sync.worker -> /v1/messages?folder=..."]
     Step3 --> Merge["Merge into IDB + update UI"]
-    Merge --> Labels["Labels merging: if API response omits labels,\nmerge from cached IndexedDB records\n(mergeMissingLabels)"]
+    Merge --> Labels["Labels merging: if API response omits labels,<br/>merge from cached IndexedDB records<br/>(mergeMissingLabels)"]
 ```
 
 ### Message Detail
 
 ```mermaid
 flowchart TD
-    Start["Message Detail Request"] --> Step1{"1. messageBodies.get([account+id])\nHIT and fresh?"}
+    Start["Message Detail Request"] --> Step1{"1. messageBodies.get([account+id])<br/>HIT and fresh?"}
     Step1 -- YES --> Render["Render body (5ms)"]
     Step1 -- NO --> Step2["2. sync.worker 'messageDetail' task"]
     Step2 --> API["GET /v1/messages/:id?raw=false"]
     API --> Parse["Parse with PostalMime"]
     Parse --> PGP["PGP decrypt if needed"]
     PGP --> Cache["Cache to messageBodies"]
-    Step2 -. fails .-> Fallback["3. FALLBACK:\nmain thread direct API fetch"]
+    Step2 -. fails .-> Fallback["3. FALLBACK:<br/>main thread direct API fetch"]
 ```
 
 ### Folders / Labels / Settings
 
 ```mermaid
 flowchart TD
-    Boot["App Boot"] --> ReadCache["Read cached folders, labels, settings\nfor fast hydration"]
+    Boot["App Boot"] --> ReadCache["Read cached folders, labels, settings<br/>for fast hydration"]
     ReadCache --> Render["Render UI immediately"]
     ReadCache --> BackgroundSync["Sync with API in background"]
-    BackgroundSync --> PerAccount["Settings are per-account,\nkeyed by account in IDB"]
-    BackgroundSync --> LabelsMerge["Labels merge:\nsettingsLabels + cached labels + msg-derived"]
+    BackgroundSync --> PerAccount["Settings are per-account,<br/>keyed by account in IDB"]
+    BackgroundSync --> LabelsMerge["Labels merge:<br/>settingsLabels + cached labels + msg-derived"]
 ```
 
 ## Search Indexing Flow
@@ -107,9 +107,9 @@ flowchart TD
     end
 
     subgraph Startup["ON STARTUP"]
-        Load["search.worker loads persisted index\nfrom searchIndex table"]
-        Load --> Compare["Compares indexMeta counts\nvs messages count"]
-        Compare -- Diverged? --> Rebuild["Background rebuild\n(non-blocking)"]
+        Load["search.worker loads persisted index<br/>from searchIndex table"]
+        Load --> Compare["Compares indexMeta counts<br/>vs messages count"]
+        Compare -- Diverged? --> Rebuild["Background rebuild<br/>(non-blocking)"]
     end
 ```
 
@@ -127,7 +127,7 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    Title["EVICTION PRIORITY\nManaged by: src/utils/cache-manager.js"]
+    Title["EVICTION PRIORITY<br/>Managed by: src/utils/cache-manager.js"]
 
     subgraph KeepLongest["KEEP LONGEST"]
         M["metadata"]
@@ -143,7 +143,7 @@ flowchart TD
 
     M --> S --> F --> B --> SI --> AB
 
-    Notes["Attachment cache: 50MB quota (meta table, key: attachment:*)\nContact cache: meta table (key: contacts:*)\nStorage tracked: navigator.storage.estimate()"]
+    Notes["Attachment cache: 50MB quota (meta table, key: attachment:*)<br/>Contact cache: meta table (key: contacts:*)<br/>Storage tracked: navigator.storage.estimate()"]
 
     Title ~~~ KeepLongest
     EvictFirst ~~~ Notes
@@ -162,11 +162,11 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    Step1["1. Is db.worker initialized?\nCheck: DevTools -> Application -> IndexedDB\nShould see webmail-cache-v1 with 13 tables"]
-    Step2["2. Does messages table have records after API fetch?\nOpen messages table, filter by account + folder"]
-    Step3["3. Are searchIndex/indexMeta populated after indexing?\nIf empty, search will return no results"]
-    Step4["4. Is UI reading from cache before network?\nFirst render should show cached data\nNetwork data should update, not replace"]
-    Step5["5. Are syncManifests progressing?\nlastSyncAt should update after each sync\npagesFetched should increment"]
+    Step1["1. Is db.worker initialized?<br/>Check: DevTools -> Application -> IndexedDB<br/>Should see webmail-cache-v1 with 13 tables"]
+    Step2["2. Does messages table have records after API fetch?<br/>Open messages table, filter by account + folder"]
+    Step3["3. Are searchIndex/indexMeta populated after indexing?<br/>If empty, search will return no results"]
+    Step4["4. Is UI reading from cache before network?<br/>First render should show cached data<br/>Network data should update, not replace"]
+    Step5["5. Are syncManifests progressing?<br/>lastSyncAt should update after each sync<br/>pagesFetched should increment"]
 
     Step1 --> Step2 --> Step3 --> Step4 --> Step5
 ```

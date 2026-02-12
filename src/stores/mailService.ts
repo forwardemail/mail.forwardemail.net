@@ -1,4 +1,5 @@
 import { Remote } from '../utils/remote.js';
+import Dexie from 'dexie';
 import { db } from '../utils/db.js';
 import { Local } from '../utils/storage.js';
 import { sanitizeHtml } from '../utils/sanitize.js';
@@ -235,6 +236,32 @@ export const clearPgpKeyCache = (): void => {
   passphraseCache.clear();
   keyNeedsPassphraseCache.clear();
   missingKeyModalShownByAccount.clear();
+  recentCacheHits.clear(); // Allow immediate re-evaluation after key changes
+};
+
+/**
+ * Invalidate cached message bodies that contain PGP-encrypted content.
+ * Called after PGP keys are added/removed so the next load re-attempts decryption.
+ */
+export const invalidatePgpCachedBodies = async (account: string): Promise<void> => {
+  try {
+    const allBodies = await db.messageBodies
+      .where('[account+id]')
+      .between([account, Dexie.minKey], [account, Dexie.maxKey])
+      .toArray();
+    const staleKeys = allBodies
+      .filter(
+        (b) =>
+          (b.raw && typeof b.raw === 'string' && isPgpEncrypted(b.raw)) ||
+          (b.body && typeof b.body === 'string' && isPgpEncrypted(b.body)),
+      )
+      .map((b) => [b.account, b.id]);
+    if (staleKeys.length) {
+      await db.messageBodies.bulkDelete(staleKeys);
+    }
+  } catch {
+    // Non-critical — worst case user refreshes
+  }
 };
 
 /**

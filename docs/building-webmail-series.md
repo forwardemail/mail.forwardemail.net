@@ -5,7 +5,7 @@ PWA that runs entirely in the browser.
 
 ```mermaid
 flowchart TD
-    A["Read Mail"] --> E["Forward Email\nWebmail PWA"]
+    A["Read Mail"] --> E["Forward Email<br/>Webmail PWA"]
     B["Search Instant"] --> E
     C["Compose Rich"] --> E
     D["Offline First"] --> E
@@ -17,19 +17,19 @@ flowchart TD
 flowchart TD
     START["START HERE"] --> A
 
-    A["1. Vision & Architecture\nWhy client-only? Why offline-first?\nThe constraints that drive everything."]
-    A --> B["2. Technology Stack\nSvelte 5 + Vite + Dexie + Workers.\nEvery choice, why it was made."]
+    A["1. Vision & Architecture<br/>Why client-only? Why offline-first?<br/>The constraints that drive everything."]
+    A --> B["2. Technology Stack<br/>Svelte 5 + Vite + Dexie + Workers.<br/>Every choice, why it was made."]
 
-    B --> C["3. Worker Mesh\n3 workers, 1 owner, 0 UI jank"]
-    B --> D["4. Data Layer\nIndexedDB as product memory"]
-    B --> E["5. Search Engine\nFlexSearch, local-first, instant results"]
+    B --> C["3. Worker Mesh<br/>3 workers, 1 owner, 0 UI jank"]
+    B --> D["4. Data Layer<br/>IndexedDB as product memory"]
+    B --> E["5. Search Engine<br/>FlexSearch, local-first, instant results"]
 
     C --> F
     D --> F
     E --> F
 
-    F["6. Service Worker & Offline Patterns\nCache the shell, not the mail.\nMutation queues, optimistic updates, sync."]
-    F --> G["7. Deployment\nCloudflare R2 + Workers, CI/CD, go live."]
+    F["6. Service Worker & Offline Patterns<br/>Cache the shell, not the mail.<br/>Mutation queues, optimistic updates, sync."]
+    F --> G["7. Deployment<br/>Cloudflare R2 + Workers, CI/CD, go live."]
 ```
 
 ## Reading Guide
@@ -60,7 +60,7 @@ These go deeper than the series articles:
 flowchart LR
     subgraph Quick Stats
         direction LR
-        A["Framework: Svelte 5 (runes)\nBuild: Vite 5\nStorage: Dexie 4 (IndexedDB)\nSearch: FlexSearch 0.7\nWorkers: 3 dedicated + service worker\nEncryption: OpenPGP 6.2\nEditor: TipTap 2\nHosting: Cloudflare R2 + Workers"]
-        B["Tables: 13 IndexedDB tables\nSource: 190+ files\nBundle: Vendor-chunked, code-split\nTarget: Lighthouse 90+"]
+        A["Framework: Svelte 5 (runes)<br/>Build: Vite 5<br/>Storage: Dexie 4 (IndexedDB)<br/>Search: FlexSearch 0.7<br/>Workers: 3 dedicated + service worker<br/>Encryption: OpenPGP 6.2<br/>Editor: TipTap 2<br/>Hosting: Cloudflare R2 + Workers"]
+        B["Tables: 13 IndexedDB tables<br/>Source: 190+ files<br/>Bundle: Vendor-chunked, code-split<br/>Target: Lighthouse 90+"]
     end
 ```

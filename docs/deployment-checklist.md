@@ -131,10 +131,10 @@ bucket_name = "webmail-prod"   # Updated by CI/CD
 ```mermaid
 flowchart LR
     subgraph Cloudflare Worker - worker/src/index.js
-        A["SPA routing:\nreturn index.html\nfor navigation requests"]
-        B["Cache headers\nper asset type"]
-        C["Security headers\nCSP, X-Frame-Options, etc."]
-        D["Serve assets\nfrom R2 bucket"]
+        A["SPA routing:<br/>return index.html<br/>for navigation requests"]
+        B["Cache headers<br/>per asset type"]
+        C["Security headers<br/>CSP, X-Frame-Options, etc."]
+        D["Serve assets<br/>from R2 bucket"]
     end
 ```
 
@@ -235,8 +235,8 @@ jobs:
 flowchart TD
     A["1. Push to main"] --> B["2. Monitor GitHub Actions"] --> C["3. Verify"]
     C --> D["R2 bucket has files?"]
-    C --> E["Worker deployed?\nnpx wrangler deployments list"]
-    C --> F["Site loads?\nhttps://mail.yourdomain.com"]
+    C --> E["Worker deployed?<br/>npx wrangler deployments list"]
+    C --> F["Site loads?<br/>https://mail.yourdomain.com"]
 ```
 
 ---

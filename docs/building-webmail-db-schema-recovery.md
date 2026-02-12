@@ -12,12 +12,12 @@ IndexedDB holds everything the user expects to see immediately:
 ```mermaid
 flowchart LR
     subgraph What lives in IndexedDB
-        A["Messages\nHeaders, Flags, Labels,\nFolders, Snippets"]
-        B["Settings\nTheme, Font, PGP keys,\nLabels, Preferences"]
-        C["Search Index\nFlexSearch payloads,\nMetadata, Health info"]
-        D["Message Bodies\nHTML/text, Attachments,\nSanitized"]
-        E["Drafts & Outbox\nAutosaved compositions,\nQueued sends"]
-        F["Sync Manifests\nPer-folder cursors,\nProgress"]
+        A["Messages<br/>Headers, Flags, Labels,<br/>Folders, Snippets"]
+        B["Settings<br/>Theme, Font, PGP keys,<br/>Labels, Preferences"]
+        C["Search Index<br/>FlexSearch payloads,<br/>Metadata, Health info"]
+        D["Message Bodies<br/>HTML/text, Attachments,<br/>Sanitized"]
+        E["Drafts & Outbox<br/>Autosaved compositions,<br/>Queued sends"]
+        F["Sync Manifests<br/>Per-folder cursors,<br/>Progress"]
     end
 ```
 
@@ -70,10 +70,10 @@ Data flows through three layers, each with different speed and durability:
 
 ```mermaid
 flowchart LR
-    API["API SERVER\nSource of truth\nProvides deltas\nRead: 100-500ms"] -- sync --> IDB["INDEXEDDB (db.worker)\n13 tables, Per-account\nSurvives reload\nRead: ~5ms"]
-    IDB -- populate --> MEM["IN-MEMORY (Svelte stores)\nLRU caches, $state vars\nInstant reads, Lost on nav\nRead: 0ms"]
+    API["API SERVER<br/>Source of truth<br/>Provides deltas<br/>Read: 100-500ms"] -- sync --> IDB["INDEXEDDB (db.worker)<br/>13 tables, Per-account<br/>Survives reload<br/>Read: ~5ms"]
+    IDB -- populate --> MEM["IN-MEMORY (Svelte stores)<br/>LRU caches, $state vars<br/>Instant reads, Lost on nav<br/>Read: 0ms"]
 
-    SW["SERVICE WORKER (Workbox CacheStorage)\nJS, CSS, fonts, icons, images\nNO API responses. NO mail data."]
+    SW["SERVICE WORKER (Workbox CacheStorage)<br/>JS, CSS, fonts, icons, images<br/>NO API responses. NO mail data."]
 ```
 
 ## Read Patterns
@@ -81,11 +81,11 @@ flowchart LR
 ```mermaid
 flowchart TD
     subgraph MAILBOX LIST
-        ML1["1. Check in-memory LRU (0ms)"] --> ML2["2. Query messages by\n[account+folder+date] (5ms)"] --> ML3["3. Fetch API delta if stale\n(100-500ms, background)"]
+        ML1["1. Check in-memory LRU (0ms)"] --> ML2["2. Query messages by<br/>[account+folder+date] (5ms)"] --> ML3["3. Fetch API delta if stale<br/>(100-500ms, background)"]
     end
 
     subgraph MESSAGE DETAIL
-        MD1["1. Check messageBodies by\n[account+id] (5ms)"] --> MD2["2. Fetch from API if missing\n(200-800ms)"] --> MD3["3. Parse, sanitize, cache\n(background)"]
+        MD1["1. Check messageBodies by<br/>[account+id] (5ms)"] --> MD2["2. Fetch from API if missing<br/>(200-800ms)"] --> MD3["3. Parse, sanitize, cache<br/>(background)"]
     end
 
     subgraph SEARCH
@@ -101,8 +101,8 @@ flowchart TD
 
 ```mermaid
 flowchart LR
-    SW["sync.worker"] --> SWD["messages, messageBodies,\nfolders, syncManifests"]
-    MT["main thread"] --> MTD["messages (flags/labels), settings,\nsettingsLabels, outbox, drafts\n(fallback writes for bodies too)"]
+    SW["sync.worker"] --> SWD["messages, messageBodies,<br/>folders, syncManifests"]
+    MT["main thread"] --> MTD["messages (flags/labels), settings,<br/>settingsLabels, outbox, drafts<br/>(fallback writes for bodies too)"]
     SEW["search.worker"] --> SEWD["searchIndex, indexMeta"]
 ```
 
@@ -136,7 +136,7 @@ flowchart TD
     C --> E["Re-init fresh"]
     E --> F["Resync from API"]
 
-    G["PRESERVED: Account credentials (localStorage)\nCLEARED: All cached mail, settings, search index\nCOMMUNICATED: User sees 'cache cleared, resyncing'"]
+    G["PRESERVED: Account credentials (localStorage)<br/>CLEARED: All cached mail, settings, search index<br/>COMMUNICATED: User sees 'cache cleared, resyncing'"]
 ```
 
 ## Cache Eviction
