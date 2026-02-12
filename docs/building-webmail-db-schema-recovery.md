@@ -9,29 +9,16 @@ fragile.
 The UI reads from local storage first. The API only supplies deltas. That means
 IndexedDB holds everything the user expects to see immediately:
 
-```
- ┌─────────────────────────────────────────────────────────────┐
- │                  What lives in IndexedDB                     │
- │                                                             │
- │  ┌────────────────┐  ┌────────────────┐  ┌──────────────┐  │
- │  │   Messages     │  │   Settings     │  │   Search     │  │
- │  │                │  │                │  │   Index      │  │
- │  │  Headers       │  │  Theme         │  │              │  │
- │  │  Flags         │  │  Font          │  │  FlexSearch  │  │
- │  │  Labels        │  │  PGP keys      │  │  payloads    │  │
- │  │  Folders       │  │  Labels        │  │  Metadata    │  │
- │  │  Snippets      │  │  Preferences   │  │  Health info │  │
- │  └────────────────┘  └────────────────┘  └──────────────┘  │
- │                                                             │
- │  ┌────────────────┐  ┌────────────────┐  ┌──────────────┐  │
- │  │  Message       │  │   Drafts &     │  │   Sync       │  │
- │  │  Bodies        │  │   Outbox       │  │   Manifests  │  │
- │  │                │  │                │  │              │  │
- │  │  HTML/text     │  │  Autosaved     │  │  Per-folder  │  │
- │  │  Attachments   │  │  compositions  │  │  cursors     │  │
- │  │  Sanitized     │  │  Queued sends  │  │  Progress    │  │
- │  └────────────────┘  └────────────────┘  └──────────────┘  │
- └─────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart LR
+    subgraph What lives in IndexedDB
+        A["Messages\nHeaders, Flags, Labels,\nFolders, Snippets"]
+        B["Settings\nTheme, Font, PGP keys,\nLabels, Preferences"]
+        C["Search Index\nFlexSearch payloads,\nMetadata, Health info"]
+        D["Message Bodies\nHTML/text, Attachments,\nSanitized"]
+        E["Drafts & Outbox\nAutosaved compositions,\nQueued sends"]
+        F["Sync Manifests\nPer-folder cursors,\nProgress"]
+    end
 ```
 
 ## Database Schema
@@ -39,137 +26,84 @@ IndexedDB holds everything the user expects to see immediately:
 Database: `webmail-cache-v1` (prod) / `webmail-cache-dev` (dev)
 Schema version: `1` (defined in `src/utils/db-constants.ts`)
 
-```
- ┌─────────────────────────────────────────────────────────────────────┐
- │  TABLE              PRIMARY KEY          PURPOSE                    │
- │ ─────────────────── ──────────────────── ───────────────────────── │
- │                                                                     │
- │  accounts           id                   Account registry           │
- │  folders            [account+path]       Cached folder tree         │
- │  messages           [account+id]         Message headers + flags    │
- │  messageBodies      [account+id]         Parsed HTML/text bodies    │
- │  drafts             [account+id]         Autosaved drafts           │
- │  outbox             [account+id]         Queued outgoing mail       │
- │  syncManifests      [account+folder]     Per-folder sync cursors    │
- │  labels             [account+id]         User-defined labels        │
- │  settings           account              Account preferences        │
- │  settingsLabels     account              Label definitions          │
- │  searchIndex        [account+key]        FlexSearch payloads        │
- │  indexMeta          [account+key]        Search index metadata      │
- │  meta               key                  Key-value store (generic)  │
- │                                                                     │
- └─────────────────────────────────────────────────────────────────────┘
-```
+| Table          | Primary Key      | Purpose                   |
+| -------------- | ---------------- | ------------------------- |
+| accounts       | id               | Account registry          |
+| folders        | [account+path]   | Cached folder tree        |
+| messages       | [account+id]     | Message headers + flags   |
+| messageBodies  | [account+id]     | Parsed HTML/text bodies   |
+| drafts         | [account+id]     | Autosaved drafts          |
+| outbox         | [account+id]     | Queued outgoing mail      |
+| syncManifests  | [account+folder] | Per-folder sync cursors   |
+| labels         | [account+id]     | User-defined labels       |
+| settings       | account          | Account preferences       |
+| settingsLabels | account          | Label definitions         |
+| searchIndex    | [account+key]    | FlexSearch payloads       |
+| indexMeta      | [account+key]    | Search index metadata     |
+| meta           | key              | Key-value store (generic) |
 
 ### Key Indexes on `messages`
 
 The schema is designed to make these reads fast:
 
-```
- ┌───────────────────────────────────────────────────────────────────┐
- │  INDEX                              USED FOR                      │
- │ ──────────────────────────────────  ──────────────────────────── │
- │  [account+folder]                   List messages in a folder     │
- │  [account+folder+date]              Sort by date within folder    │
- │  [account+folder+is_unread_index]   Filter unread in folder       │
- │  [account+id]                       Look up specific message      │
- └───────────────────────────────────────────────────────────────────┘
-```
+| Index                            | Used For                   |
+| -------------------------------- | -------------------------- |
+| [account+folder]                 | List messages in a folder  |
+| [account+folder+date]            | Sort by date within folder |
+| [account+folder+is_unread_index] | Filter unread in folder    |
+| [account+id]                     | Look up specific message   |
 
 ### The `meta` Table: Swiss Army Knife
 
 The `meta` table is a generic key-value store that avoids schema migrations for
 new features:
 
-```
- ┌──────────────────────────────────────────────────────────────────┐
- │  KEY PATTERN                 USED BY                             │
- │ ──────────────────────────── ─────────────────────────────────── │
- │  mutation-queue              Offline mutation queue               │
- │  contacts:*                  Contact autocomplete cache           │
- │  attachment:*                Attachment blob cache (50MB quota)   │
- └──────────────────────────────────────────────────────────────────┘
-```
+| Key Pattern    | Used By                            |
+| -------------- | ---------------------------------- |
+| mutation-queue | Offline mutation queue             |
+| contacts:\*    | Contact autocomplete cache         |
+| attachment:\*  | Attachment blob cache (50MB quota) |
 
 ## Storage Layers
 
 Data flows through three layers, each with different speed and durability:
 
-```
- FASTEST ─────────────────────────────────────────────── MOST DURABLE
+```mermaid
+flowchart LR
+    API["API SERVER\nSource of truth\nProvides deltas\nRead: 100-500ms"] -- sync --> IDB["INDEXEDDB (db.worker)\n13 tables, Per-account\nSurvives reload\nRead: ~5ms"]
+    IDB -- populate --> MEM["IN-MEMORY (Svelte stores)\nLRU caches, $state vars\nInstant reads, Lost on nav\nRead: 0ms"]
 
- ┌──────────────────┐   ┌───────────────────┐   ┌──────────────────┐
- │                  │   │                   │   │                  │
- │  IN-MEMORY       │   │   INDEXEDDB        │   │   API SERVER     │
- │  (Svelte stores) │   │   (db.worker)      │   │                  │
- │                  │   │                   │   │                  │
- │  • LRU caches    │   │  • 13 tables       │   │  • Source of     │
- │  • $state vars   │   │  • Per-account     │   │    truth         │
- │  • Instant reads │   │  • Survives reload │   │  • Provides      │
- │  • Lost on nav   │   │  • 5ms reads       │   │    deltas        │
- │                  │   │                   │   │                  │
- │  Read: 0ms       │   │  Read: ~5ms        │   │  Read: 100-500ms │
- │                  │   │                   │   │                  │
- └──────────────────┘   └───────────────────┘   └──────────────────┘
-        │                        │                        │
-        │     populate           │      sync              │
-        │◄───────────────────────│◄───────────────────────│
-```
-
-Separate layer for static assets only:
-
-```
- ┌──────────────────────────────────────────┐
- │  SERVICE WORKER (Workbox CacheStorage)   │
- │                                          │
- │  JS, CSS, fonts, icons, images           │
- │  NO API responses. NO mail data.         │
- └──────────────────────────────────────────┘
+    SW["SERVICE WORKER (Workbox CacheStorage)\nJS, CSS, fonts, icons, images\nNO API responses. NO mail data."]
 ```
 
 ## Read Patterns
 
-```
- ┌─────────────────────────────────────────────────────────────────┐
- │                                                                 │
- │  MAILBOX LIST                                                   │
- │  ────────────                                                   │
- │  1. Check in-memory LRU         (0ms)                          │
- │  2. Query messages by           (5ms)                          │
- │     [account+folder+date]                                      │
- │  3. Fetch API delta if stale    (100-500ms, background)        │
- │                                                                 │
- │  MESSAGE DETAIL                                                 │
- │  ──────────────                                                 │
- │  1. Check messageBodies by      (5ms)                          │
- │     [account+id]                                               │
- │  2. Fetch from API if missing   (200-800ms)                    │
- │  3. Parse, sanitize, cache      (background)                   │
- │                                                                 │
- │  SEARCH                                                         │
- │  ──────                                                         │
- │  1. Query FlexSearch index      (instant)                      │
- │  2. Health check vs DB count    (startup)                      │
- │  3. Rebuild if diverged         (background)                   │
- │                                                                 │
- │  SETTINGS & LABELS                                              │
- │  ─────────────────                                              │
- │  1. Read settings at boot       (fast hydration)               │
- │  2. Sync with API               (background)                   │
- │                                                                 │
- └─────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    subgraph MAILBOX LIST
+        ML1["1. Check in-memory LRU (0ms)"] --> ML2["2. Query messages by\n[account+folder+date] (5ms)"] --> ML3["3. Fetch API delta if stale\n(100-500ms, background)"]
+    end
+
+    subgraph MESSAGE DETAIL
+        MD1["1. Check messageBodies by\n[account+id] (5ms)"] --> MD2["2. Fetch from API if missing\n(200-800ms)"] --> MD3["3. Parse, sanitize, cache\n(background)"]
+    end
+
+    subgraph SEARCH
+        S1["1. Query FlexSearch index (instant)"] --> S2["2. Health check vs DB count (startup)"] --> S3["3. Rebuild if diverged (background)"]
+    end
+
+    subgraph SETTINGS & LABELS
+        SL1["1. Read settings at boot (fast hydration)"] --> SL2["2. Sync with API (background)"]
+    end
 ```
 
 ## Write Patterns
 
-```
- WHO WRITES WHAT
- ═══════════════
-
- sync.worker ──────▶ messages, messageBodies, folders, syncManifests
- main thread ──────▶ messages (flags/labels), settings, settingsLabels,
-                      outbox, drafts (fallback writes for bodies too)
- search.worker ────▶ searchIndex, indexMeta
+```mermaid
+flowchart LR
+    SW["sync.worker"] --> SWD["messages, messageBodies,\nfolders, syncManifests"]
+    MT["main thread"] --> MTD["messages (flags/labels), settings,\nsettingsLabels, outbox, drafts\n(fallback writes for bodies too)"]
+    SEW["search.worker"] --> SEWD["searchIndex, indexMeta"]
 ```
 
 ## Version Management
@@ -194,56 +128,35 @@ Schema changes happen inside `db.worker` and are versioned. Every update must:
 
 ## Recovery Strategy
 
-```
- ┌──────────────────────────────────────────────────────────────┐
- │                     RECOVERY FLOW                            │
- │                                                              │
- │  Dexie open ──▶ VersionError?                               │
- │                      │                                       │
- │                YES   │   NO                                  │
- │                 │    │    │                                   │
- │                 ▼    │    ▼                                   │
- │           ┌─────────┐│  ┌──────────┐                        │
- │           │ Delete  ││  │ Continue │                        │
- │           │ DB      ││  │ normally │                        │
- │           └────┬────┘│  └──────────┘                        │
- │                │     │                                       │
- │                ▼     │                                       │
- │           ┌─────────┐│                                      │
- │           │ Re-init ││                                      │
- │           │ fresh   ││                                      │
- │           └────┬────┘│                                      │
- │                │     │                                       │
- │                ▼     │                                       │
- │           ┌─────────┐│                                      │
- │           │ Resync  ││                                      │
- │           │ from API││                                      │
- │           └─────────┘│                                      │
- │                                                              │
- │  PRESERVED: Account credentials (localStorage)              │
- │  CLEARED:   All cached mail, settings, search index         │
- │  COMMUNICATED: User sees "cache cleared, resyncing"         │
- └──────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    A["Dexie open"] --> B{"VersionError?"}
+    B -- YES --> C["Delete DB"]
+    B -- NO --> D["Continue normally"]
+    C --> E["Re-init fresh"]
+    E --> F["Resync from API"]
+
+    G["PRESERVED: Account credentials (localStorage)\nCLEARED: All cached mail, settings, search index\nCOMMUNICATED: User sees 'cache cleared, resyncing'"]
 ```
 
 ## Cache Eviction
 
-```
- ┌──────────────────────────────────────────────────────────┐
- │                    EVICTION PRIORITY                     │
- │                                                         │
- │  KEEP LONGEST:                                          │
- │    ██████████████████████████  Message metadata          │
- │    ████████████████████       Settings & labels          │
- │    ████████████████           Folders & manifests        │
- │                                                         │
- │  EVICT FIRST:                                           │
- │    ████████████               Message bodies             │
- │    ████████                   Search index payloads      │
- │    ████                       Attachment blobs (50MB)    │
- │                                                         │
- │  Quota tracked via navigator.storage.estimate()         │
- └──────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    subgraph EVICTION PRIORITY
+        direction TB
+        subgraph KEEP LONGEST
+            K1["Message metadata"]
+            K2["Settings & labels"]
+            K3["Folders & manifests"]
+        end
+        subgraph EVICT FIRST
+            E1["Message bodies"]
+            E2["Search index payloads"]
+            E3["Attachment blobs (50MB)"]
+        end
+    end
+    Q["Quota tracked via navigator.storage.estimate()"]
 ```
 
 ## Troubleshooting

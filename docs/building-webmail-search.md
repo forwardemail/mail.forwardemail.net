@@ -6,202 +6,94 @@ messages. That makes search a core system, not a feature.
 
 ## The Problem
 
-```
- ┌──────────────────────────────────┐  ┌──────────────────────────────┐
- │       SERVER SEARCH              │  │       CLIENT SEARCH          │
- │                                  │  │                              │
- │  + Complete (all messages)       │  │  + Instant (no network)      │
- │  + Always accurate               │  │  + Works offline             │
- │  - 200-500ms per query          │  │  - Incomplete (only cached)  │
- │  - Requires network             │  │  - Needs maintenance         │
- │  - Feels sluggish               │  │  - Index can drift           │
- │                                  │  │                              │
- └──────────────────────────────────┘  └──────────────────────────────┘
+```mermaid
+flowchart TD
+    A["SERVER SEARCH\n+ Complete (all messages)\n+ Always accurate\n- 200-500ms per query\n- Requires network\n- Feels sluggish"]
+    B["CLIENT SEARCH\n+ Instant (no network)\n+ Works offline\n- Incomplete (only cached)\n- Needs maintenance\n- Index can drift"]
 
-                         │
-                    OUR SOLUTION
-                         │
-                         ▼
+    A --> C["OUR SOLUTION"]
+    B --> C
 
- ┌─────────────────────────────────────────────────────────────────┐
- │                    HYBRID SEARCH                                │
- │                                                                 │
- │   Query local FlexSearch index first (instant).                │
- │   Fall back to API only when local cache is insufficient.       │
- │   Merge API results back into local index for next time.       │
- │                                                                 │
- └─────────────────────────────────────────────────────────────────┘
+    C --> D["HYBRID SEARCH\nQuery local FlexSearch index first (instant).\nFall back to API only when local cache is insufficient.\nMerge API results back into local index for next time."]
 ```
 
 ## Architecture
 
-```
-                    ┌────────────────────┐
-                    │    Main Thread     │
-                    │                    │
-                    │  searchStore       │
-                    │  Search UI         │
-                    │  Query parsing     │
-                    └────────┬───────────┘
-                             │
-                   MessageChannel
-                             │
-                    ┌────────▼───────────┐
-                    │   search.worker    │
-                    │                    │
-                    │  ┌──────────────┐  │
-                    │  │  FlexSearch  │  │
-                    │  │              │  │
-                    │  │  Per-account │  │
-                    │  │  indexes     │  │
-                    │  │              │  │
-                    │  │  Subject +   │  │
-                    │  │  body (opt)  │  │
-                    │  └──────────────┘  │
-                    │                    │
-                    └────────┬───────────┘
-                             │
-                   MessagePort (to db.worker)
-                             │
-                    ┌────────▼───────────┐
-                    │    db.worker       │
-                    │                    │
-                    │  searchIndex       │
-                    │  indexMeta         │
-                    │  messages          │
-                    │  messageBodies     │
-                    └────────────────────┘
+```mermaid
+flowchart TD
+    MT["Main Thread\nsearchStore, Search UI,\nQuery parsing"]
+    MT -- MessageChannel --> SW["search.worker\nFlexSearch\nPer-account indexes\nSubject + body (opt)"]
+    SW -- "MessagePort (to db.worker)" --> DW["db.worker\nsearchIndex, indexMeta,\nmessages, messageBodies"]
 ```
 
 ## Indexing Pipeline
 
 New messages flow through a pipeline from API to searchable index:
 
-```
- API response
-       │
-       ▼
- sync.worker
-       │
-       ├──▶ Normalize metadata
-       │
-       ├──▶ Write to db.worker (messages table)
-       │
-       └──▶ Forward batch to search.worker
-                  │
-                  ├──▶ Index subject, from, snippet
-                  │
-                  ├──▶ If includeBody enabled:
-                  │       Load bodies from db.worker
-                  │       Index text content
-                  │
-                  └──▶ Persist index → db.worker
-                         (searchIndex + indexMeta)
+```mermaid
+flowchart TD
+    A["API response"] --> B["sync.worker"]
+    B --> C["Normalize metadata"]
+    B --> D["Write to db.worker\n(messages table)"]
+    B --> E["Forward batch to search.worker"]
+    E --> F["Index subject, from, snippet"]
+    E --> G{"includeBody enabled?"}
+    G -- Yes --> H["Load bodies from db.worker\nIndex text content"]
+    E --> I["Persist index to db.worker\n(searchIndex + indexMeta)"]
 ```
 
 ### What Gets Indexed
 
-```
- ┌──────────────────────────────────────────────────────────────┐
- │                                                              │
- │  ALWAYS INDEXED              OPTIONAL (user toggle)          │
- │  ────────────────            ──────────────────              │
- │                                                              │
- │  • Subject line              • Full message body text        │
- │  • From address                                              │
- │  • Snippet/preview                                           │
- │  • Date                                                      │
- │  • Message ID                                                │
- │                                                              │
- │  Body indexing is toggled in Settings → Search.              │
- │  When enabled, existing messages are indexed in background.  │
- │                                                              │
- └──────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart LR
+    subgraph What Gets Indexed
+        A["ALWAYS INDEXED\nSubject line\nFrom address\nSnippet/preview\nDate\nMessage ID"]
+        B["OPTIONAL (user toggle)\nFull message body text"]
+    end
+    C["Body indexing is toggled in Settings → Search.\nWhen enabled, existing messages are indexed in background."]
 ```
 
 ## Query Model
 
 Three paths, fastest first:
 
-```
- User types query
-       │
-       ▼
- ┌─────────────────────────────────────────────────────────────┐
- │  1. FAST PATH                                     ~10ms     │
- │     Query FlexSearch index in search.worker                 │
- │     Results from cached messages only                       │
- │     Instant for all indexed mail                            │
- └────────────────────────┬────────────────────────────────────┘
-                          │
-                    enough results?
-                          │
-                    NO    │    YES ──▶ Done, render results
-                          │
- ┌────────────────────────▼────────────────────────────────────┐
- │  2. FILTER PATH                                             │
- │     Apply mailbox-level filters:                            │
- │     folder, flags (unread/starred), labels, date range      │
- └────────────────────────┬────────────────────────────────────┘
-                          │
-                    still missing?
-                          │
-                    YES   │    NO ──▶ Done
-                          │
- ┌────────────────────────▼────────────────────────────────────┐
- │  3. FALLBACK PATH                                 100-500ms │
- │     Query the API: GET /v1/messages?q=...                   │
- │     Merge new results into db.worker + search index         │
- │     Next identical query will hit the fast path             │
- └─────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    A["User types query"] --> B["1. FAST PATH (~10ms)\nQuery FlexSearch index in search.worker\nResults from cached messages only\nInstant for all indexed mail"]
+    B --> C{"Enough results?"}
+    C -- YES --> D["Done, render results"]
+    C -- NO --> E["2. FILTER PATH\nApply mailbox-level filters:\nfolder, flags (unread/starred),\nlabels, date range"]
+    E --> F{"Still missing?"}
+    F -- NO --> G["Done"]
+    F -- YES --> H["3. FALLBACK PATH (100-500ms)\nQuery the API: GET /v1/messages?q=...\nMerge new results into db.worker + search index\nNext identical query will hit the fast path"]
 ```
 
 ### Advanced Query Syntax
 
-```
- ┌────────────────────────────────────────────────────────────────┐
- │  FILTER           EXAMPLE                                      │
- │ ────────────────  ──────────────────────────────────────────── │
- │  from:            from:alice@example.com                       │
- │  to:              to:bob@example.com                           │
- │  subject:         subject:meeting notes                        │
- │  before:          before:2025-01-01                            │
- │  after:           after:2024-06-15                             │
- │  has:attachment    has:attachment                               │
- │  is:unread        is:unread                                    │
- │  is:starred       is:starred                                   │
- │  label:           label:important                              │
- │  free text        quarterly report budget                      │
- └────────────────────────────────────────────────────────────────┘
-```
+| Filter         | Example                 |
+| -------------- | ----------------------- |
+| from:          | from:alice@example.com  |
+| to:            | to:bob@example.com      |
+| subject:       | subject:meeting notes   |
+| before:        | before:2025-01-01       |
+| after:         | after:2024-06-15        |
+| has:attachment | has:attachment          |
+| is:unread      | is:unread               |
+| is:starred     | is:starred              |
+| label:         | label:important         |
+| free text      | quarterly report budget |
 
 ## Index Health & Rebuilds
 
 Indexes drift. Messages get synced, evicted, or updated. We track this
 explicitly and heal automatically:
 
-```
- ┌─────────────────────────────────────────────────────────────┐
- │                    HEALTH CHECK FLOW                         │
- │                                                             │
- │  On startup:                                                │
- │                                                             │
- │  search.worker loads persisted index                        │
- │         │                                                   │
- │         ▼                                                   │
- │  Compare indexMeta.count vs messages.count in db.worker     │
- │         │                                                   │
- │    ┌────┴────┐                                              │
- │    │         │                                              │
- │  MATCH    DIVERGED                                          │
- │    │         │                                              │
- │    ▼         ▼                                              │
- │  Ready    Trigger background rebuild                        │
- │           • Does not block UI                               │
- │           • Progress reported to main thread                │
- │           • Index re-persisted when complete                │
- │                                                             │
- └─────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    A["On startup:\nsearch.worker loads persisted index"] --> B["Compare indexMeta.count vs\nmessages.count in db.worker"]
+    B --> C{"Match or Diverged?"}
+    C -- MATCH --> D["Ready"]
+    C -- DIVERGED --> E["Trigger background rebuild\nDoes not block UI\nProgress reported to main thread\nIndex re-persisted when complete"]
 ```
 
 ## Key Source Files

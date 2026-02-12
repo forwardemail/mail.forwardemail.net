@@ -32,12 +32,11 @@ A privacy-first, offline-capable Progressive Web App for Forward Email. Ships as
 
 The application follows a client-first, offline-capable architecture with three main layers:
 
-```
-Static Assets (CDN) → Service Worker → Main Thread → Web Workers
-                                            ↓
-                                      IndexedDB (Dexie)
-                                            ↓
-                                      API (data fallback)
+```mermaid
+graph LR
+    CDN["Static Assets (CDN)"] --> SW["Service Worker"] --> MT["Main Thread"] --> WW["Web Workers"]
+    MT --> IDB["IndexedDB (Dexie)"]
+    IDB --> API["API (data fallback)"]
 ```
 
 ### Key Components
@@ -158,21 +157,19 @@ VITE_WEBMAIL_API_BASE=https://api.forwardemail.net
 
 ### Infrastructure
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                     Cloudflare Edge                         │
-│  ┌─────────────────────────────────────────────────────┐   │
-│  │              Cloudflare Worker                       │   │
-│  │  • SPA routing (returns index.html for /mailbox, etc)│   │
-│  │  • Cache headers (immutable for assets, no-cache HTML)│  │
-│  └─────────────────────────────────────────────────────┘   │
-│                          ↓                                  │
-│  ┌─────────────────────────────────────────────────────┐   │
-│  │              Cloudflare R2                           │   │
-│  │  • Static assets (dist/)                             │   │
-│  │  • Fingerprinted bundles (/assets/*.js, *.css)       │   │
-│  └─────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────┘
+```mermaid
+graph TB
+    subgraph Edge["Cloudflare Edge"]
+        subgraph Worker["Cloudflare Worker"]
+            W1["SPA routing (returns index.html for /mailbox, etc)"]
+            W2["Cache headers (immutable for assets, no-cache HTML)"]
+        end
+        Worker --> R2
+        subgraph R2["Cloudflare R2"]
+            R2A["Static assets (dist/)"]
+            R2B["Fingerprinted bundles (/assets/*.js, *.css)"]
+        end
+    end
 ```
 
 ### Cache Strategy

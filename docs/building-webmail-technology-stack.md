@@ -5,36 +5,21 @@ webmail app that behaves like a native client.
 
 ## Stack Principles
 
-```
- ┌─────────────────────────────────────────────────────────────┐
- │                                                             │
- │   SMALL RUNTIME          Push heavy work to workers.        │
- │   BIG CAPABILITY         Load features on demand.           │
- │                                                             │
- │   LOCAL-FIRST            IndexedDB is the source of truth.  │
- │   BY DEFAULT             The API only supplies deltas.      │
- │                                                             │
- │   DETERMINISTIC          Static shell. SW controls updates. │
- │   UPDATES                No surprises mid-session.          │
- │                                                             │
- │   SECURITY AS            Sanitize HTML, encrypt secrets,    │
- │   BASELINE               zero third-party tracking.         │
- │                                                             │
- └─────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart LR
+    subgraph Stack Principles
+        A["SMALL RUNTIME / BIG CAPABILITY\nPush heavy work to workers.\nLoad features on demand."]
+        B["LOCAL-FIRST BY DEFAULT\nIndexedDB is the source of truth.\nThe API only supplies deltas."]
+        C["DETERMINISTIC UPDATES\nStatic shell. SW controls updates.\nNo surprises mid-session."]
+        D["SECURITY AS BASELINE\nSanitize HTML, encrypt secrets,\nzero third-party tracking."]
+    end
 ```
 
 ## Core Platform
 
-```
- ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
- │              │     │              │     │              │
- │   Svelte 5   │────▶│    Vite 5    │────▶│  Workbox 7   │
- │              │     │              │     │              │
- │  Compile-time│     │  Fast dev    │     │  Precache    │
- │  reactivity  │     │  HMR + build │     │  app shell   │
- │  with runes  │     │  Vendor split│     │  SW updates  │
- │              │     │              │     │              │
- └──────────────┘     └──────────────┘     └──────────────┘
+```mermaid
+flowchart LR
+    A["Svelte 5\nCompile-time reactivity\nwith runes"] --> B["Vite 5\nFast dev HMR + build\nVendor split"] --> C["Workbox 7\nPrecache app shell\nSW updates"]
 ```
 
 | Layer       | Tool         | Version           | Why                                                                        |
@@ -50,19 +35,13 @@ webmail app that behaves like a native client.
 
 ## Data & Storage
 
-```
- ┌───────────────────────────────────────────────────────────────────┐
- │                         DATA LAYER                                │
- │                                                                   │
- │   ┌──────────────┐    ┌──────────────┐    ┌──────────────┐       │
- │   │   Dexie 4    │    │  FlexSearch   │    │   Mutation   │       │
- │   │              │    │              │    │    Queue     │       │
- │   │  IndexedDB   │    │  Full-text   │    │             │       │
- │   │  wrapper     │    │  search      │    │  Offline    │       │
- │   │  13 tables   │    │  index       │    │  actions    │       │
- │   │  per-account │    │  per-account │    │  meta table │       │
- │   └──────────────┘    └──────────────┘    └──────────────┘       │
- └───────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart LR
+    subgraph DATA LAYER
+        A["Dexie 4\nIndexedDB wrapper\n13 tables, per-account"]
+        B["FlexSearch\nFull-text search\nindex, per-account"]
+        C["Mutation Queue\nOffline actions\nmeta table"]
+    end
 ```
 
 | Component     | Tool       | Version | Why                                                    |
@@ -74,28 +53,14 @@ webmail app that behaves like a native client.
 
 ## Workers & Concurrency
 
-```
- ┌─────────────────────────────────────────────────────────────────┐
- │                                                                 │
- │                     ┌───────────────┐                           │
- │                     │  Main Thread  │                           │
- │                     │  UI + Stores  │                           │
- │                     └──────┬────────┘                           │
- │                            │                                    │
- │              ┌─────────────┼─────────────┐                      │
- │              │             │             │                      │
- │              ▼             ▼             ▼                      │
- │     ┌──────────────┐ ┌──────────┐ ┌──────────────┐            │
- │     │ sync.worker  │ │db.worker │ │search.worker │            │
- │     │              │ │          │ │              │            │
- │     │  API fetch   │ │  Dexie   │ │  FlexSearch  │            │
- │     │  PostalMime  │ │  CRUD    │ │  Indexing    │            │
- │     │  OpenPGP     │ │  Schema  │ │  Queries     │            │
- │     └──────────────┘ └──────────┘ └──────────────┘            │
- │                                                                 │
- │     + Service Worker (Workbox) for asset caching               │
- │                                                                 │
- └─────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    subgraph Workers & Concurrency
+        MT["Main Thread\nUI + Stores"] --> SW["sync.worker\nAPI fetch, PostalMime, OpenPGP"]
+        MT --> DW["db.worker\nDexie CRUD, Schema"]
+        MT --> SEW["search.worker\nFlexSearch, Indexing, Queries"]
+        SVC["+ Service Worker (Workbox) for asset caching"]
+    end
 ```
 
 Every worker communicates via `MessageChannel` — no shared memory, no
@@ -116,24 +81,14 @@ contention, no UI stalls.
 
 ## Security & Privacy
 
-```
- ┌─────────────────────────────────────────────────────────────┐
- │                    SECURITY LAYERS                          │
- │                                                             │
- │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐        │
- │  │  DOMPurify  │  │  Sandboxed  │  │   OpenPGP   │        │
- │  │             │  │   Iframe    │  │             │        │
- │  │  HTML email │  │             │  │  End-to-end │        │
- │  │  sanitized  │  │  Email body │  │  encryption │        │
- │  │  before     │  │  rendered   │  │  in sync    │        │
- │  │  display    │  │  isolated   │  │  worker     │        │
- │  └─────────────┘  └─────────────┘  └─────────────┘        │
- │                                                             │
- │  + Local-first storage (no server-side UI state)           │
- │  + Static hosting (immutable, no server-rendered HTML)     │
- │  + Zero third-party tracking                               │
- │  + CSP headers via Cloudflare Worker                       │
- └─────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart LR
+    subgraph SECURITY LAYERS
+        A["DOMPurify\nHTML email sanitized\nbefore display"]
+        B["Sandboxed Iframe\nEmail body rendered\nisolated"]
+        C["OpenPGP\nEnd-to-end encryption\nin sync worker"]
+        D["+ Local-first storage (no server-side UI state)\n+ Static hosting (immutable, no server-rendered HTML)\n+ Zero third-party tracking\n+ CSP headers via Cloudflare Worker"]
+    end
 ```
 
 ## Build & Quality
@@ -150,24 +105,13 @@ contention, no UI stalls.
 
 ## Performance Budget
 
-```
- ┌─────────────────────────────────────────────────────────┐
- │                   PERFORMANCE TARGETS                    │
- │                                                         │
- │   Lighthouse         ████████████████████░  90+         │
- │   First Paint        ████████░░░░░░░░░░░░  < 1s        │
- │   Cached Boot        ████░░░░░░░░░░░░░░░░  < 200ms     │
- │   Main Thread Work   ████████████░░░░░░░░  Minimal     │
- │   Bundle (gzipped)   ████████████████░░░░  Chunked     │
- │                                                         │
- │   HOW WE HIT THEM:                                     │
- │   • Svelte compiles away the framework                 │
- │   • Vendor chunk: svelte, dexie, ky, openpgp, tiptap   │
- │   • Lazy routes: calendar, contacts, compose           │
- │   • Virtual scrolling for message lists                │
- │   • Workers for all CPU-heavy operations               │
- │                                                         │
- └─────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    subgraph PERFORMANCE TARGETS
+        direction TB
+        T["Lighthouse: 90+\nFirst Paint: < 1s\nCached Boot: < 200ms\nMain Thread Work: Minimal\nBundle (gzipped): Chunked"]
+        H["HOW WE HIT THEM:\nSvelte compiles away the framework\nVendor chunk: svelte, dexie, ky, openpgp, tiptap\nLazy routes: calendar, contacts, compose\nVirtual scrolling for message lists\nWorkers for all CPU-heavy operations"]
+    end
 ```
 
 ## Development Commands

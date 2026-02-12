@@ -6,23 +6,17 @@ network path, all the way back to the rendered list.
 
 ## High-level overview
 
-```
-User clicks folder
-        |
-        v
-+------------------+     sync      +------------------+     sync      +------------------+
-|   In-Memory LRU  | ------------> |     IndexedDB    | ------------> |   Network Fetch  |
-|   (~0ms, sync)   |   if miss     |   (~5ms, async)  |   always      | (~100-500ms)     |
-+------------------+               +------------------+               +------------------+
-        |                                  |                                  |
-        | hit: render                      | hit: render                      | response: merge,
-        | immediately                      | immediately,                     | write IDB + LRU,
-        |                                  | set loading=false                | update UI silently
-        v                                  v                                  v
-+-----------------------------------------------------------------------------+
-|                           Svelte Store (messages)                           |
-|                          UI renders from this store                         |
-+-----------------------------------------------------------------------------+
+```mermaid
+flowchart TD
+    A[User clicks folder] --> B["In-Memory LRU<br/>(~0ms, sync)"]
+    B -->|if miss| C["IndexedDB<br/>(~5ms, async)"]
+    C -->|always| D["Network Fetch<br/>(~100-500ms)"]
+
+    B -->|"hit: render immediately"| E
+    C -->|"hit: render immediately,<br/>set loading=false"| E
+    D -->|"response: merge,<br/>write IDB + LRU,<br/>update UI silently"| E
+
+    E["Svelte Store (messages)<br/>UI renders from this store"]
 ```
 
 **Key principle**: cache is always read first. Network always runs in the
@@ -37,15 +31,13 @@ IndexedDB caches are empty (e.g. first visit to a folder on a new device).
 
 **Entry point**: `mailboxStore.ts:selectFolder()`
 
-```
-selectFolder(path)
-  |
-  +-- selectedFolder.set(path)      // update store (sync)
-  +-- page.set(1)                   // reset pagination (sync)
-  +-- selectedConversationIds.set([])
-  +-- selectedMessage.set(null)
-  |
-  +-- loadMessages()                // starts the cache + fetch pipeline
+```mermaid
+flowchart TD
+    A["selectFolder(path)"] --> B["selectedFolder.set(path)<br/>update store (sync)"]
+    B --> C["page.set(1)<br/>reset pagination (sync)"]
+    C --> D["selectedConversationIds.set([])"]
+    D --> E["selectedMessage.set(null)"]
+    E --> F["loadMessages()<br/>starts the cache + fetch pipeline"]
 ```
 
 `selectFolder` and the first part of `loadMessages` run in the **same
@@ -65,18 +57,16 @@ Key format: "account:folder:page"
 Example:   "user@example.com:INBOX:1"
 ```
 
-```
-loadMessages()
-  |
-  +-- memKey = `${account}:${folder}:${page}`
-  +-- memCached = folderMessageCache.get(memKey)
-  |
-  +-- if (memCached?.messages?.length)
-        |
-        +-- messages.set(memCached.messages)   // populate store (sync)
-        +-- hasNextPage.set(memCached.hasNextPage)
-        +-- loading.set(false)                 // no skeleton
-        +-- auto-select first message (desktop classic layout)
+```mermaid
+flowchart TD
+    A["loadMessages()"] --> B["memKey = account:folder:page"]
+    B --> C["memCached = folderMessageCache.get(memKey)"]
+    C --> D{"memCached?.messages?.length?"}
+    D -->|Yes| E["messages.set(memCached.messages)<br/>populate store (sync)"]
+    E --> F["hasNextPage.set(memCached.hasNextPage)"]
+    F --> G["loading.set(false) — no skeleton"]
+    G --> H["Auto-select first message<br/>(desktop classic layout)"]
+    D -->|No| I["Continue to IDB + network layers"]
 ```
 
 This runs synchronously. If the folder was visited earlier in this session,
@@ -90,39 +80,24 @@ the list renders instantly with no flicker.
 
 **Location**: `mailboxStore.ts:loadMessages()` — IDB cache section
 
-```
-                          +-------------------+
-                          |   Dexie Query     |
-                          +-------------------+
-                                  |
-                   +--------------+--------------+
-                   |                             |
-          newest / oldest sort             other sorts
-                   |                             |
-                   v                             v
-    db.messages                          db.messages
-      .where('[account+folder+date]')      .where('[account+folder]')
-      .between(...)                        .equals([account, folder])
-      .reverse()  (if newest)              .toArray()
-      .offset(startIdx)                    |
-      .limit(limit)                        v
-      .toArray()                      sortMessages(cached, sort)
-                   |                  .slice(startIdx, startIdx + limit)
-                   |                             |
-                   +-------------+---------------+
-                                 |
-                                 v
-                       cachedPage = pageSlice.map(normalize)
+```mermaid
+flowchart TD
+    A["Dexie Query"] --> B{"Sort type?"}
+    B -->|"newest / oldest sort"| C["db.messages<br/>.where('[account+folder+date]')<br/>.between(...)<br/>.reverse() (if newest)<br/>.offset(startIdx)<br/>.limit(limit)<br/>.toArray()"]
+    B -->|"other sorts"| D["db.messages<br/>.where('[account+folder]')<br/>.equals([account, folder])<br/>.toArray()"]
+    D --> E["sortMessages(cached, sort)<br/>.slice(startIdx, startIdx + limit)"]
+    C --> F["cachedPage = pageSlice.map(normalize)"]
+    E --> F
 ```
 
 If `cachedPage` has results:
 
-```
-  +-- messages.set(cachedPage)       // render cached data
-  +-- loading.set(false)             // no skeleton
-  +-- folderMessageCache.set(...)    // warm the in-memory LRU for next time
-  +-- auto-select first message
-  +-- count total for hasNextPage (if basic query)
+```mermaid
+flowchart TD
+    A["messages.set(cachedPage)<br/>render cached data"] --> B["loading.set(false)<br/>no skeleton"]
+    B --> C["folderMessageCache.set(...)<br/>warm in-memory LRU for next time"]
+    C --> D["Auto-select first message"]
+    D --> E["Count total for hasNextPage<br/>(if basic query)"]
 ```
 
 **The IDB read populates the list within ~5ms** — well under the 150ms
@@ -134,23 +109,22 @@ skeleton delay threshold. Users see cached data almost instantly.
 
 **Location**: `mailboxStore.ts:loadMessages()` — skeleton gate
 
-```
-if (!cachedPage.length) {
-  loading.set(true);     // only triggers skeleton if BOTH caches missed
-}
+```mermaid
+flowchart TD
+    A{"cachedPage.length == 0?"} -->|Yes| B["loading.set(true)<br/>only triggers skeleton if BOTH caches missed"]
+    A -->|No| C["Skip — skeleton not needed"]
 ```
 
 On the Svelte side (`Mailbox.svelte`), the skeleton has a **150ms delay**
 before it actually renders:
 
-```
-wantListSkeleton = listIsEmpty && ($loading || syncingSelectedFolder || !showEmptyState)
-
-$effect:
-  if (wantListSkeleton)
-    setTimeout(() => showListSkeleton = true, 150ms)   // LIST_SKELETON_DELAY_MS
-  else
-    showListSkeleton = false   // cancel immediately
+```mermaid
+flowchart TD
+    A["wantListSkeleton =<br/>listIsEmpty && ($loading || syncingSelectedFolder || !showEmptyState)"]
+    A --> B{"wantListSkeleton?"}
+    B -->|Yes| C["setTimeout 150ms<br/>(LIST_SKELETON_DELAY_MS)"]
+    C --> D["showListSkeleton = true"]
+    B -->|No| E["showListSkeleton = false<br/>cancel immediately"]
 ```
 
 This means: if the IDB read or a preview fetch resolves within 150ms, the
@@ -165,17 +139,13 @@ skeleton never appears at all.
 When cache is completely empty AND the page limit is large (>20), a **parallel
 small fetch** fires to get initial results on screen faster:
 
-```
-if (!cachedPage.length && limit > 20) {
-
-  +-- fetchWithFallback({ limit: 20 })     // small preview (fire-and-forget)
-  |     .then(res => {
-  |       messages.set(previewMessages)
-  |       loading.set(false)               // cancel skeleton
-  |     })
-  |
-  +-- fetchWithFallback({ limit: full })   // full request (awaited below)
-}
+```mermaid
+flowchart TD
+    A{"cache empty AND limit > 20?"} -->|Yes| B["fetchWithFallback limit: 20<br/>small preview, fire-and-forget"]
+    A -->|Yes| C["fetchWithFallback limit: full<br/>full request, awaited"]
+    B --> D["messages.set(previewMessages)"]
+    D --> E["loading.set(false) — cancel skeleton"]
+    A -->|No| F["Skip preview, proceed with full fetch only"]
 ```
 
 Both requests run concurrently. The preview typically resolves first and
@@ -187,64 +157,34 @@ clears the skeleton while the full page loads.
 
 **Location**: `mailboxStore.ts:fetchWithFallback()`
 
-```
-fetchWithFallback(params)
-  |
-  +-- TRY: sendSyncRequest('messagePage', { account, folder, page, limit, ... })
-  |         |
-  |         +-- returns { source: 'worker', res }
-  |
-  +-- CATCH: Remote.request('MessageList', params, { pathOverride: '/v1/messages' })
-             |
-             +-- returns { source: 'main', res }
+```mermaid
+flowchart TD
+    A["fetchWithFallback(params)"] --> B["TRY: sendSyncRequest('messagePage', params)"]
+    B -->|success| C["return { source: 'worker', res }"]
+    B -->|catch| D["CATCH: Remote.request('MessageList', params)"]
+    D --> E["return { source: 'main', res }"]
 ```
 
 Two paths, worker preferred with main-thread fallback:
 
-```
-+------------------------------------------------------+
-|                  PRIMARY PATH                        |
-|                                                      |
-|  Main Thread          Sync Worker                    |
-|  (mailboxStore)       (sync.worker.ts)               |
-|       |                    |                         |
-|       +-- postMessage ---> |                         |
-|       |   { type: 'request',                         |
-|       |     action: 'messagePage',                   |
-|       |     payload }                                |
-|       |                    |                         |
-|       |                    +-- fetch(apiBase +        |
-|       |                    |     '/v1/messages?...')  |
-|       |                    |   (raw fetch, bypasses   |
-|       |                    |    Service Worker)       |
-|       |                    |                         |
-|       |                    +-- normalize messages     |
-|       |                    +-- merge missing labels   |
-|       |                    +-- db.messages.bulkPut()  |
-|       |                    +-- post to search worker  |
-|       |                    |                         |
-|       | <-- postMessage -- +                         |
-|       |   { type: 'requestComplete',                 |
-|       |     result: { messages, hasNextPage } }      |
-|       |                                              |
-+------------------------------------------------------+
+```mermaid
+flowchart LR
+    subgraph PRIMARY["PRIMARY PATH"]
+        direction TB
+        MT1["Main Thread<br/>(mailboxStore)"] -->|"postMessage<br/>{ type: 'request',<br/>action: 'messagePage',<br/>payload }"| SW["Sync Worker<br/>(sync.worker.ts)"]
+        SW --> F1["fetch(apiBase + '/v1/messages?...')<br/>(raw fetch, bypasses Service Worker)"]
+        F1 --> N1["Normalize messages"]
+        N1 --> M1["Merge missing labels"]
+        M1 --> W1["db.messages.bulkPut()"]
+        W1 --> S1["Post to search worker"]
+        S1 -->|"postMessage<br/>{ type: 'requestComplete',<br/>result: { messages, hasNextPage } }"| MT1R["Main Thread receives result"]
+    end
 
-+------------------------------------------------------+
-|                  FALLBACK PATH                       |
-|                                                      |
-|  Main Thread          API                            |
-|  (Remote.request)     (forwardemail.net)             |
-|       |                    |                         |
-|       +-- Ky HTTP -------> |                         |
-|       |   GET /v1/messages?folder=...&page=...       |
-|       |   Authorization: alias_auth / api_key        |
-|       |   Timeout: 10s                               |
-|       |   Retry: 3x exponential backoff              |
-|       |     (1s -> 2s -> 4s, cap 5s)                 |
-|       |                    |                         |
-|       | <-- JSON --------- +                         |
-|       |                                              |
-+------------------------------------------------------+
+    subgraph FALLBACK["FALLBACK PATH"]
+        direction TB
+        MT2["Main Thread<br/>(Remote.request)"] -->|"Ky HTTP GET /v1/messages<br/>Authorization: alias_auth / api_key<br/>Timeout: 10s<br/>Retry: 3x exponential backoff<br/>(1s → 2s → 4s, cap 5s)"| API["API<br/>(forwardemail.net)"]
+        API -->|"JSON response"| MT2R["Main Thread receives JSON"]
+    end
 ```
 
 ---
@@ -253,81 +193,78 @@ Two paths, worker preferred with main-thread fallback:
 
 **Location**: `mailboxStore.ts:loadMessages()` — response handler
 
-```
-Network response arrives
-  |
-  +-- Stale check: did account/folder change while in-flight?
-  |     +-- if stale: still write to IDB (for next visit), skip UI update
-  |
-  +-- Parse response
-  |     +-- worker path:  res.messages, res.hasNextPage
-  |     +-- fallback path: res.Result.List, list.length >= limit
-  |
-  +-- Normalize each message
-  |     +-- normalizeMessageForCache(raw, folder, account)
-  |     +-- attach: normalizedSubject, threadId, in_reply_to, references
-  |
-  +-- Merge enrichment
-  |     +-- mergeMissingLabels(account, mapped, labelPresence)
-  |     |     Look up existing IDB records to preserve labels
-  |     |     that the list endpoint doesn't return
-  |     |
-  |     +-- mergeMissingFrom(account, merged)
-  |           Look up existing IDB records to preserve full
-  |           "from" field when API returns abbreviated version
-  |
-  +-- Cache prune (page 1 only)
-  |     +-- Find IDB entries NOT in server response
-  |     +-- db.messages.bulkDelete(staleKeys)
-  |     +-- (removes moved/deleted messages from cache)
-  |
-  +-- Write to IDB
-  |     +-- db.messages.bulkPut(merged)
-  |
-  +-- Write to in-memory LRU
-  |     +-- folderMessageCache.set(account:folder:page, { messages, hasNextPage })
-  |
-  +-- Update search index (main-thread fallback only; worker already indexed)
-  |     +-- searchStore.actions.indexMessages(merged)
-  |
-  +-- Update UI (if not stale)
-        +-- messages.set(merged)          // silently swap in fresh data
-        +-- loading.set(false)
-        +-- updateFolderUnreadCounts()
+```mermaid
+flowchart TD
+    A["Network response arrives"] --> B{"Stale check:<br/>account/folder changed?"}
+    B -->|"Yes (stale)"| C["Write to IDB for next visit,<br/>skip UI update"]
+    B -->|No| D["Parse response"]
+
+    D --> D1{"Source?"}
+    D1 -->|worker path| D2["res.messages, res.hasNextPage"]
+    D1 -->|fallback path| D3["res.Result.List,<br/>list.length >= limit"]
+
+    D2 --> E["Normalize each message<br/>normalizeMessageForCache(raw, folder, account)<br/>attach: normalizedSubject, threadId,<br/>in_reply_to, references"]
+    D3 --> E
+
+    E --> F["mergeMissingLabels(account, mapped, labelPresence)<br/>Preserve labels the list endpoint doesn't return"]
+    F --> G["mergeMissingFrom(account, merged)<br/>Preserve full 'from' when API returns abbreviated"]
+
+    G --> H{"Page 1?"}
+    H -->|Yes| I["Cache prune: find IDB entries<br/>NOT in server response<br/>db.messages.bulkDelete(staleKeys)"]
+    H -->|No| J["Skip prune"]
+
+    I --> K["Write to IDB<br/>db.messages.bulkPut(merged)"]
+    J --> K
+
+    K --> L["Write to in-memory LRU<br/>folderMessageCache.set(account:folder:page, ...)"]
+    L --> M{"Main-thread fallback?"}
+    M -->|Yes| N["searchStore.actions.indexMessages(merged)<br/>Update search index"]
+    M -->|"No (worker already indexed)"| O["Skip indexing"]
+
+    N --> P["Update UI (if not stale)<br/>messages.set(merged)<br/>loading.set(false)<br/>updateFolderUnreadCounts()"]
+    O --> P
 ```
 
 ---
 
 ## Complete timeline visualization
 
-```
-t=0ms     User clicks folder
-          |
-          +-- selectFolder.set(path)
-          +-- loadMessages() begins (same microtask)
-          |
-          +-- [SYNC] Check in-memory LRU
-          |   Hit? -> list renders at t=0ms. No skeleton.
-          |
-t=1ms     +-- [ASYNC] Start IDB query
-          |
-t=5ms     +-- IDB results arrive
-          |   Hit? -> list renders at t=5ms. loading=false. No skeleton.
-          |
-          +-- [ASYNC] Preview fetch fires (if cache was empty)
-          +-- [ASYNC] Full network fetch fires (always)
-          |
-t=100ms   +-- Preview response arrives (if fired)
-          |   -> list renders preview. loading=false. Skeleton cancelled.
-          |
-t=150ms   --- Skeleton delay threshold ---
-          |   (skeleton only appears if nothing has rendered by now)
-          |
-t=200ms   +-- Full network response arrives
-          |   -> normalize, merge, write IDB + LRU
-          |   -> messages.set(merged) — list updates silently
-          |
-t=200ms+  +-- Background: search indexing, folder count update, quota check
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant MT as Main Thread
+    participant IDB as IndexedDB
+    participant Net as Network
+    participant UI as Svelte Store / UI
+
+    U->>MT: Click folder (t=0ms)
+    MT->>MT: selectFolder.set(path)
+    MT->>MT: loadMessages() begins (same microtask)
+
+    MT->>MT: [SYNC] Check in-memory LRU
+    alt LRU hit
+        MT->>UI: list renders at t=0ms. No skeleton.
+    end
+
+    MT->>IDB: [ASYNC] Start IDB query (t=1ms)
+    IDB-->>MT: IDB results arrive (t=5ms)
+    alt IDB hit
+        MT->>UI: list renders at t=5ms. loading=false. No skeleton.
+    end
+
+    MT->>Net: [ASYNC] Preview fetch (if cache empty)
+    MT->>Net: [ASYNC] Full network fetch (always)
+
+    Net-->>MT: Preview response arrives (t=100ms)
+    MT->>UI: list renders preview. loading=false. Skeleton cancelled.
+
+    Note over UI: t=150ms — Skeleton delay threshold<br/>(skeleton only appears if nothing rendered by now)
+
+    Net-->>MT: Full network response arrives (t=200ms)
+    MT->>MT: normalize, merge, write IDB + LRU
+    MT->>UI: messages.set(merged) — list updates silently
+
+    MT->>MT: Background: search indexing,<br/>folder count update, quota check (t=200ms+)
 ```
 
 ### When do you see a skeleton?
@@ -364,23 +301,12 @@ IndexedDB, not in CacheStorage.
 
 The Service Worker does **not** cache API responses. Its roles:
 
-```
-+---------------------------------------------------+
-|               Service Worker Roles                |
-+---------------------------------------------------+
-|                                                   |
-|  1. Precache app shell (Workbox)                  |
-|     -> JS, CSS, icons, images in CacheStorage     |
-|                                                   |
-|  2. Background sync                               |
-|     -> Process offline mutation queue             |
-|     -> Replay failed writes when online           |
-|                                                   |
-|  3. Bulk body prefetch                            |
-|     -> Fetch message bodies for offline reading   |
-|     -> Triggered after initial metadata sync      |
-|                                                   |
-+---------------------------------------------------+
+```mermaid
+flowchart TD
+    SW["Service Worker Roles"]
+    SW --> A["1. Precache app shell (Workbox)<br/>JS, CSS, icons, images in CacheStorage"]
+    SW --> B["2. Background sync<br/>Process offline mutation queue<br/>Replay failed writes when online"]
+    SW --> C["3. Bulk body prefetch<br/>Fetch message bodies for offline reading<br/>Triggered after initial metadata sync"]
 ```
 
 ### Main Thread (`src/stores/mailboxStore.ts`)
@@ -406,42 +332,37 @@ Fallback HTTP client used when the sync worker is unavailable:
 
 ## Data flow between components
 
-```
-+-------------------------------------------------------------------+
-|                         Main Thread                               |
-|                                                                   |
-|  selectFolder()                                                   |
-|       |                                                           |
-|       v                                                           |
-|  loadMessages()                                                   |
-|       |                                                           |
-|       +--[1]-- folderMessageCache (Map) ----> Svelte store        |
-|       |        (sync, ~0ms)                   messages.set()      |
-|       |                                                           |
-|       +--[2]-- db.messages (Dexie/IDB) -----> Svelte store        |
-|       |        (async, ~5ms)                  messages.set()      |
-|       |                                                           |
-|       +--[3]-- sendSyncRequest() ----------+                      |
-|       |                                    |                      |
-|       |    +-------------------------------+                      |
-|       |    |  Sync Worker                                         |
-|       |    |    |                                                  |
-|       |    |    +-- fetch(API) -----> forwardemail.net             |
-|       |    |    +-- normalize()                                   |
-|       |    |    +-- db.messages.bulkPut()                         |
-|       |    |    +-- postToSearch()                                |
-|       |    |    |                                                  |
-|       |    +----+-- postMessage(result) --+                       |
-|       |                                   |                       |
-|       | <---------------------------------+                       |
-|       |                                                           |
-|       +-- normalize + merge                                       |
-|       +-- db.messages.bulkPut()         (write-through to IDB)    |
-|       +-- folderMessageCache.set()      (write-through to LRU)    |
-|       +-- messages.set(merged) ---------> Svelte store            |
-|       +-- loading.set(false)                                      |
-|                                                                   |
-+-------------------------------------------------------------------+
+```mermaid
+flowchart TD
+    subgraph MainThread["Main Thread"]
+        SF["selectFolder()"] --> LM["loadMessages()"]
+
+        LM -->|"[1] sync, ~0ms"| LRU["folderMessageCache (Map)"]
+        LRU --> SS1["Svelte store<br/>messages.set()"]
+
+        LM -->|"[2] async, ~5ms"| IDB["db.messages (Dexie/IDB)"]
+        IDB --> SS2["Svelte store<br/>messages.set()"]
+
+        LM -->|"[3]"| SSR["sendSyncRequest()"]
+    end
+
+    subgraph SyncWorker["Sync Worker"]
+        SW_FETCH["fetch(API)"] --> FEN["forwardemail.net"]
+        FEN --> SW_NORM["normalize()"]
+        SW_NORM --> SW_WRITE["db.messages.bulkPut()"]
+        SW_WRITE --> SW_SEARCH["postToSearch()"]
+        SW_SEARCH --> SW_POST["postMessage(result)"]
+    end
+
+    SSR --> SW_FETCH
+    SW_POST --> MERGE
+
+    subgraph MainThread2["Main Thread — Response Processing"]
+        MERGE["normalize + merge"] --> WRITE_IDB["db.messages.bulkPut()<br/>(write-through to IDB)"]
+        WRITE_IDB --> WRITE_LRU["folderMessageCache.set()<br/>(write-through to LRU)"]
+        WRITE_LRU --> SS3["messages.set(merged) → Svelte store"]
+        SS3 --> DONE["loading.set(false)"]
+    end
 ```
 
 ---
@@ -456,14 +377,21 @@ Fallback HTTP client used when the sync worker is unavailable:
 
 ### IndexedDB indexes used for message queries
 
-```
-Primary (date-sorted):  [account+folder+date]
-  -> Used for newest/oldest sort
-  -> Supports efficient offset+limit pagination
+```mermaid
+flowchart LR
+    subgraph Primary["Primary Index (date-sorted)"]
+        P1["[account+folder+date]"]
+        P2["Used for newest/oldest sort"]
+        P3["Supports efficient offset+limit pagination"]
+        P1 --- P2 --- P3
+    end
 
-Fallback (unsorted):    [account+folder]
-  -> Used for subject/sender sort
-  -> Full scan + in-memory sort + slice
+    subgraph Fallback["Fallback Index (unsorted)"]
+        F1["[account+folder]"]
+        F2["Used for subject/sender sort"]
+        F3["Full scan + in-memory sort + slice"]
+        F1 --- F2 --- F3
+    end
 ```
 
 ---

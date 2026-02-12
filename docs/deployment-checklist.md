@@ -3,22 +3,10 @@
 Complete setup guide for deploying the webmail app from scratch using Cloudflare
 (R2 + Workers) and GitHub Actions.
 
-```
- ┌──────────────────────────────────────────────────────────────┐
- │                    DEPLOYMENT PIPELINE                        │
- │                                                              │
- │  git push main                                               │
- │       │                                                      │
- │       ▼                                                      │
- │  ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐ │
- │  │  Lint +  │──▶│  Build   │──▶│ Deploy   │──▶│  Purge   │ │
- │  │  Format  │   │  + SW    │   │ R2 +     │   │  CDN     │ │
- │  │          │   │  gen     │   │ Worker   │   │  cache   │ │
- │  └──────────┘   └──────────┘   └──────────┘   └──────────┘ │
- │                                                              │
- │  Result: Static PWA served from Cloudflare edge             │
- │                                                              │
- └──────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart LR
+    A["git push main"] --> B["Lint + Format"] --> C["Build + SW gen"] --> D["Deploy R2 + Worker"] --> E["Purge CDN cache"]
+    E --> F["Result: Static PWA served from Cloudflare edge"]
 ```
 
 ## Prerequisites
@@ -57,12 +45,10 @@ Complete setup guide for deploying the webmail app from scratch using Cloudflare
 
 Save these credentials:
 
-```
- ┌──────────────────────────────────────────────┐
- │  Access Key ID     →  R2_ACCESS_KEY_ID       │
- │  Secret Access Key →  R2_SECRET_ACCESS_KEY   │
- └──────────────────────────────────────────────┘
-```
+| Credential        | Secret Name          |
+| ----------------- | -------------------- |
+| Access Key ID     | R2_ACCESS_KEY_ID     |
+| Secret Access Key | R2_SECRET_ACCESS_KEY |
 
 ### 1.3 Get Account and Zone IDs
 
@@ -70,12 +56,10 @@ Save these credentials:
  Cloudflare Dashboard → Any domain → Overview → Right sidebar
 ```
 
-```
- ┌──────────────────────────────────────────────┐
- │  Account ID  →  R2_ACCOUNT_ID                │
- │  Zone ID     →  CLOUDFLARE_ZONE_ID           │
- └──────────────────────────────────────────────┘
-```
+| ID         | Secret Name        |
+| ---------- | ------------------ |
+| Account ID | R2_ACCOUNT_ID      |
+| Zone ID    | CLOUDFLARE_ZONE_ID |
 
 ### 1.4 Create Cloudflare API Token
 
@@ -144,15 +128,14 @@ bucket_name = "webmail-prod"   # Updated by CI/CD
 
 ### 3.2 Worker Responsibilities
 
-```
- ┌──────────────────────────────────────────────────────────────┐
- │  Cloudflare Worker (worker/src/index.js)                    │
- │                                                              │
- │  • SPA routing: return index.html for navigation requests   │
- │  • Cache headers per asset type                             │
- │  • Security headers (CSP, X-Frame-Options, etc.)            │
- │  • Serve assets from R2 bucket                              │
- └──────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart LR
+    subgraph Cloudflare Worker - worker/src/index.js
+        A["SPA routing:\nreturn index.html\nfor navigation requests"]
+        B["Cache headers\nper asset type"]
+        C["Security headers\nCSP, X-Frame-Options, etc."]
+        D["Serve assets\nfrom R2 bucket"]
+    end
 ```
 
 ---
@@ -248,17 +231,12 @@ jobs:
 
 ## 7. First Deployment
 
-```
- 1.  Push to main
- 2.  Monitor GitHub Actions
- 3.  Verify:
-         ┌──────────────────────────────────────────────┐
-         │  R2 bucket has files?        ✓               │
-         │  Worker deployed?            ✓               │
-         │    npx wrangler deployments list              │
-         │  Site loads?                 ✓               │
-         │    https://mail.yourdomain.com               │
-         └──────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    A["1. Push to main"] --> B["2. Monitor GitHub Actions"] --> C["3. Verify"]
+    C --> D["R2 bucket has files?"]
+    C --> E["Worker deployed?\nnpx wrangler deployments list"]
+    C --> F["Site loads?\nhttps://mail.yourdomain.com"]
 ```
 
 ---
@@ -267,69 +245,46 @@ jobs:
 
 ### Functional Checks
 
-```
- [ ] App loads at https://mail.yourdomain.com
- [ ] Login works
- [ ] Can view mailbox
- [ ] Can compose and send email
- [ ] Can view calendar
- [ ] Service worker registers (DevTools → Application)
-```
+- [ ] App loads at https://mail.yourdomain.com
+- [ ] Login works
+- [ ] Can view mailbox
+- [ ] Can compose and send email
+- [ ] Can view calendar
+- [ ] Service worker registers (DevTools → Application)
 
 ### Performance Checks
 
-```
- [ ] Assets cached (check Cache-Control headers)
- [ ] Lighthouse score > 90
- [ ] No console errors
-```
+- [ ] Assets cached (check Cache-Control headers)
+- [ ] Lighthouse score > 90
+- [ ] No console errors
 
 ### Security Checks
 
-```
- [ ] HTTPS enforced
- [ ] Security headers present
- [ ] No mixed content warnings
-```
+- [ ] HTTPS enforced
+- [ ] Security headers present
+- [ ] No mixed content warnings
 
 ---
 
 ## 9. Troubleshooting
 
-```
- ┌─────────────────────┬───────────────────────────────────────────┐
- │  PROBLEM            │  FIX                                      │
- ├─────────────────────┼───────────────────────────────────────────┤
- │  Worker not serving │  cd worker && pnpm tail                   │
- │  files              │  Check wrangler.toml routes               │
- ├─────────────────────┼───────────────────────────────────────────┤
- │  R2 bucket empty    │  aws --endpoint-url "$ENDPOINT" \         │
- │                     │    s3 ls "s3://${R2_BUCKET}/"             │
- ├─────────────────────┼───────────────────────────────────────────┤
- │  Cache not clearing │  Manual purge:                            │
- │                     │  curl -X POST ".../purge_cache" \         │
- │                     │    --data '{"purge_everything":true}'     │
- ├─────────────────────┼───────────────────────────────────────────┤
- │  Deploy 403 error   │  Verify API token has:                    │
- │                     │  Workers Scripts: Edit                    │
- │                     │  Workers R2: Edit                         │
- │                     │  Cache Purge: Purge                       │
- │                     │  Workers Routes: Edit                     │
- └─────────────────────┴───────────────────────────────────────────┘
-```
+| Problem                  | Fix                                                                                                     |
+| ------------------------ | ------------------------------------------------------------------------------------------------------- |
+| Worker not serving files | `cd worker && pnpm tail` — Check wrangler.toml routes                                                   |
+| R2 bucket empty          | `aws --endpoint-url "$ENDPOINT" s3 ls "s3://${R2_BUCKET}/"`                                             |
+| Cache not clearing       | Manual purge: `curl -X POST ".../purge_cache" --data '{"purge_everything":true}'`                       |
+| Deploy 403 error         | Verify API token has: Workers Scripts: Edit, Workers R2: Edit, Cache Purge: Purge, Workers Routes: Edit |
 
 ---
 
 ## 10. Staging Environment (Optional)
 
-```
- ┌───────────────────────────────────────────────────────────────┐
- │  1.  Create R2 bucket: webmail-staging                       │
- │  2.  Create Worker: update wrangler.toml name                │
- │  3.  Add route: staging-mail.yourdomain.com/*                │
- │  4.  Create GitHub environment with separate secrets         │
- │  5.  Modify workflow: deploy to staging on develop branch    │
- └───────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    A["1. Create R2 bucket: webmail-staging"] --> B["2. Create Worker: update wrangler.toml name"]
+    B --> C["3. Add route: staging-mail.yourdomain.com/*"]
+    C --> D["4. Create GitHub environment with separate secrets"]
+    D --> E["5. Modify workflow: deploy to staging on develop branch"]
 ```
 
 ---

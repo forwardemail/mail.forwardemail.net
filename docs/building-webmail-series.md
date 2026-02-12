@@ -3,67 +3,33 @@
 A technical deep-dive into how we built a privacy-first, offline-capable webmail
 PWA that runs entirely in the browser.
 
-```
- ╔══════════════════════════════════════════════════════════════════╗
- ║                                                                  ║
- ║    ┌─────────┐   ┌─────────┐   ┌─────────┐   ┌─────────┐      ║
- ║    │  Read   │   │ Search  │   │ Compose │   │ Offline │      ║
- ║    │  Mail   │   │ Instant │   │  Rich   │   │  First  │      ║
- ║    └────┬────┘   └────┬────┘   └────┬────┘   └────┬────┘      ║
- ║         │             │             │             │              ║
- ║         └─────────────┴──────┬──────┴─────────────┘              ║
- ║                              │                                   ║
- ║                    ┌─────────▼─────────┐                        ║
- ║                    │   Forward Email   │                        ║
- ║                    │     Webmail PWA   │                        ║
- ║                    └───────────────────┘                        ║
- ║                                                                  ║
- ╚══════════════════════════════════════════════════════════════════╝
+```mermaid
+flowchart TD
+    A["Read Mail"] --> E["Forward Email\nWebmail PWA"]
+    B["Search Instant"] --> E
+    C["Compose Rich"] --> E
+    D["Offline First"] --> E
 ```
 
 ## The Series
 
-```
- START HERE
-     │
-     ▼
- ┌─────────────────────────────────────────────────────┐
- │  1. Vision & Architecture                           │
- │     Why client-only? Why offline-first?             │
- │     The constraints that drive everything.          │
- └──────────────────────┬──────────────────────────────┘
-                        │
-                        ▼
- ┌─────────────────────────────────────────────────────┐
- │  2. Technology Stack                                │
- │     Svelte 5 + Vite + Dexie + Workers.             │
- │     Every choice, why it was made.                  │
- └──────────────────────┬──────────────────────────────┘
-                        │
-           ┌────────────┼────────────┐
-           ▼            ▼            ▼
- ┌─────────────┐ ┌────────────┐ ┌────────────────┐
- │ 3. Worker   │ │ 4. Data    │ │ 5. Search      │
- │    Mesh     │ │    Layer   │ │    Engine       │
- │             │ │            │ │                 │
- │ 3 workers,  │ │ IndexedDB  │ │ FlexSearch,     │
- │ 1 owner,    │ │ as product │ │ local-first,    │
- │ 0 UI jank   │ │ memory     │ │ instant results │
- └──────┬──────┘ └─────┬──────┘ └───────┬────────┘
-        │              │                │
-        └──────────────┼────────────────┘
-                       ▼
- ┌─────────────────────────────────────────────────────┐
- │  6. Service Worker & Offline Patterns               │
- │     Cache the shell, not the mail.                  │
- │     Mutation queues, optimistic updates, sync.      │
- └──────────────────────┬──────────────────────────────┘
-                        │
-                        ▼
- ┌─────────────────────────────────────────────────────┐
- │  7. Deployment                                      │
- │     Cloudflare R2 + Workers, CI/CD, go live.        │
- └─────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    START["START HERE"] --> A
+
+    A["1. Vision & Architecture\nWhy client-only? Why offline-first?\nThe constraints that drive everything."]
+    A --> B["2. Technology Stack\nSvelte 5 + Vite + Dexie + Workers.\nEvery choice, why it was made."]
+
+    B --> C["3. Worker Mesh\n3 workers, 1 owner, 0 UI jank"]
+    B --> D["4. Data Layer\nIndexedDB as product memory"]
+    B --> E["5. Search Engine\nFlexSearch, local-first, instant results"]
+
+    C --> F
+    D --> F
+    E --> F
+
+    F["6. Service Worker & Offline Patterns\nCache the shell, not the mail.\nMutation queues, optimistic updates, sync."]
+    F --> G["7. Deployment\nCloudflare R2 + Workers, CI/CD, go live."]
 ```
 
 ## Reading Guide
@@ -90,22 +56,11 @@ These go deeper than the series articles:
 
 ## Quick Stats
 
-```
- ┌────────────────────────────────────────────┐
- │                                            │
- │   Framework    Svelte 5 (runes)            │
- │   Build        Vite 5                      │
- │   Storage      Dexie 4 (IndexedDB)         │
- │   Search       FlexSearch 0.7              │
- │   Workers      3 dedicated + service worker│
- │   Encryption   OpenPGP 6.2                 │
- │   Editor       TipTap 2                    │
- │   Hosting      Cloudflare R2 + Workers     │
- │                                            │
- │   Tables       13 IndexedDB tables         │
- │   Source       190+ files                   │
- │   Bundle       Vendor-chunked, code-split  │
- │   Target       Lighthouse 90+              │
- │                                            │
- └────────────────────────────────────────────┘
+```mermaid
+flowchart LR
+    subgraph Quick Stats
+        direction LR
+        A["Framework: Svelte 5 (runes)\nBuild: Vite 5\nStorage: Dexie 4 (IndexedDB)\nSearch: FlexSearch 0.7\nWorkers: 3 dedicated + service worker\nEncryption: OpenPGP 6.2\nEditor: TipTap 2\nHosting: Cloudflare R2 + Workers"]
+        B["Tables: 13 IndexedDB tables\nSource: 190+ files\nBundle: Vendor-chunked, code-split\nTarget: Lighthouse 90+"]
+    end
 ```
