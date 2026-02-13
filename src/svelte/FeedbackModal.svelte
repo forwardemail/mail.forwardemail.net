@@ -7,7 +7,6 @@
   import { Checkbox } from '$lib/components/ui/checkbox';
   import { Label } from '$lib/components/ui/label';
   import * as Alert from '$lib/components/ui/alert';
-  import CheckIcon from '@lucide/svelte/icons/check';
   import { Local } from '../utils/storage';
   import { Remote } from '../utils/remote';
 
@@ -334,7 +333,7 @@ End of Report
       {#if submitSuccess}
         <div class="flex flex-col items-center justify-center py-10 text-center">
           <div class="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-green-100 text-green-600">
-            <CheckIcon class="h-6 w-6" />
+            <LucideCheck  class="h-6 w-6" />
           </div>
           <h3 class="mb-2 text-lg font-semibold">Thank you for your feedback!</h3>
           <p class="text-muted-foreground">We've received your message and will get back to you soon.</p>

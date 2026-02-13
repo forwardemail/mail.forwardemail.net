@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
   import { buildIframeSrcdoc } from '../../utils/iframe-srcdoc';
 
   interface Props {

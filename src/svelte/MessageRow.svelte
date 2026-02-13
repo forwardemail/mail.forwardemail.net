@@ -1,8 +1,6 @@
 <script lang="ts">
   import { Checkbox } from '$lib/components/ui/checkbox';
   import { Badge } from '$lib/components/ui/badge';
-  import Star from '@lucide/svelte/icons/star';
-  import Paperclip from '@lucide/svelte/icons/paperclip';
   import { formatCompactDate } from '../utils/date';
   import { extractDisplayName } from '../utils/address.ts';
   import { truncatePreview } from '../utils/preview';
@@ -98,7 +96,7 @@
     <div class="flex items-center justify-between gap-2">
       <div class="flex items-center gap-1.5 font-semibold text-foreground">
         {#if starred}
-          <Star class="h-3.5 w-3.5 fill-yellow-400 text-yellow-400" />
+          <LucideStar class="h-3.5 w-3.5 fill-yellow-400 text-yellow-400" />
         {/if}
         <span class="truncate">{from}</span>
       </div>
@@ -109,7 +107,7 @@
 
     <div class="flex items-center gap-1.5 truncate text-sm text-muted-foreground">
       {#if hasAttachment}
-        <Paperclip class="h-3.5 w-3.5 shrink-0 opacity-70" />
+        <LucidePaperclip class="h-3.5 w-3.5 shrink-0 opacity-70" />
       {/if}
       {#if labels && labels.length > 0}
         <span class="flex items-center gap-1">

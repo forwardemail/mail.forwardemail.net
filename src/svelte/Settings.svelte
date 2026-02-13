@@ -1,15 +1,15 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
-  import { readable, type Readable, type Unsubscriber } from 'svelte/store';
+  import { onDestroy, onMount } from 'svelte';
+  import { type Readable, readable, type Unsubscriber } from 'svelte/store';
   import { Local } from '../utils/storage';
   import { keyboardShortcuts } from '../utils/keyboard-shortcuts';
-  import { getDatabaseInfo, CURRENT_SCHEMA_VERSION, db } from '../utils/db';
+  import { CURRENT_SCHEMA_VERSION, db, getDatabaseInfo } from '../utils/db';
   import { cacheManager } from '../utils/cache-manager';
   import { unregisterServiceWorker } from '../utils/sw-cache.js';
   import { forceDeleteAllDatabases } from '../utils/db-recovery.js';
   import { refreshSyncWorkerPgpKeys } from '../utils/sync-worker-client.js';
   import { initPerfObservers } from '../utils/perf-logger.ts';
-  import { mailService, clearPgpKeyCache, invalidatePgpCachedBodies } from '../stores/mailService';
+  import { clearPgpKeyCache, invalidatePgpCachedBodies, mailService } from '../stores/mailService';
   import { searchStore } from '../stores/searchStore';
   const { health: healthStore, stats: searchStatsStore } = searchStore.state;
   const { checkHealth, rebuildFromCache } = searchStore.actions;
@@ -25,53 +25,44 @@
   import * as Tabs from '$lib/components/ui/tabs';
   import * as Tooltip from '$lib/components/ui/tooltip';
   import { Separator } from '$lib/components/ui/separator';
-  import ChevronLeft from '@lucide/svelte/icons/chevron-left';
-  import Plus from '@lucide/svelte/icons/plus';
-  import Info from '@lucide/svelte/icons/info';
-  import User from '@lucide/svelte/icons/user';
-  import Pencil from '@lucide/svelte/icons/pencil';
-  import X from '@lucide/svelte/icons/x';
-  import MessageSquare from '@lucide/svelte/icons/message-square';
-  import AlertCircle from '@lucide/svelte/icons/alert-circle';
-  import CheckCircle from '@lucide/svelte/icons/check-circle';
-  import AlertTriangle from '@lucide/svelte/icons/alert-triangle';
+
   import {
     accounts,
-    currentAccount,
-    loadAccounts,
     createLabel as createMailboxLabel,
-    updateLabel as updateMailboxLabel,
+    currentAccount,
     deleteLabel as deleteMailboxLabel,
-    switchAccount,
-    signOut as mailboxSignOut,
-    syncProgress,
     layoutMode,
+    loadAccounts,
+    signOut as mailboxSignOut,
     setLayoutMode,
+    switchAccount,
+    syncProgress,
+    updateLabel as updateMailboxLabel,
   } from '../stores/mailboxActions';
   import {
-    settingsLabels,
     attachmentReminder,
-    profileName,
-    loadProfileName,
-    setProfileName,
-    fetchSettings,
     effectiveTheme,
-    getEffectiveSettingValue,
-    setSettingValue,
-    isSettingOverrideEnabled,
-    setSettingOverrideEnabled,
-    localSettingsVersion,
-    getSettingDefinition,
-    SETTING_SCOPES,
+    fetchSettings,
     fetchLabels as fetchSettingsLabels,
+    getEffectiveSettingValue,
+    getSettingDefinition,
+    isSettingOverrideEnabled,
+    loadProfileName,
+    localSettingsVersion,
+    profileName,
+    setProfileName,
+    setSettingOverrideEnabled,
+    setSettingValue,
+    SETTING_SCOPES,
     settingsActions,
+    settingsLabels,
   } from '../stores/settingsStore';
   import { mailboxStore } from '../stores/mailboxStore';
   const { folders: foldersStore } = mailboxStore.state;
   const { loadFolders } = mailboxStore.actions;
   import { validateLabelName } from '../utils/label-validation.ts';
   import { config } from '../config.js';
-  import { getFonts, loadFont, getFontFamily } from '../utils/font-loader.js';
+  import { getFontFamily, getFonts, loadFont } from '../utils/font-loader.js';
   import { LABEL_PALETTE, pickLabelColor as pickLabelColorFromPalette } from '../utils/labels.js';
   import FeedbackModal from './FeedbackModal.svelte';
   import LabelModal from './components/LabelModal.svelte';
@@ -338,7 +329,7 @@
     query: string;
   }
 
-  let savedSearches = $state<SavedSearch[]>([]);
+  let savedSearches = $state<LucideSavedSearch[]>([]);
   let newSavedSearchName = $state('');
   let newSavedSearchQuery = $state('');
   let savingSearch = $state(false);
@@ -1099,7 +1090,7 @@
 
 <div class="flex h-14 items-center gap-3 px-4">
   <Button variant="ghost" size="icon" onclick={() => window.history.back()} aria-label="Back">
-    <ChevronLeft class="h-5 w-5" />
+    <LucideChevronLeft class="h-5 w-5" />
   </Button>
   <div class="flex flex-col">
     <h1 class="text-lg font-semibold">Settings</h1>
@@ -1109,13 +1100,13 @@
 
 {#if error}
   <Alert.Root variant="destructive" class="mx-4 mt-4">
-    <AlertCircle class="h-4 w-4" />
+    <LucideAlertCircle class="h-4 w-4" />
     <Alert.Description>{error}</Alert.Description>
   </Alert.Root>
 {/if}
 {#if success}
   <Alert.Root class="mx-4 mt-4 border-green-500 bg-green-50 text-green-900 dark:bg-green-950 dark:text-green-100">
-    <CheckCircle class="h-4 w-4" />
+    <LucideCheckCircle class="h-4 w-4" />
     <Alert.Description>{success}</Alert.Description>
   </Alert.Root>
 {/if}
@@ -1169,7 +1160,7 @@
               <Tooltip.Provider>
                 <Tooltip.Root>
                   <Tooltip.Trigger>
-                    <Info class="h-4 w-4 text-muted-foreground" />
+                    <LucideInfo class="h-4 w-4 text-muted-foreground" />
                   </Tooltip.Trigger>
                   <Tooltip.Content>
                     Accounts are stored on this device only and are not synced.
@@ -1183,7 +1174,7 @@
             {#each $accounts as account}
               <div class="flex items-center justify-between border border-border p-3 {account.email === $currentAccount ? 'bg-primary/5' : ''}">
                 <div class="flex items-center gap-3">
-                  <User class="h-5 w-5 text-muted-foreground" />
+                  <LucideUser class="h-5 w-5 text-muted-foreground" />
                   <div>
                     <div class="font-medium">{account.email}</div>
                     <div class="text-xs text-muted-foreground">
@@ -1199,7 +1190,7 @@
               </div>
             {/each}
             <Button variant="outline" class="mt-4" onclick={() => navigate?.('/?add_account=true')}>
-              <Plus class="mr-2 h-4 w-4" />
+              <LucidePlus class="mr-2 h-4 w-4" />
               Add account
             </Button>
           </Card.Content>
@@ -1377,10 +1368,10 @@
                   <span class="font-medium">{key.name || 'Key'}</span>
                   <div class="flex gap-1">
                     <Button variant="ghost" size="icon" onclick={() => editKey(key)} aria-label="Edit">
-                      <Pencil class="h-4 w-4" />
+                      <LucidePencil class="h-4 w-4" />
                     </Button>
                     <Button variant="ghost" size="icon" onclick={() => removeKey(key)} aria-label="Remove">
-                      <X class="h-4 w-4" />
+                      <LucideX class="h-4 w-4" />
                     </Button>
                   </div>
                 </div>
@@ -1494,10 +1485,10 @@
                     </div>
                     <div class="flex gap-1">
                       <Button variant="ghost" size="icon" onclick={() => openEditLabelModal(label)} aria-label="Edit">
-                        <Pencil class="h-4 w-4" />
+                        <LucidePencil class="h-4 w-4" />
                       </Button>
                       <Button variant="ghost" size="icon" onclick={() => deleteLabel(label)} disabled={labelsDeleting === getLabelKey(label)} aria-label="Remove">
-                        <X class="h-4 w-4" />
+                        <LucideX class="h-4 w-4" />
                       </Button>
                     </div>
                   </div>
@@ -1546,10 +1537,10 @@
             <div class="p-3 {searchHealth.healthy ? 'bg-green-50 dark:bg-green-950' : 'bg-yellow-50 dark:bg-yellow-950'}">
               <div class="flex items-center gap-2 font-semibold {searchHealth.healthy ? 'text-green-600' : 'text-yellow-600'}">
                 {#if searchHealth.healthy}
-                  <CheckCircle class="h-4 w-4" />
+                  <LucideCheckCircle class="h-4 w-4" />
                   Healthy
                 {:else}
-                  <AlertTriangle class="h-4 w-4" />
+                  <LucideAlertTriangle class="h-4 w-4" />
                   {searchHealth.needsRebuild ? 'Needs Rebuild' : 'Partial'}
                 {/if}
               </div>
@@ -1675,7 +1666,7 @@
               </div>
               {#if (storageInfo.percentage as number) > 90}
                 <Alert.Root variant="destructive">
-                  <AlertTriangle class="h-4 w-4" />
+                  <LucideAlertTriangle class="h-4 w-4" />
                   <Alert.Description>Storage almost full! Consider clearing cache.</Alert.Description>
                 </Alert.Root>
               {/if}
@@ -1763,7 +1754,7 @@
           </Card.Header>
           <Card.Content>
             <Button onclick={() => feedbackModalOpen = true}>
-              <MessageSquare class="mr-2 h-4 w-4" />
+              <LucideMessageSquare class="mr-2 h-4 w-4" />
               Send Feedback
             </Button>
           </Card.Content>

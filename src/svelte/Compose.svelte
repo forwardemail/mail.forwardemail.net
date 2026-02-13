@@ -1,13 +1,13 @@
 <script lang="ts">
-  import { tick, onMount, onDestroy } from 'svelte';
+  import { onDestroy, onMount, tick } from 'svelte';
   import { writable } from 'svelte/store';
-  import { Editor, Node, Extension } from '@tiptap/core';
+  import { Editor, Extension, Node } from '@tiptap/core';
   import StarterKit from '@tiptap/starter-kit';
   import LinkBase from '@tiptap/extension-link';
   import Placeholder from '@tiptap/extension-placeholder';
   import Highlight from '@tiptap/extension-highlight';
   import Underline from '@tiptap/extension-underline';
-  import TextStyle from '@tiptap/extension-text-style';
+  import {TextStyle} from '@tiptap/extension-text-style';
   import TextAlign from '@tiptap/extension-text-align';
   import Color from '@tiptap/extension-color';
   import FontFamily from '@tiptap/extension-font-family';
@@ -63,7 +63,7 @@
     inclusive: false,
   });
 
-  import Table from '@tiptap/extension-table';
+  import {Table} from '@tiptap/extension-table';
   import TableRow from '@tiptap/extension-table-row';
   import TableCell from '@tiptap/extension-table-cell';
   import TableHeader from '@tiptap/extension-table-header';
@@ -76,13 +76,13 @@
   import { extractDisplayName, isValidEmail } from '../utils/address.ts';
   import { queueEmail } from '../utils/outbox-service';
   import { saveSentCopy } from '../utils/sent-copy.js';
-  import { parseMailto, mailtoToPrefill } from '../utils/mailto';
+  import { mailtoToPrefill, parseMailto } from '../utils/mailto';
   import {
-    saveDraft,
-    getDraft,
-    deleteDraft,
-    listDrafts,
     createAutosaveTimer,
+    deleteDraft,
+    getDraft,
+    listDrafts,
+    saveDraft,
   } from '../utils/draft-service';
   import { shouldShowAttachmentReminder } from '../utils/attachment-reminder';
   import { attachmentReminder, getEffectiveSettingValue } from '../stores/settingsStore';
@@ -96,34 +96,6 @@
   import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
   import * as Tooltip from '$lib/components/ui/tooltip';
   import { Separator } from '$lib/components/ui/separator';
-  import ChevronLeft from '@lucide/svelte/icons/chevron-left';
-  import Send from '@lucide/svelte/icons/send';
-  import Paperclip from '@lucide/svelte/icons/paperclip';
-  import Save from '@lucide/svelte/icons/save';
-  import Trash2 from '@lucide/svelte/icons/trash-2';
-  import Minus from '@lucide/svelte/icons/minus';
-  import Maximize2 from '@lucide/svelte/icons/maximize-2';
-  import Minimize2 from '@lucide/svelte/icons/minimize-2';
-  import X from '@lucide/svelte/icons/x';
-  import MoreVertical from '@lucide/svelte/icons/more-vertical';
-  import Clock from '@lucide/svelte/icons/clock';
-  import Link2 from '@lucide/svelte/icons/link-2';
-  import ImageIcon from '@lucide/svelte/icons/image';
-  import Smile from '@lucide/svelte/icons/smile';
-  import Type from '@lucide/svelte/icons/type';
-  import Bold from '@lucide/svelte/icons/bold';
-  import Italic from '@lucide/svelte/icons/italic';
-  import UnderlineIcon from '@lucide/svelte/icons/underline';
-  import List from '@lucide/svelte/icons/list';
-  import ListOrdered from '@lucide/svelte/icons/list-ordered';
-  import Quote from '@lucide/svelte/icons/quote';
-  import Code from '@lucide/svelte/icons/code';
-  import AlignLeft from '@lucide/svelte/icons/align-left';
-  import AlignCenter from '@lucide/svelte/icons/align-center';
-  import AlignRight from '@lucide/svelte/icons/align-right';
-  import AlertTriangle from '@lucide/svelte/icons/alert-triangle';
-  import ChevronDown from '@lucide/svelte/icons/chevron-down';
-  import RemoveFormatting from '@lucide/svelte/icons/remove-formatting';
 
   interface ToastApi {
     show?: (message: string, type?: string) => void;
@@ -2226,7 +2198,7 @@
   >
       <header class="flex items-center justify-between gap-2 px-4 py-3 border-b border-border bg-muted/30">
         <Button variant="ghost" size="icon" class="md:hidden" onclick={() => closeComposer(true)}>
-          <ChevronLeft class="h-5 w-5" />
+          <LucideChevronLeft class="h-5 w-5" />
         </Button>
 
         <div class="flex items-center gap-2 min-w-0 flex-1">
@@ -2259,7 +2231,7 @@
           <Tooltip.Root>
             <Tooltip.Trigger>
               <Button variant="ghost" size="icon" class="hidden md:flex" onclick={minimizeComposer}>
-                <Minus class="h-4 w-4" />
+                <LucideMinus class="h-4 w-4" />
               </Button>
             </Tooltip.Trigger>
             <Tooltip.Content side="bottom"><p>Minimize to dock</p></Tooltip.Content>
@@ -2277,7 +2249,7 @@
                     setCompact(true);
                   }}
                 >
-                  <Minimize2 class="h-4 w-4" />
+                  <LucideMinimize2 class="h-4 w-4" />
                 </Button>
               </Tooltip.Trigger>
               <Tooltip.Content side="bottom"><p>Compact view</p></Tooltip.Content>
@@ -2295,7 +2267,7 @@
                     expanded = true;
                   }}
                 >
-                  <Maximize2 class="h-4 w-4" />
+                  <LucideMaximize2 class="h-4 w-4" />
                 </Button>
               </Tooltip.Trigger>
               <Tooltip.Content side="bottom"><p>Expand to fullscreen</p></Tooltip.Content>
@@ -2313,7 +2285,7 @@
                     expanded = true;
                   }}
                 >
-                  <Maximize2 class="h-4 w-4" />
+                  <LucideMaximize2 class="h-4 w-4" />
                 </Button>
               </Tooltip.Trigger>
               <Tooltip.Content side="bottom"><p>Expand</p></Tooltip.Content>
@@ -2329,14 +2301,14 @@
           </Tooltip.Root>
 
           <Button variant="ghost" size="icon" class="md:hidden" onclick={triggerFilePicker}>
-            <Paperclip class="h-5 w-5" />
+            <LucidePaperclip class="h-5 w-5" />
           </Button>
           <Button variant="ghost" size="icon" class="md:hidden h-10 w-10" onclick={send} disabled={sending}>
-            <Send class="h-6 w-6 text-blue-400" />
+            <LucideSend class="h-6 w-6 text-blue-400" />
           </Button>
           <div class="relative md:hidden">
             <Button variant="ghost" size="icon" class="mobile-menu" onclick={() => showMobileMenu = !showMobileMenu}>
-              <MoreVertical class="h-5 w-5" />
+              <LucideMoreVertical class="h-5 w-5" />
             </Button>
             {#if showMobileMenu}
               {@const hasContent = !editorView?.isEmpty || toList.length > 0 || subject.trim().length > 0}
@@ -2347,7 +2319,7 @@
                     class="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground"
                     onclick={() => { showMobileMenu = false; openLinkModal(); }}
                   >
-                    <Link2 class="h-4 w-4" />
+                    <LucideLink2 class="h-4 w-4" />
                     Insert link
                   </button>
                   <button
@@ -2355,7 +2327,7 @@
                     class="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground"
                     onclick={() => { showMobileMenu = false; triggerImagePicker(); }}
                   >
-                    <ImageIcon class="h-4 w-4" />
+                    <LucideImage  class="h-4 w-4" />
                     Insert image
                   </button>
                   <div class="h-px bg-border my-1"></div>
@@ -2366,7 +2338,7 @@
                   disabled={sending}
                   onclick={() => { showMobileMenu = false; openScheduleModal(); }}
                 >
-                  <Clock class="h-4 w-4" />
+                  <LucideClock class="h-4 w-4" />
                   Schedule send
                 </button>
                 <div class="h-px bg-border my-1"></div>
@@ -2376,7 +2348,7 @@
                   disabled={!hasContent}
                   onclick={async () => { await saveCurrentDraft(); showMobileMenu = false; }}
                 >
-                  <Save class="h-4 w-4" />
+                  <LucideSave class="h-4 w-4" />
                   Save as draft
                 </button>
                 <button
@@ -2384,7 +2356,7 @@
                   class="w-full flex items-center gap-2 px-3 py-2 text-sm text-destructive hover:bg-accent"
                   onclick={() => { showMobileMenu = false; closeComposer(false); }}
                 >
-                  <Trash2 class="h-4 w-4" />
+                  <LucideTrash2 class="h-4 w-4" />
                   Discard
                 </button>
               </div>
@@ -2586,7 +2558,7 @@
 
         {#if attachmentError || error}
           <Alert.Root variant="destructive">
-            <AlertTriangle class="h-4 w-4" />
+            <LucideAlertTriangle class="h-4 w-4" />
             <Alert.Description>{attachmentError || error}</Alert.Description>
           </Alert.Root>
         {/if}
@@ -2598,7 +2570,7 @@
             <Tooltip.Root>
               <Tooltip.Trigger>
                 <Button variant="ghost" size="icon" class={isFormatActive('bold') ? 'bg-accent' : ''} onclick={() => editorView?.chain().focus().toggleBold().run()}>
-                  <Bold class="h-4 w-4" />
+                  <LucideBold class="h-4 w-4" />
                 </Button>
               </Tooltip.Trigger>
               <Tooltip.Content><p>Bold</p></Tooltip.Content>
@@ -2606,7 +2578,7 @@
             <Tooltip.Root>
               <Tooltip.Trigger>
                 <Button variant="ghost" size="icon" class={isFormatActive('italic') ? 'bg-accent' : ''} onclick={() => editorView?.chain().focus().toggleItalic().run()}>
-                  <Italic class="h-4 w-4" />
+                  <LucideItalic class="h-4 w-4" />
                 </Button>
               </Tooltip.Trigger>
               <Tooltip.Content><p>Italic</p></Tooltip.Content>
@@ -2614,7 +2586,7 @@
             <Tooltip.Root>
               <Tooltip.Trigger>
                 <Button variant="ghost" size="icon" class={isFormatActive('underline') ? 'bg-accent' : ''} onclick={() => editorView?.chain().focus().toggleUnderline().run()}>
-                  <UnderlineIcon class="h-4 w-4" />
+                  <LucideUnderline  class="h-4 w-4" />
                 </Button>
               </Tooltip.Trigger>
               <Tooltip.Content><p>Underline</p></Tooltip.Content>
@@ -2622,7 +2594,7 @@
             <Tooltip.Root>
               <Tooltip.Trigger>
                 <Button variant="ghost" size="icon" onclick={() => editorView?.chain().focus().unsetAllMarks().clearNodes().run()}>
-                  <RemoveFormatting class="h-4 w-4" />
+                  <LucideRemoveFormatting class="h-4 w-4" />
                 </Button>
               </Tooltip.Trigger>
               <Tooltip.Content><p>Clear formatting</p></Tooltip.Content>
@@ -2666,7 +2638,7 @@
             <Tooltip.Root>
               <Tooltip.Trigger>
                 <Button variant="ghost" size="icon" onclick={openLinkModal}>
-                  <Link2 class="h-4 w-4" />
+                  <LucideLink2 class="h-4 w-4" />
                 </Button>
               </Tooltip.Trigger>
               <Tooltip.Content><p>Insert link</p></Tooltip.Content>
@@ -2675,7 +2647,7 @@
             <Tooltip.Root>
               <Tooltip.Trigger>
                 <Button variant="ghost" size="icon" onclick={() => (showFormatAdvanced = !showFormatAdvanced)}>
-                  <MoreVertical class="h-4 w-4" />
+                  <LucideMoreVertical class="h-4 w-4" />
                 </Button>
               </Tooltip.Trigger>
               <Tooltip.Content><p>More formatting</p></Tooltip.Content>
@@ -2686,7 +2658,7 @@
                 <Tooltip.Root>
                   <Tooltip.Trigger>
                     <Button variant="ghost" size="icon" class={alignment === 'left' ? 'bg-accent' : ''} onclick={() => setAlignment('left')}>
-                      <AlignLeft class="h-4 w-4" />
+                      <LucideAlignLeft class="h-4 w-4" />
                     </Button>
                   </Tooltip.Trigger>
                   <Tooltip.Content><p>Align left</p></Tooltip.Content>
@@ -2694,7 +2666,7 @@
                 <Tooltip.Root>
                   <Tooltip.Trigger>
                     <Button variant="ghost" size="icon" class={alignment === 'center' ? 'bg-accent' : ''} onclick={() => setAlignment('center')}>
-                      <AlignCenter class="h-4 w-4" />
+                      <LucideAlignCenter class="h-4 w-4" />
                     </Button>
                   </Tooltip.Trigger>
                   <Tooltip.Content><p>Align center</p></Tooltip.Content>
@@ -2702,7 +2674,7 @@
                 <Tooltip.Root>
                   <Tooltip.Trigger>
                     <Button variant="ghost" size="icon" class={alignment === 'right' ? 'bg-accent' : ''} onclick={() => setAlignment('right')}>
-                      <AlignRight class="h-4 w-4" />
+                      <LucideAlignRight class="h-4 w-4" />
                     </Button>
                   </Tooltip.Trigger>
                   <Tooltip.Content><p>Align right</p></Tooltip.Content>
@@ -2711,7 +2683,7 @@
                 <Tooltip.Root>
                   <Tooltip.Trigger>
                     <Button variant="ghost" size="icon" class={isFormatActive('bulletList') ? 'bg-accent' : ''} onclick={() => editorView?.chain().focus().toggleBulletList().run()}>
-                      <List class="h-4 w-4" />
+                      <LucideList class="h-4 w-4" />
                     </Button>
                   </Tooltip.Trigger>
                   <Tooltip.Content><p>Bullet list</p></Tooltip.Content>
@@ -2719,7 +2691,7 @@
                 <Tooltip.Root>
                   <Tooltip.Trigger>
                     <Button variant="ghost" size="icon" class={isFormatActive('orderedList') ? 'bg-accent' : ''} onclick={() => editorView?.chain().focus().toggleOrderedList().run()}>
-                      <ListOrdered class="h-4 w-4" />
+                      <LucideListOrdered class="h-4 w-4" />
                     </Button>
                   </Tooltip.Trigger>
                   <Tooltip.Content><p>Numbered list</p></Tooltip.Content>
@@ -2727,7 +2699,7 @@
                 <Tooltip.Root>
                   <Tooltip.Trigger>
                     <Button variant="ghost" size="icon" class={isFormatActive('blockquote') ? 'bg-accent' : ''} onclick={() => editorView?.chain().focus().toggleBlockquote().run()}>
-                      <Quote class="h-4 w-4" />
+                      <LucideQuote class="h-4 w-4" />
                     </Button>
                   </Tooltip.Trigger>
                   <Tooltip.Content><p>Quote</p></Tooltip.Content>
@@ -2735,7 +2707,7 @@
                 <Tooltip.Root>
                   <Tooltip.Trigger>
                     <Button variant="ghost" size="icon" class={isFormatActive('code') ? 'bg-accent' : ''} onclick={() => editorView?.chain().focus().toggleCode().run()}>
-                      <Code class="h-4 w-4" />
+                      <LucideCode class="h-4 w-4" />
                     </Button>
                   </Tooltip.Trigger>
                   <Tooltip.Content><p>Code</p></Tooltip.Content>
@@ -2758,7 +2730,7 @@
                   class="inline-flex items-center justify-center h-9 px-2 rounded-none border-l border-primary-foreground/20 bg-primary text-primary-foreground hover:bg-primary/90 disabled:pointer-events-none disabled:opacity-50"
                   onclick={() => showSendDropdown = !showSendDropdown}
                 >
-                  <ChevronDown class="h-4 w-4" />
+                  <LucideChevronDown class="h-4 w-4" />
                 </button>
                 {#if showSendDropdown}
                   <div class="absolute bottom-full left-0 mb-1 min-w-[160px] border border-border bg-popover p-1 shadow-lg z-[100]">
@@ -2768,7 +2740,7 @@
                       disabled={sending}
                       onclick={() => { showSendDropdown = false; openScheduleModal(); }}
                     >
-                      <Clock class="h-4 w-4" />
+                      <LucideClock class="h-4 w-4" />
                       Schedule send
                     </button>
                   </div>
@@ -2778,7 +2750,7 @@
             <Tooltip.Root>
               <Tooltip.Trigger>
                 <Button variant="ghost" size="icon" onclick={triggerFilePicker}>
-                  <Paperclip class="h-4 w-4" />
+                  <LucidePaperclip class="h-4 w-4" />
                 </Button>
               </Tooltip.Trigger>
               <Tooltip.Content><p>Attach file</p></Tooltip.Content>
@@ -2787,7 +2759,7 @@
               <Tooltip.Root>
                 <Tooltip.Trigger>
                   <Button variant="ghost" size="icon" onclick={toggleEmoji}>
-                    <Smile class="h-4 w-4" />
+                    <LucideSmile class="h-4 w-4" />
                   </Button>
                 </Tooltip.Trigger>
                 <Tooltip.Content><p>Insert emoji</p></Tooltip.Content>
@@ -2801,7 +2773,7 @@
             <Tooltip.Root>
               <Tooltip.Trigger>
                 <Button variant="ghost" size="icon" onclick={triggerImagePicker}>
-                  <ImageIcon class="h-4 w-4" />
+                  <LucideImage  class="h-4 w-4" />
                 </Button>
               </Tooltip.Trigger>
               <Tooltip.Content><p>Insert image</p></Tooltip.Content>
@@ -2809,7 +2781,7 @@
             <Tooltip.Root>
               <Tooltip.Trigger>
                 <Button variant="ghost" size="icon" onclick={saveCurrentDraft}>
-                  <Save class="h-4 w-4" />
+                  <LucideSave class="h-4 w-4" />
                 </Button>
               </Tooltip.Trigger>
               <Tooltip.Content><p>Save draft</p></Tooltip.Content>
@@ -2819,7 +2791,7 @@
           <Tooltip.Root>
             <Tooltip.Trigger>
               <Button variant="ghost" size="icon" onclick={promptDiscardDraft}>
-                <Trash2 class="h-4 w-4" />
+                <LucideTrash2 class="h-4 w-4" />
               </Button>
             </Tooltip.Trigger>
             <Tooltip.Content><p>Discard draft</p></Tooltip.Content>
@@ -2941,7 +2913,7 @@
         </div>
         {#if error}
           <Alert.Root variant="destructive">
-            <AlertTriangle class="h-4 w-4" />
+            <LucideAlertTriangle class="h-4 w-4" />
             <Alert.Description>{error}</Alert.Description>
           </Alert.Root>
         {/if}
@@ -2975,7 +2947,7 @@
         </div>
         {#if error}
           <Alert.Root variant="destructive">
-            <AlertTriangle class="h-4 w-4" />
+            <LucideAlertTriangle class="h-4 w-4" />
             <Alert.Description>{error}</Alert.Description>
           </Alert.Root>
         {/if}
@@ -3009,7 +2981,7 @@
           </div>
         </div>
         {#if (draft as { data: { attachments?: unknown[] } })?.data?.attachments?.length}
-          <Paperclip class="h-4 w-4 text-muted-foreground shrink-0" />
+          <LucidePaperclip class="h-4 w-4 text-muted-foreground shrink-0" />
         {/if}
         <Button
           variant="ghost"
@@ -3017,7 +2989,7 @@
           class="h-6 w-6 shrink-0"
           onclick={(e) => { e.stopPropagation(); discardMinimizedDraft(draft); }}
         >
-          <Trash2 class="h-3 w-3" />
+          <LucideTrash2 class="h-3 w-3" />
         </Button>
       </button>
     {/each}

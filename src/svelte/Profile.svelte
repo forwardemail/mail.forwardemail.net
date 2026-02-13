@@ -1,34 +1,26 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
   import type { Readable, Unsubscriber } from 'svelte/store';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
   import { Label } from '$lib/components/ui/label';
   import * as Card from '$lib/components/ui/card';
   import * as Avatar from '$lib/components/ui/avatar';
-  import ChevronLeft from '@lucide/svelte/icons/chevron-left';
-  import User from '@lucide/svelte/icons/user';
-  import Plus from '@lucide/svelte/icons/plus';
-  import LogOut from '@lucide/svelte/icons/log-out';
-  import BookUser from '@lucide/svelte/icons/book-user';
-  import CalendarIcon from '@lucide/svelte/icons/calendar';
-  import SettingsIcon from '@lucide/svelte/icons/settings';
-  import Camera from '@lucide/svelte/icons/camera';
   import {
     accounts,
+    addAccount,
     currentAccount,
     loadAccounts,
-    switchAccount,
-    addAccount,
     signOut,
+    switchAccount,
   } from '../stores/mailboxActions';
   import {
-    profileName,
-    profileImage,
-    loadProfileName,
     loadProfileImage,
-    setProfileName,
+    loadProfileName,
+    profileImage,
+    profileName,
     setProfileImage,
+    setProfileName,
   } from '../stores/settingsStore';
 
   interface Account {
@@ -189,7 +181,7 @@
         onclick={() => navigate('/mailbox')}
         aria-label="Back to mailbox"
       >
-        <ChevronLeft class="h-5 w-5" />
+        <LucideChevronLeft class="h-5 w-5" />
       </Button>
       <h1 class="text-xl font-semibold">Profile</h1>
     </header>
@@ -209,11 +201,11 @@
             </span>
           {:else}
             <span class="flex h-full w-full items-center justify-center text-muted-foreground">
-              <User class="h-8 w-8" />
+              <LucideUser class="h-8 w-8" />
             </span>
           {/if}
           <span class="absolute inset-0 flex items-center justify-center bg-black/50 text-white opacity-0 transition-opacity group-hover:opacity-100">
-            <Camera class="h-8 w-8" />
+            <LucideCamera class="h-8 w-8" />
           </span>
         </label>
 
@@ -261,7 +253,7 @@
               <div class="flex items-center gap-3 min-w-0">
                 <Avatar.Root class="h-9 w-9 shrink-0 border border-primary/20 bg-primary/10">
                   <Avatar.Fallback class="text-primary">
-                    <User class="h-4 w-4" />
+                    <LucideUser class="h-4 w-4" />
                   </Avatar.Fallback>
                 </Avatar.Root>
                 <div class="min-w-0">
@@ -274,7 +266,7 @@
               <div class="flex items-center gap-2 sm:shrink-0">
                 {#if (account as Account).email === $currentAccount}
                   <Button variant="destructive" size="sm" onclick={() => signOut()} class="flex-1 sm:flex-none">
-                    <LogOut class="mr-2 h-4 w-4" />
+                    <LucideLogOut class="mr-2 h-4 w-4" />
                     Sign out
                   </Button>
                 {:else}
@@ -289,7 +281,7 @@
       </div>
       <div class="flex justify-end">
         <Button variant="ghost" onclick={() => addAccount()}>
-          <Plus class="mr-2 h-4 w-4" />
+          <LucidePlus class="mr-2 h-4 w-4" />
           Add account
         </Button>
       </div>
@@ -300,15 +292,15 @@
       <h2 class="text-xs font-medium uppercase tracking-wider text-muted-foreground">Quick links</h2>
       <div class="grid grid-cols-[repeat(auto-fit,minmax(140px,1fr))] gap-3">
         <Button variant="outline" class="h-11 justify-start" onclick={() => navigate('/contacts')}>
-          <BookUser class="mr-2 h-4 w-4" />
+          <LucideBookUser class="mr-2 h-4 w-4" />
           Contacts
         </Button>
         <Button variant="outline" class="h-11 justify-start" onclick={() => navigate('/calendar')}>
-          <CalendarIcon class="mr-2 h-4 w-4" />
+          <LucideCalendar  class="mr-2 h-4 w-4" />
           Calendar
         </Button>
         <Button variant="outline" class="h-11 justify-start" onclick={() => navigate('/mailbox/settings')}>
-          <SettingsIcon class="mr-2 h-4 w-4" />
+          <LucideSettings  class="mr-2 h-4 w-4" />
           Settings
         </Button>
       </div>

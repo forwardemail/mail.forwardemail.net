@@ -1,6 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
-  import X from '@lucide/svelte/icons/x';
+  import { onDestroy, onMount } from 'svelte';
 
   interface Action {
     label: string;

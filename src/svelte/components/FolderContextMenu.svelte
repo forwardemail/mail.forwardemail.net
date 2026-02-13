@@ -1,9 +1,5 @@
 <script lang="ts">
   import { Separator } from '$lib/components/ui/separator';
-  import Plus from '@lucide/svelte/icons/plus';
-  import Pencil from '@lucide/svelte/icons/pencil';
-  import CheckCheck from '@lucide/svelte/icons/check-check';
-  import Trash2 from '@lucide/svelte/icons/trash-2';
   import type { Folder } from '$types';
 
   interface MenuState {
@@ -132,7 +128,7 @@
       onclick={() => handleAction(onCreateSubfolder)}
       role="menuitem"
     >
-      <Plus class="h-4 w-4 text-muted-foreground" />
+      <LucidePlus class="h-4 w-4 text-muted-foreground" />
       <span>Create subfolder</span>
     </button>
 
@@ -143,7 +139,7 @@
       disabled={systemFolder}
       role="menuitem"
     >
-      <Pencil class="h-4 w-4 text-muted-foreground" />
+      <LucidePencil class="h-4 w-4 text-muted-foreground" />
       <span>Rename</span>
     </button>
 
@@ -153,7 +149,7 @@
       onclick={() => handleAction(onMarkAsRead)}
       role="menuitem"
     >
-      <CheckCheck class="h-4 w-4 text-muted-foreground" />
+      <LucideCheckCheck class="h-4 w-4 text-muted-foreground" />
       <span>Mark all as read</span>
     </button>
 
@@ -166,7 +162,7 @@
       disabled={systemFolder}
       role="menuitem"
     >
-      <Trash2 class="h-4 w-4" />
+      <LucideTrash2 class="h-4 w-4" />
       <span>Delete</span>
     </button>
   </div>

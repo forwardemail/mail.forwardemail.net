@@ -1,7 +1,6 @@
 <script lang="ts">
   import { fade } from 'svelte/transition';
   import { Button } from '$lib/components/ui/button';
-  import X from '@lucide/svelte/icons/x';
   import type { Readable } from 'svelte/store';
 
   interface ToastAction {

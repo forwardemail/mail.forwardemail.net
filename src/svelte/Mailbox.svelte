@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { readable, get, writable } from 'svelte/store';
+  import { get, readable, writable } from 'svelte/store';
   import type { Readable, Unsubscriber } from 'svelte/store';
-  import { tick, onMount, onDestroy } from 'svelte';
+  import { onDestroy, onMount, tick } from 'svelte';
 
   // Store subscriptions managed in onMount/onDestroy to avoid $effect loops
   let mailboxSubscriptions: Unsubscriber[] = [];
@@ -12,94 +12,94 @@
   import { sendSyncRequest } from '../utils/sync-worker-client.js';
   import { Local } from '../utils/storage';
   import { formatCompactDate, formatReaderDate } from '../utils/date';
-  import { extractAddressList, displayAddresses, getReplyToList, extractDisplayName } from '../utils/address.ts';
+  import { displayAddresses, extractAddressList, extractDisplayName, getReplyToList } from '../utils/address.ts';
   import { truncatePreview } from '../utils/preview';
   import { validateLabelName } from '../utils/label-validation.ts';
   import { restoreBlockedImages } from '../utils/sanitize.js';
   import { LABEL_PALETTE, pickLabelColor as pickLabelColorFromPalette } from '../utils/labels.js';
-  import { processQuotedContent, initQuoteToggles } from '../utils/quote-collapse.js';
+  import { initQuoteToggles, processQuotedContent } from '../utils/quote-collapse.js';
   import {
     activateOnKeys,
-    storeToStore,
-    storeToWritableStore,
     chooseStore,
     chooseWritableStore,
     dedupeMessages as dedupeMessagesHelper,
-    resolveDeleteTargets as resolveDeleteTargetsHelper,
     nextCandidate as nextCandidateHelper,
+    resolveDeleteTargets as resolveDeleteTargetsHelper,
+    storeToStore,
+    storeToWritableStore,
   } from './mailbox/utils/mailbox-helpers.js';
   import {
-    getFromDisplay,
+    getAvatarColor,
     getConversationFromDisplay,
     getConversationFromName,
-    getMessageFromName,
+    getFromDisplay,
     getInitials,
+    getMessageFromName,
     getProfileInitials,
-    getAvatarColor,
   } from './mailbox/utils/avatar-helpers.js';
   import {
-    getMailedBy,
-    getSignedBy,
-    getSecurityInfo,
     formatSecurityStatus,
+    getMailedBy,
+    getSecurityInfo,
+    getSignedBy,
   } from './mailbox/utils/security-helpers.js';
   import { createPerfTracer } from '../utils/perf-logger.ts';
   import { getMessageApiId } from '../utils/sync-helpers.ts';
   import { getSyncSettings } from '../utils/sync-settings.js';
-  import { parseMailto, mailtoToPrefill } from '../utils/mailto';
+  import { mailtoToPrefill, parseMailto } from '../utils/mailto';
   import {
+    cancelScheduledEmail,
+    deleteOutboxItem,
+    getOutboxStats,
+    listOutbox,
     outboxCount,
     outboxProcessing,
-    listOutbox,
-    deleteOutboxItem,
-    cancelScheduledEmail,
-    getOutboxStats,
   } from '../utils/outbox-service';
-  import { syncProgress, indexProgress } from '../stores/mailboxActions';
+  import { indexProgress, syncProgress } from '../stores/mailboxActions';
   import {
-    profileName,
-    profileImage,
-    loadProfileName,
-    loadProfileImage,
     effectiveTheme,
     getEffectiveSettingValue,
+    loadProfileImage,
+    loadProfileName,
+    profileImage,
+    profileName,
     setSettingValue,
   } from '../stores/settingsStore';
   import {
-    folders as foldersStore,
-    selectedFolder as selectedFolderStore,
     expandedFolders as expandedFoldersStore,
     folderContextMenu as folderContextMenuStore,
     folderOperationInProgress as folderOperationInProgressStore,
+    folders as foldersStore,
+    selectedFolder as selectedFolderStore,
   } from '../stores/folderStore';
   import {
-    messages as messagesStoreBase,
-    selectedMessage as selectedMessageStore,
-    messageBody as messageBodyStore,
     attachments as attachmentsStore,
-    searchResults as searchResultsStore,
+    filteredMessages as filteredMessagesStore,
+    hasNextPage as hasNextPageStore,
+    loading as loadingStore,
+    messageBody as messageBodyStore,
+    messageLoading as messageLoadingStore,
+    messages as messagesStoreBase,
+    page as pageStore,
     searchActive as searchActiveFallbackStore,
     searching as searchingFallbackStore,
-    filteredMessages as filteredMessagesStore,
-    loading as loadingStore,
-    messageLoading as messageLoadingStore,
-    page as pageStore,
-    hasNextPage as hasNextPageStore,
+    searchResults as searchResultsStore,
+    selectedMessage as selectedMessageStore,
   } from '../stores/messageStore';
   import {
-    threadingEnabled as threadingEnabledStore,
-    sidebarOpen as sidebarOpenStore,
-    showFilters as showFiltersFallbackStore,
-    sortOrder as sortOrderStore,
-    query as queryStore,
-    unreadOnly as unreadOnlyStore,
-    hasAttachmentsOnly as hasAttachmentsOnlyStore,
     filterByLabel as filterByLabelStore,
+    hasAttachmentsOnly as hasAttachmentsOnlyStore,
+    query as queryStore,
+    showFilters as showFiltersFallbackStore,
+    sidebarOpen as sidebarOpenStore,
+    sortOrder as sortOrderStore,
+    threadingEnabled as threadingEnabledStore,
+    unreadOnly as unreadOnlyStore,
   } from '../stores/viewStore';
   import {
-    selectedConversationIds as selectedConversationIdsStore,
-    selectedConversationCount as selectedConversationCountStore,
     filteredConversations as filteredConversationsStore,
+    selectedConversationCount as selectedConversationCountStore,
+    selectedConversationIds as selectedConversationIdsStore,
   } from '../stores/conversationStore';
   import FolderContextMenu from './components/FolderContextMenu.svelte';
   import FolderActionModal from './components/FolderActionModal.svelte';
@@ -115,53 +115,6 @@
   import * as Avatar from '$lib/components/ui/avatar';
   import * as Tooltip from '$lib/components/ui/tooltip';
   import * as Dialog from '$lib/components/ui/dialog';
-
-  // Lucide icons
-  import Menu from '@lucide/svelte/icons/menu';
-  import ChevronLeft from '@lucide/svelte/icons/chevron-left';
-  import ChevronRight from '@lucide/svelte/icons/chevron-right';
-  import ChevronDown from '@lucide/svelte/icons/chevron-down';
-  import Pencil from '@lucide/svelte/icons/pencil';
-  import Search from '@lucide/svelte/icons/search';
-  import Inbox from '@lucide/svelte/icons/inbox';
-  import Send from '@lucide/svelte/icons/send';
-  import FileEdit from '@lucide/svelte/icons/file-edit';
-  import Trash2 from '@lucide/svelte/icons/trash-2';
-  import Archive from '@lucide/svelte/icons/archive';
-  import FolderIcon from '@lucide/svelte/icons/folder';
-  import FolderOpen from '@lucide/svelte/icons/folder-open';
-  import Reply from '@lucide/svelte/icons/reply';
-  import ReplyAll from '@lucide/svelte/icons/reply-all';
-  import Forward from '@lucide/svelte/icons/forward';
-  import Eye from '@lucide/svelte/icons/eye';
-  import Download from '@lucide/svelte/icons/download';
-  import Star from '@lucide/svelte/icons/star';
-  import Plus from '@lucide/svelte/icons/plus';
-  import Check from '@lucide/svelte/icons/check';
-  import CheckSquare from '@lucide/svelte/icons/check-square';
-  import LogOut from '@lucide/svelte/icons/log-out';
-  import MailIcon from '@lucide/svelte/icons/mail';
-  import RefreshCw from '@lucide/svelte/icons/refresh-cw';
-  import MoreHorizontal from '@lucide/svelte/icons/more-horizontal';
-  import Tag from '@lucide/svelte/icons/tag';
-  import FolderInput from '@lucide/svelte/icons/folder-input';
-  import X from '@lucide/svelte/icons/x';
-  import Paperclip from '@lucide/svelte/icons/paperclip';
-  import ImageIcon from '@lucide/svelte/icons/image';
-  import User from '@lucide/svelte/icons/user';
-  import BookUser from '@lucide/svelte/icons/book-user';
-  import CalendarIcon from '@lucide/svelte/icons/calendar';
-  import SettingsIcon from '@lucide/svelte/icons/settings';
-  import MailSearch from '@lucide/svelte/icons/mail-search';
-  import ListFilter from '@lucide/svelte/icons/list-filter';
-  import Filter from '@lucide/svelte/icons/filter';
-  import MailboxIcon from '@lucide/svelte/icons/mailbox';
-  import ShieldAlert from '@lucide/svelte/icons/shield-alert';
-  import AlertOctagon from '@lucide/svelte/icons/alert-octagon';
-  import Lock from '@lucide/svelte/icons/lock';
-  import Sun from '@lucide/svelte/icons/sun';
-  import Moon from '@lucide/svelte/icons/moon';
-  import WifiOff from '@lucide/svelte/icons/wifi-off';
   import EmailIframe from './components/EmailIframe.svelte';
 
   const isBodyPrefetchEnabled = () =>
@@ -4236,7 +4189,7 @@ const stopVerticalResize = () => {
       <Tooltip.Trigger>
         <button class={`inline-flex items-center justify-center h-11 w-11 hover:bg-accent transition-colors ${$sidebarOpen ? 'bg-accent' : ''}`} type="button" aria-label="Toggle sidebar" onclick={toggleSidebar}>
           <span class={`inline-flex transition-transform duration-200 ${$sidebarOpen ? 'rotate-90' : ''}`}>
-            <Menu class="h-4 w-4" />
+            <LucideMenu class="h-4 w-4" />
           </span>
         </button>
       </Tooltip.Trigger>
@@ -4244,7 +4197,7 @@ const stopVerticalResize = () => {
     </Tooltip.Root>
       <div class="flex items-center gap-3 flex-1">
         <div class="relative flex-1 md:max-w-[420px]">
-          <Search class="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <LucideSearch class="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
             type="search"
             class="pl-9 pr-8 h-9 bg-background"
@@ -4303,7 +4256,7 @@ const stopVerticalResize = () => {
                 aria-label="Contacts"
                 onclick={() => navigate('/contacts')}
               >
-                <BookUser class="h-4.5 w-4.5" />
+                <LucideBookUser class="h-4.5 w-4.5" />
               </button>
               <button
                 class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
@@ -4313,7 +4266,7 @@ const stopVerticalResize = () => {
                 aria-label="Calendar"
                 onclick={() => navigate('/calendar')}
               >
-                <CalendarIcon class="h-4.5 w-4.5" />
+                <LucideCalendar  class="h-4.5 w-4.5" />
               </button>
               <button
                 class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
@@ -4323,7 +4276,7 @@ const stopVerticalResize = () => {
                 aria-label="Settings"
                 onclick={() => navigate('/mailbox/settings')}
               >
-                <SettingsIcon class="h-4.5 w-4.5" />
+                <LucideSettings  class="h-4.5 w-4.5" />
               </button>
               <button
                 class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
@@ -4336,7 +4289,7 @@ const stopVerticalResize = () => {
                 {#if isDarkMode}
                   <Sun class="h-4.5 w-4.5" />
                 {:else}
-                  <Moon class="h-4.5 w-4.5" />
+                  <LucideMoon class="h-4.5 w-4.5" />
                 {/if}
               </button>
             </div>
@@ -4356,7 +4309,7 @@ const stopVerticalResize = () => {
                 {:else if profileInitials}
                   <span class="tracking-wide">{profileInitials}</span>
                 {:else}
-                  <User class="h-4.5 w-4.5" />
+                  <LucideUser class="h-4.5 w-4.5" />
                 {/if}
               </span>
             </button>
@@ -4386,7 +4339,7 @@ const stopVerticalResize = () => {
     <aside class="fe-folders" class:fe-folders-open={$sidebarOpen}>
       <div>
         <Button class="w-full gap-2" onclick={() => mailboxView?.composeModal?.open?.()}>
-          <Pencil class="h-4 w-4" />
+          <LucidePencil class="h-4 w-4" />
           <span>Compose</span>
         </Button>
       </div>
@@ -4394,7 +4347,7 @@ const stopVerticalResize = () => {
       <div class="relative mb-2 mt-2">
         <Button variant="outline" class="w-full justify-between px-3 py-2.5 font-medium h-11 bg-muted/50" onclick={() => mailboxView?.toggleAccountMenu?.()}>
           <span class="overflow-hidden text-ellipsis whitespace-nowrap max-w-[calc(100%-24px)]">{$currentAccount}</span>
-          <ChevronDown class="ml-2 h-4 w-4 opacity-50" />
+          <LucideChevronDown class="ml-2 h-4 w-4 opacity-50" />
         </Button>
         {#if $accountMenuOpen}
           <div
@@ -4433,7 +4386,7 @@ const stopVerticalResize = () => {
               <div class="my-1 h-px bg-border"></div>
             {/if}
             <button type="button" class="flex items-center w-full px-3 py-2 text-sm transition-colors hover:bg-accent" onclick={() => mailboxView?.addAccount?.()}>
-              <Plus class="h-4.5 w-4.5 mr-2 shrink-0" />
+              <LucidePlus class="h-4.5 w-4.5 mr-2 shrink-0" />
               <span>Add account</span>
             </button>
             <div class="my-1 h-px bg-border"></div>
@@ -4473,7 +4426,7 @@ const stopVerticalResize = () => {
                     onclick={(e) => { e.stopPropagation(); toggleFolderExpansion(folder.path); }}
                     aria-label={$expandedFolders.has(folder.path) ? 'Collapse' : 'Expand'}
                   >
-                    <ChevronRight class={`h-4 w-4 transition-transform ${$expandedFolders.has(folder.path) ? 'rotate-90' : ''}`} />
+                    <LucideChevronRight class={`h-4 w-4 transition-transform ${$expandedFolders.has(folder.path) ? 'rotate-90' : ''}`} />
                   </button>
                 {:else if (folder.level || 0) > 0}
                   <span class="w-4 shrink-0" aria-hidden="true"></span>
@@ -4499,7 +4452,7 @@ const stopVerticalResize = () => {
             onkeydown={(e) => activateOnKeys(e, selectOutbox)}
           >
             <span class="flex items-center gap-2 min-w-0 flex-1">
-              <Send class="h-5 w-5 text-primary shrink-0" />
+              <LucideSend class="h-5 w-5 text-primary shrink-0" />
               <span class="truncate text-sm">Outbox</span>
               {#if $outboxProcessing}
                 <span class="ml-1 h-3 w-3 animate-spin rounded-full border-2 border-border border-t-primary"></span>
@@ -4521,20 +4474,20 @@ const stopVerticalResize = () => {
           onclick={handleCreateRootFolder}
           title="Create new folder"
         >
-          <Plus class="h-4 w-4" />
+          <LucidePlus class="h-4 w-4" />
           <span>New Folder</span>
         </button>
         <div class="flex flex-col gap-1 mt-2">
           <button type="button" class="flex items-center gap-2 px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors" onclick={() => navigate('/contacts')}>
-            <BookUser class="h-4 w-4" />
+            <LucideBookUser class="h-4 w-4" />
             <span>Contacts</span>
           </button>
           <button type="button" class="flex items-center gap-2 px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors" onclick={() => navigate('/calendar')}>
-            <CalendarIcon class="h-4 w-4" />
+            <LucideCalendar  class="h-4 w-4" />
             <span>Calendar</span>
           </button>
           <button type="button" class="flex items-center gap-2 px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors" onclick={() => navigate('/mailbox/settings')}>
-            <SettingsIcon class="h-4 w-4" />
+            <LucideSettings  class="h-4 w-4" />
             <span>Settings</span>
           </button>
         </div>
@@ -4609,7 +4562,7 @@ const stopVerticalResize = () => {
               data-tooltip-position="bottom"
               onclick={() => (sortMenuOpen = !sortMenuOpen)}
             >
-              <ListFilter class="h-5 w-5" />
+              <LucideListFilter class="h-5 w-5" />
             </button>
             {#if sortMenuOpen}
               <div class="absolute z-50 mt-1.5 min-w-[160px] border border-border bg-popover p-1 shadow-md right-0" data-sort-dropdown>
@@ -4797,7 +4750,7 @@ const stopVerticalResize = () => {
               data-tooltip-position="bottom"
               onclick={bulkDelete}
             >
-              <Trash2 class="h-5 w-5" />
+              <LucideTrash2 class="h-5 w-5" />
             </button>
             <div class="relative" data-bulk-move>
               <button
@@ -4896,7 +4849,7 @@ const stopVerticalResize = () => {
                             title={item.status === 'scheduled' ? 'Cancel' : 'Delete'}
                             onclick={(e) => { e.stopPropagation(); handleDeleteOutbox(item); }}
                           >
-                            <Trash2 class="h-4.5 w-4.5" />
+                            <LucideTrash2 class="h-4.5 w-4.5" />
                           </button>
                         {/if}
                       </div>
@@ -5298,7 +5251,7 @@ const stopVerticalResize = () => {
           <span>Archive</span>
         </button>
         <button type="button" class="flex items-center w-full px-2 py-1.5 text-sm hover:bg-accent cursor-pointer" onclick={contextDelete}>
-          <Trash2 class="h-4.5 w-4.5 mr-2" />
+          <LucideTrash2 class="h-4.5 w-4.5 mr-2" />
           <span>Delete</span>
         </button>
         <div class="relative">
@@ -5429,7 +5382,7 @@ const stopVerticalResize = () => {
                 selectedOutboxItem = null;
               }}
             >
-              <ChevronLeft class="h-5 w-5" />
+              <LucideChevronLeft class="h-5 w-5" />
             </button>
           </div>
         {/if}
@@ -5521,7 +5474,7 @@ const stopVerticalResize = () => {
               data-tooltip-position="bottom"
               onclick={() => closeReaderFullscreen({ clearSelection: true })}
             >
-              <ChevronLeft class="h-5 w-5" />
+              <LucideChevronLeft class="h-5 w-5" />
             </button>
             <div class="flex items-center gap-1">
               {#if canArchive}
@@ -5556,7 +5509,7 @@ const stopVerticalResize = () => {
                 data-tooltip-position="bottom"
                 onclick={deleteSelected}
               >
-                <Trash2 class="h-5 w-5" />
+                <LucideTrash2 class="h-5 w-5" />
               </button>
               {#if canToggleRead}
                 <button
@@ -5717,7 +5670,7 @@ const stopVerticalResize = () => {
                       </button>
                     {/if}
                     <button type="button" class="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground cursor-pointer active:bg-accent" onclick={() => { actionMenuOpen = false; deleteSelected(); }}>
-                      <Trash2 class="h-4 w-4" />
+                      <LucideTrash2 class="h-4 w-4" />
                       <span>Delete</span>
                     </button>
                     {#if canDownloadOriginal}
@@ -5745,7 +5698,7 @@ const stopVerticalResize = () => {
                       }}>
                         <FolderInput class="h-4 w-4" />
                         <span class="flex-1 text-left">Move to…</span>
-                        <ChevronRight class={`h-4 w-4 transition-transform ${readerMoveMenuFlip ? 'rotate-180' : ''}`} />
+                        <LucideChevronRight class={`h-4 w-4 transition-transform ${readerMoveMenuFlip ? 'rotate-180' : ''}`} />
                       </button>
                       {#if readerMoveOpen}
                         <div
@@ -5780,7 +5733,7 @@ const stopVerticalResize = () => {
                       }}>
                         <Tag class="h-4 w-4" />
                         <span class="flex-1 text-left">Label as…</span>
-                        <ChevronRight class={`h-4 w-4 transition-transform ${readerLabelMenuFlip ? 'rotate-180' : ''}`} />
+                        <LucideChevronRight class={`h-4 w-4 transition-transform ${readerLabelMenuFlip ? 'rotate-180' : ''}`} />
                       </button>
                       {#if readerLabelMenuOpen}
                         <div
@@ -6057,7 +6010,7 @@ const stopVerticalResize = () => {
                   onclick={() => toggleThreadMessage(message)}
                   aria-expanded={isExpanded}
                 >
-                  <ChevronRight class={`h-4 w-4 transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
+                  <LucideChevronRight class={`h-4 w-4 transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
                   <span class="font-medium text-foreground truncate">{extractDisplayName(message.from) || message.from}</span>
                   <span class="text-xs text-muted-foreground ml-auto shrink-0">{formatReaderDate(message.date)}</span>
                 </button>
@@ -6098,7 +6051,7 @@ const stopVerticalResize = () => {
                     {/if}
                     {#if $hasBlockedImages}
                       <div class="flex items-center gap-3 p-3 mb-4 bg-amber-500/10 border border-amber-500/20 text-sm">
-                        <ImageIcon class="h-4.5 w-4.5" />
+                        <LucideImage  class="h-4.5 w-4.5" />
                         <span>
                           {#if $trackingPixelCount > 0 && $blockedImageCount > 0}
                             {$trackingPixelCount} tracking pixel{$trackingPixelCount !== 1 ? 's' : ''} and {$blockedImageCount} image{$blockedImageCount !== 1 ? 's' : ''} blocked
@@ -6237,7 +6190,7 @@ const stopVerticalResize = () => {
             {/if}
             {#if $hasBlockedImages}
               <div class="flex items-center gap-3 p-3 mb-4 bg-amber-500/10 border border-amber-500/20 text-sm">
-                <ImageIcon class="h-4.5 w-4.5" />
+                <LucideImage  class="h-4.5 w-4.5" />
                 <span>
                   {#if $trackingPixelCount > 0 && $blockedImageCount > 0}
                     {$trackingPixelCount} tracking pixel{$trackingPixelCount !== 1 ? 's' : ''} and {$blockedImageCount} image{$blockedImageCount !== 1 ? 's' : ''} blocked
@@ -6378,7 +6331,7 @@ const stopVerticalResize = () => {
         aria-label="Compose"
         onclick={() => mailboxView?.composeModal?.open?.()}
       >
-        <Pencil class="h-5 w-5" />
+        <LucidePencil class="h-5 w-5" />
       </Button>
     </Tooltip.Trigger>
     <Tooltip.Content side="left"><p>Compose</p></Tooltip.Content>

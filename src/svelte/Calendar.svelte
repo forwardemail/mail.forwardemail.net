@@ -1,8 +1,8 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
   import type { Readable, Unsubscriber } from 'svelte/store';
   import { ScheduleXCalendar } from '@schedule-x/svelte';
-  import { createCalendar, viewDay, viewWeek, viewMonthGrid } from '@schedule-x/calendar';
+  import { createCalendar, viewDay, viewMonthGrid, viewWeek } from '@schedule-x/calendar';
   import '@schedule-x/theme-default/dist/index.css';
   import { Local } from '../utils/storage';
   import { Remote } from '../utils/remote';
@@ -22,15 +22,6 @@
   import * as Select from '$lib/components/ui/select';
   import * as Tooltip from '$lib/components/ui/tooltip';
   import { Separator } from '$lib/components/ui/separator';
-  import ChevronLeft from '@lucide/svelte/icons/chevron-left';
-  import ChevronDown from '@lucide/svelte/icons/chevron-down';
-  import ChevronRight from '@lucide/svelte/icons/chevron-right';
-  import Import from '@lucide/svelte/icons/import';
-  import Copy from '@lucide/svelte/icons/copy';
-  import Download from '@lucide/svelte/icons/download';
-  import Trash2 from '@lucide/svelte/icons/trash-2';
-  import Info from '@lucide/svelte/icons/info';
-  import AlertTriangle from '@lucide/svelte/icons/alert-triangle';
 
   interface ToastApi {
     show?: (message: string, type?: string) => void;
@@ -2048,7 +2039,7 @@ $effect(() => {
       onclick={() => navigate?.('/mailbox')}
       aria-label="Back"
     >
-      <ChevronLeft class="h-5 w-5" />
+      <LucideChevronLeft class="h-5 w-5" />
     </Button>
     <div class="min-w-0">
       <h1 class="text-lg font-semibold truncate">Calendar</h1>
@@ -2064,7 +2055,7 @@ $effect(() => {
           {#snippet child({ props })}
             <Button variant="ghost" class="calendar-filter gap-1.5" {...props}>
               <span>{calendarFilterLabel}</span>
-              <ChevronDown class="h-4 w-4" />
+              <LucideChevronDown class="h-4 w-4" />
             </Button>
           {/snippet}
         </DropdownMenu.Trigger>
@@ -2093,7 +2084,7 @@ $effect(() => {
           class="import-menu"
           onclick={() => document.getElementById('import-ics-input')?.click()}
         >
-          <Import class="h-4 w-4" />
+          <LucideImport class="h-4 w-4" />
         </Button>
       </Tooltip.Trigger>
       <Tooltip.Content>
@@ -2115,7 +2106,7 @@ $effect(() => {
 
 {#if error}
   <Alert.Root variant="destructive" class="mx-4 mt-3">
-    <AlertTriangle class="h-4 w-4" />
+    <LucideAlertTriangle class="h-4 w-4" />
     <Alert.Description>{error}</Alert.Description>
   </Alert.Root>
 {/if}
@@ -2333,9 +2324,9 @@ $effect(() => {
         onclick={() => (optionalFieldsExpanded = !optionalFieldsExpanded)}
       >
         {#if optionalFieldsExpanded}
-          <ChevronDown class="h-4 w-4" />
+          <LucideChevronDown class="h-4 w-4" />
         {:else}
-          <ChevronRight class="h-4 w-4" />
+          <LucideChevronRight class="h-4 w-4" />
         {/if}
         <span>More details</span>
         {#if !optionalFieldsExpanded && (newEvent.location || newEvent.url || newEvent.timezone || newEvent.attendees)}
@@ -2514,9 +2505,9 @@ $effect(() => {
         onclick={() => (optionalFieldsExpanded = !optionalFieldsExpanded)}
       >
         {#if optionalFieldsExpanded}
-          <ChevronDown class="h-4 w-4" />
+          <LucideChevronDown class="h-4 w-4" />
         {:else}
-          <ChevronRight class="h-4 w-4" />
+          <LucideChevronRight class="h-4 w-4" />
         {/if}
         <span>More details</span>
         {#if !optionalFieldsExpanded && (editEvent.location || editEvent.url || editEvent.timezone || editEvent.attendees)}
@@ -2550,7 +2541,7 @@ $effect(() => {
         <Tooltip.Root>
           <Tooltip.Trigger>
             <Button variant="outline" size="icon" onclick={() => duplicateEvent()}>
-              <Copy class="h-4 w-4" />
+              <LucideCopy class="h-4 w-4" />
             </Button>
           </Tooltip.Trigger>
           <Tooltip.Content>
@@ -2560,7 +2551,7 @@ $effect(() => {
         <Tooltip.Root>
           <Tooltip.Trigger>
             <Button variant="outline" size="icon" onclick={() => exportEventAsICS(events.find(e => (e as Record<string, unknown>).id === editEvent.id) as Record<string, unknown>)}>
-              <Download class="h-4 w-4" />
+              <LucideDownload class="h-4 w-4" />
             </Button>
           </Tooltip.Trigger>
           <Tooltip.Content>
@@ -2570,7 +2561,7 @@ $effect(() => {
         <Tooltip.Root>
           <Tooltip.Trigger>
             <Button variant="outline" size="icon" class="text-destructive hover:text-destructive" onclick={() => (showDeleteConfirm = true)}>
-              <Trash2 class="h-4 w-4" />
+              <LucideTrash2 class="h-4 w-4" />
             </Button>
           </Tooltip.Trigger>
           <Tooltip.Content>

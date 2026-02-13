@@ -5,10 +5,9 @@
   import { Label } from '$lib/components/ui/label';
   import * as Alert from '$lib/components/ui/alert';
   import * as Card from '$lib/components/ui/card';
-  import ChevronLeft from '@lucide/svelte/icons/chevron-left';
   import { Remote } from '../utils/remote';
   import { buildAliasAuthHeader } from '../utils/auth.ts';
-  import { Local, Accounts } from '../utils/storage';
+  import { Accounts, Local } from '../utils/storage';
 
   interface Props {
     onSuccess?: (path: string) => void;
@@ -148,7 +147,7 @@
     <Card.Root class="w-[92%] max-w-[480px] py-0">
       <Card.Content class="flex items-center gap-2 p-3">
         <Button variant="ghost" size="icon" onclick={goToMailbox} aria-label="Back to Mailbox">
-          <ChevronLeft class="h-5 w-5" />
+          <LucideChevronLeft class="h-5 w-5" />
         </Button>
         <span class="text-sm font-semibold">Back to Mailbox</span>
       </Card.Content>
@@ -174,7 +173,7 @@
             required
           />
         </div>
-
+        
         <div class="grid gap-2">
           <Input
             type="password"

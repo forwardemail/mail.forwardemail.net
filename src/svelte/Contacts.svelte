@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
   import type { Unsubscriber } from 'svelte/store';
   import { Remote } from '../utils/remote';
   import { Local } from '../utils/storage';
@@ -14,21 +14,6 @@
   import * as Dialog from '$lib/components/ui/dialog';
   import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
   import * as Alert from '$lib/components/ui/alert';
-  import ChevronLeft from '@lucide/svelte/icons/chevron-left';
-  import ChevronDown from '@lucide/svelte/icons/chevron-down';
-  import ChevronRight from '@lucide/svelte/icons/chevron-right';
-  import Upload from '@lucide/svelte/icons/upload';
-  import Camera from '@lucide/svelte/icons/camera';
-  import Plus from '@lucide/svelte/icons/plus';
-  import MoreHorizontal from '@lucide/svelte/icons/more-horizontal';
-  import Mail from '@lucide/svelte/icons/mail';
-  import CalendarPlus from '@lucide/svelte/icons/calendar-plus';
-  import Search from '@lucide/svelte/icons/search';
-  import Download from '@lucide/svelte/icons/download';
-  import Trash2 from '@lucide/svelte/icons/trash-2';
-  import Info from '@lucide/svelte/icons/info';
-  import User from '@lucide/svelte/icons/user';
-  import AlertCircle from '@lucide/svelte/icons/alert-circle';
 
   let accountUnsub: Unsubscriber | null = null;
 
@@ -816,7 +801,7 @@
       onclick={() => navigate?.('/mailbox')}
       aria-label="Back"
     >
-      <ChevronLeft class="h-5 w-5" />
+      <LucideChevronLeft class="h-5 w-5" />
     </Button>
     <div class="flex flex-col">
       <h1 class="text-lg font-semibold">Contacts</h1>
@@ -828,7 +813,7 @@
       <DropdownMenu.Trigger>
         {#snippet child({ props })}
           <Button variant="ghost" size="icon" {...props} aria-label="Import vCard">
-            <Upload class="h-4 w-4" />
+            <LucideUpload class="h-4 w-4" />
           </Button>
         {/snippet}
       </DropdownMenu.Trigger>
@@ -847,7 +832,7 @@
       </DropdownMenu.Content>
     </DropdownMenu.Root>
     <Button onclick={startNew}>
-      <Plus class="mr-2 h-4 w-4" />
+      <LucidePlus class="mr-2 h-4 w-4" />
       New Contact
     </Button>
   </div>
@@ -855,7 +840,7 @@
 
 {#if error}
   <Alert.Root variant="destructive" class="mx-4 mt-4">
-    <AlertCircle class="h-4 w-4" />
+    <LucideAlertCircle class="h-4 w-4" />
     <Alert.Description>{error}</Alert.Description>
   </Alert.Root>
 {/if}
@@ -867,7 +852,7 @@
   >
     <div class="p-3">
       <div class="relative">
-        <Search class="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+        <LucideSearch class="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
         <Input
           type="search"
           placeholder="Search contacts"
@@ -925,7 +910,7 @@
             onclick={() => selectContact(null)}
             aria-label="Back to contacts"
           >
-            <ChevronLeft class="h-5 w-5" />
+            <LucideChevronLeft class="h-5 w-5" />
           </Button>
           <label
             for="contact-photo-upload"
@@ -940,7 +925,7 @@
               </span>
             {/if}
             <span class="absolute inset-0 flex items-center justify-center bg-black/50 text-white opacity-0 transition-opacity group-hover:opacity-100">
-              <Camera class="h-6 w-6" />
+              <LucideCamera class="h-6 w-6" />
             </span>
           </label>
           <div class="min-w-0 flex-1">
@@ -951,30 +936,30 @@
             <DropdownMenu.Trigger>
               {#snippet child({ props })}
                 <Button variant="outline" size="icon" {...props}>
-                  <MoreHorizontal class="h-4 w-4" />
+                  <LucideMoreHorizontal class="h-4 w-4" />
                 </Button>
               {/snippet}
             </DropdownMenu.Trigger>
             <DropdownMenu.Content align="end" class="w-48">
               <DropdownMenu.Item onclick={() => startMail(selectedContact)}>
-                <Mail class="mr-2 h-4 w-4" />
+                <LucideMail class="mr-2 h-4 w-4" />
                 Email
               </DropdownMenu.Item>
               <DropdownMenu.Item onclick={() => addEvent(selectedContact)}>
-                <CalendarPlus class="mr-2 h-4 w-4" />
+                <LucideCalendarPlus class="mr-2 h-4 w-4" />
                 Add event
               </DropdownMenu.Item>
               <DropdownMenu.Item onclick={() => viewEmails(selectedContact)}>
-                <Search class="mr-2 h-4 w-4" />
+                <LucideSearch class="mr-2 h-4 w-4" />
                 View emails
               </DropdownMenu.Item>
               <DropdownMenu.Item onclick={() => exportVCard(selectedContact)}>
-                <Download class="mr-2 h-4 w-4" />
+                <LucideDownload class="mr-2 h-4 w-4" />
                 Export vCard
               </DropdownMenu.Item>
               <DropdownMenu.Separator />
               <DropdownMenu.Item class="text-destructive" onclick={() => openDeleteConfirm(selectedContact)}>
-                <Trash2 class="mr-2 h-4 w-4" />
+                <LucideTrash2 class="mr-2 h-4 w-4" />
                 Delete
               </DropdownMenu.Item>
             </DropdownMenu.Content>
@@ -1039,9 +1024,9 @@
                 onclick={() => (optionalFieldsExpanded = !optionalFieldsExpanded)}
               >
                 {#if optionalFieldsExpanded}
-                  <ChevronDown class="h-4 w-4" />
+                  <LucideChevronDown class="h-4 w-4" />
                 {:else}
-                  <ChevronRight class="h-4 w-4" />
+                  <LucideChevronRight class="h-4 w-4" />
                 {/if}
                 <span>Additional info</span>
                 {#if !optionalFieldsExpanded && (draft.company || draft.jobTitle || draft.timezone || draft.website || draft.birthday)}
@@ -1107,14 +1092,14 @@
 
         <!-- Privacy Message -->
         <div class="mt-6 flex items-center gap-2 bg-muted/50 p-3 text-xs text-muted-foreground">
-          <Info class="h-4 w-4 shrink-0" />
+          <LucideInfo class="h-4 w-4 shrink-0" />
           <span>Privacy: Contacts are stored privately in your account and are never shared.</span>
         </div>
       </div>
     {:else}
       <div class="flex h-full items-center justify-center text-muted-foreground">
         <div class="text-center">
-          <User class="mx-auto h-12 w-12 opacity-50" />
+          <LucideUser class="mx-auto h-12 w-12 opacity-50" />
           <p class="mt-2">Select a contact to view details.</p>
         </div>
       </div>
@@ -1147,7 +1132,7 @@
       </div>
       {#if modalError}
         <Alert.Root variant="destructive">
-          <AlertCircle class="h-4 w-4" />
+          <LucideAlertCircle class="h-4 w-4" />
           <Alert.Description>{modalError}</Alert.Description>
         </Alert.Root>
       {/if}
