@@ -6,6 +6,8 @@ import svelteParser from 'svelte-eslint-parser';
 import tsParser from '@typescript-eslint/parser';
 import tsPlugin from '@typescript-eslint/eslint-plugin';
 
+import perfectionist from 'eslint-plugin-perfectionist';
+
 export default [
   {
     ignores: ['dist/**', 'node_modules/**'],
@@ -97,11 +99,15 @@ export default [
     },
     plugins: {
       svelte,
+      perfectionist,
       '@typescript-eslint': tsPlugin,
     },
     rules: {
       ...svelte.configs['flat/recommended'].rules,
       ...svelte.configs['flat/prettier'].rules,
+      'no-multiple-empty-lines': 'error',
+      'perfectionist/sort-named-imports': 'error',
+      'perfectionist/sort-import-attributes': 'error',
     },
   },
 ];
