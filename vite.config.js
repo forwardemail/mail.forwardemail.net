@@ -1,5 +1,8 @@
 import { defineConfig } from 'vite';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
+import AutoImport from 'unplugin-auto-import/vite';
+import Icons from 'unplugin-icons/vite';
+import IconsResolver from 'unplugin-icons/resolver';
 import { configDefaults } from 'vitest/config';
 import { visualizer } from 'rollup-plugin-visualizer';
 import { createHash } from 'crypto';
@@ -68,6 +71,19 @@ export default defineConfig({
     },
   },
   plugins: [
+    Icons({
+      compiler: 'svelte',
+    }),
+    AutoImport({
+      dts: true,
+      eslintrc: { enabled: true },
+      resolvers: [
+        IconsResolver({
+          prefix: false,
+          enabledCollections: ['lucide'],
+        }),
+      ],
+    }),
     svelte(),
     enableAnalyzer &&
       visualizer({
@@ -76,7 +92,7 @@ export default defineConfig({
         gzipSize: true,
         brotliSize: true,
       }),
-  ].filter(Boolean),
+  ],
   test: {
     environment: 'jsdom',
     globals: true,
