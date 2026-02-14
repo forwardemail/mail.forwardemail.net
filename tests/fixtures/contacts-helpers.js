@@ -5,7 +5,8 @@ import { expect } from '@playwright/test';
  */
 export async function navigateToContacts(page) {
   await page.goto('/contacts');
-  await page.waitForSelector('.fe-contacts-list', { timeout: 10000 });
+  // Wait for the contact list to render (li buttons inside the sidebar)
+  await page.waitForSelector('ul li button', { timeout: 10000 });
   await page.waitForTimeout(500);
 }
 
@@ -13,66 +14,71 @@ export async function navigateToContacts(page) {
  * Open new contact modal
  */
 export async function openNewContactModal(page) {
-  await page.click('button[aria-label="New contact"]');
-  const modal = page.locator('.fe-modal[role="dialog"]');
+  await page.getByRole('button', { name: /New contact/i }).click();
+  const modal = page.getByRole('dialog');
   await expect(modal).toBeVisible();
   return modal;
 }
 
 /**
- * Fill contact form with provided data
+ * Fill contact form with provided data.
+ * Works for both the new contact dialog and the inline detail panel.
+ * @param {import('@playwright/test').Page | import('@playwright/test').Locator} scope - page or dialog locator
+ * @param {object} contactData - fields to fill
  */
-export async function fillContactForm(page, contactData) {
+export async function fillContactForm(scope, contactData) {
   const { name, email, phone, notes, company, jobTitle, timezone, website, birthday } = contactData;
 
   if (name !== undefined) {
-    await page.fill('input[placeholder*="Name"], input[name="name"]', name);
+    await scope.getByLabel('Name', { exact: true }).first().fill(name);
   }
 
   if (email !== undefined) {
-    await page.fill('input[type="email"], input[placeholder*="Email"]', email);
+    await scope.getByLabel('Email', { exact: true }).first().fill(email);
   }
 
   if (phone !== undefined) {
-    await page.fill('input[type="tel"], input[placeholder*="Phone"]', phone);
+    await scope.getByLabel('Phone', { exact: true }).first().fill(phone);
   }
 
   if (notes !== undefined) {
-    await page.fill('textarea[placeholder*="Notes"], textarea[name="notes"]', notes);
+    await scope.getByLabel('Notes', { exact: true }).first().fill(notes);
   }
 
-  // Handle optional fields
+  // Handle optional fields (only available in the inline detail panel, not the new-contact modal)
   if (company || jobTitle || timezone || website || birthday) {
-    const optionalToggle = page.locator('button:has-text("Additional info")');
-    if (await optionalToggle.isVisible()) {
-      await optionalToggle.click();
-      await page.waitForTimeout(300);
+    // Check if optional fields are already visible; if not, expand the toggle.
+    // The section auto-expands when a contact already has optional data,
+    // so we must avoid clicking the toggle when it would collapse the section.
+    const companyField = scope.getByLabel('Company', { exact: true }).first();
+    const isAlreadyExpanded = await companyField.isVisible().catch(() => false);
+
+    if (!isAlreadyExpanded) {
+      const optionalToggle = scope.locator('button:has-text("Additional info")');
+      if (await optionalToggle.isVisible()) {
+        await optionalToggle.click();
+        (await scope.page?.waitForTimeout?.(300)) || (await new Promise((r) => setTimeout(r, 300)));
+      }
     }
 
     if (company !== undefined) {
-      await page.fill('input[placeholder*="Company"], input[name="company"]', company);
+      await companyField.fill(company);
     }
 
     if (jobTitle !== undefined) {
-      await page.fill(
-        'input[placeholder*="Job"], input[placeholder*="Title"], input[name="jobTitle"]',
-        jobTitle,
-      );
+      await scope.getByLabel('Job Title', { exact: true }).first().fill(jobTitle);
     }
 
     if (timezone !== undefined) {
-      await page.fill(
-        'input[placeholder*="Time"], input[placeholder*="zone"], input[name="timezone"]',
-        timezone,
-      );
+      await scope.getByLabel('Time Zone', { exact: true }).first().fill(timezone);
     }
 
     if (website !== undefined) {
-      await page.fill('input[type="url"], input[placeholder*="Website"]', website);
+      await scope.getByLabel('Website', { exact: true }).first().fill(website);
     }
 
     if (birthday !== undefined) {
-      await page.fill('input[type="date"], input[name="birthday"]', birthday);
+      await scope.getByLabel('Birthday', { exact: true }).first().fill(birthday);
     }
   }
 }
@@ -81,38 +87,65 @@ export async function fillContactForm(page, contactData) {
  * Complete create contact flow
  */
 export async function createContact(page, contactData) {
-  await openNewContactModal(page);
-  await fillContactForm(page, contactData);
-  await page.click('button:has-text("Save")');
-  await page.waitForSelector('.fe-modal', { state: 'hidden', timeout: 5000 });
+  const modal = await openNewContactModal(page);
+  await fillContactForm(modal, contactData);
+  await modal.locator('button:has-text("Save")').click();
+  await page.waitForSelector('div[role="dialog"]', { state: 'hidden', timeout: 5000 });
 }
 
 /**
  * Select a contact from the list by name
  */
 export async function selectContact(page, contactName) {
-  const contactRow = page.locator(`.fe-contact-row:has-text("${contactName}")`);
+  const contactRow = page.locator('li button').filter({ hasText: contactName });
   await contactRow.click();
   await page.waitForTimeout(300);
 }
 
 /**
- * Open actions menu in detail panel
+ * Open actions dropdown menu in detail panel (the "..." button).
+ * The menu items use role="menuitem", not button.
  */
 export async function openActionsMenu(page) {
-  const actionsBtn = page.locator('.fe-contact-actions button, button[aria-label*="Actions"]');
-  await actionsBtn.click();
+  // The actions button is a DropdownMenu.Trigger with a MoreHorizontal icon (no text).
+  // It renders as a button with an SVG child and no visible text.
+  const actionsBtn = page
+    .locator('button:has(svg.lucide-ellipsis), button:has(svg.lucide-more-horizontal)')
+    .first();
+  if (await actionsBtn.isVisible()) {
+    await actionsBtn.click();
+  } else {
+    // Fallback: find icon-only button (button with SVG and no meaningful text)
+    const moreBtn = page
+      .locator('button:has(svg)')
+      .filter({ hasNotText: /\w{2,}/ })
+      .last();
+    await moreBtn.click();
+  }
+  // Wait for menu to appear
+  await page.waitForSelector('[role="menu"]', { timeout: 3000 });
   await page.waitForTimeout(200);
 }
 
 /**
- * Enter edit mode and update contact inline
+ * Click a menu item in the currently open actions dropdown
+ */
+export async function clickMenuItem(page, itemName) {
+  // Use exact matching for strings to avoid substring matches (e.g. "Email" vs "View emails")
+  const options =
+    typeof itemName === 'string' ? { name: itemName, exact: true } : { name: itemName };
+  await page.getByRole('menuitem', options).click();
+  await page.waitForTimeout(300);
+}
+
+/**
+ * Edit contact inline - fields are always editable, just fill them.
+ * Save/Cancel buttons appear automatically when changes are detected.
  */
 export async function editContactInline(page, contactData) {
-  await openActionsMenu(page);
-  await page.click('button:has-text("Edit")');
-  await page.waitForTimeout(300);
   await fillContactForm(page, contactData);
+  // Wait for hasChanges to be detected and Save/Cancel to appear
+  await page.waitForTimeout(300);
 }
 
 /**
@@ -137,10 +170,10 @@ export async function cancelEditInline(page) {
 export async function deleteContact(page, contactName) {
   await selectContact(page, contactName);
   await openActionsMenu(page);
-  await page.click('button:has-text("Delete")');
-  const confirmModal = page.locator('.fe-modal[role="dialog"]');
+  await clickMenuItem(page, 'Delete');
+  const confirmModal = page.getByRole('dialog');
   await expect(confirmModal).toBeVisible();
-  await page.click('.fe-modal button:has-text("Delete")');
+  await confirmModal.locator('button:has-text("Delete")').click();
   await page.waitForTimeout(500);
 }
 
@@ -148,7 +181,7 @@ export async function deleteContact(page, contactName) {
  * Search contacts
  */
 export async function searchContacts(page, query) {
-  await page.fill('.fe-contacts-search-input, input[type="search"]', query);
+  await page.fill('input[placeholder*="Search" i], input[type="search"]', query);
   await page.waitForTimeout(300);
 }
 
@@ -156,7 +189,7 @@ export async function searchContacts(page, query) {
  * Import vCard file
  */
 export async function importVCard(page, filePath) {
-  await page.click('button[aria-label="Import vCard"]');
+  await page.getByRole('button', { name: /Import/i }).click();
   await page.waitForTimeout(200);
   const fileInput = page.locator('input[type="file"][accept*="vcf"]');
   await fileInput.setInputFiles(filePath);
@@ -171,7 +204,7 @@ export async function exportContact(page, contactName) {
   await openActionsMenu(page);
 
   const downloadPromise = page.waitForEvent('download');
-  await page.click('button:has-text("Export")');
+  await clickMenuItem(page, /Export/);
   const download = await downloadPromise;
 
   return download;
@@ -195,15 +228,32 @@ export async function toggleOptionalFields(page) {
 }
 
 /**
+ * Ensure optional fields section is expanded (expand only if collapsed).
+ * The section auto-expands when a contact has optional data, so this
+ * avoids accidentally collapsing it.
+ */
+export async function ensureOptionalFieldsExpanded(page) {
+  const companyField = page.getByLabel('Company', { exact: true }).first();
+  const isVisible = await companyField.isVisible().catch(() => false);
+  if (!isVisible) {
+    const toggle = page.locator('button:has-text("Additional info")');
+    if (await toggle.isVisible()) {
+      await toggle.click();
+      await page.waitForTimeout(300);
+    }
+  }
+}
+
+/**
  * Verify contact appears in list
  */
 export async function verifyContactInList(page, contactData) {
   const { name, email } = contactData;
   if (name) {
-    await expect(page.locator(`.fe-contact-name:has-text("${name}")`)).toBeVisible();
+    await expect(page.locator('li button').filter({ hasText: name }).first()).toBeVisible();
   }
   if (email) {
-    await expect(page.locator(`.fe-contact-email:has-text("${email}")`)).toBeVisible();
+    await expect(page.locator('li button').filter({ hasText: email }).first()).toBeVisible();
   }
 }
 
@@ -211,7 +261,7 @@ export async function verifyContactInList(page, contactData) {
  * Verify contact not in list
  */
 export async function verifyContactNotInList(page, contactName) {
-  await expect(page.locator(`.fe-contact-name:has-text("${contactName}")`)).not.toBeVisible();
+  await expect(page.locator('li button').filter({ hasText: contactName })).not.toBeVisible();
 }
 
 /**
@@ -221,19 +271,19 @@ export async function verifyContactDetails(page, contactData) {
   const { name, email, phone, notes, company, jobTitle } = contactData;
 
   if (name) {
-    await expect(page.locator('.fe-contacts-detail').getByText(name)).toBeVisible();
+    await expect(page.getByText(name).first()).toBeVisible();
   }
 
   if (email) {
-    await expect(page.locator('.fe-contacts-detail').getByText(email)).toBeVisible();
+    await expect(page.getByText(email).first()).toBeVisible();
   }
 
   if (phone) {
-    await expect(page.locator('.fe-contacts-detail').getByText(phone)).toBeVisible();
+    await expect(page.getByText(phone).first()).toBeVisible();
   }
 
   if (notes) {
-    await expect(page.locator('.fe-contacts-detail').getByText(notes)).toBeVisible();
+    await expect(page.getByText(notes).first()).toBeVisible();
   }
 
   if (company || jobTitle) {
@@ -244,58 +294,63 @@ export async function verifyContactDetails(page, contactData) {
     }
 
     if (company) {
-      await expect(page.locator('.fe-contacts-detail').getByText(company)).toBeVisible();
+      await expect(page.getByText(company).first()).toBeVisible();
     }
 
     if (jobTitle) {
-      await expect(page.locator('.fe-contacts-detail').getByText(jobTitle)).toBeVisible();
+      await expect(page.getByText(jobTitle).first()).toBeVisible();
     }
   }
 }
 
 /**
- * Click Email action
+ * Click Email action from dropdown menu
  */
 export async function clickEmailAction(page) {
   await openActionsMenu(page);
-  await page.click('button:has-text("Email")');
-  await page.waitForTimeout(300);
+  await clickMenuItem(page, 'Email');
 }
 
 /**
- * Click Add Event action
+ * Click Add Event action from dropdown menu
  */
 export async function clickAddEventAction(page) {
   await openActionsMenu(page);
-  await page.click('button:has-text("Add event")');
-  await page.waitForTimeout(300);
+  await clickMenuItem(page, 'Add event');
 }
 
 /**
- * Click View Emails action
+ * Click View Emails action from dropdown menu
  */
 export async function clickViewEmailsAction(page) {
   await openActionsMenu(page);
-  await page.click('button:has-text("View emails")');
-  await page.waitForTimeout(300);
+  await clickMenuItem(page, 'View emails');
 }
 
 /**
  * Wait for success toast
  */
 export async function waitForSuccessToast(page, expectedText) {
-  const toast = page.locator('.fe-toast:has-text("' + (expectedText || '') + '")');
-  await expect(toast).toBeVisible({ timeout: 5000 });
+  const toastContainer = page.locator('[aria-live="polite"]');
+  if (expectedText) {
+    await expect(toastContainer.getByText(expectedText)).toBeVisible({ timeout: 5000 });
+  } else {
+    await expect(toastContainer.locator('div').first()).toBeVisible({ timeout: 5000 });
+  }
 }
 
 /**
  * Wait for error toast
  */
 export async function waitForErrorToast(page, expectedText) {
-  const errorToast = page.locator(
-    '.fe-toast.error:has-text("' + (expectedText || '') + '"), .fe-alert.error',
-  );
-  await expect(errorToast).toBeVisible({ timeout: 5000 });
+  const errorLocator = page.locator('[aria-live="polite"] div, div[role="alert"]');
+  if (expectedText) {
+    await expect(errorLocator.filter({ hasText: expectedText }).first()).toBeVisible({
+      timeout: 5000,
+    });
+  } else {
+    await expect(errorLocator.first()).toBeVisible({ timeout: 5000 });
+  }
 }
 
 /**

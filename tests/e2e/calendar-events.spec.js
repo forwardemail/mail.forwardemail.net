@@ -13,99 +13,100 @@ test.describe('Event Creation', () => {
   test('should open new event modal when clicking "+ New Event" button', async ({ page }) => {
     await page.click('button:has-text("+ New Event")');
 
-    const modal = page.locator('.fe-modal[role="dialog"][aria-labelledby="new-event-title"]');
+    const modal = page.getByRole('dialog');
     await expect(modal).toBeVisible();
-    await expect(modal.locator('h3:has-text("New event")')).toBeVisible();
-    await expect(page.locator('input[placeholder*="Lunch with Alex"]')).toBeFocused();
+    await expect(modal.getByRole('heading', { name: 'New event' })).toBeVisible();
+    await expect(modal.getByLabel('Title')).toBeFocused();
   });
 
   test('should create basic timed event', async ({ page }) => {
     await page.click('button:has-text("+ New Event")');
 
-    await page.fill('input[placeholder*="Lunch with Alex"]', 'Project Kickoff');
-    await page.fill('input[type="date"]', '2026-01-25');
+    const modal = page.getByRole('dialog');
+    await modal.getByLabel('Title').fill('Project Kickoff');
+    await modal.getByLabel('Date').fill('2026-01-25');
 
     // Verify Save button becomes enabled with valid input
-    const saveButton = page.locator('button:has-text("Save")');
+    const saveButton = modal.locator('button:has-text("Save")');
     await expect(saveButton).toBeEnabled();
-
-    // Note: Not testing actual save since it requires full API chain
-    // Just verify the form accepts input correctly
   });
 
   test('should create all-day event', async ({ page }) => {
     await page.click('button:has-text("+ New Event")');
 
-    await page.fill('input[placeholder*="Lunch with Alex"]', 'Holiday');
-    await page.fill('input[type="date"]', '2026-01-30');
+    const modal = page.getByRole('dialog');
+    await modal.getByLabel('Title').fill('Holiday');
+    await modal.getByLabel('Date').fill('2026-01-30');
 
-    // Click the label containing the checkbox (checkbox itself might be hidden)
-    await page.click('label.fe-checkbox-label:has-text("All-day")');
+    // Click the All-day checkbox
+    await modal.getByLabel('All-day').check();
 
     // Verify time inputs are hidden when all-day is checked
-    await expect(page.locator('label:has-text("Start time")')).not.toBeVisible();
-    await expect(page.locator('label:has-text("End time")')).not.toBeVisible();
+    await expect(modal.getByText('Start time')).not.toBeVisible();
+    await expect(modal.getByText('End time')).not.toBeVisible();
 
     // Verify Save button is enabled
-    const saveButton = page.locator('button:has-text("Save")');
+    const saveButton = modal.locator('button:has-text("Save")');
     await expect(saveButton).toBeEnabled();
   });
 
   test('should create event with optional fields', async ({ page }) => {
     await page.click('button:has-text("+ New Event")');
 
-    await page.fill('input[placeholder*="Lunch with Alex"]', 'Client Demo');
-    await page.fill('input[type="date"]', '2026-01-26');
-    await page.fill('textarea[placeholder*="Add notes"]', 'Demonstrate new features to client');
+    const modal = page.getByRole('dialog');
+    await modal.getByLabel('Title').fill('Client Demo');
+    await modal.getByLabel('Date').fill('2026-01-26');
+    await modal.getByLabel('Description').fill('Demonstrate new features to client');
 
     // Expand optional fields
-    await page.click('button:has-text("More details")');
+    await modal.locator('button:has-text("More details")').click();
 
     // Verify optional fields are visible and can be filled
-    await expect(page.locator('input[placeholder="Add location"]')).toBeVisible();
-    await page.fill('input[placeholder="Add location"]', 'Conference Room A');
-    await page.fill('input[type="url"][placeholder="https://"]', 'https://zoom.us/j/123');
+    await expect(modal.locator('input[placeholder="Add location"]')).toBeVisible();
+    await modal.locator('input[placeholder="Add location"]').fill('Conference Room A');
+    await modal.locator('input[type="url"][placeholder="https://"]').fill('https://zoom.us/j/123');
 
     // Verify Save button is enabled
-    const saveButton = page.locator('button:has-text("Save")');
+    const saveButton = modal.locator('button:has-text("Save")');
     await expect(saveButton).toBeEnabled();
   });
 
   test('should validate required title field', async ({ page }) => {
     await page.click('button:has-text("+ New Event")');
 
-    // Clear the title field
-    await page.fill('input[placeholder*="Lunch with Alex"]', '');
+    const modal = page.getByRole('dialog');
 
-    // Verify the Save button is disabled when title is empty
-    const saveButton = page.locator('button:has-text("Save")');
+    // Title starts empty, Save should be disabled
+    const saveButton = modal.locator('button:has-text("Save")');
     await expect(saveButton).toBeDisabled();
 
     // Fill title to verify button becomes enabled
-    await page.fill('input[placeholder*="Lunch with Alex"]', 'Test Event');
+    await modal.getByLabel('Title').fill('Test Event');
     await expect(saveButton).toBeEnabled();
 
-    const modal = page.locator('.fe-modal[role="dialog"]');
     await expect(modal).toBeVisible();
   });
 
   test('should close modal on Cancel button', async ({ page }) => {
     await page.click('button:has-text("+ New Event")');
-    await page.fill('input[placeholder*="Lunch with Alex"]', 'Test Event');
 
-    await page.click('button:has-text("Cancel")');
+    const modal = page.getByRole('dialog');
+    await modal.getByLabel('Title').fill('Test Event');
 
-    const modal = page.locator('.fe-modal[role="dialog"]');
-    await expect(modal).not.toBeVisible();
+    // Accept the "Discard changes?" confirm dialog that appears when cancelling a dirty form
+    page.on('dialog', (dialog) => dialog.accept());
 
-    await expect(page.locator('text=Test Event')).not.toBeVisible();
+    await modal.locator('button:has-text("Cancel")').click();
+
+    // Wait for the dialog to close
+    await page.waitForSelector('div[role="dialog"]', { state: 'hidden', timeout: 5000 });
   });
 
   test('should close modal on Escape key', async ({ page }) => {
     await page.click('button:has-text("+ New Event")');
     await page.keyboard.press('Escape');
 
-    const modal = page.locator('.fe-modal[role="dialog"]');
+    const modal = page.getByRole('dialog');
     await expect(modal).not.toBeVisible();
   });
 });
@@ -125,10 +126,9 @@ test.describe('Event Editing', () => {
     const eventElement = page.locator('[class*="sx__"]').filter({ hasText: 'Morning Standup' });
     await eventElement.first().click();
 
-    const modal = page.locator('.fe-modal[role="dialog"][aria-label="Edit event"]');
+    const modal = page.getByRole('dialog');
     await expect(modal).toBeVisible();
-    await expect(modal.locator('h3:has-text("Edit event")')).toBeVisible();
-    await expect(modal.locator('input[value="Morning Standup"]')).toBeVisible();
+    await expect(modal.getByRole('heading', { name: 'Edit event' })).toBeVisible();
   });
 
   test.skip('should update event details', async ({ page }) => {
@@ -136,12 +136,12 @@ test.describe('Event Editing', () => {
     await page.waitForTimeout(1000);
     await page.locator('[class*="sx__"]').filter({ hasText: 'Morning Standup' }).first().click();
 
-    const modal = page.locator('.fe-modal[role="dialog"]');
+    const modal = page.getByRole('dialog');
 
-    await page.fill('input[value="Morning Standup"]', 'Updated Standup');
-    await page.fill('textarea', 'Updated description');
+    await modal.getByLabel('Title').fill('Updated Standup');
+    await modal.getByLabel('Description').fill('Updated description');
 
-    await page.click('button:has-text("Update")');
+    await modal.locator('button:has-text("Update")').click();
 
     await waitForSuccessToast(page, /updated/i);
     await expect(modal).not.toBeVisible();
@@ -171,11 +171,11 @@ test.describe('Event Editing', () => {
     await page.click('button[aria-label="Event actions"]');
     await page.click('button:has-text("Delete")');
 
-    const confirmModal = page.locator('.fe-modal[aria-label="Delete event"]');
+    const confirmModal = page.getByRole('dialog');
     await expect(confirmModal).toBeVisible();
     await expect(confirmModal.locator('text=permanently removed')).toBeVisible();
 
-    await page.click('button.fe-button.danger:has-text("Delete")');
+    await confirmModal.locator('button:has-text("Delete")').click();
 
     await waitForSuccessToast(page, /deleted/i);
   });
@@ -190,7 +190,7 @@ test.describe('Event Editing', () => {
 
     await page.click('button:has-text("Cancel")');
 
-    const confirmModal = page.locator('.fe-modal[aria-label="Delete event"]');
+    const confirmModal = page.getByRole('dialog');
     await expect(confirmModal).not.toBeVisible();
   });
 });

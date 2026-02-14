@@ -25,7 +25,7 @@ export async function navigateToCalendar(page) {
  */
 export async function openNewEventModal(page) {
   await page.click('button:has-text("+ New Event")');
-  const modal = page.locator('.fe-modal[role="dialog"][aria-labelledby="new-event-title"]');
+  const modal = page.getByRole('dialog');
   await expect(modal).toBeVisible();
   return modal;
 }
@@ -49,38 +49,37 @@ export async function fillEventForm(page, eventData) {
     attendees,
   } = eventData;
 
+  const modal = page.getByRole('dialog');
+
   if (title) {
-    await page.fill('input[placeholder*="Lunch with Alex"]', title);
+    await modal.getByLabel('Title').fill(title);
   }
 
   if (date) {
-    await page.fill('input[type="date"]', date);
+    await modal.getByLabel('Date').fill(date);
   }
 
   if (allDay) {
-    await page.check('input[type="checkbox"]');
+    await modal.getByLabel('All-day').check();
   } else {
     if (startTime) {
       await page.click('input[id="new-event-start"]');
-      await page.click(`.fe-time-dropdown button:has-text("${startTime}")`);
+      await page.click(`.time-dropdown button:has-text("${startTime}")`);
     }
     if (startMeridiem) {
-      await page.selectOption(
-        'select.fe-meridiem:near(input[id="new-event-start"])',
-        startMeridiem,
-      );
+      await page.selectOption('select:near(input[id="new-event-start"])', startMeridiem);
     }
     if (endTime) {
       await page.click('input[id="new-event-end"]');
-      await page.click(`.fe-time-dropdown button:has-text("${endTime}")`);
+      await page.click(`.time-dropdown button:has-text("${endTime}")`);
     }
     if (endMeridiem) {
-      await page.selectOption('select.fe-meridiem:near(input[id="new-event-end"])', endMeridiem);
+      await page.selectOption('select:near(input[id="new-event-end"])', endMeridiem);
     }
   }
 
   if (description) {
-    await page.fill('textarea[placeholder*="Add notes"]', description);
+    await modal.getByLabel('Description').fill(description);
   }
 
   if (location || url || timezone || attendees) {
@@ -109,16 +108,18 @@ export async function fillEventForm(page, eventData) {
  */
 export async function saveEventForm(page) {
   await page.click('button:has-text("Save")');
-  await page.waitForSelector('.fe-modal[role="dialog"]', { state: 'hidden', timeout: 5000 });
+  await page.waitForSelector('div[role="dialog"]', { state: 'hidden', timeout: 5000 });
 }
 
 /**
  * Upload ICS file
  */
 export async function uploadICSFile(page, filePath) {
-  await page.click('button[aria-label="Import calendar"]');
-  await page.waitForSelector('.fe-import-menu.open');
-  const fileInput = page.locator('input[type="file"][accept=".ics,text/calendar"]');
+  // Calendar page has nested Import buttons (tooltip trigger + actual button),
+  // use the input[type="file"] directly via setInputFiles
+  const fileInput = page.locator(
+    'input[type="file"][accept*="ics"], input[type="file"][accept*="calendar"]',
+  );
   await fileInput.setInputFiles(filePath);
 }
 
@@ -126,16 +127,20 @@ export async function uploadICSFile(page, filePath) {
  * Wait for success toast with specific message
  */
 export async function waitForSuccessToast(page, expectedText) {
-  const toast = page.locator('.fe-toast').filter({ hasText: new RegExp(expectedText, 'i') });
-  await expect(toast).toBeVisible({ timeout: 5000 });
+  const toastContainer = page.locator('[aria-live="polite"]');
+  if (expectedText) {
+    await expect(toastContainer.getByText(expectedText)).toBeVisible({ timeout: 5000 });
+  } else {
+    await expect(toastContainer.locator('div').first()).toBeVisible({ timeout: 5000 });
+  }
 }
 
 /**
  * Wait for error toast
  */
 export async function waitForErrorToast(page) {
-  const errorToast = page.locator('.fe-toast.error, .fe-alert.error');
-  await expect(errorToast).toBeVisible({ timeout: 5000 });
+  const errorLocator = page.locator('[aria-live="polite"] div, div[role="alert"]');
+  await expect(errorLocator.first()).toBeVisible({ timeout: 5000 });
 }
 
 /**
@@ -145,7 +150,7 @@ export async function clickCalendarEvent(page, eventTitle) {
   await page.waitForTimeout(1000);
   const eventElement = page.locator('[class*="sx__"]').filter({ hasText: eventTitle });
   await eventElement.first().click();
-  await page.waitForSelector('.fe-modal[role="dialog"]');
+  await page.waitForSelector('div[role="dialog"]');
 }
 
 /**
@@ -173,11 +178,11 @@ export async function deleteEventFromModal(page) {
   await page.click('button[aria-label="Event actions"]');
   await page.click('button:has-text("Delete")');
 
-  const confirmModal = page.locator('.fe-modal[aria-label="Delete event"]');
+  const confirmModal = page.getByRole('dialog');
   await expect(confirmModal).toBeVisible();
-  await page.click('button.fe-button.danger:has-text("Delete")');
+  await confirmModal.locator('button:has-text("Delete")').click();
 
-  await page.waitForSelector('.fe-modal[role="dialog"]', { state: 'hidden', timeout: 5000 });
+  await page.waitForSelector('div[role="dialog"]', { state: 'hidden', timeout: 5000 });
 }
 
 /**
@@ -193,7 +198,7 @@ export function getFormattedDate(daysOffset = 0) {
  * Verify modal field values
  */
 export async function verifyModalFields(page, expectedData) {
-  const modal = page.locator('.fe-modal[role="dialog"]');
+  const modal = page.getByRole('dialog');
 
   if (expectedData.title) {
     await expect(modal.locator(`input[value="${expectedData.title}"]`)).toBeVisible();

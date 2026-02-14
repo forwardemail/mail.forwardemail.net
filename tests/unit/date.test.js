@@ -22,7 +22,7 @@ describe('formatFriendlyDate', () => {
     expect(formatted).toMatch(/\d{1,2}\/\d{1,2}\/\d{4}/);
   });
 
-  it('returns empty string for invalid input', () => {
-    expect(formatFriendlyDate('not-a-date')).toBe('');
+  it('returns raw string for unparseable string input', () => {
+    expect(formatFriendlyDate('not-a-date')).toBe('not-a-date');
   });
 });

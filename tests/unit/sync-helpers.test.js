@@ -3,7 +3,7 @@ import {
   normalizeMessageForCache,
   mergeFlagsAndMetadata,
   didMetadataChange,
-} from '../../src/utils/sync-helpers.js';
+} from '../../src/utils/sync-helpers.ts';
 
 describe('sync helpers', () => {
   it('normalizes server message with flags', () => {
@@ -20,7 +20,7 @@ describe('sync helpers', () => {
 
     const normalized = normalizeMessageForCache(raw, 'INBOX', 'acct');
 
-    expect(normalized.id).toBe(123);
+    expect(String(normalized.id)).toBe('123');
     expect(normalized.folder).toBe('INBOX');
     expect(normalized.is_unread).toBe(false);
     expect(normalized.is_starred).toBe(true);

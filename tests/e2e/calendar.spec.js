@@ -12,7 +12,7 @@ test.describe('Calendar Navigation', () => {
     await page.goto('/calendar');
     await expect(page.getByRole('heading', { name: 'Calendar' })).toBeVisible();
     await expect(page.getByRole('button', { name: /New Event/i })).toBeVisible();
-    await expect(page.getByRole('button', { name: /Import/i })).toBeVisible();
+    await expect(page.getByLabel('Import calendar')).toBeVisible();
   });
 
   test('should display Schedule-X calendar component', async ({ page }) => {

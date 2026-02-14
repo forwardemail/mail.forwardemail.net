@@ -79,14 +79,22 @@ jobs:
       # - name: Svelte check
       #   run: pnpm check
 
+      - name: Unit tests
+        run: pnpm test -- --run
+
       - name: Build
         run: pnpm build
 
       - name: Strip source maps
         run: find dist -name '*.map' -delete
 
-      # - name: Test
-      #   run: pnpm run test --if-present
+      - name: Install Playwright browsers
+        if: github.event_name == 'pull_request'
+        run: npx playwright install --with-deps chromium
+
+      - name: E2E tests
+        if: github.event_name == 'pull_request'
+        run: pnpm test:e2e
 
       - name: Deploy to Cloudflare R2
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'

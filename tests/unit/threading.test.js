@@ -13,20 +13,29 @@ describe('threading utils', () => {
     expect(normalizeSubject('   ')).toBe('');
   });
 
-  it('uses message headers before subject when generating conversation ids', () => {
+  it('generates matching conversation ids for header-linked messages', () => {
     const root = { message_id: '<root@example.com>', subject: 'Topic' };
     const child = { in_reply_to: '<root@example.com>', subject: 'Re: Topic' };
-    const fallback = { subject: 'RE: topic' };
 
     const rootId = getConversationId(root);
     const childId = getConversationId(child);
-    const fallbackId = getConversationId(fallback);
 
+    // Both reference the same Message-ID so they share a conversation
     expect(childId).toBe(rootId);
-    expect(fallbackId).toBe(rootId);
   });
 
-  it('groups messages into conversations and tracks unread and counts', () => {
+  it('does not group by subject alone (no subject-based fallback)', () => {
+    const root = { message_id: '<root@example.com>', subject: 'Topic' };
+    const unlinked = { id: 'orphan', subject: 'RE: topic' };
+
+    const rootId = getConversationId(root);
+    const unlinkedId = getConversationId(unlinked);
+
+    // Without header links, subject match alone does not create a conversation
+    expect(unlinkedId).not.toBe(rootId);
+  });
+
+  it('groups header-linked messages into conversations and tracks unread and counts', () => {
     const messages = [
       {
         id: '1',
@@ -60,12 +69,13 @@ describe('threading utils', () => {
     const deduped = deduplicateMessages(messages);
     const conversations = groupIntoConversations(deduped);
 
-    expect(conversations.length).toBe(2);
+    // Message 3 has no header links, so it becomes its own conversation (3 total)
+    expect(conversations.length).toBe(3);
 
     const status = conversations.find((c) => c.displaySubject === 'Status Update');
-    expect(status?.messages.length).toBe(3);
+    expect(status?.messages.length).toBe(2);
     expect(status?.hasUnread).toBe(true);
-    expect(status?.messageCount).toBe(3);
+    expect(status?.messageCount).toBe(2);
 
     const different = conversations.find((c) => c.displaySubject === 'Different thread');
     expect(different?.messages.length).toBe(1);

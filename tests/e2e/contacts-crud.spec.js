@@ -9,6 +9,9 @@ import {
   editContactInline,
   saveContactInline,
   cancelEditInline,
+  ensureOptionalFieldsExpanded,
+  openActionsMenu,
+  clickMenuItem,
   verifyContactInList,
   verifyContactNotInList,
   waitForSuccessToast,
@@ -25,7 +28,7 @@ test.describe('Contact Creation - Modal', () => {
     await openNewContactModal(page);
 
     // Verify modal is visible
-    const modal = page.locator('.fe-modal[role="dialog"]');
+    const modal = page.getByRole('dialog');
     await expect(modal).toBeVisible();
 
     // Verify title
@@ -33,19 +36,19 @@ test.describe('Contact Creation - Modal', () => {
   });
 
   test('should create contact with required fields only', async ({ page }) => {
-    await openNewContactModal(page);
+    const modal = await openNewContactModal(page);
 
-    // Fill required fields
-    await fillContactForm(page, {
+    // Fill required fields within the dialog scope
+    await fillContactForm(modal, {
       name: 'Test User',
       email: 'test@example.com',
     });
 
     // Save
-    await page.click('button:has-text("Save")');
+    await modal.locator('button:has-text("Save")').click();
 
     // Wait for modal to close
-    await page.waitForSelector('.fe-modal', { state: 'hidden', timeout: 5000 });
+    await page.waitForSelector('div[role="dialog"]', { state: 'hidden', timeout: 5000 });
 
     // Wait for success toast
     await waitForSuccessToast(page, '');
@@ -55,14 +58,29 @@ test.describe('Contact Creation - Modal', () => {
   });
 
   test('should create contact with all fields', async ({ page }) => {
-    await openNewContactModal(page);
+    // Modal only supports basic fields (name, email, phone, notes)
+    const modal = await openNewContactModal(page);
 
-    // Fill all fields
-    await fillContactForm(page, {
+    await fillContactForm(modal, {
       name: 'Complete User',
       email: 'complete@example.com',
       phone: '555-9876',
       notes: 'Test contact with all fields',
+    });
+
+    // Save
+    await modal.locator('button:has-text("Save")').click();
+
+    // Wait for modal to close
+    await page.waitForSelector('div[role="dialog"]', { state: 'hidden', timeout: 5000 });
+
+    // Verify contact appears in list
+    await verifyContactInList(page, { name: 'Complete User', email: 'complete@example.com' });
+
+    // Select the new contact and add optional fields via inline edit
+    await selectContact(page, 'Complete User');
+
+    await editContactInline(page, {
       company: 'Test Corp',
       jobTitle: 'Tester',
       timezone: 'America/Chicago',
@@ -70,56 +88,44 @@ test.describe('Contact Creation - Modal', () => {
       birthday: '1990-05-15',
     });
 
-    // Save
-    await page.click('button:has-text("Save")');
-
-    // Wait for modal to close
-    await page.waitForSelector('.fe-modal', { state: 'hidden', timeout: 5000 });
-
-    // Verify contact appears in list
-    await verifyContactInList(page, { name: 'Complete User', email: 'complete@example.com' });
-
-    // Select the new contact
-    await selectContact(page, 'Complete User');
+    await saveContactInline(page);
 
     // Verify detail panel shows the info
-    const detailPanel = page.locator('.fe-contacts-detail');
-    await expect(detailPanel.getByText('Complete User')).toBeVisible();
-    await expect(detailPanel.getByText('complete@example.com')).toBeVisible();
+    await expect(page.getByText('Complete User').first()).toBeVisible();
+    await expect(page.getByText('complete@example.com').first()).toBeVisible();
   });
 
   test('should validate email is required', async ({ page }) => {
-    await openNewContactModal(page);
+    const modal = await openNewContactModal(page);
 
     // Fill name but leave email empty
-    await fillContactForm(page, {
+    await fillContactForm(modal, {
       name: 'No Email User',
       email: '',
     });
 
     // Try to save
-    await page.click('button:has-text("Save")');
+    await modal.locator('button:has-text("Save")').click();
 
     // Modal should stay open
     await page.waitForTimeout(500);
-    const modal = page.locator('.fe-modal[role="dialog"]');
     await expect(modal).toBeVisible();
   });
 
   test('should cancel contact creation', async ({ page }) => {
-    await openNewContactModal(page);
+    const modal = await openNewContactModal(page);
 
     // Fill some fields
-    await fillContactForm(page, {
+    await fillContactForm(modal, {
       name: 'Cancelled User',
       email: 'cancelled@example.com',
     });
 
     // Click Cancel
-    await page.click('.fe-modal button:has-text("Cancel")');
+    await modal.locator('button:has-text("Cancel")').click();
 
     // Modal should close
-    await page.waitForSelector('.fe-modal', { state: 'hidden', timeout: 5000 });
+    await page.waitForSelector('div[role="dialog"]', { state: 'hidden', timeout: 5000 });
 
     // Contact should not be created
     await verifyContactNotInList(page, 'Cancelled User');
@@ -132,7 +138,7 @@ test.describe('Contact Creation - Modal', () => {
     await page.keyboard.press('Escape');
 
     // Modal should close
-    await page.waitForSelector('.fe-modal', { state: 'hidden', timeout: 5000 });
+    await page.waitForSelector('div[role="dialog"]', { state: 'hidden', timeout: 5000 });
   });
 });
 
@@ -147,13 +153,10 @@ test.describe('Contact Update - Inline Editing', () => {
     // Select a contact
     await selectContact(page, 'Alice Johnson');
 
-    // Open actions menu and click Edit
-    const actionsBtn = page.locator('.fe-contact-actions button').first();
-    await actionsBtn.click();
-    await page.waitForTimeout(200);
-    await page.click('button:has-text("Edit")');
+    // Fields are always editable - modify a field and Save/Cancel should appear
+    await editContactInline(page, { name: 'Alice Johnson Modified' });
 
-    // Verify edit mode is active - Save and Cancel buttons should appear
+    // Verify Save and Cancel buttons appear when changes are detected
     await expect(page.locator('button:has-text("Save")')).toBeVisible();
     await expect(page.locator('button:has-text("Cancel")')).toBeVisible();
   });
@@ -161,7 +164,7 @@ test.describe('Contact Update - Inline Editing', () => {
   test('should update contact name', async ({ page }) => {
     await selectContact(page, 'Bob Smith');
 
-    // Edit contact
+    // Edit contact (fields are always editable)
     await editContactInline(page, {
       name: 'Robert Smith',
     });
@@ -202,9 +205,8 @@ test.describe('Contact Update - Inline Editing', () => {
     // Select contact again to see details
     await selectContact(page, 'Alice Johnson');
 
-    // Verify phone updated in detail panel
-    const detailPanel = page.locator('.fe-contacts-detail');
-    await expect(detailPanel.getByText('555-1111')).toBeVisible();
+    // Verify phone updated in detail panel (value is in a textbox input)
+    await expect(page.getByLabel('Phone', { exact: true }).first()).toHaveValue('555-1111');
   });
 
   test('should update contact notes', async ({ page }) => {
@@ -218,10 +220,11 @@ test.describe('Contact Update - Inline Editing', () => {
     // Save
     await saveContactInline(page);
 
-    // Verify notes updated
+    // Verify notes updated (value is in a textbox input)
     await selectContact(page, 'Bob Smith');
-    const detailPanel = page.locator('.fe-contacts-detail');
-    await expect(detailPanel.getByText('Updated notes for Bob')).toBeVisible();
+    await expect(page.getByLabel('Notes', { exact: true }).first()).toHaveValue(
+      'Updated notes for Bob',
+    );
   });
 
   test('should update optional fields', async ({ page }) => {
@@ -240,15 +243,12 @@ test.describe('Contact Update - Inline Editing', () => {
     // Verify optional fields updated
     await selectContact(page, 'Carol Williams');
 
-    // Expand optional fields if needed
-    const optionalToggle = page.locator('button:has-text("Additional info")');
-    if (await optionalToggle.isVisible()) {
-      await optionalToggle.click();
-      await page.waitForTimeout(300);
-    }
+    // Ensure optional fields are visible (auto-expands when contact has data)
+    await ensureOptionalFieldsExpanded(page);
 
-    const detailPanel = page.locator('.fe-contacts-detail');
-    await expect(detailPanel.getByText('TechCorp International')).toBeVisible();
+    await expect(page.getByLabel('Company', { exact: true }).first()).toHaveValue(
+      'TechCorp International',
+    );
   });
 
   test('should cancel inline edit without saving', async ({ page }) => {
@@ -263,21 +263,17 @@ test.describe('Contact Update - Inline Editing', () => {
     await cancelEditInline(page);
 
     // Verify name didn't change
-    await expect(page.locator('.fe-contacts-detail').getByText('Alice Johnson')).toBeVisible();
-    await expect(page.locator('.fe-contacts-detail').getByText('Changed Name')).not.toBeVisible();
+    await expect(page.getByText('Alice Johnson').first()).toBeVisible();
+    await expect(page.getByText('Changed Name')).not.toBeVisible();
   });
 
   test('should validate email on update', async ({ page }) => {
-    await selectContact(page, 'Bob Smith');
+    // Use Alice Johnson (not renamed by earlier tests in this suite)
+    await selectContact(page, 'Alice Johnson');
 
-    // Edit to clear email
-    const actionsBtn = page.locator('.fe-contact-actions button').first();
-    await actionsBtn.click();
-    await page.waitForTimeout(200);
-    await page.click('button:has-text("Edit")');
-
-    // Try to clear email
-    await page.fill('input[type="email"]', '');
+    // Try to clear email using the labeled input
+    const emailInput = page.getByLabel('Email', { exact: true }).first();
+    await emailInput.fill('');
 
     // Try to save
     await page.click('button:has-text("Save")');
@@ -298,16 +294,12 @@ test.describe('Contact Deletion', () => {
   test('should open delete confirmation dialog', async ({ page }) => {
     await selectContact(page, 'David Chen');
 
-    // Open actions menu
-    const actionsBtn = page.locator('.fe-contact-actions button').first();
-    await actionsBtn.click();
-    await page.waitForTimeout(200);
-
-    // Click Delete
-    await page.click('button:has-text("Delete")');
+    // Open actions menu and click Delete menuitem
+    await openActionsMenu(page);
+    await clickMenuItem(page, 'Delete');
 
     // Verify confirmation modal appears
-    const confirmModal = page.locator('.fe-modal[role="dialog"]');
+    const confirmModal = page.getByRole('dialog');
     await expect(confirmModal).toBeVisible();
 
     // Should show contact name in confirmation
@@ -317,18 +309,16 @@ test.describe('Contact Deletion', () => {
   test('should delete contact after confirmation', async ({ page }) => {
     await selectContact(page, 'David Chen');
 
-    // Delete contact
-    const actionsBtn = page.locator('.fe-contact-actions button').first();
-    await actionsBtn.click();
-    await page.waitForTimeout(200);
-    await page.click('button:has-text("Delete")');
+    // Delete contact via menu
+    await openActionsMenu(page);
+    await clickMenuItem(page, 'Delete');
 
-    // Confirm deletion
-    const confirmModal = page.locator('.fe-modal[role="dialog"]');
+    // Confirm deletion (dialog buttons ARE button role)
+    const confirmModal = page.getByRole('dialog');
     await confirmModal.locator('button:has-text("Delete")').click();
 
     // Wait for modal to close
-    await page.waitForSelector('.fe-modal', { state: 'hidden', timeout: 5000 });
+    await page.waitForSelector('div[role="dialog"]', { state: 'hidden', timeout: 5000 });
 
     // Verify contact removed from list
     await verifyContactNotInList(page, 'David Chen');
@@ -338,17 +328,15 @@ test.describe('Contact Deletion', () => {
     await selectContact(page, 'Bob Smith');
 
     // Open delete dialog
-    const actionsBtn = page.locator('.fe-contact-actions button').first();
-    await actionsBtn.click();
-    await page.waitForTimeout(200);
-    await page.click('button:has-text("Delete")');
+    await openActionsMenu(page);
+    await clickMenuItem(page, 'Delete');
 
     // Click Cancel
-    const confirmModal = page.locator('.fe-modal[role="dialog"]');
+    const confirmModal = page.getByRole('dialog');
     await confirmModal.locator('button:has-text("Cancel")').click();
 
     // Modal should close
-    await page.waitForSelector('.fe-modal', { state: 'hidden', timeout: 5000 });
+    await page.waitForSelector('div[role="dialog"]', { state: 'hidden', timeout: 5000 });
 
     // Contact should still exist
     await verifyContactInList(page, { name: 'Bob Smith' });
@@ -358,16 +346,14 @@ test.describe('Contact Deletion', () => {
     await selectContact(page, 'Alice Johnson');
 
     // Open delete dialog
-    const actionsBtn = page.locator('.fe-contact-actions button').first();
-    await actionsBtn.click();
-    await page.waitForTimeout(200);
-    await page.click('button:has-text("Delete")');
+    await openActionsMenu(page);
+    await clickMenuItem(page, 'Delete');
 
     // Press Escape
     await page.keyboard.press('Escape');
 
     // Modal should close
-    await page.waitForSelector('.fe-modal', { state: 'hidden', timeout: 5000 });
+    await page.waitForSelector('div[role="dialog"]', { state: 'hidden', timeout: 5000 });
 
     // Contact should still exist
     await verifyContactInList(page, { name: 'Alice Johnson' });

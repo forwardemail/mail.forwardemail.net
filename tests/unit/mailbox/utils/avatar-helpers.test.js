@@ -10,16 +10,7 @@ import {
 } from '../../../../src/svelte/mailbox/utils/avatar-helpers';
 
 // Mock the dependencies
-vi.mock('../../../../src/utils/date', () => ({
-  extractDisplayName: (email) => {
-    if (!email) return '';
-    if (email.includes('<')) {
-      const match = email.match(/^([^<]+)</);
-      return match ? match[1].trim() : email;
-    }
-    return email.split('@')[0] || email;
-  },
-}));
+vi.mock('../../../../src/utils/date', () => ({}));
 
 vi.mock('../../../../src/utils/address', () => ({
   extractAddressList: (msg, field) => {
@@ -29,6 +20,14 @@ vi.mock('../../../../src/utils/address', () => ({
     return Array.isArray(value) ? value : [value];
   },
   displayAddresses: (list) => list,
+  extractDisplayName: (email) => {
+    if (!email) return '';
+    if (email.includes('<')) {
+      const match = email.match(/^([^<]+)/);
+      return match ? match[1].trim() : email;
+    }
+    return email;
+  },
 }));
 
 describe('avatar-helpers', () => {
