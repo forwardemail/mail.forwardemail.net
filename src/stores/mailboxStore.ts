@@ -632,6 +632,7 @@ const createMailboxStore = () => {
         totalCount,
         countSource: unreadCount !== null ? 'server' : 'local',
         flags: f.flags || f.Flags || [],
+        specialUse: f.specialUse || f.special_use || undefined,
       };
     });
     const SYSTEM_FOLDER_ORDER: Record<string, number> = {
@@ -649,9 +650,22 @@ const createMailboxStore = () => {
       'DELETED ITEMS': 5,
       OUTBOX: 6,
     };
-    // Get the priority for a folder path, checking the top-level segment
-    // so subfolders (e.g. "Archive/2024") inherit their parent's priority.
-    const getFolderPriority = (upperPath: string): number => {
+    const SPECIAL_USE_ORDER: Record<string, number> = {
+      '\\Inbox': 0,
+      '\\Drafts': 1,
+      '\\Sent': 2,
+      '\\Archive': 3,
+      '\\Junk': 4,
+      '\\Trash': 5,
+    };
+    // Get the priority for a folder, checking specialUse flag first,
+    // then path name, then top-level segment for subfolders.
+    const getFolderPriority = (folder: { path?: string; specialUse?: string }): number => {
+      // Check IMAP specialUse flag first (strongest signal)
+      if (folder.specialUse && SPECIAL_USE_ORDER[folder.specialUse] !== undefined) {
+        return SPECIAL_USE_ORDER[folder.specialUse];
+      }
+      const upperPath = (folder.path || '').toUpperCase();
       if (SYSTEM_FOLDER_ORDER[upperPath] !== undefined) return SYSTEM_FOLDER_ORDER[upperPath];
       const sep = upperPath.indexOf('/');
       if (sep > 0) {
@@ -661,11 +675,11 @@ const createMailboxStore = () => {
       return 100;
     };
     mapped.sort((a, b) => {
+      const oa = getFolderPriority(a);
+      const ob = getFolderPriority(b);
+      if (oa !== ob) return oa - ob;
       const pa = (a.path || '').toUpperCase();
       const pb = (b.path || '').toUpperCase();
-      const oa = getFolderPriority(pa);
-      const ob = getFolderPriority(pb);
-      if (oa !== ob) return oa - ob;
       return pa.localeCompare(pb);
     });
     return mapped;
