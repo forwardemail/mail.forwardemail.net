@@ -361,6 +361,8 @@
 
   let feedbackModalOpen = $state(false);
 
+  const sectionIds = new Set(['general', 'appearance', 'privacy', 'folders', 'search', 'advanced', 'shortcuts', 'help']);
+
   const formatStorageValue = (bytes = 0) => {
     if (!bytes) return '0 GB';
     const gb = bytes / 1024 / 1024 / 1024;
@@ -384,12 +386,11 @@
     loadShortcuts();
     loadDatabaseInfo();
 
-    const hash = window.location.hash;
-    if (hash === '#security' || hash === '#accounts') {
+    const hash = window.location.hash?.slice(1) || '';
+    if (hash === 'security' || hash === 'accounts') {
       section = 'privacy';
-      setTimeout(() => {
-        history.replaceState(null, '', window.location.pathname);
-      }, 100);
+    } else if (sectionIds.has(hash)) {
+      section = hash;
     }
 
     subscriptions = [
@@ -1130,6 +1131,7 @@
           class="px-3 py-2 text-left text-sm font-medium transition-colors {section === sec.id ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-accent hover:text-foreground'}"
           onclick={() => {
             section = sec.id;
+            history.replaceState(null, '', `#${sec.id}`);
             if (sec.id === 'folders') loadLabelsList();
             if (sec.id === 'advanced') loadCacheStatistics();
           }}
@@ -1147,6 +1149,7 @@
         class="w-full border border-input bg-background px-3 py-2 text-sm"
         bind:value={section}
         onchange={() => {
+          history.replaceState(null, '', `#${section}`);
           if (section === 'folders') loadLabelsList();
           if (section === 'advanced') loadCacheStatistics();
         }}
