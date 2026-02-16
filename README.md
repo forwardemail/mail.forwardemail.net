@@ -15,18 +15,18 @@ A privacy-first, offline-capable Progressive Web App for Forward Email. Ships as
 
 ## Tech Stack
 
-| Category       | Technologies                |
-| -------------- | --------------------------- |
-| **Framework**  | Svelte 5, Vite 5            |
-| **Styling**    | Tailwind CSS 4, PostCSS     |
-| **State**      | Svelte Stores               |
-| **Database**   | Dexie 4 (IndexedDB)         |
-| **Search**     | FlexSearch                  |
-| **Editor**     | TipTap 2                    |
-| **Calendar**   | schedule-x                  |
-| **Encryption** | OpenPGP                     |
-| **Testing**    | Vitest, Playwright          |
-| **Tooling**    | ESLint 9, Prettier 3, Husky |
+| Category       | Technologies                            |
+| -------------- | --------------------------------------- |
+| **Framework**  | Svelte 5, Vite 5                        |
+| **Styling**    | Tailwind CSS 4, PostCSS                 |
+| **State**      | Svelte Stores                           |
+| **Database**   | Dexie 4 (IndexedDB)                     |
+| **Search**     | FlexSearch                              |
+| **Editor**     | TipTap 2                                |
+| **Calendar**   | schedule-x                              |
+| **Encryption** | OpenPGP                                 |
+| **Testing**    | Vitest, Playwright                      |
+| **Tooling**    | ESLint 9, Prettier 3, Husky, commitlint |
 
 ## Architecture
 
@@ -140,6 +140,47 @@ pnpm test:coverage     # Generate coverage report
 # E2E tests (Playwright)
 pnpm exec playwright install --with-deps  # First-time setup
 pnpm test:e2e          # Run e2e tests
+```
+
+## Contributing
+
+### Commit Messages
+
+This project uses [Conventional Commits](https://www.conventionalcommits.org/) enforced by commitlint. Every commit message must follow the format:
+
+```
+type(scope): description
+```
+
+| Type       | When to use                             | Version bump |
+| ---------- | --------------------------------------- | ------------ |
+| `feat`     | New feature                             | minor        |
+| `fix`      | Bug fix                                 | patch        |
+| `docs`     | Documentation only                      | none         |
+| `refactor` | Code change that neither fixes nor adds | none         |
+| `perf`     | Performance improvement                 | patch        |
+| `test`     | Adding or updating tests                | none         |
+| `chore`    | Build, CI, tooling changes              | none         |
+
+Scope is optional: `fix(compose): handle pasted recipients` or `fix: handle pasted recipients` are both valid.
+
+To trigger a **major** version bump, add a `BREAKING CHANGE:` footer:
+
+```
+feat: redesign settings page
+
+BREAKING CHANGE: settings store schema changed, requires cache clear
+```
+
+### Releasing
+
+Releases are cut locally using [commit-and-tag-version](https://github.com/absolute-version/commit-and-tag-version). It reads commits since the last tag, bumps `package.json`, updates `CHANGELOG.md`, and creates a git tag.
+
+```bash
+pnpm release            # auto-detect bump from commits (fix→patch, feat→minor)
+pnpm release:minor      # force a minor bump
+pnpm release:major      # force a major bump
+git push --follow-tags   # push the commit + tag to trigger CI/CD
 ```
 
 ## Configuration
