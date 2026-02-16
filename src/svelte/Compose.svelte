@@ -585,8 +585,29 @@
   const normalizeContactList = (list: unknown[]) =>
     Array.isArray(list) ? list.map(normalizeContact).filter(Boolean) : [];
 
-  const splitRecipientTokens = (value: string) =>
-    (value || '').split(/[,\s]+/).map((token) => token.trim()).filter(Boolean);
+  const splitRecipientTokens = (value: string) => {
+    if (!value) return [];
+    const segments = value.split(/[,;]/).map((s) => s.trim()).filter(Boolean);
+    const results: string[] = [];
+    for (const seg of segments) {
+      // Angle-bracket format: "Display Name <email>"
+      const angleMatch = seg.match(/<([^>]+@[^>]+)>/);
+      if (angleMatch) {
+        results.push(angleMatch[1].trim());
+        continue;
+      }
+      // Find an email anywhere in the segment
+      const emailMatch = seg.match(/([^\s<>]+@[^\s<>]+\.[^\s<>]+)/);
+      if (emailMatch) {
+        results.push(emailMatch[1].trim());
+        continue;
+      }
+      // No email found — keep raw tokens (space-split) for validation later
+      const parts = seg.split(/\s+/).filter(Boolean);
+      results.push(...parts);
+    }
+    return results;
+  };
 
   const handleRecipientDelimitedInput = (field: string, rawValue: string) => {
     if (!rawValue || !/[,\s]/.test(rawValue)) {

@@ -1779,10 +1779,8 @@ const normalizeHeaders = (rawHeaders, fallbackRaw = '') => {
       .join('\n')
       .trim();
   }
-  if (!looksLikeHtml(fallbackRaw)) {
-    const extracted = extractHeaders(fallbackRaw);
-    if (extracted) return extracted;
-  }
+  const extracted = extractHeaders(fallbackRaw);
+  if (extracted && /^[\w-]+\s*:/m.test(extracted)) return extracted;
   return '';
 };
 

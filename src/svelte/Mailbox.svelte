@@ -1171,6 +1171,10 @@ const stopVerticalResize = () => {
     if (query && typeof query.set === 'function') {
       query.set(val || '');
     }
+    // Close reader when search is initiated so user sees results list
+    if (val && val.trim()) {
+      closeReaderFullscreen({ clearSelection: true, updateUrl: false });
+    }
     clearTimeout(searchDebounceTimer);
     searchDebounceTimer = setTimeout(() => {
       mailboxView?.onSearch?.(val);

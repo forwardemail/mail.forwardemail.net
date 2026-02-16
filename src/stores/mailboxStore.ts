@@ -1002,15 +1002,6 @@ const createMailboxStore = () => {
       // This ensures deleted/moved messages don't reappear from cache
       const shouldPrune = !shouldAppend && currentPage === 1 && cachedPage.length && merged.length;
 
-      if (cachedPage.length && isBasicQuery && !shouldAppend && !merged.length) {
-        if (!isStaleRequest) {
-          loading.set(false);
-          error.set('');
-        }
-        tracer.end({ status: 'empty_preserve', source });
-        return;
-      }
-
       if (!isStaleRequest) {
         const nextMessages = shouldAppend ? mergeMessagePages(get(messages), merged) : merged;
         messages.set(nextMessages);
