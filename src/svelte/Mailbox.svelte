@@ -1171,9 +1171,9 @@ const stopVerticalResize = () => {
     if (query && typeof query.set === 'function') {
       query.set(val || '');
     }
-    // Close reader when search is initiated so user sees results list
+    // Close fullscreen reader when search is initiated so user sees results list
     if (val && val.trim()) {
-      closeReaderFullscreen({ clearSelection: true, updateUrl: false });
+      closeReaderFullscreen({ updateUrl: false });
     }
     clearTimeout(searchDebounceTimer);
     searchDebounceTimer = setTimeout(() => {
@@ -4136,6 +4136,17 @@ const stopVerticalResize = () => {
     if (source.state?.selectedMessage?.subscribe) {
       mailboxSubscriptions.push(
         source.state.selectedMessage.subscribe(() => debouncedUrlUpdate())
+      );
+      // Load message body when selectedMessage is set externally (e.g., search auto-select)
+      // selectMessage() sets lastSelectedMessageId before calling loadMessage(),
+      // so if the id doesn't match, this was an external store update.
+      mailboxSubscriptions.push(
+        source.state.selectedMessage.subscribe((msg) => {
+          if (msg && msg.id && msg.id !== lastSelectedMessageId) {
+            lastSelectedMessageId = msg.id;
+            loadMessage(msg);
+          }
+        })
       );
     }
 
