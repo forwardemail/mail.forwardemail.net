@@ -1,8 +1,9 @@
 {
+  "skip": { "changelog": true },
   "types": [
     { "type": "feat", "section": "Features" },
     { "type": "fix", "section": "Bug Fixes" },
-    { "type": "docs", "section": "Documentation", "hidden": true },
+    { "type": "docs", "hidden": true },
     { "type": "chore", "hidden": true },
     { "type": "style", "hidden": true },
     { "type": "refactor", "section": "Refactors" },

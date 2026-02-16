@@ -174,7 +174,7 @@ BREAKING CHANGE: settings store schema changed, requires cache clear
 
 ### Releasing
 
-Releases are cut locally using [commit-and-tag-version](https://github.com/absolute-version/commit-and-tag-version). It reads commits since the last tag, bumps `package.json`, updates `CHANGELOG.md`, and creates a git tag.
+Releases are cut locally using [commit-and-tag-version](https://github.com/absolute-version/commit-and-tag-version). It reads commits since the last tag, bumps `package.json`, and creates a git tag. Release notes are managed via GitHub Releases.
 
 ```bash
 pnpm release            # auto-detect bump from commits (fix→patch, feat→minor)
