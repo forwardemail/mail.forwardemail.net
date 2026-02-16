@@ -176,11 +176,19 @@ BREAKING CHANGE: settings store schema changed, requires cache clear
 
 Releases are cut locally using [commit-and-tag-version](https://github.com/absolute-version/commit-and-tag-version). It reads commits since the last tag, bumps `package.json`, and creates a git tag. Release notes are managed via GitHub Releases.
 
+Only release commits trigger production deployment — regular pushes to `main` run CI (lint, test, build) but do not deploy.
+
 ```bash
+# 1. Bump version and create tag
 pnpm release            # auto-detect bump from commits (fix→patch, feat→minor)
 pnpm release:minor      # force a minor bump
 pnpm release:major      # force a major bump
-git push --follow-tags   # push the commit + tag to trigger CI/CD
+
+# 2. Push to trigger deploy
+git push --follow-tags
+
+# 3. (Optional) Create GitHub Release with notes
+gh release create v0.x.x --title "v0.x.x" --generate-notes
 ```
 
 ## Configuration
@@ -225,12 +233,17 @@ graph TB
 
 ### CI/CD Pipeline
 
-The GitHub Actions workflow (`.github/workflows/ci.yml`) runs on push to `main` and pull requests:
+The GitHub Actions workflow (`.github/workflows/ci.yml`) runs on every push to `main` and on pull requests:
+
+**Every push (CI):**
 
 1. **Install** — `pnpm install --frozen-lockfile`
 2. **Lint** — `pnpm lint`
 3. **Format** — `pnpm format`
 4. **Build** — `pnpm build` (Vite + Workbox service worker)
+
+**Release commits only (`chore(release): x.y.z`):**
+
 5. **Deploy to R2** — Sync `dist/` to Cloudflare R2 bucket
 6. **Deploy Worker** — Deploy CDN worker for SPA routing + cache headers
 7. **Purge Cache** — Clear Cloudflare edge cache
