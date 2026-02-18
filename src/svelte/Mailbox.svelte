@@ -2930,7 +2930,6 @@ const stopVerticalResize = () => {
         }
         pruneMessages(targets.map((m) => m.id));
       }
-      await reloadMessages();
     } catch (err) {
       console.error('deleteMessages failed', err);
       showToast('Failed to delete some messages', 'error');
@@ -3522,6 +3521,11 @@ const stopVerticalResize = () => {
     if (source.state?.messages?.set) {
       mailboxStore.state.messages.set(list.map((m) => (m.id === updated.id ? updated : m)));
     }
+    mailboxStore?.actions?.addPendingFlagMutation?.(updated.id, {
+      is_unread: newIsUnread,
+      is_unread_index: newIsUnread ? 1 : 0,
+      flags: updated.flags,
+    });
     source.state?.selectedMessage?.set?.(updated);
     if (typeof mailboxView?.messages === 'function') {
       try {
@@ -3575,6 +3579,11 @@ const stopVerticalResize = () => {
     if (source.state?.messages?.set) {
       mailboxStore.state.messages.set(list.map((m) => (m.id === updated.id ? updated : m)));
     }
+    mailboxStore?.actions?.addPendingFlagMutation?.(updated.id, {
+      is_unread: false,
+      is_unread_index: 0,
+      flags: updated.flags,
+    });
     source.state?.selectedMessage?.set?.(updated);
     if (typeof mailboxView?.messages === 'function') {
       try {

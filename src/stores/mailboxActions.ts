@@ -321,6 +321,11 @@ export const toggleRead = async (msg) => {
         : m,
     ),
   );
+  mailboxStore.actions.addPendingFlagMutation(msg.id, {
+    is_unread: nextUnread,
+    is_unread_index: nextUnread ? 1 : 0,
+    flags: newFlags,
+  });
 
   const apiId = getMessageApiId(msg);
   if (!apiId) {
@@ -382,17 +387,22 @@ export const toggleStar = async (msg) => {
 
   // Optimistic update in message list and selected message
   const messages = get(mailboxStore.state.messages);
+  const newFlagsArr = Array.from(newFlags);
   mailboxStore.state.messages.set(
     messages.map((m) =>
-      m.id === msg.id ? { ...m, is_starred: !isStarred, flags: Array.from(newFlags) } : m,
+      m.id === msg.id ? { ...m, is_starred: !isStarred, flags: newFlagsArr } : m,
     ),
   );
+  mailboxStore.actions.addPendingFlagMutation(msg.id, {
+    is_starred: !isStarred,
+    flags: newFlagsArr,
+  });
   const currentSelected = get(mailboxStore.state.selectedMessage);
   if (currentSelected?.id === msg.id) {
     mailboxStore.state.selectedMessage.set({
       ...currentSelected,
       is_starred: !isStarred,
-      flags: Array.from(newFlags),
+      flags: newFlagsArr,
     });
   }
 

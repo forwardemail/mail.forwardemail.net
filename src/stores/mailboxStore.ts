@@ -71,6 +71,83 @@ const folderLoadState = new Map();
 // Keyed by "account:folder:page", stores processed messages ready for display
 const folderMessageCache = new Map();
 
+// Track optimistically deleted message IDs to prevent stale server responses
+// from re-adding them to the store. Entries auto-expire after 30 seconds.
+const pendingDeletes: Map<string, number> = new Map(); // id -> timestamp
+const PENDING_DELETE_TTL = 30_000;
+
+const addPendingDeletes = (ids: string[]) => {
+  const now = Date.now();
+  for (const id of ids) {
+    if (id) pendingDeletes.set(id, now);
+  }
+};
+
+const filterPendingDeletes = (msgs: Record<string, unknown>[]) => {
+  if (!pendingDeletes.size) return msgs;
+  // Prune expired entries
+  const now = Date.now();
+  for (const [id, ts] of pendingDeletes) {
+    if (now - ts > PENDING_DELETE_TTL) pendingDeletes.delete(id);
+  }
+  if (!pendingDeletes.size) return msgs;
+  return msgs.filter((m) => !pendingDeletes.has(m.id));
+};
+
+const confirmDeletes = (serverIds: Set<string>) => {
+  // If a pending-delete ID is absent from the server response, the server
+  // has processed it — safe to stop filtering.
+  for (const id of pendingDeletes.keys()) {
+    if (!serverIds.has(id)) pendingDeletes.delete(id);
+  }
+};
+
+// Track optimistic flag mutations (read/star) so stale server responses
+// don't overwrite them. Entries auto-expire after 30 seconds.
+interface PendingFlagMutation {
+  ts: number;
+  is_unread?: boolean;
+  is_unread_index?: number;
+  flags?: string[];
+  is_starred?: boolean;
+}
+const pendingFlagMutations: Map<string, PendingFlagMutation> = new Map(); // id -> mutation
+
+const addPendingFlagMutation = (id: string, mutation: Omit<PendingFlagMutation, 'ts'>) => {
+  if (!id) return;
+  pendingFlagMutations.set(id, { ...mutation, ts: Date.now() });
+};
+
+const applyPendingFlagMutations = (msgs: Record<string, unknown>[]) => {
+  if (!pendingFlagMutations.size) return msgs;
+  // Prune expired entries
+  const now = Date.now();
+  for (const [id, m] of pendingFlagMutations) {
+    if (now - m.ts > PENDING_DELETE_TTL) pendingFlagMutations.delete(id);
+  }
+  if (!pendingFlagMutations.size) return msgs;
+  return msgs.map((msg) => {
+    const pending = pendingFlagMutations.get(msg.id);
+    if (!pending) return msg;
+    const { ts: _ts, ...overrides } = pending;
+    return { ...msg, ...overrides };
+  });
+};
+
+const confirmFlagMutations = (serverMsgs: Record<string, unknown>[]) => {
+  // If the server response matches the optimistic state, the mutation
+  // has been processed — safe to stop overriding.
+  for (const msg of serverMsgs) {
+    const pending = pendingFlagMutations.get(msg.id);
+    if (!pending) continue;
+    if (pending.is_unread !== undefined && msg.is_unread === pending.is_unread) {
+      pendingFlagMutations.delete(msg.id);
+    } else if (pending.is_starred !== undefined && msg.is_starred === pending.is_starred) {
+      pendingFlagMutations.delete(msg.id);
+    }
+  }
+};
+
 const invalidateFolderInMemCache = (account, folder) => {
   const prefix = `${account}:${folder}:`;
   for (const key of folderMessageCache.keys()) {
@@ -730,7 +807,7 @@ const createMailboxStore = () => {
     if (memCached?.messages?.length) {
       cachedPage = memCached.messages;
       const nextMessages = shouldAppend ? mergeMessagePages(get(messages), cachedPage) : cachedPage;
-      messages.set(nextMessages);
+      messages.set(applyPendingFlagMutations(filterPendingDeletes(nextMessages)));
       hasNextPage.set(memCached.hasNextPage);
       loading.set(false);
       if (allowAutoSelect && (!get(selectedMessage) || get(selectedMessage)?.folder !== folder)) {
@@ -778,7 +855,7 @@ const createMailboxStore = () => {
           const nextCached = shouldAppend
             ? mergeMessagePages(get(messages), cachedPage)
             : cachedPage;
-          messages.set(nextCached);
+          messages.set(applyPendingFlagMutations(filterPendingDeletes(nextCached)));
           loading.set(false);
           if (
             allowAutoSelect &&
@@ -905,7 +982,7 @@ const createMailboxStore = () => {
           if (activeNow !== account) return;
           if (get(selectedFolder) !== folder) return;
           const nextPreview = shouldAppend ? mergeMessagePages(get(messages), mapped) : mapped;
-          messages.set(nextPreview);
+          messages.set(applyPendingFlagMutations(filterPendingDeletes(nextPreview)));
           loading.set(false);
           if (
             allowAutoSelect &&
@@ -1004,17 +1081,20 @@ const createMailboxStore = () => {
 
       if (!isStaleRequest) {
         const nextMessages = shouldAppend ? mergeMessagePages(get(messages), merged) : merged;
-        messages.set(nextMessages);
+        messages.set(applyPendingFlagMutations(filterPendingDeletes(nextMessages)));
         if (
           allowAutoSelect &&
           merged.length &&
           (!get(selectedMessage) || get(selectedMessage)?.folder !== folder)
         ) {
-          selectedMessage.set(findFirstMessage(nextMessages, currentSort));
+          selectedMessage.set(findFirstMessage(filterPendingDeletes(nextMessages), currentSort));
         } else if (!merged.length && get(selectedMessage)?.folder === folder) {
           selectedMessage.set(null);
         }
       }
+
+      confirmDeletes(new Set(merged.map((m) => m.id)));
+      confirmFlagMutations(merged);
 
       if (merged.length || shouldPrune) {
         await db.transaction('rw', db.messages, async () => {
@@ -1114,6 +1194,8 @@ const createMailboxStore = () => {
 
   const resetForAccount = () => {
     inFlightMessageListRequest = null;
+    pendingDeletes.clear();
+    pendingFlagMutations.clear();
   };
 
   const scheduleSyncRefresh = (folder, account) => {
@@ -1293,6 +1375,7 @@ const createMailboxStore = () => {
     // Optimistic remove from store
     const list = originalList.filter((m) => m.id !== msg.id);
     messages.set(list);
+    addPendingDeletes([msg.id]);
     if (originalSelected?.id === msg.id) {
       selectedMessage.set(null);
     }
@@ -1389,6 +1472,7 @@ const createMailboxStore = () => {
     const originalList = get(messages);
     const idsToRemove = new Set(validMessages.map((m) => m.id));
     messages.set(originalList.filter((m) => !idsToRemove.has(m.id)));
+    addPendingDeletes([...idsToRemove]);
 
     // Invalidate in-memory folder cache so stale entries don't reappear on refresh
     const affectedFolders = new Set(validMessages.map((m) => m.folder).filter(Boolean));
@@ -1492,6 +1576,7 @@ const createMailboxStore = () => {
     // Optimistic update
     if (stayInFolder) {
       messages.set(originalList.filter((m) => m.id !== msg.id));
+      addPendingDeletes([msg.id]);
       if (originalSelected?.id === msg.id) {
         selectedMessage.set(null);
       }
@@ -1591,6 +1676,7 @@ const createMailboxStore = () => {
     const originalList = get(messages);
     const idsToRemove = new Set(validMessages.map((m) => m.id));
     messages.set(originalList.filter((m) => !idsToRemove.has(m.id)));
+    addPendingDeletes([...idsToRemove]);
 
     // Invalidate in-memory folder cache so stale entries don't reappear on refresh
     const affectedFolders = new Set(validMessages.map((m) => m.folder).filter(Boolean));
@@ -2214,6 +2300,7 @@ const createMailboxStore = () => {
       emptyTrash,
       emptySpam,
       clearFolderMessageCache: () => folderMessageCache.clear(),
+      addPendingFlagMutation,
     },
   };
 };
