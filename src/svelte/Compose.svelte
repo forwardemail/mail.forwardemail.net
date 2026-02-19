@@ -181,6 +181,8 @@
   let attachments = $state<unknown[]>([]);
   let attachmentError = $state('');
   let attachmentLoading = $state(0);
+  let attachInputEl: HTMLInputElement | undefined;
+  let imageInputEl: HTMLInputElement | undefined;
   let showEmoji = $state(false);
   let showLinkModal = $state(false);
   let linkUrl = $state('');
@@ -1583,13 +1585,11 @@
   };
 
   const triggerFilePicker = () => {
-    const input = document.querySelector('.attach-input') as HTMLInputElement;
-    input?.click();
+    attachInputEl?.click();
   };
 
   const triggerImagePicker = () => {
-    const input = document.querySelector('.image-input') as HTMLInputElement;
-    input?.click();
+    imageInputEl?.click();
   };
 
   const onFilesSelected = async (_: unknown, event: Event) => {
@@ -2633,8 +2633,8 @@
           {/if}
         </div>
 
-        <input type="file" multiple class="attach-input hidden" onchange={(e) => onFilesSelected(null, e)} />
-        <input type="file" accept="image/*" class="image-input hidden" onchange={(e) => onImageSelected(null, e)} />
+        <input type="file" multiple class="attach-input hidden" bind:this={attachInputEl} onchange={(e) => onFilesSelected(null, e)} />
+        <input type="file" accept="image/*" class="image-input hidden" bind:this={imageInputEl} onchange={(e) => onImageSelected(null, e)} />
 
         {#if attachments.length}
           <div class="flex flex-wrap gap-2">
