@@ -2635,35 +2635,37 @@
 
         <input type="file" multiple class="attach-input hidden" bind:this={attachInputEl} onchange={(e) => onFilesSelected(null, e)} />
         <input type="file" accept="image/*" class="image-input hidden" bind:this={imageInputEl} onchange={(e) => onImageSelected(null, e)} />
+      </div>
 
-        {#if attachments.length}
-          <div class="flex flex-wrap gap-2">
-            {#each attachmentCards as card}
-              <div class="flex items-center gap-2 px-3 py-2 bg-muted">
-                {#if card.isImage && card.previewUrl}
-                  <img src={card.previewUrl} alt={card.name as string} class="h-8 w-8 object-cover" />
-                {:else}
-                  <Badge variant="outline" class="text-xs">{card.badge}</Badge>
-                {/if}
-                <div class="flex flex-col min-w-0">
-                  <span class="text-sm truncate max-w-[150px]">{card.name}</span>
-                  <span class="text-xs text-muted-foreground">{card.sizeLabel}</span>
-                </div>
-                <Button variant="ghost" size="icon" class="h-6 w-6" onclick={() => removeAttachment(card.att)}>
-                  <X class="h-3 w-3" />
-                </Button>
+      {#if attachments.length}
+        <div class="flex flex-wrap gap-2 px-4 py-2 border-t border-border shrink-0">
+          {#each attachmentCards as card}
+            <div class="flex items-center gap-2 px-3 py-2 bg-muted">
+              {#if card.isImage && card.previewUrl}
+                <img src={card.previewUrl} alt={card.name as string} class="h-8 w-8 object-cover" />
+              {:else}
+                <Badge variant="outline" class="text-xs">{card.badge}</Badge>
+              {/if}
+              <div class="flex flex-col min-w-0">
+                <span class="text-sm truncate max-w-[150px]">{card.name}</span>
+                <span class="text-xs text-muted-foreground">{card.sizeLabel}</span>
               </div>
-            {/each}
-          </div>
-        {/if}
+              <Button variant="ghost" size="icon" class="h-6 w-6" onclick={() => removeAttachment(card.att)}>
+                <X class="h-3 w-3" />
+              </Button>
+            </div>
+          {/each}
+        </div>
+      {/if}
 
-        {#if attachmentError || error}
+      {#if attachmentError || error}
+        <div class="px-4 py-2 shrink-0">
           <Alert.Root variant="destructive">
             <AlertTriangle class="h-4 w-4" />
             <Alert.Description>{attachmentError || error}</Alert.Description>
           </Alert.Root>
-        {/if}
-      </div>
+        </div>
+      {/if}
 
       <footer class="border-t border-border bg-muted/30 p-3">
         {#if !isPlainText}
