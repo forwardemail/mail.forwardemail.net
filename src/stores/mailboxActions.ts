@@ -500,6 +500,33 @@ const validateCachedBody = (content) => {
 };
 
 /**
+ * Strip quote-collapse markup (fe-quote-wrapper, fe-quote-toggle) that
+ * processQuotedContent adds for the viewing UI. The store's messageBody
+ * contains this processed HTML, but replies/forwards need the raw body.
+ */
+const stripQuoteCollapseMarkup = (html: string) => {
+  if (!html || !html.includes('fe-quote-wrapper')) return html;
+  try {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    // Remove all toggle buttons
+    doc.querySelectorAll('.fe-quote-toggle').forEach((el) => el.remove());
+    // Unwrap fe-quote-content divs (move children up)
+    doc.querySelectorAll('.fe-quote-content').forEach((el) => {
+      while (el.firstChild) el.parentNode.insertBefore(el.firstChild, el);
+      el.remove();
+    });
+    // Unwrap fe-quote-wrapper divs (move children up)
+    doc.querySelectorAll('.fe-quote-wrapper').forEach((el) => {
+      while (el.firstChild) el.parentNode.insertBefore(el.firstChild, el);
+      el.remove();
+    });
+    return doc.body.innerHTML;
+  } catch {
+    return html;
+  }
+};
+
+/**
  * Get the body for a message - checks store first, then fetches from cache
  */
 const getMessageBodyForReply = async (msg) => {
@@ -512,7 +539,8 @@ const getMessageBodyForReply = async (msg) => {
   const storeBody = get(mailboxStore.state.messageBody);
 
   if (selectedId && selectedId === msgId && storeBody) {
-    return validateCachedBody(storeBody);
+    // Store body has processQuotedContent markup — strip it for reply/forward
+    return validateCachedBody(stripQuoteCollapseMarkup(storeBody));
   }
 
   // Otherwise fetch from the database cache
@@ -559,15 +587,29 @@ const formatAttributionDate = (date) => {
 };
 
 /**
+ * Encode HTML content as base64 for the RawHtmlQuote TipTap extension.
+ * This preserves original email styling (fonts, colors, spacing) by avoiding
+ * TipTap's standard HTML parsing which strips inline styles.
+ */
+const encodeRawHtml = (value: string) => {
+  if (!value) return '';
+  try {
+    return btoa(unescape(encodeURIComponent(value)));
+  } catch {
+    return '';
+  }
+};
+
+/**
  * Build quoted body HTML for reply
  */
 const buildReplyQuotedBody = (msg, originalBody) => {
   const fromName = msg?.from || 'Unknown';
   const dateStr = formatAttributionDate(msg?.date || msg?.dateMs);
   const attribution = dateStr ? `On ${dateStr}, ${fromName} wrote:` : `${fromName} wrote:`;
+  const encoded = encodeRawHtml(originalBody);
 
-  // Create reply structure with cursor at top
-  return `<p><br></p><p class="fe-reply-attribution">${attribution}</p><blockquote class="fe-reply-quote">${originalBody}</blockquote>`;
+  return `<p><br></p><p class="fe-reply-attribution">${attribution}</p><blockquote data-raw-html="${encoded}" data-raw-variant="reply"></blockquote>`;
 };
 
 /**
@@ -587,7 +629,9 @@ const buildForwardQuotedBody = (msg, originalBody) => {
     `To: ${to}`,
   ].join('<br>');
 
-  return `<p><br></p><p class="fe-reply-attribution">${headerLines}</p><blockquote class="fe-reply-quote">${originalBody}</blockquote>`;
+  const encoded = encodeRawHtml(originalBody);
+
+  return `<p><br></p><p class="fe-reply-attribution">${headerLines}</p><blockquote data-raw-html="${encoded}" data-raw-variant="forward"></blockquote>`;
 };
 
 /**

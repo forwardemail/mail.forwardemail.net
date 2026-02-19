@@ -1777,6 +1777,22 @@
     }
   };
 
+  /**
+   * Expand data-raw-html blockquotes back to real HTML before sending.
+   * TipTap's renderHTML outputs `<blockquote data-raw-html="base64..." />`
+   * with no child content, so we decode the base64 back to the original HTML.
+   */
+  const expandRawQuotes = (html: string) => {
+    if (!html || !html.includes('data-raw-html')) return html;
+    return html.replace(
+      /<blockquote[^>]*data-raw-html="([^"]*)"[^>]*>[\s\S]*?<\/blockquote>/gi,
+      (_match, encoded) => {
+        const decoded = decodeRawHtml(encoded);
+        return decoded ? `<blockquote>${decoded}</blockquote>` : '';
+      },
+    );
+  };
+
   const extractRawQuoteText = (value: string) => {
     if (!value) return '';
     const match = value.match(/data-raw-html="([^"]+)"/);
@@ -1828,7 +1844,7 @@
     if (isPlainText) {
       payload.text = body;
     } else {
-      payload.html = body;
+      payload.html = expandRawQuotes(body);
       const textContent = extractTextContent(body);
       if (textContent) payload.text = textContent;
     }
