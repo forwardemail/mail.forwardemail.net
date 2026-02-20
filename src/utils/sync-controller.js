@@ -9,6 +9,7 @@ import {
   connectSyncSearchPort,
 } from './sync-worker-client.js';
 import { warn } from './logger.ts';
+import { getPendingDeleteIds } from '../stores/mailboxStore';
 
 let searchPortConnected = false;
 
@@ -111,6 +112,7 @@ async function runTask(task) {
       account: currentAccount,
       pageSize: task.pageSize || settings.pageSize || 50,
       maxMessages: task.maxMessages || settings.maxHeaders,
+      pendingDeleteIds: getPendingDeleteIds(),
     });
     if (task.wantBodies) {
       unshiftTask({

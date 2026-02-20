@@ -282,7 +282,7 @@ function fetchWithTimeout(url, options = {}, timeoutMs = FETCH_TIMEOUT_MS) {
 // Message Operations
 // ============================================================================
 
-async function writeMessages(account, folder, normalized) {
+async function writeMessages(account, folder, normalized, pendingDeleteIds: string[] = []) {
   if (!dbPort) {
     console.warn('[sync.worker] No db connection for writeMessages');
     return { inserted: 0, updated: 0 };
@@ -290,6 +290,7 @@ async function writeMessages(account, folder, normalized) {
 
   const keys = normalized.map((m) => [account, m.id]);
   const existingRecords = await db.messages.bulkGet(keys);
+  const pendingSet = pendingDeleteIds.length ? new Set(pendingDeleteIds) : null;
 
   const toUpsert = [];
   const changedForIndex = [];
@@ -299,6 +300,8 @@ async function writeMessages(account, folder, normalized) {
   normalized.forEach((msg, idx) => {
     const existing = existingRecords[idx];
     if (!existing) {
+      // Skip re-inserting messages that were optimistically deleted/moved
+      if (pendingSet?.has(msg.id)) return;
       toUpsert.push(msg);
       changedForIndex.push(msg);
       inserted += 1;
@@ -397,7 +400,12 @@ async function runMetadataTask(task, postProgress) {
 
     if (!normalized.length) break;
 
-    const writeResult = await writeMessages(account, folder, normalized);
+    const writeResult = await writeMessages(
+      account,
+      folder,
+      normalized,
+      task.pendingDeleteIds || [],
+    );
 
     totalFetched += normalized.length;
     totalInserted += writeResult.inserted;

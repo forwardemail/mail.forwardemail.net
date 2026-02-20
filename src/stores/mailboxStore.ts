@@ -94,6 +94,14 @@ const filterPendingDeletes = (msgs: Record<string, unknown>[]) => {
   return msgs.filter((m) => !pendingDeletes.has(m.id));
 };
 
+export const getPendingDeleteIds = (): string[] => {
+  const now = Date.now();
+  for (const [id, ts] of pendingDeletes) {
+    if (now - ts > PENDING_DELETE_TTL) pendingDeletes.delete(id);
+  }
+  return [...pendingDeletes.keys()];
+};
+
 const confirmDeletes = (serverIds: Set<string>) => {
   // If a pending-delete ID is absent from the server response, the server
   // has processed it — safe to stop filtering.
@@ -906,6 +914,20 @@ const createMailboxStore = () => {
       }
     }
 
+    // Register eagerly BEFORE async network calls to close the race window
+    // where concurrent loadMessages() callers miss the dedup guard
+    let resolveInflight!: (v: unknown) => void;
+    let rejectInflight!: (e: unknown) => void;
+    const inflightDeferred = new Promise((res, rej) => {
+      resolveInflight = res;
+      rejectInflight = rej;
+    });
+    inFlightMessageListRequest = { key: requestKey, promise: inflightDeferred };
+
+    // Prevent scheduleSyncRefresh from immediately scheduling a redundant call
+    // while this load is still in progress (covers initial load gap)
+    lastSyncRefresh = { account, folder, at: Date.now() };
+
     const fetchWithFallback = async (params, stageLabel) => {
       if (stageLabel) tracer.stage(stageLabel);
       try {
@@ -1001,9 +1023,8 @@ const createMailboxStore = () => {
         });
     }
 
-    // Track this request
+    // Track this request (inFlightMessageListRequest already set eagerly above)
     const requestPromise = fetchWithFallback(requestParams, 'request_start');
-    inFlightMessageListRequest = { key: requestKey, promise: requestPromise };
 
     try {
       const { source, res } = await requestPromise;
@@ -1174,6 +1195,7 @@ const createMailboxStore = () => {
         // Update folder unread counts after loading messages
         updateFolderUnreadCounts();
       }
+      resolveInflight(undefined);
       tracer.end({ status: isStaleRequest ? 'stale_request_cached' : 'ok', source });
     } catch (err) {
       const activeNow = Local.get('email') || 'default';
@@ -1183,11 +1205,13 @@ const createMailboxStore = () => {
         activeFolder !== folder ||
         inFlightMessageListRequest?.key !== requestKey
       ) {
+        resolveInflight(undefined);
         tracer.end({ status: 'stale_request_error' });
         return;
       }
       error.set(err?.message || 'Unable to load messages.');
       loading.set(false);
+      rejectInflight(err);
       tracer.end({ status: 'error' });
     } finally {
       // Clear in-flight tracking

@@ -50,15 +50,10 @@ function createPollingUpdater() {
     // Only refresh automatically when viewing INBOX
     if (currentFolder !== 'INBOX') return;
 
-    // loadMessages already deduplicates in-flight requests and guards
-    // against stale accounts via the generation counter, so calling it
-    // here is safe even if the user triggers a manual refresh at the
-    // same moment.
-    mailboxStore.actions.loadMessages();
-
     // Kick a lightweight metadata sync for INBOX so new arrivals on the
     // server get pulled into the local cache (uses since_modseq for
-    // incremental diff).
+    // incremental diff). loadMessages fires automatically via
+    // onSyncTaskComplete → scheduleSyncRefresh when sync results are ready.
     const folders = get(mailboxStore.state.folders) || [];
     const inbox = folders.find((f) => f.path?.toUpperCase?.() === 'INBOX');
     if (inbox) {
