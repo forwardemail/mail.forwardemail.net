@@ -12,6 +12,12 @@ const pkg = require('./package.json');
 
 const enableAnalyzer = process.env.ANALYZE === 'true';
 
+// Tauri sets TAURI_ENV_PLATFORM during `tauri build` / `tauri dev`.
+// When building for Tauri, @tauri-apps/* packages must be bundled so
+// they're available in the packaged app. For web builds they stay
+// external (dynamic imports fall back to no-ops).
+const isTauriBuild = Boolean(process.env.TAURI_ENV_PLATFORM);
+
 // Generate build hash for version tracking
 const BUILD_HASH = createHash('md5')
   .update(`${pkg.version}-${Date.now()}`)
@@ -121,16 +127,22 @@ export default defineConfig({
     rollupOptions: {
       // Tauri APIs are only available in the Tauri runtime; exclude from web builds.
       // Dynamic imports in the code already guard against calling them on web.
-      external: [
-        '@tauri-apps/api/core',
-        '@tauri-apps/api/event',
-        '@tauri-apps/api/window',
-        '@tauri-apps/plugin-notification',
-        '@tauri-apps/plugin-updater',
-        '@tauri-apps/plugin-os',
-        '@tauri-apps/plugin-deep-link',
-        '@tauri-apps/plugin-process',
-      ],
+      // When building for Tauri (TAURI_ENV_PLATFORM is set), these must be
+      // bundled so they resolve in the packaged webview.
+      ...(isTauriBuild
+        ? {}
+        : {
+            external: [
+              '@tauri-apps/api/core',
+              '@tauri-apps/api/event',
+              '@tauri-apps/api/window',
+              '@tauri-apps/plugin-notification',
+              '@tauri-apps/plugin-updater',
+              '@tauri-apps/plugin-os',
+              '@tauri-apps/plugin-deep-link',
+              '@tauri-apps/plugin-process',
+            ],
+          }),
       input: {
         main: './index.html',
       },
@@ -155,6 +167,18 @@ export default defineConfig({
   },
   plugins: [
     libsodiumResolverPlugin(),
+    // Tauri injects IPC bootstrap scripts into the webview and adds the
+    // correct nonces/hashes to the CSP configured in tauri.conf.json.
+    // However, it does NOT modify CSP <meta> tags in the HTML.  If both
+    // exist the browser applies the most restrictive union, which blocks
+    // Tauri's injected scripts and causes a blank screen.  Strip the
+    // meta-tag CSP for Tauri builds — tauri.conf.json handles it.
+    isTauriBuild && {
+      name: 'strip-csp-meta-for-tauri',
+      transformIndexHtml(html) {
+        return html.replace(/<meta\s+http-equiv="Content-Security-Policy"[^>]*>\s*/i, '');
+      },
+    },
     svelte(),
     enableAnalyzer &&
       visualizer({

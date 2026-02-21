@@ -97,7 +97,7 @@ function start(onLock) {
   document.addEventListener('visibilitychange', _visibilityHandler);
 
   // Tauri-specific: listen for window blur/focus events
-  if (isTauri()) {
+  if (isTauri) {
     setupTauriListeners();
   }
 

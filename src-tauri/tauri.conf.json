@@ -1,13 +1,13 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Forward Email",
-  "version": "0.1.9",
+  "version": "0.1.13",
   "identifier": "net.forwardemail.mail",
   "build": {
     "beforeBuildCommand": "pnpm build",
     "beforeDevCommand": "pnpm dev",
     "frontendDist": "../dist",
-    "devUrl": "http://localhost:5173"
+    "devUrl": "http://localhost:5174"
   },
   "app": {
     "windows": [
@@ -26,8 +26,8 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' https://api.forwardemail.net wss://api.forwardemail.net; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'self' 'wasm-unsafe-eval'; frame-src 'none'; object-src 'none'; base-uri 'self'; form-action 'self'; worker-src 'self' blob:; manifest-src 'self'",
-      "freezePrototype": true,
+      "csp": "default-src 'self' ipc: https://ipc.localhost; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: https://ipc.localhost https://api.forwardemail.net wss://api.forwardemail.net; img-src 'self' data: blob:; font-src 'self' data:; worker-src 'self' blob:; object-src 'none'",
+      "freezePrototype": false,
       "pattern": {
         "use": "isolation",
         "options": {

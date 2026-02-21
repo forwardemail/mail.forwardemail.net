@@ -986,6 +986,10 @@ function initStarfield() {
  * manifest to force all clients below that version to reset.
  */
 async function checkClearManifest() {
+  // Skip on Tauri — clear-manifest is a web deployment mechanism.
+  // Desktop/mobile apps use the Tauri updater for version management.
+  if (isTauri) return;
+
   try {
     const res = await fetch('/clear-manifest.json', { cache: 'no-store' });
     if (!res.ok) return;

@@ -20,7 +20,7 @@
  */
 
 import { config } from '../config';
-import { isTauri, isMobile } from './platform.js';
+import { isTauriMobile } from './platform.js';
 import { Local } from './storage';
 
 const UP_STORAGE_KEY = 'unified_push_endpoint';
@@ -33,7 +33,7 @@ const UP_REGISTERED_KEY = 'unified_push_registered';
  * @returns {Promise<boolean>}
  */
 export async function isUnifiedPushAvailable() {
-  if (!isTauri() || !isMobile()) return false;
+  if (!isTauriMobile) return false;
 
   try {
     // Check if a UnifiedPush distributor is installed by querying the
@@ -53,7 +53,7 @@ export async function isUnifiedPushAvailable() {
  * @returns {Promise<string|null>} The push endpoint URL, or null on failure
  */
 export async function registerUnifiedPush() {
-  if (!isTauri() || !isMobile()) return null;
+  if (!isTauriMobile) return null;
 
   try {
     const { invoke } = await import('@tauri-apps/api/core');
@@ -98,7 +98,7 @@ export async function unregisterUnifiedPush() {
       await unregisterEndpointFromServer(endpoint);
     }
 
-    if (isTauri() && isMobile()) {
+    if (isTauriMobile) {
       const { invoke } = await import('@tauri-apps/api/core');
       await invoke('unregister_unified_push', {
         instance: 'forwardemail-webmail',
@@ -151,7 +151,7 @@ export function handlePushMessage(message) {
  * @returns {Promise<Function|null>} Cleanup function, or null if not available
  */
 export async function initUnifiedPushListener() {
-  if (!isTauri() || !isMobile()) return null;
+  if (!isTauriMobile) return null;
 
   try {
     const { listen } = await import('@tauri-apps/api/event');

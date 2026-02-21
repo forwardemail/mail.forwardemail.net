@@ -17,7 +17,9 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, '..');
 
-const SW_PATH = resolve(root, 'public/sw-sync.js');
+// sync-core.js is the shared sync logic inlined into sw-sync.js at build time.
+// It has its own SCHEMA_VERSION that must match db-constants.ts.
+const SW_PATH = resolve(root, 'src/utils/sync-core.js');
 const DB_PATH = resolve(root, 'src/utils/db-constants.ts');
 
 function extractVersion(filePath, label) {
@@ -30,12 +32,12 @@ function extractVersion(filePath, label) {
   return Number(match[1]);
 }
 
-const swVersion = extractVersion(SW_PATH, 'sw-sync.js');
+const swVersion = extractVersion(SW_PATH, 'sync-core.js');
 const dbVersion = extractVersion(DB_PATH, 'db-constants.ts');
 
 if (swVersion !== dbVersion) {
   console.error(
-    `SCHEMA_VERSION mismatch: sw-sync.js has ${swVersion}, db-constants.ts has ${dbVersion}.\n` +
+    `SCHEMA_VERSION mismatch: sync-core.js has ${swVersion}, db-constants.ts has ${dbVersion}.\n` +
       'Both files must use the same version or the service worker will use a different database.',
   );
   process.exit(1);

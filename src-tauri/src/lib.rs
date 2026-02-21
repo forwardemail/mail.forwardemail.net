@@ -193,6 +193,11 @@ pub fn run() {
             // Emit a ready event so the frontend knows Tauri is available
             app.emit("tauri-ready", ())?;
 
+            // Open devtools automatically for debugging (remove before release)
+            if let Some(window) = app.get_webview_window("main") {
+                window.open_devtools();
+            }
+
             Ok(())
         })
         .run(tauri::generate_context!())

@@ -1,6 +1,6 @@
 [package]
 name = "forwardemail-desktop"
-version = "0.1.9"
+version = "0.1.13"
 description = "Forward Email - Privacy-focused email client"
 authors = ["Forward Email <support@forwardemail.net>"]
 license = "BUSL-1.1"
@@ -19,6 +19,7 @@ tauri = { version = "2", features = [
   "tray-icon",
   "image-png",
   "isolation",
+  "devtools",
 ] }
 tauri-plugin-notification = "2"
 tauri-plugin-deep-link = "2"
