@@ -1,0 +1,6 @@
+BEGIN:VCARD
+VERSION:3.0
+N:Doe;Jane;;;
+EMAIL;TYPE=INTERNET:jane.doe@example.com
+TEL:555-0200
+END:VCARD

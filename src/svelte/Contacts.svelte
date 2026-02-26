@@ -3,6 +3,7 @@
   import type { Unsubscriber } from 'svelte/store';
   import { Remote } from '../utils/remote';
   import { Local } from '../utils/storage';
+  import { invalidateCache } from '../utils/contact-cache';
   import { currentAccount } from '../stores/mailboxActions';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
@@ -348,9 +349,9 @@
     const file = target?.files?.[0];
     if (!file) return;
 
-    const maxSize = 5 * 1024 * 1024;
+    const maxSize = 25 * 1024 * 1024; // 25MB to support large backups
     if (file.size > maxSize) {
-      toasts?.show?.('File too large. Maximum size is 5MB.', 'error');
+      toasts?.show?.('File too large. Maximum size is 25MB.', 'error');
       target.value = '';
       return;
     }
@@ -365,42 +366,71 @@
 
       let imported = 0;
       let updated = 0;
+      let skipped = 0;
+      const total = vcards.length;
 
-      for (const vcardContent of vcards) {
+      // Show progress for large imports
+      if (total > 5) {
+        toasts?.show?.(`Importing ${total} contacts...`, 'info');
+      }
+
+      for (let i = 0; i < vcards.length; i++) {
+        const vcardContent = vcards[i];
         const vcardData = parseVCard(vcardContent);
         const email = vcardData.emails?.[0] || '';
+        const name = vcardData.name || '';
 
-        if (!email) continue;
+        // Allow contacts with either email or name (not just email)
+        if (!email && !name) {
+          skipped++;
+          continue;
+        }
 
-        const existing = contacts.find(c => c.email?.toLowerCase() === email.toLowerCase());
-        const payload = { content: vcardContent };
+        try {
+          // Match by email if available, otherwise by name
+          const existing = email
+            ? contacts.find(c => c.email?.toLowerCase() === email.toLowerCase())
+            : contacts.find(c => c.name?.toLowerCase() === name.toLowerCase() && !c.email);
+          const payload = { content: vcardContent };
 
-        if (existing) {
-          await Remote.request('ContactsUpdate', payload, {
-            method: 'PUT',
-            pathOverride: `/v1/contacts/${encodeURIComponent(existing.id || '')}`,
-          });
-          updated++;
-        } else {
-          await Remote.request('ContactsCreate', payload, {
-            method: 'POST',
-            pathOverride: '/v1/contacts',
-          });
-          imported++;
+          if (existing) {
+            await Remote.request('ContactsUpdate', payload, {
+              method: 'PUT',
+              pathOverride: `/v1/contacts/${encodeURIComponent(existing.id || '')}`,
+            });
+            updated++;
+          } else {
+            await Remote.request('ContactsCreate', payload, {
+              method: 'POST',
+              pathOverride: '/v1/contacts',
+            });
+            imported++;
+          }
+        } catch {
+          // Skip individual contact errors during bulk import
+          skipped++;
+        }
+
+        // Show progress every 25 contacts for large imports
+        if (total > 25 && (i + 1) % 25 === 0) {
+          toasts?.show?.(`Imported ${i + 1} of ${total} contacts...`, 'info');
         }
       }
 
       if (imported + updated > 0) {
+        // Invalidate cache so fresh data is fetched
+        invalidateCache().catch(() => {});
         await load();
       }
-      const msg = imported > 0 && updated > 0
-        ? `Imported ${imported} and updated ${updated} contacts`
-        : imported > 0
-          ? `Imported ${imported} contact${imported > 1 ? 's' : ''}`
-          : updated > 0
-            ? `Updated ${updated} contact${updated > 1 ? 's' : ''}`
-            : 'No contacts imported';
-      toasts?.show?.(msg, 'success');
+
+      const parts: string[] = [];
+      if (imported > 0) parts.push(`imported ${imported}`);
+      if (updated > 0) parts.push(`updated ${updated}`);
+      if (skipped > 0) parts.push(`skipped ${skipped}`);
+      const msg = parts.length > 0
+        ? `Contacts: ${parts.join(', ')}`
+        : 'No contacts imported';
+      toasts?.show?.(msg, imported + updated > 0 ? 'success' : 'info');
     } catch (err) {
       toasts?.show?.('Failed to import vCard: ' + ((err as Error)?.message || 'Unknown error'), 'error');
     } finally {
@@ -630,6 +660,8 @@
         toasts?.show?.('Contact created', 'success');
       }
       applyFilter();
+      // Invalidate contact cache after inline save
+      invalidateCache().catch(() => {});
     } catch (err) {
       error = (err as Error)?.message || 'Unable to save contact.';
     } finally {
@@ -730,6 +762,8 @@
         toasts?.show?.('Contact created', 'success');
       }
       applyFilter();
+      // Invalidate contact cache after create/update
+      invalidateCache().catch(() => {});
       modalVisible = false;
     } catch (err) {
       modalError = (err as Error)?.message || 'Unable to save contact.';
@@ -762,6 +796,8 @@
         draft = null;
       }
       applyFilter();
+      // Invalidate contact cache so stale deleted contacts are not shown
+      invalidateCache().catch(() => {});
       toasts?.show?.('Contact deleted', 'success');
     } catch (err) {
       error = (err as Error)?.message || 'Unable to delete contact.';

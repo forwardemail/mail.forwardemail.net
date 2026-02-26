@@ -125,6 +125,21 @@ export async function getContacts(options = {}) {
 }
 
 /**
+ * Invalidate the contact cache for the current account.
+ * Call this after creating, updating, or deleting contacts
+ * to ensure the cache reflects the latest server state.
+ */
+export async function invalidateCache() {
+  const account = getAccount();
+  const key = cacheKey(account);
+  try {
+    await db.meta.delete(key);
+  } catch {
+    // Ignore errors during cache invalidation
+  }
+}
+
+/**
  * Merge recently-used addresses into the cache.
  * Called after sending an email to keep autocomplete fresh.
  */
