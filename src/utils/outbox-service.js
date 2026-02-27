@@ -4,6 +4,7 @@ import { Remote } from './remote';
 import { writable } from 'svelte/store';
 import { saveSentCopy } from './sent-copy.js';
 import { warn } from './logger.ts';
+import { isDemoMode, showDemoBlockedToast } from './demo-mode';
 
 /**
  * Outbox Service
@@ -62,6 +63,14 @@ function calculateBackoff(retryCount) {
  * @returns {Promise<Object>} The queued outbox record
  */
 export async function queueEmail(emailData, options = {}) {
+  // Block sending in demo mode
+  if (isDemoMode()) {
+    showDemoBlockedToast('send email');
+    const err = new Error('Demo mode: sending is disabled');
+    err.isDemo = true;
+    throw err;
+  }
+
   const account = getAccount();
   const { skipProcess = false, sendAt = null, serverId = null } = options || {};
   const id = `${OUTBOX_PREFIX}${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;

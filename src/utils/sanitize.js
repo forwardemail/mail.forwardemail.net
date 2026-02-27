@@ -94,6 +94,11 @@ export function sanitizeHtml(html, { blockRemoteImages, blockTrackingPixels } = 
           return match;
         }
 
+        // Validate URL scheme - block javascript:, vbscript:, etc.
+        if (/^\s*(javascript|vbscript):/i.test(src)) {
+          return ''; // Strip dangerous image tags entirely
+        }
+
         // Classify image
         const isPixel = isTrackingPixel(attributes);
         let shouldBlock = false;
@@ -117,12 +122,24 @@ export function sanitizeHtml(html, { blockRemoteImages, blockTrackingPixels } = 
           const alt =
             altMatch?.[1] || (isPixel ? 'Tracking pixel blocked' : 'Image blocked for privacy');
 
+          // HTML-encode src and alt to prevent attribute injection before DOMPurify
+          const safeSrc = src
+            .replace(/&/g, '&amp;')
+            .replace(/"/g, '&quot;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;');
+          const safeAlt = alt
+            .replace(/&/g, '&amp;')
+            .replace(/"/g, '&quot;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;');
+
           if (isPixel) {
             // Hide tracking pixels completely
-            return `<img${newAttributes} data-original-src="${src}" data-tracking-pixel="true" alt="${alt}" style="display: none;">`;
+            return `<img${newAttributes} data-original-src="${safeSrc}" data-tracking-pixel="true" alt="${safeAlt}" style="display: none;">`;
           } else {
             // Visible placeholder for regular images
-            return `<img${newAttributes} data-original-src="${src}" alt="${alt}" style="display: inline-block; min-width: 100px; min-height: 100px; background: #f3f4f6; border: 2px dashed #d1d5db; border-radius: 8px; padding: 8px; color: #6b7280; font-size: 12px; text-align: center;">`;
+            return `<img${newAttributes} data-original-src="${safeSrc}" alt="${safeAlt}" style="display: inline-block; min-width: 100px; min-height: 100px; background: #f3f4f6; border: 2px dashed #d1d5db; border-radius: 8px; padding: 8px; color: #6b7280; font-size: 12px; text-align: center;">`;
           }
         }
 
@@ -159,6 +176,28 @@ export function sanitizeHtml(html, { blockRemoteImages, blockTrackingPixels } = 
  * @param {boolean} options.includeTrackingPixels - Whether to restore tracking pixels (default: false)
  * @returns {string} HTML with images restored
  */
+// Allowlist of safe URL protocols for image sources
+const SAFE_IMAGE_PROTOCOLS =
+  /^(https?:\/\/|data:image\/(png|jpeg|jpg|gif|webp|bmp|x-icon|avif)[;,])/i;
+
+/**
+ * Validate that an image URL is safe to restore.
+ * Blocks javascript:, vbscript:, data: (non-image), and other dangerous URIs.
+ */
+function isSafeImageUrl(url) {
+  if (!url || typeof url !== 'string') return false;
+  const trimmed = url.trim();
+  // Block empty, javascript:, vbscript:, and other dangerous schemes
+  if (
+    /^\s*(javascript|vbscript|data(?!:image\/(png|jpeg|jpg|gif|webp|bmp|x-icon|avif)[;,]))/i.test(
+      trimmed,
+    )
+  )
+    return false;
+  // Must start with http(s) or data:image/
+  return SAFE_IMAGE_PROTOCOLS.test(trimmed);
+}
+
 export function restoreBlockedImages(html, { includeTrackingPixels = false } = {}) {
   if (!html) return '';
 
@@ -169,6 +208,19 @@ export function restoreBlockedImages(html, { includeTrackingPixels = false } = {
       : /<img([^>]*)data-original-src=["']([^"']+)["'](?![^>]*data-tracking-pixel="true")([^>]*)>/gi;
 
     const restoredHtml = html.replace(pattern, (match, before, originalSrc, after) => {
+      // Validate URL before restoring - block javascript: and other dangerous URIs
+      if (!isSafeImageUrl(originalSrc)) {
+        return match; // Keep blocked if URL is unsafe
+      }
+
+      // HTML-encode the src to prevent attribute injection
+      const safeSrc = originalSrc
+        .replace(/&/g, '&amp;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+
       // Remove placeholder styles and data attributes
       const cleanBefore = before
         .replace(/style=["'][^"']*["']\s*/gi, '')
@@ -176,8 +228,8 @@ export function restoreBlockedImages(html, { includeTrackingPixels = false } = {
       const cleanAfter = after
         .replace(/style=["'][^"']*["']\s*/gi, '')
         .replace(/data-tracking-pixel=["']true["']\s*/gi, '');
-      // Restore the original src
-      return `<img${cleanBefore}src="${originalSrc}"${cleanAfter}>`;
+      // Restore the original src with sanitized URL
+      return `<img${cleanBefore}src="${safeSrc}"${cleanAfter}>`;
     });
 
     return restoredHtml;

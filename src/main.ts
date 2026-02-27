@@ -1,3 +1,4 @@
+import './polyfills';
 import * as mailboxActions from './stores/mailboxActions';
 import { createStarfield } from './utils/starfield';
 import { Local, Accounts, reconcileOrphanedAccountData } from './utils/storage';
@@ -66,10 +67,25 @@ document.head.appendChild(style);
 import './utils/error-logger';
 
 import { sendSyncTask, terminateSyncWorker } from './utils/sync-worker-client.js';
+import { canUseServiceWorker, isTauri } from './utils/platform.js';
+import {
+  isLockEnabled,
+  isUnlocked,
+  isVaultConfigured,
+  wasUnlockedThisSession,
+  lock as lockCryptoStore,
+  restoreSessionCredentials,
+} from './utils/crypto-store.js';
+import {
+  start as startInactivityTimer,
+  pause as pauseInactivityTimer,
+  resume as resumeInactivityTimer,
+} from './utils/inactivity-timer.js';
 import { startOutboxProcessor, processOutbox } from './utils/outbox-service';
 import { initMutationQueue, processMutationQueue } from './utils/mutation-queue';
 import { syncPendingDrafts } from './utils/draft-service';
 import { setIndexToasts, searchStore } from './stores/searchStore';
+import { setDemoToasts } from './utils/demo-mode';
 // Database initialization with recovery support
 import {
   initializeDatabase,
@@ -77,7 +93,7 @@ import {
   setTerminateWorkersCallback,
   terminateDbWorker,
 } from './utils/db';
-import { markBootstrapReady } from './utils/bootstrap-ready.js';
+import { markBootstrapReady, markAppReady } from './utils/bootstrap-ready.js';
 import { initPerfObservers } from './utils/perf-logger.ts';
 import { attemptRecovery } from './utils/db-recovery';
 import { parseMailto, mailtoToPrefill } from './utils/mailto';
@@ -296,6 +312,7 @@ window.addEventListener('mutation-queue-failed', () => {
 // Set up mailboxActions references
 mailboxActions.setToasts(toasts);
 setIndexToasts(toasts);
+setDemoToasts(toasts);
 viewModel.toasts = toasts;
 viewModel.mailboxView.toasts = toasts;
 
@@ -425,6 +442,34 @@ if (contactsRoot) {
     .catch((err) => {
       console.error('Failed to load contacts component', err);
     });
+}
+
+// Wire WebSocket CustomEvents to Calendar and Contacts APIs.
+// The websocket-updater dispatches these events when CalDAV/CardDAV changes arrive.
+// We listen here because calendarApi/contactsApi are only available in main.ts scope.
+// Store references for cleanup on sign-out.
+const _feCalendarChanged = () => {
+  calendarApi.reload?.();
+};
+const _feCalendarEventChanged = () => {
+  calendarApi.reload?.();
+};
+const _feContactsChanged = () => {
+  contactsApi.reload?.();
+};
+const _feContactChanged = () => {
+  contactsApi.reload?.();
+};
+window.addEventListener('fe:calendar-changed', _feCalendarChanged);
+window.addEventListener('fe:calendar-event-changed', _feCalendarEventChanged);
+window.addEventListener('fe:contacts-changed', _feContactsChanged);
+window.addEventListener('fe:contact-changed', _feContactChanged);
+
+export function cleanupCustomEventListeners() {
+  window.removeEventListener('fe:calendar-changed', _feCalendarChanged);
+  window.removeEventListener('fe:calendar-event-changed', _feCalendarEventChanged);
+  window.removeEventListener('fe:contacts-changed', _feContactsChanged);
+  window.removeEventListener('fe:contact-changed', _feContactChanged);
 }
 
 const composeRoot = document.getElementById('compose-root');
@@ -691,14 +736,6 @@ routeStore.subscribe((route) => {
   if (route === 'settings') viewModel.settingsModal.open();
   if (route === 'calendar') viewModel.calendarView.load();
   if (route === 'contacts') contactsApi.reload?.();
-  if (mailboxMode) {
-    if (starfieldDisposer) {
-      starfieldDisposer();
-      starfieldDisposer = null;
-    }
-  } else if (!starfieldDisposer) {
-    starfieldDisposer = initStarfield();
-  }
 });
 
 function initKeyboardShortcuts() {
@@ -1022,6 +1059,53 @@ async function checkClearManifest() {
   }
 }
 
+// ── App Lock helpers (used by bootstrap and exported for Settings) ──
+
+/**
+ * Show the lock screen overlay and wait for the user to unlock.
+ * Returns a promise that resolves when unlock succeeds.
+ */
+function showLockScreen(): Promise<void> {
+  return new Promise((resolve) => {
+    const lockOverlay = document.getElementById('app-lock-overlay');
+    if (!lockOverlay) {
+      resolve();
+      return;
+    }
+
+    lockOverlay.style.display = 'block';
+    import('svelte').then(({ mount, unmount }) => {
+      import('./svelte/LockScreen.svelte').then(({ default: LockScreen }) => {
+        const comp = mount(LockScreen, { target: lockOverlay });
+        lockOverlay.addEventListener(
+          'unlock',
+          () => {
+            unmount(comp);
+            lockOverlay.style.display = 'none';
+            resolve();
+          },
+          { once: true },
+        );
+      });
+    });
+  });
+}
+
+/**
+ * Start the inactivity timer that re-locks the app.
+ * Safe to call multiple times — restarts the timer each time.
+ * Exported so AppLockSettings can start it when the user first enables lock.
+ */
+export function startAppLockTimer() {
+  startInactivityTimer(() => {
+    lockCryptoStore();
+    pauseInactivityTimer();
+    showLockScreen().then(() => {
+      resumeInactivityTimer();
+    });
+  });
+}
+
 async function bootstrap() {
   const root = document.getElementById('rl-app');
   if (!root) return;
@@ -1073,6 +1157,11 @@ async function bootstrap() {
     // Initialize i18n first
     await i18n.init();
     initPerfObservers();
+
+    // Eagerly load libsodium on Tauri to avoid first-use latency
+    if (window.__TAURI_INTERNALS__) {
+      import('./utils/crypto-store.js').then((m) => m.getSodium()).catch(() => {});
+    }
 
     // Initialize database with recovery callbacks
     // This happens early to ensure the database is ready before any stores try to use it
@@ -1191,6 +1280,31 @@ async function bootstrap() {
     document.body.classList.toggle('mailbox-mode', mailboxMode);
     updateRouteVisibility(route);
 
+    // ── App Lock: show lock screen if enabled and vault is locked ──
+    // Skip if the user already unlocked in this tab session (survives page
+    // reloads within the same tab but not new tabs or tab close).  The DEK
+    // is lost on reload but the session flag lets us silently re-prompt via
+    // the inactivity timer path rather than blocking the UI on every navigation.
+    if (isLockEnabled() && isVaultConfigured() && !isUnlocked() && !wasUnlockedThisSession()) {
+      await showLockScreen();
+      // openVault() already calls restoreSessionCredentials() after
+      // successful unlock, so credentials are ready now.
+    } else if (isLockEnabled() && isVaultConfigured() && wasUnlockedThisSession()) {
+      // Session was previously unlocked but DEK is gone (page reload).
+      // sessionStorage should still have plaintext credentials from the
+      // prior unlock, but if they were lost ensure they're available.
+      restoreSessionCredentials();
+    }
+
+    // Signal that auth credentials are available and components can
+    // safely issue API requests.
+    markAppReady();
+
+    // Start inactivity timer if app lock is enabled (re-locks after idle)
+    if (isLockEnabled() && isVaultConfigured()) {
+      startAppLockTimer();
+    }
+
     viewModel.settingsModal.applyTheme = applyTheme;
     viewModel.settingsModal.applyFont = applyFont;
     themeUnsub?.();
@@ -1236,11 +1350,79 @@ async function bootstrap() {
       processMutationQueue();
     });
 
-    if ('serviceWorker' in navigator && import.meta.env.PROD) {
+    // Tauri-specific native integrations (desktop + mobile)
+    if (isTauri) {
+      import('./utils/tauri-bridge.js').then(({ initTauriBridge }) => initTauriBridge());
+      import('./utils/updater-bridge.js').then(({ initAutoUpdater }) => initAutoUpdater());
+      import('./utils/notification-bridge.js').then(({ initNotificationChannels }) =>
+        initNotificationChannels(),
+      );
+    }
+
+    if (canUseServiceWorker() && import.meta.env.PROD) {
       window.addEventListener('load', () => {
         registerServiceWorker();
       });
     }
+
+    // Web auto-updater: listen for newRelease WebSocket events
+    if (!isTauri && import.meta.env.PROD) {
+      import('./utils/web-updater.js').then(({ start: startWebUpdater }) => startWebUpdater());
+    }
+
+    // Register as mailto: handler on the web (not in Tauri — Tauri handles via OS registration)
+    if (!isTauri && navigator.registerProtocolHandler) {
+      try {
+        // The %s placeholder is replaced by the browser with the full mailto: URI
+        navigator.registerProtocolHandler('mailto', `${window.location.origin}/mailbox#mailto=%s`);
+      } catch (err) {
+        console.warn('[main] Failed to register mailto: handler', err);
+      }
+    }
+
+    // Listen for deep-link events from Tauri (mailto:, forwardemail://)
+    // The tauri-bridge dispatches 'app:deep-link' CustomEvents on window.
+    window.addEventListener('app:deep-link', (event: Event) => {
+      const url = (event as CustomEvent)?.detail?.url;
+      if (!url || typeof url !== 'string') return;
+
+      const trimmed = url.trim();
+
+      // Handle mailto: deep links → open Compose with prefilled fields
+      if (trimmed.toLowerCase().startsWith('mailto:')) {
+        const parsed = parseMailto(trimmed);
+        if (viewModel?.mailboxView?.composeModal?.open) {
+          viewModel.mailboxView.composeModal.open(mailtoToPrefill(parsed));
+        }
+        return;
+      }
+
+      // Handle forwardemail:// deep links → navigate to the path
+      if (trimmed.toLowerCase().startsWith('forwardemail://')) {
+        const path = trimmed.replace(/^forwardemail:\/\//i, '/');
+        if (viewModel?.navigate && /^\/[a-z]/.test(path)) {
+          viewModel.navigate(path);
+        }
+      }
+    });
+
+    // Handle single-instance events (second app launch with mailto: arg)
+    // When the user clicks a mailto: link while the app is already running,
+    // Tauri sends the URL via the single-instance plugin.
+    window.addEventListener('app:single-instance', (event: Event) => {
+      const args = (event as CustomEvent)?.detail?.args;
+      if (!Array.isArray(args)) return;
+
+      for (const arg of args) {
+        if (typeof arg === 'string' && arg.toLowerCase().startsWith('mailto:')) {
+          const parsed = parseMailto(arg);
+          if (viewModel?.mailboxView?.composeModal?.open) {
+            viewModel.mailboxView.composeModal.open(mailtoToPrefill(parsed));
+          }
+          break;
+        }
+      }
+    });
   } catch (error) {
     console.error('[main] bootstrap failed', error);
 
@@ -1260,15 +1442,13 @@ async function bootstrap() {
   }
 }
 
-// Handle database error messages from service worker
+// Handle database error messages from service worker or sync-shim
 function setupServiceWorkerDbErrorHandler() {
-  if (!('serviceWorker' in navigator)) return;
-
-  navigator.serviceWorker.addEventListener('message', async (event) => {
-    const data = event.data;
+  // Shared handler for dbError messages from any sync back-end
+  const handleDbError = async (data) => {
     if (!data || data.type !== 'dbError') return;
 
-    console.error('[SW -> Main] Database error from service worker:', data);
+    console.error('[Sync -> Main] Database error:', data);
 
     // If the error is recoverable, attempt recovery
     if (data.recoverable) {
@@ -1294,6 +1474,18 @@ function setupServiceWorkerDbErrorHandler() {
     } else {
       toasts?.show?.('Local storage error. Some features may not work.', 'warning');
     }
+  };
+
+  // Listen from service worker (web)
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.addEventListener('message', async (event) => {
+      handleDbError(event.data);
+    });
+  }
+
+  // Listen from sync-shim (Tauri desktop / mobile)
+  window.addEventListener('sync-shim-message', (event) => {
+    handleDbError((event as CustomEvent).detail);
   });
 }
 
