@@ -116,25 +116,25 @@ test.describe('Multi-VCF Upload Fixes', () => {
   });
 });
 
-test.describe('Contact Cache Invalidation on Delete', () => {
+test.describe('Per-Contact Cache Update on Delete', () => {
   test.beforeEach(async ({ page }) => {
     await mockApi(page);
     await setupAuthenticatedSession(page);
     await navigateToContacts(page);
   });
 
-  test('should remove deleted contact from list immediately', async ({ page }) => {
+  test('should surgically remove deleted contact from cache', async ({ page }) => {
     // Verify Alice exists
     await verifyContactInList(page, { name: 'Alice Johnson' });
 
-    // Delete Alice
+    // Delete Alice — cache should remove only this contact
     await deleteContact(page, 'Alice Johnson');
 
     // Alice should no longer appear in the list
     await verifyContactNotInList(page, 'Alice Johnson');
   });
 
-  test('should not show deleted contact after page reload', async ({ page }) => {
+  test('should persist cache removal after page reload', async ({ page }) => {
     // Delete a contact
     await deleteContact(page, 'Bob Smith');
 
@@ -146,11 +146,11 @@ test.describe('Contact Cache Invalidation on Delete', () => {
     await page.waitForSelector('ul li button', { timeout: 10000 });
     await page.waitForTimeout(500);
 
-    // Bob should still not appear (cache was invalidated)
+    // Bob should still not appear (removed from cache)
     await verifyContactNotInList(page, 'Bob Smith');
   });
 
-  test('should update contact list after creating new contact', async ({ page }) => {
+  test('should upsert new contact into cache after creation', async ({ page }) => {
     // Create a new contact via the modal
     await page.getByRole('button', { name: /New contact/i }).click();
     const modal = page.getByRole('dialog');
@@ -161,40 +161,42 @@ test.describe('Contact Cache Invalidation on Delete', () => {
     await modal.locator('button:has-text("Save")').click();
     await page.waitForSelector('div[role="dialog"]', { state: 'hidden', timeout: 5000 });
 
-    // New contact should appear in the list
+    // New contact should appear in the list (upserted into cache)
     await verifyContactInList(page, { name: 'New Test Contact', email: 'newtest@example.com' });
   });
 });
 
-test.describe('Contact Cache Invalidation on Import', () => {
+test.describe('Per-Contact Cache Update on Import', () => {
   test.beforeEach(async ({ page }) => {
     await mockApi(page);
     await setupAuthenticatedSession(page);
     await navigateToContacts(page);
   });
 
-  test('should show newly imported contacts after import', async ({ page }) => {
+  test('should upsert imported contacts into cache', async ({ page }) => {
     const filePath = path.join(process.cwd(), 'tests/fixtures/vcf/simple-contact.vcf');
 
     await importVCard(page, filePath);
     await waitForSuccessToast(page, '');
 
-    // Imported contact should appear
+    // Imported contact should appear (upserted into cache)
     await verifyContactInList(page, { name: 'Emily Davis', email: 'emily@example.com' });
   });
 
-  test('should update existing contact on duplicate import', async ({ page }) => {
+  test('should upsert existing contact on duplicate import without duplication', async ({
+    page,
+  }) => {
     const filePath = path.join(process.cwd(), 'tests/fixtures/vcf/simple-contact.vcf');
 
     // First import
     await importVCard(page, filePath);
     await waitForSuccessToast(page, '');
 
-    // Second import of same file (should update, not duplicate)
+    // Second import of same file (should upsert, not duplicate)
     await importVCard(page, filePath);
     await page.waitForTimeout(1000);
 
-    // Contact should still exist (not duplicated)
+    // Contact should still exist (upserted, not duplicated)
     await verifyContactInList(page, { name: 'Emily Davis', email: 'emily@example.com' });
   });
 });

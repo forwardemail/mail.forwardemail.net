@@ -3,7 +3,11 @@
   import type { Unsubscriber } from 'svelte/store';
   import { Remote } from '../utils/remote';
   import { Local } from '../utils/storage';
-  import { invalidateCache } from '../utils/contact-cache';
+  import {
+    removeContactFromCache,
+    upsertContactInCache,
+    upsertMultipleContactsInCache,
+  } from '../utils/contact-cache';
   import { currentAccount } from '../stores/mailboxActions';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
@@ -210,7 +214,7 @@
     let hash = 0;
     for (let i = 0; i < str.length; i++) {
       const char = str.charCodeAt(i);
-      hash = ((hash << 5) - hash) + char;
+      hash = (hash << 5) - hash + char;
       hash = hash & hash;
     }
     return Math.abs(hash);
@@ -218,9 +222,18 @@
 
   const getAvatarColor = (contact: Contact | null): string => {
     const colors = [
-      '#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b',
-      '#10b981', '#06b6d4', '#6366f1', '#84cc16',
-      '#f97316', '#14b8a6', '#a855f7', '#eab308'
+      '#3b82f6',
+      '#8b5cf6',
+      '#ec4899',
+      '#f59e0b',
+      '#10b981',
+      '#06b6d4',
+      '#6366f1',
+      '#84cc16',
+      '#f97316',
+      '#14b8a6',
+      '#a855f7',
+      '#eab308',
     ];
     const email = contact?.email || contact?.id || 'default';
     const hash = hashCode(email);
@@ -274,11 +287,7 @@
       }
     }
     const unescapeText = (value: string): string =>
-      value
-        .replace(/\\n/gi, '\n')
-        .replace(/\\,/g, ',')
-        .replace(/\\;/g, ';')
-        .replace(/\\\\/g, '\\');
+      value.replace(/\\n/gi, '\n').replace(/\\,/g, ',').replace(/\\;/g, ';').replace(/\\\\/g, '\\');
 
     for (const line of lines) {
       const colonIndex = line.indexOf(':');
@@ -307,7 +316,7 @@
         parsed.website = value;
       } else if (key === 'BDAY') {
         if (value.length === 8) {
-          parsed.birthday = `${value.substring(0,4)}-${value.substring(4,6)}-${value.substring(6,8)}`;
+          parsed.birthday = `${value.substring(0, 4)}-${value.substring(4, 6)}-${value.substring(6, 8)}`;
         } else {
           parsed.birthday = value;
         }
@@ -389,8 +398,8 @@
         try {
           // Match by email if available, otherwise by name
           const existing = email
-            ? contacts.find(c => c.email?.toLowerCase() === email.toLowerCase())
-            : contacts.find(c => c.name?.toLowerCase() === name.toLowerCase() && !c.email);
+            ? contacts.find((c) => c.email?.toLowerCase() === email.toLowerCase())
+            : contacts.find((c) => c.name?.toLowerCase() === name.toLowerCase() && !c.email);
           const payload = { content: vcardContent };
 
           if (existing) {
@@ -418,21 +427,31 @@
       }
 
       if (imported + updated > 0) {
-        // Invalidate cache so fresh data is fetched
-        invalidateCache().catch(() => {});
+        // Reload contacts from API and update cache with the new data
         await load();
+        // Surgically update cache with loaded contacts
+        upsertMultipleContactsInCache(
+          contacts.map((c) => ({
+            id: c.id,
+            email: c.email,
+            name: c.name,
+            avatar: c.photo || '',
+            company: c.company || '',
+          })),
+        ).catch(() => {});
       }
 
       const parts: string[] = [];
       if (imported > 0) parts.push(`imported ${imported}`);
       if (updated > 0) parts.push(`updated ${updated}`);
       if (skipped > 0) parts.push(`skipped ${skipped}`);
-      const msg = parts.length > 0
-        ? `Contacts: ${parts.join(', ')}`
-        : 'No contacts imported';
+      const msg = parts.length > 0 ? `Contacts: ${parts.join(', ')}` : 'No contacts imported';
       toasts?.show?.(msg, imported + updated > 0 ? 'success' : 'info');
     } catch (err) {
-      toasts?.show?.('Failed to import vCard: ' + ((err as Error)?.message || 'Unknown error'), 'error');
+      toasts?.show?.(
+        'Failed to import vCard: ' + ((err as Error)?.message || 'Unknown error'),
+        'error',
+      );
     } finally {
       target.value = '';
       importMenuOpen = false;
@@ -466,7 +485,13 @@
     selectedContact = contact;
     draft = contact ? { ...contact } : null;
     if (contact) {
-      optionalFieldsExpanded = !!(contact.company || contact.jobTitle || contact.timezone || contact.website || contact.birthday);
+      optionalFieldsExpanded = !!(
+        contact.company ||
+        contact.jobTitle ||
+        contact.timezone ||
+        contact.website ||
+        contact.birthday
+      );
     }
   };
 
@@ -502,22 +527,26 @@
     try {
       const res = await Remote.request('Contacts', { limit: 500 });
       if (requestId !== loadRequestId) return;
-      const list = Array.isArray(res) ? res : (res as { Result?: unknown[]; contacts?: unknown[] })?.Result || (res as { contacts?: unknown[] })?.contacts || [];
+      const list = Array.isArray(res)
+        ? res
+        : (res as { Result?: unknown[]; contacts?: unknown[] })?.Result ||
+          (res as { contacts?: unknown[] })?.contacts ||
+          [];
       const mapped: Contact[] = (list || []).map((c: Record<string, unknown>) => {
         const vcard = parseVCard(c.content as string);
         return {
           id: (c.id || c.contact_id || c.uid || c.Id) as string,
           name: (c.full_name || c.name || c.FullName || vcard.name || '') as string,
           email:
-            ((c.emails as { value: string }[])?.[0]?.value) ||
-            ((c.Emails as { value: string }[])?.[0]?.value) ||
+            (c.emails as { value: string }[])?.[0]?.value ||
+            (c.Emails as { value: string }[])?.[0]?.value ||
             (c.email as string) ||
             vcard.emails?.[0] ||
             '',
           phone:
-            ((c.phone_numbers as { value: string }[])?.[0]?.value) ||
-            ((c.Phones as { value: string }[])?.[0]?.value) ||
-            ((c.phones as { value: string }[])?.[0]?.value) ||
+            (c.phone_numbers as { value: string }[])?.[0]?.value ||
+            (c.Phones as { value: string }[])?.[0]?.value ||
+            (c.phones as { value: string }[])?.[0]?.value ||
             vcard.phones?.[0] ||
             '',
           notes: vcard.notes || '',
@@ -600,10 +629,10 @@
       };
       if (draft.id) {
         const id = draft.id;
-        const updated = await Remote.request('ContactsUpdate', payload, {
+        const updated = (await Remote.request('ContactsUpdate', payload, {
           method: 'PUT',
           pathOverride: `/v1/contacts/${encodeURIComponent(id)}`,
-        }) as Record<string, unknown>;
+        })) as Record<string, unknown>;
         const vcardData = parseVCard(updated?.content as string);
         contacts = contacts.map((c) =>
           c.id === id
@@ -611,9 +640,12 @@
                 ...c,
                 name: (updated?.full_name as string) || name,
                 email:
-                  ((updated?.emails as { value: string }[])?.[0]?.value) || (updated?.email as string) || email || '',
+                  (updated?.emails as { value: string }[])?.[0]?.value ||
+                  (updated?.email as string) ||
+                  email ||
+                  '',
                 phone:
-                  ((updated?.phone_numbers as { value: string }[])?.[0]?.value) ||
+                  (updated?.phone_numbers as { value: string }[])?.[0]?.value ||
                   (updated?.phone as string) ||
                   draft.phone ||
                   '',
@@ -631,17 +663,20 @@
         draft = selectedContact ? { ...selectedContact } : null;
         toasts?.show?.('Contact updated', 'success');
       } else {
-        const created = await Remote.request('ContactsCreate', payload, {
+        const created = (await Remote.request('ContactsCreate', payload, {
           method: 'POST',
           pathOverride: '/v1/contacts',
-        }) as Record<string, unknown>;
+        })) as Record<string, unknown>;
         const vcardData = parseVCard(created?.content as string);
         const mapped: Contact = {
           id: (created?.id || created?.contact_id || created?.uid || created?.Id) as string,
           name: (created?.full_name as string) || name,
-          email: ((created?.emails as { value: string }[])?.[0]?.value) || (created?.email as string) || email,
+          email:
+            (created?.emails as { value: string }[])?.[0]?.value ||
+            (created?.email as string) ||
+            email,
           phone:
-            ((created?.phone_numbers as { value: string }[])?.[0]?.value) ||
+            (created?.phone_numbers as { value: string }[])?.[0]?.value ||
             (created?.phone as string) ||
             draft.phone ||
             '',
@@ -660,8 +695,16 @@
         toasts?.show?.('Contact created', 'success');
       }
       applyFilter();
-      // Invalidate contact cache after inline save
-      invalidateCache().catch(() => {});
+      // Surgically update the specific contact in cache
+      if (selectedContact) {
+        upsertContactInCache({
+          id: selectedContact.id,
+          email: selectedContact.email,
+          name: selectedContact.name,
+          avatar: selectedContact.photo || '',
+          company: selectedContact.company || '',
+        }).catch(() => {});
+      }
     } catch (err) {
       error = (err as Error)?.message || 'Unable to save contact.';
     } finally {
@@ -702,10 +745,10 @@
       };
       if (modalMode === 'edit' && modalContact.id) {
         const id = modalContact.id;
-        const updated = await Remote.request('ContactsUpdate', payload, {
+        const updated = (await Remote.request('ContactsUpdate', payload, {
           method: 'PUT',
           pathOverride: `/v1/contacts/${encodeURIComponent(id)}`,
-        }) as Record<string, unknown>;
+        })) as Record<string, unknown>;
         const vcardData = parseVCard(updated?.content as string);
         contacts = contacts.map((c) =>
           c.id === id
@@ -713,9 +756,12 @@
                 ...c,
                 name: (updated?.full_name as string) || name,
                 email:
-                  ((updated?.emails as { value: string }[])?.[0]?.value) || (updated?.email as string) || email || '',
+                  (updated?.emails as { value: string }[])?.[0]?.value ||
+                  (updated?.email as string) ||
+                  email ||
+                  '',
                 phone:
-                  ((updated?.phone_numbers as { value: string }[])?.[0]?.value) ||
+                  (updated?.phone_numbers as { value: string }[])?.[0]?.value ||
                   (updated?.phone as string) ||
                   modalContact.phone ||
                   '',
@@ -733,17 +779,20 @@
         draft = selectedContact ? { ...selectedContact } : null;
         toasts?.show?.('Contact updated', 'success');
       } else {
-        const created = await Remote.request('ContactsCreate', payload, {
+        const created = (await Remote.request('ContactsCreate', payload, {
           method: 'POST',
           pathOverride: '/v1/contacts',
-        }) as Record<string, unknown>;
+        })) as Record<string, unknown>;
         const vcardData = parseVCard(created?.content as string);
         const mapped: Contact = {
           id: (created?.id || created?.contact_id || created?.uid || created?.Id) as string,
           name: (created?.full_name as string) || name,
-          email: ((created?.emails as { value: string }[])?.[0]?.value) || (created?.email as string) || email,
+          email:
+            (created?.emails as { value: string }[])?.[0]?.value ||
+            (created?.email as string) ||
+            email,
           phone:
-            ((created?.phone_numbers as { value: string }[])?.[0]?.value) ||
+            (created?.phone_numbers as { value: string }[])?.[0]?.value ||
             (created?.phone as string) ||
             modalContact.phone ||
             '',
@@ -762,8 +811,16 @@
         toasts?.show?.('Contact created', 'success');
       }
       applyFilter();
-      // Invalidate contact cache after create/update
-      invalidateCache().catch(() => {});
+      // Surgically update the specific contact in cache
+      if (selectedContact) {
+        upsertContactInCache({
+          id: selectedContact.id,
+          email: selectedContact.email,
+          name: selectedContact.name,
+          avatar: selectedContact.photo || '',
+          company: selectedContact.company || '',
+        }).catch(() => {});
+      }
       modalVisible = false;
     } catch (err) {
       modalError = (err as Error)?.message || 'Unable to save contact.';
@@ -796,8 +853,8 @@
         draft = null;
       }
       applyFilter();
-      // Invalidate contact cache so stale deleted contacts are not shown
-      invalidateCache().catch(() => {});
+      // Surgically remove the deleted contact from cache
+      removeContactFromCache(confirmTarget.id).catch(() => {});
       toasts?.show?.('Contact deleted', 'success');
     } catch (err) {
       error = (err as Error)?.message || 'Unable to delete contact.';
@@ -855,12 +912,7 @@
 
 <div class="flex h-14 items-center justify-between border-b border-border bg-background px-4">
   <div class="flex items-center gap-3">
-    <Button
-      variant="ghost"
-      size="icon"
-      onclick={() => navigate?.('/mailbox')}
-      aria-label="Back"
-    >
+    <Button variant="ghost" size="icon" onclick={() => navigate?.('/mailbox')} aria-label="Back">
       <ChevronLeft class="h-5 w-5" />
     </Button>
     <div class="flex flex-col">
@@ -880,12 +932,7 @@
       <DropdownMenu.Content align="end">
         <DropdownMenu.Item class="cursor-pointer p-0">
           <label class="flex w-full cursor-pointer items-center gap-2 px-2 py-1.5">
-            <input
-              type="file"
-              accept=".vcf,text/vcard"
-              onchange={importVCard}
-              class="hidden"
-            />
+            <input type="file" accept=".vcf,text/vcard" onchange={importVCard} class="hidden" />
             <span>Import vCard</span>
           </label>
         </DropdownMenu.Item>
@@ -907,9 +954,7 @@
 
 <div class="grid h-[calc(100vh-3.5rem)] grid-cols-1 md:grid-cols-[320px_1fr]">
   <!-- Contact List -->
-  <div
-    class="flex flex-col border-r border-border {selectedContact ? 'hidden md:flex' : 'flex'}"
-  >
+  <div class="flex flex-col border-r border-border {selectedContact ? 'hidden md:flex' : 'flex'}">
     <div class="p-3">
       <div class="relative">
         <Search class="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -932,14 +977,23 @@
           <li>
             <button
               type="button"
-              class="flex w-full items-center gap-3 border-l-[3px] px-3 py-2.5 text-left transition-colors hover:bg-accent/50 {selectedContact?.id === contact.id ? 'border-l-primary bg-primary/10' : 'border-l-transparent'}"
+              class="flex w-full items-center gap-3 border-l-[3px] px-3 py-2.5 text-left transition-colors hover:bg-accent/50 {selectedContact?.id ===
+              contact.id
+                ? 'border-l-primary bg-primary/10'
+                : 'border-l-transparent'}"
               onclick={() => selectContact(contact)}
             >
-              <Avatar.Root class="h-8 w-8 shrink-0" style="background-color: {getAvatarColor(contact)}">
+              <Avatar.Root
+                class="h-8 w-8 shrink-0"
+                style="background-color: {getAvatarColor(contact)}"
+              >
                 {#if contact.photo}
                   <Avatar.Image src={contact.photo} alt={contact.name || 'Contact'} />
                 {:else}
-                  <Avatar.Fallback class="text-white text-xs font-semibold" style="background-color: {getAvatarColor(contact)}">
+                  <Avatar.Fallback
+                    class="text-white text-xs font-semibold"
+                    style="background-color: {getAvatarColor(contact)}"
+                  >
                     {getInitials(contact)}
                   </Avatar.Fallback>
                 {/if}
@@ -956,9 +1010,7 @@
   </div>
 
   <!-- Contact Detail -->
-  <div
-    class="overflow-y-auto p-4 md:p-6 {selectedContact ? 'block' : 'hidden md:block'}"
-  >
+  <div class="overflow-y-auto p-4 md:p-6 {selectedContact ? 'block' : 'hidden md:block'}">
     {#if selectedContact && draft}
       <div class="mx-auto max-w-2xl">
         <!-- Header with avatar and actions -->
@@ -978,18 +1030,28 @@
             style="background-color: {getAvatarColor(draft)}"
           >
             {#if draft.photo}
-              <img src={draft.photo} alt={draft.name || 'Contact'} class="h-full w-full object-cover" />
+              <img
+                src={draft.photo}
+                alt={draft.name || 'Contact'}
+                class="h-full w-full object-cover"
+              />
             {:else}
-              <span class="flex h-full w-full items-center justify-center text-xl font-bold text-white">
+              <span
+                class="flex h-full w-full items-center justify-center text-xl font-bold text-white"
+              >
                 {getInitials(draft)}
               </span>
             {/if}
-            <span class="absolute inset-0 flex items-center justify-center bg-black/50 text-white opacity-0 transition-opacity group-hover:opacity-100">
+            <span
+              class="absolute inset-0 flex items-center justify-center bg-black/50 text-white opacity-0 transition-opacity group-hover:opacity-100"
+            >
               <Camera class="h-6 w-6" />
             </span>
           </label>
           <div class="min-w-0 flex-1">
-            <div class="text-lg font-semibold">{draft.name || selectedContact.name || selectedContact.email}</div>
+            <div class="text-lg font-semibold">
+              {draft.name || selectedContact.name || selectedContact.email}
+            </div>
             <div class="text-sm text-muted-foreground">{selectedContact.email}</div>
           </div>
           <DropdownMenu.Root>
@@ -1018,7 +1080,10 @@
                 Export vCard
               </DropdownMenu.Item>
               <DropdownMenu.Separator />
-              <DropdownMenu.Item class="text-destructive" onclick={() => openDeleteConfirm(selectedContact)}>
+              <DropdownMenu.Item
+                class="text-destructive"
+                onclick={() => openDeleteConfirm(selectedContact)}
+              >
                 <Trash2 class="mr-2 h-4 w-4" />
                 Delete
               </DropdownMenu.Item>
@@ -1031,41 +1096,23 @@
           <Card.Content class="space-y-4 pt-6">
             <div class="space-y-2">
               <Label for="contact-name">Name</Label>
-              <Input
-                id="contact-name"
-                type="text"
-                bind:value={draft.name}
-              />
+              <Input id="contact-name" type="text" bind:value={draft.name} />
             </div>
             <div class="space-y-2">
               <Label for="contact-email">Email</Label>
-              <Input
-                id="contact-email"
-                type="email"
-                bind:value={draft.email}
-              />
+              <Input id="contact-email" type="email" bind:value={draft.email} />
             </div>
             <div class="space-y-2">
               <Label for="contact-phone">Phone</Label>
-              <Input
-                id="contact-phone"
-                type="tel"
-                bind:value={draft.phone}
-              />
+              <Input id="contact-phone" type="tel" bind:value={draft.phone} />
             </div>
             <div class="space-y-2">
               <Label for="contact-notes">Notes</Label>
-              <Textarea
-                id="contact-notes"
-                rows={4}
-                bind:value={draft.notes}
-              />
+              <Textarea id="contact-notes" rows={4} bind:value={draft.notes} />
             </div>
 
             {#if draft.photo}
-              <Button variant="ghost" size="sm" onclick={removePhoto}>
-                Remove photo
-              </Button>
+              <Button variant="ghost" size="sm" onclick={removePhoto}>Remove photo</Button>
             {/if}
 
             <input
@@ -1098,19 +1145,11 @@
                 <div class="mt-4 space-y-4">
                   <div class="space-y-2">
                     <Label for="contact-company">Company</Label>
-                    <Input
-                      id="contact-company"
-                      type="text"
-                      bind:value={draft.company}
-                    />
+                    <Input id="contact-company" type="text" bind:value={draft.company} />
                   </div>
                   <div class="space-y-2">
                     <Label for="contact-job">Job Title</Label>
-                    <Input
-                      id="contact-job"
-                      type="text"
-                      bind:value={draft.jobTitle}
-                    />
+                    <Input id="contact-job" type="text" bind:value={draft.jobTitle} />
                   </div>
                   <div class="space-y-2">
                     <Label for="contact-timezone">Time Zone</Label>
@@ -1132,11 +1171,7 @@
                   </div>
                   <div class="space-y-2">
                     <Label for="contact-birthday">Birthday</Label>
-                    <Input
-                      id="contact-birthday"
-                      type="date"
-                      bind:value={draft.birthday}
-                    />
+                    <Input id="contact-birthday" type="date" bind:value={draft.birthday} />
                   </div>
                 </div>
               {/if}
@@ -1212,7 +1247,9 @@
     <Dialog.Header>
       <Dialog.Title>Delete contact?</Dialog.Title>
       <Dialog.Description>
-        This will permanently delete <strong>{confirmTarget?.name || confirmTarget?.email || 'this contact'}</strong>. This can't be undone.
+        This will permanently delete <strong
+          >{confirmTarget?.name || confirmTarget?.email || 'this contact'}</strong
+        >. This can't be undone.
       </Dialog.Description>
     </Dialog.Header>
     <Dialog.Footer>

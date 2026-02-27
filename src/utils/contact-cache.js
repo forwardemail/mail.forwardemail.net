@@ -125,18 +125,70 @@ export async function getContacts(options = {}) {
 }
 
 /**
- * Invalidate the contact cache for the current account.
- * Call this after creating, updating, or deleting contacts
- * to ensure the cache reflects the latest server state.
+ * Remove a single contact from the cache by ID.
+ * Call this after deleting a contact.
+ *
+ * @param {string} contactId - The ID of the contact to remove
  */
-export async function invalidateCache() {
+export async function removeContactFromCache(contactId) {
+  if (!contactId) return;
   const account = getAccount();
-  const key = cacheKey(account);
-  try {
-    await db.meta.delete(key);
-  } catch {
-    // Ignore errors during cache invalidation
+  const cached = await readCache(account);
+  if (!cached?.contacts?.length) return;
+  const updated = cached.contacts.filter((c) => c.id !== contactId);
+  if (updated.length !== cached.contacts.length) {
+    await writeCache(account, updated).catch(() => {});
   }
+}
+
+/**
+ * Insert or update a single contact in the cache.
+ * Call this after creating or updating a contact.
+ *
+ * @param {Object} contact - Normalized contact object with at least { id, email, name }
+ */
+export async function upsertContactInCache(contact) {
+  if (!contact?.id) return;
+  const normalized = normalizeContact(contact) || contact;
+  const account = getAccount();
+  const cached = await readCache(account);
+  const existing = cached?.contacts || [];
+  const idx = existing.findIndex((c) => c.id === normalized.id);
+  let updated;
+  if (idx >= 0) {
+    updated = [...existing];
+    updated[idx] = { ...existing[idx], ...normalized };
+  } else {
+    updated = [...existing, normalized];
+  }
+  await writeCache(account, sortContacts(updated)).catch(() => {});
+}
+
+/**
+ * Insert or update multiple contacts in the cache.
+ * Call this after bulk import.
+ *
+ * @param {Array} contacts - Array of normalized contact objects
+ */
+export async function upsertMultipleContactsInCache(contacts) {
+  if (!contacts?.length) return;
+  const account = getAccount();
+  const cached = await readCache(account);
+  const existing = cached?.contacts || [];
+  const idMap = new Map(existing.map((c, i) => [c.id, i]));
+  const updated = [...existing];
+  for (const contact of contacts) {
+    const normalized = normalizeContact(contact) || contact;
+    if (!normalized?.id) continue;
+    const idx = idMap.get(normalized.id);
+    if (idx !== undefined) {
+      updated[idx] = { ...updated[idx], ...normalized };
+    } else {
+      updated.push(normalized);
+      idMap.set(normalized.id, updated.length - 1);
+    }
+  }
+  await writeCache(account, sortContacts(updated)).catch(() => {});
 }
 
 /**
