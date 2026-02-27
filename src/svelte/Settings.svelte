@@ -6,7 +6,11 @@
   import { getDatabaseInfo, CURRENT_SCHEMA_VERSION, db } from '../utils/db';
   import { cacheManager } from '../utils/cache-manager';
   import { unregisterServiceWorker } from '../utils/sw-cache.js';
+  import AppLockSettings from './AppLockSettings.svelte';
+  import MailtoSettings from './components/MailtoSettings.svelte';
   import { forceDeleteAllDatabases } from '../utils/db-recovery.js';
+  import { closeDatabase, terminateDbWorker } from '../utils/db-worker-client.js';
+  import { deactivateDemoMode } from '../utils/demo-mode.js';
   import { refreshSyncWorkerPgpKeys } from '../utils/sync-worker-client.js';
   import { initPerfObservers } from '../utils/perf-logger.ts';
   import { mailService, clearPgpKeyCache, invalidatePgpCachedBodies } from '../stores/mailService';
@@ -137,6 +141,7 @@
   let composePlainDefault = $state(false);
   let attachmentReminderEnabled = $state(false);
   let defaultReplyAll = $state(false);
+  let sendAndArchiveDefault = $state(false);
   let messagesPerPage = $state(20);
   let archiveFolder = $state('');
   let sentFolder = $state('');
@@ -456,6 +461,9 @@
     );
     defaultReplyAll = Boolean(
       getEffectiveSettingValue('default_reply_all', { account: currentAcct }),
+    );
+    sendAndArchiveDefault = Boolean(
+      getEffectiveSettingValue('send_and_archive_default', { account: currentAcct }),
     );
     messagesPerPage = Number.parseInt(
       getEffectiveSettingValue('messages_per_page', { account: currentAcct }) || '20',
@@ -800,6 +808,22 @@
     }
   };
 
+  const saveSendAndArchiveDefault = async () => {
+    try {
+      await setSettingValue('send_and_archive_default', sendAndArchiveDefault, {
+        account: getAccountId(),
+      });
+      toasts?.show?.(
+        sendAndArchiveDefault
+          ? 'Send & Archive set as default'
+          : 'Send set as default',
+        'success',
+      );
+    } catch (err) {
+      toasts?.show?.((err as Error)?.message || 'Failed to save send default', 'error');
+    }
+  };
+
   const toggleBlockRemoteImages = () => {
     try {
       setSettingValue('block_remote_images', blockRemoteImages, { account: getAccountId() });
@@ -1088,9 +1112,27 @@
 
     resettingStorage = true;
     try {
+      try {
+        await closeDatabase();
+      } catch {
+        /* ignore */
+      }
+      try {
+        terminateDbWorker();
+      } catch {
+        /* ignore */
+      }
       await unregisterServiceWorker();
       await forceDeleteAllDatabases();
-      Local.clear();
+      // Set a flag for the fallback-recovery.js to delete IndexedDB on next page load
+      // (the database may still be blocked by open connections on this page)
+      localStorage.setItem('webmail_pending_idb_cleanup', '1');
+      // Clear ALL localStorage (not just webmail_ prefixed keys)
+      localStorage.clear();
+      localStorage.setItem('webmail_pending_idb_cleanup', '1');
+      sessionStorage.clear();
+      // Also deactivate demo mode (clears fe_demo_mode key)
+      deactivateDemoMode();
       setSuccess('Service worker reset and local data cleared. Redirecting to login...');
       toasts?.show?.('Service worker reset and local data cleared. Redirecting to login...', 'success');
       setTimeout(() => {
@@ -1322,6 +1364,13 @@
             <p class="text-sm text-muted-foreground">
               Use Reply All as the default reply action instead of Reply.
             </p>
+            <label class="flex items-center gap-3">
+              <Checkbox bind:checked={sendAndArchiveDefault} onCheckedChange={saveSendAndArchiveDefault} />
+              <span>Send & Archive by default</span>
+            </label>
+            <p class="text-sm text-muted-foreground">
+              When replying, the primary send button will archive the conversation after sending.
+            </p>
           </Card.Content>
         </Card.Root>
 
@@ -1386,6 +1435,12 @@
       {/if}
 
       {#if section === 'privacy'}
+        <!-- Default Email App (mailto handler) -->
+        <MailtoSettings />
+
+        <!-- App Lock section - above PGP encryption -->
+        <AppLockSettings />
+
         <Card.Root>
           <Card.Header>
             <Card.Title>PGP encryption</Card.Title>

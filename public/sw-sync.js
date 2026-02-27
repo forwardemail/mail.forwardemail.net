@@ -599,6 +599,16 @@
   };
 
   /**
+   * Fetch with a timeout to prevent hung requests from blocking the mutation queue.
+   */
+  const MUTATION_FETCH_TIMEOUT_MS = 30_000;
+  const fetchWithTimeout = (url, options = {}) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), MUTATION_FETCH_TIMEOUT_MS);
+    return fetch(url, { ...options, signal: controller.signal }).finally(() => clearTimeout(timer));
+  };
+
+  /**
    * Execute a single mutation via fetch from the SW context.
    */
   const executeMutationSW = async (mutation) => {
@@ -619,7 +629,7 @@
         const flags = payload.isUnread
           ? (payload.flags || []).filter((f) => f !== '\\Seen')
           : [...(payload.flags || []), '\\Seen'];
-        const res = await fetch(`${base}${msgPath}`, {
+        const res = await fetchWithTimeout(`${base}${msgPath}`, {
           method: 'PUT',
           headers,
           body: JSON.stringify({ flags, folder: payload.folder }),
@@ -630,7 +640,7 @@
         const flags = payload.isStarred
           ? (payload.flags || []).filter((f) => f !== '\\Flagged')
           : [...(payload.flags || []), '\\Flagged'];
-        const res = await fetch(`${base}${msgPath}`, {
+        const res = await fetchWithTimeout(`${base}${msgPath}`, {
           method: 'PUT',
           headers,
           body: JSON.stringify({ flags, folder: payload.folder }),
@@ -638,7 +648,7 @@
         return res.ok;
       }
       case 'move': {
-        const res = await fetch(`${base}${msgPath}`, {
+        const res = await fetchWithTimeout(`${base}${msgPath}`, {
           method: 'PUT',
           headers,
           body: JSON.stringify({ folder: payload.targetFolder }),
@@ -647,14 +657,14 @@
       }
       case 'delete': {
         const path = payload.permanent ? `${msgPath}?permanent=1` : msgPath;
-        const res = await fetch(`${base}${path}`, {
+        const res = await fetchWithTimeout(`${base}${path}`, {
           method: 'DELETE',
           headers,
         });
         return res.ok;
       }
       case 'label': {
-        const res = await fetch(`${base}${msgPath}`, {
+        const res = await fetchWithTimeout(`${base}${msgPath}`, {
           method: 'PUT',
           headers,
           body: JSON.stringify({ labels: payload.labels }),

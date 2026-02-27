@@ -12,6 +12,7 @@
   import Color from '@tiptap/extension-color';
   import FontFamily from '@tiptap/extension-font-family';
   import Image from '@tiptap/extension-image';
+  import DOMPurify from 'dompurify';
 
   // Custom FontSize extension to add fontSize support to TextStyle
   const FontSize = Extension.create({
@@ -326,7 +327,7 @@
           try {
             const decoded = decodeRawHtml((currentNode.attrs.raw as string) || '');
             if (decoded && isValidDecodedHtml(decoded)) {
-              inner.innerHTML = decoded;
+              inner.innerHTML = DOMPurify.sanitize(decoded);
             } else {
               inner.innerHTML = '';
               inner.textContent = extractRawQuoteText((currentNode.attrs.raw as string) || '') || '';
@@ -389,7 +390,7 @@
   let draftStatus = $state<'idle' | 'saving' | 'saved' | 'error'>('idle');
   let draftStatusDetail = $state('');
   let replyBodyLoading = $state(false);
-  let archiveAfterSend = $state(false);
+  let archiveAfterSend = $state(Boolean(getEffectiveSettingValue('send_and_archive_default')));
   let replyBodyError = $state<string | null>(null);
   let pendingReplyBody = $state('');
   let replyPrefillData = $state<unknown>(null);
@@ -1096,7 +1097,7 @@
     linkUrl = '';
     showAttachmentReminderModal = false;
     attachmentReminderKeyword = '';
-    archiveAfterSend = false;
+    archiveAfterSend = Boolean(getEffectiveSettingValue('send_and_archive_default'));
     showMobileMenu = false;
     showScheduleModal = false;
     showScheduleConfirm = false;
@@ -2830,7 +2831,7 @@
           <div class="flex items-center gap-1">
             <div class="flex shrink-0">
               <Button onclick={send} disabled={sending} class="rounded-none min-w-[100px]">
-                {sending ? 'Sending...' : 'Send'}
+                {sending ? 'Sending...' : (archiveAfterSend && inReplyTo ? 'Send & Archive' : 'Send')}
               </Button>
               <div class="relative">
                 <button
@@ -2843,7 +2844,7 @@
                 </button>
                 {#if showSendDropdown}
                   <div class="absolute bottom-full left-0 mb-1 min-w-[160px] border border-border bg-popover p-1 shadow-lg z-[100]">
-                    {#if inReplyTo}
+                    {#if inReplyTo && !archiveAfterSend}
                       <button
                         type="button"
                         class="w-full flex items-center gap-2 px-2 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground disabled:opacity-50 disabled:pointer-events-none"
@@ -2852,6 +2853,17 @@
                       >
                         <Archive class="h-4 w-4" />
                         Send &amp; Archive
+                      </button>
+                    {/if}
+                    {#if inReplyTo && archiveAfterSend}
+                      <button
+                        type="button"
+                        class="w-full flex items-center gap-2 px-2 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground disabled:opacity-50 disabled:pointer-events-none"
+                        disabled={sending}
+                        onclick={() => { showSendDropdown = false; archiveAfterSend = false; send(); }}
+                      >
+                        <Send class="h-4 w-4" />
+                        Send without archiving
                       </button>
                     {/if}
                     <button

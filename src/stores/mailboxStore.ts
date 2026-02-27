@@ -72,9 +72,10 @@ const folderLoadState = new Map();
 const folderMessageCache = new Map();
 
 // Track optimistically deleted message IDs to prevent stale server responses
-// from re-adding them to the store. Entries auto-expire after 30 seconds.
+// from re-adding them to the store. Entries auto-expire after 60 seconds
+// (generous to cover slow connections / queued sync tasks).
 const pendingDeletes: Map<string, number> = new Map(); // id -> timestamp
-const PENDING_DELETE_TTL = 30_000;
+const PENDING_DELETE_TTL = 60_000;
 
 const addPendingDeletes = (ids: string[]) => {
   const now = Date.now();
@@ -1099,6 +1100,24 @@ const createMailboxStore = () => {
       if (mapped.length) {
         merged = await mergeMissingLabels(account, mapped, labelPresence);
         merged = await mergeMissingFrom(account, merged);
+      }
+
+      // Guard against transient empty responses: if the server returns zero
+      // messages for a non-search, non-filtered page-1 request but we already
+      // have cached data, keep the cache instead of clearing the inbox.
+      // This handles intermittent backend storage issues (e.g. stale reads
+      // from distributed SQLite) that briefly return empty result sets.
+      const isBasicPage1 =
+        !shouldAppend &&
+        currentPage === 1 &&
+        !queryParam &&
+        !get(unreadOnly) &&
+        !get(hasAttachmentsOnly);
+      if (isBasicPage1 && !merged.length && cachedPage.length) {
+        tracer.end({ status: 'transient_empty_kept_cache', cachedCount: cachedPage.length });
+        loading.set(false);
+        error.set('');
+        return;
       }
 
       // Always prune stale cache entries on page 1 when we have fresh server data
@@ -2340,6 +2359,7 @@ const createMailboxStore = () => {
       emptyTrash,
       emptySpam,
       clearFolderMessageCache: () => folderMessageCache.clear(),
+      invalidateFolderInMemCache,
       addPendingFlagMutation,
     },
   };

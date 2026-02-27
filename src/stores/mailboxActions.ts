@@ -1,7 +1,7 @@
 import { writable, derived, get } from 'svelte/store';
 import Dexie from 'dexie';
 import { Remote } from '../utils/remote';
-import { Local, Accounts } from '../utils/storage';
+import { Local, Session, Accounts } from '../utils/storage';
 import { db } from '../utils/db';
 import { mailboxStore } from './mailboxStore';
 import { searchStore } from './searchStore';
@@ -32,7 +32,7 @@ import { resolveSearchBodyIndexing } from '../utils/search-body-indexing.js';
 import { LABEL_PALETTE } from '../utils/labels.js';
 import { queueMutation } from '../utils/mutation-queue';
 import { config } from '../config';
-import { createInboxUpdater } from '../utils/inbox-poller';
+import { createInboxUpdater } from '../utils/websocket-updater';
 import { i18n } from '../utils/i18n';
 import { warn } from '../utils/logger.ts';
 
@@ -229,7 +229,16 @@ export const load = async () => {
 
     // Run loadLabels and loadMessages in parallel — labels only affect the
     // filter dropdown, not message rendering. No reason to serialize them.
-    await Promise.all([loadLabels(), mailboxStore.actions.loadMessages()]);
+    const [labelsResult, messagesResult] = await Promise.allSettled([
+      loadLabels(),
+      mailboxStore.actions.loadMessages(),
+    ]);
+    if (labelsResult.status === 'rejected') {
+      warn('[load] loadLabels failed, continuing without labels', labelsResult.reason);
+    }
+    if (messagesResult.status === 'rejected') {
+      warn('[load] loadMessages failed', messagesResult.reason);
+    }
     if (thisGeneration !== loadGeneration) return;
 
     // Incrementally index any new labels from the freshly loaded messages
@@ -327,6 +336,11 @@ export const toggleRead = async (msg) => {
     flags: newFlags,
   });
 
+  // Invalidate in-memory folder cache so stale flags don't survive into
+  // the next loadMessages() cycle triggered by a WebSocket sync refresh.
+  const account = Local.get('email') || 'default';
+  mailboxStore.actions.invalidateFolderInMemCache?.(account, msg.folder);
+
   const apiId = getMessageApiId(msg);
   if (!apiId) {
     warn('toggleRead failed: missing message id');
@@ -336,7 +350,6 @@ export const toggleRead = async (msg) => {
   }
 
   // Update IDB cache immediately (optimistic)
-  const account = Local.get('email') || 'default';
   await db.messages
     .where('[account+id]')
     .equals([account, msg.id])
@@ -397,6 +410,12 @@ export const toggleStar = async (msg) => {
     is_starred: !isStarred,
     flags: newFlagsArr,
   });
+
+  // Invalidate in-memory folder cache so stale flags don't survive into
+  // the next loadMessages() cycle triggered by a WebSocket sync refresh.
+  const account = Local.get('email') || 'default';
+  mailboxStore.actions.invalidateFolderInMemCache?.(account, msg.folder);
+
   const currentSelected = get(mailboxStore.state.selectedMessage);
   if (currentSelected?.id === msg.id) {
     mailboxStore.state.selectedMessage.set({
@@ -418,7 +437,6 @@ export const toggleStar = async (msg) => {
   }
 
   // Update IDB cache immediately (optimistic)
-  const account = Local.get('email') || 'default';
   await db.messages
     .where('[account+id]')
     .equals([account, msg.id])
@@ -479,10 +497,11 @@ const validateCachedBody = (content) => {
     warn('[validateCachedBody] Detected escaped HTML in cached body, attempting to fix');
     try {
       // Attempt to unescape the content
-      const textarea = typeof document !== 'undefined' ? document.createElement('textarea') : null;
-      if (textarea) {
-        textarea.innerHTML = content;
-        const unescaped = textarea.value;
+      // Use DOMParser instead of textarea.innerHTML to safely decode HTML entities
+      // textarea.innerHTML is vulnerable to XSS if content contains script-like patterns
+      if (typeof DOMParser !== 'undefined') {
+        const doc = new DOMParser().parseFromString(content, 'text/html');
+        const unescaped = doc.body?.textContent || '';
         // Check if unescaping produced valid HTML
         if (unescaped && !/&lt;[a-zA-Z/]|&gt;/.test(unescaped)) {
           return unescaped;
@@ -1461,6 +1480,22 @@ export const signOut = async () => {
   if (inboxUpdater) inboxUpdater.destroy();
   inboxUpdater = null;
 
+  // Clean up custom event listeners from main.ts
+  try {
+    const { cleanupCustomEventListeners } = await import('../main');
+    cleanupCustomEventListeners();
+  } catch {
+    // main module may not expose cleanup yet
+  }
+
+  // Deactivate demo mode and clear its localStorage key
+  try {
+    const { deactivateDemoMode } = await import('../utils/demo-mode.js');
+    deactivateDemoMode();
+  } catch {
+    // demo-mode module may not be loaded
+  }
+
   clearSensitiveClientStorage(currentEmail);
 
   if (currentEmail) {
@@ -1493,7 +1528,24 @@ export const signOut = async () => {
     }
 
     // No other accounts, clear everything and go to login
+    // Close the Dexie instance inside the worker, then terminate the worker
+    // so no connection holds the IndexedDB open during deletion
+    try {
+      const { closeDatabase, terminateDbWorker } = await import('../utils/db-worker-client.js');
+      await closeDatabase();
+      terminateDbWorker();
+    } catch (err) {
+      warn('Failed to close database', err);
+    }
+
+    // Set a flag for the fallback-recovery.js to delete IndexedDB on next page load
+    // (the database may still be blocked by open connections on this page)
+    localStorage.setItem('webmail_pending_idb_cleanup', '1');
+    // Clear only webmail-prefixed keys (preserves third-party localStorage on same origin)
     Local.clear();
+    Session.clear();
+    // Re-set cleanup flag after clear (Local.clear removes it)
+    localStorage.setItem('webmail_pending_idb_cleanup', '1');
     accounts.set([]);
     currentAccount.set('');
 
@@ -1503,6 +1555,14 @@ export const signOut = async () => {
       await clearAllSWCaches();
     } catch (err) {
       warn('Failed to clear SW caches', err);
+    }
+
+    // Clear all IndexedDB databases (Dexie mail cache, etc.)
+    try {
+      const { forceDeleteAllDatabases } = await import('../utils/db-recovery.js');
+      await forceDeleteAllDatabases();
+    } catch (err) {
+      warn('Failed to clear IndexedDB', err);
     }
 
     mailboxStore.state.selectedConversationIds.set([]);

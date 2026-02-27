@@ -11,11 +11,13 @@
   import { db } from '../utils/db';
   import { sendSyncRequest } from '../utils/sync-worker-client.js';
   import { Local } from '../utils/storage';
+  import { appReady } from '../utils/bootstrap-ready.js';
   import { formatCompactDate, formatReaderDate } from '../utils/date';
   import { i18n } from '../utils/i18n';
   import { extractAddressList, displayAddresses, getReplyToList, extractDisplayName } from '../utils/address.ts';
   import { truncatePreview } from '../utils/preview';
   import { validateLabelName } from '../utils/label-validation.ts';
+  import DOMPurify from 'dompurify';
   import { restoreBlockedImages } from '../utils/sanitize.js';
   import { LABEL_PALETTE, pickLabelColor as pickLabelColorFromPalette } from '../utils/labels.js';
   import { processQuotedContent, initQuoteToggles } from '../utils/quote-collapse.js';
@@ -52,6 +54,7 @@
   import { getMessageApiId } from '../utils/sync-helpers.ts';
   import { getSyncSettings } from '../utils/sync-settings.js';
   import { parseMailto, mailtoToPrefill } from '../utils/mailto';
+  import MailtoPrompt from './components/MailtoPrompt.svelte';
   import {
     outboxCount,
     outboxProcessing,
@@ -416,6 +419,11 @@
     mailboxView?.selectedMessage,
     null,
   );
+  // Derived IDs for active-message highlighting — using $derived ensures
+  // Svelte 5 re-evaluates {#each} item classes when the selection changes.
+  const activeConvId = $derived($selectedConversation?.id ?? null);
+  const activeMsgId = $derived($selectedMessage?.id ?? null);
+
   let messageBody = chooseStore(source.state?.messageBody, mailboxView?.messageBody, '');
   let attachments = chooseStore(source.state?.attachments, mailboxView?.attachments, []);
   let hasBlockedImages = writable(false);
@@ -942,6 +950,35 @@ const stopVerticalResize = () => {
     return ext ? PREVIEWABLE_EXTENSIONS.has(ext) : false;
   };
 
+  /**
+   * Sanitize outbox HTML preview to prevent XSS.
+   * Outbox items may contain user-composed HTML that has not been
+   * server-sanitized, so we must run DOMPurify before rendering.
+   */
+  // Create a DOMPurify instance with the hook pre-registered so it isn't
+  // added repeatedly on every call to sanitizeOutboxHtml.
+  const outboxPurify = DOMPurify();
+  outboxPurify.addHook('afterSanitizeAttributes', (node) => {
+    // Strip all on* event handler attributes (covers onerror, onload, onclick, etc.)
+    for (const attr of [...node.attributes]) {
+      if (attr.name.startsWith('on')) node.removeAttribute(attr.name);
+    }
+    // Ensure links open safely in new tab
+    if (node.tagName === 'A') {
+      node.setAttribute('target', '_blank');
+      node.setAttribute('rel', 'noopener noreferrer');
+    }
+  });
+
+  const sanitizeOutboxHtml = (html: string): string => {
+    if (!html) return '';
+    return outboxPurify.sanitize(html, {
+      USE_PROFILES: { html: true },
+      ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto|tel|ftp):|[^a-z]|[a-z+.-]+(?:[^a-z+.-:]|$))/i,
+      FORBID_TAGS: ['script', 'style', 'iframe', 'object', 'embed', 'form', 'input', 'textarea', 'select', 'button'],
+    });
+  };
+
   const formatAttachmentSize = (bytes) => {
     if (!bytes) return '';
     if (bytes < 1024) return `${bytes} B`;
@@ -1035,7 +1072,7 @@ const stopVerticalResize = () => {
       )
     : searchSuggestionItems);
 
-  // Reset showEmailDetails when message changes - guard to prevent loop
+  // Reset showEmailDetails and scroll reader to top when message changes
   let lastSelectedMsgId = '';
   $effect(() => {
     const msgId = $selectedMessage?.id || '';
@@ -1044,6 +1081,10 @@ const stopVerticalResize = () => {
       showEmailDetails = false;
       showAllRecipients = false;
       showAllCc = false;
+      // Scroll reader pane to top so the metadata header is visible
+      if (readerPaneEl) {
+        readerPaneEl.scrollTop = 0;
+      }
     }
   });
 
@@ -4039,16 +4080,22 @@ const stopVerticalResize = () => {
       mailboxStore.actions.setToasts(mailboxView.toasts);
     }
 
-    if (mailboxStore?.actions?.loadFolders) {
-      mailboxStore.actions
-        .loadFolders()
-        .then(() => mailboxStore.actions?.loadMessages?.())
-        .catch(() => {
-          mailboxView?.load?.();
-        });
-    } else {
-      mailboxView?.load?.();
-    }
+    // Wait for bootstrap to finish (including app lock unlock + credential
+    // decryption) before issuing any API requests.  Without this gate the
+    // Mailbox onMount races with bootstrap and fires API calls with
+    // encrypted credentials → 401.
+    appReady.then(() => {
+      if (mailboxStore?.actions?.loadFolders) {
+        mailboxStore.actions
+          .loadFolders()
+          .then(() => mailboxStore.actions?.loadMessages?.())
+          .catch(() => {
+            mailboxView?.load?.();
+          });
+      } else {
+        mailboxView?.load?.();
+      }
+    });
     // Initialize search store for saved search suggestions
     searchStore?.actions?.ensureInitialized?.().then(() => {
       searchStore?.actions?.refreshSavedSearches?.();
@@ -5040,7 +5087,7 @@ const stopVerticalResize = () => {
               <ul class="divide-y divide-border">
                 {#each convList as conv (conv.id)}
                 <li
-                  class={`relative cursor-pointer hover:bg-accent/50 transition-colors ${$selectedConversation?.id === conv.id ? 'bg-accent' : ''}`}
+                  class={`relative cursor-pointer hover:bg-accent/50 transition-colors ${activeConvId === conv.id ? 'msg-active' : ''}`}
                   oncontextmenu={(e) => openContextMenu(e, conv)}
                   ondblclick={(e) => {
                     const message = conv?.messages?.[conv.messages.length - 1];
@@ -5199,7 +5246,7 @@ const stopVerticalResize = () => {
             {@const msgList = $filteredMessages}
             {#each msgList as msg}
               <article
-                class={`relative cursor-pointer hover:bg-accent/50 transition-colors ${($selectedConversationIds || []).includes(msg.id) ? 'bg-accent' : ''}`}
+                class={`relative cursor-pointer hover:bg-accent/50 transition-colors ${activeMsgId === msg.id || ($selectedConversationIds || []).includes(msg.id) ? 'msg-active' : ''}`}
                 oncontextmenu={(e) => openContextMenu(e, msg)}
                 ondblclick={(e) => {
                   if (isDraftMessage(msg)) {
@@ -5636,7 +5683,7 @@ const stopVerticalResize = () => {
           </div>
         {/if}
         <div class="prose prose-sm dark:prose-invert max-w-none" bind:this={outboxMessageBodyContainer}>
-          {@html selectedOutboxItem.emailData?.html || selectedOutboxItem.emailData?.text || ''}
+          {@html sanitizeOutboxHtml(selectedOutboxItem.emailData?.html || selectedOutboxItem.emailData?.text || '')}
         </div>
         {#if selectedOutboxItem.emailData?.attachments?.length}
           <div class="flex flex-wrap gap-2 mt-4 pt-4 border-t border-border">
@@ -6581,6 +6628,11 @@ const stopVerticalResize = () => {
 {/if}
 </Tooltip.Provider>
 
+<!-- Mailto handler prompt (shown once on first INBOX render after sign-in) -->
+{#if $selectedFolder === 'INBOX'}
+  <MailtoPrompt account={$currentAccount || ''} />
+{/if}
+
 <style>
   /* Shared list layout tokens */
   :global(:root) {
@@ -6804,6 +6856,16 @@ const stopVerticalResize = () => {
   :global(body.dragging) {
     user-select: none;
     -webkit-user-select: none;
+  }
+
+  /* Active / selected message highlight */
+  .msg-active {
+    background: rgba(0, 175, 248, 0.10);
+    box-shadow: inset 3px 0 0 0 hsl(var(--primary, 199 89% 49%));
+  }
+
+  :global(body.light-mode) .msg-active {
+    background: rgba(0, 175, 248, 0.08);
   }
 
 </style>

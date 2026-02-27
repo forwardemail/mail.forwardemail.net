@@ -298,10 +298,12 @@ async function writeMessages(account, folder, normalized, pendingDeleteIds: stri
   let updated = 0;
 
   normalized.forEach((msg, idx) => {
+    // Skip messages that were optimistically deleted/moved — prevents the
+    // sync worker from re-inserting or updating records the user just removed.
+    if (pendingSet?.has(msg.id)) return;
+
     const existing = existingRecords[idx];
     if (!existing) {
-      // Skip re-inserting messages that were optimistically deleted/moved
-      if (pendingSet?.has(msg.id)) return;
       toUpsert.push(msg);
       changedForIndex.push(msg);
       inserted += 1;

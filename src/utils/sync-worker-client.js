@@ -5,6 +5,7 @@ import { getDbWorker, initializeDatabase } from './db.js';
 import { getAuthHeader } from './auth.ts';
 import { createPendingRequests } from './pending-requests.js';
 import { warn } from './logger.ts';
+import { isDemoMode } from './demo-mode';
 
 let worker = null;
 let workerReady = false;
@@ -113,6 +114,7 @@ async function connectToDbWorker() {
 }
 
 export async function ensureSyncWorkerReady() {
+  if (isDemoMode()) return; // Don't spawn worker in demo mode
   if (workerReady && worker) return worker;
   if (!worker) {
     worker = createWorker();
@@ -173,6 +175,12 @@ function withTimeout(promise, ms, taskId) {
 }
 
 export async function sendSyncTask(task, options = {}) {
+  // In demo mode, skip the sync worker — return a no-op result
+  // so callers like requestParsing fall through to their fallback path.
+  if (isDemoMode()) {
+    return { success: false, body: '', attachments: [] };
+  }
+
   const instance = await ensureSyncWorkerReady();
   const taskId = `t-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const promise = pendingTasks.add(taskId);
@@ -189,6 +197,12 @@ export async function sendSyncRequest(
   payload = {},
   { timeout = DEFAULT_WORKER_TIMEOUT } = {},
 ) {
+  // In demo mode, skip the sync worker entirely so the caller falls back
+  // to Remote.request() which is intercepted by the demo data generator.
+  if (isDemoMode()) {
+    throw new Error('Demo mode: sync worker bypassed');
+  }
+
   const instance = await ensureSyncWorkerReady();
   const requestId = `r-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const promise = pendingRequests.add(requestId);

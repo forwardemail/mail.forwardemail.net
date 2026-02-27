@@ -12,8 +12,18 @@
  * @param isDarkMode - Whether the app is in dark mode
  * @returns Complete HTML document string for srcdoc
  */
-export function buildIframeSrcdoc(emailHtml: string, isDarkMode: boolean = false): string {
+export function buildIframeSrcdoc(
+  emailHtml: string,
+  isDarkMode: boolean = false,
+  parentOrigin: string = '*',
+): string {
   const bodyClass = isDarkMode ? 'fe-iframe-dark' : 'fe-iframe-light';
+  const safeOrigin = parentOrigin.replace(/'/g, "\\'").replace(/\\/g, '\\\\');
+  const scriptContent = getEmbeddedScript(safeOrigin);
+  // The iframe is sandboxed (sandbox="allow-scripts") so 'unsafe-inline' here
+  // only applies within the isolated srcdoc context — not the parent page.
+  // Using a hash is fragile because the browser hashes the full text node
+  // between <script>…</script> including template-literal whitespace.
 
   return `<!DOCTYPE html>
 <html>
@@ -32,7 +42,7 @@ export function buildIframeSrcdoc(emailHtml: string, isDarkMode: boolean = false
     ${emailHtml}
   </div>
   <script>
-    ${getEmbeddedScript()}
+    ${scriptContent}
   </script>
 </body>
 </html>`;
@@ -267,14 +277,16 @@ function getQuoteToggleStyles(): string {
   `;
 }
 
-function getEmbeddedScript(): string {
+function getEmbeddedScript(parentOrigin: string): string {
   return `
     (function() {
       'use strict';
 
+      var TARGET_ORIGIN = '${parentOrigin}';
+
       // Send ready message FIRST - ensures parent knows iframe is alive even if other code fails
       try {
-        parent.postMessage({ type: 'ready', payload: {} }, '*');
+        parent.postMessage({ type: 'ready', payload: {} }, TARGET_ORIGIN);
       } catch (e) {
         // Ignore - parent might not be accessible
       }
@@ -395,7 +407,7 @@ function getEmbeddedScript(): string {
         // Ensure minimum height and round up
         height = Math.max(Math.ceil(height), 50);
 
-        parent.postMessage({ type: 'height', payload: { height: height } }, '*');
+        parent.postMessage({ type: 'height', payload: { height: height } }, TARGET_ORIGIN);
       }
 
       // Report height at multiple intervals to catch all rendering phases
@@ -448,7 +460,7 @@ function getEmbeddedScript(): string {
           parent.postMessage({
             type: 'link',
             payload: { url: url, isMailto: isMailto }
-          }, '*');
+          }, TARGET_ORIGIN);
         }
       }, true);
 
@@ -475,7 +487,7 @@ function getEmbeddedScript(): string {
             method: form.method || 'get',
             data: formData
           }
-        }, '*');
+        }, TARGET_ORIGIN);
       }, true);
 
       /**

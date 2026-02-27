@@ -49,7 +49,7 @@
   // Build srcdoc - reactively updates when html or dark mode changes
   const srcdoc = $derived.by(() => {
     const darkMode = mounted ? isDarkMode : detectDarkMode();
-    return buildIframeSrcdoc(html || '', darkMode);
+    return buildIframeSrcdoc(html || '', darkMode, window.location.origin);
   });
 
   // Check if iframe has rendered content properly
@@ -123,6 +123,12 @@
 
   // Handle postMessage events from iframe
   function handleMessage(event: MessageEvent) {
+    // Validate origin: only accept messages from same origin or null (srcdoc iframes)
+    // srcdoc iframes have a null origin, so we accept that as well as our own origin
+    if (event.origin !== 'null' && event.origin !== window.location.origin) {
+      return;
+    }
+
     // Only accept messages from our own iframe to prevent cross-contamination
     // when multiple EmailIframe instances exist (e.g., conversation view)
     if (iframeRef && event.source !== iframeRef.contentWindow) {
