@@ -1,0 +1,99 @@
+name: Release
+
+# Triggered when `np` (or manual `git tag`) pushes a semver tag.
+# Orchestrates: GitHub Release creation -> Desktop builds -> Mobile builds -> Checksums.
+on:
+  push:
+    tags:
+      - 'v*'
+
+# Minimal permissions — only contents:write for release management
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # ── 1. Create the GitHub Release ────────────────────────────────────────
+  create-release:
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.create.outputs.id }}
+      upload_url: ${{ steps.create.outputs.upload_url }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract and validate version from tag
+        id: version
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          # Validate semver format (major.minor.patch with optional pre-release)
+          if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$'; then
+            echo "Error: tag does not match semver format: $VERSION"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        id: create
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          prerelease: false
+          generate_release_notes: true
+          name: v${{ steps.version.outputs.version }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ── 2. Build Desktop (Tauri) ────────────────────────────────────────────
+  build-desktop:
+    needs: create-release
+    uses: ./.github/workflows/release-desktop.yml
+    with:
+      version: ${{ needs.create-release.outputs.version }}
+    secrets: inherit
+
+  # ── 3. Build Mobile (Tauri) ─────────────────────────────────────────────
+  build-mobile:
+    needs: create-release
+    uses: ./.github/workflows/release-mobile.yml
+    with:
+      version: ${{ needs.create-release.outputs.version }}
+    secrets: inherit
+
+  # ── 4. Generate checksums ───────────────────────────────────────────────
+  checksums:
+    needs: [create-release, build-desktop, build-mobile]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Generate SHA-256 checksums
+        run: |
+          cd artifacts
+          find . -type f \( -name '*.dmg' -o -name '*.app.tar.gz' \
+            -o -name '*.app.tar.gz.sig' \
+            -o -name '*.msi' -o -name '*.msi.zip' -o -name '*.msi.zip.sig' \
+            -o -name '*.nsis.zip' -o -name '*.nsis.zip.sig' \
+            -o -name '*.deb' -o -name '*.AppImage' \
+            -o -name '*.AppImage.tar.gz' -o -name '*.AppImage.tar.gz.sig' \
+            -o -name '*.apk' -o -name '*.aab' -o -name '*.ipa' \) \
+            -exec sha256sum {} + | sort -k2 > SHA256SUMS.txt
+          echo "=== SHA256SUMS.txt ==="
+          cat SHA256SUMS.txt
+          echo "=== File count: $(wc -l < SHA256SUMS.txt) ==="
+
+      - name: Upload checksums to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.create-release.outputs.version }}
+          files: artifacts/SHA256SUMS.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

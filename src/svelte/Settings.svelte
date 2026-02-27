@@ -6,7 +6,11 @@
   import { getDatabaseInfo, CURRENT_SCHEMA_VERSION, db } from '../utils/db';
   import { cacheManager } from '../utils/cache-manager';
   import { unregisterServiceWorker } from '../utils/sw-cache.js';
+  import AppLockSettings from './AppLockSettings.svelte';
+  import MailtoSettings from './components/MailtoSettings.svelte';
   import { forceDeleteAllDatabases } from '../utils/db-recovery.js';
+  import { closeDatabase, terminateDbWorker } from '../utils/db-worker-client.js';
+  import { deactivateDemoMode } from '../utils/demo-mode.js';
   import { refreshSyncWorkerPgpKeys } from '../utils/sync-worker-client.js';
   import { initPerfObservers } from '../utils/perf-logger.ts';
   import { mailService, clearPgpKeyCache, invalidatePgpCachedBodies } from '../stores/mailService';
@@ -1070,9 +1074,27 @@
 
     resettingStorage = true;
     try {
+      try {
+        await closeDatabase();
+      } catch {
+        /* ignore */
+      }
+      try {
+        terminateDbWorker();
+      } catch {
+        /* ignore */
+      }
       await unregisterServiceWorker();
       await forceDeleteAllDatabases();
-      Local.clear();
+      // Set a flag for the fallback-recovery.js to delete IndexedDB on next page load
+      // (the database may still be blocked by open connections on this page)
+      localStorage.setItem('webmail_pending_idb_cleanup', '1');
+      // Clear ALL localStorage (not just webmail_ prefixed keys)
+      localStorage.clear();
+      localStorage.setItem('webmail_pending_idb_cleanup', '1');
+      sessionStorage.clear();
+      // Also deactivate demo mode (clears fe_demo_mode key)
+      deactivateDemoMode();
       setSuccess('Service worker reset and local data cleared. Redirecting to login...');
       toasts?.show?.('Service worker reset and local data cleared. Redirecting to login...', 'success');
       setTimeout(() => {
@@ -1361,6 +1383,12 @@
       {/if}
 
       {#if section === 'privacy'}
+        <!-- Default Email App (mailto handler) -->
+        <MailtoSettings />
+
+        <!-- App Lock section - above PGP encryption -->
+        <AppLockSettings />
+
         <Card.Root>
           <Card.Header>
             <Card.Title>PGP encryption</Card.Title>

@@ -3,6 +3,7 @@ import { config } from '../config.js';
 import { buildApiKeyAuthHeader, getAuthHeader } from './auth.ts';
 import { logApiError } from './error-logger.ts';
 import { logPerfEvent } from './perf-logger.ts';
+import { interceptDemoRequest, isDemoMode } from './demo-mode';
 
 // Action-specific timeouts for better performance
 const TIMEOUT_BY_ACTION = {
@@ -46,6 +47,21 @@ const api = ky.create({
 
 export const Remote = {
   async request(action, params = {}, options = {}) {
+    // Demo mode: intercept all requests with fake data
+    if (isDemoMode()) {
+      const demo = interceptDemoRequest(action, params, options);
+      if (demo.handled) {
+        // Write actions return { blocked: true } — throw so callers
+        // enter their error path.  The demo toast was already shown.
+        if (demo.result?.blocked) {
+          const err = new Error('Demo mode');
+          err.isDemo = true;
+          throw err;
+        }
+        return demo.result;
+      }
+    }
+
     const { path, method: defaultMethod } = this.getEndpoint(action);
     const method = (options.method || defaultMethod || 'GET').toLowerCase();
     const { signal } = options;
@@ -89,11 +105,25 @@ export const Remote = {
                 logApiError(action, method.toUpperCase(), 0, e);
               }
 
+              // Sanitize error message to prevent server info leakage
+              const rawMessage = errorData?.message || errorData?.error || 'Request failed';
+              // Strip server-specific details (stack traces, file paths, internal IPs)
               const message =
-                errorData?.message || errorData?.error || response.statusText || 'Request failed';
+                typeof rawMessage === 'string'
+                  ? rawMessage
+                      .replace(
+                        /\b(?:\/[\w./-]+|\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}|at\s+\S+)\b/g,
+                        '[redacted]',
+                      )
+                      .slice(0, 500)
+                  : 'Request failed';
               const error = new Error(message);
+              // Only copy safe, known fields from error data
               if (errorData && typeof errorData === 'object') {
-                Object.assign(error, errorData);
+                const safeFields = ['code', 'description', 'param', 'type'];
+                for (const field of safeFields) {
+                  if (field in errorData) error[field] = errorData[field];
+                }
               }
               error.status = response.status;
 
