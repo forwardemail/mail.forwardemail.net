@@ -32,7 +32,7 @@ import { resolveSearchBodyIndexing } from '../utils/search-body-indexing.js';
 import { LABEL_PALETTE } from '../utils/labels.js';
 import { queueMutation } from '../utils/mutation-queue';
 import { config } from '../config';
-import { createInboxUpdater } from '../utils/inbox-poller';
+import { createInboxUpdater } from '../utils/websocket-updater';
 import { i18n } from '../utils/i18n';
 import { warn } from '../utils/logger.ts';
 
@@ -479,10 +479,11 @@ const validateCachedBody = (content) => {
     warn('[validateCachedBody] Detected escaped HTML in cached body, attempting to fix');
     try {
       // Attempt to unescape the content
-      const textarea = typeof document !== 'undefined' ? document.createElement('textarea') : null;
-      if (textarea) {
-        textarea.innerHTML = content;
-        const unescaped = textarea.value;
+      // Use DOMParser instead of textarea.innerHTML to safely decode HTML entities
+      // textarea.innerHTML is vulnerable to XSS if content contains script-like patterns
+      if (typeof DOMParser !== 'undefined') {
+        const doc = new DOMParser().parseFromString(content, 'text/html');
+        const unescaped = doc.body?.textContent || '';
         // Check if unescaping produced valid HTML
         if (unescaped && !/&lt;[a-zA-Z/]|&gt;/.test(unescaped)) {
           return unescaped;
@@ -1461,6 +1462,22 @@ export const signOut = async () => {
   if (inboxUpdater) inboxUpdater.destroy();
   inboxUpdater = null;
 
+  // Clean up custom event listeners from main.ts
+  try {
+    const { cleanupCustomEventListeners } = await import('../main');
+    cleanupCustomEventListeners();
+  } catch {
+    // main module may not expose cleanup yet
+  }
+
+  // Deactivate demo mode and clear its localStorage key
+  try {
+    const { deactivateDemoMode } = await import('../utils/demo-mode.js');
+    deactivateDemoMode();
+  } catch {
+    // demo-mode module may not be loaded
+  }
+
   clearSensitiveClientStorage(currentEmail);
 
   if (currentEmail) {
@@ -1493,7 +1510,26 @@ export const signOut = async () => {
     }
 
     // No other accounts, clear everything and go to login
-    Local.clear();
+    // Close the Dexie instance inside the worker, then terminate the worker
+    // so no connection holds the IndexedDB open during deletion
+    try {
+      const { closeDatabase, terminateDbWorker } = await import('../utils/db-worker-client.js');
+      await closeDatabase();
+      terminateDbWorker();
+    } catch (err) {
+      warn('Failed to close database', err);
+    }
+
+    // Set a flag for the fallback-recovery.js to delete IndexedDB on next page load
+    // (the database may still be blocked by open connections on this page)
+    localStorage.setItem('webmail_pending_idb_cleanup', '1');
+    // Clear ALL localStorage (not just webmail_ prefixed keys)
+    // Note: setItem above will be cleared too, but that's fine — the flag
+    // only needs to survive until the page navigates and fallback-recovery.js reads it.
+    // We re-set it after clear() to ensure it persists.
+    localStorage.clear();
+    localStorage.setItem('webmail_pending_idb_cleanup', '1');
+    sessionStorage.clear();
     accounts.set([]);
     currentAccount.set('');
 
@@ -1503,6 +1539,14 @@ export const signOut = async () => {
       await clearAllSWCaches();
     } catch (err) {
       warn('Failed to clear SW caches', err);
+    }
+
+    // Clear all IndexedDB databases (Dexie mail cache, etc.)
+    try {
+      const { forceDeleteAllDatabases } = await import('../utils/db-recovery.js');
+      await forceDeleteAllDatabases();
+    } catch (err) {
+      warn('Failed to clear IndexedDB', err);
     }
 
     mailboxStore.state.selectedConversationIds.set([]);

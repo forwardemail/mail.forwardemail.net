@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Hardened Runtime: required for notarization -->
+  <key>com.apple.security.app-sandbox</key>
+  <true/>
+
+  <!-- Network access for API and WebSocket connections -->
+  <key>com.apple.security.network.client</key>
+  <true/>
+
+  <!-- Allow loading the WKWebView (required by Tauri) -->
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+
+  <!-- Allow unsigned executable memory (required by WebKit JIT) -->
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+</dict>
+</plist>

@@ -3,6 +3,7 @@ import { Local } from './storage';
 import { Remote } from './remote';
 import { sendSyncTask } from './sync-worker-client';
 import { getEffectiveSettingValue } from '../stores/settingsStore';
+import { isDemoMode } from './demo-mode';
 
 const AUTOSAVE_INTERVAL = 30000; // 30 seconds
 const AUTOSAVE_DEBOUNCE = 3000; // 3 seconds after last keystroke (matches Gmail)
@@ -62,6 +63,11 @@ export async function saveDraft(draftData, options = {}) {
   };
 
   await db.drafts.put(draft);
+
+  // In demo mode, save locally but skip server sync
+  if (isDemoMode()) {
+    return { ...draft, syncStatus: 'local' };
+  }
 
   if (sync && typeof navigator !== 'undefined' && navigator.onLine) {
     try {

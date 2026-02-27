@@ -6,15 +6,30 @@
   import * as Alert from '$lib/components/ui/alert';
   import * as Card from '$lib/components/ui/card';
   import ChevronLeft from '@lucide/svelte/icons/chevron-left';
+  import Play from '@lucide/svelte/icons/play';
   import { Remote } from '../utils/remote';
   import { buildAliasAuthHeader } from '../utils/auth.ts';
   import { Local, Accounts } from '../utils/storage';
+  import {
+    activateDemoMode,
+    isDemoMode,
+  } from '../utils/demo-mode';
+  import {
+    DEMO_EMAIL,
+    DEMO_ALIAS_AUTH,
+  } from '../utils/demo-data';
 
   interface Props {
     onSuccess?: (path: string) => void;
   }
 
   let { onSuccess = () => {} }: Props = $props();
+
+  // Client-side login rate limiting to prevent brute-force
+  let loginAttempts = 0;
+  let loginLockoutUntil = 0;
+  const MAX_LOGIN_ATTEMPTS = 5;
+  const LOGIN_LOCKOUT_MS = 30_000; // 30 seconds
 
   // Check if we're in "add account" mode via URL parameter
   const getIsAddingAccount = () =>
@@ -103,6 +118,7 @@
   let submitRequest = $state(false);
   let submitError = $state('');
   let submitErrorAdditional = $state('');
+  let demoLoading = $state(false);
 
   const submitButtonText = $derived(submitRequest ? 'Signing in...' : 'Sign In');
 
@@ -116,9 +132,60 @@
     window.location.href = '/mailbox';
   };
 
+  /**
+   * Activate demo mode — sets up fake credentials and navigates to mailbox.
+   * No real API call is made; the demo interceptor in remote.js handles everything.
+   */
+  const handleTryDemo = () => {
+    if (demoLoading || submitRequest) return;
+
+    // Don't allow demo if user already has a real account logged in
+    if (hasActiveSession() && !isDemoMode()) {
+      submitError = 'Please sign out of your current account before trying the demo.';
+      return;
+    }
+
+    demoLoading = true;
+    submitError = '';
+    submitErrorAdditional = '';
+
+    try {
+      // Activate demo mode (sets sessionStorage flag)
+      activateDemoMode();
+
+      // Set up fake credentials so the app thinks we are logged in
+      Accounts.init();
+      Accounts.add(DEMO_EMAIL, { aliasAuth: DEMO_ALIAS_AUTH }, false); // session-only
+      Accounts.setActive(DEMO_EMAIL);
+
+      Local.set('email', DEMO_EMAIL);
+      Local.set('alias_auth', DEMO_ALIAS_AUTH);
+      Local.remove('api_token');
+
+      // Clear form fields
+      email = '';
+      password = '';
+
+      // Navigate to mailbox
+      onSuccess?.('/mailbox');
+    } catch (error) {
+      submitError = 'Failed to start demo. Please try again.';
+      console.error('[demo] Failed to activate demo mode:', error);
+    } finally {
+      demoLoading = false;
+    }
+  };
+
   const handleSubmit = async (event?: Event) => {
     event?.preventDefault?.();
     if (submitRequest) return;
+
+    // Rate limiting check
+    if (loginLockoutUntil > Date.now()) {
+      const remaining = Math.ceil((loginLockoutUntil - Date.now()) / 1000);
+      submitError = `Too many login attempts. Please try again in ${remaining} seconds.`;
+      return;
+    }
 
     const trimmedEmail = (email || '').trim();
     if (!trimmedEmail || !password) {
@@ -162,9 +229,16 @@
 
       onSuccess?.('/mailbox');
     } catch (error) {
-      submitError = (error as Error)?.message || 'Login failed. Please try again.';
-      if ((error as { description?: string })?.description) {
-        submitErrorAdditional = (error as { description: string }).description;
+      loginAttempts++;
+      if (loginAttempts >= MAX_LOGIN_ATTEMPTS) {
+        loginLockoutUntil = Date.now() + LOGIN_LOCKOUT_MS;
+        loginAttempts = 0;
+        submitError = `Too many failed attempts. Please try again in ${LOGIN_LOCKOUT_MS / 1000} seconds.`;
+      } else {
+        submitError = (error as Error)?.message || 'Login failed. Please try again.';
+        if ((error as { description?: string })?.description) {
+          submitErrorAdditional = (error as { description: string }).description;
+        }
       }
     } finally {
       submitRequest = false;
@@ -238,6 +312,29 @@
           </Alert.Root>
         {/if}
       </form>
+
+      <div class="relative my-4">
+        <div class="absolute inset-0 flex items-center">
+          <span class="w-full border-t"></span>
+        </div>
+        <div class="relative flex justify-center text-xs uppercase">
+          <span class="bg-card px-2 text-muted-foreground">or</span>
+        </div>
+      </div>
+
+      <Button
+        variant="outline"
+        class="w-full"
+        disabled={demoLoading || submitRequest}
+        onclick={handleTryDemo}
+        data-testid="try-demo-btn"
+      >
+        <Play class="mr-2 h-4 w-4" />
+        {demoLoading ? 'Loading demo...' : 'Try Demo'}
+      </Button>
+      <p class="mt-2 text-center text-xs text-muted-foreground">
+        Explore the interface with sample data. No account required.
+      </p>
     </Card.Content>
 
     <Card.Footer class="flex-col gap-1 text-center text-sm text-muted-foreground">

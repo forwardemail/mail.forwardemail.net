@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#667eea" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.forwardemail.net; worker-src 'self' blob:; frame-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; manifest-src 'self'; media-src 'none'"
+      content="default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.forwardemail.net wss://api.forwardemail.net; worker-src 'self' blob:; frame-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; manifest-src 'self'; media-src 'none'"
     />
     <title>Forward Email Webmail</title>
 
@@ -38,6 +38,7 @@
     <div id="compose-root"></div>
     <div id="passphrase-root"></div>
     <div id="toasts-root"></div>
+    <div id="app-lock-overlay"></div>
 
     <!-- Fallback recovery UI for catastrophic errors before main JS loads -->
     <div

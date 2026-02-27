@@ -6,3 +6,25 @@ test-results
 .vites
 .DS_Store
 vite.config.js.timestamp*
+
+# Environment files (secrets)
+.env
+.env.*
+!.env.example
+
+# Tauri
+src-tauri/target/
+src-tauri/gen/
+
+# Build artifacts
+*.dmg
+*.msi
+*.exe
+*.AppImage
+*.deb
+*.apk
+*.aab
+*.ipa
+*.tar.gz
+*.sig
+*.nsis.zip

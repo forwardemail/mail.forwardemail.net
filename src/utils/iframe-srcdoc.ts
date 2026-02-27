@@ -14,6 +14,11 @@
  */
 export function buildIframeSrcdoc(emailHtml: string, isDarkMode: boolean = false): string {
   const bodyClass = isDarkMode ? 'fe-iframe-dark' : 'fe-iframe-light';
+  const scriptContent = getEmbeddedScript();
+  // The iframe is sandboxed (sandbox="allow-scripts") so 'unsafe-inline' here
+  // only applies within the isolated srcdoc context — not the parent page.
+  // Using a hash is fragile because the browser hashes the full text node
+  // between <script>…</script> including template-literal whitespace.
 
   return `<!DOCTYPE html>
 <html>
@@ -32,7 +37,7 @@ export function buildIframeSrcdoc(emailHtml: string, isDarkMode: boolean = false
     ${emailHtml}
   </div>
   <script>
-    ${getEmbeddedScript()}
+    ${scriptContent}
   </script>
 </body>
 </html>`;

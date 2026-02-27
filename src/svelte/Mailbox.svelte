@@ -16,6 +16,7 @@
   import { extractAddressList, displayAddresses, getReplyToList, extractDisplayName } from '../utils/address.ts';
   import { truncatePreview } from '../utils/preview';
   import { validateLabelName } from '../utils/label-validation.ts';
+  import DOMPurify from 'dompurify';
   import { restoreBlockedImages } from '../utils/sanitize.js';
   import { LABEL_PALETTE, pickLabelColor as pickLabelColorFromPalette } from '../utils/labels.js';
   import { processQuotedContent, initQuoteToggles } from '../utils/quote-collapse.js';
@@ -52,6 +53,7 @@
   import { getMessageApiId } from '../utils/sync-helpers.ts';
   import { getSyncSettings } from '../utils/sync-settings.js';
   import { parseMailto, mailtoToPrefill } from '../utils/mailto';
+  import MailtoPrompt from './components/MailtoPrompt.svelte';
   import {
     outboxCount,
     outboxProcessing,
@@ -939,6 +941,33 @@ const stopVerticalResize = () => {
     return ext ? PREVIEWABLE_EXTENSIONS.has(ext) : false;
   };
 
+  /**
+   * Sanitize outbox HTML preview to prevent XSS.
+   * Outbox items may contain user-composed HTML that has not been
+   * server-sanitized, so we must run DOMPurify before rendering.
+   */
+  const sanitizeOutboxHtml = (html: string): string => {
+    if (!html) return '';
+    return DOMPurify.sanitize(html, {
+      USE_PROFILES: { html: true },
+      ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto|tel|ftp):|[^a-z]|[a-z+.-]+(?:[^a-z+.-:]|$))/i,
+      FORBID_TAGS: ['script', 'style', 'iframe', 'object', 'embed', 'form', 'input', 'textarea', 'select', 'button'],
+      HOOKS: {
+        afterSanitizeAttributes: (node) => {
+          // Strip all on* event handler attributes (covers onerror, onload, onclick, etc.)
+          for (const attr of [...node.attributes]) {
+            if (attr.name.startsWith('on')) node.removeAttribute(attr.name);
+          }
+          // Ensure links open safely in new tab
+          if (node.tagName === 'A') {
+            node.setAttribute('target', '_blank');
+            node.setAttribute('rel', 'noopener noreferrer');
+          }
+        },
+      },
+    });
+  };
+
   const formatAttachmentSize = (bytes) => {
     if (!bytes) return '';
     if (bytes < 1024) return `${bytes} B`;
@@ -1032,7 +1061,7 @@ const stopVerticalResize = () => {
       )
     : searchSuggestionItems);
 
-  // Reset showEmailDetails when message changes - guard to prevent loop
+  // Reset showEmailDetails and scroll reader to top when message changes
   let lastSelectedMsgId = '';
   $effect(() => {
     const msgId = $selectedMessage?.id || '';
@@ -1041,6 +1070,10 @@ const stopVerticalResize = () => {
       showEmailDetails = false;
       showAllRecipients = false;
       showAllCc = false;
+      // Scroll reader pane to top so the metadata header is visible
+      if (readerPaneEl) {
+        readerPaneEl.scrollTop = 0;
+      }
     }
   });
 
@@ -5630,7 +5663,7 @@ const stopVerticalResize = () => {
           </div>
         {/if}
         <div class="prose prose-sm dark:prose-invert max-w-none" bind:this={outboxMessageBodyContainer}>
-          {@html selectedOutboxItem.emailData?.html || selectedOutboxItem.emailData?.text || ''}
+          {@html sanitizeOutboxHtml(selectedOutboxItem.emailData?.html || selectedOutboxItem.emailData?.text || '')}
         </div>
         {#if selectedOutboxItem.emailData?.attachments?.length}
           <div class="flex flex-wrap gap-2 mt-4 pt-4 border-t border-border">
@@ -6574,6 +6607,11 @@ const stopVerticalResize = () => {
 </div>
 {/if}
 </Tooltip.Provider>
+
+<!-- Mailto handler prompt (shown once on first INBOX render after sign-in) -->
+{#if $selectedFolder === 'INBOX'}
+  <MailtoPrompt account={$currentAccount || ''} />
+{/if}
 
 <style>
   /* Shared list layout tokens */
