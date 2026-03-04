@@ -52,11 +52,10 @@
     const prefs = getLockPrefs();
     maxLength = prefs.pinLength || 6;
 
-    // Check if passkey is available
+    // Check if passkey is available — show the button but don't auto-trigger
+    // the system biometric dialog, which is intrusive on every page load.
     if (prefs.hasPasskey && hasPasskeyCredential() && isWebAuthnAvailable()) {
       showPasskeyOption = true;
-      // Auto-trigger passkey prompt on mount
-      setTimeout(() => handlePasskeyAuth(), 300);
     }
 
     // Restore lockout state from sessionStorage

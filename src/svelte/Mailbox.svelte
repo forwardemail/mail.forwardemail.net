@@ -946,25 +946,27 @@ const stopVerticalResize = () => {
    * Outbox items may contain user-composed HTML that has not been
    * server-sanitized, so we must run DOMPurify before rendering.
    */
+  // Create a DOMPurify instance with the hook pre-registered so it isn't
+  // added repeatedly on every call to sanitizeOutboxHtml.
+  const outboxPurify = DOMPurify();
+  outboxPurify.addHook('afterSanitizeAttributes', (node) => {
+    // Strip all on* event handler attributes (covers onerror, onload, onclick, etc.)
+    for (const attr of [...node.attributes]) {
+      if (attr.name.startsWith('on')) node.removeAttribute(attr.name);
+    }
+    // Ensure links open safely in new tab
+    if (node.tagName === 'A') {
+      node.setAttribute('target', '_blank');
+      node.setAttribute('rel', 'noopener noreferrer');
+    }
+  });
+
   const sanitizeOutboxHtml = (html: string): string => {
     if (!html) return '';
-    return DOMPurify.sanitize(html, {
+    return outboxPurify.sanitize(html, {
       USE_PROFILES: { html: true },
       ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto|tel|ftp):|[^a-z]|[a-z+.-]+(?:[^a-z+.-:]|$))/i,
       FORBID_TAGS: ['script', 'style', 'iframe', 'object', 'embed', 'form', 'input', 'textarea', 'select', 'button'],
-      HOOKS: {
-        afterSanitizeAttributes: (node) => {
-          // Strip all on* event handler attributes (covers onerror, onload, onclick, etc.)
-          for (const attr of [...node.attributes]) {
-            if (attr.name.startsWith('on')) node.removeAttribute(attr.name);
-          }
-          // Ensure links open safely in new tab
-          if (node.tagName === 'A') {
-            node.setAttribute('target', '_blank');
-            node.setAttribute('rel', 'noopener noreferrer');
-          }
-        },
-      },
     });
   };
 

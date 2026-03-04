@@ -1,7 +1,7 @@
 import { writable, derived, get } from 'svelte/store';
 import Dexie from 'dexie';
 import { Remote } from '../utils/remote';
-import { Local, Accounts } from '../utils/storage';
+import { Local, Session, Accounts } from '../utils/storage';
 import { db } from '../utils/db';
 import { mailboxStore } from './mailboxStore';
 import { searchStore } from './searchStore';
@@ -1523,13 +1523,11 @@ export const signOut = async () => {
     // Set a flag for the fallback-recovery.js to delete IndexedDB on next page load
     // (the database may still be blocked by open connections on this page)
     localStorage.setItem('webmail_pending_idb_cleanup', '1');
-    // Clear ALL localStorage (not just webmail_ prefixed keys)
-    // Note: setItem above will be cleared too, but that's fine — the flag
-    // only needs to survive until the page navigates and fallback-recovery.js reads it.
-    // We re-set it after clear() to ensure it persists.
-    localStorage.clear();
+    // Clear only webmail-prefixed keys (preserves third-party localStorage on same origin)
+    Local.clear();
+    Session.clear();
+    // Re-set cleanup flag after clear (Local.clear removes it)
     localStorage.setItem('webmail_pending_idb_cleanup', '1');
-    sessionStorage.clear();
     accounts.set([]);
     currentAccount.set('');
 

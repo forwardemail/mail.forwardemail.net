@@ -29,7 +29,6 @@ import { config } from '../config';
 let unpack = null;
 let pack = null;
 let msgpackrAvailable = false;
-let msgpackrInitialized = false;
 let _initPromise = null;
 
 /**
@@ -297,9 +296,8 @@ export function createWebSocketClient(opts = {}) {
     cancelReconnect();
 
     // Ensure msgpackr is initialized (once) if the client wants it
-    if (wantsMsgpackr && !msgpackrInitialized) {
+    if (wantsMsgpackr) {
       await initMsgpackr();
-      msgpackrInitialized = true;
     }
 
     const url = buildURL();
@@ -311,15 +309,18 @@ export function createWebSocketClient(opts = {}) {
     console.info('[ws] Connecting...');
 
     try {
-      // Browser WebSocket doesn't support custom headers.
-      // For Basic Auth, we encode credentials in the URL (user:pass@host).
-      let connectURL = url;
-      if (opts.email && opts.password) {
-        const parsed = new URL(url);
-        parsed.username = encodeURIComponent(opts.email);
-        parsed.password = encodeURIComponent(opts.password);
-        connectURL = parsed.toString();
-      }
+      // NOTE: Browser WebSocket API does not support custom headers, and
+      // modern browsers no longer send an Authorization header from URL
+      // userinfo (user:pass@host) on WebSocket upgrade requests.
+      // The server's _authenticate() exclusively reads basicAuth(request)
+      // from the Authorization header, so browser clients cannot currently
+      // authenticate.  Until the server is updated to accept query-param
+      // or token-based auth for WebSocket upgrades, the connection will
+      // fall through to broadcastOnly mode.
+      // TODO: Update server _authenticate() to read query.username /
+      // query.password when Authorization header is absent, then pass
+      // credentials here via searchParams.
+      const connectURL = url;
 
       socket = new WebSocket(connectURL);
       if (wantsMsgpackr && msgpackrAvailable) {

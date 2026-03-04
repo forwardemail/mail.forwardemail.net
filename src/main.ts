@@ -71,6 +71,7 @@ import {
   isLockEnabled,
   isUnlocked,
   isVaultConfigured,
+  wasUnlockedThisSession,
   lock as lockCryptoStore,
 } from './utils/crypto-store.js';
 import {
@@ -723,14 +724,6 @@ routeStore.subscribe((route) => {
   if (route === 'settings') viewModel.settingsModal.open();
   if (route === 'calendar') viewModel.calendarView.load();
   if (route === 'contacts') contactsApi.reload?.();
-  if (mailboxMode) {
-    if (starfieldDisposer) {
-      starfieldDisposer();
-      starfieldDisposer = null;
-    }
-  } else if (!starfieldDisposer) {
-    starfieldDisposer = initStarfield();
-  }
 });
 
 function initKeyboardShortcuts() {
@@ -1276,7 +1269,11 @@ async function bootstrap() {
     updateRouteVisibility(route);
 
     // ── App Lock: show lock screen if enabled and vault is locked ──
-    if (isLockEnabled() && isVaultConfigured() && !isUnlocked()) {
+    // Skip if the user already unlocked in this tab session (survives page
+    // reloads within the same tab but not new tabs or tab close).  The DEK
+    // is lost on reload but the session flag lets us silently re-prompt via
+    // the inactivity timer path rather than blocking the UI on every navigation.
+    if (isLockEnabled() && isVaultConfigured() && !isUnlocked() && !wasUnlockedThisSession()) {
       await showLockScreen();
     }
 

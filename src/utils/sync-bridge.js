@@ -143,9 +143,13 @@ export async function destroySyncBridge() {
 function _sendViaSW(payload) {
   if (!navigator.serviceWorker?.controller) {
     // SW not yet active — queue for when it is
-    navigator.serviceWorker?.ready?.then((reg) => {
-      reg.active?.postMessage(payload);
-    });
+    navigator.serviceWorker?.ready
+      ?.then((reg) => {
+        reg.active?.postMessage(payload);
+      })
+      .catch((err) => {
+        console.warn('[sync-bridge] SW ready failed:', err);
+      });
     return;
   }
 

@@ -99,6 +99,8 @@ const isSensitiveLocalKey = (key) => {
   return false;
 };
 
+const SESSION_UNLOCKED_KEY = 'webmail_lock_session_unlocked';
+
 let _sodium = null;
 let _dek = null; // Data Encryption Key - held in memory only while unlocked
 let _initialized = false;
@@ -286,6 +288,11 @@ async function createVault(kek) {
   _dek = dek;
   _enabled = true;
   _initialized = true;
+  try {
+    sessionStorage.setItem(SESSION_UNLOCKED_KEY, '1');
+  } catch {
+    // ignore
+  }
 }
 
 /**
@@ -312,6 +319,13 @@ async function openVault(kek) {
     _dek = dek;
     _enabled = true;
     _initialized = true;
+    // Mark this tab session as unlocked so in-app page reloads
+    // don't re-prompt (cleared on tab close by sessionStorage).
+    try {
+      sessionStorage.setItem(SESSION_UNLOCKED_KEY, '1');
+    } catch {
+      // ignore
+    }
     return true;
   } catch {
     // Wrong PIN / passkey — decryption failed
@@ -359,6 +373,12 @@ function lock() {
     }
     _dek = null;
   }
+  // Clear session unlock flag so the next page load shows the lock screen
+  try {
+    sessionStorage.removeItem(SESSION_UNLOCKED_KEY);
+  } catch {
+    // ignore
+  }
 }
 
 /**
@@ -366,6 +386,20 @@ function lock() {
  */
 function isUnlocked() {
   return _dek !== null && _enabled;
+}
+
+/**
+ * Check if this tab session was previously unlocked (survives page reloads
+ * within the same tab but cleared on tab close).  Used by bootstrap to
+ * avoid re-prompting the lock screen on SPA-style page reloads where the
+ * in-memory DEK is lost but the user already authenticated.
+ */
+function wasUnlockedThisSession() {
+  try {
+    return sessionStorage.getItem(SESSION_UNLOCKED_KEY) === '1';
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -845,6 +879,7 @@ export {
   isVaultConfigured,
   isLockEnabled,
   isUnlocked,
+  wasUnlockedThisSession,
   isEnabled,
   getSodium,
 

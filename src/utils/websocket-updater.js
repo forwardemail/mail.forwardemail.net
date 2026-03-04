@@ -25,7 +25,7 @@ import { mailboxStore } from '../stores/mailboxStore';
 import { Local } from './storage';
 import { startInitialSync } from './sync-controller';
 import { createWebSocketClient, createReleaseWatcher, WS_EVENTS } from './websocket-client';
-import { connectNotifications, requestNotificationPermission } from './notification-manager';
+import { connectNotifications } from './notification-manager';
 
 // ── Constants ──────────────────────────────────────────────────────────────
 const FALLBACK_POLL_INTERVAL_MS = 300_000; // 5 min fallback — WebSocket handles real-time
@@ -128,9 +128,12 @@ function createWebSocketUpdater() {
       if (destroyed || started) return;
       started = true;
 
-      // Read credentials at connect time only — never store them
+      // Read credentials at connect time only — never store them.
+      // The app stores alias_auth as "email:password" (password may contain colons).
       const email = Local.get('email');
-      const password = Local.get('password');
+      const aliasAuth = Local.get('alias_auth') || '';
+      const colonIdx = aliasAuth.indexOf(':');
+      const password = colonIdx !== -1 ? aliasAuth.slice(colonIdx + 1) : '';
 
       // Always start the release watcher (no auth needed)
       releaseWatcher = createReleaseWatcher();
@@ -264,14 +267,14 @@ function createWebSocketUpdater() {
         // Connect notification manager
         notifCleanup = connectNotifications(wsClient);
 
-        // Request notification permission
-        requestNotificationPermission();
-
         wsClient.connect();
       }
 
-      // Start fallback polling only when WS client exists
-      if (wsClient) startFallbackPoll();
+      // Start fallback polling whenever we have credentials,
+      // even if the WebSocket connection fails to establish.
+      if (isNonEmptyString(email) && isNonEmptyString(password)) {
+        startFallbackPoll();
+      }
     },
 
     stop() {
