@@ -2924,6 +2924,7 @@ const stopVerticalResize = () => {
     try {
       if (mailboxStore?.actions?.bulkDeleteMessages) {
         const { failed } = await mailboxStore.actions.bulkDeleteMessages(targets);
+        await reloadMessages();
         if (failed > 0) {
           showToast(`Failed to delete ${failed} message${failed === 1 ? '' : 's'}`, 'error');
         }
