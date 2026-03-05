@@ -92,10 +92,8 @@
     "*.{json,css,html,md,svelte}": "pnpm format"
   },
   "np": {
-    "message": "chore(release): %s",
     "branch": "main",
-    "publish": false,
-    "releaseDraft": true
+    "publish": false
   },
   "packageManager": "pnpm@9.0.0",
   "private": true,

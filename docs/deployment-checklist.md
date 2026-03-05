@@ -5,8 +5,9 @@ Complete setup guide for deploying the webmail app from scratch using Cloudflare
 
 ```mermaid
 flowchart LR
-    A["git push main"] --> B["Lint + Format"] --> C["Build + SW gen"] --> D["Deploy R2 + Worker"] --> E["Purge CDN cache"]
-    E --> F["Result: Static PWA served from Cloudflare edge"]
+    A["pnpm release"] --> B["np: lint, test, build, bump, tag"] --> C["GitHub Release published"]
+    C --> D["Deploy workflow: build, R2 sync, Worker deploy, cache purge"]
+    D --> E["Result: Static PWA served from Cloudflare edge"]
 ```
 
 ## Prerequisites
@@ -182,61 +183,43 @@ None needed — the app is entirely client-side after build.
 
 ## 6. CI/CD Pipeline
 
-```yaml
-# .github/workflows/ci.yml
-name: CI
+There are two separate GitHub Actions workflows:
 
-on:
-  push:
-    branches: [main]
-  pull_request:
+### CI (`.github/workflows/ci.yml`)
 
-env:
-  NODE_VERSION: '20'
-  R2_BUCKET: ${{ vars.R2_BUCKET }}
+Runs on every push to `main` and on pull requests. Performs lint, format, unit tests, build, and E2E tests (PRs only). **Does not deploy.**
 
-jobs:
-  build-test-deploy:
-    runs-on: ubuntu-latest
-    steps:
-      # ... checkout, setup pnpm, install deps ...
+### Deploy (`.github/workflows/deploy.yml`)
 
-      - name: Lint + Format
-        run: pnpm lint && pnpm format
+Runs only when a GitHub Release is published. Builds the app, syncs to R2, deploys the Worker, and purges the Cloudflare cache.
 
-      - name: Build
-        run: pnpm build
-
-      - name: Deploy to R2
-        if: github.ref == 'refs/heads/main'
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
-        run: |
-          ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
-          aws --endpoint-url "$ENDPOINT" s3 sync dist/ "s3://${R2_BUCKET}/" --delete
-
-      - name: Deploy Worker
-        if: github.ref == 'refs/heads/main'
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
-        run: |
-          sed -i "s/bucket_name = \".*\"/bucket_name = \"${R2_BUCKET}\"/" worker/wrangler.toml
-          cd worker && pnpm install && npx wrangler deploy
-
-      - name: Purge CDN Cache
-        if: github.ref == 'refs/heads/main'
-        env:
-          CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-        run: |
-          curl -X POST "https://api.cloudflare.com/client/v4/zones/${CLOUDFLARE_ZONE_ID}/purge_cache" \
-            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
-            -H "Content-Type: application/json" \
-            --data '{"purge_everything":true}'
+```mermaid
+flowchart TD
+    subgraph CI ["CI workflow (push / PR)"]
+        A1["Install"] --> A2["Lint + Format"] --> A3["Unit tests"] --> A4["Build"]
+        A4 --> A5["E2E tests (PR only)"]
+    end
+    subgraph Deploy ["Deploy workflow (release published)"]
+        B1["Install + Build"] --> B2["Deploy to R2"] --> B3["Deploy Worker"] --> B4["Purge CDN cache"]
+    end
+    R["pnpm release → GitHub Release published"] --> Deploy
 ```
+
+### Releasing
+
+Releases are managed locally using [np](https://github.com/sindresorhus/np):
+
+```bash
+pnpm release
+```
+
+This will:
+
+1. Verify a clean working tree and up-to-date `main` branch
+2. Run lint, format, tests, and build
+3. Bump the version in `package.json` and create a git tag
+4. Push the commit and tag to GitHub
+5. Publish a GitHub Release, which triggers the Deploy workflow
 
 ---
 
@@ -244,7 +227,7 @@ jobs:
 
 ```mermaid
 flowchart TD
-    A["1. Push to main"] --> B["2. Monitor GitHub Actions"] --> C["3. Verify"]
+    A["1. pnpm release"] --> B["2. Monitor GitHub Actions (Deploy workflow)"] --> C["3. Verify"]
     C --> D["R2 bucket has files?"]
     C --> E["Worker deployed?<br/>npx wrangler deployments list"]
     C --> F["Site loads?<br/>https://mail.yourdomain.com"]
@@ -285,6 +268,7 @@ flowchart TD
 | R2 bucket empty          | `aws --endpoint-url "$ENDPOINT" s3 ls "s3://${R2_BUCKET}/"`                                             |
 | Cache not clearing       | Manual purge: `curl -X POST ".../purge_cache" --data '{"purge_everything":true}'`                       |
 | Deploy 403 error         | Verify API token has: Workers Scripts: Edit, Workers R2: Edit, Cache Purge: Purge, Workers Routes: Edit |
+| Deploy not triggering    | Ensure `pnpm release` published a GitHub Release (check the Releases tab), not just a tag               |
 
 ---
 
@@ -295,18 +279,19 @@ flowchart TD
     A["1. Create R2 bucket: webmail-staging"] --> B["2. Create Worker: update wrangler.toml name"]
     B --> C["3. Add route: staging-mail.yourdomain.com/*"]
     C --> D["4. Create GitHub environment with separate secrets"]
-    D --> E["5. Modify workflow: deploy to staging on develop branch"]
+    D --> E["5. Add environment filter to deploy.yml"]
 ```
 
 ---
 
 ## Quick Reference
 
-| Resource      | Location                                  |
-| ------------- | ----------------------------------------- |
-| R2 Bucket     | Cloudflare Dashboard → R2                 |
-| Worker        | Cloudflare Dashboard → Workers & Pages    |
-| DNS           | Cloudflare Dashboard → Your Domain → DNS  |
-| Secrets       | GitHub → Settings → Secrets and variables |
-| Workflow      | `.github/workflows/ci.yml`                |
-| Worker Config | `worker/wrangler.toml`                    |
+| Resource        | Location                                  |
+| --------------- | ----------------------------------------- |
+| R2 Bucket       | Cloudflare Dashboard → R2                 |
+| Worker          | Cloudflare Dashboard → Workers & Pages    |
+| DNS             | Cloudflare Dashboard → Your Domain → DNS  |
+| Secrets         | GitHub → Settings → Secrets and variables |
+| CI Workflow     | `.github/workflows/ci.yml`                |
+| Deploy Workflow | `.github/workflows/deploy.yml`            |
+| Worker Config   | `worker/wrangler.toml`                    |

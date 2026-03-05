@@ -174,13 +174,21 @@ BREAKING CHANGE: settings store schema changed, requires cache clear
 
 ### Releasing
 
-Releases are cut locally using [np](https://github.com/sindresorhus/np). It runs pre-release checks (clean tree, tests, build), bumps `package.json`, creates a git tag, pushes, and drafts a GitHub Release.
-
-Only release commits trigger production deployment — regular pushes to `main` run CI (lint, test, build) but do not deploy.
+Releases are managed locally using [np](https://github.com/sindresorhus/np) and deployed automatically via GitHub Actions when a GitHub Release is published.
 
 ```bash
-pnpm release            # interactive version prompt, runs checks, pushes, drafts GitHub release
+pnpm release            # interactive version prompt, runs checks, pushes, publishes GitHub Release
 ```
+
+This command will:
+
+1. Verify a clean working tree and up-to-date `main` branch
+2. Run lint, format, tests, and build
+3. Bump the version in `package.json` and create a git tag
+4. Push the commit and tag to GitHub
+5. Publish a GitHub Release
+
+Once the GitHub Release is published, the **Deploy** workflow (`.github/workflows/deploy.yml`) automatically triggers and deploys to Cloudflare.
 
 ## Configuration
 
@@ -224,20 +232,25 @@ graph TB
 
 ### CI/CD Pipeline
 
-The GitHub Actions workflow (`.github/workflows/ci.yml`) runs on every push to `main` and on pull requests:
+CI and deployment are handled by two separate GitHub Actions workflows:
 
-**Every push (CI):**
+**CI** (`.github/workflows/ci.yml`) — runs on every push to `main` and on pull requests:
 
 1. **Install** — `pnpm install --frozen-lockfile`
 2. **Lint** — `pnpm lint`
 3. **Format** — `pnpm format`
-4. **Build** — `pnpm build` (Vite + Workbox service worker)
+4. **Unit tests** — `pnpm test -- --run`
+5. **Build** — `pnpm build` (Vite + Workbox service worker)
+6. **E2E tests** — Playwright (pull requests only)
 
-**Release commits only (`chore(release): x.y.z`):**
+**Deploy** (`.github/workflows/deploy.yml`) — runs only when a GitHub Release is published:
 
-5. **Deploy to R2** — Sync `dist/` to Cloudflare R2 bucket
-6. **Deploy Worker** — Deploy CDN worker for SPA routing + cache headers
-7. **Purge Cache** — Clear Cloudflare edge cache
+1. **Build** — Full production build
+2. **Deploy to R2** — Sync `dist/` to Cloudflare R2 bucket
+3. **Deploy Worker** — Deploy CDN worker for SPA routing + cache headers
+4. **Purge Cache** — Clear Cloudflare edge cache
+
+Pushing to `main` never triggers a deployment. Only publishing a GitHub Release (via `pnpm release`) triggers the deploy workflow.
 
 ### Required Secrets & Variables
 
