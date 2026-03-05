@@ -1,36 +1,6 @@
 {
   "name": "forwardemail-webmail-client",
   "version": "0.2.13",
-  "private": true,
-  "type": "module",
-  "packageManager": "pnpm@9.0.0",
-  "engines": {
-    "node": ">=20 <21",
-    "pnpm": ">=9.0.0"
-  },
-  "scripts": {
-    "dev": "vite",
-    "prebuild": "node scripts/validate-schema-version.js",
-    "build": "vite build && workbox generateSW workbox.config.cjs",
-    "preview": "vite preview",
-    "check": "svelte-check",
-    "analyze": "ANALYZE=true pnpm build",
-    "lhci:collect": "lhci collect --config=./lighthouserc.cjs",
-    "lhci:assert": "lhci assert --config=./lighthouserc.cjs",
-    "lhci": "pnpm build && pnpm lhci:collect && pnpm lhci:assert",
-    "test": "vitest",
-    "test:unit": "vitest",
-    "test:watch": "vitest watch",
-    "test:coverage": "vitest run --coverage",
-    "test:e2e": "playwright test",
-    "lint": "eslint .",
-    "lint:fix": "eslint . --fix",
-    "lint-staged": "lint-staged",
-    "format": "prettier . --check",
-    "format:fix": "prettier . --write",
-    "prepare": "husky install",
-    "release": "np"
-  },
   "dependencies": {
     "@fontsource-variable/inter": "^5.2.8",
     "@fontsource-variable/literata": "^5.2.8",
@@ -87,7 +57,6 @@
     "@typescript-eslint/parser": "^8.53.1",
     "@vitest/coverage-v8": "^2.1.4",
     "autoprefixer": "^10.4.23",
-    "np": "^10.2.0",
     "eslint": "^9.10.0",
     "eslint-config-prettier": "^9.1.0",
     "eslint-plugin-svelte": "^2.46.0",
@@ -96,6 +65,7 @@
     "jsdom": "^25.0.0",
     "lint-staged": "^15.2.10",
     "mode-watcher": "^1.1.0",
+    "np": "^10.2.0",
     "postcss": "^8.5.6",
     "prettier": "^3.3.3",
     "prettier-plugin-svelte": "^3.2.6",
@@ -113,14 +83,48 @@
     "vitest": "^2.1.4",
     "workbox-cli": "^7.0.0"
   },
+  "engines": {
+    "node": ">=20 <21",
+    "pnpm": ">=9.0.0"
+  },
+  "lint-staged": {
+    "*.{js,mjs,cjs,ts,tsx,jsx,svelte}": "pnpm run lint",
+    "*.{json,css,html,md,svelte}": "pnpm format"
+  },
   "np": {
     "message": "chore(release): %s",
     "branch": "main",
     "publish": false,
     "releaseDraft": true
   },
-  "lint-staged": {
-    "*.{js,mjs,cjs,ts,tsx,jsx,svelte}": "pnpm run lint",
-    "*.{json,css,html,md,svelte}": "pnpm format"
-  }
+  "packageManager": "pnpm@9.0.0",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/forwardemail/mail.forwardemail.net.git"
+  },
+  "scripts": {
+    "analyze": "ANALYZE=true pnpm build",
+    "build": "vite build && workbox generateSW workbox.config.cjs",
+    "check": "svelte-check",
+    "dev": "vite",
+    "format": "prettier . --check",
+    "format:fix": "prettier . --write",
+    "lhci": "pnpm build && pnpm lhci:collect && pnpm lhci:assert",
+    "lhci:assert": "lhci assert --config=./lighthouserc.cjs",
+    "lhci:collect": "lhci collect --config=./lighthouserc.cjs",
+    "lint": "eslint .",
+    "lint-staged": "lint-staged",
+    "lint:fix": "eslint . --fix",
+    "prebuild": "node scripts/validate-schema-version.js",
+    "prepare": "husky install",
+    "preview": "vite preview",
+    "release": "np",
+    "test": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "test:e2e": "playwright test",
+    "test:unit": "vitest",
+    "test:watch": "vitest watch"
+  },
+  "type": "module"
 }
