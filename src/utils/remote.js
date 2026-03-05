@@ -34,7 +34,7 @@ const api = ky.create({
   retry: {
     limit: 3,
     methods: ['get', 'post', 'put', 'delete'],
-    statusCodes: [0, 408, 413, 429, 500, 502, 503, 504],
+    statusCodes: [0, 408, 429, 500, 502, 503, 504],
     backoffLimit: 5000,
     delay: (attemptCount) => addJitter(Math.min(1000 * Math.pow(2, attemptCount - 1), 5000)),
   },
