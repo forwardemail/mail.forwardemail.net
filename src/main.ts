@@ -460,6 +460,16 @@ if (composeRoot) {
         props: {
           toasts,
           mailboxView: composeMailboxView,
+          onSent: (result?: { archive?: boolean; queued?: boolean }) => {
+            if (result?.archive) {
+              const msg = get(selectedMessage);
+              if (msg) {
+                mailboxActions.archiveMessage(msg).catch((err) => {
+                  console.error('[Compose] Failed to archive after send:', err);
+                });
+              }
+            }
+          },
           registerApi: (api: typeof composeApi) => {
             if (api) {
               composeApi = api;

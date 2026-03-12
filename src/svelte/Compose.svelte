@@ -124,6 +124,7 @@
   import AlignRight from '@lucide/svelte/icons/align-right';
   import AlertTriangle from '@lucide/svelte/icons/alert-triangle';
   import ChevronDown from '@lucide/svelte/icons/chevron-down';
+  import Archive from '@lucide/svelte/icons/archive';
   import RemoveFormatting from '@lucide/svelte/icons/remove-formatting';
 
   interface ToastApi {
@@ -388,6 +389,7 @@
   let draftStatus = $state<'idle' | 'saving' | 'saved' | 'error'>('idle');
   let draftStatusDetail = $state('');
   let replyBodyLoading = $state(false);
+  let archiveAfterSend = $state(false);
   let replyBodyError = $state<string | null>(null);
   let pendingReplyBody = $state('');
   let replyPrefillData = $state<unknown>(null);
@@ -1094,6 +1096,7 @@
     linkUrl = '';
     showAttachmentReminderModal = false;
     attachmentReminderKeyword = '';
+    archiveAfterSend = false;
     showMobileMenu = false;
     showScheduleModal = false;
     showScheduleConfirm = false;
@@ -1971,8 +1974,9 @@
         }
         toasts?.show?.('Message queued - will send when online', 'info');
         setVisible(false);
+        const shouldArchive = archiveAfterSend;
         reset();
-        onSent?.({ queued: true });
+        onSent?.({ queued: true, archive: shouldArchive });
       } catch (err) {
         error = 'Failed to queue message';
         toasts?.show?.(error, 'error');
@@ -2009,8 +2013,9 @@
         ...bccList.map((e) => ({ email: e })),
       ]).catch(() => {});
       setVisible(false);
+      const shouldArchive = archiveAfterSend;
       reset();
-      onSent?.();
+      onSent?.({ archive: shouldArchive });
     } catch (err) {
       const e = err as { message?: string; status?: number };
       if (e.message?.includes('network') || e.message?.includes('fetch') || e.status === 0) {
@@ -2034,8 +2039,9 @@
           }
           toasts?.show?.('Network error - message queued for retry', 'warning');
           setVisible(false);
+          const shouldArchive = archiveAfterSend;
           reset();
-          onSent?.({ queued: true });
+          onSent?.({ queued: true, archive: shouldArchive });
         } catch (queueErr) {
           error = e?.message || 'Send failed';
           toasts?.show?.(error, 'error');
@@ -2837,6 +2843,17 @@
                 </button>
                 {#if showSendDropdown}
                   <div class="absolute bottom-full left-0 mb-1 min-w-[160px] border border-border bg-popover p-1 shadow-lg z-[100]">
+                    {#if inReplyTo}
+                      <button
+                        type="button"
+                        class="w-full flex items-center gap-2 px-2 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground disabled:opacity-50 disabled:pointer-events-none"
+                        disabled={sending}
+                        onclick={() => { showSendDropdown = false; archiveAfterSend = true; send(); }}
+                      >
+                        <Archive class="h-4 w-4" />
+                        Send &amp; Archive
+                      </button>
+                    {/if}
                     <button
                       type="button"
                       class="w-full flex items-center gap-2 px-2 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground disabled:opacity-50 disabled:pointer-events-none"

@@ -136,6 +136,7 @@
   let section = $state('general');
   let composePlainDefault = $state(false);
   let attachmentReminderEnabled = $state(false);
+  let defaultReplyAll = $state(false);
   let messagesPerPage = $state(20);
   let archiveFolder = $state('');
   let sentFolder = $state('');
@@ -452,6 +453,9 @@
     layoutModeChoice = getEffectiveSettingValue('layout_mode', { account: currentAcct }) || 'full';
     composePlainDefault = Boolean(
       getEffectiveSettingValue('compose_plain_default', { account: currentAcct }),
+    );
+    defaultReplyAll = Boolean(
+      getEffectiveSettingValue('default_reply_all', { account: currentAcct }),
     );
     messagesPerPage = Number.parseInt(
       getEffectiveSettingValue('messages_per_page', { account: currentAcct }) || '20',
@@ -779,6 +783,20 @@
       );
     } catch (err) {
       toasts?.show?.((err as Error)?.message || 'Failed to save attachment reminder setting', 'error');
+    }
+  };
+
+  const saveDefaultReplyAll = async () => {
+    try {
+      await setSettingValue('default_reply_all', defaultReplyAll, {
+        account: getAccountId(),
+      });
+      toasts?.show?.(
+        defaultReplyAll ? 'Reply All set as default' : 'Reply set as default',
+        'success',
+      );
+    } catch (err) {
+      toasts?.show?.((err as Error)?.message || 'Failed to save reply default', 'error');
     }
   };
 
@@ -1296,6 +1314,13 @@
             </label>
             <p class="text-sm text-muted-foreground">
               Get a reminder if you mention attachments but forget to add them.
+            </p>
+            <label class="flex items-center gap-3">
+              <Checkbox bind:checked={defaultReplyAll} onCheckedChange={saveDefaultReplyAll} />
+              <span>Reply All by default</span>
+            </label>
+            <p class="text-sm text-muted-foreground">
+              Use Reply All as the default reply action instead of Reply.
             </p>
           </Card.Content>
         </Card.Root>

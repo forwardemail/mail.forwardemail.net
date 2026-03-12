@@ -173,6 +173,9 @@
   const isBodyPrefetchEnabled = () =>
     getEffectiveSettingValue('cache_prefetch_enabled') !== false;
 
+  const isDefaultReplyAll = () =>
+    Boolean(getEffectiveSettingValue('default_reply_all'));
+
   interface MailboxApi {
     open?: () => void;
     refresh?: () => void;
@@ -3253,7 +3256,11 @@ const stopVerticalResize = () => {
 
   const contextReply = () => {
     if (!contextMenuMessage) return;
-    mailboxView?.replyTo?.(contextMenuMessage);
+    if (isDefaultReplyAll()) {
+      mailboxView?.replyAll?.(contextMenuMessage);
+    } else {
+      mailboxView?.replyTo?.(contextMenuMessage);
+    }
     closeContextMenu();
   };
 
@@ -3412,7 +3419,7 @@ const stopVerticalResize = () => {
     !readerIsDraftFolder &&
     !readerIsTrashFolder &&
     !readerIsSpamOrJunk);
-  const canReply = $derived(!readerIsSentFolder && !readerIsDraftFolder);
+  const canReply = $derived(!readerIsDraftFolder);
   const canForward = $derived(!readerIsDraftFolder);
   const canDownloadOriginal = $derived(!readerIsDraftFolder);
   const canViewOriginal = $derived(!readerIsDraftFolder);
@@ -4565,19 +4572,17 @@ const stopVerticalResize = () => {
               onclick={() => handleSelectFolder(folder.path)}
               onkeydown={(e) => activateOnKeys(e, () => handleSelectFolder(folder.path))}
             >
-              <span class="flex items-center gap-2 min-w-0 flex-1" style={`padding-left: ${(folder.level || 0) * 12}px`}>
+              <span class={`flex items-center gap-1.5 min-w-0 flex-1 ${(folder.level || 0) > 0 ? 'border-l border-border pl-1.5' : ''}`} style={`${(folder.level || 0) > 0 ? `margin-left: ${(folder.level) * 6}px` : ''}`}>
                 <!-- Chevron for expand/collapse -->
                 {#if hasChildren(folder)}
                   <button
                     type="button"
-                    class="p-0.5 hover:bg-accent transition-colors shrink-0"
+                    class="hover:bg-accent transition-colors shrink-0"
                     onclick={(e) => { e.stopPropagation(); toggleFolderExpansion(folder.path); }}
                     aria-label={$expandedFolders.has(folder.path) ? 'Collapse' : 'Expand'}
                   >
-                    <ChevronRight class={`h-4 w-4 transition-transform ${$expandedFolders.has(folder.path) ? 'rotate-90' : ''}`} />
+                    <ChevronRight class={`h-3.5 w-3.5 transition-transform ${$expandedFolders.has(folder.path) ? 'rotate-90' : ''}`} />
                   </button>
-                {:else if (folder.level || 0) > 0}
-                  <span class="w-4 shrink-0" aria-hidden="true"></span>
                 {/if}
 
                 <svelte:component this={getFolderIcon(folder)} class="h-5 w-5 text-primary shrink-0" />
@@ -5645,7 +5650,7 @@ const stopVerticalResize = () => {
         {/if}
       {:else if $selectedMessage}
         {#if isProductivityLayout || $mobileReader}
-          <div class="flex items-center gap-2 p-2 border-b border-border">
+          <div class="sticky top-0 z-10 bg-background flex items-center gap-2 p-2 border-b border-border">
             <button
               class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
               type="button"
@@ -5732,7 +5737,7 @@ const stopVerticalResize = () => {
             </div>
           </div>
         {/if}
-        <div class="p-4 border-b border-border">
+        <div class="sticky top-0 z-10 bg-background p-4 border-b border-border">
           <div class="flex items-start justify-between gap-4 mb-2">
             <div class="flex-1 min-w-0">
               <strong class="text-lg font-semibold">{threadSubject || $selectedMessage.subject}</strong>
@@ -5768,10 +5773,10 @@ const stopVerticalResize = () => {
                 <button
                   class="inline-flex items-center justify-center h-9 w-9 hover:bg-accent hover:text-accent-foreground"
                   type="button"
-                  aria-label="Reply"
-                  data-tooltip="Reply (R)"
+                  aria-label={isDefaultReplyAll() ? 'Reply All' : 'Reply'}
+                  data-tooltip={isDefaultReplyAll() ? 'Reply All (R)' : 'Reply (R)'}
                   data-tooltip-position="bottom"
-                  onclick={() => mailboxView?.replyTo?.($selectedMessage)}
+                  onclick={() => isDefaultReplyAll() ? mailboxView?.replyAll?.($selectedMessage) : mailboxView?.replyTo?.($selectedMessage)}
                 >
                   <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 17 4 12 9 7"></polyline><path d="M20 18v-2a4 4 0 0 0-4-4H4"></path></svg>
                 </button>

@@ -126,6 +126,16 @@ export const SETTINGS_REGISTRY: Record<string, SettingDefinition> = {
     localParse: (raw) => parseBoolean(raw, true),
     localSerialize: (value) => serializeBoolean(Boolean(value)),
   },
+  default_reply_all: {
+    id: 'default_reply_all',
+    label: 'Default Reply All',
+    scope: SETTING_SCOPES.DEVICE,
+    localKey: 'default_reply_all',
+    valueType: 'boolean',
+    defaultValue: false,
+    localParse: (raw) => parseBoolean(raw, false),
+    localSerialize: (value) => serializeBoolean(Boolean(value)),
+  },
   messages_per_page: {
     id: 'messages_per_page',
     label: 'Messages Per Page',

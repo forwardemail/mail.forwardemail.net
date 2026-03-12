@@ -52,9 +52,46 @@ export interface MessageWithHeaders {
 
 type AddressInput = string | AddressObject | AddressObject[] | null | undefined;
 
+/**
+ * Split a comma-separated address string into individual addresses,
+ * respecting quoted strings and angle brackets.
+ * e.g. "jake@x.com, Vicky <vicky@x.com>" → ["jake@x.com", "Vicky <vicky@x.com>"]
+ */
+const splitAddressString = (str: string): string[] => {
+  const parts: string[] = [];
+  let current = '';
+  let inQuotes = false;
+  let inAngle = 0;
+  for (let i = 0; i < str.length; i++) {
+    const ch = str[i];
+    if (ch === '"' && str[i - 1] !== '\\') {
+      inQuotes = !inQuotes;
+      current += ch;
+    } else if (!inQuotes && ch === '<') {
+      inAngle++;
+      current += ch;
+    } else if (!inQuotes && ch === '>' && inAngle > 0) {
+      inAngle--;
+      current += ch;
+    } else if (!inQuotes && inAngle === 0 && ch === ',') {
+      const trimmed = current.trim();
+      if (trimmed) parts.push(trimmed);
+      current = '';
+    } else {
+      current += ch;
+    }
+  }
+  const trimmed = current.trim();
+  if (trimmed) parts.push(trimmed);
+  return parts;
+};
+
 export const recipientsToList = (value: AddressInput): (string | AddressObject)[] => {
   if (!value) return [];
   if (Array.isArray(value)) return value.filter(Boolean);
+  if (typeof value === 'string' && value.includes(',')) {
+    return splitAddressString(value).filter(Boolean);
+  }
   return [value].filter(Boolean);
 };
 
