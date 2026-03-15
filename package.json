@@ -141,7 +141,8 @@
   },
   "np": {
     "branch": "main",
-    "publish": false
+    "publish": false,
+    "message": "chore(release): %s"
   },
   "repository": {
     "type": "git",
