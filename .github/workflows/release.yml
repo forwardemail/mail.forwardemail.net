@@ -8,6 +8,11 @@ on:
   #   tags:
   #     - 'v*'
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g. 0.3.2)'
+        required: true
+        type: string
 
 # Minimal permissions — only contents:write for release management
 permissions:
@@ -28,10 +33,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Extract and validate version from tag
+      - name: Extract and validate version
         id: version
         run: |
-          VERSION="${GITHUB_REF#refs/tags/v}"
+          VERSION="${{ github.event.inputs.version || '' }}"
+          if [ -z "$VERSION" ]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          fi
           # Validate semver format (major.minor.patch with optional pre-release)
           if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$'; then
             echo "Error: tag does not match semver format: $VERSION"

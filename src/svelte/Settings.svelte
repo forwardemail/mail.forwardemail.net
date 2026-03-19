@@ -1205,19 +1205,21 @@
   <!-- Mobile Section Selector -->
   <div class="w-full md:hidden">
     <div class="border-b border-border p-4">
-      <select
-        class="w-full border border-input bg-background px-3 py-2 text-sm"
-        bind:value={section}
-        onchange={() => {
-          history.replaceState(null, '', `#${section}`);
-          if (section === 'folders') loadLabelsList();
-          if (section === 'advanced') loadCacheStatistics();
-        }}
-      >
-        {#each sections.filter(s => s.id !== 'shortcuts') as sec}
-          <option value={sec.id}>{sec.label}</option>
-        {/each}
-      </select>
+      <Select.Root type="single" value={section} onValueChange={(v) => {
+          section = v;
+          history.replaceState(null, '', `#${v}`);
+          if (v === 'folders') loadLabelsList();
+          if (v === 'advanced') loadCacheStatistics();
+        }}>
+        <Select.Trigger class="w-full">
+          {sections.find(s => s.id === section)?.label || 'Select section'}
+        </Select.Trigger>
+        <Select.Content>
+          {#each sections.filter(s => s.id !== 'shortcuts') as sec}
+            <Select.Item value={sec.id}>{sec.label}</Select.Item>
+          {/each}
+        </Select.Content>
+      </Select.Root>
     </div>
   </div>
 
@@ -1407,17 +1409,16 @@
           <Card.Content class="space-y-4">
             <div class="space-y-2">
               <Label for="font-select">Typeface</Label>
-              <select
-                id="font-select"
-                class="w-full border border-input bg-background px-3 py-2 text-sm"
-                bind:value={fontChoice}
-                onchange={saveFont}
-                style="font-family: {currentFontFamily}"
-              >
-                {#each availableFonts as font}
-                  <option value={font.key} style="font-family: {font.family}">{font.name}</option>
-                {/each}
-              </select>
+              <Select.Root type="single" bind:value={fontChoice} onValueChange={() => saveFont()}>
+                <Select.Trigger class="w-full" style="font-family: {currentFontFamily}">
+                  {availableFonts.find(f => f.key === fontChoice)?.name || 'System Default'}
+                </Select.Trigger>
+                <Select.Content>
+                  {#each availableFonts as font}
+                    <Select.Item value={font.key}>{font.name}</Select.Item>
+                  {/each}
+                </Select.Content>
+              </Select.Root>
             </div>
             {#if fontLoading}
               <p class="text-sm text-primary">Loading font...</p>
@@ -1519,30 +1520,45 @@
           <Card.Content class="space-y-4">
             <div class="space-y-2">
               <Label for="archive-folder">Archive folder</Label>
-              <select id="archive-folder" class="w-full border border-input bg-background px-3 py-2 text-sm" bind:value={archiveFolder} onchange={saveArchiveFolder}>
-                <option value="">Auto-detect (Archive)</option>
-                {#each availableFolders as folder}
-                  <option value={folder}>{folder}</option>
-                {/each}
-              </select>
+              <Select.Root type="single" bind:value={archiveFolder} onValueChange={() => saveArchiveFolder()}>
+                <Select.Trigger class="w-full">
+                  {archiveFolder || 'Auto-detect (Archive)'}
+                </Select.Trigger>
+                <Select.Content>
+                  <Select.Item value="">Auto-detect (Archive)</Select.Item>
+                  {#each availableFolders as folder}
+                    <Select.Item value={folder}>{folder}</Select.Item>
+                  {/each}
+                </Select.Content>
+              </Select.Root>
             </div>
             <div class="space-y-2">
               <Label for="sent-folder">Sent folder</Label>
-              <select id="sent-folder" class="w-full border border-input bg-background px-3 py-2 text-sm" bind:value={sentFolder} onchange={saveSentFolder}>
-                <option value="">Auto-detect (Sent)</option>
-                {#each availableFolders as folder}
-                  <option value={folder}>{folder}</option>
-                {/each}
-              </select>
+              <Select.Root type="single" bind:value={sentFolder} onValueChange={() => saveSentFolder()}>
+                <Select.Trigger class="w-full">
+                  {sentFolder || 'Auto-detect (Sent)'}
+                </Select.Trigger>
+                <Select.Content>
+                  <Select.Item value="">Auto-detect (Sent)</Select.Item>
+                  {#each availableFolders as folder}
+                    <Select.Item value={folder}>{folder}</Select.Item>
+                  {/each}
+                </Select.Content>
+              </Select.Root>
             </div>
             <div class="space-y-2">
               <Label for="drafts-folder">Drafts folder</Label>
-              <select id="drafts-folder" class="w-full border border-input bg-background px-3 py-2 text-sm" bind:value={draftsFolder} onchange={saveDraftsFolder}>
-                <option value="">Auto-detect (Drafts)</option>
-                {#each availableFolders as folder}
-                  <option value={folder}>{folder}</option>
-                {/each}
-              </select>
+              <Select.Root type="single" bind:value={draftsFolder} onValueChange={() => saveDraftsFolder()}>
+                <Select.Trigger class="w-full">
+                  {draftsFolder || 'Auto-detect (Drafts)'}
+                </Select.Trigger>
+                <Select.Content>
+                  <Select.Item value="">Auto-detect (Drafts)</Select.Item>
+                  {#each availableFolders as folder}
+                    <Select.Item value={folder}>{folder}</Select.Item>
+                  {/each}
+                </Select.Content>
+              </Select.Root>
             </div>
             <p class="text-sm text-muted-foreground">
               Leave as "Auto-detect" to automatically find folders by standard names.

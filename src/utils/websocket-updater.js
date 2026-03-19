@@ -26,9 +26,11 @@ import { Local } from './storage';
 import { startInitialSync } from './sync-controller';
 import { createWebSocketClient, createReleaseWatcher, WS_EVENTS } from './websocket-client';
 import { connectNotifications } from './notification-manager';
+import { fetchLabels } from '../stores/settingsStore';
 
 // ── Constants ──────────────────────────────────────────────────────────────
 const FALLBACK_POLL_INTERVAL_MS = 300_000; // 5 min fallback — WebSocket handles real-time
+const SETTINGS_SYNC_THROTTLE_MS = 30_000; // Throttle visibility-based settings sync
 
 /**
  * @typedef {Object} InboxUpdater
@@ -75,6 +77,8 @@ function createWebSocketUpdater() {
   let fallbackTimer = null;
   let destroyed = false;
   let started = false;
+  let visibilityHandler = null;
+  let lastSettingsSync = 0;
   const wsUnsubs = [];
 
   // Refresh the INBOX view (same logic as the old poller tick)
@@ -277,6 +281,17 @@ function createWebSocketUpdater() {
         wsClient.connect();
       }
 
+      // Re-sync labels/settings when the app becomes visible (handles
+      // cross-client label creation — e.g. webmail ↔ desktop).
+      visibilityHandler = () => {
+        if (document.hidden || destroyed || !started) return;
+        const now = Date.now();
+        if (now - lastSettingsSync < SETTINGS_SYNC_THROTTLE_MS) return;
+        lastSettingsSync = now;
+        fetchLabels(true, { force: true }).catch(() => {});
+      };
+      document.addEventListener('visibilitychange', visibilityHandler);
+
       // Start fallback polling whenever we have credentials,
       // even if the WebSocket connection fails to establish.
       if (isNonEmptyString(email) && isNonEmptyString(password)) {
@@ -287,6 +302,10 @@ function createWebSocketUpdater() {
     stop() {
       started = false;
       stopFallbackPoll();
+      if (visibilityHandler) {
+        document.removeEventListener('visibilitychange', visibilityHandler);
+        visibilityHandler = null;
+      }
       if (wsClient) {
         // Unsubscribe all WS event listeners before destroying
         for (const unsub of wsUnsubs) {

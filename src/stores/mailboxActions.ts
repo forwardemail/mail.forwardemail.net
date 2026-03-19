@@ -34,6 +34,7 @@ import { queueMutation } from '../utils/mutation-queue';
 import { config } from '../config';
 import { createInboxUpdater } from '../utils/websocket-updater';
 import { i18n } from '../utils/i18n';
+import { isTauri } from '../utils/platform.js';
 import { warn } from '../utils/logger.ts';
 
 /**
@@ -1800,6 +1801,13 @@ async function getMessageContent(msg) {
 }
 
 function downloadBlob(content, filename, mime = 'text/plain') {
+  if (isTauri) {
+    downloadBlobTauri(content, filename).catch((err) =>
+      console.warn('[downloadBlob] Tauri save failed:', err),
+    );
+    return true;
+  }
+
   try {
     const blob = new Blob([content], { type: mime });
     const url = URL.createObjectURL(blob);
@@ -1817,7 +1825,26 @@ function downloadBlob(content, filename, mime = 'text/plain') {
   }
 }
 
+async function downloadBlobTauri(content, filename) {
+  const { save } = await import('@tauri-apps/plugin-dialog');
+  const { writeFile } = await import('@tauri-apps/plugin-fs');
+
+  const filePath = await save({ defaultPath: filename });
+  if (!filePath) return;
+
+  const data =
+    typeof content === 'string' ? new TextEncoder().encode(content) : new Uint8Array(content);
+  await writeFile(filePath, data);
+}
+
 function openInNewTab(content, mime = 'text/html') {
+  if (isTauri) {
+    openInNewTabTauri(content, mime).catch((err) =>
+      console.warn('[openInNewTab] Tauri open failed:', err),
+    );
+    return true;
+  }
+
   try {
     const blob = new Blob([content], { type: mime });
     const url = URL.createObjectURL(blob);
@@ -1828,6 +1855,21 @@ function openInNewTab(content, mime = 'text/html') {
     console.error('openInNewTab failed', err);
     return false;
   }
+}
+
+async function openInNewTabTauri(content, mime) {
+  const { writeFile } = await import('@tauri-apps/plugin-fs');
+  const { tempDir } = await import('@tauri-apps/api/path');
+  const { open } = await import('@tauri-apps/plugin-opener');
+
+  const ext = mime === 'text/html' ? 'html' : 'txt';
+  const tmp = await tempDir();
+  const filePath = `${tmp}forwardemail-original-${Date.now()}.${ext}`;
+
+  const data =
+    typeof content === 'string' ? new TextEncoder().encode(content) : new Uint8Array(content);
+  await writeFile(filePath, data);
+  await open(filePath);
 }
 
 const getSafeFilename = (subject = '', suffix = 'eml') => {

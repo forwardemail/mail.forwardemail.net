@@ -97,6 +97,7 @@
   import * as Alert from '$lib/components/ui/alert';
   import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
   import * as Tooltip from '$lib/components/ui/tooltip';
+  import * as Select from '$lib/components/ui/select';
   import { Separator } from '$lib/components/ui/separator';
   import ChevronLeft from '@lucide/svelte/icons/chevron-left';
   import Send from '@lucide/svelte/icons/send';
@@ -2712,16 +2713,26 @@
 
             <Separator orientation="vertical" class="h-6 mx-1" />
 
-            <select class="h-8 px-2 text-xs border border-input bg-background" bind:value={fontFamily} onchange={(e) => setFontFamily((e.target as HTMLSelectElement).value)}>
-              {#each FONT_FAMILIES as font}
-                <option value={font.value}>{font.label}</option>
-              {/each}
-            </select>
-            <select class="h-8 px-2 text-xs border border-input bg-background" bind:value={fontSize} onchange={(e) => setFontSize((e.target as HTMLSelectElement).value)}>
-              {#each FONT_SIZES as size}
-                <option value={size}>{size}px</option>
-              {/each}
-            </select>
+            <Select.Root type="single" bind:value={fontFamily} onValueChange={(v) => setFontFamily(v)}>
+              <Select.Trigger size="sm" class="h-8 px-2 text-xs">
+                {FONT_FAMILIES.find(f => f.value === fontFamily)?.label || fontFamily}
+              </Select.Trigger>
+              <Select.Content>
+                {#each FONT_FAMILIES as font}
+                  <Select.Item value={font.value}>{font.label}</Select.Item>
+                {/each}
+              </Select.Content>
+            </Select.Root>
+            <Select.Root type="single" bind:value={fontSize} onValueChange={(v) => setFontSize(v)}>
+              <Select.Trigger size="sm" class="h-8 px-2 text-xs">
+                {fontSize}px
+              </Select.Trigger>
+              <Select.Content>
+                {#each FONT_SIZES as size}
+                  <Select.Item value={size}>{size}px</Select.Item>
+                {/each}
+              </Select.Content>
+            </Select.Root>
 
             <Separator orientation="vertical" class="h-6 mx-1" />
 
@@ -3037,10 +3048,15 @@
                 </div>
               {/if}
             </div>
-            <select class="h-9 px-3 border border-input bg-background" bind:value={scheduleMeridiem}>
-              <option value="AM">AM</option>
-              <option value="PM">PM</option>
-            </select>
+            <Select.Root type="single" bind:value={scheduleMeridiem}>
+              <Select.Trigger size="default" class="h-9 w-[70px]">
+                {scheduleMeridiem || 'AM'}
+              </Select.Trigger>
+              <Select.Content>
+                <Select.Item value="AM">AM</Select.Item>
+                <Select.Item value="PM">PM</Select.Item>
+              </Select.Content>
+            </Select.Root>
           </div>
         </div>
         {#if error}

@@ -5,7 +5,8 @@
 
   // Store subscriptions managed in onMount/onDestroy to avoid $effect loops
   let mailboxSubscriptions: Unsubscriber[] = [];
-  import { mailService } from '../stores/mailService';
+  import { mailService, getPgpKeysVersion } from '../stores/mailService';
+  import { isTauri } from '../utils/platform.js';
   import { searchStore } from '../stores/searchStore';
   import { Remote } from '../utils/remote';
   import { db } from '../utils/db';
@@ -237,6 +238,8 @@
   onDestroy(() => {
     if (activeUnsub) activeUnsub();
     window.removeEventListener('draft-message-deleted', handleDraftMessageDeleted as EventListener);
+    if (menuUnlisten) menuUnlisten();
+    if (checkMailUnlisten) checkMailUnlisten();
   });
   let actionMenuOpen = $state(false);
   let showEmailDetails = $state(false);
@@ -283,12 +286,23 @@
   let urlStateInitialized = false; // Track if URL state system is ready
 
   // When becoming active (e.g., navigating back from Settings), ensure a folder is selected
+  // and re-load the selected message if PGP keys changed (e.g., user just added a key).
   let wasActive = isActive;
+  let lastPgpKeysVersion = getPgpKeysVersion();
+  let pgpReloadPending = false;
   $effect(() => {
     if (isActive && !wasActive) {
       const folder = get(selectedFolder);
       if (!folder) {
         mailboxStore?.actions?.selectFolder?.('INBOX');
+      }
+
+      // If PGP keys changed while we were away (Settings), flag for reload.
+      // The actual reload happens in a separate $effect after loadMessage is defined.
+      const currentPgpVersion = getPgpKeysVersion();
+      if (currentPgpVersion !== lastPgpKeysVersion) {
+        lastPgpKeysVersion = currentPgpVersion;
+        pgpReloadPending = true;
       }
     }
     wasActive = isActive;
@@ -851,6 +865,8 @@ const stopVerticalResize = () => {
   let outboxMessageBodyContainer;
   let infiniteScrollSentinel;
   let infiniteScrollObserver;
+  let menuUnlisten: (() => void) | null = null;
+  let checkMailUnlisten: (() => void) | null = null;
 
   // Unified breakpoint constants for consistent responsive behavior
   const BREAKPOINT_MOBILE = 640;  // phones
@@ -2901,6 +2917,7 @@ const stopVerticalResize = () => {
       // Use optimized bulk move if available
       if (mailboxStore?.actions?.bulkMoveMessages) {
         const { success, failed } = await mailboxStore.actions.bulkMoveMessages(messages, archivePath);
+        clearSelection();
         await reloadMessages();
 
         if (success > 0) {
@@ -3023,6 +3040,7 @@ const stopVerticalResize = () => {
       // Use optimized bulk move if available
       if (mailboxStore?.actions?.bulkMoveMessages) {
         const { success, failed } = await mailboxStore.actions.bulkMoveMessages(messages, path);
+        clearSelection();
         await reloadMessages();
 
         if (success > 0) {
@@ -3938,6 +3956,19 @@ const stopVerticalResize = () => {
     }
   };
 
+  // Re-load selected message after PGP keys change (e.g., returning from Settings)
+  $effect(() => {
+    if (pgpReloadPending) {
+      pgpReloadPending = false;
+      const msg = source.state?.selectedMessage ? get(selectedMessage) : null;
+      if (msg) {
+        messageLoadInProgress = false;
+        activeMessageId = null;
+        loadMessage(msg);
+      }
+    }
+  });
+
   const pruneMessages = (ids = []) => {
     if (!Array.isArray(ids) || !ids.length) return;
     const currentMessages = source.state?.messages ? get(messagesStore) || [] : [];
@@ -4008,10 +4039,20 @@ const stopVerticalResize = () => {
   };
 
   // Handler for iframe link clicks
-  const handleIframeLinkClick = (url: string, isMailto: boolean) => {
+  const handleIframeLinkClick = async (url: string, isMailto: boolean) => {
     if (isMailto) {
       const parsed = parseMailto(url);
       mailboxView?.composeModal?.open?.(mailtoToPrefill(parsed));
+    } else if (isTauri) {
+      // Tauri: window.open doesn't open the system browser.
+      // Use the opener plugin to launch external URLs.
+      try {
+        const { openUrl } = await import('@tauri-apps/plugin-opener');
+        await openUrl(url);
+      } catch (err) {
+        console.warn('[Mailbox] Failed to open URL via Tauri opener:', err);
+        window.open(url, '_blank', 'noopener,noreferrer');
+      }
     } else {
       window.open(url, '_blank', 'noopener,noreferrer');
     }
@@ -4046,7 +4087,13 @@ const stopVerticalResize = () => {
       }
       if (link && link.href) {
         e.preventDefault();
-        window.open(link.href, '_blank', 'noopener,noreferrer');
+        if (isTauri) {
+          import('@tauri-apps/plugin-opener').then(({ openUrl }) => openUrl(link.href)).catch(() => {
+            window.open(link.href, '_blank', 'noopener,noreferrer');
+          });
+        } else {
+          window.open(link.href, '_blank', 'noopener,noreferrer');
+        }
       }
     };
 
@@ -4108,6 +4155,42 @@ const stopVerticalResize = () => {
       contextMenuConversation = null;
     };
     window.addEventListener('click', closeHandler, true);
+
+    // Tauri: intercept all external link clicks and open via system browser.
+    // WRY doesn't support target="_blank" — it tries to open a new webview
+    // and fails with DataCloneError on postMessage.
+    if (isTauri) {
+      const tauriLinkHandler = (e: MouseEvent) => {
+        const link = (e.target as HTMLElement)?.closest?.('a');
+        if (!link) return;
+        const href = link.href;
+        if (!href) return;
+        if (href.startsWith('http://') || href.startsWith('https://')) {
+          e.preventDefault();
+          e.stopPropagation();
+          import('@tauri-apps/plugin-opener')
+            .then(({ openUrl }) => openUrl(href))
+            .catch((err) => console.warn('[Mailbox] Failed to open URL:', err));
+        }
+      };
+      document.addEventListener('click', tauriLinkHandler, true);
+
+      // Listen for "New Message" from native menu bar / tray
+      import('@tauri-apps/api/event').then(({ listen }) => {
+        listen('menu:new-message', () => {
+          mailboxView?.composeModal?.open?.();
+        }).then((unlisten) => {
+          menuUnlisten = unlisten;
+        });
+
+        // Listen for "Check for New Mail" from tray
+        listen('menu:check-mail', () => {
+          reloadMessages();
+        }).then((unlisten) => {
+          checkMailUnlisten = unlisten;
+        });
+      });
+    }
 
     // Set up infinite scroll observer for mobile
     if (typeof window !== 'undefined' && 'IntersectionObserver' in window) {

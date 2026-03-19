@@ -899,7 +899,7 @@ export const settingsActions = {
 /**
  * Fetch labels from /v1/account (labels are part of settings)
  */
-export async function fetchLabels(includeHidden = false): Promise<Label[]> {
+export async function fetchLabels(includeHidden = false, { force = false } = {}): Promise<Label[]> {
   const account = Local.get('email') || 'default';
 
   try {
@@ -910,7 +910,7 @@ export async function fetchLabels(includeHidden = false): Promise<Label[]> {
     }
 
     // Fetch account data which includes settings.labels
-    const response = await fetchAccountData();
+    const response = await fetchAccountData({ force });
 
     const settingsData = extractSettingsFromAccount(response as AccountResponse);
     const labelArray = Array.isArray(settingsData.labels) ? settingsData.labels : [];

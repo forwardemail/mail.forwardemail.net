@@ -5,6 +5,11 @@ on:
   # push:
   #   tags:
   #     - 'v*'
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
   workflow_dispatch:
     inputs:
       tag:
@@ -142,8 +147,8 @@ jobs:
           WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
           WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
         with:
-          tagName: ${{ github.event.inputs.tag || github.ref_name }}
-          releaseName: 'Forward Email ${{ github.event.inputs.tag || github.ref_name }}'
+          tagName: v${{ inputs.version || github.event.inputs.tag || github.ref_name }}
+          releaseName: 'Forward Email v${{ inputs.version || github.event.inputs.tag || github.ref_name }}'
           releaseBody: |
             See the [CHANGELOG](https://github.com/forwardemail/mail.forwardemail.net/blob/main/CHANGELOG.md) for details.
 

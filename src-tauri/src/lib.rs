@@ -3,9 +3,17 @@ use tauri::{Emitter, Listener, Manager};
 
 #[cfg(desktop)]
 use tauri::{
-    menu::{Menu, MenuItem},
+    image::Image,
+    menu::{AboutMetadata, Menu, MenuItem, PredefinedMenuItem, Submenu},
     tray::TrayIconBuilder,
 };
+
+#[cfg(desktop)]
+use tauri_plugin_opener::OpenerExt;
+
+#[cfg(target_os = "macos")]
+#[macro_use]
+extern crate objc;
 
 // ── Payload types ────────────────────────────────────────────────────────────
 
@@ -49,9 +57,24 @@ fn set_badge_count(count: u32) -> Result<(), String> {
 
     #[cfg(target_os = "macos")]
     {
-        // macOS badge count via dock API.
-        // Tauri does not expose this directly yet; placeholder for Swift plugin.
-        let _ = count;
+        use objc::runtime::Object;
+
+        unsafe {
+            let app: *mut Object = msg_send![class!(NSApplication), sharedApplication];
+            let dock_tile: *mut Object = msg_send![app, dockTile];
+            let label = if count == 0 {
+                String::new()
+            } else {
+                count.to_string()
+            };
+            let c_label =
+                std::ffi::CString::new(label).unwrap_or_else(|_| std::ffi::CString::default());
+            let ns_string: *mut Object = msg_send![
+                class!(NSString),
+                stringWithUTF8String: c_label.as_ptr()
+            ];
+            let _: () = msg_send![dock_tile, setBadgeLabel: ns_string];
+        }
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -82,21 +105,48 @@ fn toggle_window_visibility(app: tauri::AppHandle) -> Result<(), String> {
 
 #[cfg(desktop)]
 fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
-    let show = MenuItem::with_id(app, "show", "Show Forward Email", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &quit])?;
+    let compose = MenuItem::with_id(app, "tray_compose", "Compose New Message", true, None::<&str>)?;
+    let check_mail = MenuItem::with_id(app, "tray_check_mail", "Check for New Mail", true, None::<&str>)?;
+    let sep1 = PredefinedMenuItem::separator(app)?;
+    let show_hide = MenuItem::with_id(app, "tray_show_hide", "Show/Hide Forward Email", true, None::<&str>)?;
+    let sep2 = PredefinedMenuItem::separator(app)?;
+    let quit = MenuItem::with_id(app, "tray_quit", "Quit Forward Email", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&compose, &check_mail, &sep1, &show_hide, &sep2, &quit])?;
+
+    let icon = Image::from_bytes(include_bytes!("../icons/32x32.png"))?;
 
     let _tray = TrayIconBuilder::new()
+        .icon(icon)
+        .icon_as_template(false)
         .menu(&menu)
+        .show_menu_on_left_click(true)
         .tooltip("Forward Email")
         .on_menu_event(move |app, event| match event.id.as_ref() {
-            "show" => {
+            "tray_compose" => {
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.show();
                     let _ = window.set_focus();
+                    let _ = window.emit("menu:new-message", ());
                 }
             }
-            "quit" => {
+            "tray_check_mail" => {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                    let _ = window.emit("menu:check-mail", ());
+                }
+            }
+            "tray_show_hide" => {
+                if let Some(window) = app.get_webview_window("main") {
+                    if window.is_visible().unwrap_or(false) {
+                        let _ = window.hide();
+                    } else {
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                    }
+                }
+            }
+            "tray_quit" => {
                 app.exit(0);
             }
             _ => {}
@@ -113,6 +163,97 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         .build(app)?;
 
     Ok(())
+}
+
+// ── Native Menu Bar ──────────────────────────────────────────────────────────
+
+#[cfg(desktop)]
+fn setup_menu(app: &tauri::App) -> Result<Menu<tauri::Wry>, Box<dyn std::error::Error>> {
+    // App menu (macOS shows this as the application menu)
+    let about_metadata = AboutMetadata {
+        version: Some(env!("CARGO_PKG_VERSION").to_string()),
+        authors: Some(vec!["Forward Email <support@forwardemail.net>".to_string()]),
+        website: Some("https://forwardemail.net".to_string()),
+        website_label: Some("forwardemail.net".to_string()),
+        license: Some("BUSL-1.1".to_string()),
+        ..Default::default()
+    };
+
+    let app_menu = Submenu::with_items(
+        app,
+        "Forward Email",
+        true,
+        &[
+            &PredefinedMenuItem::about(app, Some("About Forward Email"), Some(about_metadata))?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::services(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::hide(app, None)?,
+            &PredefinedMenuItem::hide_others(app, None)?,
+            &PredefinedMenuItem::show_all(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::quit(app, None)?,
+        ],
+    )?;
+
+    // File menu
+    let new_message =
+        MenuItem::with_id(app, "new_message", "New Message", true, Some("CmdOrCtrl+N"))?;
+    let file_menu = Submenu::with_items(
+        app,
+        "File",
+        true,
+        &[
+            &new_message,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::close_window(app, None)?,
+        ],
+    )?;
+
+    // Edit menu
+    let edit_menu = Submenu::with_items(
+        app,
+        "Edit",
+        true,
+        &[
+            &PredefinedMenuItem::undo(app, None)?,
+            &PredefinedMenuItem::redo(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::cut(app, None)?,
+            &PredefinedMenuItem::copy(app, None)?,
+            &PredefinedMenuItem::paste(app, None)?,
+            &PredefinedMenuItem::select_all(app, None)?,
+        ],
+    )?;
+
+    // View menu
+    let reload = MenuItem::with_id(app, "reload", "Reload", true, Some("CmdOrCtrl+R"))?;
+    let view_menu = Submenu::with_items(app, "View", true, &[&reload])?;
+
+    // Window menu
+    let window_menu = Submenu::with_items(
+        app,
+        "Window",
+        true,
+        &[
+            &PredefinedMenuItem::minimize(app, None)?,
+            &PredefinedMenuItem::maximize(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::close_window(app, None)?,
+        ],
+    )?;
+
+    // Help menu
+    let website = MenuItem::with_id(app, "website", "Forward Email Website", true, None::<&str>)?;
+    let support = MenuItem::with_id(app, "support", "Support", true, None::<&str>)?;
+    let help_menu = Submenu::with_items(app, "Help", true, &[&website, &support])?;
+
+    let menu = Menu::with_items(
+        app,
+        &[&app_menu, &file_menu, &edit_menu, &view_menu, &window_menu, &help_menu],
+    )?;
+
+    Ok(menu)
 }
 
 // ── Deep-link URL validation ─────────────────────────────────────────────────
@@ -156,7 +297,8 @@ pub fn run() {
                 );
             }))
             .plugin(tauri_plugin_window_state::Builder::new().build())
-            .plugin(tauri_plugin_updater::Builder::new().build());
+            .plugin(tauri_plugin_updater::Builder::new().build())
+            .plugin(tauri_plugin_global_shortcut::Builder::new().build());
     }
 
     builder
@@ -165,6 +307,9 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_log::Builder::new().build())
+        .plugin(tauri_plugin_os::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
         .invoke_handler(tauri::generate_handler![
             get_app_version,
             get_platform,
@@ -173,9 +318,55 @@ pub fn run() {
             toggle_window_visibility,
         ])
         .setup(|app| {
-            // Set up tray icon on desktop
+            // Set up native menu bar and tray icon on desktop
             #[cfg(desktop)]
-            setup_tray(app)?;
+            {
+                let menu = setup_menu(app)?;
+                app.set_menu(menu)?;
+
+                app.on_menu_event(|app, event| match event.id().as_ref() {
+                    "new_message" => {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.emit("menu:new-message", ());
+                        }
+                    }
+                    "reload" => {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.eval("window.location.reload()");
+                        }
+                    }
+                    "website" => {
+                        let _ = app.opener().open_url("https://forwardemail.net", None::<&str>);
+                    }
+                    "support" => {
+                        let _ = app.opener().open_url("https://forwardemail.net/help", None::<&str>);
+                    }
+                    _ => {}
+                });
+
+                setup_tray(app)?;
+
+                // Register global shortcut: Cmd+Shift+M (macOS) / Ctrl+Shift+M (others)
+                use tauri_plugin_global_shortcut::{
+                    Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState,
+                };
+
+                #[cfg(target_os = "macos")]
+                let modifiers = Modifiers::SUPER | Modifiers::SHIFT;
+                #[cfg(not(target_os = "macos"))]
+                let modifiers = Modifiers::CONTROL | Modifiers::SHIFT;
+
+                let shortcut = Shortcut::new(Some(modifiers), Code::KeyM);
+                let handle = app.handle().clone();
+                app.global_shortcut().on_shortcut(shortcut, move |_app, _shortcut, event| {
+                    if event.state == ShortcutState::Pressed {
+                        if let Some(window) = handle.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    }
+                })?;
+            }
 
             // Register deep-link handler with URL validation
             let handle = app.handle().clone();

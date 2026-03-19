@@ -27,9 +27,17 @@
     "process:allow-exit",
     "process:allow-restart",
 
-    "opener:allow-open-url",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [{ "url": "https://*" }, { "url": "http://*" }]
+    },
 
-    "log:allow-log"
+    "log:allow-log",
+    "os:default",
+    "dialog:allow-save",
+    "fs:allow-write-file",
+    "opener:allow-open-path",
+    "global-shortcut:allow-is-registered"
   ],
   "platforms": ["linux", "macOS", "windows", "android", "iOS"]
 }

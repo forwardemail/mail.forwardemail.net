@@ -19,6 +19,7 @@ import {
   extractTextContent,
 } from '../utils/mime-utils.js';
 import { getCachedAttachmentBlob, cacheAttachmentBlob } from '../utils/attachment-cache.js';
+import { isTauri } from '../utils/platform.js';
 import type { Message, Attachment, PerfTracer, PgpKey } from '../types';
 import { warn } from '../utils/logger.ts';
 
@@ -115,8 +116,14 @@ function isPgpEncrypted(raw: string): boolean {
   return false;
 }
 
-// Trigger file download via temporary anchor element
+// Trigger file download — uses native save dialog on Tauri, anchor trick on web
 function triggerDownload(href: string, filename: string): void {
+  if (isTauri) {
+    triggerDownloadTauri(href, filename).catch((err) => {
+      console.warn('[mailService] Tauri save failed:', err);
+    });
+    return;
+  }
   const a = document.createElement('a');
   a.href = href;
   a.download = filename;
@@ -124,6 +131,37 @@ function triggerDownload(href: string, filename: string): void {
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
+}
+
+async function triggerDownloadTauri(href: string, filename: string): Promise<void> {
+  const { save } = await import('@tauri-apps/plugin-dialog');
+  const { writeFile } = await import('@tauri-apps/plugin-fs');
+
+  // Show native save dialog first (small IPC call)
+  const filePath = await save({ defaultPath: filename });
+  if (!filePath) return; // User cancelled
+
+  // Convert href to binary data
+  let data: Uint8Array;
+  if (href.startsWith('data:')) {
+    const match = href.match(/^data:[^;]+;base64,(.+)$/);
+    if (match) {
+      const binary = atob(match[1]);
+      data = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) {
+        data[i] = binary.charCodeAt(i);
+      }
+    } else {
+      const response = await fetch(href);
+      data = new Uint8Array(await response.arrayBuffer());
+    }
+  } else {
+    const response = await fetch(href);
+    data = new Uint8Array(await response.arrayBuffer());
+  }
+
+  // Write to user-selected path via fs plugin (binary IPC, no JSON serialization)
+  await writeFile(filePath, data);
 }
 
 function isCachedBodyComplete(cached: CachedBody | undefined): boolean {
@@ -229,6 +267,13 @@ export const setPassphraseModal = (modal: PassphraseModalRef): void => {
 };
 
 /**
+ * Monotonic counter incremented when PGP keys change.
+ * Mailbox watches this to re-load the selected message after returning from Settings.
+ */
+let _pgpKeysVersion = 0;
+export const getPgpKeysVersion = (): number => _pgpKeysVersion;
+
+/**
  * Clear PGP key caches when keys are updated in settings
  * This ensures fresh checks for passphrase requirements
  */
@@ -237,6 +282,7 @@ export const clearPgpKeyCache = (): void => {
   keyNeedsPassphraseCache.clear();
   missingKeyModalShownByAccount.clear();
   recentCacheHits.clear(); // Allow immediate re-evaluation after key changes
+  _pgpKeysVersion++;
 };
 
 /**

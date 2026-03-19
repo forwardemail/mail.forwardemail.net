@@ -2253,14 +2253,15 @@ $effect(() => {
                   </div>
                 {/if}
               </div>
-              <select
-                class="h-9 border border-input bg-background px-3 text-sm"
-                bind:value={newEvent.startMeridiem}
-                onchange={handleStartTimeChange}
-              >
-                <option>AM</option>
-                <option>PM</option>
-              </select>
+              <Select.Root type="single" bind:value={newEvent.startMeridiem} onValueChange={() => handleStartTimeChange()}>
+                <Select.Trigger size="default" class="h-9 w-[70px]">
+                  {newEvent.startMeridiem || 'AM'}
+                </Select.Trigger>
+                <Select.Content>
+                  <Select.Item value="AM">AM</Select.Item>
+                  <Select.Item value="PM">PM</Select.Item>
+                </Select.Content>
+              </Select.Root>
             </div>
           </div>
           <div class="space-y-2">
@@ -2301,14 +2302,15 @@ $effect(() => {
                   </div>
                 {/if}
               </div>
-              <select
-                class="h-9 border border-input bg-background px-3 text-sm"
-                bind:value={newEvent.endMeridiem}
-                onchange={handleEndTimeChange}
-              >
-                <option>AM</option>
-                <option>PM</option>
-              </select>
+              <Select.Root type="single" bind:value={newEvent.endMeridiem} onValueChange={() => handleEndTimeChange()}>
+                <Select.Trigger size="default" class="h-9 w-[70px]">
+                  {newEvent.endMeridiem || 'AM'}
+                </Select.Trigger>
+                <Select.Content>
+                  <Select.Item value="AM">AM</Select.Item>
+                  <Select.Item value="PM">PM</Select.Item>
+                </Select.Content>
+              </Select.Root>
             </div>
           </div>
         </div>
@@ -2453,10 +2455,15 @@ $effect(() => {
                 </div>
               {/if}
             </div>
-            <select class="h-9 border border-input bg-background px-3 text-sm" bind:value={editEvent.startMeridiem}>
-              <option>AM</option>
-              <option>PM</option>
-            </select>
+            <Select.Root type="single" bind:value={editEvent.startMeridiem}>
+              <Select.Trigger size="default" class="h-9 w-[70px]">
+                {editEvent.startMeridiem || 'AM'}
+              </Select.Trigger>
+              <Select.Content>
+                <Select.Item value="AM">AM</Select.Item>
+                <Select.Item value="PM">PM</Select.Item>
+              </Select.Content>
+            </Select.Root>
           </div>
         </div>
         <div class="space-y-2">
@@ -2495,10 +2502,15 @@ $effect(() => {
                 </div>
               {/if}
             </div>
-            <select class="h-9 border border-input bg-background px-3 text-sm" bind:value={editEvent.endMeridiem}>
-              <option>AM</option>
-              <option>PM</option>
-            </select>
+            <Select.Root type="single" bind:value={editEvent.endMeridiem}>
+              <Select.Trigger size="default" class="h-9 w-[70px]">
+                {editEvent.endMeridiem || 'AM'}
+              </Select.Trigger>
+              <Select.Content>
+                <Select.Item value="AM">AM</Select.Item>
+                <Select.Item value="PM">PM</Select.Item>
+              </Select.Content>
+            </Select.Root>
           </div>
         </div>
       </div>

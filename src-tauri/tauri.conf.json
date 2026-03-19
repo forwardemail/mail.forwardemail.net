@@ -34,11 +34,6 @@
           "dir": "./isolation"
         }
       }
-    },
-    "trayIcon": {
-      "iconPath": "icons/icon.png",
-      "iconAsTemplate": true,
-      "tooltip": "Forward Email"
     }
   },
   "bundle": {

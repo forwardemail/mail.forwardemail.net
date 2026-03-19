@@ -256,15 +256,15 @@
     success = 'Passkey removed';
   }
 
-  function handleTimeoutChange(event) {
-    const value = Number(event.target.value);
+  function handleTimeoutChange(val) {
+    const value = Number(val);
     prefs = { ...prefs, timeoutMs: value };
     setLockPrefs(prefs);
     notifyTimerPrefsChanged();
   }
 
-  function handlePinLengthChange(event) {
-    const value = Number(event.target.value);
+  function handlePinLengthChange(val) {
+    const value = Number(val);
     prefs = { ...prefs, pinLength: value };
     setLockPrefs(prefs);
   }
@@ -309,16 +309,16 @@
         <div class="space-y-3 rounded-md border border-border p-4">
           <div class="space-y-1">
             <Label for="pin-length">PIN Length</Label>
-            <select
-              id="pin-length"
-              class="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              onchange={handlePinLengthChange}
-              value={prefs.pinLength || 6}
-            >
-              {#each PIN_LENGTH_OPTIONS as len}
-                <option value={len}>{len} digits</option>
-              {/each}
-            </select>
+            <Select.Root type="single" value={String(prefs.pinLength || 6)} onValueChange={handlePinLengthChange}>
+              <Select.Trigger class="flex h-9 w-full rounded-md">
+                {(prefs.pinLength || 6)} digits
+              </Select.Trigger>
+              <Select.Content>
+                {#each PIN_LENGTH_OPTIONS as len}
+                  <Select.Item value={String(len)}>{len} digits</Select.Item>
+                {/each}
+              </Select.Content>
+            </Select.Root>
           </div>
 
           <div class="space-y-1">
@@ -373,16 +373,16 @@
       <!-- Inactivity timeout -->
       <div class="space-y-1">
         <Label for="timeout">Auto-lock after inactivity</Label>
-        <select
-          id="timeout"
-          class="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-          onchange={handleTimeoutChange}
-          value={prefs.timeoutMs}
-        >
-          {#each TIMEOUT_OPTIONS as opt}
-            <option value={opt.value}>{opt.label}</option>
-          {/each}
-        </select>
+        <Select.Root type="single" value={String(prefs.timeoutMs)} onValueChange={handleTimeoutChange}>
+          <Select.Trigger class="flex h-9 w-full rounded-md">
+            {TIMEOUT_OPTIONS.find(o => o.value === prefs.timeoutMs)?.label || 'Select timeout'}
+          </Select.Trigger>
+          <Select.Content>
+            {#each TIMEOUT_OPTIONS as opt}
+              <Select.Item value={String(opt.value)}>{opt.label}</Select.Item>
+            {/each}
+          </Select.Content>
+        </Select.Root>
       </div>
 
       <!-- Lock on minimize -->

@@ -567,6 +567,14 @@ const createMailboxStore = () => {
       });
 
       folders.set(updatedFolders);
+
+      // Sync badge count to INBOX unread count
+      const inbox = updatedFolders.find((f) => f.path?.toUpperCase?.() === 'INBOX');
+      if (inbox && typeof inbox.count === 'number') {
+        import('../utils/notification-manager.js')
+          .then(({ setBadgeCount }) => setBadgeCount(inbox.count))
+          .catch(() => {});
+      }
     } catch (err) {
       warn('[mailboxStore] Failed to update folder unread counts', err);
     }
@@ -1280,8 +1288,14 @@ const createMailboxStore = () => {
     if (data?.taskType !== 'metadata' || !data?.folder) return;
     const account = data.account || Local.get('email') || 'default';
     if ((Local.get('email') || 'default') !== account) return;
+
+    // Always update sidebar unread counts after metadata sync, even if the
+    // user is viewing a different folder.  This keeps badge and folder counts
+    // accurate for shared-inbox scenarios where another client changes flags.
+    updateFolderUnreadCounts();
+
     if (get(selectedFolder) !== data.folder) return;
-    // Always refresh on metadata sync completion to catch deletions/moves
+    // Refresh the message list to catch deletions/moves
     // that may have happened on server or in another session
     scheduleSyncRefresh(data.folder, account);
   });
