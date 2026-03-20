@@ -22,7 +22,6 @@ env:
   CARGO_INCREMENTAL: 0
   RUST_BACKTRACE: short
   NODE_VERSION: '22'
-  PNPM_VERSION: '9'
 
 jobs:
   # Supply chain audit job — runs before builds
@@ -40,8 +39,6 @@ jobs:
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
-        with:
-          version: ${{ env.PNPM_VERSION }}
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -116,8 +113,6 @@ jobs:
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
-        with:
-          version: ${{ env.PNPM_VERSION }}
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile

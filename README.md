@@ -56,6 +56,8 @@ Detailed architecture documentation is available in the `docs/` directory:
 - [Search](docs/building-webmail-search.md) — FlexSearch setup and query parsing
 - [Service Worker](docs/building-webmail-service-worker.md) — Asset caching strategy
 - [DB Schema & Recovery](docs/building-webmail-db-schema-recovery.md) — Database management
+- [Desktop Build CI](docs/desktop-build-ci.md) — How the desktop build is triggered and tested
+- [Desktop Contributing](docs/desktop-contributing.md) — Desktop architecture and IPC patterns
 
 ## Project Structure
 
@@ -232,9 +234,11 @@ graph TB
 
 ### CI/CD Pipeline
 
-CI and deployment are handled by two separate GitHub Actions workflows:
+CI and deployment are handled by separate GitHub Actions workflows for web and desktop:
 
-**CI** (`.github/workflows/ci.yml`) — runs on every push to `main` and on pull requests:
+**Desktop Build** (`.github/workflows/build-desktop.yml`) — See [Desktop Build CI guide](docs/desktop-build-ci.md) for contributor details.
+
+**Web CI** (`.github/workflows/ci.yml`) — runs on every push to `main` and on pull requests:
 
 1. **Install** — `pnpm install --frozen-lockfile`
 2. **Lint** — `pnpm lint`
