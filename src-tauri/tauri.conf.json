@@ -91,7 +91,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IERGQjFEOEEzRjRGNTNDODUKUldTRlBQWDBvOWl4MzEzcGl5Uk9IdUc5UnpjVmVBVFFhQndXdHFnQ2lxSXdVKzZ6aGFWbktxZFgK",
+      "pubkey": "",
       "endpoints": [
         "https://github.com/forwardemail/mail.forwardemail.net/releases/latest/download/latest.json"
       ],

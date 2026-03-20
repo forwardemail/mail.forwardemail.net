@@ -29,7 +29,6 @@ env:
   CARGO_INCREMENTAL: 0
   RUST_BACKTRACE: short
   NODE_VERSION: '22'
-  PNPM_VERSION: '9'
 
 jobs:
   # Pre-release audit
@@ -56,8 +55,6 @@ jobs:
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
-        with:
-          version: ${{ env.PNPM_VERSION }}
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -123,11 +120,13 @@ jobs:
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
-        with:
-          version: ${{ env.PNPM_VERSION }}
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Set updater public key
+        run: |
+          jq '.plugins.updater.pubkey = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IERGQjFEOEEzRjRGNTNDODUKUldTRlBQWDBvOWl4MzEzcGl5Uk9IdUc5UnpjVmVBVFFhQndXdHFnQ2lxSXdVKzZ6aGFWbktxZFgK"' src-tauri/tauri.conf.json > src-tauri/tauri.conf.json.tmp && mv src-tauri/tauri.conf.json.tmp src-tauri/tauri.conf.json
 
       - name: Build and release Tauri app
         uses: tauri-apps/tauri-action@v0
