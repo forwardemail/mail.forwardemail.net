@@ -1178,11 +1178,16 @@ const fetchEventsForCalendar = async (requestId: number, accountKey: string, cal
       updatedAt: Date.now(),
     });
   } catch (err) {
-    if (attempt < 3) {
+    // Don't retry client errors (4xx) — they won't succeed on retry
+    const status = (err as { status?: number })?.status || (err as { statusCode?: number })?.statusCode;
+    const isClientError = typeof status === 'number' && status >= 400 && status < 500;
+    if (!isClientError && attempt < 3) {
       return fetchEventsForCalendar(requestId, accountKey, calendarId, attempt + 1);
     }
     if (requestId !== loadRequestId) return;
-    setError((err as Error)?.message || 'Unable to load events.');
+    if (!isClientError) {
+      setError((err as Error)?.message || 'Unable to load events.');
+    }
     const cached = await db.meta.get(getEventsCacheKey(accountKey, calendarId));
     if (requestId !== loadRequestId) return;
     if (cached?.value) {
@@ -1247,44 +1252,38 @@ const fetchCalendars = async (attempt = 1): Promise<void> => {
     const res = await Remote.request('Calendars', { limit: 50 });
     if (requestId !== loadRequestId) return;
     const list = Array.isArray(res) ? res : (res as Record<string, unknown>)?.Result || (res as Record<string, unknown>)?.calendars || [];
-    const finalList =
-      list && (list as unknown[]).length
-        ? list
-        : [
-            {
-              id: 'default',
-              calendar_id: 'default',
-              name: 'My Calendar',
-              displayName: 'My Calendar',
-            },
-          ];
-    calendars = finalList as unknown[];
+    const finalList = Array.isArray(list) ? (list as unknown[]) : [];
+    calendars = finalList;
     await db.meta.put({ key: calendarsCacheKey, value: finalList, updatedAt: Date.now() });
     if (requestId !== loadRequestId) return;
+    if (!finalList.length) {
+      // No calendars exist on the server — show empty state, don't fetch events
+      // for a non-existent 'default' calendar (which causes 400 errors).
+      events = [];
+      allEvents = [];
+      return;
+    }
     const prefsSnapshot = selectedCalendarIds.length
       ? { selectedIds: selectedCalendarIds, activeId: activeCalendarId }
       : storedPrefs;
-    const { selectedIds, activeId } = reconcileCalendarSelection(finalList as unknown[], prefsSnapshot);
+    const { selectedIds, activeId } = reconcileCalendarSelection(finalList, prefsSnapshot);
     await persistCalendarPrefs(accountKey, selectedIds);
     if (requestId !== loadRequestId) return;
     await loadEventsForSelection(true);
   } catch (err) {
-    if (attempt < 3) {
+    const status = (err as { status?: number })?.status || (err as { statusCode?: number })?.statusCode;
+    const isClientError = typeof status === 'number' && status >= 400 && status < 500;
+    if (!isClientError && attempt < 3) {
       return fetchCalendars(attempt + 1);
     }
-    setError((err as Error)?.message || 'Unable to load calendars.');
+    if (!isClientError) {
+      setError((err as Error)?.message || 'Unable to load calendars.');
+    }
+    // Don't create a fake 'default' calendar — it doesn't exist on the server
+    // and fetching events for it causes 400 errors. Show empty state instead.
     if (!calendars.length) {
-      calendars = [
-        {
-          id: 'default',
-          calendar_id: 'default',
-          name: 'My Calendar',
-          displayName: 'My Calendar',
-        },
-      ];
-      const { selectedIds, activeId } = reconcileCalendarSelection(calendars, storedPrefs);
-      await persistCalendarPrefs(accountKey, selectedIds);
-      await loadEventsForSelection(true);
+      events = [];
+      allEvents = [];
     }
   }
 };

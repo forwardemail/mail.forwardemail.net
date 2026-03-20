@@ -299,6 +299,18 @@ export function mergeFlagsAndMetadata(
     changed = true;
   }
 
+  // Merge labels — the API is the source of truth for cross-client sync
+  if (Array.isArray(incoming.labels)) {
+    const existingLabels = Array.isArray(existing.labels) ? existing.labels : [];
+    const incomingLabels = incoming.labels.filter(
+      (l): l is string => typeof l === 'string' && l.length > 0,
+    );
+    if (JSON.stringify(incomingLabels) !== JSON.stringify(existingLabels)) {
+      next.labels = incomingLabels;
+      changed = true;
+    }
+  }
+
   if (changed) {
     next.updatedAt = Date.now();
   }

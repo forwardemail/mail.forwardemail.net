@@ -21,6 +21,7 @@
     "notification:allow-request-permission",
     "notification:allow-notify",
     "notification:allow-create-channel",
+    "notification:allow-register-action-types",
 
     "deep-link:default",
 

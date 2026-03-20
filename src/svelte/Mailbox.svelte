@@ -4148,6 +4148,8 @@ const stopVerticalResize = () => {
       searchStore?.actions?.refreshSavedSearches?.();
     });
     const closeHandler = (e) => {
+      // macOS Ctrl+Click fires both contextmenu and click — ignore the click
+      if (e?.ctrlKey) return;
       if (e?.target?.closest?.('[data-context-menu]')) return;
       contextMenuVisible = false;
       contextMoveOpen = false;
@@ -5780,7 +5782,7 @@ const stopVerticalResize = () => {
         {/if}
       {:else if $selectedMessage}
         {#if isProductivityLayout || $mobileReader}
-          <div class="sticky top-0 z-10 bg-background flex items-center gap-2 p-2 border-b border-border">
+          <div class="sticky top-0 z-20 bg-background flex items-center gap-2 p-2 border-b border-border">
             <button
               class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
               type="button"

@@ -23,6 +23,8 @@ import { isTauri } from './platform.js';
 import { notify, requestPermission } from './notification-bridge.js';
 import { setBadgeCount as tauriBadge } from './tauri-bridge.js';
 import { updateFaviconBadge } from './favicon-badge.js';
+import { Remote } from './remote.js';
+import { extractFromField } from './sync-helpers.ts';
 
 // ── Input sanitisation ──────────────────────────────────────────────────────
 
@@ -41,6 +43,62 @@ function sanitize(value, maxLen) {
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
   );
+}
+
+/**
+ * Plain-text sanitisation for native (Tauri) notifications.
+ * Strips control chars but does NOT HTML-encode — native notifications are plain text.
+ */
+function sanitizePlain(value, maxLen) {
+  if (typeof value !== 'string') return '';
+  return (
+    value
+      .slice(0, maxLen)
+      // eslint-disable-next-line no-control-regex
+      .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')
+  );
+}
+
+/**
+ * Extract just the display name from a "Name <email>" string.
+ * Returns the name only, or the email if no name part exists.
+ */
+function extractDisplayName(fromStr) {
+  if (typeof fromStr !== 'string') return '';
+  const trimmed = fromStr.trim();
+  const angleBracket = trimmed.indexOf('<');
+  if (angleBracket > 0) {
+    const name = trimmed
+      .slice(0, angleBracket)
+      .trim()
+      .replace(/^["']|["']$/g, '');
+    if (name) return name;
+  }
+  if (trimmed.startsWith('<') && trimmed.endsWith('>')) {
+    return trimmed.slice(1, -1);
+  }
+  return trimmed;
+}
+
+/**
+ * Parse From and Subject from a raw EML string's headers.
+ * Only reads the header block (before the first blank line).
+ */
+function parseEmlHeaders(eml) {
+  if (typeof eml !== 'string') return {};
+  const headerEnd = eml.indexOf('\r\n\r\n');
+  const headerBlock = headerEnd > 0 ? eml.slice(0, headerEnd) : eml.slice(0, 4096);
+  // Unfold continuation lines (lines starting with whitespace)
+  const unfolded = headerBlock.replace(/\r\n[ \t]+/g, ' ');
+  const result = {};
+  for (const line of unfolded.split('\r\n')) {
+    const match = line.match(/^(From|Subject):\s*(.+)/i);
+    if (match) {
+      const key = match[1].toLowerCase();
+      if (!result[key]) result[key] = match[2].trim();
+    }
+  }
+  return result;
 }
 
 // Allowed prefixes for notification data.path
@@ -190,29 +248,59 @@ export async function initBadgeFromStore() {
 
 // ── Event -> Notification Mapping ───────────────────────────────────────────
 
-function handleNewMessage(data) {
+async function handleNewMessage(data) {
   if (!data || typeof data !== 'object') return;
 
-  const from = sanitize(
-    data.message?.from?.text ||
-      data.message?.from?.address ||
-      data.message?.from ||
-      'Unknown sender',
-    MAX_TITLE_LEN,
-  );
-  const subject = sanitize(data.message?.subject || '(No subject)', MAX_BODY_LEN);
-  const uid = data.message?.uid || data.message?.id;
+  incrementBadge(1);
+
+  const msg = data.message || data;
+  const uid = msg.uid || msg.id;
+  const mailbox = msg.mailbox || 'INBOX';
+
+  let from =
+    msg.from?.text ||
+    msg.from?.name ||
+    msg.from?.address ||
+    (typeof msg.from === 'string' ? msg.from : null);
+  let subject = msg.subject || msg.Subject;
+
+  // WS payload includes raw EML — parse From/Subject directly from headers
+  if (!from && typeof msg.eml === 'string') {
+    const headers = parseEmlHeaders(msg.eml);
+    from = headers.from || null;
+    subject = subject || headers.subject;
+  }
+
+  // Fallback: fetch from API if we still don't have sender info
+  if (!from) {
+    try {
+      const res = await Remote.request(
+        'MessageList',
+        { folder: mailbox, page: 1, limit: 1 },
+        { method: 'GET', pathOverride: '/v1/messages' },
+      );
+      const list = res?.Result?.List || res?.Result || res || [];
+      const latest = Array.isArray(list) ? list[0] : null;
+      if (latest) {
+        from = extractFromField(latest) || null;
+        subject = subject || latest.subject || latest.Subject;
+      }
+    } catch {
+      // API fetch failed — show notification with whatever we have
+    }
+  }
+
+  const displayName = sanitizePlain(extractDisplayName(from) || 'Unknown sender', MAX_TITLE_LEN);
+  const safeSubject = sanitizePlain(subject || '(No subject)', MAX_BODY_LEN);
   const safeTag = sanitize(`new-message-${uid || Date.now()}`, MAX_TAG_LEN);
 
   showNotification({
-    title: `New email from ${from}`,
-    body: subject,
+    title: `New email from ${displayName}`,
+    body: safeSubject,
     tag: safeTag,
     channelId: 'new-mail',
     data: { path: sanitizePath(`#inbox/${uid}`), uid },
   });
-
-  incrementBadge(1);
 }
 
 function handleFlagsUpdated(data) {

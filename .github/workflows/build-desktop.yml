@@ -1,22 +1,13 @@
 name: Build Desktop (Tauri)
 
 on:
-  # Disabled automatic triggers until desktop CI is ready.
-  # Re-enable push/pull_request triggers when Tauri desktop builds are set up.
-  # push:
-  #   branches: [main, develop]
-  #   paths:
-  #     - 'src-tauri/**'
-  #     - 'src/**'
-  #     - 'package.json'
-  #     - 'pnpm-lock.yaml'
-  # pull_request:
-  #   branches: [main]
-  #   paths:
-  #     - 'src-tauri/**'
-  #     - 'src/**'
-  #     - 'package.json'
-  #     - 'pnpm-lock.yaml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src-tauri/**'
+      - 'src/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
   workflow_dispatch:
 
 # Minimal permissions — only what's needed for CI builds

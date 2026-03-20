@@ -44,6 +44,35 @@ function sanitize(value, maxLen) {
 // Allowed Android notification channel IDs
 const ALLOWED_CHANNEL_IDS = new Set(['new-mail', 'sync-status']);
 
+// ── Notification click tracking ─────────────────────────────────────────────
+//
+// On macOS, the Tauri notification plugin routes dev-mode notifications through
+// com.apple.Terminal (so that unbundled apps can send notifications at all).
+// This means onAction callbacks never fire in dev.  In production builds the
+// app's real bundle ID is used and clicks activate the correct app.
+//
+// Strategy:
+//   1. Register an onAction handler (works in production + mobile).
+//   2. Fallback: track the most recent notification and navigate when the
+//      native window gains focus within a short time window.
+
+let _lastNotificationData = null;
+let _lastNotificationTime = 0;
+const NOTIFICATION_CLICK_WINDOW_MS = 10_000;
+
+function trackNotification(data) {
+  if (!data) return;
+  _lastNotificationData = data;
+  _lastNotificationTime = Date.now();
+}
+
+function navigateToNotification(data) {
+  const path = data?.path;
+  if (path && typeof path === 'string') {
+    window.location.hash = path.startsWith('#') ? path.slice(1) : path;
+  }
+}
+
 // ── Public API ──────────────────────────────────────────────────────────────
 
 /**
@@ -82,7 +111,7 @@ export async function notify({ title, body, icon, tag, data, channelId }) {
 
   if (isTauri) {
     const safeChannel = channelId && ALLOWED_CHANNEL_IDS.has(channelId) ? channelId : undefined;
-    return _notifyTauri({ title: safeTitle, body: safeBody, channelId: safeChannel });
+    return _notifyTauri({ title: safeTitle, body: safeBody, channelId: safeChannel, data });
   }
 
   return _notifyWeb({ title: safeTitle, body: safeBody, icon, tag: safeTag, data });
@@ -119,6 +148,62 @@ export async function initNotificationChannels() {
   }
 }
 
+/**
+ * Register click handling for Tauri notifications.
+ * Call once during app bootstrap.
+ */
+export async function initTauriNotificationClickHandler() {
+  if (!isTauri) return;
+  const mod = await ensureTauriNotification();
+
+  // Strategy 1: plugin onAction callback (production builds + mobile)
+  if (mod) {
+    try {
+      if (mod.registerActionTypes) {
+        await mod.registerActionTypes([
+          {
+            id: 'default-mail',
+            actions: [{ id: 'open', title: 'Open', foreground: true }],
+          },
+        ]);
+      }
+    } catch {
+      /* ignore */
+    }
+
+    try {
+      if (mod.onAction) {
+        await mod.onAction((event) => {
+          const extra = event?.extra || event?.notification?.extra || event?.data;
+          navigateToNotification(extra);
+          _lastNotificationData = null; // prevent focus fallback double-fire
+        });
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // Strategy 2: focus-based fallback
+  // When macOS activates the app after a notification click, the Tauri
+  // window gains focus.  If it happens within the click window, navigate.
+  try {
+    const { getCurrentWindow } = await import('@tauri-apps/api/window');
+    const win = getCurrentWindow();
+    await win.onFocusChanged(({ payload: focused }) => {
+      if (!focused || !_lastNotificationData) return;
+      if (Date.now() - _lastNotificationTime > NOTIFICATION_CLICK_WINDOW_MS) {
+        _lastNotificationData = null;
+        return;
+      }
+      navigateToNotification(_lastNotificationData);
+      _lastNotificationData = null;
+    });
+  } catch {
+    /* ignore */
+  }
+}
+
 // ── Tauri implementation ────────────────────────────────────────────────────
 
 async function _requestTauriPermission() {
@@ -134,15 +219,23 @@ async function _requestTauriPermission() {
   }
 }
 
-async function _notifyTauri({ title, body, channelId }) {
+async function _notifyTauri({ title, body, channelId, data }) {
   const mod = await ensureTauriNotification();
   if (!mod) return;
   try {
     const granted = await mod.isPermissionGranted();
     if (!granted) return;
-    const payload = { title, body: body || '' };
+    const payload = { title, body: body || '', actionTypeId: 'default-mail' };
     if (channelId) payload.channelId = channelId;
+    if (data && typeof data === 'object') {
+      const extra = {};
+      if (data.path) extra.path = String(data.path);
+      if (data.uid) extra.uid = String(data.uid);
+      if (data.url) extra.url = String(data.url);
+      if (Object.keys(extra).length) payload.extra = extra;
+    }
     mod.sendNotification(payload);
+    if (data) trackNotification(data);
   } catch (err) {
     console.warn('[notification-bridge] Tauri notification failed:', err);
   }

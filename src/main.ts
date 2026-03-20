@@ -1368,8 +1368,11 @@ async function bootstrap() {
     if (isTauri) {
       import('./utils/tauri-bridge.js').then(({ initTauriBridge }) => initTauriBridge());
       import('./utils/updater-bridge.js').then(({ initAutoUpdater }) => initAutoUpdater());
-      import('./utils/notification-bridge.js').then(({ initNotificationChannels }) =>
-        initNotificationChannels(),
+      import('./utils/notification-bridge.js').then(
+        ({ initNotificationChannels, initTauriNotificationClickHandler }) => {
+          initNotificationChannels();
+          initTauriNotificationClickHandler();
+        },
       );
     }
 
