@@ -2909,7 +2909,7 @@
               </Tooltip.Root>
               {#if showEmoji}
                 <div class="fixed z-[100] shadow-lg overflow-hidden border border-border" bind:this={emojiPickerRef}>
-                  <emoji-picker use:bindEmojiPicker></emoji-picker>
+                  <emoji-picker data-source="/emoji-data.json" use:bindEmojiPicker></emoji-picker>
                 </div>
               {/if}
             </div>
