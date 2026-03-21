@@ -106,7 +106,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev \
-            libappindicator3-dev \
             librsvg2-dev \
             patchelf \
             libssl-dev \
@@ -124,9 +123,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Set updater public key
+      - name: Set updater signing config
         run: |
-          jq '.plugins.updater.pubkey = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IERGQjFEOEEzRjRGNTNDODUKUldTRlBQWDBvOWl4MzEzcGl5Uk9IdUc5UnpjVmVBVFFhQndXdHFnQ2lxSXdVKzZ6aGFWbktxZFgK"' src-tauri/tauri.conf.json > src-tauri/tauri.conf.json.tmp && mv src-tauri/tauri.conf.json.tmp src-tauri/tauri.conf.json
+          jq '.plugins.updater.pubkey = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IERGQjFEOEEzRjRGNTNDODUKUldTRlBQWDBvOWl4MzEzcGl5Uk9IdUc5UnpjVmVBVFFhQndXdHFnQ2lxSXdVKzZ6aGFWbktxZFgK" | .bundle.createUpdaterArtifacts = true' src-tauri/tauri.conf.json > src-tauri/tauri.conf.json.tmp && mv src-tauri/tauri.conf.json.tmp src-tauri/tauri.conf.json
 
       - name: Build and release Tauri app
         uses: tauri-apps/tauri-action@v0

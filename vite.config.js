@@ -31,30 +31,35 @@ const APP_VERSION = `${pkg.version}-${BUILD_HASH}`;
 // We locate it once at config time and redirect the import via a plugin.
 function findLibsodiumCorePath() {
   try {
-    // The libsodium package is a dependency of libsodium-wrappers.
-    // In pnpm it lives under its own .pnpm directory.
+    // Resolve the libsodium core package directly — works cross-platform
+    // and across pnpm's strict layout without shelling out to `find`.
+    const corePath = require.resolve('libsodium');
+    // corePath points to the CJS entry; find the ESM sibling
+    const coreDir = path.dirname(corePath);
+    const esmPath = path.join(coreDir, '..', 'modules-esm', 'libsodium.mjs');
+    if (fs.existsSync(esmPath)) return esmPath;
+
+    // Fallback: walk up from the wrappers entry to the pnpm store
     const wrappersEntry = require.resolve('libsodium-wrappers');
-    // Walk up from the wrappers entry to find the pnpm virtual store
-    const pnpmStore = wrappersEntry.split('node_modules/.pnpm/')[0] + 'node_modules/.pnpm/';
-    // Find the libsodium ESM file
-    const candidates = [
-      path.join(
-        pnpmStore,
-        'libsodium@0.7.16/node_modules/libsodium/dist/modules-esm/libsodium.mjs',
-      ),
-    ];
-    for (const candidate of candidates) {
-      if (fs.existsSync(candidate)) return candidate;
+    const normalized = wrappersEntry.split(path.sep).join('/');
+    const storeIdx = normalized.indexOf('node_modules/.pnpm/');
+    if (storeIdx !== -1) {
+      const pnpmStore = wrappersEntry.substring(0, storeIdx + 'node_modules/.pnpm/'.length);
+      // Search for any libsodium version in the store
+      const entries = fs.readdirSync(pnpmStore).filter((e) => e.startsWith('libsodium@'));
+      for (const entry of entries) {
+        const candidate = path.join(
+          pnpmStore,
+          entry,
+          'node_modules',
+          'libsodium',
+          'dist',
+          'modules-esm',
+          'libsodium.mjs',
+        );
+        if (fs.existsSync(candidate)) return candidate;
+      }
     }
-    // Fallback: search for it
-    const { execSync } = require('child_process');
-    const found = execSync(
-      `find ${pnpmStore} -name "libsodium.mjs" -path "*/libsodium/*" 2>/dev/null`,
-      { encoding: 'utf8' },
-    )
-      .trim()
-      .split('\n')[0];
-    if (found && fs.existsSync(found)) return found;
   } catch {
     // ignore
   }
