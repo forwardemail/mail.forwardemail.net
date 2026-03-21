@@ -143,10 +143,17 @@
               }
             })
             .then(function () {
-              window.location.reload();
+              // Short delay lets iOS finish SW teardown before reload
+              return new Promise(function (r) {
+                setTimeout(r, 500);
+              });
+            })
+            .then(function () {
+              // Cache-busting param bypasses any lingering SW fetch handler
+              window.location.href = window.location.pathname + '?_cb=' + Date.now();
             })
             .catch(function () {
-              window.location.reload();
+              window.location.href = window.location.pathname + '?_cb=' + Date.now();
             });
         });
       })();

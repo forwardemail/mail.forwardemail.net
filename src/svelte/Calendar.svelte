@@ -32,6 +32,7 @@
   import Trash2 from '@lucide/svelte/icons/trash-2';
   import Info from '@lucide/svelte/icons/info';
   import AlertTriangle from '@lucide/svelte/icons/alert-triangle';
+  import CalendarIcon from '@lucide/svelte/icons/calendar';
 
   interface ToastApi {
     show?: (message: string, type?: string) => void;
@@ -2132,6 +2133,12 @@ $effect(() => {
     <div class="mt-4 flex items-center gap-2 bg-muted/50 p-3 text-xs text-muted-foreground shrink-0">
       <Info class="h-3.5 w-3.5 shrink-0" />
       <span>Privacy: Your calendar data is stored privately and never shared.</span>
+    </div>
+  {:else if calendarsLoaded && !calendars.length}
+    <div class="flex flex-col items-center justify-center h-64 text-muted-foreground gap-3">
+      <CalendarIcon class="h-10 w-10 opacity-50" />
+      <p class="text-sm">No calendars found for this account.</p>
+      <p class="text-xs">Create a calendar using a CalDAV client (e.g. Thunderbird, Apple Calendar) to get started.</p>
     </div>
   {:else}
     <div class="flex items-center justify-center h-64 text-muted-foreground">
