@@ -21,7 +21,7 @@
 
   // State declarations
   let iframeRef: HTMLIFrameElement | null = $state(null);
-  let iframeHeight = $state(150);
+  let iframeHeight = $state(600);
   let isDarkMode = $state(false);
   let mounted = $state(false);
 
@@ -31,6 +31,9 @@
   // Track which messages we've already attempted recovery for (prevents loops)
   const recoveryAttempted = new Set<string>();
   let recoveryTimeoutId: ReturnType<typeof setTimeout> | null = null;
+
+  // Cache measured heights by messageId to avoid flicker when revisiting
+  const heightCache = new Map<string, number>();
 
   // Detect app's dark mode by checking if body has 'light-mode' class
   function detectDarkMode(): boolean {
@@ -83,8 +86,8 @@
   function checkIframeRendered(): boolean {
     if (!iframeRef) return false;
 
-    // If we've received a height update > 150, content rendered successfully
-    if (iframeHeight > 150) return true;
+    // If we've received a real height update (not the default), content rendered
+    if (iframeHeight !== 600 && iframeHeight > 50) return true;
 
     // Try to measure content directly
     return measureIframeHeight() > 10;
@@ -159,10 +162,10 @@
       recoveryTimeoutId = null;
     }
 
-    // Schedule a single recovery check after 1.5 seconds
+    // Schedule a single recovery check after 500ms
     recoveryTimeoutId = setTimeout(() => {
       attemptRecovery();
-    }, 1500);
+    }, 500);
   }
 
   // Effect to handle message changes
@@ -170,8 +173,9 @@
     // Track messageId for reactivity
     const currentMsgId = messageId;
 
-    // Reset height for new messages
-    iframeHeight = 150;
+    // Use cached height if available (revisiting a message), otherwise
+    // use a tall default to avoid visible clipping before measurement
+    iframeHeight = heightCache.get(currentMsgId) || 600;
     stopHeightPolling();
 
     // Schedule recovery check (will be cleared if messageId changes again)
@@ -225,6 +229,7 @@
           // Only update if height actually changed to avoid unnecessary re-renders
           if (newHeight !== iframeHeight) {
             iframeHeight = newHeight;
+            heightCache.set(messageId, newHeight);
             onHeightChange?.(iframeHeight);
 
             // Cancel recovery check - we got a height, content is rendering
@@ -334,8 +339,7 @@
     border: none;
     display: block;
     background: transparent;
-    /* Smooth height transitions */
-    transition: height 0.15s ease-out;
+    /* No height transition — instant resize avoids visible flicker */
   }
 
   .fe-email-loading {

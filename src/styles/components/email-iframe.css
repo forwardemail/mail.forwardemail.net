@@ -19,7 +19,7 @@
   border: none;
   display: block;
   background: transparent;
-  transition: height 0.1s ease-out;
+  /* No height transition — instant resize avoids visible two-phase render */
 }
 
 /* Appearance toggle dropdown styling */
