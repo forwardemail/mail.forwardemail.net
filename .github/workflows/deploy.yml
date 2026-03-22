@@ -43,7 +43,10 @@ jobs:
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
         run: |
           ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
-          aws --endpoint-url "$ENDPOINT" s3 sync dist/ "s3://${R2_BUCKET}/" --delete --acl private
+          # Don't --delete old assets: users with cached HTML still reference
+          # old fingerprinted bundles until their SW updates. Old assets are
+          # harmless (unique hashes, no conflicts) and can be cleaned up later.
+          aws --endpoint-url "$ENDPOINT" s3 sync dist/ "s3://${R2_BUCKET}/" --acl private
 
       - name: Deploy Worker
         env:
