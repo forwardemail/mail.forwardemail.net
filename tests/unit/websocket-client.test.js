@@ -4,7 +4,7 @@ import { WS_EVENTS } from '../../src/utils/websocket-client.js';
 /**
  * Tests for the WebSocket client event constants.
  *
- * The Forward Email WebSocket API defines 21 distinct event types.
+ * The Forward Email WebSocket API defines 20 distinct event types.
  * These tests ensure the client-side WS_EVENTS map stays in sync
  * with the server API specification.
  */
@@ -28,12 +28,11 @@ const API_EVENTS = {
   calendarEventCreated: 'calendarEventCreated',
   calendarEventUpdated: 'calendarEventUpdated',
   calendarEventDeleted: 'calendarEventDeleted',
-  // CardDAV (6)
+  // CardDAV (5)
   contactCreated: 'contactCreated',
   contactUpdated: 'contactUpdated',
   contactDeleted: 'contactDeleted',
   addressBookCreated: 'addressBookCreated',
-  addressBookUpdated: 'addressBookUpdated',
   addressBookDeleted: 'addressBookDeleted',
   // Broadcast (1)
   newRelease: 'newRelease',
@@ -44,8 +43,8 @@ describe('WS_EVENTS', () => {
     expect(Object.isFrozen(WS_EVENTS)).toBe(true);
   });
 
-  it('contains exactly 21 event types', () => {
-    expect(Object.keys(WS_EVENTS)).toHaveLength(21);
+  it('contains exactly 20 event types', () => {
+    expect(Object.keys(WS_EVENTS)).toHaveLength(20);
   });
 
   it('includes all 8 IMAP events', () => {
@@ -68,9 +67,8 @@ describe('WS_EVENTS', () => {
     expect(WS_EVENTS.CALENDAR_EVENT_DELETED).toBe('calendarEventDeleted');
   });
 
-  it('includes all 6 CardDAV events', () => {
+  it('includes all 5 CardDAV events', () => {
     expect(WS_EVENTS.ADDRESS_BOOK_CREATED).toBe('addressBookCreated');
-    expect(WS_EVENTS.ADDRESS_BOOK_UPDATED).toBe('addressBookUpdated');
     expect(WS_EVENTS.ADDRESS_BOOK_DELETED).toBe('addressBookDeleted');
     expect(WS_EVENTS.CONTACT_CREATED).toBe('contactCreated');
     expect(WS_EVENTS.CONTACT_UPDATED).toBe('contactUpdated');

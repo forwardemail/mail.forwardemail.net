@@ -406,9 +406,15 @@ function handleContactCreated(data) {
 
 function handleNewRelease(data) {
   if (!data || typeof data !== 'object') return;
-  const version = sanitize(data.tagName || data.tag_name || data.version || 'new', 64);
-  const name = sanitize(data.name || `Version ${version}`, MAX_BODY_LEN);
-  const url = sanitizeUrl(data.htmlUrl || data.html_url || '');
+
+  // Unwrap the nested release object if present (server sends
+  // { release: { tagName, name, body, htmlUrl, ... } } after
+  // protocol fields are stripped by websocket-client.js)
+  const r = data.release && typeof data.release === 'object' ? data.release : data;
+
+  const version = sanitize(r.tagName || r.tag_name || r.version || 'new', 64);
+  const name = sanitize(r.name || `Version ${version}`, MAX_BODY_LEN);
+  const url = sanitizeUrl(r.htmlUrl || r.html_url || '');
   showNotification({
     title: 'Forward Email Update Available',
     body: `${name} is now available. Click to learn more.`,

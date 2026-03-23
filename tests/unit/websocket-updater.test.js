@@ -95,7 +95,6 @@ vi.mock('../../src/utils/websocket-client', () => ({
     CALENDAR_EVENT_UPDATED: 'calendarEventUpdated',
     CALENDAR_EVENT_DELETED: 'calendarEventDeleted',
     ADDRESS_BOOK_CREATED: 'addressBookCreated',
-    ADDRESS_BOOK_UPDATED: 'addressBookUpdated',
     ADDRESS_BOOK_DELETED: 'addressBookDeleted',
     CONTACT_CREATED: 'contactCreated',
     CONTACT_UPDATED: 'contactUpdated',
@@ -235,14 +234,13 @@ describe('createInboxUpdater', () => {
     updater.destroy();
   });
 
-  it('subscribes to all 6 CardDAV events', () => {
+  it('subscribes to all 5 CardDAV events', () => {
     setupCredentials();
     const updater = createInboxUpdater();
     updater.start();
 
     const subscribedEvents = mockWsOn.mock.calls.map((call) => call[0]);
     expect(subscribedEvents).toContain('addressBookCreated');
-    expect(subscribedEvents).toContain('addressBookUpdated');
     expect(subscribedEvents).toContain('addressBookDeleted');
     expect(subscribedEvents).toContain('contactCreated');
     expect(subscribedEvents).toContain('contactUpdated');

@@ -8,7 +8,7 @@
  *   - Optional msgpackr binary framing (?msgpackr=true)
  *   - Exponential backoff reconnection with jitter
  *   - Server-initiated ping/pong keep-alive (responds to server pings)
- *   - All 21 server events dispatched to registered listeners
+ *   - All 20 server events dispatched to registered listeners
  *
  * Protocol (per api-websocket-handler.js):
  *   - Server sends flat JSON/msgpackr objects: { event, timestamp, ...fields }
@@ -96,9 +96,8 @@ export const WS_EVENTS = Object.freeze({
   CALENDAR_EVENT_CREATED: 'calendarEventCreated',
   CALENDAR_EVENT_UPDATED: 'calendarEventUpdated',
   CALENDAR_EVENT_DELETED: 'calendarEventDeleted',
-  // CardDAV (6)
+  // CardDAV (5)
   ADDRESS_BOOK_CREATED: 'addressBookCreated',
-  ADDRESS_BOOK_UPDATED: 'addressBookUpdated',
   ADDRESS_BOOK_DELETED: 'addressBookDeleted',
   CONTACT_CREATED: 'contactCreated',
   CONTACT_UPDATED: 'contactUpdated',

@@ -279,11 +279,7 @@ function createWebSocketUpdater() {
         }
 
         // CardDAV events
-        for (const evt of [
-          WS_EVENTS.ADDRESS_BOOK_CREATED,
-          WS_EVENTS.ADDRESS_BOOK_UPDATED,
-          WS_EVENTS.ADDRESS_BOOK_DELETED,
-        ]) {
+        for (const evt of [WS_EVENTS.ADDRESS_BOOK_CREATED, WS_EVENTS.ADDRESS_BOOK_DELETED]) {
           wsUnsubs.push(
             wsClient.on(evt, (data) => {
               if (data && typeof data === 'object') {
