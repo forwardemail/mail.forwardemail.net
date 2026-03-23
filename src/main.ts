@@ -1456,14 +1456,18 @@ async function bootstrap() {
 
     // Web auto-updater: check GitHub releases + listen for newRelease WebSocket events
     if (!isTauri && import.meta.env.PROD) {
-      import('./utils/web-updater.js').then(({ start: startWebUpdater, handleWsNewRelease }) => {
-        startWebUpdater();
-        // Route fe:new-release events from the releaseWatcher to the web updater
-        _handleNewReleaseWeb = (event: Event) => {
-          handleWsNewRelease((event as CustomEvent)?.detail);
-        };
-        window.addEventListener('fe:new-release', _handleNewReleaseWeb);
-      });
+      import('./utils/web-updater.js').then(
+        ({ start: startWebUpdater, handleWsNewRelease, applyUpdate }) => {
+          startWebUpdater({
+            onUpdateAvailable: () => applyUpdate(),
+          });
+          // Route fe:new-release events from the releaseWatcher to the web updater
+          _handleNewReleaseWeb = (event: Event) => {
+            handleWsNewRelease((event as CustomEvent)?.detail);
+          };
+          window.addEventListener('fe:new-release', _handleNewReleaseWeb);
+        },
+      );
     }
 
     // Register as mailto: handler on the web (not in Tauri — Tauri handles via OS registration)
@@ -1605,6 +1609,24 @@ async function registerServiceWorker() {
 
     // Expose registration globally for cache clearing
     window.__swRegistration = registration;
+
+    // Check for SW updates every 30 minutes (browser default is 24h — too slow)
+    setInterval(
+      () => {
+        registration.update().catch(() => {});
+      },
+      30 * 60 * 1000,
+    );
+
+    // When a new SW activates and claims this page, auto-reload so the user
+    // gets the new assets. skipWaiting + clientsClaim means the new precache
+    // is ready, but the running page still has old JS in memory.
+    let reloading = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (reloading) return;
+      reloading = true;
+      window.location.reload();
+    });
   } catch (error) {
     // SW registration failed - app works fine without it
     console.warn('[SW] Service worker registration failed:', error.message);

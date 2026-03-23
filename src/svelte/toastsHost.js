@@ -55,8 +55,9 @@ export function createToastHost(target) {
     dismiss();
     const id = (nextId += 1);
     items.set([{ id, message, type, action: resolvedAction }]);
-    const duration = Math.max(5000, Number(timeout) || 0);
-    if (duration) {
+    // duration 0 = persistent (no auto-dismiss)
+    const duration = timeout === 0 ? 0 : Math.max(5000, Number(timeout) || 5000);
+    if (duration > 0) {
       const timer = setTimeout(() => dismiss(id), duration);
       timeouts.set(id, timer);
     }
