@@ -146,6 +146,7 @@ export default defineConfig({
               '@tauri-apps/plugin-os',
               '@tauri-apps/plugin-deep-link',
               '@tauri-apps/plugin-process',
+              'tauri-plugin-remote-push-api',
             ],
           }),
       input: {

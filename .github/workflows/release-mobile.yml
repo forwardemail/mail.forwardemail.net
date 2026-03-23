@@ -5,6 +5,11 @@ on:
   # push:
   #   tags:
   #     - 'v*'
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
   workflow_dispatch:
     inputs:
       tag:
