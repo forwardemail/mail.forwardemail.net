@@ -10,14 +10,8 @@
   import { Remote } from '../utils/remote';
   import { buildAliasAuthHeader } from '../utils/auth.ts';
   import { Local, Accounts } from '../utils/storage';
-  import {
-    activateDemoMode,
-    isDemoMode,
-  } from '../utils/demo-mode';
-  import {
-    DEMO_EMAIL,
-    DEMO_ALIAS_AUTH,
-  } from '../utils/demo-data';
+  import { activateDemoMode, isDemoMode, cleanupDemoAccount } from '../utils/demo-mode';
+  import { DEMO_EMAIL, DEMO_ALIAS_AUTH } from '../utils/demo-data';
 
   interface Props {
     onSuccess?: (path: string) => void;
@@ -211,6 +205,13 @@
         return;
       }
 
+      // If the user was in demo mode, clean up all demo state before
+      // setting up the real account.  This prevents the demo account
+      // from lingering in the Accounts list and its cache from leaking.
+      if (isDemoMode()) {
+        await cleanupDemoAccount();
+      }
+
       Accounts.init();
       Accounts.add(trimmedEmail, { aliasAuth: `${trimmedEmail}:${password}` }, signMe);
       Accounts.setActive(trimmedEmail);
@@ -267,7 +268,14 @@
     </Card.Header>
 
     <Card.Content>
-      <form onsubmit={(e) => { e.preventDefault(); handleSubmit(e); }} novalidate class="grid gap-4">
+      <form
+        onsubmit={(e) => {
+          e.preventDefault();
+          handleSubmit(e);
+        }}
+        novalidate
+        class="grid gap-4"
+      >
         <div class="grid gap-2">
           <Input
             type="email"

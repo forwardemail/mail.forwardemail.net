@@ -69,21 +69,47 @@
     onContext?.(event, item);
   };
 
-  const lastMessage = $derived(threaded ? (item as ConversationItem)?.messages?.slice?.(-1)?.[0] : item as Message);
-  const fromName = $derived(extractDisplayName((lastMessage as Message)?.from || (lastMessage as Record<string, unknown>)?.From as string));
-  const toName = $derived(extractDisplayName((lastMessage as Message)?.to || (lastMessage as Record<string, unknown>)?.To as string));
+  const lastMessage = $derived(
+    threaded ? (item as ConversationItem)?.messages?.slice?.(-1)?.[0] : (item as Message),
+  );
+  const fromName = $derived(
+    extractDisplayName(
+      (lastMessage as Message)?.from || ((lastMessage as Record<string, unknown>)?.From as string),
+    ),
+  );
+  const toName = $derived(
+    extractDisplayName(
+      (lastMessage as Message)?.to || ((lastMessage as Record<string, unknown>)?.To as string),
+    ),
+  );
   const from = $derived(isSentFolder ? `To: ${toName || fromName}` : fromName);
   const subject = $derived((lastMessage as Message)?.subject || '(No subject)');
   const snippet = $derived(truncatePreview((lastMessage as Message)?.snippet || ''));
-  const date = $derived(formatCompactDate((lastMessage as Message)?.date || (lastMessage as Message)?.dateMs || Date.now()));
-  const unread = $derived(threaded ? (item as ConversationItem)?.is_unread : (lastMessage as Message)?.is_unread);
-  const starred = $derived(threaded ? (item as ConversationItem)?.is_starred : (lastMessage as Message)?.is_starred);
-  const hasAttachment = $derived(threaded ? (item as ConversationItem)?.has_attachment : (lastMessage as Message)?.has_attachment);
-  const labels = $derived((threaded ? (item as ConversationItem)?.labels : (lastMessage as Message)?.labels) || []);
+  const date = $derived(
+    formatCompactDate(
+      (lastMessage as Message)?.date || (lastMessage as Message)?.dateMs || Date.now(),
+    ),
+  );
+  const unread = $derived(
+    threaded ? (item as ConversationItem)?.is_unread : (lastMessage as Message)?.is_unread,
+  );
+  const starred = $derived(
+    threaded ? (item as ConversationItem)?.is_starred : (lastMessage as Message)?.is_starred,
+  );
+  const hasAttachment = $derived(
+    threaded
+      ? (item as ConversationItem)?.has_attachment
+      : (lastMessage as Message)?.has_attachment,
+  );
+  const labels = $derived(
+    (threaded ? (item as ConversationItem)?.labels : (lastMessage as Message)?.labels) || [],
+  );
 </script>
 
 <div
-  class="grid cursor-pointer grid-cols-[28px_1fr_auto] gap-2 border-b border-border px-3 py-2.5 transition-colors hover:bg-accent/50 {unread ? 'bg-primary/5' : ''} {isSelected ? 'bg-primary/10' : ''}"
+  class="grid cursor-pointer grid-cols-[28px_1fr_auto] gap-2 border-b border-border px-3 py-2.5 transition-colors hover:bg-accent/50 {unread
+    ? 'bg-primary/5'
+    : ''} {isSelected ? 'bg-primary/10' : ''}"
   onclick={handleClick}
   oncontextmenu={handleContext}
   role="button"
@@ -122,9 +148,14 @@
               <Badge
                 variant="secondary"
                 class="h-5 px-1.5 text-xs"
-                style={labelMap.get(lbl)?.color ? `background:${labelMap.get(lbl)?.color}; color:#fff;` : ''}
+                style={labelMap.get(lbl)?.color
+                  ? `background:${labelMap.get(lbl)?.color}; color:#fff;`
+                  : ''}
               >
-                {labelMap.get(lbl)?.name || labelMap.get(lbl)?.label || labelMap.get(lbl)?.value || lbl}
+                {labelMap.get(lbl)?.name ||
+                  labelMap.get(lbl)?.label ||
+                  labelMap.get(lbl)?.value ||
+                  lbl}
               </Badge>
             {/if}
           {/each}
@@ -136,7 +167,9 @@
 
   {#if threaded && showThreadCount}
     <div class="self-center text-xs text-muted-foreground">
-      {(item as ConversationItem)?.messageCount || (item as ConversationItem)?.messages?.length || 1}
+      {(item as ConversationItem)?.messageCount ||
+        (item as ConversationItem)?.messages?.length ||
+        1}
     </div>
   {/if}
 </div>

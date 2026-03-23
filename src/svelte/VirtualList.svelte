@@ -38,8 +38,8 @@
   const endIndex = $derived(
     Math.min(
       items?.length || 0,
-      Math.ceil((scrollTop + viewportHeight + padding) / itemSize) + overscan
-    )
+      Math.ceil((scrollTop + viewportHeight + padding) / itemSize) + overscan,
+    ),
   );
   const visible = $derived((items || []).slice(startIndex, endIndex));
   const offsetY = $derived(startIndex * itemSize + padding);

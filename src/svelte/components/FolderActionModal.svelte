@@ -13,7 +13,12 @@
     onClose?: () => void;
   }
 
-  let { action = 'create', folder = null, onConfirm = () => {}, onClose = () => {} }: Props = $props();
+  let {
+    action = 'create',
+    folder = null,
+    onConfirm = () => {},
+    onClose = () => {},
+  }: Props = $props();
 
   let folderName = $state('');
   let errorMessage = $state('');
@@ -51,7 +56,9 @@
     }
   };
 
-  const title = $derived(action === 'create' ? (folder ? 'Create Subfolder' : 'Create Folder') : 'Rename Folder');
+  const title = $derived(
+    action === 'create' ? (folder ? 'Create Subfolder' : 'Create Folder') : 'Rename Folder',
+  );
   const placeholder = $derived(action === 'create' ? 'Folder name' : 'New folder name');
 </script>
 
@@ -74,7 +81,7 @@
           type="text"
           bind:ref={inputEl}
           bind:value={folderName}
-          placeholder={placeholder}
+          {placeholder}
           maxlength={100}
           aria-invalid={!!errorMessage}
           onkeydown={handleKeydown}

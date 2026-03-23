@@ -40,7 +40,8 @@
     active?: boolean | Readable<boolean>;
   }
 
-  let { navigate = (path: string) => (window.location.href = path), active = false }: Props = $props();
+  let { navigate = (path: string) => (window.location.href = path), active = false }: Props =
+    $props();
 
   // Handle active as either a boolean or a store
   let isActive = $state(typeof active === 'boolean' ? active : false);
@@ -68,7 +69,9 @@
 
   onMount(() => {
     if (active && typeof active === 'object' && 'subscribe' in active) {
-      activeUnsub = active.subscribe((val: boolean) => { isActive = val; });
+      activeUnsub = active.subscribe((val: boolean) => {
+        isActive = val;
+      });
     }
 
     loadAccounts();
@@ -204,7 +207,9 @@
           {#if photoValue}
             <img src={photoValue} alt="Profile" class="h-full w-full object-cover" />
           {:else if getInitials(nameValue)}
-            <span class="flex h-full w-full items-center justify-center text-xl font-bold text-muted-foreground">
+            <span
+              class="flex h-full w-full items-center justify-center text-xl font-bold text-muted-foreground"
+            >
               {getInitials(nameValue)}
             </span>
           {:else}
@@ -212,7 +217,9 @@
               <User class="h-8 w-8" />
             </span>
           {/if}
-          <span class="absolute inset-0 flex items-center justify-center bg-black/50 text-white opacity-0 transition-opacity group-hover:opacity-100">
+          <span
+            class="absolute inset-0 flex items-center justify-center bg-black/50 text-white opacity-0 transition-opacity group-hover:opacity-100"
+          >
             <Camera class="h-8 w-8" />
           </span>
         </label>
@@ -232,9 +239,7 @@
           />
           {#if photoValue}
             <div class="mt-1">
-              <Button variant="ghost" size="sm" onclick={removePhoto}>
-                Remove photo
-              </Button>
+              <Button variant="ghost" size="sm" onclick={removePhoto}>Remove photo</Button>
             </div>
           {/if}
           {#if photoError}
@@ -257,7 +262,9 @@
       <div class="flex flex-col gap-2.5">
         {#each $accounts as account}
           <Card.Root>
-            <Card.Content class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 p-3">
+            <Card.Content
+              class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 p-3"
+            >
               <div class="flex items-center gap-3 min-w-0">
                 <Avatar.Root class="h-9 w-9 shrink-0 border border-primary/20 bg-primary/10">
                   <Avatar.Fallback class="text-primary">
@@ -273,12 +280,22 @@
               </div>
               <div class="flex items-center gap-2 sm:shrink-0">
                 {#if (account as Account).email === $currentAccount}
-                  <Button variant="destructive" size="sm" onclick={() => signOut()} class="flex-1 sm:flex-none">
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    onclick={() => signOut()}
+                    class="flex-1 sm:flex-none"
+                  >
                     <LogOut class="mr-2 h-4 w-4" />
                     Sign out
                   </Button>
                 {:else}
-                  <Button variant="ghost" size="sm" onclick={() => switchAccount(account)} class="flex-1 sm:flex-none">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onclick={() => switchAccount(account)}
+                    class="flex-1 sm:flex-none"
+                  >
                     Switch
                   </Button>
                 {/if}
@@ -297,7 +314,9 @@
 
     <!-- Quick Links Section -->
     <section class="flex flex-col gap-3">
-      <h2 class="text-xs font-medium uppercase tracking-wider text-muted-foreground">Quick links</h2>
+      <h2 class="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+        Quick links
+      </h2>
       <div class="grid grid-cols-[repeat(auto-fit,minmax(140px,1fr))] gap-3">
         <Button variant="outline" class="h-11 justify-start" onclick={() => navigate('/contacts')}>
           <BookUser class="mr-2 h-4 w-4" />
@@ -307,7 +326,11 @@
           <CalendarIcon class="mr-2 h-4 w-4" />
           Calendar
         </Button>
-        <Button variant="outline" class="h-11 justify-start" onclick={() => navigate('/mailbox/settings')}>
+        <Button
+          variant="outline"
+          class="h-11 justify-start"
+          onclick={() => navigate('/mailbox/settings')}
+        >
           <SettingsIcon class="mr-2 h-4 w-4" />
           Settings
         </Button>

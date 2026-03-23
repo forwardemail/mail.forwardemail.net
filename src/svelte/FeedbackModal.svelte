@@ -333,19 +333,29 @@ End of Report
     <div class="py-4">
       {#if submitSuccess}
         <div class="flex flex-col items-center justify-center py-10 text-center">
-          <div class="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-green-100 text-green-600">
+          <div
+            class="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-green-100 text-green-600"
+          >
             <CheckIcon class="h-6 w-6" />
           </div>
           <h3 class="mb-2 text-lg font-semibold">Thank you for your feedback!</h3>
-          <p class="text-muted-foreground">We've received your message and will get back to you soon.</p>
+          <p class="text-muted-foreground">
+            We've received your message and will get back to you soon.
+          </p>
         </div>
       {:else}
-        <form onsubmit={(e) => { e.preventDefault(); handleSubmit(); }} class="grid gap-4">
+        <form
+          onsubmit={(e) => {
+            e.preventDefault();
+            handleSubmit();
+          }}
+          class="grid gap-4"
+        >
           <div class="grid gap-2">
             <Label for="feedback-type">What kind of feedback?</Label>
             <Select.Root type="single" name="feedback-type" bind:value={feedbackType}>
               <Select.Trigger class="w-full">
-                {feedbackTypeOptions.find(o => o.value === feedbackType)?.label || 'Select type'}
+                {feedbackTypeOptions.find((o) => o.value === feedbackType)?.label || 'Select type'}
               </Select.Trigger>
               <Select.Content>
                 {#each feedbackTypeOptions as option}
@@ -391,7 +401,8 @@ End of Report
             <div class="flex items-start gap-3">
               <Checkbox id="include-system" bind:checked={includeSystemInfo} />
               <div class="grid gap-1">
-                <Label for="include-system" class="cursor-pointer">Include system information</Label>
+                <Label for="include-system" class="cursor-pointer">Include system information</Label
+                >
                 <p class="text-xs text-muted-foreground">
                   Helps us debug issues (browser, OS, screen size, storage usage)
                 </p>
@@ -426,9 +437,7 @@ End of Report
           Download Diagnostics
         </Button>
         <div class="flex gap-2">
-          <Button variant="ghost" onclick={onClose} disabled={submitting}>
-            Cancel
-          </Button>
+          <Button variant="ghost" onclick={onClose} disabled={submitting}>Cancel</Button>
           <Button onclick={handleSubmit} disabled={submitting}>
             {submitting ? 'Sending...' : 'Send Feedback'}
           </Button>

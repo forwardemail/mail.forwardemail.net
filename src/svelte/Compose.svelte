@@ -87,7 +87,11 @@
     createAutosaveTimer,
   } from '../utils/draft-service';
   import { shouldShowAttachmentReminder } from '../utils/attachment-reminder';
-  import { attachmentReminder, getEffectiveSettingValue, profileName } from '../stores/settingsStore';
+  import {
+    attachmentReminder,
+    getEffectiveSettingValue,
+    profileName,
+  } from '../stores/settingsStore';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
   import { Textarea } from '$lib/components/ui/textarea';
@@ -205,10 +209,24 @@
   let activeDraftKey = $state<string | null>(null);
   let minimizedDraftSequence = 0;
   const IMAGE_EXTENSIONS = new Set([
-    'apng', 'avif', 'bmp', 'gif', 'heic', 'heif', 'jpeg', 'jpg', 'png', 'svg', 'tiff', 'webp',
+    'apng',
+    'avif',
+    'bmp',
+    'gif',
+    'heic',
+    'heif',
+    'jpeg',
+    'jpg',
+    'png',
+    'svg',
+    'tiff',
+    'webp',
   ]);
 
-  const getAttachmentName = (att: unknown) => (att as Record<string, unknown>)?.name || (att as Record<string, unknown>)?.filename || 'Attachment';
+  const getAttachmentName = (att: unknown) =>
+    (att as Record<string, unknown>)?.name ||
+    (att as Record<string, unknown>)?.filename ||
+    'Attachment';
 
   const formatAttachmentSize = (bytes = 0) => {
     if (!bytes) return '0 KB';
@@ -218,7 +236,11 @@
   };
 
   const isImageAttachment = (att: unknown) => {
-    const type = (att as Record<string, unknown>)?.contentType || (att as Record<string, unknown>)?.mimeType || (att as Record<string, unknown>)?.type || '';
+    const type =
+      (att as Record<string, unknown>)?.contentType ||
+      (att as Record<string, unknown>)?.mimeType ||
+      (att as Record<string, unknown>)?.type ||
+      '';
     if ((type as string).startsWith('image/')) return true;
     const name = (getAttachmentName(att) as string).toLowerCase();
     const ext = name.includes('.') ? name.split('.').pop() : '';
@@ -237,14 +259,16 @@
     return ext ? ext.slice(0, 4).toUpperCase() : 'FILE';
   };
 
-  const attachmentCards = $derived(attachments.map((att: unknown) => ({
-    att,
-    name: getAttachmentName(att),
-    sizeLabel: formatAttachmentSize((att as { size?: number })?.size || 0),
-    isImage: isImageAttachment(att),
-    previewUrl: getAttachmentPreviewUrl(att),
-    badge: getAttachmentBadge(att),
-  })));
+  const attachmentCards = $derived(
+    attachments.map((att: unknown) => ({
+      att,
+      name: getAttachmentName(att),
+      sizeLabel: formatAttachmentSize((att as { size?: number })?.size || 0),
+      isImage: isImageAttachment(att),
+      previewUrl: getAttachmentPreviewUrl(att),
+      badge: getAttachmentBadge(att),
+    })),
+  );
 
   let focusedField = $state('to');
   let contactOptions = $state<unknown[]>([]);
@@ -306,10 +330,17 @@
     },
     renderHTML({ HTMLAttributes }: { HTMLAttributes: Record<string, unknown> }) {
       const { raw, variant, ...rest } = HTMLAttributes;
-      const classes = ['raw-quote', variant === 'forward' ? 'forward-quote' : 'reply-quote'].filter(Boolean).join(' ');
+      const classes = ['raw-quote', variant === 'forward' ? 'forward-quote' : 'reply-quote']
+        .filter(Boolean)
+        .join(' ');
       return [
         'blockquote',
-        { ...rest, class: classes, 'data-raw-html': raw || '', 'data-raw-variant': variant || 'reply' },
+        {
+          ...rest,
+          class: classes,
+          'data-raw-html': raw || '',
+          'data-raw-variant': variant || 'reply',
+        },
       ];
     },
     addNodeView() {
@@ -322,7 +353,9 @@
         dom.appendChild(inner);
         const render = () => {
           const variant = currentNode.attrs.variant || 'reply';
-          dom.className = ['raw-quote', variant === 'forward' ? 'forward-quote' : 'reply-quote'].filter(Boolean).join(' ');
+          dom.className = ['raw-quote', variant === 'forward' ? 'forward-quote' : 'reply-quote']
+            .filter(Boolean)
+            .join(' ');
           dom.setAttribute('data-raw-html', (currentNode.attrs.raw as string) || '');
           dom.setAttribute('data-raw-variant', variant as string);
           try {
@@ -331,7 +364,8 @@
               inner.innerHTML = DOMPurify.sanitize(decoded);
             } else {
               inner.innerHTML = '';
-              inner.textContent = extractRawQuoteText((currentNode.attrs.raw as string) || '') || '';
+              inner.textContent =
+                extractRawQuoteText((currentNode.attrs.raw as string) || '') || '';
             }
           } catch {
             inner.innerHTML = '';
@@ -401,7 +435,11 @@
   let formatButtonRef = $state<HTMLElement | undefined>();
   let fontFamily = $state('default');
   let fontSize = $state('16');
-  let textColor = $state(typeof document !== 'undefined' && document.documentElement.classList.contains('dark') ? '#e5e7eb' : '#000000');
+  let textColor = $state(
+    typeof document !== 'undefined' && document.documentElement.classList.contains('dark')
+      ? '#e5e7eb'
+      : '#000000',
+  );
   let highlightColor = $state('#fef08a');
   let alignment = $state<'left' | 'center' | 'right'>('left');
 
@@ -478,10 +516,17 @@
     const minute = match[2] ? parseInt(match[2], 10) : 0;
     if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
     if (!meridiem) {
-      if (hour === 0) { meridiem = 'AM'; hour = 12; }
-      else if (hour < 12) { meridiem = 'AM'; }
-      else if (hour === 12) { meridiem = 'PM'; }
-      else { meridiem = 'PM'; hour = hour - 12; }
+      if (hour === 0) {
+        meridiem = 'AM';
+        hour = 12;
+      } else if (hour < 12) {
+        meridiem = 'AM';
+      } else if (hour === 12) {
+        meridiem = 'PM';
+      } else {
+        meridiem = 'PM';
+        hour = hour - 12;
+      }
     } else {
       if (hour === 0) hour = 12;
       if (hour > 12) hour = hour - 12;
@@ -543,8 +588,16 @@
     const scheduledDate = new Date(sendAt);
     const toRecipients = toList.length ? toList : parseRecipients(toInput);
     return {
-      date: scheduledDate.toLocaleDateString(i18n.getFormattingLocale(), { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }),
-      time: scheduledDate.toLocaleTimeString(i18n.getFormattingLocale(), { hour: 'numeric', minute: '2-digit' }),
+      date: scheduledDate.toLocaleDateString(i18n.getFormattingLocale(), {
+        weekday: 'long',
+        month: 'long',
+        day: 'numeric',
+        year: 'numeric',
+      }),
+      time: scheduledDate.toLocaleTimeString(i18n.getFormattingLocale(), {
+        hour: 'numeric',
+        minute: '2-digit',
+      }),
       recipients: toRecipients.join(', '),
       subject: subject || '(No subject)',
     };
@@ -594,7 +647,10 @@
 
   const splitRecipientTokens = (value: string) => {
     if (!value) return [];
-    const segments = value.split(/[,;]/).map((s) => s.trim()).filter(Boolean);
+    const segments = value
+      .split(/[,;]/)
+      .map((s) => s.trim())
+      .filter(Boolean);
     const results: string[] = [];
     for (const seg of segments) {
       // Angle-bracket format: "Display Name <email>"
@@ -692,7 +748,13 @@
     if (!contact) return null;
     const c = contact as Record<string, unknown>;
     const vcard = parseVCardBasics((c.content as string) || '');
-    const email = ((c.emails as { value?: string }[])?.[0]?.value) || ((c.Emails as { value?: string }[])?.[0]?.value) || (c.email as string) || (c.address as string) || vcard.emails?.[0] || '';
+    const email =
+      (c.emails as { value?: string }[])?.[0]?.value ||
+      (c.Emails as { value?: string }[])?.[0]?.value ||
+      (c.email as string) ||
+      (c.address as string) ||
+      vcard.emails?.[0] ||
+      '';
     const name = (c.full_name || c.name || c.FullName || vcard.name || '') as string;
     const trimmedEmail = (email || '').trim();
     if (!trimmedEmail) return null;
@@ -715,11 +777,23 @@
         }
         // Fallback to direct API call if cache was empty
         const res = await Remote.request('Contacts', { limit: 500 });
-        const list = Array.isArray(res) ? res : (res as Record<string, unknown>)?.Result || (res as Record<string, unknown>)?.contacts || [];
+        const list = Array.isArray(res)
+          ? res
+          : (res as Record<string, unknown>)?.Result ||
+            (res as Record<string, unknown>)?.contacts ||
+            [];
         const mapped = (list || []).map(normalizeContactApiItem).filter(Boolean);
         mapped.sort((a, b) => {
-          const nameA = ((a as {name?: string; email?: string}).name || (a as {email?: string}).email || '').toLowerCase();
-          const nameB = ((b as {name?: string; email?: string}).name || (b as {email?: string}).email || '').toLowerCase();
+          const nameA = (
+            (a as { name?: string; email?: string }).name ||
+            (a as { email?: string }).email ||
+            ''
+          ).toLowerCase();
+          const nameB = (
+            (b as { name?: string; email?: string }).name ||
+            (b as { email?: string }).email ||
+            ''
+          ).toLowerCase();
           return nameA.localeCompare(nameB);
         });
         contactOptions = mapped as unknown[];
@@ -804,19 +878,23 @@
   };
 
   const hasRecipientSuggestions = (field: string) =>
-    recipientSuggestionField === field && showAddressBook === field && recipientSuggestions.length > 0;
+    recipientSuggestionField === field &&
+    showAddressBook === field &&
+    recipientSuggestions.length > 0;
 
   const handleRecipientSuggestionKeydown = (field: string, event: KeyboardEvent) => {
     if (!hasRecipientSuggestions(field)) return true;
     const lastIndex = recipientSuggestions.length - 1;
     if (event.key === 'ArrowDown') {
       event.preventDefault();
-      recipientSuggestionIndex = recipientSuggestionIndex < lastIndex ? recipientSuggestionIndex + 1 : 0;
+      recipientSuggestionIndex =
+        recipientSuggestionIndex < lastIndex ? recipientSuggestionIndex + 1 : 0;
       return false;
     }
     if (event.key === 'ArrowUp') {
       event.preventDefault();
-      recipientSuggestionIndex = recipientSuggestionIndex > 0 ? recipientSuggestionIndex - 1 : lastIndex;
+      recipientSuggestionIndex =
+        recipientSuggestionIndex > 0 ? recipientSuggestionIndex - 1 : lastIndex;
       return false;
     }
     if (event.key === 'Enter' && recipientSuggestionIndex >= 0) {
@@ -861,13 +939,23 @@
 
   const editRecipient = (field: string, rec: string) => {
     removeRecipient(field, rec);
-    if (field === 'to') { toInput = rec; toInputEl?.focus(); }
-    else if (field === 'cc') { ccInput = rec; ccInputEl?.focus(); }
-    else if (field === 'bcc') { bccInput = rec; bccInputEl?.focus(); }
+    if (field === 'to') {
+      toInput = rec;
+      toInputEl?.focus();
+    } else if (field === 'cc') {
+      ccInput = rec;
+      ccInputEl?.focus();
+    } else if (field === 'bcc') {
+      bccInput = rec;
+      bccInputEl?.focus();
+    }
   };
 
   const parseRecipients = (value: string) =>
-    (value || '').split(/[,;]/).map((r) => r.trim()).filter(Boolean);
+    (value || '')
+      .split(/[,;]/)
+      .map((r) => r.trim())
+      .filter(Boolean);
 
   const onRecipientFocus = (field: string) => {
     focusedField = field;
@@ -898,7 +986,7 @@
         const validTokens: string[] = [];
         const invalidTokens: string[] = [];
 
-        tokens.forEach(token => {
+        tokens.forEach((token) => {
           if (isValidEmail(token)) {
             validTokens.push(token);
           } else {
@@ -910,15 +998,15 @@
         if (validTokens.length) {
           if (field === 'to') {
             const existing = new Set(toList);
-            validTokens.forEach(t => existing.add(t));
+            validTokens.forEach((t) => existing.add(t));
             toList = Array.from(existing);
           } else if (field === 'cc') {
             const existing = new Set(ccList);
-            validTokens.forEach(t => existing.add(t));
+            validTokens.forEach((t) => existing.add(t));
             ccList = Array.from(existing);
           } else if (field === 'bcc') {
             const existing = new Set(bccList);
-            validTokens.forEach(t => existing.add(t));
+            validTokens.forEach((t) => existing.add(t));
             bccList = Array.from(existing);
           }
           markDraftDirty();
@@ -931,7 +1019,10 @@
 
         // Show warning for invalid tokens
         if (invalidTokens.length) {
-          toasts?.show?.(`Invalid email${invalidTokens.length > 1 ? 's' : ''}: ${invalidTokens.join(', ')}`, 'warning');
+          toasts?.show?.(
+            `Invalid email${invalidTokens.length > 1 ? 's' : ''}: ${invalidTokens.join(', ')}`,
+            'warning',
+          );
         }
       }
     }, 150);
@@ -1033,7 +1124,14 @@
   });
 
   const hasUnsavedContent = () => {
-    return draftDirty || toList.length > 0 || ccList.length > 0 || bccList.length > 0 || subject.trim() !== '' || body.trim() !== '';
+    return (
+      draftDirty ||
+      toList.length > 0 ||
+      ccList.length > 0 ||
+      bccList.length > 0 ||
+      subject.trim() !== '' ||
+      body.trim() !== ''
+    );
   };
 
   const saveCurrentDraft = async () => {
@@ -1147,13 +1245,20 @@
       draftStatus,
       draftStatusDetail,
     };
-    minimizedDrafts = [...minimizedDrafts, { key: activeDraftKey, data: draftData, meta: draftMeta }];
+    minimizedDrafts = [
+      ...minimizedDrafts,
+      { key: activeDraftKey, data: draftData, meta: draftMeta },
+    ];
     setVisible(false);
     reset();
   };
 
   const restoreMinimizedDraft = async (draft: unknown) => {
-    const d = draft as { key: string; data: Record<string, unknown>; meta: Record<string, unknown> };
+    const d = draft as {
+      key: string;
+      data: Record<string, unknown>;
+      meta: Record<string, unknown>;
+    };
     if (visible && hasUnsavedContent()) {
       toasts?.show?.('Finish the current draft before restoring another.', 'info');
       return;
@@ -1184,7 +1289,10 @@
   };
 
   const discardMinimizedDraft = async (draft: unknown) => {
-    const d = draft as { key: string; meta?: { currentDraftId?: string; sourceMessageId?: string; currentDraftServerId?: string } };
+    const d = draft as {
+      key: string;
+      meta?: { currentDraftId?: string; sourceMessageId?: string; currentDraftServerId?: string };
+    };
     // Delete draft from database if it exists
     if (d.meta?.currentDraftId) {
       try {
@@ -1254,7 +1362,9 @@
     if (!draggedDraft || draggedDraft === targetDraft) return;
     const draggedKey = (draggedDraft as { key: string }).key;
     const targetKey = (targetDraft as { key: string }).key;
-    const draggedIndex = minimizedDrafts.findIndex((d) => (d as { key: string }).key === draggedKey);
+    const draggedIndex = minimizedDrafts.findIndex(
+      (d) => (d as { key: string }).key === draggedKey,
+    );
     const targetIndex = minimizedDrafts.findIndex((d) => (d as { key: string }).key === targetKey);
     if (draggedIndex === -1 || targetIndex === -1) return;
     const newDrafts = [...minimizedDrafts];
@@ -1338,7 +1448,10 @@
       await Remote.request(
         'MessageDelete',
         {},
-        { method: 'DELETE', pathOverride: `/v1/messages/${encodeURIComponent(String(apiId))}?permanent=1` }
+        {
+          method: 'DELETE',
+          pathOverride: `/v1/messages/${encodeURIComponent(String(apiId))}?permanent=1`,
+        },
       );
     } catch (err) {
       const status = (err as { status?: number })?.status;
@@ -1353,10 +1466,16 @@
       await db.messages.where('[account+id]').equals([account, msgId]).delete();
       // Also try to delete by other potential ID fields
       if (cachedMsg?.message_id && cachedMsg.message_id !== msgId) {
-        await db.messages.where('[account+id]').equals([account, cachedMsg.message_id as string]).delete();
+        await db.messages
+          .where('[account+id]')
+          .equals([account, cachedMsg.message_id as string])
+          .delete();
       }
       if (cachedMsg?.uid && cachedMsg.uid !== msgId) {
-        await db.messages.where('[account+id]').equals([account, String(cachedMsg.uid)]).delete();
+        await db.messages
+          .where('[account+id]')
+          .equals([account, String(cachedMsg.uid)])
+          .delete();
       }
       // Delete message bodies
       await db.messageBodies.where('[account+id]').equals([account, msgId]).delete();
@@ -1367,7 +1486,9 @@
     }
 
     // Notify mailbox to refresh UI
-    window.dispatchEvent(new CustomEvent('draft-message-deleted', { detail: { messageId: msgId } }));
+    window.dispatchEvent(
+      new CustomEvent('draft-message-deleted', { detail: { messageId: msgId } }),
+    );
   };
 
   const clearComposeInlineHeights = () => {
@@ -1396,8 +1517,14 @@
       const trimmed = line.trim();
 
       if (!trimmed) {
-        if (inUl) { parts.push('</ul>'); inUl = false; }
-        if (inOl) { parts.push('</ol>'); inOl = false; }
+        if (inUl) {
+          parts.push('</ul>');
+          inUl = false;
+        }
+        if (inOl) {
+          parts.push('</ol>');
+          inOl = false;
+        }
         parts.push('<p></p>');
         continue;
       }
@@ -1405,8 +1532,14 @@
       // Bullet list: -, *, or • followed by space
       const bullet = trimmed.match(/^[-*•]\s+(.*)/);
       if (bullet) {
-        if (inOl) { parts.push('</ol>'); inOl = false; }
-        if (!inUl) { parts.push('<ul>'); inUl = true; }
+        if (inOl) {
+          parts.push('</ol>');
+          inOl = false;
+        }
+        if (!inUl) {
+          parts.push('<ul>');
+          inUl = true;
+        }
         parts.push(`<li>${escapeHtml(bullet[1])}</li>`);
         continue;
       }
@@ -1414,15 +1547,27 @@
       // Ordered list: number followed by . or ) and space
       const ordered = trimmed.match(/^\d+[.)]\s+(.*)/);
       if (ordered) {
-        if (inUl) { parts.push('</ul>'); inUl = false; }
-        if (!inOl) { parts.push('<ol>'); inOl = true; }
+        if (inUl) {
+          parts.push('</ul>');
+          inUl = false;
+        }
+        if (!inOl) {
+          parts.push('<ol>');
+          inOl = true;
+        }
         parts.push(`<li>${escapeHtml(ordered[1])}</li>`);
         continue;
       }
 
       // Regular line
-      if (inUl) { parts.push('</ul>'); inUl = false; }
-      if (inOl) { parts.push('</ol>'); inOl = false; }
+      if (inUl) {
+        parts.push('</ul>');
+        inUl = false;
+      }
+      if (inOl) {
+        parts.push('</ol>');
+        inOl = false;
+      }
       parts.push(`<p>${escapeHtml(trimmed)}</p>`);
     }
 
@@ -1476,15 +1621,17 @@
       editorProps: {
         // Clean up pasted HTML from Word/Outlook
         transformPastedHTML(html: string) {
-          return html
-            // Remove Word conditional comments
-            .replace(/<!--\[if[^]*?endif\]-->/gi, '')
-            // Remove MSO namespace tags (<o:p>, etc.)
-            .replace(/<\/?o:[^>]*>/gi, '')
-            // Remove class="Mso*" attributes
-            .replace(/\s*class="Mso[^"]*"/gi, '')
-            // Remove mso-* CSS properties
-            .replace(/mso-[^;:"']+:[^;:"']+;?/gi, '');
+          return (
+            html
+              // Remove Word conditional comments
+              .replace(/<!--\[if[^]*?endif\]-->/gi, '')
+              // Remove MSO namespace tags (<o:p>, etc.)
+              .replace(/<\/?o:[^>]*>/gi, '')
+              // Remove class="Mso*" attributes
+              .replace(/\s*class="Mso[^"]*"/gi, '')
+              // Remove mso-* CSS properties
+              .replace(/mso-[^;:"']+:[^;:"']+;?/gi, '')
+          );
         },
         // Convert plain-text-only paste to rich HTML
         handlePaste: (view, event) => {
@@ -1553,7 +1700,11 @@
 
   const setFontSize = (value: string) => {
     fontSize = value;
-    editorView?.chain().focus().setMark('textStyle', { fontSize: `${value}px` }).run();
+    editorView
+      ?.chain()
+      .focus()
+      .setMark('textStyle', { fontSize: `${value}px` })
+      .run();
   };
 
   const setTextColor = (value: string) => {
@@ -1611,13 +1762,16 @@
           reader.onerror = reject;
           reader.readAsDataURL(file);
         });
-        attachments = [...attachments, {
-          name: file.name,
-          filename: file.name,
-          size: file.size,
-          contentType: file.type || 'application/octet-stream',
-          content,
-        }];
+        attachments = [
+          ...attachments,
+          {
+            name: file.name,
+            filename: file.name,
+            size: file.size,
+            contentType: file.type || 'application/octet-stream',
+            content,
+          },
+        ];
       }
       markDraftDirty();
     } catch (err) {
@@ -1826,7 +1980,7 @@
 
     // Validate all email addresses
     const allRecipients = [...toRecipients, ...ccRecipients, ...bccRecipients];
-    const invalidEmails = allRecipients.filter(email => !isValidEmail(email));
+    const invalidEmails = allRecipients.filter((email) => !isValidEmail(email));
 
     if (invalidEmails.length) {
       error = `Invalid email address${invalidEmails.length > 1 ? 'es' : ''}: ${invalidEmails.join(', ')}`;
@@ -2104,14 +2258,16 @@
     if (!value) return [];
     if (typeof value === 'string') return [value];
     if (Array.isArray(value)) {
-      return value.map((item) => {
-        if (typeof item === 'string') return item;
-        if (typeof item === 'object' && item) {
-          const i = item as Record<string, unknown>;
-          return (i.email || i.address || i.value || '') as string;
-        }
-        return '';
-      }).filter(Boolean);
+      return value
+        .map((item) => {
+          if (typeof item === 'string') return item;
+          if (typeof item === 'object' && item) {
+            const i = item as Record<string, unknown>;
+            return (i.email || i.address || i.value || '') as string;
+          }
+          return '';
+        })
+        .filter(Boolean);
     }
     return [];
   };
@@ -2123,7 +2279,8 @@
         return;
       }
       const minimizedDraft = minimizedDrafts.find(
-        (d) => (d as { meta: { currentDraftId: string } })?.meta?.currentDraftId === prefill.draftId
+        (d) =>
+          (d as { meta: { currentDraftId: string } })?.meta?.currentDraftId === prefill.draftId,
       );
       if (minimizedDraft) {
         await restoreMinimizedDraft(minimizedDraft);
@@ -2172,23 +2329,39 @@
     }
     if (resolvedPrefill.to) {
       const normalizedTo = normalizePrefillList(resolvedPrefill.to);
-      toList = normalizedTo.length ? normalizedTo : Array.isArray(resolvedPrefill.to) ? (resolvedPrefill.to as string[]).filter(Boolean) : [resolvedPrefill.to as string];
+      toList = normalizedTo.length
+        ? normalizedTo
+        : Array.isArray(resolvedPrefill.to)
+          ? (resolvedPrefill.to as string[]).filter(Boolean)
+          : [resolvedPrefill.to as string];
     }
     if (resolvedPrefill.cc) {
       const normalizedCc = normalizePrefillList(resolvedPrefill.cc);
-      ccList = normalizedCc.length ? normalizedCc : Array.isArray(resolvedPrefill.cc) ? (resolvedPrefill.cc as string[]).filter(Boolean) : [resolvedPrefill.cc as string];
+      ccList = normalizedCc.length
+        ? normalizedCc
+        : Array.isArray(resolvedPrefill.cc)
+          ? (resolvedPrefill.cc as string[]).filter(Boolean)
+          : [resolvedPrefill.cc as string];
     }
     if (resolvedPrefill.bcc) {
       const normalizedBcc = normalizePrefillList(resolvedPrefill.bcc);
-      bccList = normalizedBcc.length ? normalizedBcc : Array.isArray(resolvedPrefill.bcc) ? (resolvedPrefill.bcc as string[]).filter(Boolean) : [resolvedPrefill.bcc as string];
+      bccList = normalizedBcc.length
+        ? normalizedBcc
+        : Array.isArray(resolvedPrefill.bcc)
+          ? (resolvedPrefill.bcc as string[]).filter(Boolean)
+          : [resolvedPrefill.bcc as string];
     }
     if (resolvedPrefill.replyTo || resolvedPrefill.reply_to) {
       const replyToValue = resolvedPrefill.replyTo || resolvedPrefill.reply_to;
-      replyTo = Array.isArray(replyToValue) ? (replyToValue as string[])[0] : (replyToValue as string) || '';
+      replyTo = Array.isArray(replyToValue)
+        ? (replyToValue as string[])[0]
+        : (replyToValue as string) || '';
     }
     if (resolvedPrefill.inReplyTo || resolvedPrefill.in_reply_to) {
       const inReplyToValue = resolvedPrefill.inReplyTo || resolvedPrefill.in_reply_to;
-      inReplyTo = Array.isArray(inReplyToValue) ? (inReplyToValue as string[])[0] : (inReplyToValue as string) || '';
+      inReplyTo = Array.isArray(inReplyToValue)
+        ? (inReplyToValue as string[])[0]
+        : (inReplyToValue as string) || '';
     }
     if (resolvedPrefill.subject) subject = resolvedPrefill.subject as string;
     if (isPlainText && resolvedPrefill.text) {
@@ -2219,11 +2392,17 @@
   // API functions for external use
   const reply = (options: Record<string, unknown> = {}) => open(options);
   const forward = (options: Record<string, unknown> = {}) => open(options);
-  const setContacts = (list: unknown[] = []) => { contacts = list as { email: string; name?: string }[]; };
-  const setToList = (list: unknown[] = []) => { toList = list as string[]; };
+  const setContacts = (list: unknown[] = []) => {
+    contacts = list as { email: string; name?: string }[];
+  };
+  const setToList = (list: unknown[] = []) => {
+    toList = list as string[];
+  };
   const isVisible = () => visible;
   const isMinimized = () => minimized;
-  const saveDraftFn = () => { saveCurrentDraft(); };
+  const saveDraftFn = () => {
+    saveCurrentDraft();
+  };
   const updateReplyBody = (newBody?: string, options?: { focusTop?: boolean }) => {
     if (!newBody) return;
     // Set the HTML content in the editor
@@ -2256,7 +2435,13 @@
       visibility,
     });
     const handleClickOutside = (event: MouseEvent) => {
-      if (showEmoji && emojiPickerRef && !emojiPickerRef.contains(event.target as Node) && emojiButtonRef && !emojiButtonRef.contains(event.target as Node)) {
+      if (
+        showEmoji &&
+        emojiPickerRef &&
+        !emojiPickerRef.contains(event.target as Node) &&
+        emojiButtonRef &&
+        !emojiButtonRef.contains(event.target as Node)
+      ) {
         showEmoji = false;
       }
       // Format menu stays open until explicitly closed via toggle button
@@ -2279,33 +2464,35 @@
 </script>
 
 <Tooltip.Provider>
-{#if visible && !minimized}
-  {#if expanded}
-    <div class="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm"></div>
-  {/if}
-  <div
-    class="fixed inset-0 z-50 flex flex-col bg-background border border-border shadow-2xl ring-1 ring-black/5 dark:ring-white/10 overflow-hidden transition-all"
-    class:md:inset-auto={!expanded}
-    class:md:bottom-4={!expanded}
-    class:md:right-4={!expanded}
-    class:md:left-auto={!expanded}
-    class:md:top-auto={!expanded}
-    class:w-full={!expanded}
-    class:h-full={!expanded}
-    class:md:w-[560px]={!expanded && !compact}
-    class:md:h-[600px]={!expanded && !compact}
-    class:md:w-[650px]={!expanded && compact}
-    class:md:h-[700px]={!expanded && compact}
-    class:md:top-8={expanded}
-    class:md:bottom-8={expanded}
-    class:md:left-0={expanded}
-    class:md:right-0={expanded}
-    class:md:max-w-5xl={expanded}
-    class:md:mx-auto={expanded}
-    role="dialog"
-    aria-modal={!compact}
-  >
-      <header class="flex items-center justify-between gap-2 px-4 py-3 border-b border-border bg-muted/30">
+  {#if visible && !minimized}
+    {#if expanded}
+      <div class="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm"></div>
+    {/if}
+    <div
+      class="fixed inset-0 z-50 flex flex-col bg-background border border-border shadow-2xl ring-1 ring-black/5 dark:ring-white/10 overflow-hidden transition-all"
+      class:md:inset-auto={!expanded}
+      class:md:bottom-4={!expanded}
+      class:md:right-4={!expanded}
+      class:md:left-auto={!expanded}
+      class:md:top-auto={!expanded}
+      class:w-full={!expanded}
+      class:h-full={!expanded}
+      class:md:w-[560px]={!expanded && !compact}
+      class:md:h-[600px]={!expanded && !compact}
+      class:md:w-[650px]={!expanded && compact}
+      class:md:h-[700px]={!expanded && compact}
+      class:md:top-8={expanded}
+      class:md:bottom-8={expanded}
+      class:md:left-0={expanded}
+      class:md:right-0={expanded}
+      class:md:max-w-5xl={expanded}
+      class:md:mx-auto={expanded}
+      role="dialog"
+      aria-modal={!compact}
+    >
+      <header
+        class="flex items-center justify-between gap-2 px-4 py-3 border-b border-border bg-muted/30"
+      >
         <Button variant="ghost" size="icon" class="md:hidden" onclick={() => closeComposer()}>
           <ChevronLeft class="h-5 w-5" />
         </Button>
@@ -2402,7 +2589,12 @@
           {/if}
           <Tooltip.Root>
             <Tooltip.Trigger>
-              <Button variant="ghost" size="icon" class="hidden md:flex" onclick={() => closeComposer()}>
+              <Button
+                variant="ghost"
+                size="icon"
+                class="hidden md:flex"
+                onclick={() => closeComposer()}
+              >
                 <X class="h-4 w-4" />
               </Button>
             </Tooltip.Trigger>
@@ -2412,21 +2604,38 @@
           <Button variant="ghost" size="icon" class="md:hidden" onclick={triggerFilePicker}>
             <Paperclip class="h-5 w-5" />
           </Button>
-          <Button variant="ghost" size="icon" class="md:hidden h-10 w-10" onclick={send} disabled={sending}>
+          <Button
+            variant="ghost"
+            size="icon"
+            class="md:hidden h-10 w-10"
+            onclick={send}
+            disabled={sending}
+          >
             <Send class="h-6 w-6 text-blue-400" />
           </Button>
           <div class="relative md:hidden">
-            <Button variant="ghost" size="icon" class="mobile-menu" onclick={() => showMobileMenu = !showMobileMenu}>
+            <Button
+              variant="ghost"
+              size="icon"
+              class="mobile-menu"
+              onclick={() => (showMobileMenu = !showMobileMenu)}
+            >
               <MoreVertical class="h-5 w-5" />
             </Button>
             {#if showMobileMenu}
-              {@const hasContent = !editorView?.isEmpty || toList.length > 0 || subject.trim().length > 0}
-              <div class="absolute right-0 top-full mt-1 min-w-[180px] border border-border bg-popover p-1 shadow-lg z-[100]">
+              {@const hasContent =
+                !editorView?.isEmpty || toList.length > 0 || subject.trim().length > 0}
+              <div
+                class="absolute right-0 top-full mt-1 min-w-[180px] border border-border bg-popover p-1 shadow-lg z-[100]"
+              >
                 {#if !isPlainText}
                   <button
                     type="button"
                     class="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground"
-                    onclick={() => { showMobileMenu = false; openLinkModal(); }}
+                    onclick={() => {
+                      showMobileMenu = false;
+                      openLinkModal();
+                    }}
                   >
                     <Link2 class="h-4 w-4" />
                     Insert link
@@ -2434,7 +2643,10 @@
                   <button
                     type="button"
                     class="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground"
-                    onclick={() => { showMobileMenu = false; triggerImagePicker(); }}
+                    onclick={() => {
+                      showMobileMenu = false;
+                      triggerImagePicker();
+                    }}
                   >
                     <ImageIcon class="h-4 w-4" />
                     Insert image
@@ -2445,7 +2657,10 @@
                   type="button"
                   class="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground disabled:opacity-50 disabled:pointer-events-none"
                   disabled={sending}
-                  onclick={() => { showMobileMenu = false; openScheduleModal(); }}
+                  onclick={() => {
+                    showMobileMenu = false;
+                    openScheduleModal();
+                  }}
                 >
                   <Clock class="h-4 w-4" />
                   Schedule send
@@ -2455,7 +2670,10 @@
                   type="button"
                   class="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground disabled:opacity-50 disabled:pointer-events-none"
                   disabled={!hasContent}
-                  onclick={async () => { await saveCurrentDraft(); showMobileMenu = false; }}
+                  onclick={async () => {
+                    await saveCurrentDraft();
+                    showMobileMenu = false;
+                  }}
                 >
                   <Save class="h-4 w-4" />
                   Save as draft
@@ -2463,7 +2681,10 @@
                 <button
                   type="button"
                   class="w-full flex items-center gap-2 px-3 py-2 text-sm text-destructive hover:bg-accent"
-                  onclick={() => { showMobileMenu = false; promptDiscardDraft(); }}
+                  onclick={() => {
+                    showMobileMenu = false;
+                    promptDiscardDraft();
+                  }}
                 >
                   <Trash2 class="h-4 w-4" />
                   Discard
@@ -2477,11 +2698,17 @@
       <div class="flex-1 overflow-y-auto p-0 md:p-4 flex flex-col gap-3">
         <div class="space-y-2 shrink-0">
           <div class="relative">
-            <div class="flex flex-wrap items-center gap-1.5 min-h-[44px] md:min-h-[38px] px-3 py-2 md:py-1.5 border border-input bg-background transition-colors focus-within:border-primary">
+            <div
+              class="flex flex-wrap items-center gap-1.5 min-h-[44px] md:min-h-[38px] px-3 py-2 md:py-1.5 border border-input bg-background transition-colors focus-within:border-primary"
+            >
               {#each toList as rec}
                 <Badge variant="secondary" class="gap-1 pl-2 pr-1 text-base md:text-sm">
                   <span class="cursor-pointer" onclick={() => editRecipient('to', rec)}>{rec}</span>
-                  <button type="button" class="hover:bg-muted-foreground/20 rounded-full p-0.5" onclick={() => removeRecipient('to', rec)}>
+                  <button
+                    type="button"
+                    class="hover:bg-muted-foreground/20 rounded-full p-0.5"
+                    onclick={() => removeRecipient('to', rec)}
+                  >
                     <X class="h-3.5 w-3.5 md:h-3 md:w-3" />
                   </button>
                 </Badge>
@@ -2500,15 +2727,31 @@
               />
               <div class="flex items-center gap-1 ml-auto">
                 {#if !showCc}
-                  <button type="button" class="text-sm md:text-xs text-muted-foreground hover:text-foreground" onclick={() => { showCc = true; tick().then(() => ccInputEl?.focus()); }}>Cc</button>
+                  <button
+                    type="button"
+                    class="text-sm md:text-xs text-muted-foreground hover:text-foreground"
+                    onclick={() => {
+                      showCc = true;
+                      tick().then(() => ccInputEl?.focus());
+                    }}>Cc</button
+                  >
                 {/if}
                 {#if !showBcc}
-                  <button type="button" class="text-sm md:text-xs text-muted-foreground hover:text-foreground" onclick={() => { showBcc = true; tick().then(() => bccInputEl?.focus()); }}>Bcc</button>
+                  <button
+                    type="button"
+                    class="text-sm md:text-xs text-muted-foreground hover:text-foreground"
+                    onclick={() => {
+                      showBcc = true;
+                      tick().then(() => bccInputEl?.focus());
+                    }}>Bcc</button
+                  >
                 {/if}
               </div>
             </div>
             {#if showAddressBook === 'to' && recipientSuggestions.length}
-              <div class="contact-suggestions absolute top-full left-0 right-0 mt-1 border border-border bg-popover shadow-lg z-10 max-h-[200px] overflow-y-auto">
+              <div
+                class="contact-suggestions absolute top-full left-0 right-0 mt-1 border border-border bg-popover shadow-lg z-10 max-h-[200px] overflow-y-auto"
+              >
                 {#each recipientSuggestions as contact, idx}
                   <button
                     type="button"
@@ -2516,9 +2759,14 @@
                     class:bg-accent={recipientSuggestionIndex === idx}
                     onclick={() => applyRecipientSuggestion('to', contact)}
                   >
-                    <span>{(contact as { name?: string; email: string }).name || (contact as { email: string }).email}</span>
+                    <span
+                      >{(contact as { name?: string; email: string }).name ||
+                        (contact as { email: string }).email}</span
+                    >
                     {#if (contact as { name?: string }).name}
-                      <span class="text-xs text-muted-foreground">{(contact as { email: string }).email}</span>
+                      <span class="text-xs text-muted-foreground"
+                        >{(contact as { email: string }).email}</span
+                      >
                     {/if}
                   </button>
                 {/each}
@@ -2528,11 +2776,19 @@
 
           {#if showCc}
             <div class="relative">
-              <div class="flex flex-wrap items-center gap-1.5 min-h-[44px] md:min-h-[38px] px-3 py-2 md:py-1.5 border border-input bg-background transition-colors focus-within:border-primary">
+              <div
+                class="flex flex-wrap items-center gap-1.5 min-h-[44px] md:min-h-[38px] px-3 py-2 md:py-1.5 border border-input bg-background transition-colors focus-within:border-primary"
+              >
                 {#each ccList as rec}
                   <Badge variant="secondary" class="gap-1 pl-2 pr-1 text-base md:text-sm">
-                    <span class="cursor-pointer" onclick={() => editRecipient('cc', rec)}>{rec}</span>
-                    <button type="button" class="hover:bg-muted-foreground/20 rounded-full p-0.5" onclick={() => removeRecipient('cc', rec)}>
+                    <span class="cursor-pointer" onclick={() => editRecipient('cc', rec)}
+                      >{rec}</span
+                    >
+                    <button
+                      type="button"
+                      class="hover:bg-muted-foreground/20 rounded-full p-0.5"
+                      onclick={() => removeRecipient('cc', rec)}
+                    >
                       <X class="h-3.5 w-3.5 md:h-3 md:w-3" />
                     </button>
                   </Badge>
@@ -2551,7 +2807,9 @@
                 />
               </div>
               {#if showAddressBook === 'cc' && recipientSuggestions.length}
-                <div class="contact-suggestions absolute top-full left-0 right-0 mt-1 border border-border bg-popover shadow-lg z-10 max-h-[200px] overflow-y-auto">
+                <div
+                  class="contact-suggestions absolute top-full left-0 right-0 mt-1 border border-border bg-popover shadow-lg z-10 max-h-[200px] overflow-y-auto"
+                >
                   {#each recipientSuggestions as contact, idx}
                     <button
                       type="button"
@@ -2559,9 +2817,14 @@
                       class:bg-accent={recipientSuggestionIndex === idx}
                       onclick={() => applyRecipientSuggestion('cc', contact)}
                     >
-                      <span>{(contact as { name?: string; email: string }).name || (contact as { email: string }).email}</span>
+                      <span
+                        >{(contact as { name?: string; email: string }).name ||
+                          (contact as { email: string }).email}</span
+                      >
                       {#if (contact as { name?: string }).name}
-                        <span class="text-xs text-muted-foreground">{(contact as { email: string }).email}</span>
+                        <span class="text-xs text-muted-foreground"
+                          >{(contact as { email: string }).email}</span
+                        >
                       {/if}
                     </button>
                   {/each}
@@ -2572,11 +2835,19 @@
 
           {#if showBcc}
             <div class="relative">
-              <div class="flex flex-wrap items-center gap-1.5 min-h-[44px] md:min-h-[38px] px-3 py-2 md:py-1.5 border border-input bg-background transition-colors focus-within:border-primary">
+              <div
+                class="flex flex-wrap items-center gap-1.5 min-h-[44px] md:min-h-[38px] px-3 py-2 md:py-1.5 border border-input bg-background transition-colors focus-within:border-primary"
+              >
                 {#each bccList as rec}
                   <Badge variant="secondary" class="gap-1 pl-2 pr-1 text-base md:text-sm">
-                    <span class="cursor-pointer" onclick={() => editRecipient('bcc', rec)}>{rec}</span>
-                    <button type="button" class="hover:bg-muted-foreground/20 rounded-full p-0.5" onclick={() => removeRecipient('bcc', rec)}>
+                    <span class="cursor-pointer" onclick={() => editRecipient('bcc', rec)}
+                      >{rec}</span
+                    >
+                    <button
+                      type="button"
+                      class="hover:bg-muted-foreground/20 rounded-full p-0.5"
+                      onclick={() => removeRecipient('bcc', rec)}
+                    >
                       <X class="h-3.5 w-3.5 md:h-3 md:w-3" />
                     </button>
                   </Badge>
@@ -2595,7 +2866,9 @@
                 />
               </div>
               {#if showAddressBook === 'bcc' && recipientSuggestions.length}
-                <div class="contact-suggestions absolute top-full left-0 right-0 mt-1 border border-border bg-popover shadow-lg z-10 max-h-[200px] overflow-y-auto">
+                <div
+                  class="contact-suggestions absolute top-full left-0 right-0 mt-1 border border-border bg-popover shadow-lg z-10 max-h-[200px] overflow-y-auto"
+                >
                   {#each recipientSuggestions as contact, idx}
                     <button
                       type="button"
@@ -2603,9 +2876,14 @@
                       class:bg-accent={recipientSuggestionIndex === idx}
                       onclick={() => applyRecipientSuggestion('bcc', contact)}
                     >
-                      <span>{(contact as { name?: string; email: string }).name || (contact as { email: string }).email}</span>
+                      <span
+                        >{(contact as { name?: string; email: string }).name ||
+                          (contact as { email: string }).email}</span
+                      >
                       {#if (contact as { name?: string }).name}
-                        <span class="text-xs text-muted-foreground">{(contact as { email: string }).email}</span>
+                        <span class="text-xs text-muted-foreground"
+                          >{(contact as { email: string }).email}</span
+                        >
                       {/if}
                     </button>
                   {/each}
@@ -2627,7 +2905,9 @@
 
         <div class="flex-1 min-h-[200px] flex flex-col" onclick={focusEditor}>
           {#if !isPlainText}
-            <div class="rich-editor prose prose-sm dark:prose-invert max-w-none flex-1 flex flex-col"></div>
+            <div
+              class="rich-editor prose prose-sm dark:prose-invert max-w-none flex-1 flex flex-col"
+            ></div>
           {:else}
             <Textarea
               class="flex-1 min-h-[200px] resize-none"
@@ -2641,8 +2921,20 @@
           {/if}
         </div>
 
-        <input type="file" multiple class="attach-input hidden" bind:this={attachInputEl} onchange={(e) => onFilesSelected(null, e)} />
-        <input type="file" accept="image/*" class="image-input hidden" bind:this={imageInputEl} onchange={(e) => onImageSelected(null, e)} />
+        <input
+          type="file"
+          multiple
+          class="attach-input hidden"
+          bind:this={attachInputEl}
+          onchange={(e) => onFilesSelected(null, e)}
+        />
+        <input
+          type="file"
+          accept="image/*"
+          class="image-input hidden"
+          bind:this={imageInputEl}
+          onchange={(e) => onImageSelected(null, e)}
+        />
       </div>
 
       {#if attachments.length}
@@ -2658,7 +2950,12 @@
                 <span class="text-sm truncate max-w-[150px]">{card.name}</span>
                 <span class="text-xs text-muted-foreground">{card.sizeLabel}</span>
               </div>
-              <Button variant="ghost" size="icon" class="h-6 w-6" onclick={() => removeAttachment(card.att)}>
+              <Button
+                variant="ghost"
+                size="icon"
+                class="h-6 w-6"
+                onclick={() => removeAttachment(card.att)}
+              >
                 <X class="h-3 w-3" />
               </Button>
             </div>
@@ -2677,10 +2974,18 @@
 
       <footer class="border-t border-border bg-muted/30 p-3">
         {#if !isPlainText}
-          <div class="hidden md:flex flex-wrap items-center gap-1 mb-3 p-2 bg-background border border-border shadow-md" bind:this={formatMenuRef}>
+          <div
+            class="hidden md:flex flex-wrap items-center gap-1 mb-3 p-2 bg-background border border-border shadow-md"
+            bind:this={formatMenuRef}
+          >
             <Tooltip.Root>
               <Tooltip.Trigger>
-                <Button variant="ghost" size="icon" class={isFormatActive('bold') ? 'bg-accent' : ''} onclick={() => editorView?.chain().focus().toggleBold().run()}>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  class={isFormatActive('bold') ? 'bg-accent' : ''}
+                  onclick={() => editorView?.chain().focus().toggleBold().run()}
+                >
                   <Bold class="h-4 w-4" />
                 </Button>
               </Tooltip.Trigger>
@@ -2688,7 +2993,12 @@
             </Tooltip.Root>
             <Tooltip.Root>
               <Tooltip.Trigger>
-                <Button variant="ghost" size="icon" class={isFormatActive('italic') ? 'bg-accent' : ''} onclick={() => editorView?.chain().focus().toggleItalic().run()}>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  class={isFormatActive('italic') ? 'bg-accent' : ''}
+                  onclick={() => editorView?.chain().focus().toggleItalic().run()}
+                >
                   <Italic class="h-4 w-4" />
                 </Button>
               </Tooltip.Trigger>
@@ -2696,7 +3006,12 @@
             </Tooltip.Root>
             <Tooltip.Root>
               <Tooltip.Trigger>
-                <Button variant="ghost" size="icon" class={isFormatActive('underline') ? 'bg-accent' : ''} onclick={() => editorView?.chain().focus().toggleUnderline().run()}>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  class={isFormatActive('underline') ? 'bg-accent' : ''}
+                  onclick={() => editorView?.chain().focus().toggleUnderline().run()}
+                >
                   <UnderlineIcon class="h-4 w-4" />
                 </Button>
               </Tooltip.Trigger>
@@ -2704,7 +3019,11 @@
             </Tooltip.Root>
             <Tooltip.Root>
               <Tooltip.Trigger>
-                <Button variant="ghost" size="icon" onclick={() => editorView?.chain().focus().unsetAllMarks().clearNodes().run()}>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onclick={() => editorView?.chain().focus().unsetAllMarks().clearNodes().run()}
+                >
                   <RemoveFormatting class="h-4 w-4" />
                 </Button>
               </Tooltip.Trigger>
@@ -2713,9 +3032,13 @@
 
             <Separator orientation="vertical" class="h-6 mx-1" />
 
-            <Select.Root type="single" bind:value={fontFamily} onValueChange={(v) => setFontFamily(v)}>
+            <Select.Root
+              type="single"
+              bind:value={fontFamily}
+              onValueChange={(v) => setFontFamily(v)}
+            >
               <Select.Trigger size="sm" class="h-8 px-2 text-xs">
-                {FONT_FAMILIES.find(f => f.value === fontFamily)?.label || fontFamily}
+                {FONT_FAMILIES.find((f) => f.value === fontFamily)?.label || fontFamily}
               </Select.Trigger>
               <Select.Content>
                 {#each FONT_FAMILIES as font}
@@ -2739,8 +3062,15 @@
             <Tooltip.Root>
               <Tooltip.Trigger>
                 <label class="relative cursor-pointer h-6 w-6 overflow-hidden">
-                  <span class="block h-6 w-6 border border-input" style="background: {textColor}"></span>
-                  <input type="color" class="absolute inset-0 opacity-0 cursor-pointer w-full h-full" style="min-width: 0; min-height: 0;" bind:value={textColor} oninput={(e) => setTextColor((e.target as HTMLInputElement).value)} />
+                  <span class="block h-6 w-6 border border-input" style="background: {textColor}"
+                  ></span>
+                  <input
+                    type="color"
+                    class="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+                    style="min-width: 0; min-height: 0;"
+                    bind:value={textColor}
+                    oninput={(e) => setTextColor((e.target as HTMLInputElement).value)}
+                  />
                 </label>
               </Tooltip.Trigger>
               <Tooltip.Content><p>Text color</p></Tooltip.Content>
@@ -2748,8 +3078,17 @@
             <Tooltip.Root>
               <Tooltip.Trigger>
                 <label class="relative cursor-pointer h-6 w-6 overflow-hidden">
-                  <span class="block h-6 w-6 border border-input" style="background: {highlightColor}"></span>
-                  <input type="color" class="absolute inset-0 opacity-0 cursor-pointer w-full h-full" style="min-width: 0; min-height: 0;" bind:value={highlightColor} oninput={(e) => setHighlightColor((e.target as HTMLInputElement).value)} />
+                  <span
+                    class="block h-6 w-6 border border-input"
+                    style="background: {highlightColor}"
+                  ></span>
+                  <input
+                    type="color"
+                    class="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+                    style="min-width: 0; min-height: 0;"
+                    bind:value={highlightColor}
+                    oninput={(e) => setHighlightColor((e.target as HTMLInputElement).value)}
+                  />
                 </label>
               </Tooltip.Trigger>
               <Tooltip.Content><p>Highlight color</p></Tooltip.Content>
@@ -2767,7 +3106,11 @@
 
             <Tooltip.Root>
               <Tooltip.Trigger>
-                <Button variant="ghost" size="icon" onclick={() => (showFormatAdvanced = !showFormatAdvanced)}>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onclick={() => (showFormatAdvanced = !showFormatAdvanced)}
+                >
                   <MoreVertical class="h-4 w-4" />
                 </Button>
               </Tooltip.Trigger>
@@ -2778,7 +3121,12 @@
               <div class="flex items-center gap-1 ml-2">
                 <Tooltip.Root>
                   <Tooltip.Trigger>
-                    <Button variant="ghost" size="icon" class={alignment === 'left' ? 'bg-accent' : ''} onclick={() => setAlignment('left')}>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      class={alignment === 'left' ? 'bg-accent' : ''}
+                      onclick={() => setAlignment('left')}
+                    >
                       <AlignLeft class="h-4 w-4" />
                     </Button>
                   </Tooltip.Trigger>
@@ -2786,7 +3134,12 @@
                 </Tooltip.Root>
                 <Tooltip.Root>
                   <Tooltip.Trigger>
-                    <Button variant="ghost" size="icon" class={alignment === 'center' ? 'bg-accent' : ''} onclick={() => setAlignment('center')}>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      class={alignment === 'center' ? 'bg-accent' : ''}
+                      onclick={() => setAlignment('center')}
+                    >
                       <AlignCenter class="h-4 w-4" />
                     </Button>
                   </Tooltip.Trigger>
@@ -2794,7 +3147,12 @@
                 </Tooltip.Root>
                 <Tooltip.Root>
                   <Tooltip.Trigger>
-                    <Button variant="ghost" size="icon" class={alignment === 'right' ? 'bg-accent' : ''} onclick={() => setAlignment('right')}>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      class={alignment === 'right' ? 'bg-accent' : ''}
+                      onclick={() => setAlignment('right')}
+                    >
                       <AlignRight class="h-4 w-4" />
                     </Button>
                   </Tooltip.Trigger>
@@ -2803,7 +3161,12 @@
                 <Separator orientation="vertical" class="h-6 mx-1" />
                 <Tooltip.Root>
                   <Tooltip.Trigger>
-                    <Button variant="ghost" size="icon" class={isFormatActive('bulletList') ? 'bg-accent' : ''} onclick={() => editorView?.chain().focus().toggleBulletList().run()}>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      class={isFormatActive('bulletList') ? 'bg-accent' : ''}
+                      onclick={() => editorView?.chain().focus().toggleBulletList().run()}
+                    >
                       <List class="h-4 w-4" />
                     </Button>
                   </Tooltip.Trigger>
@@ -2811,7 +3174,12 @@
                 </Tooltip.Root>
                 <Tooltip.Root>
                   <Tooltip.Trigger>
-                    <Button variant="ghost" size="icon" class={isFormatActive('orderedList') ? 'bg-accent' : ''} onclick={() => editorView?.chain().focus().toggleOrderedList().run()}>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      class={isFormatActive('orderedList') ? 'bg-accent' : ''}
+                      onclick={() => editorView?.chain().focus().toggleOrderedList().run()}
+                    >
                       <ListOrdered class="h-4 w-4" />
                     </Button>
                   </Tooltip.Trigger>
@@ -2819,7 +3187,12 @@
                 </Tooltip.Root>
                 <Tooltip.Root>
                   <Tooltip.Trigger>
-                    <Button variant="ghost" size="icon" class={isFormatActive('blockquote') ? 'bg-accent' : ''} onclick={() => editorView?.chain().focus().toggleBlockquote().run()}>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      class={isFormatActive('blockquote') ? 'bg-accent' : ''}
+                      onclick={() => editorView?.chain().focus().toggleBlockquote().run()}
+                    >
                       <Quote class="h-4 w-4" />
                     </Button>
                   </Tooltip.Trigger>
@@ -2827,7 +3200,12 @@
                 </Tooltip.Root>
                 <Tooltip.Root>
                   <Tooltip.Trigger>
-                    <Button variant="ghost" size="icon" class={isFormatActive('code') ? 'bg-accent' : ''} onclick={() => editorView?.chain().focus().toggleCode().run()}>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      class={isFormatActive('code') ? 'bg-accent' : ''}
+                      onclick={() => editorView?.chain().focus().toggleCode().run()}
+                    >
                       <Code class="h-4 w-4" />
                     </Button>
                   </Tooltip.Trigger>
@@ -2842,25 +3220,31 @@
           <div class="flex items-center gap-1">
             <div class="flex shrink-0">
               <Button onclick={send} disabled={sending} class="rounded-none min-w-[100px]">
-                {sending ? 'Sending...' : (archiveAfterSend && inReplyTo ? 'Send & Archive' : 'Send')}
+                {sending ? 'Sending...' : archiveAfterSend && inReplyTo ? 'Send & Archive' : 'Send'}
               </Button>
               <div class="relative">
                 <button
                   type="button"
                   disabled={sending}
                   class="inline-flex items-center justify-center h-9 px-2 rounded-none border-l border-primary-foreground/20 bg-primary text-primary-foreground hover:bg-primary/90 disabled:pointer-events-none disabled:opacity-50"
-                  onclick={() => showSendDropdown = !showSendDropdown}
+                  onclick={() => (showSendDropdown = !showSendDropdown)}
                 >
                   <ChevronDown class="h-4 w-4" />
                 </button>
                 {#if showSendDropdown}
-                  <div class="absolute bottom-full left-0 mb-1 min-w-[160px] border border-border bg-popover p-1 shadow-lg z-[100]">
+                  <div
+                    class="absolute bottom-full left-0 mb-1 min-w-[160px] border border-border bg-popover p-1 shadow-lg z-[100]"
+                  >
                     {#if inReplyTo && !archiveAfterSend}
                       <button
                         type="button"
                         class="w-full flex items-center gap-2 px-2 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground disabled:opacity-50 disabled:pointer-events-none"
                         disabled={sending}
-                        onclick={() => { showSendDropdown = false; archiveAfterSend = true; send(); }}
+                        onclick={() => {
+                          showSendDropdown = false;
+                          archiveAfterSend = true;
+                          send();
+                        }}
                       >
                         <Archive class="h-4 w-4" />
                         Send &amp; Archive
@@ -2871,7 +3255,11 @@
                         type="button"
                         class="w-full flex items-center gap-2 px-2 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground disabled:opacity-50 disabled:pointer-events-none"
                         disabled={sending}
-                        onclick={() => { showSendDropdown = false; archiveAfterSend = false; send(); }}
+                        onclick={() => {
+                          showSendDropdown = false;
+                          archiveAfterSend = false;
+                          send();
+                        }}
                       >
                         <Send class="h-4 w-4" />
                         Send without archiving
@@ -2881,7 +3269,10 @@
                       type="button"
                       class="w-full flex items-center gap-2 px-2 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground disabled:opacity-50 disabled:pointer-events-none"
                       disabled={sending}
-                      onclick={() => { showSendDropdown = false; openScheduleModal(); }}
+                      onclick={() => {
+                        showSendDropdown = false;
+                        openScheduleModal();
+                      }}
                     >
                       <Clock class="h-4 w-4" />
                       Schedule send
@@ -2908,7 +3299,10 @@
                 <Tooltip.Content><p>Insert emoji</p></Tooltip.Content>
               </Tooltip.Root>
               {#if showEmoji}
-                <div class="fixed z-[100] shadow-lg overflow-hidden border border-border" bind:this={emojiPickerRef}>
+                <div
+                  class="fixed z-[100] shadow-lg overflow-hidden border border-border"
+                  bind:this={emojiPickerRef}
+                >
                   <emoji-picker data-source="/emoji-data.json" use:bindEmojiPicker></emoji-picker>
                 </div>
               {/if}
@@ -2943,206 +3337,231 @@
       </footer>
     </div>
 
-  <Dialog.Root bind:open={showLinkModal}>
-    <Dialog.Content class="sm:max-w-[400px]">
-      <Dialog.Header>
-        <Dialog.Title>Insert Link</Dialog.Title>
-      </Dialog.Header>
-      <div class="py-4 space-y-4">
-        <div class="space-y-2">
-          <Label for="link-url">URL</Label>
-          <Input
-            id="link-url"
-            type="url"
-            placeholder="https://example.com"
-            bind:value={linkUrl}
-            onkeydown={(e) => {
-              if (e.key === 'Enter') {
-                e.preventDefault();
-                e.stopPropagation();
-                insertLink();
-              }
-            }}
-            bind:this={linkInputEl}
-          />
-          <p class="text-xs text-muted-foreground">Leave empty to remove link</p>
+    <Dialog.Root bind:open={showLinkModal}>
+      <Dialog.Content class="sm:max-w-[400px]">
+        <Dialog.Header>
+          <Dialog.Title>Insert Link</Dialog.Title>
+        </Dialog.Header>
+        <div class="py-4 space-y-4">
+          <div class="space-y-2">
+            <Label for="link-url">URL</Label>
+            <Input
+              id="link-url"
+              type="url"
+              placeholder="https://example.com"
+              bind:value={linkUrl}
+              onkeydown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  insertLink();
+                }
+              }}
+              bind:this={linkInputEl}
+            />
+            <p class="text-xs text-muted-foreground">Leave empty to remove link</p>
+          </div>
         </div>
-      </div>
-      <Dialog.Footer>
-        <Button variant="ghost" onclick={closeLinkModal}>Cancel</Button>
-        <Button onclick={insertLink}>{linkUrl.trim() ? 'Insert Link' : 'Remove Link'}</Button>
-      </Dialog.Footer>
-    </Dialog.Content>
-  </Dialog.Root>
+        <Dialog.Footer>
+          <Button variant="ghost" onclick={closeLinkModal}>Cancel</Button>
+          <Button onclick={insertLink}>{linkUrl.trim() ? 'Insert Link' : 'Remove Link'}</Button>
+        </Dialog.Footer>
+      </Dialog.Content>
+    </Dialog.Root>
 
-  <Dialog.Root bind:open={showAttachmentReminderModal}>
-    <Dialog.Content class="sm:max-w-[400px]">
-      <Dialog.Header>
-        <Dialog.Title>Forgot attachment?</Dialog.Title>
-      </Dialog.Header>
-      <div class="py-4">
-        <p class="mb-2">
-          You mentioned "<strong>{attachmentReminderKeyword}</strong>" but didn't attach any files.
-        </p>
-        <p class="text-muted-foreground text-sm">
-          Would you like to add an attachment, or send anyway?
-        </p>
-      </div>
-      <Dialog.Footer>
-        <Button variant="ghost" onclick={() => dismissAttachmentReminder(true)}>Send anyway</Button>
-        <Button onclick={() => dismissAttachmentReminder(false)}>Add attachment</Button>
-      </Dialog.Footer>
-    </Dialog.Content>
-  </Dialog.Root>
-
-  <Dialog.Root bind:open={showDiscardModal}>
-    <Dialog.Content class="sm:max-w-[400px]">
-      <Dialog.Header>
-        <Dialog.Title>Discard draft?</Dialog.Title>
-      </Dialog.Header>
-      <div class="py-4">
-        <p class="text-muted-foreground">
-          Your message has unsaved changes. Are you sure you want to discard this draft?
-        </p>
-      </div>
-      <Dialog.Footer>
-        <Button variant="ghost" onclick={() => (showDiscardModal = false)}>Cancel</Button>
-        <Button variant="destructive" onclick={confirmDiscardDraft}>Discard</Button>
-      </Dialog.Footer>
-    </Dialog.Content>
-  </Dialog.Root>
-
-  <Dialog.Root bind:open={showScheduleModal}>
-    <Dialog.Content class="sm:max-w-[400px]">
-      <Dialog.Header>
-        <Dialog.Title>Schedule send</Dialog.Title>
-      </Dialog.Header>
-      <div class="py-4 space-y-4">
-        <div class="space-y-2">
-          <Label for="schedule-date">Date</Label>
-          <Input id="schedule-date" type="date" bind:value={scheduleDate} min={getTodayDateString()} />
+    <Dialog.Root bind:open={showAttachmentReminderModal}>
+      <Dialog.Content class="sm:max-w-[400px]">
+        <Dialog.Header>
+          <Dialog.Title>Forgot attachment?</Dialog.Title>
+        </Dialog.Header>
+        <div class="py-4">
+          <p class="mb-2">
+            You mentioned "<strong>{attachmentReminderKeyword}</strong>" but didn't attach any
+            files.
+          </p>
+          <p class="text-muted-foreground text-sm">
+            Would you like to add an attachment, or send anyway?
+          </p>
         </div>
-        <div class="space-y-2">
-          <Label for="schedule-time">Time</Label>
-          <div class="flex gap-2">
-            <div class="relative flex-1">
-              <Input
-                id="schedule-time"
-                type="text"
-                placeholder="9:00"
-                bind:value={scheduleTime}
-                onclick={() => (showScheduleTimePicker = true)}
-                onblur={handleTimeInputBlur}
-              />
-              {#if showScheduleTimePicker}
-                <div class="absolute top-full left-0 right-0 mt-1 max-h-[200px] overflow-y-auto border border-border bg-popover shadow-lg z-10">
-                  {#each scheduleTimeOptions as opt}
-                    <button
-                      type="button"
-                      class="w-full px-3 py-2 text-left text-sm hover:bg-accent"
-                      onmousedown={(e) => { e.preventDefault(); scheduleTime = opt.value; showScheduleTimePicker = false; }}
-                    >
-                      {opt.display}
-                    </button>
-                  {/each}
-                </div>
+        <Dialog.Footer>
+          <Button variant="ghost" onclick={() => dismissAttachmentReminder(true)}
+            >Send anyway</Button
+          >
+          <Button onclick={() => dismissAttachmentReminder(false)}>Add attachment</Button>
+        </Dialog.Footer>
+      </Dialog.Content>
+    </Dialog.Root>
+
+    <Dialog.Root bind:open={showDiscardModal}>
+      <Dialog.Content class="sm:max-w-[400px]">
+        <Dialog.Header>
+          <Dialog.Title>Discard draft?</Dialog.Title>
+        </Dialog.Header>
+        <div class="py-4">
+          <p class="text-muted-foreground">
+            Your message has unsaved changes. Are you sure you want to discard this draft?
+          </p>
+        </div>
+        <Dialog.Footer>
+          <Button variant="ghost" onclick={() => (showDiscardModal = false)}>Cancel</Button>
+          <Button variant="destructive" onclick={confirmDiscardDraft}>Discard</Button>
+        </Dialog.Footer>
+      </Dialog.Content>
+    </Dialog.Root>
+
+    <Dialog.Root bind:open={showScheduleModal}>
+      <Dialog.Content class="sm:max-w-[400px]">
+        <Dialog.Header>
+          <Dialog.Title>Schedule send</Dialog.Title>
+        </Dialog.Header>
+        <div class="py-4 space-y-4">
+          <div class="space-y-2">
+            <Label for="schedule-date">Date</Label>
+            <Input
+              id="schedule-date"
+              type="date"
+              bind:value={scheduleDate}
+              min={getTodayDateString()}
+            />
+          </div>
+          <div class="space-y-2">
+            <Label for="schedule-time">Time</Label>
+            <div class="flex gap-2">
+              <div class="relative flex-1">
+                <Input
+                  id="schedule-time"
+                  type="text"
+                  placeholder="9:00"
+                  bind:value={scheduleTime}
+                  onclick={() => (showScheduleTimePicker = true)}
+                  onblur={handleTimeInputBlur}
+                />
+                {#if showScheduleTimePicker}
+                  <div
+                    class="absolute top-full left-0 right-0 mt-1 max-h-[200px] overflow-y-auto border border-border bg-popover shadow-lg z-10"
+                  >
+                    {#each scheduleTimeOptions as opt}
+                      <button
+                        type="button"
+                        class="w-full px-3 py-2 text-left text-sm hover:bg-accent"
+                        onmousedown={(e) => {
+                          e.preventDefault();
+                          scheduleTime = opt.value;
+                          showScheduleTimePicker = false;
+                        }}
+                      >
+                        {opt.display}
+                      </button>
+                    {/each}
+                  </div>
+                {/if}
+              </div>
+              <Select.Root type="single" bind:value={scheduleMeridiem}>
+                <Select.Trigger size="default" class="h-9 w-[70px]">
+                  {scheduleMeridiem || 'AM'}
+                </Select.Trigger>
+                <Select.Content>
+                  <Select.Item value="AM">AM</Select.Item>
+                  <Select.Item value="PM">PM</Select.Item>
+                </Select.Content>
+              </Select.Root>
+            </div>
+          </div>
+          {#if error}
+            <Alert.Root variant="destructive">
+              <AlertTriangle class="h-4 w-4" />
+              <Alert.Description>{error}</Alert.Description>
+            </Alert.Root>
+          {/if}
+        </div>
+        <Dialog.Footer>
+          <Button variant="ghost" onclick={closeScheduleModal}>Cancel</Button>
+          <Button onclick={proceedToScheduleConfirm} disabled={!scheduleDate || !scheduleTime}
+            >Continue</Button
+          >
+        </Dialog.Footer>
+      </Dialog.Content>
+    </Dialog.Root>
+
+    <Dialog.Root bind:open={showScheduleConfirm}>
+      {@const scheduleInfo = getScheduleDisplayInfo()}
+      <Dialog.Content class="sm:max-w-[400px]">
+        <Dialog.Header>
+          <Dialog.Title>Confirm scheduled send</Dialog.Title>
+        </Dialog.Header>
+        <div class="py-4 space-y-3">
+          <div class="flex justify-between text-sm">
+            <span class="text-muted-foreground">To:</span>
+            <span class="text-right">{scheduleInfo?.recipients || ''}</span>
+          </div>
+          <div class="flex justify-between text-sm">
+            <span class="text-muted-foreground">Subject:</span>
+            <span class="text-right">{scheduleInfo?.subject || ''}</span>
+          </div>
+          <Separator />
+          <div class="flex justify-between text-sm font-medium">
+            <span>Send on:</span>
+            <span class="text-primary"
+              >{scheduleInfo?.date || ''} at {scheduleInfo?.time || ''}</span
+            >
+          </div>
+          {#if error}
+            <Alert.Root variant="destructive">
+              <AlertTriangle class="h-4 w-4" />
+              <Alert.Description>{error}</Alert.Description>
+            </Alert.Root>
+          {/if}
+        </div>
+        <Dialog.Footer>
+          <Button variant="ghost" onclick={backToSchedulePicker}>Back</Button>
+          <Button onclick={sendLater} disabled={sending}
+            >{sending ? 'Scheduling...' : 'Schedule Send'}</Button
+          >
+        </Dialog.Footer>
+      </Dialog.Content>
+    </Dialog.Root>
+  {/if}
+
+  {#if minimizedDrafts.length}
+    <div class="fixed bottom-4 right-4 z-40 flex flex-col gap-2">
+      {#each minimizedDrafts as draft ((draft as { key: string }).key)}
+        <button
+          type="button"
+          class="flex items-center gap-2 px-3 py-2 bg-background border border-border shadow-md hover:bg-accent transition-colors cursor-pointer"
+          onclick={() => restoreMinimizedDraft(draft)}
+          onkeydown={(e) => handleMinimizedKeydown(e, draft)}
+        >
+          <div class="flex flex-col items-start min-w-0 flex-1">
+            <span class="text-sm font-medium truncate max-w-[180px]"
+              >{getMinimizedTitle(draft)}</span
+            >
+            <div class="flex items-center gap-2 text-xs text-muted-foreground">
+              {#if getMinimizedStatusLabel(draft)}
+                <span>{getMinimizedStatusLabel(draft)}</span>
+              {/if}
+              {#if getMinimizedMeta(draft)}
+                <span>{getMinimizedMeta(draft)}</span>
               {/if}
             </div>
-            <Select.Root type="single" bind:value={scheduleMeridiem}>
-              <Select.Trigger size="default" class="h-9 w-[70px]">
-                {scheduleMeridiem || 'AM'}
-              </Select.Trigger>
-              <Select.Content>
-                <Select.Item value="AM">AM</Select.Item>
-                <Select.Item value="PM">PM</Select.Item>
-              </Select.Content>
-            </Select.Root>
           </div>
-        </div>
-        {#if error}
-          <Alert.Root variant="destructive">
-            <AlertTriangle class="h-4 w-4" />
-            <Alert.Description>{error}</Alert.Description>
-          </Alert.Root>
-        {/if}
-      </div>
-      <Dialog.Footer>
-        <Button variant="ghost" onclick={closeScheduleModal}>Cancel</Button>
-        <Button onclick={proceedToScheduleConfirm} disabled={!scheduleDate || !scheduleTime}>Continue</Button>
-      </Dialog.Footer>
-    </Dialog.Content>
-  </Dialog.Root>
-
-  <Dialog.Root bind:open={showScheduleConfirm}>
-    {@const scheduleInfo = getScheduleDisplayInfo()}
-    <Dialog.Content class="sm:max-w-[400px]">
-      <Dialog.Header>
-        <Dialog.Title>Confirm scheduled send</Dialog.Title>
-      </Dialog.Header>
-      <div class="py-4 space-y-3">
-        <div class="flex justify-between text-sm">
-          <span class="text-muted-foreground">To:</span>
-          <span class="text-right">{scheduleInfo?.recipients || ''}</span>
-        </div>
-        <div class="flex justify-between text-sm">
-          <span class="text-muted-foreground">Subject:</span>
-          <span class="text-right">{scheduleInfo?.subject || ''}</span>
-        </div>
-        <Separator />
-        <div class="flex justify-between text-sm font-medium">
-          <span>Send on:</span>
-          <span class="text-primary">{scheduleInfo?.date || ''} at {scheduleInfo?.time || ''}</span>
-        </div>
-        {#if error}
-          <Alert.Root variant="destructive">
-            <AlertTriangle class="h-4 w-4" />
-            <Alert.Description>{error}</Alert.Description>
-          </Alert.Root>
-        {/if}
-      </div>
-      <Dialog.Footer>
-        <Button variant="ghost" onclick={backToSchedulePicker}>Back</Button>
-        <Button onclick={sendLater} disabled={sending}>{sending ? 'Scheduling...' : 'Schedule Send'}</Button>
-      </Dialog.Footer>
-    </Dialog.Content>
-  </Dialog.Root>
-{/if}
-
-{#if minimizedDrafts.length}
-  <div class="fixed bottom-4 right-4 z-40 flex flex-col gap-2">
-    {#each minimizedDrafts as draft ((draft as { key: string }).key)}
-      <button
-        type="button"
-        class="flex items-center gap-2 px-3 py-2 bg-background border border-border shadow-md hover:bg-accent transition-colors cursor-pointer"
-        onclick={() => restoreMinimizedDraft(draft)}
-        onkeydown={(e) => handleMinimizedKeydown(e, draft)}
-      >
-        <div class="flex flex-col items-start min-w-0 flex-1">
-          <span class="text-sm font-medium truncate max-w-[180px]">{getMinimizedTitle(draft)}</span>
-          <div class="flex items-center gap-2 text-xs text-muted-foreground">
-            {#if getMinimizedStatusLabel(draft)}
-              <span>{getMinimizedStatusLabel(draft)}</span>
-            {/if}
-            {#if getMinimizedMeta(draft)}
-              <span>{getMinimizedMeta(draft)}</span>
-            {/if}
-          </div>
-        </div>
-        {#if (draft as { data: { attachments?: unknown[] } })?.data?.attachments?.length}
-          <Paperclip class="h-4 w-4 text-muted-foreground shrink-0" />
-        {/if}
-        <Button
-          variant="ghost"
-          size="icon"
-          class="h-6 w-6 shrink-0"
-          onclick={(e) => { e.stopPropagation(); discardMinimizedDraft(draft); }}
-        >
-          <Trash2 class="h-3 w-3" />
-        </Button>
-      </button>
-    {/each}
-  </div>
-{/if}
+          {#if (draft as { data: { attachments?: unknown[] } })?.data?.attachments?.length}
+            <Paperclip class="h-4 w-4 text-muted-foreground shrink-0" />
+          {/if}
+          <Button
+            variant="ghost"
+            size="icon"
+            class="h-6 w-6 shrink-0"
+            onclick={(e) => {
+              e.stopPropagation();
+              discardMinimizedDraft(draft);
+            }}
+          >
+            <Trash2 class="h-3 w-3" />
+          </Button>
+        </button>
+      {/each}
+    </div>
+  {/if}
 </Tooltip.Provider>
 
 <style>

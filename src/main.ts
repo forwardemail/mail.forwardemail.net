@@ -1243,6 +1243,29 @@ async function bootstrap() {
       reconcileOrphanedAccountData().catch((err) => {
         console.warn('[DB] Account reconciliation failed:', err);
       });
+
+      // Backwards-compatible fix: if the user is stuck with both a demo
+      // account and a real account in the Accounts list, silently remove
+      // the demo account and deactivate demo mode so the real account
+      // takes over cleanly.
+      try {
+        const { isDemoMode, cleanupDemoAccount } = await import('./utils/demo-mode.js');
+        const { DEMO_EMAIL } = await import('./utils/demo-data.js');
+        const allAccounts = Accounts.getAll();
+        const hasDemoAccount = allAccounts.some((a) => a.email === DEMO_EMAIL);
+        const hasRealAccount = allAccounts.some((a) => a.email !== DEMO_EMAIL);
+        if ((hasDemoAccount && hasRealAccount) || (hasDemoAccount && !isDemoMode())) {
+          console.info('[bootstrap] Cleaning up stale demo account');
+          await cleanupDemoAccount({ preserveCredentials: true });
+          // If a real account exists, make sure it is the active one
+          const remaining = Accounts.getAll();
+          if (remaining.length > 0 && Accounts.getActive() === DEMO_EMAIL) {
+            Accounts.setActive(remaining[0].email);
+          }
+        }
+      } catch (err) {
+        console.warn('[bootstrap] Demo cleanup failed:', err);
+      }
     }
 
     let route = currentRoute();

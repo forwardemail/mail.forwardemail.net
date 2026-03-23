@@ -164,6 +164,9 @@ importers:
       tailwind-merge:
         specifier: ^3.4.0
         version: 3.4.0
+      tauri-plugin-remote-push-api:
+        specifier: ^1.0.10
+        version: 1.0.10
     devDependencies:
       '@commitlint/cli':
         specifier: ^20.4.1
@@ -5516,6 +5519,9 @@ packages:
 
   tar-stream@3.1.7:
     resolution: {integrity: sha512-qJj60CXt7IU1Ffyc3NJMjh6EkuCFej46zUqJ4J7pqYlThyd9bO0XBTmcOIhSzZJVWfsLks0+nle/j538YAW9RQ==}
+
+  tauri-plugin-remote-push-api@1.0.10:
+    resolution: {integrity: sha512-FfMRFQT1ylH51sDswDH40DeTU95bGn8HTEWkBPVu7VzA5OZNxm1/LGcP6iaLewgLRLo8mrXsGQ8UU+mdV2v8nw==}
 
   temp-dir@2.0.0:
     resolution: {integrity: sha512-aoBAniQmmwtcKp/7BzsH8Cxzv8OL736p7v1ihGb5e9DJ9kTwGWHrQrVB5+lfVDzfGrdRzXch+ig7LHaY1JTOrg==}
@@ -11813,6 +11819,10 @@ snapshots:
     transitivePeerDependencies:
       - bare-abort-controller
       - react-native-b4a
+
+  tauri-plugin-remote-push-api@1.0.10:
+    dependencies:
+      '@tauri-apps/api': 2.10.1
 
   temp-dir@2.0.0: {}
 

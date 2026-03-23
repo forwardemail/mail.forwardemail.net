@@ -93,7 +93,8 @@
     "postal-mime": "^2.6.0",
     "preact": "^10.24.3",
     "svelte": "^5.48.0",
-    "tailwind-merge": "^3.4.0"
+    "tailwind-merge": "^3.4.0",
+    "tauri-plugin-remote-push-api": "^1.0.10"
   },
   "devDependencies": {
     "@commitlint/cli": "^20.4.1",

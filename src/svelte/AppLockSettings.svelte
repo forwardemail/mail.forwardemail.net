@@ -302,16 +302,18 @@
 
     {#if !enabled}
       {#if !showSetupPin}
-        <Button onclick={handleEnableLock} disabled={loading}>
-          Enable App Lock
-        </Button>
+        <Button onclick={handleEnableLock} disabled={loading}>Enable App Lock</Button>
       {:else}
         <div class="space-y-3 rounded-md border border-border p-4">
           <div class="space-y-1">
             <Label for="pin-length">PIN Length</Label>
-            <Select.Root type="single" value={String(prefs.pinLength || 6)} onValueChange={handlePinLengthChange}>
+            <Select.Root
+              type="single"
+              value={String(prefs.pinLength || 6)}
+              onValueChange={handlePinLengthChange}
+            >
               <Select.Trigger class="flex h-9 w-full rounded-md">
-                {(prefs.pinLength || 6)} digits
+                {prefs.pinLength || 6} digits
               </Select.Trigger>
               <Select.Content>
                 {#each PIN_LENGTH_OPTIONS as len}
@@ -373,9 +375,13 @@
       <!-- Inactivity timeout -->
       <div class="space-y-1">
         <Label for="timeout">Auto-lock after inactivity</Label>
-        <Select.Root type="single" value={String(prefs.timeoutMs)} onValueChange={handleTimeoutChange}>
+        <Select.Root
+          type="single"
+          value={String(prefs.timeoutMs)}
+          onValueChange={handleTimeoutChange}
+        >
           <Select.Trigger class="flex h-9 w-full rounded-md">
-            {TIMEOUT_OPTIONS.find(o => o.value === prefs.timeoutMs)?.label || 'Select timeout'}
+            {TIMEOUT_OPTIONS.find((o) => o.value === prefs.timeoutMs)?.label || 'Select timeout'}
           </Select.Trigger>
           <Select.Content>
             {#each TIMEOUT_OPTIONS as opt}
@@ -486,7 +492,9 @@
           {#if prfSupported}
             {#if passkeyRegistered}
               <div class="flex items-center gap-3">
-                <span class="inline-flex items-center gap-1 rounded-md bg-green-50 px-2 py-1 text-xs font-medium text-green-700 ring-1 ring-inset ring-green-600/20 dark:bg-green-500/10 dark:text-green-400 dark:ring-green-500/20">
+                <span
+                  class="inline-flex items-center gap-1 rounded-md bg-green-50 px-2 py-1 text-xs font-medium text-green-700 ring-1 ring-inset ring-green-600/20 dark:bg-green-500/10 dark:text-green-400 dark:ring-green-500/20"
+                >
                   <ShieldCheck class="h-3 w-3" />
                   Passkey registered
                 </span>
@@ -500,7 +508,12 @@
                 </Button>
               </div>
             {:else}
-              <Button variant="outline" size="sm" onclick={handleRegisterPasskey} disabled={loading}>
+              <Button
+                variant="outline"
+                size="sm"
+                onclick={handleRegisterPasskey}
+                disabled={loading}
+              >
                 {loading ? 'Registering...' : 'Register Passkey'}
               </Button>
             {/if}

@@ -11,13 +11,7 @@
     onFormSubmit?: (action: string, method: string, data: Record<string, unknown>) => void;
   }
 
-  let {
-    html,
-    messageId,
-    onLinkClick,
-    onHeightChange,
-    onFormSubmit,
-  }: Props = $props();
+  let { html, messageId, onLinkClick, onHeightChange, onFormSubmit }: Props = $props();
 
   // State declarations
   let iframeRef: HTMLIFrameElement | null = $state(null);
@@ -125,7 +119,10 @@
 
     // Mark recovery attempted and force recreation
     recoveryAttempted.add(currentMsgId);
-    console.warn('[EmailIframe] Content not rendered after delay, forcing recreation for message:', currentMsgId);
+    console.warn(
+      '[EmailIframe] Content not rendered after delay, forcing recreation for message:',
+      currentMsgId,
+    );
     themeVersion++;
   }
 
@@ -252,7 +249,7 @@
           onFormSubmit?.(
             data.payload.action || '',
             data.payload.method || 'get',
-            data.payload.data || {}
+            data.payload.data || {},
           );
         }
         break;
@@ -283,7 +280,7 @@
     });
     themeObserver.observe(document.body, {
       attributes: true,
-      attributeFilter: ['class']
+      attributeFilter: ['class'],
     });
   });
 

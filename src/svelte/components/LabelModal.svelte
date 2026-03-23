@@ -141,7 +141,9 @@
     border: 2px solid transparent;
     cursor: pointer;
     box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.35);
-    transition: transform 0.1s ease, border-color 0.1s ease;
+    transition:
+      transform 0.1s ease,
+      border-color 0.1s ease;
   }
 
   .label-color-swatch:hover {
@@ -150,7 +152,9 @@
 
   .label-color-swatch.active {
     border-color: hsl(var(--foreground));
-    box-shadow: 0 0 0 2px hsl(var(--background)), inset 0 0 0 1px rgba(255, 255, 255, 0.35);
+    box-shadow:
+      0 0 0 2px hsl(var(--background)),
+      inset 0 0 0 1px rgba(255, 255, 255, 0.35);
   }
 
   .label-custom-color {

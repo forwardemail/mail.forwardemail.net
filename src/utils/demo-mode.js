@@ -142,6 +142,54 @@ export function showDemoBlockedToast(actionLabel) {
 }
 
 /**
+ * Silently clean up all demo account state.
+ * Use this when transitioning from demo to a real account (login or bootstrap).
+ * Unlike exitDemoAndRedirect(), this does NOT open the sign-up page or reload.
+ *
+ * @param {object} [options]
+ * @param {boolean} [options.preserveCredentials=false] - When true, only remove
+ *   the demo Accounts entry and deactivate demo mode without touching
+ *   Local/Session credential keys.  Use this during bootstrap when a real
+ *   account's credentials are already stored in those shared keys.
+ * @returns {Promise<void>}
+ */
+export async function cleanupDemoAccount({ preserveCredentials = false } = {}) {
+  deactivateDemoMode();
+
+  // Remove demo account entry and its IndexedDB cache
+  try {
+    await Accounts.remove(DEMO_EMAIL, true);
+  } catch {
+    // Best effort — Accounts.remove may reject if entry is already gone
+  }
+
+  // Only clear shared credential keys when the caller knows they still
+  // hold demo values (e.g. during login before the real account is set up).
+  // During bootstrap the real account's credentials are already stored in
+  // these keys, so wiping them would break the active session.
+  if (!preserveCredentials) {
+    try {
+      Local.remove('email');
+      Local.remove('alias_auth');
+      Local.remove('api_token');
+    } catch {
+      // ignore
+    }
+
+    try {
+      sessionStorage.removeItem('webmail_email');
+      sessionStorage.removeItem('webmail_alias_auth');
+      sessionStorage.removeItem('webmail_api_key');
+      sessionStorage.removeItem('webmail_authToken');
+      sessionStorage.removeItem('webmail_active_account');
+      sessionStorage.removeItem('webmail_session_accounts');
+    } catch {
+      // ignore
+    }
+  }
+}
+
+/**
  * Exit demo mode, clear credentials, and redirect to sign-up page.
  */
 export function exitDemoAndRedirect() {

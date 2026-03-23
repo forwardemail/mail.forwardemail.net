@@ -47,13 +47,9 @@
       class="flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3 shadow-lg"
     >
       <Mail class="h-5 w-5 shrink-0 text-primary" />
-      <p class="text-sm">
-        Set Forward Email as your default email app?
-      </p>
+      <p class="text-sm">Set Forward Email as your default email app?</p>
       <div class="flex shrink-0 gap-2">
-        <Button size="sm" onclick={handleSetDefault}>
-          Set as default
-        </Button>
+        <Button size="sm" onclick={handleSetDefault}>Set as default</Button>
         <Button size="sm" variant="ghost" onclick={handleDismiss} aria-label="Dismiss">
           <X class="h-4 w-4" />
         </Button>

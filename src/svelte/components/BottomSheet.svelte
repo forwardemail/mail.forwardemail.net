@@ -93,10 +93,7 @@
 {#if open}
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div
-    class="fe-bottom-sheet-backdrop"
-    onclick={handleBackdropClick}
-  >
+  <div class="fe-bottom-sheet-backdrop" onclick={handleBackdropClick}>
     <div
       class="fe-bottom-sheet"
       bind:this={sheetEl}
@@ -116,12 +113,7 @@
       {#if title}
         <div class="fe-bottom-sheet-header">
           <h2 id="bottom-sheet-title" class="fe-bottom-sheet-title">{title}</h2>
-          <button
-            type="button"
-            class="fe-bottom-sheet-close"
-            aria-label="Close"
-            onclick={onClose}
-          >
+          <button type="button" class="fe-bottom-sheet-close" aria-label="Close" onclick={onClose}>
             <X class="h-5 w-5" />
           </button>
         </div>
@@ -150,13 +142,7 @@
 
       <!-- Cancel button -->
       <div class="fe-bottom-sheet-footer">
-        <button
-          type="button"
-          class="fe-bottom-sheet-cancel"
-          onclick={onClose}
-        >
-          Cancel
-        </button>
+        <button type="button" class="fe-bottom-sheet-cancel" onclick={onClose}> Cancel </button>
       </div>
     </div>
   </div>
