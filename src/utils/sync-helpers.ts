@@ -15,8 +15,33 @@ type RawMessage = Record<string, unknown> & {
     from?: AddressObject;
     textAsHtml?: string;
     text?: string;
+    html?: string;
   };
 };
+
+/**
+ * Strip HTML tags, style/script blocks, and HTML entities from a string,
+ * then collapse whitespace and truncate to produce a clean plaintext snippet.
+ */
+function stripHtmlToPlaintext(html: string, maxLen = 160): string {
+  if (!html) return '';
+  const cleaned = String(html)
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<br\s*\/?>/gi, ' ')
+    .replace(/<\/?(p|div|li|tr|td|th|h[1-6]|blockquote|pre)[^>]*>/gi, ' ')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#039;/gi, "'")
+    .replace(/&[#\w]+;/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return cleaned.length > maxLen ? cleaned.slice(0, maxLen) : cleaned;
+}
 
 export const accountKey = (account?: string | null): string =>
   account || Local.get('email') || 'default';
@@ -212,15 +237,25 @@ export function normalizeMessageForCache(
     cc: ccField || undefined,
     bcc: bccField || undefined,
     subject,
-    snippet:
-      ((raw.Plain as string)?.slice?.(0, 140) as string) ||
-      (raw.snippet as string) ||
-      (raw.preview as string) ||
-      (raw.textAsHtml as string) ||
-      (raw.text as string) ||
-      raw.nodemailer?.textAsHtml ||
-      raw.nodemailer?.text ||
-      '',
+    snippet: (() => {
+      // Prefer pre-computed plaintext sources first
+      const plain =
+        (raw.Plain as string) ||
+        (raw.snippet as string) ||
+        (raw.preview as string) ||
+        (raw.text as string) ||
+        raw.nodemailer?.text ||
+        '';
+      if (plain) return stripHtmlToPlaintext(plain);
+      // Fall back to HTML body sources, stripping tags
+      const html =
+        (raw.textAsHtml as string) ||
+        raw.nodemailer?.textAsHtml ||
+        (raw.html as string) ||
+        raw.nodemailer?.html ||
+        '';
+      return stripHtmlToPlaintext(html);
+    })(),
     flags,
     is_unread: isUnread,
     is_unread_index: isUnread ? 1 : 0,

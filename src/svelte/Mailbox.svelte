@@ -5667,11 +5667,21 @@
                                   >
                                 {/if}
                               </div>
-                              <div class="flex-1 min-w-0">
+                              <div class="flex-1 min-w-0 flex items-baseline gap-1">
                                 <span
-                                  class={`truncate block ${conv.hasUnread || conv.is_unread ? 'font-medium' : ''}`}
-                                  >{conv.displaySubject || conv.subject}</span
+                                  class={`shrink-0 ${conv.hasUnread || conv.is_unread ? 'font-medium' : ''}`}
+                                  style="max-width:60%">{conv.displaySubject || conv.subject}</span
                                 >
+                                {#if truncatePreview(mailboxView?.getConversationPreview?.(conv) || conv.snippet || '', 80)}
+                                  <span class="truncate text-muted-foreground font-normal text-xs">
+                                    &mdash; {truncatePreview(
+                                      mailboxView?.getConversationPreview?.(conv) ||
+                                        conv.snippet ||
+                                        '',
+                                      80,
+                                    )}
+                                  </span>
+                                {/if}
                               </div>
                               <div class="flex items-center gap-1.5 shrink-0 text-muted-foreground">
                                 {#if hasConversationReplies(conv)}
@@ -5715,40 +5725,33 @@
                                 </span>
                               </div>
                             </div>
-                            <!-- Row 2: Preview + Labels -->
-                            <div class="flex items-center gap-2 text-xs text-muted-foreground">
-                              <span class="truncate flex-1 min-w-0">
-                                {truncatePreview(
-                                  mailboxView?.getConversationPreview?.(conv) || conv.snippet || '',
-                                )}
-                              </span>
-                              {#if Array.isArray(conv.labels) && conv.labels.length > 0}
-                                <div class="flex items-center gap-1 shrink-0">
-                                  {#each conv.labels.slice(0, 3) as lbl}
-                                    {#if typeof lbl === 'string' && lbl && lbl !== '[]'}
-                                      {#if labelMap.get(lbl)}
-                                        <span
-                                          class="inline-flex items-center px-1.5 py-0.5 text-[10px] truncate max-w-[80px]"
-                                          style={labelMap.get(lbl).color
-                                            ? `background:${labelMap.get(lbl).color}; color:#fff;`
-                                            : ''}
-                                        >
-                                          {labelMap.get(lbl).name ||
-                                            labelMap.get(lbl).label ||
-                                            labelMap.get(lbl).value ||
-                                            lbl}
-                                        </span>
-                                      {/if}
+                            {#if Array.isArray(conv.labels) && conv.labels.length > 0}
+                              <!-- Row 2: Labels -->
+                              <div class="flex items-center gap-1">
+                                {#each conv.labels.slice(0, 3) as lbl}
+                                  {#if typeof lbl === 'string' && lbl && lbl !== '[]'}
+                                    {#if labelMap.get(lbl)}
+                                      <span
+                                        class="inline-flex items-center px-1.5 py-0.5 text-[10px] truncate max-w-[80px]"
+                                        style={labelMap.get(lbl).color
+                                          ? `background:${labelMap.get(lbl).color}; color:#fff;`
+                                          : ''}
+                                      >
+                                        {labelMap.get(lbl).name ||
+                                          labelMap.get(lbl).label ||
+                                          labelMap.get(lbl).value ||
+                                          lbl}
+                                      </span>
                                     {/if}
-                                  {/each}
-                                  {#if conv.labels.length > 3}
-                                    <span class="text-[10px] text-muted-foreground"
-                                      >+{conv.labels.length - 3}</span
-                                    >
                                   {/if}
-                                </div>
-                              {/if}
-                            </div>
+                                {/each}
+                                {#if conv.labels.length > 3}
+                                  <span class="text-[10px] text-muted-foreground"
+                                    >+{conv.labels.length - 3}</span
+                                  >
+                                {/if}
+                              </div>
+                            {/if}
                           </div>
                         </div>
                       </li>
@@ -5809,73 +5812,70 @@
                             <Square class="h-5 w-5" />
                           {/if}
                         </button>
-                        <div class="flex-1 min-w-0 flex flex-col gap-1">
-                          <div class="flex items-center justify-between gap-2">
-                            <div class="font-medium truncate">
+                        <div class="flex-1 min-w-0 flex flex-col gap-0.5 text-[13px]">
+                          <!-- Row 1: From | Subject - Preview | Date -->
+                          <div class="flex items-center gap-3">
+                            <div
+                              class="w-[30%] min-w-[140px] max-w-[280px] shrink-0 flex items-center gap-1"
+                            >
                               {#if msg.is_unread}
-                                <span
-                                  class="w-2 h-2 rounded-full bg-primary shrink-0"
-                                  title="Unread"
-                                ></span>
+                                <span class="w-1.5 h-1.5 rounded-full bg-primary shrink-0"></span>
                               {/if}
-                              <span
-                                class={isProductivityLayout ? 'whitespace-normal break-words' : ''}
-                                >{msg.subject}</span
+                              <span class={`truncate ${msg.is_unread ? 'font-semibold' : ''}`}
+                                >{listIsSentFolder
+                                  ? `To: ${getMessageToName(msg) || getMessageFromName(msg)}`
+                                  : getMessageFromName(msg)}</span
                               >
                             </div>
-                            <div class="flex items-center gap-2 shrink-0">
-                              {#if hasAttachments(msg)}
-                                <span class="text-muted-foreground" title="Has attachments">
-                                  <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" aria-hidden="true">
-                                    <path
-                                      d="M21.44 11.05l-8.49 8.49a5 5 0 0 1-7.07-7.07l9.19-9.19a3 3 0 1 1 4.24 4.24l-9.19 9.19a1 1 0 1 1-1.41-1.41l8.49-8.49"
-                                      fill="none"
-                                      stroke="currentColor"
-                                      stroke-width="2"
-                                      stroke-linecap="round"
-                                      stroke-linejoin="round"
-                                    ></path>
-                                  </svg>
+                            <div class="flex-1 min-w-0 flex items-baseline gap-1">
+                              <span
+                                class={`shrink-0 ${msg.is_unread ? 'font-medium' : ''}`}
+                                style="max-width:60%">{msg.subject}</span
+                              >
+                              {#if truncatePreview(msg.snippet || '', 80)}
+                                <span class="truncate text-muted-foreground font-normal text-xs">
+                                  &mdash; {truncatePreview(msg.snippet || '', 80)}
                                 </span>
                               {/if}
-                              <span class="text-xs text-muted-foreground whitespace-nowrap">
+                            </div>
+                            <div class="flex items-center gap-1.5 shrink-0 text-muted-foreground">
+                              {#if hasAttachments(msg)}
+                                <svg viewBox="0 0 24 24" class="h-3 w-3" aria-hidden="true">
+                                  <path
+                                    d="M21.44 11.05l-8.49 8.49a5 5 0 0 1-7.07-7.07l9.19-9.19a3 3 0 1 1 4.24 4.24l-9.19 9.19a1 1 0 1 1-1.41-1.41l8.49-8.49"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="2"
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                  ></path>
+                                </svg>
+                              {/if}
+                              <span class="text-[11px] whitespace-nowrap">
                                 {formatCompactDate(msg.date)}
                               </span>
                             </div>
                           </div>
-                          <div class="text-sm text-muted-foreground truncate">
-                            {listIsSentFolder
-                              ? `To: ${getMessageToName(msg) || getMessageFromName(msg)}`
-                              : getMessageFromName(msg)}
-                          </div>
                           {#if Array.isArray(msg.labels) && msg.labels.length}
-                            <div class="flex flex-wrap gap-1.5 mt-1">
+                            <!-- Row 2: Labels -->
+                            <div class="flex items-center gap-1">
                               {#each msg.labels.slice(0, 4) as lbl}
                                 {#if typeof lbl === 'string' && lbl && lbl !== '[]'}
                                   {#if labelMap.get(lbl)}
-                                    {#if labelMap.get(lbl).color}
-                                      <span
-                                        class="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-secondary text-secondary-foreground truncate max-w-[120px]"
-                                        style={`background:${labelMap.get(lbl).color}; color:#fff;`}
-                                      >
-                                        {labelMap.get(lbl).name ||
-                                          labelMap.get(lbl).label ||
-                                          labelMap.get(lbl).value ||
-                                          lbl}
-                                      </span>
-                                    {:else}
-                                      <span
-                                        class="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-secondary text-secondary-foreground truncate max-w-[120px]"
-                                      >
-                                        {labelMap.get(lbl).name ||
-                                          labelMap.get(lbl).label ||
-                                          labelMap.get(lbl).value ||
-                                          lbl}
-                                      </span>
-                                    {/if}
+                                    <span
+                                      class="inline-flex items-center px-1.5 py-0.5 text-[10px] truncate max-w-[80px]"
+                                      style={labelMap.get(lbl).color
+                                        ? `background:${labelMap.get(lbl).color}; color:#fff;`
+                                        : ''}
+                                    >
+                                      {labelMap.get(lbl).name ||
+                                        labelMap.get(lbl).label ||
+                                        labelMap.get(lbl).value ||
+                                        lbl}
+                                    </span>
                                   {:else}
                                     <span
-                                      class="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-secondary text-secondary-foreground truncate max-w-[120px]"
+                                      class="inline-flex items-center px-1.5 py-0.5 text-[10px] bg-secondary text-secondary-foreground truncate max-w-[80px]"
                                       >{lbl}</span
                                     >
                                   {/if}
@@ -5883,9 +5883,6 @@
                               {/each}
                             </div>
                           {/if}
-                          <div class="text-sm text-muted-foreground truncate">
-                            {msg.snippet || ''}
-                          </div>
                         </div>
                       </div>
                     </article>
