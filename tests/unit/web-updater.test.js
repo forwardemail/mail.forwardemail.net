@@ -1,10 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import {
-  compareSemver,
-  handleWsNewRelease,
-  start,
-  stop,
-} from '../../src/utils/web-updater.js';
+import { compareSemver, handleWsNewRelease, start, stop } from '../../src/utils/web-updater.js';
 
 // ── compareSemver ─────────────────────────────────────────────────────────
 
@@ -109,9 +104,7 @@ describe('handleWsNewRelease', () => {
       },
     });
 
-    expect(updateCallback).toHaveBeenCalledWith(
-      expect.objectContaining({ newVersion: '3.0.0' }),
-    );
+    expect(updateCallback).toHaveBeenCalledWith(expect.objectContaining({ newVersion: '3.0.0' }));
   });
 
   it('handles nested payload with version field', () => {
@@ -121,9 +114,7 @@ describe('handleWsNewRelease', () => {
       },
     });
 
-    expect(updateCallback).toHaveBeenCalledWith(
-      expect.objectContaining({ newVersion: '4.0.0' }),
-    );
+    expect(updateCallback).toHaveBeenCalledWith(expect.objectContaining({ newVersion: '4.0.0' }));
   });
 
   it('handles flattened payload shape (forward-compat)', () => {
@@ -133,9 +124,7 @@ describe('handleWsNewRelease', () => {
       name: 'v5',
     });
 
-    expect(updateCallback).toHaveBeenCalledWith(
-      expect.objectContaining({ newVersion: '5.0.0' }),
-    );
+    expect(updateCallback).toHaveBeenCalledWith(expect.objectContaining({ newVersion: '5.0.0' }));
   });
 
   it('handles flattened payload with tagName', () => {
@@ -143,9 +132,7 @@ describe('handleWsNewRelease', () => {
       tagName: 'v6.0.0',
     });
 
-    expect(updateCallback).toHaveBeenCalledWith(
-      expect.objectContaining({ newVersion: '6.0.0' }),
-    );
+    expect(updateCallback).toHaveBeenCalledWith(expect.objectContaining({ newVersion: '6.0.0' }));
   });
 
   it('strips v prefix from version', () => {
@@ -153,9 +140,7 @@ describe('handleWsNewRelease', () => {
       release: { tagName: 'v7.0.0' },
     });
 
-    expect(updateCallback).toHaveBeenCalledWith(
-      expect.objectContaining({ newVersion: '7.0.0' }),
-    );
+    expect(updateCallback).toHaveBeenCalledWith(expect.objectContaining({ newVersion: '7.0.0' }));
   });
 
   it('ignores null/undefined data', () => {

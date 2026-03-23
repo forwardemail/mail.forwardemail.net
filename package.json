@@ -140,8 +140,11 @@
     "workbox-cli": "^7.0.0"
   },
   "lint-staged": {
-    "*.{js,mjs,cjs,ts,tsx,jsx,svelte}": "pnpm run lint",
-    "*.{json,css,html,md,svelte}": "pnpm format"
+    "*.{js,mjs,cjs,ts,tsx,jsx,svelte}": [
+      "pnpm run lint",
+      "prettier --write"
+    ],
+    "*.{json,css,html,md,svelte}": "prettier --write"
   },
   "np": {
     "branch": "main",

@@ -58,16 +58,12 @@ describe('handleWsNewRelease payload parsing', () => {
 
   it('extracts version from nested { release: { tag_name } } shape', () => {
     mockIsTauriDesktop = true;
-    expect(() =>
-      handleWsNewRelease({ release: { tag_name: 'v2.0.0' } }),
-    ).not.toThrow();
+    expect(() => handleWsNewRelease({ release: { tag_name: 'v2.0.0' } })).not.toThrow();
   });
 
   it('extracts version from nested { release: { version } } shape', () => {
     mockIsTauriDesktop = true;
-    expect(() =>
-      handleWsNewRelease({ release: { version: '2.0.0' } }),
-    ).not.toThrow();
+    expect(() => handleWsNewRelease({ release: { version: '2.0.0' } })).not.toThrow();
   });
 
   it('extracts version from flattened { tagName } shape', () => {
