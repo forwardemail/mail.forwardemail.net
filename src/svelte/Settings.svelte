@@ -353,6 +353,42 @@
   let rebuildingFromCache = $state(false);
   let lastHealthCheck = $state<Date | null>(null);
 
+  // Update check state
+  let checkingForUpdates = $state(false);
+  let updateCheckResult = $state('');
+
+  async function handleCheckForUpdates() {
+    checkingForUpdates = true;
+    updateCheckResult = '';
+    try {
+      // Use the globally exposed checkNow from web-updater (web)
+      if (typeof window.__checkForWebUpdates === 'function') {
+        const result = await window.__checkForWebUpdates();
+        if (result.upToDate) {
+          updateCheckResult = `You're on the latest version (v${result.currentVersion || result.latestVersion})`;
+        }
+        // If not up to date, web-updater's onUpdateAvailable will auto-reload
+      } else {
+        // Tauri: use the updater-bridge
+        try {
+          const { checkForUpdates } = await import('../utils/updater-bridge.js');
+          const result = await checkForUpdates();
+          if (!result) {
+            updateCheckResult = "You're on the latest version";
+          }
+          // If an update is found, updater-bridge handles the download/install flow
+        } catch {
+          updateCheckResult = 'Could not check for updates';
+        }
+      }
+    } catch (err) {
+      updateCheckResult = 'Could not check for updates';
+      console.warn('[Settings] Update check failed:', err);
+    } finally {
+      checkingForUpdates = false;
+    }
+  }
+
   interface SavedSearch {
     name: string;
     query: string;
@@ -2179,9 +2215,22 @@
           <Card.Header>
             <Card.Title>Version Information</Card.Title>
           </Card.Header>
-          <Card.Content class="text-sm">
+          <Card.Content class="text-sm space-y-2">
             <div><strong>App Version:</strong> {import.meta.env.VITE_PKG_VERSION || '0.0.0'}</div>
             <div><strong>Database Schema:</strong> v{databaseVersion}</div>
+            <div class="pt-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={checkingForUpdates}
+                onclick={handleCheckForUpdates}
+              >
+                {checkingForUpdates ? 'Checking…' : 'Check for Updates'}
+              </Button>
+              {#if updateCheckResult}
+                <span class="ml-2 text-xs text-muted-foreground">{updateCheckResult}</span>
+              {/if}
+            </div>
           </Card.Content>
         </Card.Root>
       {/if}

@@ -1260,8 +1260,12 @@
       meta: Record<string, unknown>;
     };
     if (visible && hasUnsavedContent()) {
-      toasts?.show?.('Finish the current draft before restoring another.', 'info');
-      return;
+      // Auto-save the current draft instead of blocking the user with a toast
+      try {
+        await saveCurrentDraft();
+      } catch {
+        // Save failed — proceed anyway so the user isn't stuck
+      }
     }
     minimizedDrafts = minimizedDrafts.filter((md) => (md as { key: string }).key !== d.key);
     reset();
@@ -2287,10 +2291,12 @@
         return;
       }
     }
-    if (visible) {
-      if (hasUnsavedContent()) {
-        toasts?.show?.('Finish the current draft before starting a new one.', 'info');
-        return;
+    if (visible && hasUnsavedContent()) {
+      // Auto-save the current draft instead of blocking the user
+      try {
+        await saveCurrentDraft();
+      } catch {
+        // Save failed — proceed anyway so the user isn't stuck
       }
     }
     reset();

@@ -3729,7 +3729,9 @@
       if (conv?.messages?.length > 1) {
         await markConversationRead(conv);
         actionMenuOpen = false;
-        refresh();
+        // Do NOT call refresh() here — the optimistic updates in markMessageRead
+        // already set the correct is_unread in the messages store, and the LRU
+        // cache is invalidated after each IDB write.
         return;
       }
     }
@@ -3789,7 +3791,14 @@
           flags: updated.flags,
         });
       mailboxStore.actions.updateFolderUnreadCounts();
-      refresh();
+      // Invalidate the LRU cache so future loadMessages() reads fresh data from IDB
+      const folder = get(selectedFolder);
+      if (account && folder) {
+        mailboxStore.actions.invalidateFolderInMemCache(account, folder);
+      }
+      // Do NOT call refresh() here — the optimistic update above already set the
+      // correct is_unread in the messages store.  Calling refresh() would read
+      // stale LRU cache data and could revert the unread dot.
     } catch (err) {
       console.warn('toggleRead failed', err);
       reloadMessages();
@@ -3849,6 +3858,11 @@
       const changes = { is_unread: false, is_unread_index: 0, flags: updated.flags };
       await db.messages.where('[account+id]').equals([account, updated.id]).modify(changes);
       mailboxStore.actions.updateFolderUnreadCounts();
+      // Invalidate the LRU cache so future loadMessages() reads fresh data from IDB
+      const folder = get(selectedFolder);
+      if (account && folder) {
+        mailboxStore.actions.invalidateFolderInMemCache(account, folder);
+      }
     } catch (err) {
       console.warn('markMessageRead failed', err);
       if (source.state?.messages?.set && previousList) {
@@ -5667,13 +5681,13 @@
                                   >
                                 {/if}
                               </div>
-                              <div class="flex-1 min-w-0 flex items-baseline gap-1">
+                              <div class="flex-1 min-w-0 flex items-baseline gap-1 overflow-hidden">
                                 <span
-                                  class={`shrink-0 ${conv.hasUnread || conv.is_unread ? 'font-medium' : ''}`}
-                                  style="max-width:60%">{conv.displaySubject || conv.subject}</span
+                                  class={`truncate ${conv.hasUnread || conv.is_unread ? 'font-medium' : ''}`}
+                                  >{conv.displaySubject || conv.subject}</span
                                 >
                                 {#if truncatePreview(mailboxView?.getConversationPreview?.(conv) || conv.snippet || '', 80)}
-                                  <span class="truncate text-muted-foreground font-normal text-xs">
+                                  <span class="text-muted-foreground font-normal text-xs truncate">
                                     &mdash; {truncatePreview(
                                       mailboxView?.getConversationPreview?.(conv) ||
                                         conv.snippet ||
@@ -5827,13 +5841,12 @@
                                   : getMessageFromName(msg)}</span
                               >
                             </div>
-                            <div class="flex-1 min-w-0 flex items-baseline gap-1">
-                              <span
-                                class={`shrink-0 ${msg.is_unread ? 'font-medium' : ''}`}
-                                style="max-width:60%">{msg.subject}</span
+                            <div class="flex-1 min-w-0 flex items-baseline gap-1 overflow-hidden">
+                              <span class={`truncate ${msg.is_unread ? 'font-medium' : ''}`}
+                                >{msg.subject}</span
                               >
                               {#if truncatePreview(msg.snippet || '', 80)}
-                                <span class="truncate text-muted-foreground font-normal text-xs">
+                                <span class="text-muted-foreground font-normal text-xs truncate">
                                   &mdash; {truncatePreview(msg.snippet || '', 80)}
                                 </span>
                               {/if}

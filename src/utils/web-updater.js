@@ -1,30 +1,42 @@
 /**
  * Web Updater
  *
- * Handles update detection and notification for the web PWA.
- * Listens for `newRelease` events from the WebSocket connection
- * and also periodically checks GitHub releases as a fallback.
+ * Handles update detection for the web PWA.  Listens for `newRelease`
+ * events from the WebSocket connection and periodically checks GitHub
+ * releases as a fallback.
  *
- * When a new version is detected:
- *   1. Shows a non-intrusive notification banner
- *   2. User can click to reload and get the new version
- *   3. The service worker (if present) handles cache invalidation
+ * When a new version is detected the `onUpdateAvailable` callback is
+ * invoked.  The callback is responsible for orchestrating the actual
+ * reload (draft-save, toast, push notification, SW cache flush, etc.)
+ * so that all channels funnel through a single code-path in main.ts.
  *
- * For Tauri desktop/mobile, the updater-bridge.js handles updates
- * via the Tauri updater plugin instead.
+ * Detection channels:
+ *   1. WebSocket `newRelease` event — real-time, fastest
+ *   2. GitHub releases polling — fallback every 10 minutes
+ *   3. Visibility change — re-checks when the user returns to the tab
+ *      after being away for at least 5 minutes
+ *   4. Manual "Check for Updates" button in Settings
+ *
+ * Service-worker `controllerchange` / `updatefound` detection lives
+ * in main.ts and also funnels through the same centralized handler.
+ *
+ * For Tauri desktop/mobile, updater-bridge.js handles updates via the
+ * Tauri updater plugin instead.
  */
 
 const GITHUB_RELEASES_URL =
   'https://api.github.com/repos/forwardemail/mail.forwardemail.net/releases/latest';
-const CHECK_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes fallback polling
+const CHECK_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes fallback polling
+const VISIBILITY_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes between visibility re-checks
 const VERSION_KEY = 'webmail_current_version';
-const DISMISSED_VERSION_KEY = 'webmail_dismissed_version';
 
 let _currentVersion = null;
 let _latestVersion = null;
 let _checkTimer = null;
 let _onUpdateAvailable = null;
 let _wsUnsubscribe = null;
+let _visibilityHandler = null;
+let _lastVisibilityCheck = 0;
 
 /**
  * Parse a semver string into comparable parts.
@@ -63,7 +75,7 @@ function compareSemver(a, b) {
 function getCurrentVersion() {
   if (_currentVersion) return _currentVersion;
 
-  // Try to get version from meta tag (set during build)
+  // Try meta tag first (set during build by vite transformIndexHtml)
   try {
     const meta = document.querySelector('meta[name="app-version"]');
     if (meta?.content) {
@@ -85,7 +97,7 @@ function getCurrentVersion() {
     // ignore
   }
 
-  // Fallback: try import.meta.env
+  // Fallback: import.meta.env
   try {
     if (typeof import.meta !== 'undefined' && import.meta.env?.VITE_APP_VERSION) {
       _currentVersion = import.meta.env.VITE_APP_VERSION;
@@ -99,36 +111,13 @@ function getCurrentVersion() {
 }
 
 /**
- * Check if a version has been dismissed by the user.
- */
-function isVersionDismissed(version) {
-  try {
-    const dismissed = localStorage.getItem(DISMISSED_VERSION_KEY);
-    return dismissed === version;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Dismiss a version (user chose to skip this update).
- */
-function dismissVersion(version) {
-  try {
-    localStorage.setItem(DISMISSED_VERSION_KEY, version);
-  } catch {
-    // ignore
-  }
-}
-
-/**
  * Check GitHub releases for a new version.
  */
 async function checkGitHubReleases() {
   try {
     const response = await fetch(GITHUB_RELEASES_URL, {
       headers: { Accept: 'application/vnd.github.v3+json' },
-      signal: AbortSignal.timeout(10000),
+      signal: AbortSignal.timeout(10_000),
     });
 
     if (!response.ok) return null;
@@ -149,14 +138,15 @@ async function checkGitHubReleases() {
 }
 
 /**
- * Handle a new version being detected.
+ * Handle a new version being detected from any channel.
+ * If the version is newer than the current one, invokes onUpdateAvailable.
  */
 function handleNewVersion(releaseInfo) {
   if (!releaseInfo?.version) return;
 
   const current = getCurrentVersion();
   if (!current) {
-    // No current version known; store this as current
+    // No current version known — store this as current and don't reload
     _currentVersion = releaseInfo.version;
     try {
       localStorage.setItem(VERSION_KEY, releaseInfo.version);
@@ -166,16 +156,20 @@ function handleNewVersion(releaseInfo) {
     return;
   }
 
-  // Check if this is actually newer than current
+  // Only proceed if this is strictly newer than current
   if (compareSemver(releaseInfo.version, current) <= 0) return;
 
-  // Check if already tracking a newer or equal version
+  // Only proceed if this is newer than any version we've already seen
   if (_latestVersion && compareSemver(releaseInfo.version, _latestVersion) <= 0) return;
 
-  // Check if user dismissed this version
-  if (isVersionDismissed(releaseInfo.version)) return;
-
   _latestVersion = releaseInfo.version;
+
+  // Store the new version so we know it after reload
+  try {
+    localStorage.setItem(VERSION_KEY, releaseInfo.version);
+  } catch {
+    // ignore
+  }
 
   if (_onUpdateAvailable) {
     _onUpdateAvailable({
@@ -195,12 +189,11 @@ function handleNewVersion(releaseInfo) {
  * The server sends: { event: "newRelease", release: { tagName, name, body, ... } }
  * After protocol field stripping, the handler receives: { release: { tagName, ... } }
  *
- * We also handle flattened shapes for forward-compatibility.
+ * Also handles flattened shapes for forward-compatibility.
  */
 function handleWsNewRelease(data) {
   if (!data) return;
 
-  // Standard shape: { release: { tagName, htmlUrl, ... } }
   let version, url, name, body, publishedAt;
 
   if (data.release && typeof data.release === 'object') {
@@ -234,27 +227,65 @@ function handleWsNewRelease(data) {
  * Start the web updater.
  *
  * @param {Object} options
- * @param {Function} options.onUpdateAvailable - Callback when a new version is found
+ * @param {Function} options.onUpdateAvailable - Callback when a new version is found.
+ *   Receives { currentVersion, newVersion, releaseUrl, releaseName, releaseNotes, publishedAt }.
+ *   The callback is responsible for orchestrating the reload (draft-save, toast, notification).
  * @param {Object} [options.wsClient] - WebSocket client instance to subscribe to newRelease events
  */
 function start(options = {}) {
   _onUpdateAvailable = options.onUpdateAvailable || null;
 
-  // Subscribe to WebSocket newRelease events
+  // Subscribe to WebSocket newRelease events if a client is provided
   if (options.wsClient && typeof options.wsClient.on === 'function') {
     _wsUnsubscribe = options.wsClient.on('newRelease', handleWsNewRelease);
   }
 
-  // Initial check via GitHub releases
+  // Initial check via GitHub releases (covers page load requirement)
   checkGitHubReleases().then((release) => {
     if (release) handleNewVersion(release);
   });
 
-  // Periodic fallback polling
+  // Periodic fallback polling (every 10 minutes)
   _checkTimer = setInterval(async () => {
     const release = await checkGitHubReleases();
     if (release) handleNewVersion(release);
   }, CHECK_INTERVAL_MS);
+
+  // Re-check when the user returns to the tab after being away 5+ minutes.
+  // The cooldown prevents rapid-fire checks when the user switches tabs often.
+  _lastVisibilityCheck = Date.now();
+  _visibilityHandler = () => {
+    if (document.visibilityState !== 'visible') return;
+    const now = Date.now();
+    if (now - _lastVisibilityCheck < VISIBILITY_COOLDOWN_MS) return;
+    _lastVisibilityCheck = now;
+    checkGitHubReleases().then((release) => {
+      if (release) handleNewVersion(release);
+    });
+  };
+  document.addEventListener('visibilitychange', _visibilityHandler);
+}
+
+/**
+ * Manually trigger an update check.
+ * Returns { upToDate: boolean, currentVersion, latestVersion } or throws.
+ */
+async function checkNow() {
+  const release = await checkGitHubReleases();
+  const current = getCurrentVersion();
+  if (release) {
+    handleNewVersion(release);
+    return {
+      upToDate: compareSemver(release.version, current) <= 0,
+      currentVersion: current,
+      latestVersion: release.version,
+    };
+  }
+  return {
+    upToDate: true,
+    currentVersion: current,
+    latestVersion: current,
+  };
 }
 
 /**
@@ -271,40 +302,12 @@ function stop() {
     _wsUnsubscribe = null;
   }
 
+  if (_visibilityHandler) {
+    document.removeEventListener('visibilitychange', _visibilityHandler);
+    _visibilityHandler = null;
+  }
+
   _onUpdateAvailable = null;
-}
-
-/**
- * Apply the update (reload the page).
- * If a service worker is registered, it will handle cache invalidation.
- */
-async function applyUpdate() {
-  // Store the new version so we know it after reload
-  if (_latestVersion) {
-    try {
-      localStorage.setItem(VERSION_KEY, _latestVersion);
-      localStorage.removeItem(DISMISSED_VERSION_KEY);
-    } catch {
-      // ignore
-    }
-  }
-
-  // If service worker is available, tell it to skip waiting
-  if ('serviceWorker' in navigator) {
-    try {
-      const registration = await navigator.serviceWorker.getRegistration();
-      if (registration?.waiting) {
-        registration.waiting.postMessage({ type: 'SKIP_WAITING' });
-        // Wait a moment for the SW to activate
-        await new Promise((resolve) => setTimeout(resolve, 500));
-      }
-    } catch {
-      // ignore
-    }
-  }
-
-  // Hard reload to get the new version
-  window.location.reload();
 }
 
 /**
@@ -317,11 +320,10 @@ function getLatestVersion() {
 export {
   start,
   stop,
-  applyUpdate,
-  dismissVersion,
   getLatestVersion,
   getCurrentVersion,
   checkGitHubReleases,
+  checkNow,
   compareSemver,
   handleWsNewRelease,
 };

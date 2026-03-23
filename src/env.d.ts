@@ -10,6 +10,12 @@ declare global {
 
   interface Window {
     __swRegistration?: ServiceWorkerRegistration;
+    __performAppUpdate?: (version?: string) => Promise<void>;
+    __checkForWebUpdates?: () => Promise<{
+      upToDate: boolean;
+      currentVersion: string | null;
+      latestVersion: string | null;
+    }>;
     gtag?: (...args: unknown[]) => void;
   }
 }

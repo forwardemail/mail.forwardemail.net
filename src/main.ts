@@ -40,20 +40,20 @@ style.textContent = `
     pointer-events: none !important;
     visibility: hidden !important;
   }
-  
+
   /* Ensure compose modal is always visible and clickable when present */
   #compose-root {
     pointer-events: auto !important;
     position: relative;
     z-index: 9999;
   }
-  
+
   #compose-root .fe-modal-backdrop {
     display: flex !important;
     visibility: visible !important;
     opacity: 1 !important;
   }
-  
+
   #compose-root .fe-modal {
     display: flex !important;
     flex-direction: column !important;
@@ -1455,12 +1455,101 @@ async function bootstrap() {
     }
 
     // Web auto-updater: check GitHub releases + listen for newRelease WebSocket events
+    //
+    // All update channels (WS, GitHub poll, SW detection, visibility, manual)
+    // funnel through a single performAppUpdate() to guarantee:
+    //   - Dedup: only one reload can happen at a time
+    //   - Draft-safe: saves any in-progress compose before reloading
+    //   - Toast + push notification: always shown before reload
+    //   - SW cache flush: triggers registration.update() + SKIP_WAITING
     if (!isTauri && import.meta.env.PROD) {
-      import('./utils/web-updater.js').then(
-        ({ start: startWebUpdater, handleWsNewRelease, applyUpdate }) => {
-          startWebUpdater({
-            onUpdateAvailable: () => applyUpdate(),
+      let _updateInProgress = false;
+
+      /**
+       * Centralized update handler.  Every detection channel calls this.
+       * Saves draft → shows toast → sends push notification → flushes SW → reloads.
+       */
+      async function performAppUpdate(version?: string) {
+        if (_updateInProgress) return;
+        _updateInProgress = true;
+
+        const label = version ? `v${version}` : 'latest';
+        console.info(`[update] Performing app update to ${label}`);
+
+        // 1. Save draft if the composer has unsaved content
+        try {
+          if (composeApi?.isVisible?.()) {
+            console.info('[update] Saving draft before reload');
+            await composeApi.saveDraft?.();
+          }
+        } catch (err) {
+          console.warn('[update] Failed to save draft before reload:', err);
+        }
+
+        // 2. Show toast so the user knows what's happening
+        try {
+          toasts?.show?.(`Updating to ${label}…`, 'info', 0);
+        } catch {
+          // toast system may not be ready
+        }
+
+        // 3. Send push notification so the user sees it even if the tab is in the background
+        try {
+          const { notify } = await import('./utils/notification-bridge.js');
+          await notify({
+            title: 'Forward Email Updated',
+            body: `App updated to ${label}. Reloading…`,
+            tag: 'app-update',
           });
+        } catch {
+          // notification permission may not be granted — that's fine
+        }
+
+        // 4. Trigger SW update so the new precache manifest is fetched
+        try {
+          const reg = window.__swRegistration;
+          if (reg) {
+            await reg.update().catch(() => {});
+            // If a new SW is waiting, tell it to activate
+            if (reg.waiting) {
+              reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+              // Give the SW a moment to activate before reload
+              await new Promise((r) => setTimeout(r, 500));
+            }
+          }
+        } catch {
+          // SW may not be available
+        }
+
+        // 5. Store the new version so we recognise it after reload
+        if (version) {
+          try {
+            localStorage.setItem('webmail_current_version', version);
+          } catch {
+            // ignore
+          }
+        }
+
+        // 6. Reload after a short delay so the toast is visible
+        setTimeout(() => {
+          window.location.reload();
+        }, 1200);
+      }
+
+      // Expose globally so registerServiceWorker() and Settings can use it
+      window.__performAppUpdate = performAppUpdate;
+
+      import('./utils/web-updater.js').then(
+        ({ start: startWebUpdater, handleWsNewRelease, checkNow }) => {
+          startWebUpdater({
+            onUpdateAvailable: (info) => {
+              performAppUpdate(info?.newVersion);
+            },
+          });
+
+          // Expose checkNow globally so Settings can call it
+          window.__checkForWebUpdates = checkNow;
+
           // Route fe:new-release events from the releaseWatcher to the web updater
           _handleNewReleaseWeb = (event: Event) => {
             handleWsNewRelease((event as CustomEvent)?.detail);
@@ -1610,23 +1699,54 @@ async function registerServiceWorker() {
     // Expose registration globally for cache clearing
     window.__swRegistration = registration;
 
-    // Check for SW updates every 30 minutes (browser default is 24h — too slow)
-    setInterval(
-      () => {
-        registration.update().catch(() => {});
-      },
-      30 * 60 * 1000,
-    );
-
-    // When a new SW activates and claims this page, auto-reload so the user
-    // gets the new assets. skipWaiting + clientsClaim means the new precache
-    // is ready, but the running page still has old JS in memory.
-    let reloading = false;
-    navigator.serviceWorker.addEventListener('controllerchange', () => {
-      if (reloading) return;
-      reloading = true;
-      window.location.reload();
+    // Detect when a new SW is installed and trigger the centralized update handler.
+    // This covers the case where a deploy pushes new assets and the SW precache
+    // manifest changes — workbox detects the diff and installs a new SW.
+    registration.addEventListener('updatefound', () => {
+      const newWorker = registration.installing;
+      if (!newWorker) return;
+      newWorker.addEventListener('statechange', () => {
+        if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+          // New SW installed while an existing one controls the page.
+          // Tell it to activate immediately; controllerchange will handle reload.
+          console.info('[SW] New service worker installed, activating');
+          newWorker.postMessage({ type: 'SKIP_WAITING' });
+        }
+      });
     });
+
+    // Auto-reload when a new SW takes control (covers skipWaiting activation).
+    // Only reload if there was already a controller — avoids reloading on first
+    // SW installation when the page had no controller yet.
+    // Funnels through performAppUpdate() for draft-save, toast, and push notification.
+    const hadController = Boolean(navigator.serviceWorker.controller);
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!hadController) return;
+      // Use the centralized handler if available, otherwise fall back to raw reload
+      if (typeof window.__performAppUpdate === 'function') {
+        window.__performAppUpdate();
+      } else {
+        window.location.reload();
+      }
+    });
+
+    // Periodically check for SW updates so long-lived tabs pick up new releases.
+    // Check every 60s for the first 5 minutes (fast catch-up after deploy),
+    // then every 15 minutes thereafter.
+    let swCheckCount = 0;
+    const swUpdateInterval = setInterval(() => {
+      registration.update().catch(() => {});
+      swCheckCount++;
+      if (swCheckCount >= 5) {
+        clearInterval(swUpdateInterval);
+        setInterval(
+          () => {
+            registration.update().catch(() => {});
+          },
+          15 * 60 * 1000,
+        );
+      }
+    }, 60 * 1000);
   } catch (error) {
     // SW registration failed - app works fine without it
     console.warn('[SW] Service worker registration failed:', error.message);
