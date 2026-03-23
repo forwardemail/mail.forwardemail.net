@@ -115,13 +115,16 @@ function createWebSocketUpdater() {
    * us something changed.  This ensures the API is queried immediately and
    * the message list updates regardless of sync worker state.
    */
-  function refreshFolder(folderPath) {
-    if (!isNonEmptyString(folderPath)) return;
+  function refreshFolder(folderIdentifier) {
+    if (!isNonEmptyString(folderIdentifier)) return;
 
     const currentFolder = get(mailboxStore.state.selectedFolder);
     const account = Local.get('email') || 'default';
     const folders = get(mailboxStore.state.folders) || [];
-    const folder = folders.find((f) => f.path?.toUpperCase?.() === folderPath.toUpperCase());
+    // Match by folder id first (server sends MongoDB ObjectIds), then by path
+    const folder =
+      folders.find((f) => String(f.id) === folderIdentifier) ||
+      folders.find((f) => f.path?.toUpperCase?.() === folderIdentifier.toUpperCase());
 
     // Always kick off a background metadata sync for the affected folder
     if (folder) {
@@ -130,6 +133,7 @@ function createWebSocketUpdater() {
 
     // If the user is currently viewing the affected folder, also reload
     // the message list immediately so the UI reflects the change.
+    const folderPath = folder?.path || folderIdentifier;
     if (currentFolder && currentFolder.toUpperCase() === folderPath.toUpperCase()) {
       // Invalidate the in-memory folder cache so loadMessages() doesn't
       // return stale cached data.
