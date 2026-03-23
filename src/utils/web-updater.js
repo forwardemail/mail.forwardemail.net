@@ -191,22 +191,41 @@ function handleNewVersion(releaseInfo) {
 
 /**
  * Handle WebSocket `newRelease` event.
+ *
+ * The server sends: { event: "newRelease", release: { tagName, name, body, ... } }
+ * After protocol field stripping, the handler receives: { release: { tagName, ... } }
+ *
+ * We also handle flattened shapes for forward-compatibility.
  */
 function handleWsNewRelease(data) {
   if (!data) return;
 
-  // The WebSocket event may have different shapes
-  const version = data.version || data.tag_name || data.tag;
-  const url = data.url || data.html_url || '';
-  const name = data.name || version || '';
+  // Standard shape: { release: { tagName, htmlUrl, ... } }
+  let version, url, name, body, publishedAt;
+
+  if (data.release && typeof data.release === 'object') {
+    const r = data.release;
+    version = r.tagName || r.tag_name || r.version;
+    url = r.htmlUrl || r.html_url || r.url || '';
+    name = r.name || version || '';
+    body = r.body || r.notes || '';
+    publishedAt = r.publishedAt || r.published_at || new Date().toISOString();
+  } else {
+    // Flattened shape (forward-compat)
+    version = data.version || data.tag_name || data.tag || data.tagName;
+    url = data.url || data.html_url || data.htmlUrl || '';
+    name = data.name || version || '';
+    body = data.body || data.notes || '';
+    publishedAt = data.published_at || data.publishedAt || new Date().toISOString();
+  }
 
   if (version) {
     handleNewVersion({
       version: version.replace(/^v/, ''),
       url,
       name,
-      body: data.body || data.notes || '',
-      publishedAt: data.published_at || data.publishedAt || new Date().toISOString(),
+      body,
+      publishedAt,
     });
   }
 }

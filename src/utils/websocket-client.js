@@ -3,16 +3,32 @@
  *
  * Connects to wss://api.forwardemail.net/v1/ws with:
  *   - Basic Auth via URL userinfo (browser WebSocket limitation)
+ *   - Fallback: query parameters (?username=, ?password=) for environments
+ *     where URL userinfo is stripped (e.g. some proxy setups)
  *   - Optional msgpackr binary framing (?msgpackr=true)
  *   - Exponential backoff reconnection with jitter
  *   - Server-initiated ping/pong keep-alive (responds to server pings)
  *   - All 21 server events dispatched to registered listeners
  *
- * Protocol (per WEBSOCKET_IMPLEMENTATION.md):
+ * Protocol (per api-websocket-handler.js):
  *   - Server sends flat JSON/msgpackr objects: { event, timestamp, ...fields }
- *   - Server sends { event: 'auth', status: 'ok' } on successful auth
+ *   - Server sends { event: 'connected', aliasId } on successful auth
+ *   - Server sends { event: 'connected', broadcastOnly: true } for unauth
  *   - Server sends { event: 'ping' } every 30s; client responds { event: 'pong' }
  *   - Client messages (except pong) are silently ignored by the server
+ *
+ * Authentication (per api-websocket-handler.js _authenticate()):
+ *   The server supports three authentication methods:
+ *     1. Authorization header (HTTP Basic Auth) — preferred
+ *     2. Query params ?username=&password= — fallback for browser clients
+ *     3. Query param ?token= (with ?alias_id=) — API token auth
+ *   The server prefers the Authorization header but explicitly falls back
+ *   to query parameters for browser WebSocket clients that cannot set
+ *   custom headers on the upgrade request.
+ *
+ *   This client uses URL userinfo (user:pass@host) which browsers
+ *   automatically translate into an Authorization header.  If userinfo
+ *   is not supported by the environment, it falls back to query params.
  *
  * Hardening:
  *   - Enforces wss:// only (never ws://).
@@ -143,7 +159,19 @@ export function createWebSocketClient(opts = {}) {
   }
   window.addEventListener('online', handleOnline);
 
-  // Build the WebSocket URL — enforces wss:// only
+  /**
+   * Build the WebSocket URL with authentication.
+   *
+   * The server (api-websocket-handler.js _authenticate()) supports:
+   *   1. Authorization header (HTTP Basic Auth) — preferred
+   *   2. Query params ?username=&password= — browser fallback
+   *   3. Query param ?token= with ?alias_id= — API token auth
+   *
+   * We use URL userinfo (user:pass@host) which browsers automatically
+   * convert into an Authorization header.  This is the preferred method.
+   * The query param fallback exists on the server for environments where
+   * URL userinfo is stripped by proxies.
+   */
   function buildURL() {
     const base = opts.apiBase || config.apiBase || 'https://api.forwardemail.net';
     const wsBase = base.replace(/^http/, 'ws');
@@ -379,7 +407,7 @@ export function createWebSocketClient(opts = {}) {
           return;
 
         case 'auth':
-          // Server confirms authentication status
+          // Legacy auth event — server confirms authentication status
           if (parsed.status === 'ok') {
             authenticated = true;
             console.info('[ws] Authenticated');
@@ -402,6 +430,7 @@ export function createWebSocketClient(opts = {}) {
             dispatch('_authenticated', { aliasId: parsed.aliasId });
           } else {
             console.info('[ws] Connected in broadcast-only mode');
+            dispatch('_broadcastOnly', {});
           }
           return;
 

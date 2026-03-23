@@ -460,6 +460,14 @@ const _feContactsChanged = () => {
 const _feContactChanged = () => {
   contactsApi.reload?.();
 };
+
+// Wire the `fe:new-release` CustomEvent (dispatched by websocket-updater's
+// releaseWatcher) to the updater modules.  This follows the same pattern
+// used for CalDAV/CardDAV events above — websocket-updater dispatches,
+// main.ts routes to the appropriate consumer.
+let _handleNewReleaseTauri: ((e: Event) => void) | null = null;
+let _handleNewReleaseWeb: ((e: Event) => void) | null = null;
+
 window.addEventListener('fe:calendar-changed', _feCalendarChanged);
 window.addEventListener('fe:calendar-event-changed', _feCalendarEventChanged);
 window.addEventListener('fe:contacts-changed', _feContactsChanged);
@@ -470,6 +478,14 @@ export function cleanupCustomEventListeners() {
   window.removeEventListener('fe:calendar-event-changed', _feCalendarEventChanged);
   window.removeEventListener('fe:contacts-changed', _feContactsChanged);
   window.removeEventListener('fe:contact-changed', _feContactChanged);
+  if (_handleNewReleaseTauri) {
+    window.removeEventListener('fe:new-release', _handleNewReleaseTauri);
+    _handleNewReleaseTauri = null;
+  }
+  if (_handleNewReleaseWeb) {
+    window.removeEventListener('fe:new-release', _handleNewReleaseWeb);
+    _handleNewReleaseWeb = null;
+  }
 }
 
 const composeRoot = document.getElementById('compose-root');
@@ -1367,13 +1383,34 @@ async function bootstrap() {
     // Tauri-specific native integrations (desktop + mobile)
     if (isTauri) {
       import('./utils/tauri-bridge.js').then(({ initTauriBridge }) => initTauriBridge());
-      import('./utils/updater-bridge.js').then(({ initAutoUpdater }) => initAutoUpdater());
+      import('./utils/updater-bridge.js').then(({ initAutoUpdater, handleWsNewRelease }) => {
+        initAutoUpdater();
+        // Route fe:new-release events from the releaseWatcher to the Tauri updater
+        _handleNewReleaseTauri = (event: Event) => {
+          handleWsNewRelease((event as CustomEvent)?.detail);
+        };
+        window.addEventListener('fe:new-release', _handleNewReleaseTauri);
+      });
       import('./utils/notification-bridge.js').then(
         ({ initNotificationChannels, initTauriNotificationClickHandler }) => {
           initNotificationChannels();
           initTauriNotificationClickHandler();
         },
       );
+      // Initialize background service for app lifecycle management (tray keep-alive,
+      // foreground/background detection, push token management)
+      import('./utils/background-service.js').then(({ initBackgroundService }) =>
+        initBackgroundService(),
+      );
+      // Initialize push notifications on mobile (APNs, FCM, UnifiedPush fallback)
+      import('./utils/push-notifications.js').then(({ initPushNotifications }) => {
+        const authToken = Local.get('authToken') || Local.get('api_key') || '';
+        if (authToken) {
+          initPushNotifications({ authToken }).catch((err) => {
+            console.warn('[main] Push notification init failed:', err);
+          });
+        }
+      });
     }
 
     if (canUseServiceWorker() && import.meta.env.PROD) {
@@ -1382,9 +1419,16 @@ async function bootstrap() {
       });
     }
 
-    // Web auto-updater: listen for newRelease WebSocket events
+    // Web auto-updater: check GitHub releases + listen for newRelease WebSocket events
     if (!isTauri && import.meta.env.PROD) {
-      import('./utils/web-updater.js').then(({ start: startWebUpdater }) => startWebUpdater());
+      import('./utils/web-updater.js').then(({ start: startWebUpdater, handleWsNewRelease }) => {
+        startWebUpdater();
+        // Route fe:new-release events from the releaseWatcher to the web updater
+        _handleNewReleaseWeb = (event: Event) => {
+          handleWsNewRelease((event as CustomEvent)?.detail);
+        };
+        window.addEventListener('fe:new-release', _handleNewReleaseWeb);
+      });
     }
 
     // Register as mailto: handler on the web (not in Tauri — Tauri handles via OS registration)

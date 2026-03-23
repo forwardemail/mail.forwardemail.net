@@ -41,10 +41,11 @@ async function ensureUpdater() {
 
 /**
  * Validate a semver-like version string.
+ * Accepts pre-release suffixes (e.g. 1.2.3-beta.1).
  */
 function isValidVersion(v) {
   if (typeof v !== 'string') return false;
-  return /^\d+\.\d+\.\d+$/.test(v);
+  return /^\d+\.\d+\.\d+/.test(v);
 }
 
 /**
@@ -148,20 +149,41 @@ export async function downloadAndInstall(updateInfo, onProgress) {
 }
 
 /**
+ * Extract a version string from a WebSocket newRelease payload.
+ *
+ * The server sends the payload as:
+ *   { release: { tagName, name, body, assets, ... } }
+ *
+ * The websocket-updater dispatches the inner fields (after stripping
+ * the `event` and `timestamp` protocol fields), so the handler
+ * receives: { release: { tagName, ... } }.
+ *
+ * We also handle flattened shapes for forward-compatibility.
+ */
+function extractVersionFromRelease(data) {
+  if (!data || typeof data !== 'object') return null;
+
+  // Standard shape: { release: { tagName: "v1.2.3" } }
+  if (data.release && typeof data.release === 'object') {
+    return data.release.tagName || data.release.tag_name || data.release.version || null;
+  }
+
+  // Flattened shape (forward-compat)
+  return data.tagName || data.tag_name || data.version || data.tag || null;
+}
+
+/**
  * Handle WebSocket `newRelease` event.
  * Triggers an immediate update check (bypassing the rate limit for this one check).
  */
-function handleWsNewRelease(data) {
+export function handleWsNewRelease(data) {
   if (!isTauriDesktop) return;
-  if (!data) return;
 
-  const version = data.version || data.tag_name || data.tag;
+  const version = extractVersionFromRelease(data);
   if (!version) return;
 
-  // Respect rate limit — don't allow WS events to bypass the 5-minute window
-  const now = Date.now();
-  if (now - _lastCheckTime < MIN_CHECK_INTERVAL_MS) return;
-  _lastCheckTime = now;
+  // Reset rate limit to allow immediate check on new release
+  _lastCheckTime = 0;
 
   // Trigger the auto-check flow
   if (_autoCheckCallback) {
@@ -175,7 +197,8 @@ let _autoCheckCallback = null;
  * Convenience: check, download, and install in one call.
  * Shows a confirmation dialog via the provided callback before installing.
  *
- * Also subscribes to WebSocket `newRelease` events for immediate checks.
+ * Also subscribes to WebSocket `newRelease` events for immediate checks
+ * when a `wsClient` is provided.
  *
  * @param {object} options
  * @param {function} [options.onUpdateAvailable] - (info) => Promise<boolean>

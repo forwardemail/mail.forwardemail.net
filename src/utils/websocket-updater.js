@@ -25,7 +25,7 @@ import { mailboxStore } from '../stores/mailboxStore';
 import { Local } from './storage';
 import { startInitialSync } from './sync-controller';
 import { createWebSocketClient, createReleaseWatcher, WS_EVENTS } from './websocket-client';
-import { connectNotifications } from './notification-manager';
+import { connectNotifications, requestNotificationPermission } from './notification-manager';
 import { fetchLabels } from '../stores/settingsStore';
 
 // ── Constants ──────────────────────────────────────────────────────────────
@@ -99,14 +99,49 @@ function createWebSocketUpdater() {
     }
   }
 
-  // Refresh a specific folder
+  /**
+   * Refresh a specific folder — triggers both a background metadata sync
+   * AND an immediate loadMessages() call so the UI updates right away.
+   *
+   * Previously this only called startInitialSync(), which fetches metadata
+   * in the background via the sync worker.  The sync worker completion
+   * eventually triggers scheduleSyncRefresh → loadMessages(), but ONLY if
+   * the sync worker is connected AND the task completes before the user
+   * navigates away.  For newly created aliases with no prior sync state,
+   * the sync worker may not have enough context to produce a taskComplete
+   * event, leaving the UI stale.
+   *
+   * The fix: always call loadMessages() directly when the WebSocket tells
+   * us something changed.  This ensures the API is queried immediately and
+   * the message list updates regardless of sync worker state.
+   */
   function refreshFolder(folderPath) {
     if (!isNonEmptyString(folderPath)) return;
+
+    const currentFolder = get(mailboxStore.state.selectedFolder);
     const account = Local.get('email') || 'default';
     const folders = get(mailboxStore.state.folders) || [];
     const folder = folders.find((f) => f.path?.toUpperCase?.() === folderPath.toUpperCase());
+
+    // Always kick off a background metadata sync for the affected folder
     if (folder) {
       startInitialSync(account, [folder], { wantBodies: false });
+    }
+
+    // If the user is currently viewing the affected folder, also reload
+    // the message list immediately so the UI reflects the change.
+    if (currentFolder && currentFolder.toUpperCase() === folderPath.toUpperCase()) {
+      // Invalidate the in-memory folder cache so loadMessages() doesn't
+      // return stale cached data.
+      if (typeof mailboxStore.actions.invalidateFolderInMemCache === 'function') {
+        mailboxStore.actions.invalidateFolderInMemCache(account, currentFolder);
+      }
+      mailboxStore.actions.loadMessages();
+    }
+
+    // Always update sidebar unread counts
+    if (typeof mailboxStore.actions.updateFolderUnreadCounts === 'function') {
+      mailboxStore.actions.updateFolderUnreadCounts();
     }
   }
 
@@ -275,8 +310,9 @@ function createWebSocketUpdater() {
           }),
         );
 
-        // Connect notification manager
+        // Connect notification manager and request permission
         notifCleanup = connectNotifications(wsClient);
+        requestNotificationPermission();
 
         wsClient.connect();
       }
@@ -297,6 +333,14 @@ function createWebSocketUpdater() {
       if (isNonEmptyString(email) && isNonEmptyString(password)) {
         startFallbackPoll();
       }
+    },
+
+    /**
+     * Expose the authenticated WebSocket client so callers (e.g. the
+     * auto-updater or push notification manager) can subscribe to events.
+     */
+    getWsClient() {
+      return wsClient;
     },
 
     stop() {
