@@ -1259,6 +1259,9 @@ const createMailboxStore = () => {
     inFlightMessageListRequest = null;
     pendingDeletes.clear();
     pendingFlagMutations.clear();
+    // Clear folder TTL cache so the next loadFolders() does a fresh fetch
+    // instead of returning stale/empty data from a previous session.
+    folderLoadState.clear();
   };
 
   const scheduleSyncRefresh = (folder, account) => {

@@ -28,6 +28,10 @@ import { Local, Accounts } from './storage';
 let _active = false;
 let _toasts = null;
 
+// Track messages the user has marked as read during this demo session.
+// Applied when generating demo data so read state survives re-fetches.
+const _readMessageIds = new Set();
+
 const SIGN_UP_URL = 'https://forwardemail.net';
 const BLOCKED_MSG = 'Action not available in demo account. Sign up at https://forwardemail.net';
 
@@ -45,8 +49,9 @@ const READ_ACTIONS = new Set([
   'Account',
 ]);
 
-// Write actions that are silently blocked (no toast) — background ops like mark-as-read
-const SILENT_WRITE_ACTIONS = new Set(['MessageUpdate']);
+// Write actions that are silently blocked (no toast) — background ops
+// Note: MessageUpdate is handled explicitly above to track read state.
+const SILENT_WRITE_ACTIONS = new Set();
 
 // Actions that are write operations and should be blocked with toast
 const WRITE_ACTIONS = new Set([
@@ -101,6 +106,7 @@ export function activateDemoMode() {
  */
 export function deactivateDemoMode() {
   _active = false;
+  _readMessageIds.clear();
   try {
     localStorage.removeItem(DEMO_STORAGE_KEY);
   } catch {
@@ -241,7 +247,17 @@ export function interceptDemoRequest(action, params = {}, options = {}) {
     return { handled: true, result: getDemoData(action, params) };
   }
 
-  // Silently block background write actions (no toast, no error)
+  // Handle mark-as-read: track the ID so subsequent data generation
+  // returns the message with \Seen, keeping badge counts accurate.
+  if (action === 'MessageUpdate') {
+    const flags = params?.flags || params?.addFlags || [];
+    if (Array.isArray(flags) && flags.includes('\\Seen') && params?.id) {
+      _readMessageIds.add(params.id);
+    }
+    return { handled: true, result: { ok: true, demo: true } };
+  }
+
+  // Silently block other background write actions (no toast, no error)
   if (SILENT_WRITE_ACTIONS.has(action)) {
     return { handled: true, result: { ok: true, demo: true } };
   }
@@ -264,11 +280,14 @@ export function interceptDemoRequest(action, params = {}, options = {}) {
 
 function getDemoData(action, params) {
   switch (action) {
-    case 'Folders':
-      return generateFolders();
+    case 'Folders': {
+      const rawFolders = generateFolders();
+      // Recompute unseen counts based on tracked read state
+      return recomputeFolderCounts(rawFolders);
+    }
 
     case 'FolderGet': {
-      const folders = generateFolders();
+      const folders = recomputeFolderCounts(generateFolders());
       const id = params?.id || params?.path;
       return folders.find((f) => f.id === id || f.path === id) || folders[0];
     }
@@ -277,7 +296,7 @@ function getDemoData(action, params) {
     case 'Message': {
       const folder = params?.folder || params?.mailbox || params?.path || 'INBOX';
       const page = Number(params?.page) || 1;
-      const messages = generateMessages(folder, page);
+      const messages = applyReadState(generateMessages(folder, page));
       if (action === 'Message' && params?.id) {
         return messages.find((m) => m.id === params.id) || messages[0] || null;
       }
@@ -309,6 +328,32 @@ function getDemoData(action, params) {
     default:
       return null;
   }
+}
+
+/**
+ * Apply tracked read state to generated messages.
+ * Adds \Seen flag to any message the user has read during this session.
+ */
+function applyReadState(messages) {
+  return messages.map((msg) => {
+    if (_readMessageIds.has(msg.id) && !msg.flags?.includes('\\Seen')) {
+      return { ...msg, flags: [...(msg.flags || []), '\\Seen'] };
+    }
+    return msg;
+  });
+}
+
+/**
+ * Recompute folder unseen counts by applying read state to all messages
+ * in each folder and counting those without \Seen.
+ */
+function recomputeFolderCounts(folders) {
+  if (_readMessageIds.size === 0) return folders;
+  return folders.map((folder) => {
+    const msgs = applyReadState(generateMessages(folder.path, 1));
+    const unseen = msgs.filter((m) => !m.flags?.includes('\\Seen')).length;
+    return { ...folder, unseen };
+  });
 }
 
 function getFriendlyActionName(action) {

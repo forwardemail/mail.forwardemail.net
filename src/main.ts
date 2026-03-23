@@ -86,6 +86,7 @@ import { initMutationQueue, processMutationQueue } from './utils/mutation-queue'
 import { syncPendingDrafts } from './utils/draft-service';
 import { setIndexToasts, searchStore } from './stores/searchStore';
 import { setDemoToasts } from './utils/demo-mode';
+import { setNotificationToasts } from './utils/notification-manager';
 // Database initialization with recovery support
 import {
   initializeDatabase,
@@ -309,10 +310,21 @@ window.addEventListener('mutation-queue-failed', () => {
   toasts.show("Some changes couldn't be synced. Please try again.", 'error');
 });
 
+// Manual lock button — dispatched from Mailbox.svelte sidebar
+window.addEventListener('fe:lock-app', () => {
+  if (!isLockEnabled() || !isVaultConfigured()) return;
+  lockCryptoStore();
+  pauseInactivityTimer();
+  showLockScreen().then(() => {
+    resumeInactivityTimer();
+  });
+});
+
 // Set up mailboxActions references
 mailboxActions.setToasts(toasts);
 setIndexToasts(toasts);
 setDemoToasts(toasts);
+setNotificationToasts(toasts);
 viewModel.toasts = toasts;
 viewModel.mailboxView.toasts = toasts;
 

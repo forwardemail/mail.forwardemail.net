@@ -26,6 +26,19 @@ import { updateFaviconBadge } from './favicon-badge.js';
 import { Remote } from './remote.js';
 import { extractFromField } from './sync-helpers.ts';
 
+// ── In-app toast reference ─────────────────────────────────────────────────
+// Set from main.ts via setNotificationToasts() — same pattern as
+// setDemoToasts() and setIndexToasts().
+let _toasts = null;
+
+/**
+ * Provide the toast host so new-message events can show an in-app toast
+ * in addition to the OS-level notification.
+ */
+export function setNotificationToasts(toasts) {
+  _toasts = toasts;
+}
+
 // ── Input sanitisation ──────────────────────────────────────────────────────
 
 const MAX_TITLE_LEN = 256;
@@ -301,6 +314,9 @@ async function handleNewMessage(data) {
     channelId: 'new-mail',
     data: { path: sanitizePath(`#inbox/${uid}`), uid },
   });
+
+  // In-app toast (visible when the app window is focused)
+  _toasts?.show?.(`New email from ${displayName}: ${safeSubject}`, 'info');
 }
 
 function handleFlagsUpdated(data) {

@@ -92,29 +92,43 @@ function start(onLock) {
     document.addEventListener(event, onActivity, { passive: true, capture: true });
   }
 
-  // Visibility change handler (lock on minimize with grace period)
+  // Visibility change handler
   _visibilityHandler = () => {
-    const prefs = getLockPrefs();
-    if (!prefs.lockOnMinimize || _paused) return;
+    if (_paused) return;
 
     if (document.hidden) {
-      // Start grace period — don't lock immediately so brief tab switches
-      // (checking a notification, switching apps momentarily) don't trigger it
-      if (!_minimizeGraceTimer && _onLock) {
+      // Lock-on-minimize: start grace period so brief tab switches don't trigger
+      const prefs = getLockPrefs();
+      if (prefs.lockOnMinimize && !_minimizeGraceTimer && _onLock) {
         _minimizeGraceTimer = setTimeout(() => {
           _minimizeGraceTimer = null;
-          // Re-check: still hidden and not paused?
           if (document.hidden && !_paused && _started && _onLock) {
             _onLock();
           }
         }, MINIMIZE_GRACE_MS);
       }
     } else {
-      // User returned — cancel the grace timer
+      // User returned — cancel the minimize grace timer
       if (_minimizeGraceTimer) {
         clearTimeout(_minimizeGraceTimer);
         _minimizeGraceTimer = null;
       }
+
+      // Check if the inactivity timeout elapsed while the tab was hidden.
+      // Browsers throttle setTimeout in hidden tabs (Chrome fires at most
+      // once per minute), so a short timeout (e.g. 30s) may not have fired.
+      // Enforce it now that the user is back.
+      if (_started && _onLock) {
+        const prefs = getLockPrefs();
+        const timeoutMs = prefs.timeoutMs || 5 * 60 * 1000;
+        if (timeoutMs > 0 && Date.now() - _lastActivity >= timeoutMs) {
+          _onLock();
+          return;
+        }
+      }
+
+      // Tab is visible again — reset the timer with remaining time
+      resetTimer();
     }
   };
   document.addEventListener('visibilitychange', _visibilityHandler);
@@ -135,14 +149,14 @@ async function setupTauriListeners() {
     const { getCurrentWindow } = await import('@tauri-apps/api/window');
     const appWindow = getCurrentWindow();
 
-    // Lock on window blur if lockOnMinimize is enabled (with grace period)
+    // Lock on window blur/focus
     const unlistenBlur = await appWindow.onFocusChanged(({ payload: focused }) => {
       if (!_started || _paused) return;
-      const prefs = getLockPrefs();
-      if (!prefs.lockOnMinimize) return;
 
       if (!focused) {
-        if (!_minimizeGraceTimer && _onLock) {
+        // Lock-on-minimize: start grace period
+        const prefs = getLockPrefs();
+        if (prefs.lockOnMinimize && !_minimizeGraceTimer && _onLock) {
           _minimizeGraceTimer = setTimeout(() => {
             _minimizeGraceTimer = null;
             if (!_paused && _started && _onLock) {
@@ -155,6 +169,18 @@ async function setupTauriListeners() {
           clearTimeout(_minimizeGraceTimer);
           _minimizeGraceTimer = null;
         }
+
+        // Check if inactivity timeout elapsed while window was unfocused
+        if (_onLock) {
+          const prefs = getLockPrefs();
+          const timeoutMs = prefs.timeoutMs || 5 * 60 * 1000;
+          if (timeoutMs > 0 && Date.now() - _lastActivity >= timeoutMs) {
+            _onLock();
+            return;
+          }
+        }
+
+        resetTimer();
       }
     });
     _tauriUnlisteners.push(unlistenBlur);

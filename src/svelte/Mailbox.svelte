@@ -46,9 +46,7 @@
     getConversationToName,
     getMessageFromName,
     getMessageToName,
-    getInitials,
     getProfileInitials,
-    getAvatarColor,
   } from './mailbox/utils/avatar-helpers.js';
   import {
     getMailedBy,
@@ -57,6 +55,7 @@
     formatSecurityStatus,
   } from './mailbox/utils/security-helpers.js';
   import { createPerfTracer } from '../utils/perf-logger.ts';
+  import { isLockEnabled, isVaultConfigured } from '../utils/crypto-store.js';
   import { getMessageApiId } from '../utils/sync-helpers.ts';
   import { getSyncSettings } from '../utils/sync-settings.js';
   import { parseMailto, mailtoToPrefill } from '../utils/mailto';
@@ -126,7 +125,6 @@
   import { Checkbox } from '$lib/components/ui/checkbox';
   import { Separator } from '$lib/components/ui/separator';
   import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
-  import * as Avatar from '$lib/components/ui/avatar';
   import * as Tooltip from '$lib/components/ui/tooltip';
   import * as Dialog from '$lib/components/ui/dialog';
 
@@ -4774,6 +4772,18 @@
                     <Moon class="h-4.5 w-4.5" />
                   {/if}
                 </button>
+                {#if isLockEnabled() && isVaultConfigured()}
+                  <button
+                    class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                    type="button"
+                    data-tooltip="Lock app"
+                    data-tooltip-position="bottom"
+                    aria-label="Lock app"
+                    onclick={() => window.dispatchEvent(new CustomEvent('fe:lock-app'))}
+                  >
+                    <Lock class="h-4.5 w-4.5" />
+                  </button>
+                {/if}
               </div>
             {/if}
             <div class="inline-flex items-center gap-2.5">
@@ -5024,6 +5034,17 @@
                 <SettingsIcon class="h-4 w-4" />
                 <span>Settings</span>
               </button>
+              {#if isLockEnabled() && isVaultConfigured()}
+                <button
+                  type="button"
+                  class="flex items-center gap-2 px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                  aria-label="Lock app"
+                  onclick={() => window.dispatchEvent(new CustomEvent('fe:lock-app'))}
+                >
+                  <Lock class="h-4 w-4" />
+                  <span>Lock</span>
+                </button>
+              {/if}
             </div>
           </div>
 
@@ -5607,59 +5628,23 @@
                             ? 'none'
                             : 'transform 0.25s cubic-bezier(0.25, 0.46, 0.45, 0.94)'};"
                         >
-                          {#if selectionMode}
-                            {@const convSelected = ($selectedConversationIds || []).includes(
-                              conv.id,
-                            )}
-                            <button
-                              class={`relative w-8 h-8 rounded flex items-center justify-center shrink-0 transition-colors ${convSelected ? 'text-primary' : 'text-muted-foreground hover:text-foreground'}`}
-                              type="button"
-                              aria-label={convSelected ? 'Deselect' : 'Select'}
-                              onclick={(e) => {
-                                e.stopPropagation();
-                                toggleSelection(conv, e);
-                              }}
-                            >
-                              {#if convSelected}
-                                <CheckSquare class="h-5 w-5" />
-                              {:else}
-                                <Square class="h-5 w-5" />
-                              {/if}
-                            </button>
-                          {:else}
-                            <button
-                              class={`relative w-8 h-8 rounded-full flex items-center justify-center shrink-0 transition-colors ${($selectedConversationIds || []).includes(conv.id) ? 'bg-primary text-primary-foreground' : ''}`}
-                              type="button"
-                              aria-label={($selectedConversationIds || []).includes(conv.id)
-                                ? 'Deselect'
-                                : 'Select'}
-                              onclick={(e) => {
-                                e.stopPropagation();
-                                toggleSelection(conv, e);
-                              }}
-                              style={`--avatar-color: ${getAvatarColor(listIsSentFolder ? getConversationToDisplay(conv) || getConversationFromDisplay(conv) : getConversationFromDisplay(conv))}; ${!($selectedConversationIds || []).includes(conv.id) ? `background-color: var(--avatar-color)` : ''}`}
-                            >
-                              {#if ($selectedConversationIds || []).includes(conv.id)}
-                                <svg
-                                  class="h-4 w-4"
-                                  viewBox="0 0 24 24"
-                                  fill="currentColor"
-                                  aria-hidden="true"
-                                >
-                                  <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" />
-                                </svg>
-                              {:else}
-                                <span class="text-[10px] font-semibold text-white"
-                                  >{getInitials(
-                                    listIsSentFolder
-                                      ? getConversationToDisplay(conv) ||
-                                          getConversationFromDisplay(conv)
-                                      : getConversationFromDisplay(conv),
-                                  )}</span
-                                >
-                              {/if}
-                            </button>
-                          {/if}
+                          <button
+                            class={`relative w-8 h-8 rounded flex items-center justify-center shrink-0 transition-colors ${($selectedConversationIds || []).includes(conv.id) ? 'text-primary' : 'text-muted-foreground hover:text-foreground'}`}
+                            type="button"
+                            aria-label={($selectedConversationIds || []).includes(conv.id)
+                              ? 'Deselect'
+                              : 'Select'}
+                            onclick={(e) => {
+                              e.stopPropagation();
+                              toggleSelection(conv, e);
+                            }}
+                          >
+                            {#if ($selectedConversationIds || []).includes(conv.id)}
+                              <CheckSquare class="h-5 w-5" />
+                            {:else}
+                              <Square class="h-5 w-5" />
+                            {/if}
+                          </button>
                           <!-- Gmail-style: two rows -->
                           <div class="flex-1 min-w-0 flex flex-col gap-0.5 text-[13px]">
                             <!-- Row 1: From | Subject | Date -->
@@ -5807,52 +5792,23 @@
                         ondragstart={(e) => handleDragStart(e, msg)}
                         ondragend={handleDragEnd}
                       >
-                        {#if selectionMode}
-                          {@const msgSelected = ($selectedConversationIds || []).includes(msg.id)}
-                          <button
-                            class={`relative w-10 h-10 rounded flex items-center justify-center shrink-0 transition-colors ${msgSelected ? 'text-primary' : 'text-muted-foreground hover:text-foreground'}`}
-                            type="button"
-                            aria-label={msgSelected ? 'Deselect' : 'Select'}
-                            onclick={(e) => {
-                              e.stopPropagation();
-                              toggleSelection({ id: msg.id }, e);
-                            }}
-                          >
-                            {#if msgSelected}
-                              <CheckSquare class="h-5 w-5" />
-                            {:else}
-                              <Square class="h-5 w-5" />
-                            {/if}
-                          </button>
-                        {:else}
-                          <button
-                            class={`relative w-10 h-10 rounded-full flex items-center justify-center shrink-0 transition-colors ${($selectedConversationIds || []).includes(msg.id) ? 'bg-primary text-primary-foreground' : 'bg-muted'}`}
-                            type="button"
-                            aria-label={($selectedConversationIds || []).includes(msg.id)
-                              ? 'Deselect'
-                              : 'Select'}
-                            onclick={(e) => {
-                              e.stopPropagation();
-                              toggleSelection({ id: msg.id }, e);
-                            }}
-                            style={`--avatar-color: ${getAvatarColor(listIsSentFolder ? getToDisplay(msg) || getFromDisplay(msg) : getFromDisplay(msg))}; ${!($selectedConversationIds || []).includes(msg.id) ? `background-color: var(--avatar-color)` : ''}`}
-                          >
-                            <svg
-                              class="h-4 w-4 text-primary"
-                              viewBox="0 0 24 24"
-                              aria-hidden="true"
-                            >
-                              <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" />
-                            </svg>
-                            <span class="text-xs font-medium"
-                              >{getInitials(
-                                listIsSentFolder
-                                  ? getToDisplay(msg) || getFromDisplay(msg)
-                                  : getFromDisplay(msg),
-                              )}</span
-                            >
-                          </button>
-                        {/if}
+                        <button
+                          class={`relative w-10 h-10 rounded flex items-center justify-center shrink-0 transition-colors ${($selectedConversationIds || []).includes(msg.id) ? 'text-primary' : 'text-muted-foreground hover:text-foreground'}`}
+                          type="button"
+                          aria-label={($selectedConversationIds || []).includes(msg.id)
+                            ? 'Deselect'
+                            : 'Select'}
+                          onclick={(e) => {
+                            e.stopPropagation();
+                            toggleSelection({ id: msg.id }, e);
+                          }}
+                        >
+                          {#if ($selectedConversationIds || []).includes(msg.id)}
+                            <CheckSquare class="h-5 w-5" />
+                          {:else}
+                            <Square class="h-5 w-5" />
+                          {/if}
+                        </button>
                         <div class="flex-1 min-w-0 flex flex-col gap-1">
                           <div class="flex items-center justify-between gap-2">
                             <div class="font-medium truncate">
@@ -6425,7 +6381,7 @@
             {:else if $selectedMessage}
               {#if isProductivityLayout || $mobileReader}
                 <div
-                  class="sticky top-0 z-20 bg-background flex items-center gap-2 p-2 border-b border-border"
+                  class="sticky top-0 z-20 bg-[var(--color-panel)] flex items-center gap-2 p-2 border-b border-border"
                 >
                   <button
                     class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
@@ -6525,7 +6481,7 @@
                   </div>
                 </div>
               {/if}
-              <div class="sticky top-0 z-10 bg-background p-4 border-b border-border">
+              <div class="sticky top-0 z-10 bg-[var(--color-panel)] p-4 border-b border-border">
                 <div class="flex items-start justify-between gap-4 mb-2">
                   <div class="flex-1 min-w-0">
                     <strong class="text-lg font-semibold"
