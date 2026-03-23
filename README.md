@@ -6,15 +6,15 @@ This is the official, open-source, and end-to-end encrypted webmail client for [
 
 When the release pipelines are enabled, all official builds will be produced automatically via secure, tamper-proof [GitHub Actions workflows](https://github.com/forwardemail/mail.forwardemail.net/actions), ensuring a transparent and auditable trail from source code to the final compiled binary. Binaries for all platforms will be cryptographically signed and, where applicable, notarized to ensure their authenticity and integrity. Releases will be published on the [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases) page.
 
-| Platform    | Architecture          | Download                                             | Store                     |
-| :---------- | :-------------------- | :--------------------------------------------------- | :------------------------ |
-| **Web**     | —                     | [app.forwardemail.net](https://app.forwardemail.net) | —                         |
-| **Windows** | x64                   | `.msi` (Coming Soon)                                 |                           |
-| **macOS**   | Apple Silicon & Intel | `.dmg` (Coming Soon)                                 | App Store (Coming Soon)   |
-| **Linux**   | x64                   | `.deb` / `.AppImage` (Coming Soon)                   |                           |
-| **Android** | Universal             | `.apk` (Coming Soon)                                 | Google Play (Coming Soon) |
-|             |                       |                                                      | F-Droid (Coming Soon)     |
-| **iOS**     | arm64                 | Coming Soon                                          | App Store (Coming Soon)   |
+| Platform    | Architecture          | Download                                               | Store                     |
+| :---------- | :-------------------- | :----------------------------------------------------- | :------------------------ |
+| **Web**     | —                     | [mail.forwardemail.net](https://mail.forwardemail.net) | —                         |
+| **Windows** | x64                   | `.msi` (Coming Soon)                                   |                           |
+| **macOS**   | Apple Silicon & Intel | `.dmg` (Coming Soon)                                   | App Store (Coming Soon)   |
+| **Linux**   | x64                   | `.deb` / `.AppImage` (Coming Soon)                     |                           |
+| **Android** | Universal             | `.apk` (Coming Soon)                                   | Google Play (Coming Soon) |
+|             |                       |                                                        | F-Droid (Coming Soon)     |
+| **iOS**     | arm64                 | Coming Soon                                            | App Store (Coming Soon)   |
 
 > **Note for macOS users:** If you download the `.dmg` from GitHub Releases, you may need to run the following command if you see a "damaged" or unverified app error:
 >
