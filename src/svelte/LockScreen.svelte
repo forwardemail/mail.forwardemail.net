@@ -7,7 +7,7 @@
    * app interaction until the user successfully authenticates.
    */
 
-  import { onMount, onDestroy, createEventDispatcher } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import {
     isVaultConfigured,
     unlockWithPin,
@@ -21,14 +21,9 @@
     authenticatePasskey,
   } from '../utils/passkey-auth.js';
 
-  const dispatch = createEventDispatcher();
-
-  /** Emit both a Svelte component event and a DOM CustomEvent so that
-   *  imperative callers (main.ts) who listen on the overlay element
-   *  can also react immediately. */
+  /** Emit a real DOM event from the overlay element so that imperative
+   *  callers (main.ts) who listen on the overlay can react. */
   function emitUnlock() {
-    dispatch('unlock');
-    // Bubble a real DOM event from this component's root element
     const root = document.getElementById('app-lock-overlay');
     if (root) root.dispatchEvent(new CustomEvent('unlock', { bubbles: true }));
   }
@@ -269,7 +264,7 @@
 
     if (event.key >= '0' && event.key <= '9') {
       handleDigit(event.key);
-    } else if (event.key === 'Backspace') {
+    } else if (event.key === 'Backspace' || event.key === 'Delete') {
       handleBackspace();
     } else if (event.key === 'Enter' && pin.length === maxLength) {
       handlePinSubmit();
@@ -277,7 +272,7 @@
   }
 </script>
 
-<svelte:window on:keydown={handleKeydown} />
+<svelte:window onkeydown={handleKeydown} />
 
 <div class="lock-screen" role="dialog" aria-modal="true" aria-label="App Lock Screen">
   <div class="lock-container">
@@ -338,7 +333,7 @@
               {#if showPasskeyOption}
                 <button
                   class="numpad-key special"
-                  on:click={handlePasskeyAuth}
+                  onclick={handlePasskeyAuth}
                   disabled={loading || lockoutUntil > Date.now()}
                   aria-label="Unlock with passkey"
                   title="Use passkey"
@@ -364,7 +359,7 @@
             {:else if key === 'backspace'}
               <button
                 class="numpad-key special"
-                on:click={handleBackspace}
+                onclick={handleBackspace}
                 disabled={loading || pin.length === 0}
                 aria-label="Delete last digit"
               >
@@ -386,7 +381,7 @@
             {:else}
               <button
                 class="numpad-key digit"
-                on:click={() => handleDigit(key)}
+                onclick={() => handleDigit(key)}
                 disabled={loading || lockoutUntil > Date.now()}
                 aria-label={key}
               >
@@ -423,21 +418,20 @@
     display: flex;
     flex-direction: column;
     align-items: center;
+    padding: 2rem;
     max-width: 320px;
     width: 100%;
-    padding: 2rem 1rem;
   }
 
   .lock-icon {
     margin-bottom: 1.5rem;
-    opacity: 0.7;
+    opacity: 0.8;
   }
 
   .lock-title {
     font-size: 1.5rem;
     font-weight: 600;
     margin: 0 0 0.25rem;
-    letter-spacing: -0.01em;
   }
 
   .lock-subtitle {
@@ -450,7 +444,7 @@
     display: flex;
     gap: 14px;
     margin-bottom: 1.5rem;
-    min-height: 20px;
+    min-height: 16px;
   }
 
   .pin-dot {
@@ -472,7 +466,7 @@
   }
 
   .shake {
-    animation: shake 0.4s ease-in-out;
+    animation: shake 0.5s ease-in-out;
   }
 
   @keyframes shake {
