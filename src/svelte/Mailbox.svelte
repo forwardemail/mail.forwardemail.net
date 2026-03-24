@@ -4650,7 +4650,7 @@
           <span>You're offline. Cached messages are still available.</span>
         </div>
       {/if}
-      <div class="flex items-center gap-3 px-4 py-2 bg-muted/50">
+      <div class="flex items-center gap-3 px-4 py-2 bg-muted/50 dark:bg-background">
         <Tooltip.Root>
           <Tooltip.Trigger>
             <button
