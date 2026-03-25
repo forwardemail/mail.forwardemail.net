@@ -151,6 +151,7 @@ export default defineConfig({
           }),
       input: {
         main: './index.html',
+        compose: './compose.html',
       },
       output: {
         manualChunks: {

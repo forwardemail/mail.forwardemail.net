@@ -405,6 +405,15 @@ class KeyboardShortcutManager {
   }
 
   /**
+   * Register additional shortcuts at runtime (e.g., platform-specific shortcuts).
+   * Accepts an object in the same format as DEFAULT_SHORTCUTS.
+   */
+  addShortcuts(shortcuts) {
+    Object.assign(this.shortcuts, shortcuts);
+    this.bindShortcuts();
+  }
+
+  /**
    * Capture the next shortcut entered by the user via hotkeys-js.
    */
   startCapture(onCapture) {
@@ -445,6 +454,23 @@ class KeyboardShortcutManager {
   }
 }
 
+// Tab shortcuts — registered dynamically on Tauri desktop only (not web or mobile)
+export const TAB_SHORTCUTS = {
+  'ctrl+t': { action: 'new-tab', label: 'New tab' },
+  'ctrl+w': { action: 'close-tab', label: 'Close tab' },
+  'ctrl+1': { action: 'tab-1', label: 'Switch to tab 1' },
+  'ctrl+2': { action: 'tab-2', label: 'Switch to tab 2' },
+  'ctrl+3': { action: 'tab-3', label: 'Switch to tab 3' },
+  'ctrl+4': { action: 'tab-4', label: 'Switch to tab 4' },
+  'ctrl+5': { action: 'tab-5', label: 'Switch to tab 5' },
+  'ctrl+6': { action: 'tab-6', label: 'Switch to tab 6' },
+  'ctrl+7': { action: 'tab-7', label: 'Switch to tab 7' },
+  'ctrl+8': { action: 'tab-8', label: 'Switch to tab 8' },
+  'ctrl+9': { action: 'tab-9', label: 'Switch to tab 9' },
+  'ctrl+tab': { action: 'next-tab', label: 'Next tab' },
+  'ctrl+shift+tab': { action: 'prev-tab', label: 'Previous tab' },
+};
+
 // Create singleton instance
 export const keyboardShortcuts = new KeyboardShortcutManager();
 
@@ -458,6 +484,7 @@ export function showKeyboardShortcutsHelp() {
     'Receiving & Navigation': [],
     'Managing & Tags': [],
     'Search & Filter': [],
+    Tabs: [],
     Other: [],
   };
 
@@ -516,7 +543,21 @@ export function showKeyboardShortcutsHelp() {
       return;
     }
 
+    if (
+      shortcut.action.includes('tab') ||
+      shortcut.action === 'new-tab' ||
+      shortcut.action === 'close-tab'
+    ) {
+      grouped['Tabs'].push(shortcut);
+      return;
+    }
+
     grouped['Other'].push(shortcut);
+  });
+
+  // Remove empty groups (e.g., "Tabs" on web/mobile where tab shortcuts aren't registered)
+  Object.keys(grouped).forEach((key) => {
+    if (grouped[key].length === 0) delete grouped[key];
   });
 
   return grouped;

@@ -5,6 +5,7 @@ import { getAuthHeader } from './auth';
 import { config } from '../config';
 import { writable } from 'svelte/store';
 import { warn } from './logger.ts';
+import { swReadyWithTimeout } from './platform.js';
 
 /**
  * Offline Mutation Queue
@@ -114,12 +115,15 @@ export async function queueMutation(type, payload) {
 /**
  * Register a Background Sync tag so the SW can process mutations
  * even if the tab is closed when connectivity returns.
+ *
+ * Uses a timeout so this doesn't hang forever on platforms where the
+ * SW never activates (Chrome OS Flex, storage quota issues, etc.)
  */
 function registerBackgroundSync() {
   if (!('serviceWorker' in navigator)) return;
-  navigator.serviceWorker.ready
+  swReadyWithTimeout(5000)
     .then((reg) => {
-      if (reg.sync) {
+      if (reg?.sync) {
         return reg.sync.register('mutation-queue');
       }
     })

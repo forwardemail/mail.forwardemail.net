@@ -60,3 +60,42 @@ export function canUseBackgroundSync() {
   if (!canUseServiceWorker()) return false;
   return 'SyncManager' in window;
 }
+
+/**
+ * Wait for the service worker to become active, with a timeout.
+ *
+ * On some platforms (Chrome OS Flex, certain Linux configs) the SW API
+ * exists (`'serviceWorker' in navigator` is true) but the worker never
+ * activates — storage quota, corrupted cache, or browser eviction.
+ * `navigator.serviceWorker.ready` hangs forever in that case.
+ *
+ * This helper races `.ready` against a timeout so callers can fall back
+ * instead of silently hanging.
+ *
+ * @param {number} [timeoutMs=5000] — max milliseconds to wait
+ * @returns {Promise<ServiceWorkerRegistration|null>} the registration, or null on timeout/error
+ */
+export function swReadyWithTimeout(timeoutMs = 5000) {
+  if (!isServiceWorkerSupported) return Promise.resolve(null);
+
+  // Already controlling — resolve immediately
+  if (navigator.serviceWorker.controller) {
+    return navigator.serviceWorker.ready.catch(() => null);
+  }
+
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      resolve(null);
+    }, timeoutMs);
+
+    navigator.serviceWorker.ready
+      .then((reg) => {
+        clearTimeout(timer);
+        resolve(reg.active ? reg : null);
+      })
+      .catch(() => {
+        clearTimeout(timer);
+        resolve(null);
+      });
+  });
+}

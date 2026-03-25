@@ -34,8 +34,14 @@ import { queueMutation } from '../utils/mutation-queue';
 import { config } from '../config';
 import { createInboxUpdater } from '../utils/websocket-updater';
 import { i18n } from '../utils/i18n';
-import { isTauri } from '../utils/platform.js';
+import { isTauri, isTauriDesktop, swReadyWithTimeout } from '../utils/platform.js';
 import { warn } from '../utils/logger.ts';
+import {
+  resetTabs,
+  setLoadGenerationHook,
+  setConversationIdsStore,
+  setLoadMessagesHook,
+} from './tabStore';
 
 /**
  * Additional mailbox actions that were in MailboxView
@@ -104,6 +110,17 @@ let loadPromise = null;
 let loadAccount = null;
 let loadGeneration = 0;
 let inboxUpdater = null;
+
+// Wire tab store hooks (desktop only)
+if (isTauriDesktop) {
+  setLoadGenerationHook(() => {
+    loadGeneration++;
+  });
+  setConversationIdsStore(mailboxStore.state.selectedConversationIds);
+  setLoadMessagesHook(() => {
+    mailboxStore.actions.loadMessages?.();
+  });
+}
 
 // Compose modal reference (set by main.js)
 let composeModalRef = null;
@@ -288,12 +305,16 @@ function prefetchAdjacentAccounts(activeAccount) {
   // Delay prefetch to avoid competing with the active account's initial sync
   setTimeout(async () => {
     try {
-      const reg = await navigator.serviceWorker.ready;
+      // Use a timeout so this doesn't hang forever on platforms where the
+      // SW never activates (Chrome OS Flex, storage quota issues, etc.)
+      const reg = await swReadyWithTimeout(5000);
+      if (!reg?.active) return;
+
       for (const acct of allAccounts) {
         if (acct.email === activeAccount) continue;
         const authToken = acct.aliasAuth || (acct.apiKey ? `${acct.apiKey}:` : '');
         if (!authToken) continue;
-        reg.active?.postMessage({
+        reg.active.postMessage({
           type: 'startSync',
           accountId: acct.email,
           folderId: 'INBOX',
@@ -1766,6 +1787,11 @@ const performAccountSwitch = async (email) => {
   }
   if (cached.settingsLabels.length) {
     settingsLabels.set(cached.settingsLabels);
+  }
+
+  // Reset tabs for new account (desktop only)
+  if (isTauriDesktop) {
+    resetTabs(cached.defaultFolder || 'INBOX');
   }
 
   toastsRef?.show?.(`Switched to ${email}`, 'info');

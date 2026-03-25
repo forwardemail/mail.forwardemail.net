@@ -20,10 +20,12 @@
  *   - Sync-shim CustomEvent payloads are type-checked.
  */
 
-import { canUseServiceWorker } from './platform.js';
+import { canUseServiceWorker, swReadyWithTimeout } from './platform.js';
 
 let _mode = null; // 'sw' | 'shim'
 let _shimCore = null;
+
+const SW_READY_TIMEOUT_MS = 5000;
 
 // Allowlisted sync command types
 const ALLOWED_COMMANDS = new Set(['startSync', 'cancelSync', 'syncStatus']);
@@ -39,13 +41,25 @@ const ALLOWED_MESSAGE_TYPES = new Set([
 /**
  * Initialise the sync bridge.  Call once at app bootstrap.
  *
- * On web this is a no-op (the SW is registered separately).
+ * On web, checks that the SW actually activates within a timeout.
+ * If the SW API exists but the worker never activates (Chrome OS Flex,
+ * storage quota issues, etc.) falls back to the main-thread shim so
+ * syncing still works.
+ *
  * On Tauri / non-SW platforms this lazily loads and boots the shim.
  */
 export async function initSyncBridge() {
   if (canUseServiceWorker()) {
-    _mode = 'sw';
-    return;
+    const reg = await swReadyWithTimeout(SW_READY_TIMEOUT_MS);
+    if (reg) {
+      _mode = 'sw';
+      return;
+    }
+
+    console.warn(
+      '[sync-bridge] SW not active after %dms — falling back to shim',
+      SW_READY_TIMEOUT_MS,
+    );
   }
 
   // Lazy-load the shim so it's tree-shaken out of the web bundle
@@ -141,19 +155,31 @@ export async function destroySyncBridge() {
 // ── Internal helpers ─────────────────────────────────────────────────────────
 
 function _sendViaSW(payload) {
-  if (!navigator.serviceWorker?.controller) {
-    // SW not yet active — queue for when it is
-    navigator.serviceWorker?.ready
-      ?.then((reg) => {
-        reg.active?.postMessage(payload);
-      })
-      .catch((err) => {
-        console.warn('[sync-bridge] SW ready failed:', err);
-      });
+  if (navigator.serviceWorker?.controller) {
+    navigator.serviceWorker.controller.postMessage(payload);
     return;
   }
 
-  navigator.serviceWorker.controller.postMessage(payload);
+  // SW controller is gone — fall back to shim dynamically
+  _runtimeFallbackToShim(payload);
+}
+
+async function _runtimeFallbackToShim(payload) {
+  // Already switched to shim (e.g. from a prior fallback)
+  if (_mode === 'shim' && _shimCore) {
+    _handleShimCommand(payload);
+    return;
+  }
+
+  console.warn('[sync-bridge] SW controller lost — switching to shim');
+  try {
+    const { initSyncShim } = await import('./sync-shim.js');
+    _shimCore = initSyncShim();
+    _mode = 'shim';
+    _handleShimCommand(payload);
+  } catch (err) {
+    console.warn('[sync-bridge] Shim fallback failed:', err);
+  }
 }
 
 function _handleShimCommand(payload) {

@@ -176,6 +176,9 @@
   import Moon from '@lucide/svelte/icons/moon';
   import WifiOff from '@lucide/svelte/icons/wifi-off';
   import EmailIframe from './components/EmailIframe.svelte';
+  import TabBar from './components/TabBar.svelte';
+  import { updateActiveTabFolder, activeTabId } from '../stores/tabStore';
+  import { isTauriDesktop } from '../utils/platform.js';
 
   const isBodyPrefetchEnabled = () => getEffectiveSettingValue('cache_prefetch_enabled') !== false;
 
@@ -287,6 +290,7 @@
   let skipFolderUrlUpdate = false; // Flag to prevent URL update during popstate handling
   let skipFilterUrlUpdate = true; // Start true to prevent URL updates during initialization
   let urlStateInitialized = false; // Track if URL state system is ready
+  let tabSwitchInProgress = false; // Use replaceState instead of pushState during tab switches
 
   // When becoming active (e.g., navigating back from Settings), ensure a folder is selected
   // and re-load the selected message if PGP keys changed (e.g., user just added a key).
@@ -1378,6 +1382,8 @@
     } else {
       mailboxView?.selectFolder?.(path);
     }
+    // Update the active tab's folder label (desktop only)
+    if (isTauriDesktop) updateActiveTabFolder(path);
     // URL will be updated by the selectedFolder subscription
   };
   const updateSelectedConversation = (conv) => {
@@ -4439,11 +4445,26 @@
           // Always show just the folder - message selection happens separately
           if (folder && !skipFolderUrlUpdate) {
             const hash = buildHashUrl(folder, null);
-            history.pushState({ folder }, '', hash);
+            // Tab switches use replaceState to avoid polluting browser history
+            if (tabSwitchInProgress) {
+              history.replaceState({ folder }, '', hash);
+              tabSwitchInProgress = false;
+            } else {
+              history.pushState({ folder }, '', hash);
+            }
           }
         }
       }),
     );
+
+    // Track tab switches so URL updates use replaceState instead of pushState (desktop only)
+    if (isTauriDesktop) {
+      mailboxSubscriptions.push(
+        activeTabId.subscribe(() => {
+          tabSwitchInProgress = true;
+        }),
+      );
+    }
 
     // Update URL when filter state changes (debounced to avoid rapid updates)
     let filterUrlUpdateTimer: ReturnType<typeof setTimeout> | null = null;
@@ -4825,6 +4846,10 @@
           </div>
         </div>
       </div>
+
+      {#if isTauriDesktop}
+        <TabBar />
+      {/if}
 
       {#if $sidebarOpen}
         <div
@@ -7794,7 +7819,7 @@
     aside.fe-folders {
       display: flex;
       flex-direction: column;
-      height: calc(100vh - 60px);
+      height: calc(100dvh - 60px);
       padding: 12px 12px 10px;
     }
   }
@@ -7804,6 +7829,8 @@
     aside.fe-folders.fe-folders-open {
       display: flex;
       flex-direction: column;
+      height: 100dvh;
+      max-height: 100dvh;
       padding: 12px 12px 10px;
     }
   }

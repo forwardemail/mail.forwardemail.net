@@ -155,9 +155,15 @@
     toasts?: ToastApi | null;
     registerApi?: (api: ComposeApi) => void;
     onSent?: (result?: unknown) => void;
+    nativeWindow?: boolean;
   }
 
-  let { toasts = null, registerApi = () => {}, onSent = () => {} }: Props = $props();
+  let {
+    toasts = null,
+    registerApi = () => {},
+    onSent = () => {},
+    nativeWindow = false,
+  }: Props = $props();
 
   let visible = $state(false);
   const visibility = writable(false);
@@ -1604,7 +1610,7 @@
         StarterKit,
         Link.configure({
           openOnClick: false,
-          autolink: false,
+          autolink: true,
           linkOnPaste: true,
         }),
         Placeholder.configure({ placeholder: 'Write your message...' }),
@@ -2409,6 +2415,7 @@
   const saveDraftFn = () => {
     saveCurrentDraft();
   };
+
   const updateReplyBody = (newBody?: string, options?: { focusTop?: boolean }) => {
     if (!newBody) return;
     // Set the HTML content in the editor
@@ -2471,30 +2478,32 @@
 
 <Tooltip.Provider>
   {#if visible && !minimized}
-    {#if expanded}
+    {#if expanded && !nativeWindow}
       <div class="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm"></div>
     {/if}
     <div
-      class="fixed inset-0 z-50 flex flex-col bg-background border border-border shadow-2xl ring-1 ring-black/5 dark:ring-white/10 overflow-hidden transition-all"
-      class:md:inset-auto={!expanded}
-      class:md:bottom-4={!expanded}
-      class:md:right-4={!expanded}
-      class:md:left-auto={!expanded}
-      class:md:top-auto={!expanded}
-      class:w-full={!expanded}
-      class:h-full={!expanded}
-      class:md:w-[560px]={!expanded && !compact}
-      class:md:h-[600px]={!expanded && !compact}
-      class:md:w-[650px]={!expanded && compact}
-      class:md:h-[700px]={!expanded && compact}
-      class:md:top-8={expanded}
-      class:md:bottom-8={expanded}
-      class:md:left-0={expanded}
-      class:md:right-0={expanded}
-      class:md:max-w-5xl={expanded}
-      class:md:mx-auto={expanded}
+      class={nativeWindow
+        ? 'flex flex-col bg-background w-full h-screen overflow-hidden'
+        : 'fixed inset-0 z-50 flex flex-col bg-background border border-border shadow-2xl ring-1 ring-black/5 dark:ring-white/10 overflow-hidden transition-all'}
+      class:md:inset-auto={!nativeWindow && !expanded}
+      class:md:bottom-4={!nativeWindow && !expanded}
+      class:md:right-4={!nativeWindow && !expanded}
+      class:md:left-auto={!nativeWindow && !expanded}
+      class:md:top-auto={!nativeWindow && !expanded}
+      class:w-full={!nativeWindow && !expanded}
+      class:h-full={!nativeWindow && !expanded}
+      class:md:w-[560px]={!nativeWindow && !expanded && !compact}
+      class:md:h-[600px]={!nativeWindow && !expanded && !compact}
+      class:md:w-[650px]={!nativeWindow && !expanded && compact}
+      class:md:h-[700px]={!nativeWindow && !expanded && compact}
+      class:md:top-8={!nativeWindow && expanded}
+      class:md:bottom-8={!nativeWindow && expanded}
+      class:md:left-0={!nativeWindow && expanded}
+      class:md:right-0={!nativeWindow && expanded}
+      class:md:max-w-5xl={!nativeWindow && expanded}
+      class:md:mx-auto={!nativeWindow && expanded}
       role="dialog"
-      aria-modal={!compact}
+      aria-modal={!compact && !nativeWindow}
     >
       <header
         class="flex items-center justify-between gap-2 px-4 py-3 border-b border-border bg-muted/30"
@@ -2530,82 +2539,93 @@
         </div>
 
         <div class="flex items-center gap-1">
-          <Tooltip.Root>
-            <Tooltip.Trigger>
-              <Button variant="ghost" size="icon" class="hidden md:flex" onclick={minimizeComposer}>
-                <Minus class="h-4 w-4" />
-              </Button>
-            </Tooltip.Trigger>
-            <Tooltip.Content side="bottom"><p>Minimize to dock</p></Tooltip.Content>
-          </Tooltip.Root>
-          {#if expanded}
+          {#if !nativeWindow}
             <Tooltip.Root>
               <Tooltip.Trigger>
                 <Button
                   variant="ghost"
                   size="icon"
                   class="hidden md:flex"
-                  onclick={() => {
-                    if (!isDesktopViewport()) return;
-                    expanded = false;
-                    setCompact(true);
-                  }}
+                  onclick={minimizeComposer}
                 >
-                  <Minimize2 class="h-4 w-4" />
+                  <Minus class="h-4 w-4" />
                 </Button>
               </Tooltip.Trigger>
-              <Tooltip.Content side="bottom"><p>Compact view</p></Tooltip.Content>
-            </Tooltip.Root>
-          {:else if compact}
-            <Tooltip.Root>
-              <Tooltip.Trigger>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  class="hidden md:flex"
-                  onclick={() => {
-                    if (!isDesktopViewport()) return;
-                    setCompact(false);
-                    expanded = true;
-                  }}
-                >
-                  <Maximize2 class="h-4 w-4" />
-                </Button>
-              </Tooltip.Trigger>
-              <Tooltip.Content side="bottom"><p>Expand to fullscreen</p></Tooltip.Content>
-            </Tooltip.Root>
-          {:else}
-            <Tooltip.Root>
-              <Tooltip.Trigger>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  class="hidden md:flex"
-                  onclick={() => {
-                    if (!isDesktopViewport()) return;
-                    setCompact(false);
-                    expanded = true;
-                  }}
-                >
-                  <Maximize2 class="h-4 w-4" />
-                </Button>
-              </Tooltip.Trigger>
-              <Tooltip.Content side="bottom"><p>Expand</p></Tooltip.Content>
+              <Tooltip.Content side="bottom"><p>Minimize to dock</p></Tooltip.Content>
             </Tooltip.Root>
           {/if}
-          <Tooltip.Root>
-            <Tooltip.Trigger>
-              <Button
-                variant="ghost"
-                size="icon"
-                class="hidden md:flex"
-                onclick={() => closeComposer()}
-              >
-                <X class="h-4 w-4" />
-              </Button>
-            </Tooltip.Trigger>
-            <Tooltip.Content side="bottom"><p>Close</p></Tooltip.Content>
-          </Tooltip.Root>
+          {#if !nativeWindow}
+            {#if expanded}
+              <Tooltip.Root>
+                <Tooltip.Trigger>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    class="hidden md:flex"
+                    onclick={() => {
+                      if (!isDesktopViewport()) return;
+                      expanded = false;
+                      setCompact(true);
+                    }}
+                  >
+                    <Minimize2 class="h-4 w-4" />
+                  </Button>
+                </Tooltip.Trigger>
+                <Tooltip.Content side="bottom"><p>Compact view</p></Tooltip.Content>
+              </Tooltip.Root>
+            {:else if compact}
+              <Tooltip.Root>
+                <Tooltip.Trigger>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    class="hidden md:flex"
+                    onclick={() => {
+                      if (!isDesktopViewport()) return;
+                      setCompact(false);
+                      expanded = true;
+                    }}
+                  >
+                    <Maximize2 class="h-4 w-4" />
+                  </Button>
+                </Tooltip.Trigger>
+                <Tooltip.Content side="bottom"><p>Expand to fullscreen</p></Tooltip.Content>
+              </Tooltip.Root>
+            {:else}
+              <Tooltip.Root>
+                <Tooltip.Trigger>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    class="hidden md:flex"
+                    onclick={() => {
+                      if (!isDesktopViewport()) return;
+                      setCompact(false);
+                      expanded = true;
+                    }}
+                  >
+                    <Maximize2 class="h-4 w-4" />
+                  </Button>
+                </Tooltip.Trigger>
+                <Tooltip.Content side="bottom"><p>Expand</p></Tooltip.Content>
+              </Tooltip.Root>
+            {/if}
+          {/if}
+          {#if !nativeWindow}
+            <Tooltip.Root>
+              <Tooltip.Trigger>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  class="hidden md:flex"
+                  onclick={() => closeComposer()}
+                >
+                  <X class="h-4 w-4" />
+                </Button>
+              </Tooltip.Trigger>
+              <Tooltip.Content side="bottom"><p>Close</p></Tooltip.Content>
+            </Tooltip.Root>
+          {/if}
 
           <Button variant="ghost" size="icon" class="md:hidden" onclick={triggerFilePicker}>
             <Paperclip class="h-5 w-5" />

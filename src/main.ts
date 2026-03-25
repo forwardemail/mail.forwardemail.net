@@ -2,7 +2,11 @@ import './polyfills';
 import * as mailboxActions from './stores/mailboxActions';
 import { createStarfield } from './utils/starfield';
 import { Local, Accounts, reconcileOrphanedAccountData } from './utils/storage';
-import { keyboardShortcuts, showKeyboardShortcutsHelp } from './utils/keyboard-shortcuts';
+import {
+  keyboardShortcuts,
+  showKeyboardShortcutsHelp,
+  TAB_SHORTCUTS,
+} from './utils/keyboard-shortcuts';
 import { i18n } from './utils/i18n';
 import { createToastHost } from './svelte/toastsHost';
 import Login from './svelte/Login.svelte';
@@ -13,6 +17,16 @@ import Profile from './svelte/Profile.svelte';
 import { mailService } from './stores/mailService';
 import { mailboxStore } from './stores/mailboxStore';
 import { effectiveTheme, getEffectiveSettingValue } from './stores/settingsStore';
+import {
+  createTab,
+  closeTab,
+  activateTab,
+  getNextTabId,
+  getPrevTabId,
+  getTabIdByIndex,
+  resetTabs,
+  activeTabId,
+} from './stores/tabStore';
 import { writable, get } from 'svelte/store';
 import { mount } from 'svelte';
 // Design system styles - base reset first, then tokens, components, pages, then main
@@ -67,7 +81,8 @@ document.head.appendChild(style);
 import './utils/error-logger';
 
 import { sendSyncTask, terminateSyncWorker } from './utils/sync-worker-client.js';
-import { canUseServiceWorker, isTauri } from './utils/platform.js';
+import { canUseServiceWorker, isTauri, isTauriDesktop } from './utils/platform.js';
+import { openComposeWindow, initComposeWindowListener } from './utils/compose-window';
 import {
   isLockEnabled,
   isUnlocked,
@@ -126,6 +141,11 @@ import {
   selectedConversationCount,
   filteredConversations,
 } from './stores/conversationStore';
+
+// Register tab shortcuts early (before component mount) so Settings.svelte sees them
+if (isTauriDesktop) {
+  keyboardShortcuts.addShortcuts(TAB_SHORTCUTS);
+}
 
 const loadCalendarComponent = () => import('./svelte/Calendar.svelte');
 const loadContactsComponent = () => import('./svelte/Contacts.svelte');
@@ -623,6 +643,12 @@ if (mailboxRoot) {
       },
     },
   });
+
+  // Initialize desktop-only systems (tabs + compose window listener)
+  if (isTauriDesktop) {
+    resetTabs('INBOX');
+    initComposeWindowListener();
+  }
 }
 
 const updateRouteVisibility = (route) => {
@@ -696,35 +722,82 @@ viewModel.settingsModal.navigate = viewModel.navigate;
 mailboxActions.setNavigate(viewModel.navigate);
 
 viewModel.pgpPassphraseModal = passphraseApi;
-// Use Svelte compose
-viewModel.mailboxView.composeModal = {
-  open: (prefill) => {
-    return composeApi.open(prefill);
-  },
-  close: () => composeApi.close(),
-  forward: (prefill) =>
-    composeApi.forward({
-      subject: prefill?.subject,
-      // Use the body from prefill (set by mailboxActions) or fall back to store
-      body: prefill?.body || get(messageBody),
-    }),
-  reply: (prefill) =>
-    composeApi.reply({
-      subject: prefill?.subject,
-      from: prefill?.from,
-      to: prefill?.to,
-      cc: prefill?.cc,
-      date: prefill?.date,
-      // Use the body from prefill (set by mailboxActions) or fall back to store
-      body: prefill?.body || get(messageBody),
-      bodyLoading: prefill?.bodyLoading,
-      inReplyTo: prefill?.inReplyTo,
-    }),
-  updateReplyBody: (body, options) => composeApi.updateReplyBody?.(body, options),
-  toList: (list) => composeApi.setToList(list),
-  setContacts: (list) => composeApi.setContacts(list),
-  isVisible: () => composeApi.isVisible?.(),
-};
+// Compose: Tauri desktop uses separate native windows, web/mobile uses in-app modal
+if (isTauriDesktop) {
+  viewModel.mailboxView.composeModal = {
+    open: (prefill) => {
+      openComposeWindow({ action: 'open', prefill });
+    },
+    close: () => {},
+    forward: (prefill) => {
+      openComposeWindow({
+        action: 'forward',
+        prefill: {
+          subject: prefill?.subject,
+          body: prefill?.body || get(messageBody),
+        },
+      });
+    },
+    reply: (prefill) => {
+      openComposeWindow({
+        action: 'reply',
+        prefill: {
+          subject: prefill?.subject,
+          from: prefill?.from,
+          to: prefill?.to,
+          cc: prefill?.cc,
+          date: prefill?.date,
+          body: prefill?.body || get(messageBody),
+          bodyLoading: prefill?.bodyLoading,
+          inReplyTo: prefill?.inReplyTo,
+        },
+      });
+    },
+    updateReplyBody: () => {},
+    toList: () => {},
+    setContacts: () => {},
+    isVisible: () => false,
+  };
+
+  // Listen for compose:sent events from compose windows
+  import('@tauri-apps/api/event').then(({ listen }) => {
+    listen('compose:sent', (event) => {
+      const result = event.payload as { archive?: boolean; queued?: boolean } | undefined;
+      if (result?.archive) {
+        const msg = get(selectedMessage);
+        if (msg) mailboxActions.archiveMessage(msg).catch(() => {});
+      }
+      mailboxStore.actions.loadMessages?.();
+    });
+  });
+} else {
+  viewModel.mailboxView.composeModal = {
+    open: (prefill) => {
+      return composeApi.open(prefill);
+    },
+    close: () => composeApi.close(),
+    forward: (prefill) =>
+      composeApi.forward({
+        subject: prefill?.subject,
+        body: prefill?.body || get(messageBody),
+      }),
+    reply: (prefill) =>
+      composeApi.reply({
+        subject: prefill?.subject,
+        from: prefill?.from,
+        to: prefill?.to,
+        cc: prefill?.cc,
+        date: prefill?.date,
+        body: prefill?.body || get(messageBody),
+        bodyLoading: prefill?.bodyLoading,
+        inReplyTo: prefill?.inReplyTo,
+      }),
+    updateReplyBody: (body, options) => composeApi.updateReplyBody?.(body, options),
+    toList: (list) => composeApi.setToList(list),
+    setContacts: (list) => composeApi.setContacts(list),
+    isVisible: () => composeApi.isVisible?.(),
+  };
+}
 mailboxActions.setComposeModal(viewModel.mailboxView.composeModal);
 viewModel.mailboxView.passphraseModal = viewModel.pgpPassphraseModal;
 // Update Svelte compose with mailboxView ref via store
@@ -972,6 +1045,34 @@ function initKeyboardShortcuts() {
   keyboardShortcuts.on('redo', () => {
     viewModel.mailboxView.toasts?.show?.('Redo not yet implemented', 'info');
   });
+
+  // Tab shortcut handlers (desktop only — shortcuts registered at module init, handlers bound here)
+  if (isTauriDesktop) {
+    keyboardShortcuts.on('new-tab', () => {
+      createTab('mailbox', { folder: get(mailboxStore.state.selectedFolder) || 'INBOX' });
+    });
+
+    keyboardShortcuts.on('close-tab', () => {
+      closeTab(get(activeTabId));
+    });
+
+    keyboardShortcuts.on('next-tab', () => {
+      const id = getNextTabId();
+      if (id) activateTab(id);
+    });
+
+    keyboardShortcuts.on('prev-tab', () => {
+      const id = getPrevTabId();
+      if (id) activateTab(id);
+    });
+
+    for (let i = 1; i <= 9; i++) {
+      keyboardShortcuts.on(`tab-${i}`, () => {
+        const id = getTabIdByIndex(i - 1);
+        if (id) activateTab(id);
+      });
+    }
+  }
 }
 
 function showShortcutsHelp() {
