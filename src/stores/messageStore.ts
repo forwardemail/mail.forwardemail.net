@@ -52,9 +52,12 @@ export const filteredMessages: Readable<Message[]> = derived(
     $searchActive,
     $sortOrder,
   ]) => {
+    const selectedUpper = $selectedFolder?.toUpperCase();
     const base = $searchActive
-      ? ($searchResults || []).filter((m) => !$selectedFolder || m.folder === $selectedFolder)
-      : ($messages || []).filter((m) => m.folder === $selectedFolder);
+      ? ($searchResults || []).filter(
+          (m) => !$selectedFolder || m.folder?.toUpperCase() === selectedUpper,
+        )
+      : ($messages || []).filter((m) => m.folder?.toUpperCase() === selectedUpper);
     let list = base;
     if ($unreadOnly) list = list.filter((m) => m.is_unread);
     if ($hasAttachmentsOnly) list = list.filter((m) => m.has_attachment);

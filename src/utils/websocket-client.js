@@ -545,6 +545,18 @@ export function createWebSocketClient(opts = {}) {
       backoff = INITIAL_BACKOFF_MS;
     },
 
+    /**
+     * Reconnect if currently disconnected. Resets the reconnect counter
+     * first so a previously exhausted budget doesn't block recovery.
+     * Safe to call when already connected (no-op).
+     */
+    reconnect() {
+      if (destroyed || connected) return;
+      reconnectAttempts = 0;
+      backoff = INITIAL_BACKOFF_MS;
+      connect();
+    },
+
     /** Whether the socket is currently connected. */
     get connected() {
       return connected;

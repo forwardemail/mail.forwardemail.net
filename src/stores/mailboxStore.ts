@@ -722,7 +722,7 @@ const createMailboxStore = () => {
       const totalCount = readNumber(f.total ?? f.message_count ?? f.count);
 
       return {
-        id: f.id || f.folder_id || f.uid || f.uidnext || f.uidvalidity || f.uid_validity,
+        id: f.id || f._id || f.folder_id || f.uid || f.uidnext || f.uidvalidity || f.uid_validity,
         path,
         name: f.name || f.path || f.fullName || f.fullname,
         icon: f.icon || f.Icon || f.path?.toLowerCase?.() || 'folder',
@@ -1041,7 +1041,7 @@ const createMailboxStore = () => {
       const activeFolder = get(selectedFolder);
       const isStaleRequest =
         activeNow !== account ||
-        activeFolder !== folder ||
+        activeFolder?.toUpperCase() !== folder?.toUpperCase() ||
         inFlightMessageListRequest?.key !== requestKey;
       if (isStaleRequest) {
         tracer.stage('stale_request_continue_cache', { source });
@@ -1236,7 +1236,7 @@ const createMailboxStore = () => {
       const activeFolder = get(selectedFolder);
       if (
         activeNow !== account ||
-        activeFolder !== folder ||
+        activeFolder?.toUpperCase() !== folder?.toUpperCase() ||
         inFlightMessageListRequest?.key !== requestKey
       ) {
         resolveInflight(undefined);
@@ -1268,14 +1268,14 @@ const createMailboxStore = () => {
     const now = Date.now();
     const recentlyRefreshed =
       lastSyncRefresh.account === account &&
-      lastSyncRefresh.folder === folder &&
+      lastSyncRefresh.folder?.toUpperCase() === folder?.toUpperCase() &&
       now - lastSyncRefresh.at < 1000;
     if (recentlyRefreshed) return;
     if (syncRefreshTimer) clearTimeout(syncRefreshTimer);
     syncRefreshTimer = setTimeout(() => {
       syncRefreshTimer = null;
       if ((Local.get('email') || 'default') !== account) return;
-      if (get(selectedFolder) !== folder) return;
+      if (get(selectedFolder)?.toUpperCase() !== folder?.toUpperCase()) return;
       if (get(loading)) return;
       if (inFlightMessageListRequest) return; // Don't compete with user pagination
       // Skip refresh when search is active — the search view uses searchResults,
@@ -1297,7 +1297,7 @@ const createMailboxStore = () => {
     // accurate for shared-inbox scenarios where another client changes flags.
     updateFolderUnreadCounts();
 
-    if (get(selectedFolder) !== data.folder) return;
+    if (get(selectedFolder)?.toUpperCase() !== data.folder?.toUpperCase()) return;
     // Refresh the message list to catch deletions/moves
     // that may have happened on server or in another session
     scheduleSyncRefresh(data.folder, account);

@@ -29,7 +29,7 @@ import { connectNotifications, requestNotificationPermission } from './notificat
 import { fetchLabels } from '../stores/settingsStore';
 
 // ── Constants ──────────────────────────────────────────────────────────────
-const FALLBACK_POLL_INTERVAL_MS = 300_000; // 5 min fallback — WebSocket handles real-time
+const FALLBACK_POLL_INTERVAL_MS = 60_000; // 1 min fallback when WS disconnected
 const SETTINGS_SYNC_THROTTLE_MS = 30_000; // Throttle visibility-based settings sync
 
 /**
@@ -81,21 +81,32 @@ function createWebSocketUpdater() {
   let lastSettingsSync = 0;
   const wsUnsubs = [];
 
-  // Refresh the INBOX view (same logic as the old poller tick)
-  function refreshInbox() {
+  // Refresh the current folder — polls whatever the user is viewing, not just INBOX.
+  // Removed navigator.onLine guard (unreliable on Linux) — let fetch fail naturally.
+  function refreshCurrentFolder() {
     if (document.visibilityState !== 'visible') return;
-    if (!navigator.onLine) return;
 
     const currentFolder = get(mailboxStore.state.selectedFolder);
-    if (currentFolder !== 'INBOX') return;
-
-    mailboxStore.actions.loadMessages();
+    if (!currentFolder) return;
 
     const account = Local.get('email') || 'default';
+
+    // Invalidate in-memory cache so loadMessages fetches fresh data
+    if (typeof mailboxStore.actions.invalidateFolderInMemCache === 'function') {
+      mailboxStore.actions.invalidateFolderInMemCache(account, currentFolder);
+    }
+    mailboxStore.actions.loadMessages();
+
+    // Background metadata sync for the current folder
     const folders = get(mailboxStore.state.folders) || [];
-    const inbox = folders.find((f) => f.path?.toUpperCase?.() === 'INBOX');
-    if (inbox) {
-      startInitialSync(account, [inbox], { wantBodies: false });
+    const folder = folders.find((f) => f.path?.toUpperCase?.() === currentFolder.toUpperCase());
+    if (folder) {
+      startInitialSync(account, [folder], { wantBodies: false });
+    }
+
+    // Always update sidebar unread counts
+    if (typeof mailboxStore.actions.updateFolderUnreadCounts === 'function') {
+      mailboxStore.actions.updateFolderUnreadCounts();
     }
   }
 
@@ -121,22 +132,31 @@ function createWebSocketUpdater() {
     const currentFolder = get(mailboxStore.state.selectedFolder);
     const account = Local.get('email') || 'default';
     const folders = get(mailboxStore.state.folders) || [];
-    // Match by folder id first (server sends MongoDB ObjectIds), then by path
+
+    // Match by folder id (server sends MongoDB ObjectIds), _id, or path
     const folder =
       folders.find((f) => String(f.id) === folderIdentifier) ||
+      folders.find((f) => String(f._id) === folderIdentifier) ||
       folders.find((f) => f.path?.toUpperCase?.() === folderIdentifier.toUpperCase());
 
-    // Always kick off a background metadata sync for the affected folder
+    // Always kick off a background metadata sync for the matched folder
     if (folder) {
       startInitialSync(account, [folder], { wantBodies: false });
     }
 
-    // If the user is currently viewing the affected folder, also reload
-    // the message list immediately so the UI reflects the change.
-    const folderPath = folder?.path || folderIdentifier;
-    if (currentFolder && currentFolder.toUpperCase() === folderPath.toUpperCase()) {
-      // Invalidate the in-memory folder cache so loadMessages() doesn't
-      // return stale cached data.
+    // Determine if the affected folder matches what the user is viewing.
+    // If we matched a folder, compare paths. If we couldn't match (e.g.,
+    // ObjectId not found in folders list), assume the current folder might
+    // be affected and refresh anyway — better to over-refresh than miss
+    // a new message.
+    const folderPath = folder?.path;
+    const affectsCurrentFolder = !currentFolder
+      ? false
+      : folderPath
+        ? currentFolder.toUpperCase() === folderPath.toUpperCase()
+        : true; // Unknown folder — refresh current view as safety net
+
+    if (affectsCurrentFolder) {
       if (typeof mailboxStore.actions.invalidateFolderInMemCache === 'function') {
         mailboxStore.actions.invalidateFolderInMemCache(account, currentFolder);
       }
@@ -154,7 +174,7 @@ function createWebSocketUpdater() {
     stopFallbackPoll();
     fallbackTimer = setInterval(() => {
       if (!wsClient?.connected) {
-        refreshInbox();
+        refreshCurrentFolder();
       }
     }, FALLBACK_POLL_INTERVAL_MS);
   }
@@ -310,6 +330,14 @@ function createWebSocketUpdater() {
           }),
         );
 
+        // Ensure fallback polling stays active if WS gives up reconnecting
+        wsUnsubs.push(
+          wsClient.on('_maxReconnectsReached', () => {
+            console.warn('[updater] WebSocket gave up reconnecting, relying on polling');
+            startFallbackPoll();
+          }),
+        );
+
         // Connect notification manager and request permission
         notifCleanup = connectNotifications(wsClient);
         requestNotificationPermission();
@@ -317,10 +345,21 @@ function createWebSocketUpdater() {
         wsClient.connect();
       }
 
-      // Re-sync labels/settings when the app becomes visible (handles
-      // cross-client label creation — e.g. webmail ↔ desktop).
+      // When the app becomes visible: refresh messages, reconnect WS if needed,
+      // and re-sync labels/settings. Covers mobile background return, Linux
+      // suspend/resume, browser tab switch, and Wayland desktop switching.
       visibilityHandler = () => {
         if (document.hidden || destroyed || !started) return;
+
+        // 1. Always refresh the current folder when user returns
+        refreshCurrentFolder();
+
+        // 2. If WS is disconnected, reset counter and reconnect immediately
+        if (wsClient && !wsClient.connected) {
+          wsClient.reconnect();
+        }
+
+        // 3. Re-sync labels/settings (throttled to avoid hammering)
         const now = Date.now();
         if (now - lastSettingsSync < SETTINGS_SYNC_THROTTLE_MS) return;
         lastSettingsSync = now;

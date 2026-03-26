@@ -805,6 +805,10 @@ async function decryptExistingLocalStorage() {
         );
       } catch (err) {
         console.error(`[crypto-store] Failed to decrypt localStorage key ${key}:`, err);
+        // Remove undecryptable values — they were encrypted with a different
+        // DEK (e.g., after a PIN change) and will never be recoverable.
+        // Leaving them as encrypted blobs would cause persistent errors.
+        localStorage.removeItem(fullKey);
       }
     }
   }

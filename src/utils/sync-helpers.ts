@@ -161,11 +161,14 @@ export function normalizeMessageForCache(
   // causing distinct messages to collide and overwrite each other in IDB.
   const apiId = (raw.id as string) || (raw.Id as string);
   const uid = (raw.Uid as number) || (raw.uid as number) || null;
+  // Prefer server receive time (created_at) over sender's clock (header_date)
+  // to ensure new messages sort to the top regardless of sender clock skew.
   const dateVal =
+    (raw.created_at as string | number) ||
     (raw.date as string | number) ||
     (raw.Date as string | number) ||
-    (raw.header_date as string) ||
     (raw.internal_date as string) ||
+    (raw.header_date as string) ||
     (raw.received_at as string);
   const parsedDate = dateVal ? new Date(dateVal) : null;
   const dateMs =
