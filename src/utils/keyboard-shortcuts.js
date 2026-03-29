@@ -543,11 +543,7 @@ export function showKeyboardShortcutsHelp() {
       return;
     }
 
-    if (
-      shortcut.action.includes('tab') ||
-      shortcut.action === 'new-tab' ||
-      shortcut.action === 'close-tab'
-    ) {
+    if (shortcut.action.includes('tab') || shortcut.action === 'close-tab') {
       grouped['Tabs'].push(shortcut);
       return;
     }

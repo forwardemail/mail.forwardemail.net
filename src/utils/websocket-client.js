@@ -467,7 +467,8 @@ export function createWebSocketClient(opts = {}) {
       // The browser Error event carries no useful detail (it's opaque for
       // security reasons).  Log connection context instead so developers
       // can correlate failures with network/auth state.
-      const state = socket.readyState; // 0 CONNECTING, 1 OPEN, 2 CLOSING, 3 CLOSED
+      // Guard against socket being null (race with destroy/close)
+      const state = socket?.readyState ?? 3; // 0 CONNECTING, 1 OPEN, 2 CLOSING, 3 CLOSED
       const stateLabel = ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED'][state] || state;
       console.warn(
         `[ws] Connection error (readyState=${stateLabel}, attempt=${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`,

@@ -308,6 +308,34 @@
     }
   };
 
+  // Custom Blockquote that skips data-raw-html blockquotes (handled by RawHtmlQuote)
+  const SafeBlockquote = Node.create({
+    name: 'blockquote',
+    group: 'block',
+    content: 'block+',
+    defining: true,
+    parseHTML() {
+      return [
+        {
+          tag: 'blockquote',
+          // Skip blockquotes that have data-raw-html — those are RawHtmlQuote atoms
+          getAttrs: (dom: HTMLElement) => (dom.hasAttribute('data-raw-html') ? false : null),
+        },
+      ];
+    },
+    renderHTML() {
+      return ['blockquote', 0];
+    },
+    addCommands() {
+      return {
+        toggleBlockquote:
+          () =>
+          ({ commands }) =>
+            commands.toggleWrap('blockquote'),
+      };
+    },
+  });
+
   const RawHtmlQuote = Node.create({
     name: 'rawHtmlQuote',
     priority: 1000,
@@ -367,7 +395,7 @@
           try {
             const decoded = decodeRawHtml((currentNode.attrs.raw as string) || '');
             if (decoded && isValidDecodedHtml(decoded)) {
-              inner.innerHTML = DOMPurify.sanitize(decoded);
+              inner.innerHTML = DOMPurify.sanitize(decoded, { ADD_TAGS: ['style'] });
             } else {
               inner.innerHTML = '';
               inner.textContent =
@@ -1166,6 +1194,15 @@
     visibility.set(val);
   };
 
+  const closeNativeWindow = async () => {
+    try {
+      const { getCurrentWindow } = await import('@tauri-apps/api/window');
+      getCurrentWindow().close();
+    } catch {
+      window.close();
+    }
+  };
+
   const setCompact = (val: boolean) => {
     compact = val;
     compactState.set(val);
@@ -1400,6 +1437,7 @@
     autosaveTimer?.stop();
     setVisible(false);
     reset();
+    if (nativeWindow) closeNativeWindow();
   };
 
   const promptDiscardDraft = () => {
@@ -1410,6 +1448,7 @@
       autosaveTimer?.stop();
       setVisible(false);
       reset();
+      if (nativeWindow) closeNativeWindow();
     }
   };
 
@@ -1434,6 +1473,7 @@
     }
     setVisible(false);
     reset();
+    if (nativeWindow) closeNativeWindow();
   };
 
   // Helper to delete source message from server and local cache
@@ -1607,7 +1647,9 @@
     editorView = new Editor({
       element: editorEl as HTMLElement,
       extensions: [
-        StarterKit,
+        StarterKit.configure({
+          blockquote: false,
+        }),
         Link.configure({
           openOnClick: false,
           autolink: true,
@@ -1627,6 +1669,7 @@
         TableCell,
         TableHeader,
         RawHtmlQuote,
+        SafeBlockquote,
       ],
       editorProps: {
         // Clean up pasted HTML from Word/Outlook
@@ -1674,6 +1717,9 @@
     tick().then(() => {
       if (focusToField) {
         toInputEl?.focus();
+      } else if (inReplyTo) {
+        // Reply/forward: place cursor at the top (above the quoted content)
+        editorView?.commands.focus('start');
       } else {
         editorView?.commands.focus();
       }
@@ -2153,31 +2199,38 @@
     }
     try {
       await Remote.request('Emails', payload, { method: 'POST' });
-      await saveSentCopyWrapper(payload);
-      const msgIdToDelete = sourceMessageId;
-      const serverDraftIdToDelete = currentDraftServerId;
-      if (currentDraftId) {
-        try {
-          await deleteDraft(currentDraftId);
-        } catch (err) {
-          console.error('[Compose] Failed to delete draft after send:', err);
-          toasts?.show?.('Warning: Failed to delete draft', 'warning');
-        }
+      // Skip saveSentCopy in native window — the db worker isn't initialized
+      // in the compose webview, so IDB access hangs. The server handles sent copy.
+      if (!nativeWindow) {
+        await saveSentCopyWrapper(payload);
       }
-      // Delete source message from Drafts folder if this was an edited draft
-      await deleteSourceMessage(msgIdToDelete);
-      // Delete autosaved server draft if it exists and is different from the source
-      if (serverDraftIdToDelete && serverDraftIdToDelete !== msgIdToDelete) {
-        await deleteSourceMessage(serverDraftIdToDelete);
+      // Draft/source cleanup uses IDB which isn't available in native window
+      if (!nativeWindow) {
+        const msgIdToDelete = sourceMessageId;
+        const serverDraftIdToDelete = currentDraftServerId;
+        if (currentDraftId) {
+          try {
+            await deleteDraft(currentDraftId);
+          } catch (err) {
+            console.error('[Compose] Failed to delete draft after send:', err);
+            toasts?.show?.('Warning: Failed to delete draft', 'warning');
+          }
+        }
+        // Delete source message from Drafts folder if this was an edited draft
+        await deleteSourceMessage(msgIdToDelete);
+        // Delete autosaved server draft if it exists and is different from the source
+        if (serverDraftIdToDelete && serverDraftIdToDelete !== msgIdToDelete) {
+          await deleteSourceMessage(serverDraftIdToDelete);
+        }
+        // Cache recipient addresses for offline autocomplete
+        mergeRecentAddresses([
+          ...toList.map((e) => ({ email: e })),
+          ...ccList.map((e) => ({ email: e })),
+          ...bccList.map((e) => ({ email: e })),
+        ]).catch(() => {});
       }
       success = 'Message sent';
       toasts?.show?.('Message sent', 'success');
-      // Cache recipient addresses for offline autocomplete
-      mergeRecentAddresses([
-        ...toList.map((e) => ({ email: e })),
-        ...ccList.map((e) => ({ email: e })),
-        ...bccList.map((e) => ({ email: e })),
-      ]).catch(() => {});
       setVisible(false);
       const shouldArchive = archiveAfterSend;
       reset();
@@ -3605,6 +3658,18 @@
     pointer-events: none;
     height: 0;
     font-weight: 400;
+  }
+
+  :global(.rich-editor .ProseMirror p) {
+    min-height: 1.25em;
+  }
+
+  :global(.rich-editor .ProseMirror .fe-reply-attribution) {
+    color: hsl(var(--muted-foreground));
+    font-size: 0.85em;
+    padding-top: 0.5em;
+    border-top: 1px solid hsl(var(--border));
+    margin-top: 0.5em;
   }
 
   :global(.rich-editor .ProseMirror blockquote) {

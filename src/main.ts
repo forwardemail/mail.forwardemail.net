@@ -18,7 +18,6 @@ import { mailService } from './stores/mailService';
 import { mailboxStore } from './stores/mailboxStore';
 import { effectiveTheme, getEffectiveSettingValue } from './stores/settingsStore';
 import {
-  createTab,
   closeTab,
   activateTab,
   getNextTabId,
@@ -26,6 +25,7 @@ import {
   getTabIdByIndex,
   resetTabs,
   activeTabId,
+  openMessageTab,
 } from './stores/tabStore';
 import { writable, get } from 'svelte/store';
 import { mount } from 'svelte';
@@ -649,6 +649,29 @@ if (mailboxRoot) {
     resetTabs('INBOX');
     initComposeWindowListener();
   }
+
+  // Tauri: intercept all external link clicks app-wide and open via system browser.
+  // WRY doesn't support target="_blank" — it tries to open a new webview
+  // and fails with DataCloneError. This covers all routes (Settings, Calendar, etc.).
+  if (isTauri) {
+    document.addEventListener(
+      'click',
+      (e: MouseEvent) => {
+        const link = (e.target as HTMLElement)?.closest?.('a');
+        if (!link) return;
+        const href = link.href;
+        if (!href) return;
+        if (href.startsWith('http://') || href.startsWith('https://')) {
+          e.preventDefault();
+          e.stopPropagation();
+          import('@tauri-apps/plugin-opener')
+            .then(({ openUrl }) => openUrl(href))
+            .catch((err) => console.warn('[main] Failed to open URL:', err));
+        }
+      },
+      true,
+    );
+  }
 }
 
 const updateRouteVisibility = (route) => {
@@ -730,15 +753,32 @@ if (isTauriDesktop) {
     },
     close: () => {},
     forward: (prefill) => {
+      const rawBody = get(messageBody) || prefill?.body || '';
+      const cleanBody = mailboxActions.stripQuoteCollapseMarkup(rawBody);
+      const selectedMsg = get(selectedMessage);
+      const quotedHtml = mailboxActions.buildForwardQuotedBody(
+        selectedMsg || { subject: prefill?.subject },
+        cleanBody,
+      );
       openComposeWindow({
         action: 'forward',
         prefill: {
           subject: prefill?.subject,
-          body: prefill?.body || get(messageBody),
+          html: quotedHtml,
         },
       });
     },
     reply: (prefill) => {
+      // Build the quoted reply body immediately since the compose window
+      // is a separate Tauri webview and updateReplyBody can't reach it.
+      // Always use messageBody from the store (the actual email content),
+      // NOT prefill.html which is just a '<p><br></p>' placeholder from replyTo().
+      const rawBody = get(messageBody) || prefill?.body || '';
+      const cleanBody = mailboxActions.stripQuoteCollapseMarkup(rawBody);
+      const quotedHtml = mailboxActions.buildReplyQuotedBody(
+        { from: prefill?.from, date: prefill?.date },
+        cleanBody,
+      );
       openComposeWindow({
         action: 'reply',
         prefill: {
@@ -747,8 +787,7 @@ if (isTauriDesktop) {
           to: prefill?.to,
           cc: prefill?.cc,
           date: prefill?.date,
-          body: prefill?.body || get(messageBody),
-          bodyLoading: prefill?.bodyLoading,
+          html: quotedHtml,
           inReplyTo: prefill?.inReplyTo,
         },
       });
@@ -908,7 +947,16 @@ function initKeyboardShortcuts() {
   });
 
   keyboardShortcuts.on('print', () => {
-    window.print();
+    try {
+      window.print();
+    } catch {
+      if (isTauri) {
+        viewModel.mailboxView.toasts?.show?.(
+          'Print is not supported in the desktop app. Use "View Original" to print from your browser.',
+          'info',
+        );
+      }
+    }
   });
 
   keyboardShortcuts.on('send-now', () => {
@@ -1049,7 +1097,10 @@ function initKeyboardShortcuts() {
   // Tab shortcut handlers (desktop only — shortcuts registered at module init, handlers bound here)
   if (isTauriDesktop) {
     keyboardShortcuts.on('new-tab', () => {
-      createTab('mailbox', { folder: get(mailboxStore.state.selectedFolder) || 'INBOX' });
+      const msg = get(selectedMessage);
+      if (msg) {
+        openMessageTab(msg);
+      }
     });
 
     keyboardShortcuts.on('close-tab', () => {

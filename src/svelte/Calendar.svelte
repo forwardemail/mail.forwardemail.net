@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import type { Readable, Unsubscriber } from 'svelte/store';
+  import { downloadFile } from '../utils/download';
   import { ScheduleXCalendar } from '@schedule-x/svelte';
   import { createCalendar, viewDay, viewWeek, viewMonthGrid } from '@schedule-x/calendar';
   import '@schedule-x/theme-default/dist/index.css';
@@ -728,16 +729,8 @@
       uid: event.id as string,
       reminder: Number(event.notify) || 0,
     });
-    const blob = new Blob([icalContent], { type: 'text/calendar;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
     const filename = ((event.title as string) || 'event').replace(/[^a-z0-9]/gi, '_');
-    a.download = `${filename}.ics`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    downloadFile(icalContent, `${filename}.ics`, 'text/calendar;charset=utf-8');
     toasts?.show?.('Event exported', 'success');
   };
 

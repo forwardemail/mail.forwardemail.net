@@ -1,23 +1,17 @@
 <script lang="ts">
-  import { get } from 'svelte/store';
   import X from '@lucide/svelte/icons/x';
-  import Plus from '@lucide/svelte/icons/plus';
   import Inbox from '@lucide/svelte/icons/inbox';
   import MailIcon from '@lucide/svelte/icons/mail';
-  import Pencil from '@lucide/svelte/icons/pencil';
   import FolderIcon from '@lucide/svelte/icons/folder';
   import {
     tabs,
     activeTabId,
     activateTab,
     closeTab,
-    createTab,
     closeOtherTabs,
     closeTabsToRight,
-    duplicateTab,
   } from '../../stores/tabStore';
   import type { Tab } from '../../stores/tabStore';
-  import { selectedFolder } from '../../stores/folderStore';
 
   let contextMenu: { x: number; y: number; tabId: string } | null = $state(null);
 
@@ -28,10 +22,6 @@
   function handleTabClose(e: MouseEvent, tabId: string) {
     e.stopPropagation();
     closeTab(tabId);
-  }
-
-  function handleNewTab() {
-    createTab('mailbox', { folder: get(selectedFolder) || 'INBOX' });
   }
 
   function handleContextMenu(e: MouseEvent, tabId: string) {
@@ -58,14 +48,10 @@
       case 'close-right':
         closeTabsToRight(tabId);
         break;
-      case 'duplicate':
-        duplicateTab(tabId);
-        break;
     }
   }
 
   function getTabIcon(tab: Tab): typeof Inbox {
-    if (tab.type === 'compose') return Pencil;
     if (tab.type === 'message') return MailIcon;
     const folder = tab.folder?.toUpperCase() || '';
     if (folder === 'INBOX') return Inbox;
@@ -117,16 +103,6 @@
         {/if}
       </button>
     {/each}
-
-    <button
-      type="button"
-      class="inline-flex items-center justify-center h-7 w-7 text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors shrink-0"
-      aria-label="New tab"
-      title="New tab (Ctrl+T)"
-      onclick={handleNewTab}
-    >
-      <Plus class="h-3.5 w-3.5" />
-    </button>
   </div>
 
   {#if contextMenu}
@@ -169,15 +145,6 @@
           onclick={() => handleContextAction('close-right')}
         >
           Close Tabs to the Right
-        </button>
-        <div class="my-1 h-px bg-border"></div>
-        <button
-          type="button"
-          class="flex items-center w-full px-3 py-1.5 hover:bg-accent transition-colors text-left"
-          role="menuitem"
-          onclick={() => handleContextAction('duplicate')}
-        >
-          Duplicate Tab
         </button>
       </div>
     </div>

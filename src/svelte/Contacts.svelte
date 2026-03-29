@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import type { Unsubscriber } from 'svelte/store';
+  import { downloadFile } from '../utils/download';
   import { Remote } from '../utils/remote';
   import { Local } from '../utils/storage';
   import {
@@ -340,16 +341,8 @@
   const exportVCard = (contact: Contact | null) => {
     if (!contact) return;
     const vcardContent = generateVCard(contact);
-    const blob = new Blob([vcardContent], { type: 'text/vcard;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
     const filename = (contact.name || contact.email || 'contact').replace(/[^a-z0-9]/gi, '_');
-    a.download = `${filename}.vcf`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    downloadFile(vcardContent, `${filename}.vcf`, 'text/vcard;charset=utf-8');
     toasts?.show?.('vCard exported', 'success');
   };
 

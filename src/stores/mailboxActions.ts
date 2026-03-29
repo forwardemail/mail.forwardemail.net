@@ -35,13 +35,9 @@ import { config } from '../config';
 import { createInboxUpdater } from '../utils/websocket-updater';
 import { i18n } from '../utils/i18n';
 import { isTauri, isTauriDesktop, swReadyWithTimeout } from '../utils/platform.js';
+import { downloadFile } from '../utils/download';
 import { warn } from '../utils/logger.ts';
-import {
-  resetTabs,
-  setLoadGenerationHook,
-  setConversationIdsStore,
-  setLoadMessagesHook,
-} from './tabStore';
+import { resetTabs } from './tabStore';
 
 /**
  * Additional mailbox actions that were in MailboxView
@@ -110,17 +106,6 @@ let loadPromise = null;
 let loadAccount = null;
 let loadGeneration = 0;
 let inboxUpdater = null;
-
-// Wire tab store hooks (desktop only)
-if (isTauriDesktop) {
-  setLoadGenerationHook(() => {
-    loadGeneration++;
-  });
-  setConversationIdsStore(mailboxStore.state.selectedConversationIds);
-  setLoadMessagesHook(() => {
-    mailboxStore.actions.loadMessages?.();
-  });
-}
 
 // Compose modal reference (set by main.js)
 let composeModalRef = null;
@@ -545,7 +530,7 @@ const validateCachedBody = (content) => {
  * processQuotedContent adds for the viewing UI. The store's messageBody
  * contains this processed HTML, but replies/forwards need the raw body.
  */
-const stripQuoteCollapseMarkup = (html: string) => {
+export const stripQuoteCollapseMarkup = (html: string) => {
   if (!html || !html.includes('fe-quote-wrapper')) return html;
   try {
     const doc = new DOMParser().parseFromString(html, 'text/html');
@@ -644,19 +629,19 @@ const encodeRawHtml = (value: string) => {
 /**
  * Build quoted body HTML for reply
  */
-const buildReplyQuotedBody = (msg, originalBody) => {
+export const buildReplyQuotedBody = (msg, originalBody) => {
   const fromName = msg?.from || 'Unknown';
   const dateStr = formatAttributionDate(msg?.date || msg?.dateMs);
   const attribution = dateStr ? `On ${dateStr}, ${fromName} wrote:` : `${fromName} wrote:`;
   const encoded = encodeRawHtml(originalBody);
 
-  return `<p><br></p><p class="fe-reply-attribution">${attribution}</p><blockquote data-raw-html="${encoded}" data-raw-variant="reply"></blockquote>`;
+  return `<p><br></p><p><br></p><p><br></p><p class="fe-reply-attribution">${attribution}</p><blockquote data-raw-html="${encoded}" data-raw-variant="reply"></blockquote>`;
 };
 
 /**
  * Build quoted body HTML for forward
  */
-const buildForwardQuotedBody = (msg, originalBody) => {
+export const buildForwardQuotedBody = (msg, originalBody) => {
   const from = msg?.from || '';
   const to = Array.isArray(msg?.to) ? msg.to.join(', ') : msg?.to || '';
   const dateStr = formatAttributionDate(msg?.date || msg?.dateMs);
@@ -672,13 +657,13 @@ const buildForwardQuotedBody = (msg, originalBody) => {
 
   const encoded = encodeRawHtml(originalBody);
 
-  return `<p><br></p><p class="fe-reply-attribution">${headerLines}</p><blockquote data-raw-html="${encoded}" data-raw-variant="forward"></blockquote>`;
+  return `<p><br></p><p><br></p><p><br></p><p class="fe-reply-attribution">${headerLines}</p><blockquote data-raw-html="${encoded}" data-raw-variant="forward"></blockquote>`;
 };
 
 /**
  * Add RE: prefix if not already present
  */
-const addReplyPrefix = (subject) => {
+export const addReplyPrefix = (subject) => {
   if (!subject) return 'Re: ';
   const trimmed = subject.trim();
   if (/^re:\s*/i.test(trimmed)) return trimmed;
@@ -688,7 +673,7 @@ const addReplyPrefix = (subject) => {
 /**
  * Add Fwd: prefix if not already present
  */
-const addForwardPrefix = (subject) => {
+export const addForwardPrefix = (subject) => {
   if (!subject) return 'Fwd: ';
   const trimmed = subject.trim();
   if (/^fwd?:\s*/i.test(trimmed)) return trimmed;
@@ -1826,43 +1811,6 @@ async function getMessageContent(msg) {
   return null;
 }
 
-function downloadBlob(content, filename, mime = 'text/plain') {
-  if (isTauri) {
-    downloadBlobTauri(content, filename).catch((err) =>
-      console.warn('[downloadBlob] Tauri save failed:', err),
-    );
-    return true;
-  }
-
-  try {
-    const blob = new Blob([content], { type: mime });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = filename;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-    return true;
-  } catch (err) {
-    console.error('downloadBlob failed', err);
-    return false;
-  }
-}
-
-async function downloadBlobTauri(content, filename) {
-  const { save } = await import('@tauri-apps/plugin-dialog');
-  const { writeFile } = await import('@tauri-apps/plugin-fs');
-
-  const filePath = await save({ defaultPath: filename });
-  if (!filePath) return;
-
-  const data =
-    typeof content === 'string' ? new TextEncoder().encode(content) : new Uint8Array(content);
-  await writeFile(filePath, data);
-}
-
 function openInNewTab(content, mime = 'text/html') {
   if (isTauri) {
     openInNewTabTauri(content, mime).catch((err) =>
@@ -2222,7 +2170,7 @@ export const downloadOriginal = async (msg) => {
     }
   }
 
-  const success = downloadBlob(
+  const success = downloadFile(
     emlPayload || '',
     getSafeFilename(target?.subject, 'eml'),
     'message/rfc822',

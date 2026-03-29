@@ -177,7 +177,13 @@
   import WifiOff from '@lucide/svelte/icons/wifi-off';
   import EmailIframe from './components/EmailIframe.svelte';
   import TabBar from './components/TabBar.svelte';
-  import { updateActiveTabFolder, activeTabId } from '../stores/tabStore';
+  import MessageTab from './components/MessageTab.svelte';
+  import {
+    updateMailboxTabFolder,
+    activeTabId,
+    activeTab,
+    openMessageTab,
+  } from '../stores/tabStore';
   import { isTauriDesktop } from '../utils/platform.js';
 
   const isBodyPrefetchEnabled = () => getEffectiveSettingValue('cache_prefetch_enabled') !== false;
@@ -1383,7 +1389,7 @@
       mailboxView?.selectFolder?.(path);
     }
     // Update the active tab's folder label (desktop only)
-    if (isTauriDesktop) updateActiveTabFolder(path);
+    if (isTauriDesktop) updateMailboxTabFolder(path);
     // URL will be updated by the selectedFolder subscription
   };
   const updateSelectedConversation = (conv) => {
@@ -1536,6 +1542,12 @@
   };
   // Auto-select conversation removed (was causing loops) - user must click to select
   const selectMessage = (msg, { updateUrl = true } = {}) => {
+    // Desktop: open message in its own tab (Thunderbird-style)
+    if (isTauriDesktop && msg?.id) {
+      openMessageTab(msg);
+      return;
+    }
+
     // Close action menu when selecting a new message
     actionMenuOpen = false;
 
@@ -4347,25 +4359,9 @@
     };
     window.addEventListener('click', closeHandler, true);
 
-    // Tauri: intercept all external link clicks and open via system browser.
-    // WRY doesn't support target="_blank" — it tries to open a new webview
-    // and fails with DataCloneError on postMessage.
-    if (isTauri) {
-      const tauriLinkHandler = (e: MouseEvent) => {
-        const link = (e.target as HTMLElement)?.closest?.('a');
-        if (!link) return;
-        const href = link.href;
-        if (!href) return;
-        if (href.startsWith('http://') || href.startsWith('https://')) {
-          e.preventDefault();
-          e.stopPropagation();
-          import('@tauri-apps/plugin-opener')
-            .then(({ openUrl }) => openUrl(href))
-            .catch((err) => console.warn('[Mailbox] Failed to open URL:', err));
-        }
-      };
-      document.addEventListener('click', tauriLinkHandler, true);
+    // Tauri external link handler is registered globally in main.ts
 
+    if (isTauri) {
       // Listen for "New Message" from native menu bar / tray
       import('@tauri-apps/api/event').then(({ listen }) => {
         listen('menu:new-message', () => {
@@ -4851,60 +4847,73 @@
         <TabBar />
       {/if}
 
-      {#if $sidebarOpen}
+      {#if isTauriDesktop && $activeTab?.type === 'message'}
+        {#key $activeTab.id}
+          <MessageTab
+            tabId={$activeTab.id}
+            messageId={$activeTab.messageId || ''}
+            accountEmail={$activeTab.accountEmail || ''}
+            folder={$activeTab.folder || ''}
+            initialMessage={$activeTab.initialMessage}
+            {mailboxView}
+          />
+        {/key}
+      {:else}
+        {#if $sidebarOpen}
+          <div
+            class="fixed inset-0 z-40 bg-black/50 md:hidden"
+            role="presentation"
+            tabindex="-1"
+            onclick={toggleSidebar}
+            onkeydown={(e) => activateOnKeys(e, toggleSidebar)}
+          ></div>
+        {/if}
+
         <div
-          class="fixed inset-0 z-40 bg-black/50 md:hidden"
-          role="presentation"
-          tabindex="-1"
-          onclick={toggleSidebar}
-          onkeydown={(e) => activateOnKeys(e, toggleSidebar)}
-        ></div>
-      {/if}
+          class="fe-mailbox-shell"
+          class:fe-shell-collapsed={!$sidebarOpen}
+          class:mobile-reader={$mobileReader}
+          class:fe-layout-productivity={isProductivityLayout}
+          class:fe-vertical-resizable={isVerticalDesktop}
+          style={verticalSplitStyle || undefined}
+        >
+          <aside class="fe-folders" class:fe-folders-open={$sidebarOpen}>
+            <div>
+              <Button class="w-full gap-2" onclick={() => mailboxView?.composeModal?.open?.()}>
+                <Pencil class="h-4 w-4" />
+                <span>Compose</span>
+              </Button>
+            </div>
 
-      <div
-        class="fe-mailbox-shell"
-        class:fe-shell-collapsed={!$sidebarOpen}
-        class:mobile-reader={$mobileReader}
-        class:fe-layout-productivity={isProductivityLayout}
-        class:fe-vertical-resizable={isVerticalDesktop}
-        style={verticalSplitStyle || undefined}
-      >
-        <aside class="fe-folders" class:fe-folders-open={$sidebarOpen}>
-          <div>
-            <Button class="w-full gap-2" onclick={() => mailboxView?.composeModal?.open?.()}>
-              <Pencil class="h-4 w-4" />
-              <span>Compose</span>
-            </Button>
-          </div>
-
-          <div class="relative mb-2 mt-2">
-            <Button
-              variant="outline"
-              class="w-full justify-between px-3 py-2.5 font-medium h-11 bg-muted/50"
-              onclick={() => mailboxView?.toggleAccountMenu?.()}
-            >
-              <span class="overflow-hidden text-ellipsis whitespace-nowrap max-w-[calc(100%-24px)]"
-                >{$currentAccount}</span
-              >
-              <ChevronDown class="ml-2 h-4 w-4 opacity-50" />
-            </Button>
-            {#if $accountMenuOpen}
-              <div
-                class="fixed inset-0 z-40"
+            <div class="relative mb-2 mt-2">
+              <Button
+                variant="outline"
+                class="w-full justify-between px-3 py-2.5 font-medium h-11 bg-muted/50"
                 onclick={() => mailboxView?.toggleAccountMenu?.()}
-                onkeydown={(e) => {
-                  if (e.key === 'Escape') mailboxView?.toggleAccountMenu?.();
-                }}
-                role="presentation"
-                tabindex="-1"
-              ></div>
-              <div
-                class="absolute z-50 mt-1 min-w-[160px] border border-border bg-popover p-1 shadow-md"
-                style="min-width: 100%; width: 100%; left: 0; right: auto"
               >
-                {#if $accounts.length > 1}
-                  <div
-                    style="
+                <span
+                  class="overflow-hidden text-ellipsis whitespace-nowrap max-w-[calc(100%-24px)]"
+                  >{$currentAccount}</span
+                >
+                <ChevronDown class="ml-2 h-4 w-4 opacity-50" />
+              </Button>
+              {#if $accountMenuOpen}
+                <div
+                  class="fixed inset-0 z-40"
+                  onclick={() => mailboxView?.toggleAccountMenu?.()}
+                  onkeydown={(e) => {
+                    if (e.key === 'Escape') mailboxView?.toggleAccountMenu?.();
+                  }}
+                  role="presentation"
+                  tabindex="-1"
+                ></div>
+                <div
+                  class="absolute z-50 mt-1 min-w-[160px] border border-border bg-popover p-1 shadow-md"
+                  style="min-width: 100%; width: 100%; left: 0; right: auto"
+                >
+                  {#if $accounts.length > 1}
+                    <div
+                      style="
                   padding: 8px 12px;
                   font-size: 11px;
                   font-weight: 600;
@@ -4912,417 +4921,337 @@
                   color: var(--color-text-secondary);
                   opacity: 0.7;
                 "
+                    >
+                      Accounts
+                    </div>
+                    {#each $accounts as acct}
+                      <button
+                        type="button"
+                        class={`flex items-center w-full px-3 py-2 text-sm transition-colors ${acct.email === $currentAccount ? 'bg-accent text-accent-foreground' : 'hover:bg-accent'}`}
+                        onclick={() => mailboxView?.switchAccount?.(acct)}
+                      >
+                        <span class="truncate">{acct.email}</span>
+                        {#if acct.email === $currentAccount}
+                          <Check class="ml-auto h-4 w-4 shrink-0" />
+                        {/if}
+                      </button>
+                    {/each}
+                    <div class="my-1 h-px bg-border"></div>
+                  {/if}
+                  <button
+                    type="button"
+                    class="flex items-center w-full px-3 py-2 text-sm transition-colors hover:bg-accent"
+                    onclick={() => mailboxView?.addAccount?.()}
                   >
-                    Accounts
-                  </div>
-                  {#each $accounts as acct}
+                    <Plus class="h-4.5 w-4.5 mr-2 shrink-0" />
+                    <span>Add account</span>
+                  </button>
+                  <div class="my-1 h-px bg-border"></div>
+                  <button
+                    type="button"
+                    class="flex items-center w-full px-3 py-2 text-sm transition-colors text-destructive hover:bg-destructive/10"
+                    onclick={() => mailboxView?.signOut?.()}
+                  >
+                    <LogOut class="h-4.5 w-4.5 mr-2" />
+                    <span>Sign out {$currentAccount}</span>
+                  </button>
+                </div>
+              {/if}
+            </div>
+
+            <div class="flex-1 overflow-y-auto">
+              <ul class="space-y-0.5 p-2">
+                {#each visibleFolders as folder}
+                  <li
+                    class={`relative transition-colors ${!outboxSelected && $selectedFolder === folder.path ? 'bg-accent ring-1 ring-border' : ''}`}
+                    class:has-children={hasChildren(folder)}
+                    class:fe-drag-over={dragOverFolder === folder.path}
+                    oncontextmenu={(e) => handleFolderContextMenu(e, folder)}
+                    ondragenter={(e) => handleFolderDragEnter(e, folder)}
+                    ondragover={(e) => handleFolderDragOver(e, folder)}
+                    ondragleave={(e) => handleFolderDragLeave(e, folder)}
+                    ondrop={(e) => handleFolderDrop(e, folder)}
+                  >
                     <button
                       type="button"
-                      class={`flex items-center w-full px-3 py-2 text-sm transition-colors ${acct.email === $currentAccount ? 'bg-accent text-accent-foreground' : 'hover:bg-accent'}`}
-                      onclick={() => mailboxView?.switchAccount?.(acct)}
+                      class={`flex items-center justify-between w-full px-3 py-2 text-sm transition-colors ${!outboxSelected && $selectedFolder === folder.path ? 'text-primary font-medium' : 'hover:bg-accent'}`}
+                      onclick={() => handleSelectFolder(folder.path)}
+                      onkeydown={(e) => activateOnKeys(e, () => handleSelectFolder(folder.path))}
                     >
-                      <span class="truncate">{acct.email}</span>
-                      {#if acct.email === $currentAccount}
-                        <Check class="ml-auto h-4 w-4 shrink-0" />
+                      <span
+                        class={`flex items-center gap-1.5 min-w-0 flex-1 ${(folder.level || 0) > 0 ? 'border-l border-border pl-1.5' : ''}`}
+                        style={`${(folder.level || 0) > 0 ? `margin-left: ${folder.level * 6}px` : ''}`}
+                      >
+                        <!-- Chevron for expand/collapse -->
+                        {#if hasChildren(folder)}
+                          <button
+                            type="button"
+                            class="hover:bg-accent transition-colors shrink-0"
+                            onclick={(e) => {
+                              e.stopPropagation();
+                              toggleFolderExpansion(folder.path);
+                            }}
+                            aria-label={$expandedFolders.has(folder.path) ? 'Collapse' : 'Expand'}
+                          >
+                            <ChevronRight
+                              class={`h-3.5 w-3.5 transition-transform ${$expandedFolders.has(folder.path) ? 'rotate-90' : ''}`}
+                            />
+                          </button>
+                        {/if}
+
+                        <svelte:component
+                          this={getFolderIcon(folder)}
+                          class="h-5 w-5 text-primary shrink-0"
+                        />
+                        <span class="truncate text-sm">{folder.name || folder.path}</span>
+                      </span>
+
+                      {#if folder.count}
+                        <span
+                          class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-primary/10 text-primary"
+                          >{folder.count}</span
+                        >
                       {/if}
                     </button>
-                  {/each}
-                  <div class="my-1 h-px bg-border"></div>
-                {/if}
-                <button
-                  type="button"
-                  class="flex items-center w-full px-3 py-2 text-sm transition-colors hover:bg-accent"
-                  onclick={() => mailboxView?.addAccount?.()}
-                >
-                  <Plus class="h-4.5 w-4.5 mr-2 shrink-0" />
-                  <span>Add account</span>
-                </button>
-                <div class="my-1 h-px bg-border"></div>
-                <button
-                  type="button"
-                  class="flex items-center w-full px-3 py-2 text-sm transition-colors text-destructive hover:bg-destructive/10"
-                  onclick={() => mailboxView?.signOut?.()}
-                >
-                  <LogOut class="h-4.5 w-4.5 mr-2" />
-                  <span>Sign out {$currentAccount}</span>
-                </button>
-              </div>
-            {/if}
-          </div>
+                  </li>
+                {/each}
 
-          <div class="flex-1 overflow-y-auto">
-            <ul class="space-y-0.5 p-2">
-              {#each visibleFolders as folder}
+                <!-- Outbox virtual folder -->
                 <li
-                  class={`relative transition-colors ${!outboxSelected && $selectedFolder === folder.path ? 'bg-accent ring-1 ring-border' : ''}`}
-                  class:has-children={hasChildren(folder)}
-                  class:fe-drag-over={dragOverFolder === folder.path}
-                  oncontextmenu={(e) => handleFolderContextMenu(e, folder)}
-                  ondragenter={(e) => handleFolderDragEnter(e, folder)}
-                  ondragover={(e) => handleFolderDragOver(e, folder)}
-                  ondragleave={(e) => handleFolderDragLeave(e, folder)}
-                  ondrop={(e) => handleFolderDrop(e, folder)}
+                  class={`relative transition-colors ${outboxSelected ? 'bg-accent ring-1 ring-border' : ''}`}
                 >
                   <button
                     type="button"
-                    class={`flex items-center justify-between w-full px-3 py-2 text-sm transition-colors ${!outboxSelected && $selectedFolder === folder.path ? 'text-primary font-medium' : 'hover:bg-accent'}`}
-                    onclick={() => handleSelectFolder(folder.path)}
-                    onkeydown={(e) => activateOnKeys(e, () => handleSelectFolder(folder.path))}
+                    class={`flex items-center justify-between w-full px-3 py-2 text-sm transition-colors ${outboxSelected ? 'text-primary font-medium' : 'hover:bg-accent'}`}
+                    onclick={selectOutbox}
+                    onkeydown={(e) => activateOnKeys(e, selectOutbox)}
                   >
-                    <span
-                      class={`flex items-center gap-1.5 min-w-0 flex-1 ${(folder.level || 0) > 0 ? 'border-l border-border pl-1.5' : ''}`}
-                      style={`${(folder.level || 0) > 0 ? `margin-left: ${folder.level * 6}px` : ''}`}
-                    >
-                      <!-- Chevron for expand/collapse -->
-                      {#if hasChildren(folder)}
-                        <button
-                          type="button"
-                          class="hover:bg-accent transition-colors shrink-0"
-                          onclick={(e) => {
-                            e.stopPropagation();
-                            toggleFolderExpansion(folder.path);
-                          }}
-                          aria-label={$expandedFolders.has(folder.path) ? 'Collapse' : 'Expand'}
-                        >
-                          <ChevronRight
-                            class={`h-3.5 w-3.5 transition-transform ${$expandedFolders.has(folder.path) ? 'rotate-90' : ''}`}
-                          />
-                        </button>
+                    <span class="flex items-center gap-2 min-w-0 flex-1">
+                      <Send class="h-5 w-5 text-primary shrink-0" />
+                      <span class="truncate text-sm">Outbox</span>
+                      {#if $outboxProcessing}
+                        <span
+                          class="ml-1 h-3 w-3 animate-spin rounded-full border-2 border-border border-t-primary"
+                        ></span>
                       {/if}
-
-                      <svelte:component
-                        this={getFolderIcon(folder)}
-                        class="h-5 w-5 text-primary shrink-0"
-                      />
-                      <span class="truncate text-sm">{folder.name || folder.path}</span>
                     </span>
-
-                    {#if folder.count}
+                    {#if $outboxCount > 0}
                       <span
-                        class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-primary/10 text-primary"
-                        >{folder.count}</span
+                        class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-amber-500/10 text-amber-600"
+                        >{$outboxCount}</span
                       >
                     {/if}
                   </button>
                 </li>
-              {/each}
+              </ul>
+            </div>
 
-              <!-- Outbox virtual folder -->
-              <li
-                class={`relative transition-colors ${outboxSelected ? 'bg-accent ring-1 ring-border' : ''}`}
-              >
-                <button
-                  type="button"
-                  class={`flex items-center justify-between w-full px-3 py-2 text-sm transition-colors ${outboxSelected ? 'text-primary font-medium' : 'hover:bg-accent'}`}
-                  onclick={selectOutbox}
-                  onkeydown={(e) => activateOnKeys(e, selectOutbox)}
-                >
-                  <span class="flex items-center gap-2 min-w-0 flex-1">
-                    <Send class="h-5 w-5 text-primary shrink-0" />
-                    <span class="truncate text-sm">Outbox</span>
-                    {#if $outboxProcessing}
-                      <span
-                        class="ml-1 h-3 w-3 animate-spin rounded-full border-2 border-border border-t-primary"
-                      ></span>
-                    {/if}
-                  </span>
-                  {#if $outboxCount > 0}
-                    <span
-                      class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-amber-500/10 text-amber-600"
-                      >{$outboxCount}</span
-                    >
-                  {/if}
-                </button>
-              </li>
-            </ul>
-          </div>
-
-          <!-- Add folder button at bottom -->
-          <div class="mt-auto p-3 border-t border-border">
-            <button
-              type="button"
-              class="flex items-center gap-2 w-full px-3 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-              onclick={handleCreateRootFolder}
-              title="Create new folder"
-            >
-              <Plus class="h-4 w-4" />
-              <span>New Folder</span>
-            </button>
-            <div class="flex flex-col gap-1 mt-2">
+            <!-- Add folder button at bottom -->
+            <div class="mt-auto p-3 border-t border-border">
               <button
                 type="button"
-                class="flex items-center gap-2 px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-                onclick={() => navigate('/contacts')}
+                class="flex items-center gap-2 w-full px-3 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                onclick={handleCreateRootFolder}
+                title="Create new folder"
               >
-                <BookUser class="h-4 w-4" />
-                <span>Contacts</span>
+                <Plus class="h-4 w-4" />
+                <span>New Folder</span>
               </button>
-              <button
-                type="button"
-                class="flex items-center gap-2 px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-                onclick={() => navigate('/calendar')}
-              >
-                <CalendarIcon class="h-4 w-4" />
-                <span>Calendar</span>
-              </button>
-              <button
-                type="button"
-                class="flex items-center gap-2 px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-                onclick={() => navigate('/mailbox/settings')}
-              >
-                <SettingsIcon class="h-4 w-4" />
-                <span>Settings</span>
-              </button>
-              {#if isLockEnabled() && isVaultConfigured()}
+              <div class="flex flex-col gap-1 mt-2">
                 <button
                   type="button"
                   class="flex items-center gap-2 px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-                  aria-label="Lock app"
-                  onclick={() => window.dispatchEvent(new CustomEvent('fe:lock-app'))}
+                  onclick={() => navigate('/contacts')}
                 >
-                  <Lock class="h-4 w-4" />
-                  <span>Lock</span>
+                  <BookUser class="h-4 w-4" />
+                  <span>Contacts</span>
                 </button>
-              {/if}
-            </div>
-          </div>
-
-          {#if $storageTotal > 0}
-            <a
-              href="https://forwardemail.net/my-account/billing"
-              target="_blank"
-              rel="noopener noreferrer"
-              class="block px-3 pb-3 hover:bg-accent/50 transition-colors mx-2 mb-2"
-              title="Manage billing and storage"
-            >
-              <div class="flex items-center justify-between text-xs text-muted-foreground mb-1">
-                <small>Storage</small>
-                <small>{storagePercent()}%</small>
-              </div>
-              <div class="h-1.5 w-full bg-secondary rounded-full overflow-hidden">
-                <div
-                  class="h-full bg-primary transition-all rounded-full"
-                  style={`width:${storagePercent()}%`}
-                ></div>
-              </div>
-              <small class="text-xs text-muted-foreground mt-1">
-                {formatStorage($storageUsed)} of {formatStorage($storageTotal)}
-              </small>
-            </a>
-          {/if}
-        </aside>
-
-        <section
-          class="fe-messages"
-          class:mobile-reader-active={$mobileReader}
-          bind:this={messagesPaneEl}
-        >
-          {#if $filteredConversations.length || $filteredMessages.length || $unreadOnly || $hasAttachmentsOnly || $starredOnly || ($filterByLabel && $filterByLabel.length)}
-            <div
-              class="flex items-center gap-3 px-4 py-2 border-b border-border bg-muted/30 relative z-40 overflow-visible"
-            >
-              <div class="flex items-center gap-1 overflow-visible">
-                {#if !outboxSelected && ($filteredConversations.length || $filteredMessages.length)}
-                  {@const allSelected =
-                    ($threadingEnabled ? $filteredConversations : $filteredMessages).length > 0 &&
-                    ($threadingEnabled ? $filteredConversations : $filteredMessages).every((item) =>
-                      ($selectedConversationIds || []).includes(item.id),
-                    )}
+                <button
+                  type="button"
+                  class="flex items-center gap-2 px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                  onclick={() => navigate('/calendar')}
+                >
+                  <CalendarIcon class="h-4 w-4" />
+                  <span>Calendar</span>
+                </button>
+                <button
+                  type="button"
+                  class="flex items-center gap-2 px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                  onclick={() => navigate('/mailbox/settings')}
+                >
+                  <SettingsIcon class="h-4 w-4" />
+                  <span>Settings</span>
+                </button>
+                {#if isLockEnabled() && isVaultConfigured()}
                   <button
-                    class={`inline-flex items-center justify-center h-11 w-11 transition-colors ${allSelected ? 'bg-accent text-primary' : selectionMode ? 'bg-accent/50 text-accent-foreground' : 'hover:bg-accent hover:text-accent-foreground'}`}
                     type="button"
-                    data-tooltip={selectionMode
-                      ? allSelected
-                        ? 'Deselect all'
-                        : 'Select all'
-                      : 'Select'}
-                    data-tooltip-position="bottom"
-                    aria-label={selectionMode
-                      ? 'Select all visible messages'
-                      : 'Enter selection mode'}
-                    onclick={() =>
-                      selectAllVisible(
-                        $threadingEnabled ? $filteredConversations : $filteredMessages,
-                      )}
+                    class="flex items-center gap-2 px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                    aria-label="Lock app"
+                    onclick={() => window.dispatchEvent(new CustomEvent('fe:lock-app'))}
                   >
-                    <CheckSquare class="h-5 w-5" />
+                    <Lock class="h-4 w-4" />
+                    <span>Lock</span>
                   </button>
                 {/if}
-                <button
-                  class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
-                  type="button"
-                  data-tooltip="Refresh (F5)"
-                  data-tooltip-position="bottom"
-                  aria-label="Refresh"
-                  onclick={handleRefreshClick}
-                >
-                  <RefreshCw class={`h-5 w-5 ${refreshAnimating ? 'animate-spin' : ''}`} />
-                </button>
-                <div class="relative" data-sort-toggle>
-                  <button
-                    class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
-                    type="button"
-                    aria-label="Sort"
-                    aria-expanded={sortMenuOpen}
-                    data-tooltip={`Sort: ${getSortLabel($sortOrder)}`}
-                    data-tooltip-position="bottom"
-                    onclick={() => (sortMenuOpen = !sortMenuOpen)}
-                  >
-                    <ListFilter class="h-5 w-5" />
-                  </button>
-                  {#if sortMenuOpen}
-                    <div
-                      class="absolute z-50 mt-1.5 min-w-[160px] border border-border bg-popover p-1 shadow-md right-0"
-                      data-sort-dropdown
-                    >
-                      <div
-                        class="px-2 py-1 text-xs font-medium text-muted-foreground uppercase tracking-wider"
-                      >
-                        Sort by
-                      </div>
-                      {#each sortOptions as option}
-                        <button
-                          type="button"
-                          class={`flex items-center w-full px-3 py-2 text-sm transition-colors ${$sortOrder === option.value ? 'bg-accent text-accent-foreground' : 'hover:bg-accent'}`}
-                          aria-pressed={$sortOrder === option.value}
-                          onclick={() => {
-                            setSortOrder(option.value);
-                            sortMenuOpen = false;
-                          }}
-                        >
-                          <span>{option.label}</span>
-                          {#if $sortOrder === option.value}
-                            <Check class="ml-auto h-4 w-4 shrink-0" />
-                          {/if}
-                        </button>
-                      {/each}
-                      <div class="my-1 h-px bg-border"></div>
-                      <button
-                        type="button"
-                        class="flex items-center w-full px-3 py-2 text-sm transition-colors hover:bg-accent text-muted-foreground"
-                        onclick={() => {
-                          setSortOrder('date_desc');
-                          sortMenuOpen = false;
-                        }}
-                      >
-                        Reset to default
-                      </button>
-                    </div>
-                  {/if}
+              </div>
+            </div>
+
+            {#if $storageTotal > 0}
+              <a
+                href="https://forwardemail.net/my-account/billing"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="block px-3 pb-3 hover:bg-accent/50 transition-colors mx-2 mb-2"
+                title="Manage billing and storage"
+              >
+                <div class="flex items-center justify-between text-xs text-muted-foreground mb-1">
+                  <small>Storage</small>
+                  <small>{storagePercent()}%</small>
                 </div>
-                <div class="relative" data-labels-toggle>
-                  <button
-                    class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
-                    type="button"
-                    aria-label="Labels"
-                    aria-expanded={labelMenuOpen}
-                    data-tooltip="Labels"
-                    data-tooltip-position="bottom"
-                    onclick={() => (labelMenuOpen = !labelMenuOpen)}
-                  >
-                    <Tag class="h-5 w-5" />
-                  </button>
-                  {#if labelMenuOpen}
-                    <div
-                      class="absolute z-50 mt-1.5 min-w-[160px] border border-border bg-popover p-1 shadow-md right-0"
-                      data-labels-dropdown
-                    >
-                      <div
-                        class="px-2 py-1 text-xs font-medium text-muted-foreground uppercase tracking-wider"
-                      >
-                        Apply label
-                      </div>
-                      {#if !availableLabelsFromStore.length}
-                        <div class="px-3 py-2 text-sm text-muted-foreground">No labels yet.</div>
-                      {/if}
-                      {#each availableLabelsFromStore as label}
-                        {#if label}
-                          <button
-                            type="button"
-                            class={`flex items-center gap-2 w-full px-3 py-2 text-sm transition-colors ${labelState(label) === 'all' ? 'bg-accent text-accent-foreground' : 'hover:bg-accent'}`}
-                            aria-pressed={labelState(label) === 'all'}
-                            data-state={labelState(label)}
-                            onclick={() => applyLabelToTargets(label)}
-                          >
-                            <span
-                              class="w-2.5 h-2.5 rounded-full shrink-0"
-                              style={`background:${label.color || '#9ca3af'}`}
-                            ></span>
-                            <span class="flex-1 text-left"
-                              >{label.name || label.label || label.value}</span
-                            >
-                            {#if labelState(label) === 'partial'}
-                              <span class="text-muted-foreground">•</span>
-                            {:else if labelState(label) === 'all'}
-                              <Check class="h-4 w-4 shrink-0" />
-                            {/if}
-                          </button>
-                        {/if}
-                      {/each}
-                      <div class="my-1 h-px bg-border"></div>
-                      <button
-                        type="button"
-                        class="flex items-center gap-2 w-full px-3 py-2 text-sm transition-colors hover:bg-accent text-muted-foreground"
-                        onclick={openLabelModal}
-                      >
-                        <span
-                          class="w-2.5 h-2.5 rounded-full shrink-0"
-                          style={`background:${labelFormColor || labelPalette[0]}`}
-                        ></span>
-                        <span>Create new label</span>
-                      </button>
-                    </div>
-                  {/if}
+                <div class="h-1.5 w-full bg-secondary rounded-full overflow-hidden">
+                  <div
+                    class="h-full bg-primary transition-all rounded-full"
+                    style={`width:${storagePercent()}%`}
+                  ></div>
                 </div>
-                <div class="relative" data-filters-toggle>
+                <small class="text-xs text-muted-foreground mt-1">
+                  {formatStorage($storageUsed)} of {formatStorage($storageTotal)}
+                </small>
+              </a>
+            {/if}
+          </aside>
+
+          <section
+            class="fe-messages"
+            class:mobile-reader-active={$mobileReader}
+            bind:this={messagesPaneEl}
+          >
+            {#if $filteredConversations.length || $filteredMessages.length || $unreadOnly || $hasAttachmentsOnly || $starredOnly || ($filterByLabel && $filterByLabel.length)}
+              <div
+                class="flex items-center gap-3 px-4 py-2 border-b border-border bg-muted/30 relative z-40 overflow-visible"
+              >
+                <div class="flex items-center gap-1 overflow-visible">
+                  {#if !outboxSelected && ($filteredConversations.length || $filteredMessages.length)}
+                    {@const allSelected =
+                      ($threadingEnabled ? $filteredConversations : $filteredMessages).length > 0 &&
+                      ($threadingEnabled ? $filteredConversations : $filteredMessages).every(
+                        (item) => ($selectedConversationIds || []).includes(item.id),
+                      )}
+                    <button
+                      class={`inline-flex items-center justify-center h-11 w-11 transition-colors ${allSelected ? 'bg-accent text-primary' : selectionMode ? 'bg-accent/50 text-accent-foreground' : 'hover:bg-accent hover:text-accent-foreground'}`}
+                      type="button"
+                      data-tooltip={selectionMode
+                        ? allSelected
+                          ? 'Deselect all'
+                          : 'Select all'
+                        : 'Select'}
+                      data-tooltip-position="bottom"
+                      aria-label={selectionMode
+                        ? 'Select all visible messages'
+                        : 'Enter selection mode'}
+                      onclick={() =>
+                        selectAllVisible(
+                          $threadingEnabled ? $filteredConversations : $filteredMessages,
+                        )}
+                    >
+                      <CheckSquare class="h-5 w-5" />
+                    </button>
+                  {/if}
                   <button
                     class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
                     type="button"
-                    aria-label="Filters"
-                    aria-expanded={$showFiltersStore}
-                    data-tooltip={filterLabel}
+                    data-tooltip="Refresh (F5)"
                     data-tooltip-position="bottom"
-                    onclick={toggleFilters}
+                    aria-label="Refresh"
+                    onclick={handleRefreshClick}
                   >
-                    <Filter class="h-5 w-5" />
+                    <RefreshCw class={`h-5 w-5 ${refreshAnimating ? 'animate-spin' : ''}`} />
                   </button>
-                  {#if $showFiltersStore}
-                    <div
-                      class="absolute z-50 mt-1.5 min-w-[160px] border border-border bg-popover p-1 shadow-md right-0"
-                      data-filters-dropdown
+                  <div class="relative" data-sort-toggle>
+                    <button
+                      class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                      type="button"
+                      aria-label="Sort"
+                      aria-expanded={sortMenuOpen}
+                      data-tooltip={`Sort: ${getSortLabel($sortOrder)}`}
+                      data-tooltip-position="bottom"
+                      onclick={() => (sortMenuOpen = !sortMenuOpen)}
                     >
-                      <button
-                        type="button"
-                        class={`flex items-center w-full px-3 py-2 text-sm transition-colors ${$unreadOnly ? 'bg-accent text-accent-foreground' : 'hover:bg-accent'}`}
-                        aria-pressed={$unreadOnly}
-                        onclick={() => setUnreadOnly(!$unreadOnly)}
+                      <ListFilter class="h-5 w-5" />
+                    </button>
+                    {#if sortMenuOpen}
+                      <div
+                        class="absolute z-50 mt-1.5 min-w-[160px] border border-border bg-popover p-1 shadow-md right-0"
+                        data-sort-dropdown
                       >
-                        <span>Unread only</span>
-                        {#if $unreadOnly}<Check class="ml-auto h-4 w-4 shrink-0" />{/if}
-                      </button>
-                      <button
-                        type="button"
-                        class={`flex items-center w-full px-3 py-2 text-sm transition-colors ${$hasAttachmentsOnly ? 'bg-accent text-accent-foreground' : 'hover:bg-accent'}`}
-                        aria-pressed={$hasAttachmentsOnly}
-                        onclick={() => setHasAttachmentsOnly(!$hasAttachmentsOnly)}
-                      >
-                        <span>With attachments</span>
-                        {#if $hasAttachmentsOnly}<Check class="ml-auto h-4 w-4 shrink-0" />{/if}
-                      </button>
-                      {#if availableLabelsFromStore && availableLabelsFromStore.length > 0}
-                        <div class="my-1 h-px bg-border"></div>
                         <div
                           class="px-2 py-1 text-xs font-medium text-muted-foreground uppercase tracking-wider"
                         >
-                          Filter by label
+                          Sort by
                         </div>
+                        {#each sortOptions as option}
+                          <button
+                            type="button"
+                            class={`flex items-center w-full px-3 py-2 text-sm transition-colors ${$sortOrder === option.value ? 'bg-accent text-accent-foreground' : 'hover:bg-accent'}`}
+                            aria-pressed={$sortOrder === option.value}
+                            onclick={() => {
+                              setSortOrder(option.value);
+                              sortMenuOpen = false;
+                            }}
+                          >
+                            <span>{option.label}</span>
+                            {#if $sortOrder === option.value}
+                              <Check class="ml-auto h-4 w-4 shrink-0" />
+                            {/if}
+                          </button>
+                        {/each}
+                        <div class="my-1 h-px bg-border"></div>
+                        <button
+                          type="button"
+                          class="flex items-center w-full px-3 py-2 text-sm transition-colors hover:bg-accent text-muted-foreground"
+                          onclick={() => {
+                            setSortOrder('date_desc');
+                            sortMenuOpen = false;
+                          }}
+                        >
+                          Reset to default
+                        </button>
+                      </div>
+                    {/if}
+                  </div>
+                  <div class="relative" data-labels-toggle>
+                    <button
+                      class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                      type="button"
+                      aria-label="Labels"
+                      aria-expanded={labelMenuOpen}
+                      data-tooltip="Labels"
+                      data-tooltip-position="bottom"
+                      onclick={() => (labelMenuOpen = !labelMenuOpen)}
+                    >
+                      <Tag class="h-5 w-5" />
+                    </button>
+                    {#if labelMenuOpen}
+                      <div
+                        class="absolute z-50 mt-1.5 min-w-[160px] border border-border bg-popover p-1 shadow-md right-0"
+                        data-labels-dropdown
+                      >
+                        <div
+                          class="px-2 py-1 text-xs font-medium text-muted-foreground uppercase tracking-wider"
+                        >
+                          Apply label
+                        </div>
+                        {#if !availableLabelsFromStore.length}
+                          <div class="px-3 py-2 text-sm text-muted-foreground">No labels yet.</div>
+                        {/if}
                         {#each availableLabelsFromStore as label}
                           {#if label}
                             <button
                               type="button"
-                              class={`flex items-center gap-2 w-full px-3 py-2 text-sm transition-colors ${($filterByLabel || []).includes(getLabelId(label)) ? 'bg-accent text-accent-foreground' : 'hover:bg-accent'}`}
-                              aria-pressed={($filterByLabel || []).includes(getLabelId(label))}
-                              onclick={() => toggleFilterByLabel(getLabelId(label))}
+                              class={`flex items-center gap-2 w-full px-3 py-2 text-sm transition-colors ${labelState(label) === 'all' ? 'bg-accent text-accent-foreground' : 'hover:bg-accent'}`}
+                              aria-pressed={labelState(label) === 'all'}
+                              data-state={labelState(label)}
+                              onclick={() => applyLabelToTargets(label)}
                             >
                               <span
                                 class="w-2.5 h-2.5 rounded-full shrink-0"
@@ -5331,419 +5260,641 @@
                               <span class="flex-1 text-left"
                                 >{label.name || label.label || label.value}</span
                               >
-                              {#if ($filterByLabel || []).includes(getLabelId(label))}<Check
-                                  class="h-4 w-4 shrink-0"
-                                />{/if}
+                              {#if labelState(label) === 'partial'}
+                                <span class="text-muted-foreground">•</span>
+                              {:else if labelState(label) === 'all'}
+                                <Check class="h-4 w-4 shrink-0" />
+                              {/if}
                             </button>
                           {/if}
                         {/each}
-                      {/if}
-                      <div class="my-1 h-px bg-border"></div>
-                      <button
-                        type="button"
-                        class="flex items-center w-full px-3 py-2 text-sm transition-colors hover:bg-accent text-muted-foreground"
-                        onclick={() => {
-                          setUnreadOnly(false);
-                          setHasAttachmentsOnly(false);
-                          starredOnly.set(false);
-                          filterByLabel.set([]);
-                          closeFilters();
-                        }}
-                      >
-                        Clear filters
-                      </button>
-                    </div>
-                  {/if}
-                </div>
-              </div>
-              <span class="text-sm font-medium text-muted-foreground"
-                >{outboxSelected ? 'Outbox' : $selectedFolder}</span
-              >
-            </div>
-          {/if}
-
-          {#if $selectedConversationIds && $selectedConversationIds.length}
-            <div class="flex items-center gap-3 px-4 py-2 bg-muted/50 sticky top-0 z-30">
-              <div
-                class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium bg-primary text-primary-foreground"
-              >
-                <span>{$selectedConversationIds.length}</span>
-              </div>
-              <div class="flex items-center gap-1">
-                <button
-                  class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
-                  type="button"
-                  aria-label="Clear selection"
-                  data-tooltip="Clear selection"
-                  data-tooltip-position="bottom"
-                  onclick={clearSelection}
-                >
-                  <X class="h-5 w-5" />
-                </button>
-                {#if $selectedFolder?.toUpperCase?.() !== 'ARCHIVE'}
-                  <button
-                    class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
-                    type="button"
-                    aria-label="Archive selected"
-                    data-tooltip="Archive selected"
-                    data-tooltip-position="bottom"
-                    onclick={bulkArchive}
-                  >
-                    <Archive class="h-5 w-5" />
-                  </button>
-                {/if}
-                <button
-                  class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
-                  type="button"
-                  aria-label="Delete selected"
-                  data-tooltip="Delete selected"
-                  data-tooltip-position="bottom"
-                  onclick={bulkDelete}
-                >
-                  <Trash2 class="h-5 w-5" />
-                </button>
-                <div class="relative" data-bulk-move>
-                  <button
-                    class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
-                    type="button"
-                    aria-label="Move selected"
-                    data-tooltip="Move selected"
-                    data-tooltip-position="bottom"
-                    onclick={() => {
-                      if (bulkMoveOpen?.update) {
-                        bulkMoveOpen.update((v) => !v);
-                      } else if (mailboxView?.toggleBulkMove) {
-                        mailboxView.toggleBulkMove();
-                      }
-                    }}
-                  >
-                    <FolderInput class="h-5 w-5" />
-                  </button>
-                  {#if $bulkMoveOpen}
-                    <div
-                      class="absolute right-0 z-50 mt-1 min-w-[160px] max-h-[300px] overflow-y-auto border border-border bg-popover p-1 shadow-md"
-                    >
-                      {#each availableMoveTargetsFromStore.length ? availableMoveTargetsFromStore : $availableMoveTargets as folder}
+                        <div class="my-1 h-px bg-border"></div>
                         <button
                           type="button"
-                          class="flex items-center w-full px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground cursor-pointer"
-                          onclick={() => bulkMoveTo(folder.path)}
+                          class="flex items-center gap-2 w-full px-3 py-2 text-sm transition-colors hover:bg-accent text-muted-foreground"
+                          onclick={openLabelModal}
                         >
-                          {folder.path || folder.name}
+                          <span
+                            class="w-2.5 h-2.5 rounded-full shrink-0"
+                            style={`background:${labelFormColor || labelPalette[0]}`}
+                          ></span>
+                          <span>Create new label</span>
                         </button>
-                      {/each}
-                    </div>
-                  {/if}
-                </div>
-              </div>
-            </div>
-          {/if}
-
-          <div
-            class="fe-message-list-wrapper relative flex-1 min-h-0 overflow-y-auto"
-            bind:this={messageListWrapper}
-          >
-            {#if outboxSelected}
-              <!-- Outbox View -->
-              <div class="flex flex-col">
-                {#if outboxItems.length === 0}
-                  <div
-                    class="flex flex-col items-center justify-center py-12 text-center text-muted-foreground"
-                  >
-                    <p>No messages in outbox</p>
-                    <small>Messages queued for sending will appear here</small>
+                      </div>
+                    {/if}
                   </div>
-                {:else}
-                  <ul class="divide-y divide-border">
-                    {#each outboxItems as item (item.id)}
-                      <li
-                        class={`relative ${item.status === 'failed' ? 'bg-destructive/10' : ''} ${item.status === 'sending' ? 'opacity-70' : ''}`}
+                  <div class="relative" data-filters-toggle>
+                    <button
+                      class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                      type="button"
+                      aria-label="Filters"
+                      aria-expanded={$showFiltersStore}
+                      data-tooltip={filterLabel}
+                      data-tooltip-position="bottom"
+                      onclick={toggleFilters}
+                    >
+                      <Filter class="h-5 w-5" />
+                    </button>
+                    {#if $showFiltersStore}
+                      <div
+                        class="absolute z-50 mt-1.5 min-w-[160px] border border-border bg-popover p-1 shadow-md right-0"
+                        data-filters-dropdown
                       >
-                        <div class="flex items-start gap-3 p-3 transition-colors">
-                          <div class="text-xs">
-                            {#if item.status === 'pending'}
-                              <span
-                                class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"
-                                title="Pending">Queued</span
-                              >
-                            {:else if item.status === 'scheduled'}
-                              <span
-                                class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"
-                                title="Scheduled"
-                              >
-                                {formatScheduledTime(item.sendAt)}
-                              </span>
-                            {:else if item.status === 'sending'}
-                              <span
-                                class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-primary/10 text-primary animate-pulse"
-                                title="Sending">Sending...</span
-                              >
-                            {:else if item.status === 'sent'}
-                              <span
-                                class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
-                                title="Sent">Sent</span
-                              >
-                            {:else if item.status === 'failed'}
-                              <span
-                                class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-destructive/10 text-destructive"
-                                title="Failed">Failed</span
-                              >
-                            {/if}
+                        <button
+                          type="button"
+                          class={`flex items-center w-full px-3 py-2 text-sm transition-colors ${$unreadOnly ? 'bg-accent text-accent-foreground' : 'hover:bg-accent'}`}
+                          aria-pressed={$unreadOnly}
+                          onclick={() => setUnreadOnly(!$unreadOnly)}
+                        >
+                          <span>Unread only</span>
+                          {#if $unreadOnly}<Check class="ml-auto h-4 w-4 shrink-0" />{/if}
+                        </button>
+                        <button
+                          type="button"
+                          class={`flex items-center w-full px-3 py-2 text-sm transition-colors ${$hasAttachmentsOnly ? 'bg-accent text-accent-foreground' : 'hover:bg-accent'}`}
+                          aria-pressed={$hasAttachmentsOnly}
+                          onclick={() => setHasAttachmentsOnly(!$hasAttachmentsOnly)}
+                        >
+                          <span>With attachments</span>
+                          {#if $hasAttachmentsOnly}<Check class="ml-auto h-4 w-4 shrink-0" />{/if}
+                        </button>
+                        {#if availableLabelsFromStore && availableLabelsFromStore.length > 0}
+                          <div class="my-1 h-px bg-border"></div>
+                          <div
+                            class="px-2 py-1 text-xs font-medium text-muted-foreground uppercase tracking-wider"
+                          >
+                            Filter by label
                           </div>
-                          <div class="flex-1 min-w-0 flex flex-col gap-1">
-                            <div class="flex items-center gap-1.5">
-                              <span class="font-medium truncate"
-                                >{item.emailData?.subject || '(No subject)'}</span
-                              >
-                            </div>
-                            <div class="flex items-center gap-1.5 text-sm">
-                              <span class="text-muted-foreground truncate">
-                                To: {(item.emailData?.to || [])
-                                  .slice(0, 5)
-                                  .join(', ')}{#if (item.emailData?.to || []).length > 5}, +{(
-                                    item.emailData?.to || []
-                                  ).length - 5} more{/if}
-                              </span>
-                            </div>
-                            {#if item.lastError}
-                              <div class="text-xs text-destructive">
-                                <small>{item.lastError}</small>
-                              </div>
-                            {/if}
-                          </div>
-                          <div class="flex items-center gap-2 shrink-0">
-                            <span class="text-xs text-muted-foreground whitespace-nowrap"
-                              >{formatCompactDate(item.createdAt)}</span
-                            >
-                            {#if item.retryCount > 0}
-                              <small class="text-muted-foreground">Retries: {item.retryCount}</small
-                              >
-                            {/if}
-                          </div>
-                          <div class="flex items-center gap-2 mt-2">
-                            {#if item.status !== 'sending'}
+                          {#each availableLabelsFromStore as label}
+                            {#if label}
                               <button
-                                class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
                                 type="button"
-                                title={item.status === 'scheduled' ? 'Cancel' : 'Delete'}
-                                onclick={(e) => {
-                                  e.stopPropagation();
-                                  handleDeleteOutbox(item);
-                                }}
+                                class={`flex items-center gap-2 w-full px-3 py-2 text-sm transition-colors ${($filterByLabel || []).includes(getLabelId(label)) ? 'bg-accent text-accent-foreground' : 'hover:bg-accent'}`}
+                                aria-pressed={($filterByLabel || []).includes(getLabelId(label))}
+                                onclick={() => toggleFilterByLabel(getLabelId(label))}
                               >
-                                <Trash2 class="h-4.5 w-4.5" />
+                                <span
+                                  class="w-2.5 h-2.5 rounded-full shrink-0"
+                                  style={`background:${label.color || '#9ca3af'}`}
+                                ></span>
+                                <span class="flex-1 text-left"
+                                  >{label.name || label.label || label.value}</span
+                                >
+                                {#if ($filterByLabel || []).includes(getLabelId(label))}<Check
+                                    class="h-4 w-4 shrink-0"
+                                  />{/if}
                               </button>
                             {/if}
-                          </div>
-                        </div>
-                      </li>
-                    {/each}
-                  </ul>
-                {/if}
-              </div>
-            {:else}
-              <div
-                class="divide-y divide-border"
-                aria-busy={$loading}
-                ontouchstart={handlePullStart}
-                ontouchmove={handlePullMove}
-                ontouchend={handlePullEnd}
-                style="transform: translateY({pullDistance}px); transition: {isPulling
-                  ? 'none'
-                  : 'transform 0.3s ease-out'};"
-              >
-                {#if pullDistance > 0 || isRefreshing}
-                  <div
-                    class={`flex items-center justify-center gap-2 py-3 text-muted-foreground ${pullDistance > 60 ? 'text-primary' : ''} ${isRefreshing ? 'text-primary' : ''}`}
-                    style="opacity: {isRefreshing
-                      ? 1
-                      : Math.min(pullDistance / 60, 1)}; margin-top: {isRefreshing
-                      ? 0
-                      : -60 + pullDistance}px"
-                  >
-                    <div
-                      class={`h-5 w-5 rounded-full border-2 border-border border-t-primary ${isRefreshing ? 'animate-spin' : ''}`}
-                    >
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <circle cx="12" cy="12" r="10" opacity="0.25" />
-                        <path d="M12 2a10 10 0 0 1 10 10" stroke-linecap="round" />
-                      </svg>
-                    </div>
-                    <span
-                      >{isRefreshing
-                        ? 'Refreshing...'
-                        : pullDistance > 60
-                          ? 'Release to refresh'
-                          : 'Pull to refresh'}</span
-                    >
-                  </div>
-                {/if}
-                {#if $threadingEnabled}
-                  {@const convList = $filteredConversations}
-                  <ul class="divide-y divide-border">
-                    {#each convList as conv (conv.id)}
-                      <li
-                        class={`relative cursor-pointer hover:bg-accent/50 transition-colors ${activeConvId === conv.id ? 'msg-active' : ''}`}
-                        oncontextmenu={(e) => openContextMenu(e, conv)}
-                        ondblclick={(e) => {
-                          const message = conv?.messages?.[conv.messages.length - 1];
-                          if (isDraftMessage(message || conv)) {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            openDraftFromMessage(message || conv);
-                          }
-                        }}
-                      >
-                        {#if swipeItemId === conv.id}
-                          <div class="absolute inset-y-0 right-0 flex items-center">
-                            {#if swipeDistance > 0}
-                              <div
-                                class={`flex items-center justify-center gap-2 px-4 bg-green-500 text-white ${swipeDistance > 80 ? 'opacity-100' : 'opacity-60'}`}
-                              >
-                                <svg
-                                  viewBox="0 0 24 24"
-                                  fill="none"
-                                  stroke="currentColor"
-                                  stroke-width="2"
-                                >
-                                  <path d="M21 8v13H3V8M1 3h22v5H1zM10 12h4" />
-                                </svg>
-                                <span>Archive</span>
-                              </div>
-                            {:else if swipeDistance < 0}
-                              <div
-                                class={`flex items-center justify-center gap-2 px-4 bg-destructive text-destructive-foreground ${Math.abs(swipeDistance) > 80 ? 'opacity-100' : 'opacity-60'}`}
-                              >
-                                <svg
-                                  viewBox="0 0 24 24"
-                                  fill="none"
-                                  stroke="currentColor"
-                                  stroke-width="2"
-                                >
-                                  <path
-                                    d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
-                                  />
-                                </svg>
-                                <span>Delete</span>
-                              </div>
-                            {/if}
-                          </div>
+                          {/each}
                         {/if}
-                        <div
-                          class={`flex items-center gap-3 px-3 py-1.5 cursor-pointer ${swiping && swipeItemId === conv.id ? 'user-select-none' : ''} ${window.innerWidth > 640 ? 'cursor-grab active:cursor-grabbing' : ''}`}
-                          data-conversation-row
-                          role="button"
-                          tabindex="0"
-                          draggable={window.innerWidth > 640}
+                        <div class="my-1 h-px bg-border"></div>
+                        <button
+                          type="button"
+                          class="flex items-center w-full px-3 py-2 text-sm transition-colors hover:bg-accent text-muted-foreground"
                           onclick={() => {
-                            const message = conv?.messages?.[conv.messages.length - 1] || conv;
-                            if (isDraftMessage(message || conv)) {
-                              openDraftFromMessage(message || conv);
-                              return;
-                            }
-                            selectConversation(conv);
+                            setUnreadOnly(false);
+                            setHasAttachmentsOnly(false);
+                            starredOnly.set(false);
+                            filterByLabel.set([]);
+                            closeFilters();
                           }}
-                          onkeydown={(e) =>
-                            activateOnKeys(e, () => {
+                        >
+                          Clear filters
+                        </button>
+                      </div>
+                    {/if}
+                  </div>
+                </div>
+                <span class="text-sm font-medium text-muted-foreground"
+                  >{outboxSelected ? 'Outbox' : $selectedFolder}</span
+                >
+              </div>
+            {/if}
+
+            {#if $selectedConversationIds && $selectedConversationIds.length}
+              <div class="flex items-center gap-3 px-4 py-2 bg-muted/50 sticky top-0 z-30">
+                <div
+                  class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium bg-primary text-primary-foreground"
+                >
+                  <span>{$selectedConversationIds.length}</span>
+                </div>
+                <div class="flex items-center gap-1">
+                  <button
+                    class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                    type="button"
+                    aria-label="Clear selection"
+                    data-tooltip="Clear selection"
+                    data-tooltip-position="bottom"
+                    onclick={clearSelection}
+                  >
+                    <X class="h-5 w-5" />
+                  </button>
+                  {#if $selectedFolder?.toUpperCase?.() !== 'ARCHIVE'}
+                    <button
+                      class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                      type="button"
+                      aria-label="Archive selected"
+                      data-tooltip="Archive selected"
+                      data-tooltip-position="bottom"
+                      onclick={bulkArchive}
+                    >
+                      <Archive class="h-5 w-5" />
+                    </button>
+                  {/if}
+                  <button
+                    class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                    type="button"
+                    aria-label="Delete selected"
+                    data-tooltip="Delete selected"
+                    data-tooltip-position="bottom"
+                    onclick={bulkDelete}
+                  >
+                    <Trash2 class="h-5 w-5" />
+                  </button>
+                  <div class="relative" data-bulk-move>
+                    <button
+                      class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                      type="button"
+                      aria-label="Move selected"
+                      data-tooltip="Move selected"
+                      data-tooltip-position="bottom"
+                      onclick={() => {
+                        if (bulkMoveOpen?.update) {
+                          bulkMoveOpen.update((v) => !v);
+                        } else if (mailboxView?.toggleBulkMove) {
+                          mailboxView.toggleBulkMove();
+                        }
+                      }}
+                    >
+                      <FolderInput class="h-5 w-5" />
+                    </button>
+                    {#if $bulkMoveOpen}
+                      <div
+                        class="absolute right-0 z-50 mt-1 min-w-[160px] max-h-[300px] overflow-y-auto border border-border bg-popover p-1 shadow-md"
+                      >
+                        {#each availableMoveTargetsFromStore.length ? availableMoveTargetsFromStore : $availableMoveTargets as folder}
+                          <button
+                            type="button"
+                            class="flex items-center w-full px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground cursor-pointer"
+                            onclick={() => bulkMoveTo(folder.path)}
+                          >
+                            {folder.path || folder.name}
+                          </button>
+                        {/each}
+                      </div>
+                    {/if}
+                  </div>
+                </div>
+              </div>
+            {/if}
+
+            <div
+              class="fe-message-list-wrapper relative flex-1 min-h-0 overflow-y-auto"
+              bind:this={messageListWrapper}
+            >
+              {#if outboxSelected}
+                <!-- Outbox View -->
+                <div class="flex flex-col">
+                  {#if outboxItems.length === 0}
+                    <div
+                      class="flex flex-col items-center justify-center py-12 text-center text-muted-foreground"
+                    >
+                      <p>No messages in outbox</p>
+                      <small>Messages queued for sending will appear here</small>
+                    </div>
+                  {:else}
+                    <ul class="divide-y divide-border">
+                      {#each outboxItems as item (item.id)}
+                        <li
+                          class={`relative ${item.status === 'failed' ? 'bg-destructive/10' : ''} ${item.status === 'sending' ? 'opacity-70' : ''}`}
+                        >
+                          <div class="flex items-start gap-3 p-3 transition-colors">
+                            <div class="text-xs">
+                              {#if item.status === 'pending'}
+                                <span
+                                  class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"
+                                  title="Pending">Queued</span
+                                >
+                              {:else if item.status === 'scheduled'}
+                                <span
+                                  class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"
+                                  title="Scheduled"
+                                >
+                                  {formatScheduledTime(item.sendAt)}
+                                </span>
+                              {:else if item.status === 'sending'}
+                                <span
+                                  class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-primary/10 text-primary animate-pulse"
+                                  title="Sending">Sending...</span
+                                >
+                              {:else if item.status === 'sent'}
+                                <span
+                                  class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
+                                  title="Sent">Sent</span
+                                >
+                              {:else if item.status === 'failed'}
+                                <span
+                                  class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-destructive/10 text-destructive"
+                                  title="Failed">Failed</span
+                                >
+                              {/if}
+                            </div>
+                            <div class="flex-1 min-w-0 flex flex-col gap-1">
+                              <div class="flex items-center gap-1.5">
+                                <span class="font-medium truncate"
+                                  >{item.emailData?.subject || '(No subject)'}</span
+                                >
+                              </div>
+                              <div class="flex items-center gap-1.5 text-sm">
+                                <span class="text-muted-foreground truncate">
+                                  To: {(item.emailData?.to || [])
+                                    .slice(0, 5)
+                                    .join(', ')}{#if (item.emailData?.to || []).length > 5}, +{(
+                                      item.emailData?.to || []
+                                    ).length - 5} more{/if}
+                                </span>
+                              </div>
+                              {#if item.lastError}
+                                <div class="text-xs text-destructive">
+                                  <small>{item.lastError}</small>
+                                </div>
+                              {/if}
+                            </div>
+                            <div class="flex items-center gap-2 shrink-0">
+                              <span class="text-xs text-muted-foreground whitespace-nowrap"
+                                >{formatCompactDate(item.createdAt)}</span
+                              >
+                              {#if item.retryCount > 0}
+                                <small class="text-muted-foreground"
+                                  >Retries: {item.retryCount}</small
+                                >
+                              {/if}
+                            </div>
+                            <div class="flex items-center gap-2 mt-2">
+                              {#if item.status !== 'sending'}
+                                <button
+                                  class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                                  type="button"
+                                  title={item.status === 'scheduled' ? 'Cancel' : 'Delete'}
+                                  onclick={(e) => {
+                                    e.stopPropagation();
+                                    handleDeleteOutbox(item);
+                                  }}
+                                >
+                                  <Trash2 class="h-4.5 w-4.5" />
+                                </button>
+                              {/if}
+                            </div>
+                          </div>
+                        </li>
+                      {/each}
+                    </ul>
+                  {/if}
+                </div>
+              {:else}
+                <div
+                  class="divide-y divide-border"
+                  aria-busy={$loading}
+                  ontouchstart={handlePullStart}
+                  ontouchmove={handlePullMove}
+                  ontouchend={handlePullEnd}
+                  style="transform: translateY({pullDistance}px); transition: {isPulling
+                    ? 'none'
+                    : 'transform 0.3s ease-out'};"
+                >
+                  {#if pullDistance > 0 || isRefreshing}
+                    <div
+                      class={`flex items-center justify-center gap-2 py-3 text-muted-foreground ${pullDistance > 60 ? 'text-primary' : ''} ${isRefreshing ? 'text-primary' : ''}`}
+                      style="opacity: {isRefreshing
+                        ? 1
+                        : Math.min(pullDistance / 60, 1)}; margin-top: {isRefreshing
+                        ? 0
+                        : -60 + pullDistance}px"
+                    >
+                      <div
+                        class={`h-5 w-5 rounded-full border-2 border-border border-t-primary ${isRefreshing ? 'animate-spin' : ''}`}
+                      >
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <circle cx="12" cy="12" r="10" opacity="0.25" />
+                          <path d="M12 2a10 10 0 0 1 10 10" stroke-linecap="round" />
+                        </svg>
+                      </div>
+                      <span
+                        >{isRefreshing
+                          ? 'Refreshing...'
+                          : pullDistance > 60
+                            ? 'Release to refresh'
+                            : 'Pull to refresh'}</span
+                      >
+                    </div>
+                  {/if}
+                  {#if $threadingEnabled}
+                    {@const convList = $filteredConversations}
+                    <ul class="divide-y divide-border">
+                      {#each convList as conv (conv.id)}
+                        <li
+                          class={`relative cursor-pointer hover:bg-accent/50 transition-colors ${activeConvId === conv.id ? 'msg-active' : ''}`}
+                          oncontextmenu={(e) => openContextMenu(e, conv)}
+                          ondblclick={(e) => {
+                            const message = conv?.messages?.[conv.messages.length - 1];
+                            if (isDraftMessage(message || conv)) {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              openDraftFromMessage(message || conv);
+                            }
+                          }}
+                        >
+                          {#if swipeItemId === conv.id}
+                            <div class="absolute inset-y-0 right-0 flex items-center">
+                              {#if swipeDistance > 0}
+                                <div
+                                  class={`flex items-center justify-center gap-2 px-4 bg-green-500 text-white ${swipeDistance > 80 ? 'opacity-100' : 'opacity-60'}`}
+                                >
+                                  <svg
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="2"
+                                  >
+                                    <path d="M21 8v13H3V8M1 3h22v5H1zM10 12h4" />
+                                  </svg>
+                                  <span>Archive</span>
+                                </div>
+                              {:else if swipeDistance < 0}
+                                <div
+                                  class={`flex items-center justify-center gap-2 px-4 bg-destructive text-destructive-foreground ${Math.abs(swipeDistance) > 80 ? 'opacity-100' : 'opacity-60'}`}
+                                >
+                                  <svg
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="2"
+                                  >
+                                    <path
+                                      d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
+                                    />
+                                  </svg>
+                                  <span>Delete</span>
+                                </div>
+                              {/if}
+                            </div>
+                          {/if}
+                          <div
+                            class={`flex items-center gap-3 px-3 py-1.5 cursor-pointer ${swiping && swipeItemId === conv.id ? 'user-select-none' : ''} ${window.innerWidth > 640 ? 'cursor-grab active:cursor-grabbing' : ''}`}
+                            data-conversation-row
+                            role="button"
+                            tabindex="0"
+                            draggable={window.innerWidth > 640}
+                            onclick={() => {
                               const message = conv?.messages?.[conv.messages.length - 1] || conv;
                               if (isDraftMessage(message || conv)) {
                                 openDraftFromMessage(message || conv);
                                 return;
                               }
                               selectConversation(conv);
+                            }}
+                            onkeydown={(e) =>
+                              activateOnKeys(e, () => {
+                                const message = conv?.messages?.[conv.messages.length - 1] || conv;
+                                if (isDraftMessage(message || conv)) {
+                                  openDraftFromMessage(message || conv);
+                                  return;
+                                }
+                                selectConversation(conv);
+                              })}
+                            ontouchstart={(e) => handleSwipeStart(e, conv)}
+                            ontouchmove={(e) => handleSwipeMove(e, conv)}
+                            ontouchend={() => handleSwipeEnd(conv)}
+                            ondragstart={(e) => handleDragStart(e, conv)}
+                            ondragend={handleDragEnd}
+                            style="transform: translateX({swipeItemId === conv.id
+                              ? swipeDistance
+                              : 0}px); will-change: {swipeItemId === conv.id
+                              ? 'transform'
+                              : 'auto'}; transition: {swiping &&
+                            swipeItemId === conv.id &&
+                            !swipeAnimating
+                              ? 'none'
+                              : 'transform 0.25s cubic-bezier(0.25, 0.46, 0.45, 0.94)'};"
+                          >
+                            <button
+                              class={`relative w-8 h-8 rounded flex items-center justify-center shrink-0 transition-colors ${($selectedConversationIds || []).includes(conv.id) ? 'text-primary' : 'text-muted-foreground hover:text-foreground'}`}
+                              type="button"
+                              aria-label={($selectedConversationIds || []).includes(conv.id)
+                                ? 'Deselect'
+                                : 'Select'}
+                              onclick={(e) => {
+                                e.stopPropagation();
+                                toggleSelection(conv, e);
+                              }}
+                            >
+                              {#if ($selectedConversationIds || []).includes(conv.id)}
+                                <CheckSquare class="h-5 w-5" />
+                              {:else}
+                                <Square class="h-5 w-5" />
+                              {/if}
+                            </button>
+                            <!-- Gmail-style: two rows -->
+                            <div class="flex-1 min-w-0 flex flex-col gap-0.5 text-[13px]">
+                              <!-- Row 1: From | Subject | Date -->
+                              <div class="flex items-center gap-3">
+                                <div
+                                  class="w-[30%] min-w-[140px] max-w-[280px] shrink-0 flex items-center gap-1"
+                                >
+                                  {#if conv.hasUnread || conv.is_unread}
+                                    <span class="w-1.5 h-1.5 rounded-full bg-primary shrink-0"
+                                    ></span>
+                                  {/if}
+                                  <span
+                                    class={`truncate ${conv.hasUnread || conv.is_unread ? 'font-semibold' : ''}`}
+                                    >{listIsSentFolder
+                                      ? `To: ${getConversationToName(conv) || getConversationFromName(conv)}`
+                                      : getConversationFromName(conv)}</span
+                                  >
+                                  {#if conv.messageCount > 1}
+                                    <span class="text-[11px] text-muted-foreground shrink-0"
+                                      >({conv.messageCount})</span
+                                    >
+                                  {/if}
+                                </div>
+                                <div
+                                  class="flex-1 min-w-0 flex items-baseline gap-1 overflow-hidden"
+                                >
+                                  <span
+                                    class={`truncate ${conv.hasUnread || conv.is_unread ? 'font-medium' : ''}`}
+                                    >{conv.displaySubject || conv.subject}</span
+                                  >
+                                  {#if truncatePreview(mailboxView?.getConversationPreview?.(conv) || conv.snippet || '', 80)}
+                                    <span
+                                      class="text-muted-foreground font-normal text-xs truncate"
+                                    >
+                                      &mdash; {truncatePreview(
+                                        mailboxView?.getConversationPreview?.(conv) ||
+                                          conv.snippet ||
+                                          '',
+                                        80,
+                                      )}
+                                    </span>
+                                  {/if}
+                                </div>
+                                <div
+                                  class="flex items-center gap-1.5 shrink-0 text-muted-foreground"
+                                >
+                                  {#if hasConversationReplies(conv)}
+                                    <svg viewBox="0 0 24 24" class="h-3 w-3" aria-hidden="true">
+                                      <path
+                                        d="M9 17l-5-5 5-5"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        stroke-width="2"
+                                        stroke-linecap="round"
+                                        stroke-linejoin="round"
+                                      ></path>
+                                      <path
+                                        d="M20 18v-2a4 4 0 0 0-4-4H4"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        stroke-width="2"
+                                        stroke-linecap="round"
+                                        stroke-linejoin="round"
+                                      ></path>
+                                    </svg>
+                                  {/if}
+                                  {#if hasAttachments(conv)}
+                                    <svg viewBox="0 0 24 24" class="h-3 w-3" aria-hidden="true">
+                                      <path
+                                        d="M21.44 11.05l-8.49 8.49a5 5 0 0 1-7.07-7.07l9.19-9.19a3 3 0 1 1 4.24 4.24l-9.19 9.19a1 1 0 1 1-1.41-1.41l8.49-8.49"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        stroke-width="2"
+                                        stroke-linecap="round"
+                                        stroke-linejoin="round"
+                                      ></path>
+                                    </svg>
+                                  {/if}
+                                  <span class="text-[11px] whitespace-nowrap">
+                                    {#if conv.latestDate}
+                                      {formatCompactDate(conv.latestDate)}
+                                    {:else}
+                                      {formatCompactDate(conv.date)}
+                                    {/if}
+                                  </span>
+                                </div>
+                              </div>
+                              {#if Array.isArray(conv.labels) && conv.labels.length > 0}
+                                <!-- Row 2: Labels -->
+                                <div class="flex items-center gap-1">
+                                  {#each conv.labels.slice(0, 3) as lbl}
+                                    {#if typeof lbl === 'string' && lbl && lbl !== '[]'}
+                                      {#if labelMap.get(lbl)}
+                                        <span
+                                          class="inline-flex items-center px-1.5 py-0.5 text-[10px] truncate max-w-[80px]"
+                                          style={labelMap.get(lbl).color
+                                            ? `background:${labelMap.get(lbl).color}; color:#fff;`
+                                            : ''}
+                                        >
+                                          {labelMap.get(lbl).name ||
+                                            labelMap.get(lbl).label ||
+                                            labelMap.get(lbl).value ||
+                                            lbl}
+                                        </span>
+                                      {/if}
+                                    {/if}
+                                  {/each}
+                                  {#if conv.labels.length > 3}
+                                    <span class="text-[10px] text-muted-foreground"
+                                      >+{conv.labels.length - 3}</span
+                                    >
+                                  {/if}
+                                </div>
+                              {/if}
+                            </div>
+                          </div>
+                        </li>
+                      {/each}
+                    </ul>
+                  {:else}
+                    {@const msgList = $filteredMessages}
+                    {#each msgList as msg}
+                      <article
+                        class={`relative cursor-pointer hover:bg-accent/50 transition-colors ${activeMsgId === msg.id || ($selectedConversationIds || []).includes(msg.id) ? 'msg-active' : ''}`}
+                        oncontextmenu={(e) => openContextMenu(e, msg)}
+                        ondblclick={(e) => {
+                          if (isDraftMessage(msg)) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            openDraftFromMessage(msg);
+                          }
+                        }}
+                      >
+                        <div
+                          class={`flex items-center gap-3 px-3 py-1.5 cursor-pointer ${window.innerWidth > 640 ? 'cursor-grab active:cursor-grabbing' : ''}`}
+                          data-conversation-row
+                          role="button"
+                          tabindex="0"
+                          draggable={window.innerWidth > 640}
+                          onclick={() => {
+                            if (isDraftMessage(msg)) {
+                              openDraftFromMessage(msg);
+                              return;
+                            }
+                            selectMessage(msg);
+                          }}
+                          onkeydown={(e) =>
+                            activateOnKeys(e, () => {
+                              if (isDraftMessage(msg)) {
+                                openDraftFromMessage(msg);
+                                return;
+                              }
+                              selectMessage(msg);
                             })}
-                          ontouchstart={(e) => handleSwipeStart(e, conv)}
-                          ontouchmove={(e) => handleSwipeMove(e, conv)}
-                          ontouchend={() => handleSwipeEnd(conv)}
-                          ondragstart={(e) => handleDragStart(e, conv)}
+                          ondragstart={(e) => handleDragStart(e, msg)}
                           ondragend={handleDragEnd}
-                          style="transform: translateX({swipeItemId === conv.id
-                            ? swipeDistance
-                            : 0}px); will-change: {swipeItemId === conv.id
-                            ? 'transform'
-                            : 'auto'}; transition: {swiping &&
-                          swipeItemId === conv.id &&
-                          !swipeAnimating
-                            ? 'none'
-                            : 'transform 0.25s cubic-bezier(0.25, 0.46, 0.45, 0.94)'};"
                         >
                           <button
-                            class={`relative w-8 h-8 rounded flex items-center justify-center shrink-0 transition-colors ${($selectedConversationIds || []).includes(conv.id) ? 'text-primary' : 'text-muted-foreground hover:text-foreground'}`}
+                            class={`relative w-10 h-10 rounded flex items-center justify-center shrink-0 transition-colors ${($selectedConversationIds || []).includes(msg.id) ? 'text-primary' : 'text-muted-foreground hover:text-foreground'}`}
                             type="button"
-                            aria-label={($selectedConversationIds || []).includes(conv.id)
+                            aria-label={($selectedConversationIds || []).includes(msg.id)
                               ? 'Deselect'
                               : 'Select'}
                             onclick={(e) => {
                               e.stopPropagation();
-                              toggleSelection(conv, e);
+                              toggleSelection({ id: msg.id }, e);
                             }}
                           >
-                            {#if ($selectedConversationIds || []).includes(conv.id)}
+                            {#if ($selectedConversationIds || []).includes(msg.id)}
                               <CheckSquare class="h-5 w-5" />
                             {:else}
                               <Square class="h-5 w-5" />
                             {/if}
                           </button>
-                          <!-- Gmail-style: two rows -->
                           <div class="flex-1 min-w-0 flex flex-col gap-0.5 text-[13px]">
-                            <!-- Row 1: From | Subject | Date -->
+                            <!-- Row 1: From | Subject - Preview | Date -->
                             <div class="flex items-center gap-3">
                               <div
                                 class="w-[30%] min-w-[140px] max-w-[280px] shrink-0 flex items-center gap-1"
                               >
-                                {#if conv.hasUnread || conv.is_unread}
+                                {#if msg.is_unread}
                                   <span class="w-1.5 h-1.5 rounded-full bg-primary shrink-0"></span>
                                 {/if}
-                                <span
-                                  class={`truncate ${conv.hasUnread || conv.is_unread ? 'font-semibold' : ''}`}
+                                <span class={`truncate ${msg.is_unread ? 'font-semibold' : ''}`}
                                   >{listIsSentFolder
-                                    ? `To: ${getConversationToName(conv) || getConversationFromName(conv)}`
-                                    : getConversationFromName(conv)}</span
+                                    ? `To: ${getMessageToName(msg) || getMessageFromName(msg)}`
+                                    : getMessageFromName(msg)}</span
                                 >
-                                {#if conv.messageCount > 1}
-                                  <span class="text-[11px] text-muted-foreground shrink-0"
-                                    >({conv.messageCount})</span
-                                  >
-                                {/if}
                               </div>
                               <div class="flex-1 min-w-0 flex items-baseline gap-1 overflow-hidden">
-                                <span
-                                  class={`truncate ${conv.hasUnread || conv.is_unread ? 'font-medium' : ''}`}
-                                  >{conv.displaySubject || conv.subject}</span
+                                <span class={`truncate ${msg.is_unread ? 'font-medium' : ''}`}
+                                  >{msg.subject}</span
                                 >
-                                {#if truncatePreview(mailboxView?.getConversationPreview?.(conv) || conv.snippet || '', 80)}
+                                {#if truncatePreview(msg.snippet || '', 80)}
                                   <span class="text-muted-foreground font-normal text-xs truncate">
-                                    &mdash; {truncatePreview(
-                                      mailboxView?.getConversationPreview?.(conv) ||
-                                        conv.snippet ||
-                                        '',
-                                      80,
-                                    )}
+                                    &mdash; {truncatePreview(msg.snippet || '', 80)}
                                   </span>
                                 {/if}
                               </div>
                               <div class="flex items-center gap-1.5 shrink-0 text-muted-foreground">
-                                {#if hasConversationReplies(conv)}
-                                  <svg viewBox="0 0 24 24" class="h-3 w-3" aria-hidden="true">
-                                    <path
-                                      d="M9 17l-5-5 5-5"
-                                      fill="none"
-                                      stroke="currentColor"
-                                      stroke-width="2"
-                                      stroke-linecap="round"
-                                      stroke-linejoin="round"
-                                    ></path>
-                                    <path
-                                      d="M20 18v-2a4 4 0 0 0-4-4H4"
-                                      fill="none"
-                                      stroke="currentColor"
-                                      stroke-width="2"
-                                      stroke-linecap="round"
-                                      stroke-linejoin="round"
-                                    ></path>
-                                  </svg>
-                                {/if}
-                                {#if hasAttachments(conv)}
+                                {#if hasAttachments(msg)}
                                   <svg viewBox="0 0 24 24" class="h-3 w-3" aria-hidden="true">
                                     <path
                                       d="M21.44 11.05l-8.49 8.49a5 5 0 0 1-7.07-7.07l9.19-9.19a3 3 0 1 1 4.24 4.24l-9.19 9.19a1 1 0 1 1-1.41-1.41l8.49-8.49"
@@ -5756,18 +5907,14 @@
                                   </svg>
                                 {/if}
                                 <span class="text-[11px] whitespace-nowrap">
-                                  {#if conv.latestDate}
-                                    {formatCompactDate(conv.latestDate)}
-                                  {:else}
-                                    {formatCompactDate(conv.date)}
-                                  {/if}
+                                  {formatCompactDate(msg.date)}
                                 </span>
                               </div>
                             </div>
-                            {#if Array.isArray(conv.labels) && conv.labels.length > 0}
+                            {#if Array.isArray(msg.labels) && msg.labels.length}
                               <!-- Row 2: Labels -->
                               <div class="flex items-center gap-1">
-                                {#each conv.labels.slice(0, 3) as lbl}
+                                {#each msg.labels.slice(0, 4) as lbl}
                                   {#if typeof lbl === 'string' && lbl && lbl !== '[]'}
                                     {#if labelMap.get(lbl)}
                                       <span
@@ -5781,1176 +5928,1177 @@
                                           labelMap.get(lbl).value ||
                                           lbl}
                                       </span>
+                                    {:else}
+                                      <span
+                                        class="inline-flex items-center px-1.5 py-0.5 text-[10px] bg-secondary text-secondary-foreground truncate max-w-[80px]"
+                                        >{lbl}</span
+                                      >
                                     {/if}
                                   {/if}
                                 {/each}
-                                {#if conv.labels.length > 3}
-                                  <span class="text-[10px] text-muted-foreground"
-                                    >+{conv.labels.length - 3}</span
-                                  >
-                                {/if}
                               </div>
                             {/if}
                           </div>
                         </div>
-                      </li>
+                      </article>
                     {/each}
-                  </ul>
-                {:else}
-                  {@const msgList = $filteredMessages}
-                  {#each msgList as msg}
-                    <article
-                      class={`relative cursor-pointer hover:bg-accent/50 transition-colors ${activeMsgId === msg.id || ($selectedConversationIds || []).includes(msg.id) ? 'msg-active' : ''}`}
-                      oncontextmenu={(e) => openContextMenu(e, msg)}
-                      ondblclick={(e) => {
-                        if (isDraftMessage(msg)) {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          openDraftFromMessage(msg);
-                        }
-                      }}
-                    >
-                      <div
-                        class={`flex items-center gap-3 px-3 py-1.5 cursor-pointer ${window.innerWidth > 640 ? 'cursor-grab active:cursor-grabbing' : ''}`}
-                        data-conversation-row
-                        role="button"
-                        tabindex="0"
-                        draggable={window.innerWidth > 640}
-                        onclick={() => {
-                          if (isDraftMessage(msg)) {
-                            openDraftFromMessage(msg);
-                            return;
-                          }
-                          selectMessage(msg);
-                        }}
-                        onkeydown={(e) =>
-                          activateOnKeys(e, () => {
-                            if (isDraftMessage(msg)) {
-                              openDraftFromMessage(msg);
-                              return;
-                            }
-                            selectMessage(msg);
-                          })}
-                        ondragstart={(e) => handleDragStart(e, msg)}
-                        ondragend={handleDragEnd}
-                      >
-                        <button
-                          class={`relative w-10 h-10 rounded flex items-center justify-center shrink-0 transition-colors ${($selectedConversationIds || []).includes(msg.id) ? 'text-primary' : 'text-muted-foreground hover:text-foreground'}`}
-                          type="button"
-                          aria-label={($selectedConversationIds || []).includes(msg.id)
-                            ? 'Deselect'
-                            : 'Select'}
-                          onclick={(e) => {
-                            e.stopPropagation();
-                            toggleSelection({ id: msg.id }, e);
-                          }}
+                  {/if}
+                  {#if showListSkeleton}
+                    <div class="space-y-0">
+                      {#each Array(8) as _, i}
+                        <div
+                          class="flex items-start gap-3 p-3 border-b border-border animate-pulse"
                         >
-                          {#if ($selectedConversationIds || []).includes(msg.id)}
-                            <CheckSquare class="h-5 w-5" />
-                          {:else}
-                            <Square class="h-5 w-5" />
-                          {/if}
-                        </button>
-                        <div class="flex-1 min-w-0 flex flex-col gap-0.5 text-[13px]">
-                          <!-- Row 1: From | Subject - Preview | Date -->
-                          <div class="flex items-center gap-3">
-                            <div
-                              class="w-[30%] min-w-[140px] max-w-[280px] shrink-0 flex items-center gap-1"
-                            >
-                              {#if msg.is_unread}
-                                <span class="w-1.5 h-1.5 rounded-full bg-primary shrink-0"></span>
-                              {/if}
-                              <span class={`truncate ${msg.is_unread ? 'font-semibold' : ''}`}
-                                >{listIsSentFolder
-                                  ? `To: ${getMessageToName(msg) || getMessageFromName(msg)}`
-                                  : getMessageFromName(msg)}</span
-                              >
-                            </div>
-                            <div class="flex-1 min-w-0 flex items-baseline gap-1 overflow-hidden">
-                              <span class={`truncate ${msg.is_unread ? 'font-medium' : ''}`}
-                                >{msg.subject}</span
-                              >
-                              {#if truncatePreview(msg.snippet || '', 80)}
-                                <span class="text-muted-foreground font-normal text-xs truncate">
-                                  &mdash; {truncatePreview(msg.snippet || '', 80)}
-                                </span>
-                              {/if}
-                            </div>
-                            <div class="flex items-center gap-1.5 shrink-0 text-muted-foreground">
-                              {#if hasAttachments(msg)}
-                                <svg viewBox="0 0 24 24" class="h-3 w-3" aria-hidden="true">
-                                  <path
-                                    d="M21.44 11.05l-8.49 8.49a5 5 0 0 1-7.07-7.07l9.19-9.19a3 3 0 1 1 4.24 4.24l-9.19 9.19a1 1 0 1 1-1.41-1.41l8.49-8.49"
-                                    fill="none"
-                                    stroke="currentColor"
-                                    stroke-width="2"
-                                    stroke-linecap="round"
-                                    stroke-linejoin="round"
-                                  ></path>
-                                </svg>
-                              {/if}
-                              <span class="text-[11px] whitespace-nowrap">
-                                {formatCompactDate(msg.date)}
-                              </span>
-                            </div>
+                          <div class="w-4 h-4 bg-muted shrink-0"></div>
+                          <div class="flex-1 space-y-2">
+                            <div class="h-4 bg-muted" style="width: {60 + (i % 3) * 10}%"></div>
+                            <div class="h-3 bg-muted" style="width: {40 + (i % 4) * 8}%"></div>
+                            <div class="h-3 bg-muted" style="width: {70 + (i % 5) * 5}%"></div>
                           </div>
-                          {#if Array.isArray(msg.labels) && msg.labels.length}
-                            <!-- Row 2: Labels -->
-                            <div class="flex items-center gap-1">
-                              {#each msg.labels.slice(0, 4) as lbl}
-                                {#if typeof lbl === 'string' && lbl && lbl !== '[]'}
-                                  {#if labelMap.get(lbl)}
-                                    <span
-                                      class="inline-flex items-center px-1.5 py-0.5 text-[10px] truncate max-w-[80px]"
-                                      style={labelMap.get(lbl).color
-                                        ? `background:${labelMap.get(lbl).color}; color:#fff;`
-                                        : ''}
-                                    >
-                                      {labelMap.get(lbl).name ||
-                                        labelMap.get(lbl).label ||
-                                        labelMap.get(lbl).value ||
-                                        lbl}
-                                    </span>
-                                  {:else}
-                                    <span
-                                      class="inline-flex items-center px-1.5 py-0.5 text-[10px] bg-secondary text-secondary-foreground truncate max-w-[80px]"
-                                      >{lbl}</span
-                                    >
-                                  {/if}
-                                {/if}
-                              {/each}
-                            </div>
-                          {/if}
+                          <div class="w-12 h-3 bg-muted rounded shrink-0"></div>
                         </div>
-                      </div>
-                    </article>
-                  {/each}
-                {/if}
-                {#if showListSkeleton}
-                  <div class="space-y-0">
-                    {#each Array(8) as _, i}
-                      <div class="flex items-start gap-3 p-3 border-b border-border animate-pulse">
-                        <div class="w-4 h-4 bg-muted shrink-0"></div>
-                        <div class="flex-1 space-y-2">
-                          <div class="h-4 bg-muted" style="width: {60 + (i % 3) * 10}%"></div>
-                          <div class="h-3 bg-muted" style="width: {40 + (i % 4) * 8}%"></div>
-                          <div class="h-3 bg-muted" style="width: {70 + (i % 5) * 5}%"></div>
-                        </div>
-                        <div class="w-12 h-3 bg-muted rounded shrink-0"></div>
-                      </div>
-                    {/each}
-                  </div>
-                {:else if showEmptyState}
-                  <div class="flex flex-col items-center justify-center py-16 text-center">
-                    {#if $searchActiveStore}
-                      <svg
-                        class="h-12 w-12 text-muted-foreground mb-4"
-                        viewBox="0 0 24 24"
-                        aria-hidden="true"
-                      >
-                        <circle
-                          cx="11"
-                          cy="11"
-                          r="8"
-                          stroke="currentColor"
-                          fill="none"
-                          stroke-width="2"
-                        />
-                        <line
-                          x1="21"
-                          y1="21"
-                          x2="16.65"
-                          y2="16.65"
-                          stroke="currentColor"
-                          stroke-width="2"
-                        />
-                      </svg>
-                      <h3>No results found</h3>
-                      <p>Try adjusting your search or filters</p>
-                      {#if $unreadOnly || $hasAttachmentsOnly || $starredOnly || ($filterByLabel && $filterByLabel.length)}
-                        <button
-                          type="button"
-                          class="mt-4 px-4 py-2 text-sm font-medium rounded-md border border-border hover:bg-accent hover:text-accent-foreground transition-colors"
-                          onclick={() => {
-                            setUnreadOnly(false);
-                            setHasAttachmentsOnly(false);
-                            starredOnly.set(false);
-                            filterByLabel.set([]);
-                          }}
+                      {/each}
+                    </div>
+                  {:else if showEmptyState}
+                    <div class="flex flex-col items-center justify-center py-16 text-center">
+                      {#if $searchActiveStore}
+                        <svg
+                          class="h-12 w-12 text-muted-foreground mb-4"
+                          viewBox="0 0 24 24"
+                          aria-hidden="true"
                         >
-                          Clear filters
-                        </button>
+                          <circle
+                            cx="11"
+                            cy="11"
+                            r="8"
+                            stroke="currentColor"
+                            fill="none"
+                            stroke-width="2"
+                          />
+                          <line
+                            x1="21"
+                            y1="21"
+                            x2="16.65"
+                            y2="16.65"
+                            stroke="currentColor"
+                            stroke-width="2"
+                          />
+                        </svg>
+                        <h3>No results found</h3>
+                        <p>Try adjusting your search or filters</p>
+                        {#if $unreadOnly || $hasAttachmentsOnly || $starredOnly || ($filterByLabel && $filterByLabel.length)}
+                          <button
+                            type="button"
+                            class="mt-4 px-4 py-2 text-sm font-medium rounded-md border border-border hover:bg-accent hover:text-accent-foreground transition-colors"
+                            onclick={() => {
+                              setUnreadOnly(false);
+                              setHasAttachmentsOnly(false);
+                              starredOnly.set(false);
+                              filterByLabel.set([]);
+                            }}
+                          >
+                            Clear filters
+                          </button>
+                        {/if}
+                      {:else if $selectedFolder === 'INBOX'}
+                        <svg
+                          class="h-12 w-12 text-muted-foreground mb-4"
+                          viewBox="0 0 24 24"
+                          aria-hidden="true"
+                        >
+                          <path
+                            d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
+                            stroke="currentColor"
+                            fill="none"
+                            stroke-width="2"
+                          />
+                          <line
+                            x1="9"
+                            y1="13"
+                            x2="15"
+                            y2="13"
+                            stroke="currentColor"
+                            stroke-width="2"
+                          />
+                        </svg>
+                        <h3>Inbox Zero!</h3>
+                        <p>You're all caught up</p>
+                      {:else if isDraftFolder($selectedFolder)}
+                        <svg
+                          class="h-12 w-12 text-muted-foreground mb-4"
+                          viewBox="0 0 24 24"
+                          aria-hidden="true"
+                        >
+                          <path
+                            d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"
+                            stroke="currentColor"
+                            fill="none"
+                            stroke-width="2"
+                          />
+                          <path
+                            d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"
+                            stroke="currentColor"
+                            fill="none"
+                            stroke-width="2"
+                          />
+                        </svg>
+                        <h3>No drafts</h3>
+                        <p>Your draft messages will appear here</p>
+                      {:else}
+                        <svg
+                          class="h-12 w-12 text-muted-foreground mb-4"
+                          viewBox="0 0 24 24"
+                          aria-hidden="true"
+                        >
+                          <path
+                            d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
+                            stroke="currentColor"
+                            fill="none"
+                            stroke-width="2"
+                          />
+                        </svg>
+                        <h3>No messages</h3>
+                        <p>This folder is empty</p>
                       {/if}
-                    {:else if $selectedFolder === 'INBOX'}
-                      <svg
-                        class="h-12 w-12 text-muted-foreground mb-4"
-                        viewBox="0 0 24 24"
-                        aria-hidden="true"
-                      >
-                        <path
-                          d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
-                          stroke="currentColor"
-                          fill="none"
-                          stroke-width="2"
-                        />
-                        <line
-                          x1="9"
-                          y1="13"
-                          x2="15"
-                          y2="13"
-                          stroke="currentColor"
-                          stroke-width="2"
-                        />
-                      </svg>
-                      <h3>Inbox Zero!</h3>
-                      <p>You're all caught up</p>
-                    {:else if isDraftFolder($selectedFolder)}
-                      <svg
-                        class="h-12 w-12 text-muted-foreground mb-4"
-                        viewBox="0 0 24 24"
-                        aria-hidden="true"
-                      >
-                        <path
-                          d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"
-                          stroke="currentColor"
-                          fill="none"
-                          stroke-width="2"
-                        />
-                        <path
-                          d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"
-                          stroke="currentColor"
-                          fill="none"
-                          stroke-width="2"
-                        />
-                      </svg>
-                      <h3>No drafts</h3>
-                      <p>Your draft messages will appear here</p>
-                    {:else}
-                      <svg
-                        class="h-12 w-12 text-muted-foreground mb-4"
-                        viewBox="0 0 24 24"
-                        aria-hidden="true"
-                      >
-                        <path
-                          d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
-                          stroke="currentColor"
-                          fill="none"
-                          stroke-width="2"
-                        />
-                      </svg>
-                      <h3>No messages</h3>
-                      <p>This folder is empty</p>
-                    {/if}
-                  </div>
-                {/if}
-                {#if isMobile && $loading && (($threadingEnabled && $filteredConversations.length) || (!$threadingEnabled && $filteredMessages.length))}
-                  <div class="flex items-center justify-center py-6">
-                    <span
-                      class="inline-block h-3 w-3 animate-spin rounded-full border-2 border-border border-t-primary"
-                      style="margin-right: 8px;"
-                    ></span>
-                    Loading more...
-                  </div>
-                {/if}
-                <!-- Sentinel element for infinite scroll -->
-                <div bind:this={infiniteScrollSentinel} class="h-px" style="height: 1px;"></div>
-              </div>
-            {/if}
-          </div>
-
-          {#if !outboxSelected && !isMobile}
-            <div
-              class="fe-pagination flex items-center justify-center gap-2 px-3 py-1.5 border-t border-border text-xs text-muted-foreground"
-            >
-              <button
-                class="px-2 py-1 hover:bg-accent hover:text-accent-foreground disabled:opacity-50"
-                type="button"
-                onclick={prevPage}
-                disabled={$page <= 1}>Prev</button
-              >
-              <span>Page {$page}</span>
-              {#if $hasNextPage}
-                <button
-                  class="px-2 py-1 hover:bg-accent hover:text-accent-foreground"
-                  type="button"
-                  onclick={nextPage}>Next</button
-                >
+                    </div>
+                  {/if}
+                  {#if isMobile && $loading && (($threadingEnabled && $filteredConversations.length) || (!$threadingEnabled && $filteredMessages.length))}
+                    <div class="flex items-center justify-center py-6">
+                      <span
+                        class="inline-block h-3 w-3 animate-spin rounded-full border-2 border-border border-t-primary"
+                        style="margin-right: 8px;"
+                      ></span>
+                      Loading more...
+                    </div>
+                  {/if}
+                  <!-- Sentinel element for infinite scroll -->
+                  <div bind:this={infiniteScrollSentinel} class="h-px" style="height: 1px;"></div>
+                </div>
               {/if}
             </div>
-          {/if}
-        </section>
 
-        {#if contextMenuVisible && contextMenuMessage}
-          <!-- Backdrop to capture clicks outside context menu -->
-          <div
-            class="fixed inset-0 z-[99]"
-            onpointerdown={closeContextMenu}
-            role="presentation"
-            tabindex="-1"
-          ></div>
-          <div
-            class={`fixed z-[100] min-w-[200px] border border-border bg-popover p-1 shadow-lg touch-manipulation ${contextMenuFlipX ? 'origin-top-right' : 'origin-top-left'} ${contextMenuFlipY ? 'origin-bottom' : 'origin-top'}`}
-            style={`top:${contextMenuY}px; left:${contextMenuX}px; ${contextMenuFlipX ? 'transform: translateX(-100%);' : ''} ${contextMenuFlipY ? 'transform: translateY(-100%);' : ''}`}
-            role="menu"
-            tabindex="0"
-            data-context-menu
-            onpointerdown={(e) => e.stopPropagation()}
-            onclick={(e) => e.stopPropagation()}
-            onkeydown={(e) => {
-              if (e.key === 'Escape') {
-                closeContextMenu();
-              }
-            }}
-          >
-            <button
-              type="button"
-              class="flex items-center w-full px-2 py-1.5 text-sm hover:bg-accent cursor-pointer"
-              onclick={contextToggleRead}
+            {#if !outboxSelected && !isMobile}
+              <div
+                class="fe-pagination flex items-center justify-center gap-2 px-3 py-1.5 border-t border-border text-xs text-muted-foreground"
+              >
+                <button
+                  class="px-2 py-1 hover:bg-accent hover:text-accent-foreground disabled:opacity-50"
+                  type="button"
+                  onclick={prevPage}
+                  disabled={$page <= 1}>Prev</button
+                >
+                <span>Page {$page}</span>
+                {#if $hasNextPage}
+                  <button
+                    class="px-2 py-1 hover:bg-accent hover:text-accent-foreground"
+                    type="button"
+                    onclick={nextPage}>Next</button
+                  >
+                {/if}
+              </div>
+            {/if}
+          </section>
+
+          {#if contextMenuVisible && contextMenuMessage}
+            <!-- Backdrop to capture clicks outside context menu -->
+            <div
+              class="fixed inset-0 z-[99]"
+              onpointerdown={closeContextMenu}
+              role="presentation"
+              tabindex="-1"
+            ></div>
+            <div
+              class={`fixed z-[100] min-w-[200px] border border-border bg-popover p-1 shadow-lg touch-manipulation ${contextMenuFlipX ? 'origin-top-right' : 'origin-top-left'} ${contextMenuFlipY ? 'origin-bottom' : 'origin-top'}`}
+              style={`top:${contextMenuY}px; left:${contextMenuX}px; ${contextMenuFlipX ? 'transform: translateX(-100%);' : ''} ${contextMenuFlipY ? 'transform: translateY(-100%);' : ''}`}
+              role="menu"
+              tabindex="0"
+              data-context-menu
+              onpointerdown={(e) => e.stopPropagation()}
+              onclick={(e) => e.stopPropagation()}
+              onkeydown={(e) => {
+                if (e.key === 'Escape') {
+                  closeContextMenu();
+                }
+              }}
             >
-              <Eye class="h-4.5 w-4.5 mr-2" />
-              <span>{contextMenuMessage.is_unread ? 'Mark Read' : 'Mark Unread'}</span>
-            </button>
-            <div class="my-1 h-px bg-border"></div>
-            <button
-              type="button"
-              class="flex items-center w-full px-2 py-1.5 text-sm hover:bg-accent cursor-pointer"
-              onclick={contextReply}
-            >
-              <Reply class="h-4.5 w-4.5 mr-2" />
-              <span>Reply</span>
-            </button>
-            <button
-              type="button"
-              class="flex items-center w-full px-2 py-1.5 text-sm hover:bg-accent cursor-pointer"
-              onclick={contextForward}
-            >
-              <Forward class="h-4.5 w-4.5 mr-2" />
-              <span>Forward</span>
-            </button>
-            <div class="my-1 h-px bg-border"></div>
-            {#if isDraftMessage(contextMenuMessage)}
               <button
                 type="button"
                 class="flex items-center w-full px-2 py-1.5 text-sm hover:bg-accent cursor-pointer"
-                onclick={contextEditDraft}
+                onclick={contextToggleRead}
               >
-                <FileEdit class="h-4.5 w-4.5 mr-2" />
-                <span>Edit draft</span>
+                <Eye class="h-4.5 w-4.5 mr-2" />
+                <span>{contextMenuMessage.is_unread ? 'Mark Read' : 'Mark Unread'}</span>
               </button>
               <div class="my-1 h-px bg-border"></div>
-            {/if}
-            <button
-              type="button"
-              class="flex items-center w-full px-2 py-1.5 text-sm hover:bg-accent cursor-pointer"
-              onclick={contextArchive}
-            >
-              <Archive class="h-4.5 w-4.5 mr-2" />
-              <span>Archive</span>
-            </button>
-            <button
-              type="button"
-              class="flex items-center w-full px-2 py-1.5 text-sm hover:bg-accent cursor-pointer"
-              onclick={contextDelete}
-            >
-              <Trash2 class="h-4.5 w-4.5 mr-2" />
-              <span>Delete</span>
-            </button>
-            <div class="relative">
               <button
                 type="button"
-                class="flex items-center w-full px-2 py-1.5 text-sm hover:bg-accent cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-                onclick={toggleContextMoveMenu}
-                disabled={!contextSubmenusEnabled}
-                aria-disabled={!contextSubmenusEnabled}
+                class="flex items-center w-full px-2 py-1.5 text-sm hover:bg-accent cursor-pointer"
+                onclick={contextReply}
               >
-                <FolderInput class="h-4.5 w-4.5 mr-2" />
-                <span class="flex-1 text-left">Move to…</span>
-                {#if contextSubmenusEnabled}
-                  <span aria-hidden="true" class="ml-auto">›</span>
-                {/if}
+                <Reply class="h-4.5 w-4.5 mr-2" />
+                <span>Reply</span>
               </button>
-              {#if contextSubmenusEnabled && contextMoveOpen}
-                <div
-                  class={`absolute z-[101] min-w-[160px] border border-border bg-popover p-1 shadow-lg overflow-y-auto ${contextSubmenuFlipX ? 'right-full mr-1' : 'left-full ml-1'} ${contextSubmenuFlipY ? 'bottom-0' : 'top-0'}`}
-                  style={`max-height: ${contextSubmenuMaxHeight}px; transform: translateY(${contextSubmenuShiftY}px);`}
-                  bind:this={contextMoveSubmenuEl}
+              <button
+                type="button"
+                class="flex items-center w-full px-2 py-1.5 text-sm hover:bg-accent cursor-pointer"
+                onclick={contextForward}
+              >
+                <Forward class="h-4.5 w-4.5 mr-2" />
+                <span>Forward</span>
+              </button>
+              <div class="my-1 h-px bg-border"></div>
+              {#if isDraftMessage(contextMenuMessage)}
+                <button
+                  type="button"
+                  class="flex items-center w-full px-2 py-1.5 text-sm hover:bg-accent cursor-pointer"
+                  onclick={contextEditDraft}
                 >
-                  {#each availableMoveTargetsFromStore as folder}
-                    <button
-                      type="button"
-                      class="flex items-center w-full px-2 py-1.5 text-sm hover:bg-accent cursor-pointer"
-                      onclick={() => contextMoveTo(folder.path)}
-                    >
-                      <span>{folder.path || folder.name}</span>
-                    </button>
-                  {/each}
-                </div>
+                  <FileEdit class="h-4.5 w-4.5 mr-2" />
+                  <span>Edit draft</span>
+                </button>
+                <div class="my-1 h-px bg-border"></div>
               {/if}
-            </div>
-            <div class="relative">
               <button
                 type="button"
-                class="flex items-center w-full px-2 py-1.5 text-sm hover:bg-accent cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-                onclick={toggleContextLabelMenu}
-                disabled={!contextSubmenusEnabled}
-                aria-disabled={!contextSubmenusEnabled}
+                class="flex items-center w-full px-2 py-1.5 text-sm hover:bg-accent cursor-pointer"
+                onclick={contextArchive}
               >
-                <Tag class="h-4.5 w-4.5 mr-2" />
-                <span class="flex-1 text-left">Label as…</span>
-                {#if contextSubmenusEnabled}
-                  <span aria-hidden="true" class="ml-auto">›</span>
-                {/if}
+                <Archive class="h-4.5 w-4.5 mr-2" />
+                <span>Archive</span>
               </button>
-              {#if contextSubmenusEnabled && contextLabelOpen}
-                <div
-                  class={`absolute z-[101] min-w-[160px] border border-border bg-popover p-1 shadow-lg overflow-y-auto ${contextSubmenuFlipX ? 'right-full mr-1' : 'left-full ml-1'} ${contextSubmenuFlipY ? 'bottom-0' : 'top-0'}`}
-                  style={`max-height: ${contextSubmenuMaxHeight}px; transform: translateY(${contextSubmenuShiftY}px);`}
-                  data-labels-dropdown
-                  bind:this={contextLabelSubmenuEl}
+              <button
+                type="button"
+                class="flex items-center w-full px-2 py-1.5 text-sm hover:bg-accent cursor-pointer"
+                onclick={contextDelete}
+              >
+                <Trash2 class="h-4.5 w-4.5 mr-2" />
+                <span>Delete</span>
+              </button>
+              <div class="relative">
+                <button
+                  type="button"
+                  class="flex items-center w-full px-2 py-1.5 text-sm hover:bg-accent cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                  onclick={toggleContextMoveMenu}
+                  disabled={!contextSubmenusEnabled}
+                  aria-disabled={!contextSubmenusEnabled}
                 >
-                  {#if !availableLabelsFromStore.length}
-                    <div class="px-3 py-2 text-sm text-muted-foreground">No labels yet.</div>
+                  <FolderInput class="h-4.5 w-4.5 mr-2" />
+                  <span class="flex-1 text-left">Move to…</span>
+                  {#if contextSubmenusEnabled}
+                    <span aria-hidden="true" class="ml-auto">›</span>
                   {/if}
-                  {#each availableLabelsFromStore as label}
-                    {#if label}
+                </button>
+                {#if contextSubmenusEnabled && contextMoveOpen}
+                  <div
+                    class={`absolute z-[101] min-w-[160px] border border-border bg-popover p-1 shadow-lg overflow-y-auto ${contextSubmenuFlipX ? 'right-full mr-1' : 'left-full ml-1'} ${contextSubmenuFlipY ? 'bottom-0' : 'top-0'}`}
+                    style={`max-height: ${contextSubmenuMaxHeight}px; transform: translateY(${contextSubmenuShiftY}px);`}
+                    bind:this={contextMoveSubmenuEl}
+                  >
+                    {#each availableMoveTargetsFromStore as folder}
                       <button
                         type="button"
-                        class={`flex items-center gap-2 w-full px-3 py-2 text-sm transition-colors ${contextLabelState(label) === 'all' ? 'bg-accent text-accent-foreground' : 'hover:bg-accent'}`}
-                        data-state={contextLabelState(label)}
-                        onclick={() =>
-                          contextLabel(label.id || label.keyword || label.value || label.name)}
+                        class="flex items-center w-full px-2 py-1.5 text-sm hover:bg-accent cursor-pointer"
+                        onclick={() => contextMoveTo(folder.path)}
                       >
-                        <span
-                          class="w-2.5 h-2.5 rounded-full shrink-0"
-                          style={`background:${label.color || '#9ca3af'}`}
-                        ></span>
-                        <span class="flex-1 text-left"
-                          >{label.name || label.label || label.value}</span
-                        >
-                        {#if contextLabelState(label) === 'partial'}
-                          <span class="text-muted-foreground">•</span>
-                        {:else if contextLabelState(label) === 'all'}
-                          <Check class="h-4 w-4 shrink-0" />
-                        {/if}
+                        <span>{folder.path || folder.name}</span>
                       </button>
+                    {/each}
+                  </div>
+                {/if}
+              </div>
+              <div class="relative">
+                <button
+                  type="button"
+                  class="flex items-center w-full px-2 py-1.5 text-sm hover:bg-accent cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                  onclick={toggleContextLabelMenu}
+                  disabled={!contextSubmenusEnabled}
+                  aria-disabled={!contextSubmenusEnabled}
+                >
+                  <Tag class="h-4.5 w-4.5 mr-2" />
+                  <span class="flex-1 text-left">Label as…</span>
+                  {#if contextSubmenusEnabled}
+                    <span aria-hidden="true" class="ml-auto">›</span>
+                  {/if}
+                </button>
+                {#if contextSubmenusEnabled && contextLabelOpen}
+                  <div
+                    class={`absolute z-[101] min-w-[160px] border border-border bg-popover p-1 shadow-lg overflow-y-auto ${contextSubmenuFlipX ? 'right-full mr-1' : 'left-full ml-1'} ${contextSubmenuFlipY ? 'bottom-0' : 'top-0'}`}
+                    style={`max-height: ${contextSubmenuMaxHeight}px; transform: translateY(${contextSubmenuShiftY}px);`}
+                    data-labels-dropdown
+                    bind:this={contextLabelSubmenuEl}
+                  >
+                    {#if !availableLabelsFromStore.length}
+                      <div class="px-3 py-2 text-sm text-muted-foreground">No labels yet.</div>
                     {/if}
-                  {/each}
-                  <div class="my-1 h-px bg-border"></div>
-                  <button
-                    type="button"
-                    class="flex items-center gap-2 w-full px-3 py-2 text-sm transition-colors hover:bg-accent"
-                    onclick={() => {
-                      openLabelModal();
-                      contextLabelOpen = false;
-                      closeContextMenu();
-                    }}
-                  >
-                    <span
-                      class="w-2.5 h-2.5 rounded-full shrink-0"
-                      style={`background:${labelFormColor || labelPalette[0]}`}
-                    ></span>
-                    <span>New label</span>
-                  </button>
-                </div>
-              {/if}
-            </div>
-          </div>
-        {/if}
-
-        {#if isVerticalDesktop}
-          <button
-            type="button"
-            class="fe-vertical-resizer"
-            aria-label="Resize message and reader panes"
-            onmousedown={startVerticalResize}
-            onkeydown={(e) => {
-              if (e.key === 'ArrowLeft') {
-                verticalSplit = Math.max(0.25, verticalSplit - 0.02);
-                e.preventDefault();
-              } else if (e.key === 'ArrowRight') {
-                verticalSplit = Math.min(0.75, verticalSplit + 0.02);
-                e.preventDefault();
-              }
-            }}
-          ></button>
-        {/if}
-
-        {#if !isProductivityLayout || $mobileReader}
-          <section
-            class="fe-reader"
-            class:mobile-reader-active={$mobileReader}
-            bind:this={readerPaneEl}
-            ontouchstart={handleReaderSwipeStart}
-            ontouchend={handleReaderSwipeEnd}
-          >
-            {#if outboxSelected && selectedOutboxItem}
-              <!-- Outbox Item Reader -->
-              {#if $mobileReader}
-                <div class="flex items-center gap-2 p-2 border-b border-border">
-                  <button
-                    class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
-                    type="button"
-                    aria-label="Back"
-                    onclick={() => {
-                      closeReaderFullscreen({ clearSelection: true });
-                      selectedOutboxItem = null;
-                    }}
-                  >
-                    <ChevronLeft class="h-5 w-5" />
-                  </button>
-                </div>
-              {/if}
-              <div class="p-4 border-b border-border">
-                <div class="mb-2">
-                  <strong class="text-lg font-semibold"
-                    >{selectedOutboxItem.emailData?.subject || '(No subject)'}</strong
-                  >
-                </div>
-                <div class="space-y-1 text-sm">
-                  <div class="flex items-start gap-2">
-                    <span class="text-muted-foreground shrink-0">To:</span>
-                    <span class="flex flex-wrap items-center gap-1">
-                      <span
-                        class="hover:underline cursor-pointer"
-                        data-tooltip="Click to copy"
-                        role="button"
-                        tabindex="0"
-                        onclick={(e) => copyAddressValue(outboxRecipientsList, null, e)}
-                        onkeydown={(e) => handleAddressCopyKey(outboxRecipientsList, null, e)}
-                      >
-                        {displayedOutboxRecipients.join(
-                          ', ',
-                        )}{#if outboxRecipientsList.length > 5 && !showAllOutboxRecipients}, ...{/if}
-                      </span>
-                      {#if outboxRecipientsList.length > 5}
+                    {#each availableLabelsFromStore as label}
+                      {#if label}
                         <button
                           type="button"
-                          class="text-xs text-primary hover:underline cursor-pointer"
-                          onclick={() => (showAllOutboxRecipients = !showAllOutboxRecipients)}
+                          class={`flex items-center gap-2 w-full px-3 py-2 text-sm transition-colors ${contextLabelState(label) === 'all' ? 'bg-accent text-accent-foreground' : 'hover:bg-accent'}`}
+                          data-state={contextLabelState(label)}
+                          onclick={() =>
+                            contextLabel(label.id || label.keyword || label.value || label.name)}
                         >
-                          {showAllOutboxRecipients
-                            ? 'show less'
-                            : `+${remainingOutboxRecipientsCount} more`}
+                          <span
+                            class="w-2.5 h-2.5 rounded-full shrink-0"
+                            style={`background:${label.color || '#9ca3af'}`}
+                          ></span>
+                          <span class="flex-1 text-left"
+                            >{label.name || label.label || label.value}</span
+                          >
+                          {#if contextLabelState(label) === 'partial'}
+                            <span class="text-muted-foreground">•</span>
+                          {:else if contextLabelState(label) === 'all'}
+                            <Check class="h-4 w-4 shrink-0" />
+                          {/if}
                         </button>
                       {/if}
-                    </span>
+                    {/each}
+                    <div class="my-1 h-px bg-border"></div>
+                    <button
+                      type="button"
+                      class="flex items-center gap-2 w-full px-3 py-2 text-sm transition-colors hover:bg-accent"
+                      onclick={() => {
+                        openLabelModal();
+                        contextLabelOpen = false;
+                        closeContextMenu();
+                      }}
+                    >
+                      <span
+                        class="w-2.5 h-2.5 rounded-full shrink-0"
+                        style={`background:${labelFormColor || labelPalette[0]}`}
+                      ></span>
+                      <span>New label</span>
+                    </button>
                   </div>
-                  <div class="flex items-center gap-2">
-                    {formatReaderDate(selectedOutboxItem.createdAt)}
-                  </div>
-                </div>
-              </div>
-              <div class="flex items-center justify-end gap-2 p-3 border-b border-border">
-                <span
-                  class={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
-                    selectedOutboxItem.status === 'pending'
-                      ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'
-                      : selectedOutboxItem.status === 'sending'
-                        ? 'bg-primary/10 text-primary animate-pulse'
-                        : selectedOutboxItem.status === 'sent'
-                          ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
-                          : selectedOutboxItem.status === 'failed'
-                            ? 'bg-destructive/10 text-destructive'
-                            : 'bg-muted text-muted-foreground'
-                  }`}
-                >
-                  {selectedOutboxItem.status === 'pending'
-                    ? 'Queued'
-                    : selectedOutboxItem.status === 'sending'
-                      ? 'Sending...'
-                      : selectedOutboxItem.status === 'sent'
-                        ? 'Sent'
-                        : selectedOutboxItem.status === 'failed'
-                          ? 'Failed'
-                          : selectedOutboxItem.status}
-                </span>
-                {#if selectedOutboxItem.status !== 'sending'}
-                  <Tooltip.Root>
-                    <Tooltip.Trigger>
-                      <button
-                        class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
-                        type="button"
-                        onclick={() => {
-                          handleDeleteOutbox(selectedOutboxItem);
-                          selectedOutboxItem = null;
-                        }}
-                      >
-                        <svg class="h-4 w-4" viewBox="0 0 24 24" aria-hidden="true">
-                          <path
-                            d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
-                          />
-                        </svg>
-                      </button>
-                    </Tooltip.Trigger>
-                    <Tooltip.Content><p>Delete</p></Tooltip.Content>
-                  </Tooltip.Root>
                 {/if}
               </div>
-              {#if selectedOutboxItem.lastError}
-                <div
-                  class="flex items-center gap-3 p-3 bg-destructive/10 border border-destructive/20 text-sm text-destructive mx-4 mt-4"
-                >
-                  <small>Error: {selectedOutboxItem.lastError}</small>
-                </div>
-              {/if}
-              <div
-                class="prose prose-sm dark:prose-invert max-w-none"
-                bind:this={outboxMessageBodyContainer}
-              >
-                {@html sanitizeOutboxHtml(
-                  selectedOutboxItem.emailData?.html || selectedOutboxItem.emailData?.text || '',
-                )}
-              </div>
-              {#if selectedOutboxItem.emailData?.attachments?.length}
-                <div class="flex flex-wrap gap-2 mt-4 pt-4 border-t border-border">
-                  {#each selectedOutboxItem.emailData.attachments as att}
-                    <div class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm bg-secondary">
-                      <span>{att.name || att.filename}</span>
-                      {#if att.size}<span class="text-xs text-muted-foreground"
-                          >{formatAttachmentSize(att.size)}</span
-                        >{/if}
-                    </div>
-                  {/each}
-                </div>
-              {/if}
-            {:else if $selectedMessage}
-              {#if isProductivityLayout || $mobileReader}
-                <div
-                  class="sticky top-0 z-20 bg-[var(--color-panel)] flex items-center gap-2 p-2 border-b border-border"
-                >
-                  <button
-                    class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
-                    type="button"
-                    aria-label="Back to list"
-                    data-tooltip="Back"
-                    data-tooltip-position="bottom"
-                    onclick={() => closeReaderFullscreen({ clearSelection: true })}
-                  >
-                    <ChevronLeft class="h-5 w-5" />
-                  </button>
-                  <div class="flex items-center gap-1">
-                    {#if canArchive}
-                      <button
-                        class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
-                        type="button"
-                        aria-label="Archive"
-                        data-tooltip="Archive"
-                        data-tooltip-position="bottom"
-                        onclick={archiveSelected}
-                      >
-                        <Archive class="h-5 w-5" />
-                      </button>
-                    {/if}
-                    {#if canNotSpam}
-                      <button
-                        class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
-                        type="button"
-                        aria-label="Not spam"
-                        data-tooltip="Not spam"
-                        data-tooltip-position="bottom"
-                        onclick={markNotSpam}
-                      >
-                        <Inbox class="h-5 w-5" />
-                      </button>
-                    {/if}
+            </div>
+          {/if}
+
+          {#if isVerticalDesktop}
+            <button
+              type="button"
+              class="fe-vertical-resizer"
+              aria-label="Resize message and reader panes"
+              onmousedown={startVerticalResize}
+              onkeydown={(e) => {
+                if (e.key === 'ArrowLeft') {
+                  verticalSplit = Math.max(0.25, verticalSplit - 0.02);
+                  e.preventDefault();
+                } else if (e.key === 'ArrowRight') {
+                  verticalSplit = Math.min(0.75, verticalSplit + 0.02);
+                  e.preventDefault();
+                }
+              }}
+            ></button>
+          {/if}
+
+          {#if !isProductivityLayout || $mobileReader}
+            <section
+              class="fe-reader"
+              class:mobile-reader-active={$mobileReader}
+              bind:this={readerPaneEl}
+              ontouchstart={handleReaderSwipeStart}
+              ontouchend={handleReaderSwipeEnd}
+            >
+              {#if outboxSelected && selectedOutboxItem}
+                <!-- Outbox Item Reader -->
+                {#if $mobileReader}
+                  <div class="flex items-center gap-2 p-2 border-b border-border">
                     <button
                       class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
                       type="button"
-                      aria-label={readerIsTrashFolder ? 'Delete permanently' : 'Delete'}
-                      data-tooltip={readerIsTrashFolder ? 'Delete permanently' : 'Delete'}
-                      data-tooltip-position="bottom"
-                      onclick={deleteSelected}
+                      aria-label="Back"
+                      onclick={() => {
+                        closeReaderFullscreen({ clearSelection: true });
+                        selectedOutboxItem = null;
+                      }}
                     >
-                      <Trash2 class="h-5 w-5" />
+                      <ChevronLeft class="h-5 w-5" />
                     </button>
-                    {#if canToggleRead}
-                      <button
-                        class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
-                        type="button"
-                        aria-label={$selectedMessage?.is_unread ? 'Mark read' : 'Mark unread'}
-                        data-tooltip={$selectedMessage?.is_unread ? 'Mark read' : 'Mark unread'}
-                        data-tooltip-position="bottom"
-                        onclick={() => toggleReadMessage($selectedMessage)}
-                      >
-                        <Eye class="h-5 w-5" />
-                      </button>
-                    {/if}
-                    <div class="relative" data-reader-toolbar-move>
-                      <button
-                        class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
-                        type="button"
-                        aria-label="Move to"
-                        data-tooltip="Move to"
-                        data-tooltip-position="bottom"
-                        onclick={() => (readerToolbarMoveOpen = !readerToolbarMoveOpen)}
-                      >
-                        <FolderInput class="h-5 w-5" />
-                      </button>
-                      {#if readerToolbarMoveOpen}
-                        <div
-                          class="fixed inset-0 z-[99]"
-                          onpointerdown={() => (readerToolbarMoveOpen = false)}
-                          role="presentation"
-                          tabindex="-1"
-                        ></div>
-                        <div
-                          class="absolute right-0 z-[100] mt-1 min-w-[160px] border border-border bg-popover p-1 shadow-md touch-manipulation"
-                          onpointerdown={(e) => e.stopPropagation()}
-                          onclick={(e) => e.stopPropagation()}
+                  </div>
+                {/if}
+                <div class="p-4 border-b border-border">
+                  <div class="mb-2">
+                    <strong class="text-lg font-semibold"
+                      >{selectedOutboxItem.emailData?.subject || '(No subject)'}</strong
+                    >
+                  </div>
+                  <div class="space-y-1 text-sm">
+                    <div class="flex items-start gap-2">
+                      <span class="text-muted-foreground shrink-0">To:</span>
+                      <span class="flex flex-wrap items-center gap-1">
+                        <span
+                          class="hover:underline cursor-pointer"
+                          data-tooltip="Click to copy"
+                          role="button"
+                          tabindex="0"
+                          onclick={(e) => copyAddressValue(outboxRecipientsList, null, e)}
+                          onkeydown={(e) => handleAddressCopyKey(outboxRecipientsList, null, e)}
                         >
-                          {#each availableMoveTargetsFromStore.length ? availableMoveTargetsFromStore : $availableMoveTargets as folder}
-                            <button
-                              type="button"
-                              class="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground cursor-pointer"
-                              onclick={() => {
-                                readerToolbarMoveOpen = false;
-                                moveReaderTo(folder.path);
-                              }}
-                            >
-                              {folder.path || folder.name}
-                            </button>
+                          {displayedOutboxRecipients.join(
+                            ', ',
+                          )}{#if outboxRecipientsList.length > 5 && !showAllOutboxRecipients}, ...{/if}
+                        </span>
+                        {#if outboxRecipientsList.length > 5}
+                          <button
+                            type="button"
+                            class="text-xs text-primary hover:underline cursor-pointer"
+                            onclick={() => (showAllOutboxRecipients = !showAllOutboxRecipients)}
+                          >
+                            {showAllOutboxRecipients
+                              ? 'show less'
+                              : `+${remainingOutboxRecipientsCount} more`}
+                          </button>
+                        {/if}
+                      </span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                      {formatReaderDate(selectedOutboxItem.createdAt)}
+                    </div>
+                  </div>
+                </div>
+                <div class="flex items-center justify-end gap-2 p-3 border-b border-border">
+                  <span
+                    class={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
+                      selectedOutboxItem.status === 'pending'
+                        ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'
+                        : selectedOutboxItem.status === 'sending'
+                          ? 'bg-primary/10 text-primary animate-pulse'
+                          : selectedOutboxItem.status === 'sent'
+                            ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
+                            : selectedOutboxItem.status === 'failed'
+                              ? 'bg-destructive/10 text-destructive'
+                              : 'bg-muted text-muted-foreground'
+                    }`}
+                  >
+                    {selectedOutboxItem.status === 'pending'
+                      ? 'Queued'
+                      : selectedOutboxItem.status === 'sending'
+                        ? 'Sending...'
+                        : selectedOutboxItem.status === 'sent'
+                          ? 'Sent'
+                          : selectedOutboxItem.status === 'failed'
+                            ? 'Failed'
+                            : selectedOutboxItem.status}
+                  </span>
+                  {#if selectedOutboxItem.status !== 'sending'}
+                    <Tooltip.Root>
+                      <Tooltip.Trigger>
+                        <button
+                          class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                          type="button"
+                          onclick={() => {
+                            handleDeleteOutbox(selectedOutboxItem);
+                            selectedOutboxItem = null;
+                          }}
+                        >
+                          <svg class="h-4 w-4" viewBox="0 0 24 24" aria-hidden="true">
+                            <path
+                              d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
+                            />
+                          </svg>
+                        </button>
+                      </Tooltip.Trigger>
+                      <Tooltip.Content><p>Delete</p></Tooltip.Content>
+                    </Tooltip.Root>
+                  {/if}
+                </div>
+                {#if selectedOutboxItem.lastError}
+                  <div
+                    class="flex items-center gap-3 p-3 bg-destructive/10 border border-destructive/20 text-sm text-destructive mx-4 mt-4"
+                  >
+                    <small>Error: {selectedOutboxItem.lastError}</small>
+                  </div>
+                {/if}
+                <div
+                  class="prose prose-sm dark:prose-invert max-w-none"
+                  bind:this={outboxMessageBodyContainer}
+                >
+                  {@html sanitizeOutboxHtml(
+                    selectedOutboxItem.emailData?.html || selectedOutboxItem.emailData?.text || '',
+                  )}
+                </div>
+                {#if selectedOutboxItem.emailData?.attachments?.length}
+                  <div class="flex flex-wrap gap-2 mt-4 pt-4 border-t border-border">
+                    {#each selectedOutboxItem.emailData.attachments as att}
+                      <div
+                        class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm bg-secondary"
+                      >
+                        <span>{att.name || att.filename}</span>
+                        {#if att.size}<span class="text-xs text-muted-foreground"
+                            >{formatAttachmentSize(att.size)}</span
+                          >{/if}
+                      </div>
+                    {/each}
+                  </div>
+                {/if}
+              {:else if $selectedMessage}
+                {#if isProductivityLayout || $mobileReader}
+                  <div
+                    class="sticky top-0 z-20 bg-[var(--color-panel)] flex items-center gap-2 p-2 border-b border-border"
+                  >
+                    <button
+                      class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                      type="button"
+                      aria-label="Back to list"
+                      data-tooltip="Back"
+                      data-tooltip-position="bottom"
+                      onclick={() => closeReaderFullscreen({ clearSelection: true })}
+                    >
+                      <ChevronLeft class="h-5 w-5" />
+                    </button>
+                    <div class="flex items-center gap-1">
+                      {#if canArchive}
+                        <button
+                          class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                          type="button"
+                          aria-label="Archive"
+                          data-tooltip="Archive"
+                          data-tooltip-position="bottom"
+                          onclick={archiveSelected}
+                        >
+                          <Archive class="h-5 w-5" />
+                        </button>
+                      {/if}
+                      {#if canNotSpam}
+                        <button
+                          class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                          type="button"
+                          aria-label="Not spam"
+                          data-tooltip="Not spam"
+                          data-tooltip-position="bottom"
+                          onclick={markNotSpam}
+                        >
+                          <Inbox class="h-5 w-5" />
+                        </button>
+                      {/if}
+                      <button
+                        class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                        type="button"
+                        aria-label={readerIsTrashFolder ? 'Delete permanently' : 'Delete'}
+                        data-tooltip={readerIsTrashFolder ? 'Delete permanently' : 'Delete'}
+                        data-tooltip-position="bottom"
+                        onclick={deleteSelected}
+                      >
+                        <Trash2 class="h-5 w-5" />
+                      </button>
+                      {#if canToggleRead}
+                        <button
+                          class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                          type="button"
+                          aria-label={$selectedMessage?.is_unread ? 'Mark read' : 'Mark unread'}
+                          data-tooltip={$selectedMessage?.is_unread ? 'Mark read' : 'Mark unread'}
+                          data-tooltip-position="bottom"
+                          onclick={() => toggleReadMessage($selectedMessage)}
+                        >
+                          <Eye class="h-5 w-5" />
+                        </button>
+                      {/if}
+                      <div class="relative" data-reader-toolbar-move>
+                        <button
+                          class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                          type="button"
+                          aria-label="Move to"
+                          data-tooltip="Move to"
+                          data-tooltip-position="bottom"
+                          onclick={() => (readerToolbarMoveOpen = !readerToolbarMoveOpen)}
+                        >
+                          <FolderInput class="h-5 w-5" />
+                        </button>
+                        {#if readerToolbarMoveOpen}
+                          <div
+                            class="fixed inset-0 z-[99]"
+                            onpointerdown={() => (readerToolbarMoveOpen = false)}
+                            role="presentation"
+                            tabindex="-1"
+                          ></div>
+                          <div
+                            class="absolute right-0 z-[100] mt-1 min-w-[160px] border border-border bg-popover p-1 shadow-md touch-manipulation"
+                            onpointerdown={(e) => e.stopPropagation()}
+                            onclick={(e) => e.stopPropagation()}
+                          >
+                            {#each availableMoveTargetsFromStore.length ? availableMoveTargetsFromStore : $availableMoveTargets as folder}
+                              <button
+                                type="button"
+                                class="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground cursor-pointer"
+                                onclick={() => {
+                                  readerToolbarMoveOpen = false;
+                                  moveReaderTo(folder.path);
+                                }}
+                              >
+                                {folder.path || folder.name}
+                              </button>
+                            {/each}
+                          </div>
+                        {/if}
+                      </div>
+                    </div>
+                  </div>
+                {/if}
+                <div class="sticky top-0 z-10 bg-[var(--color-panel)] p-4 border-b border-border">
+                  <div class="flex items-start justify-between gap-4 mb-2">
+                    <div class="flex-1 min-w-0">
+                      <strong class="text-lg font-semibold"
+                        >{threadSubject || $selectedMessage.subject}</strong
+                      >
+                      {#if Array.isArray($selectedMessage.labels) && $selectedMessage.labels.length}
+                        <div class="flex flex-wrap gap-1.5 mt-2">
+                          {#each $selectedMessage.labels as lbl}
+                            {#if typeof lbl === 'string' && lbl && lbl !== '[]'}
+                              {#if labelMap.get(lbl)}
+                                {#if labelMap.get(lbl).color}
+                                  <span
+                                    class="inline-flex items-center px-2 py-0.5 rounded-full text-xs truncate max-w-[150px]"
+                                    style={`background:${labelMap.get(lbl).color}; color:#fff;`}
+                                  >
+                                    {labelMap.get(lbl).name ||
+                                      labelMap.get(lbl).label ||
+                                      labelMap.get(lbl).value ||
+                                      lbl}
+                                  </span>
+                                {:else}
+                                  <span
+                                    class="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-secondary text-secondary-foreground truncate max-w-[150px]"
+                                  >
+                                    {labelMap.get(lbl).name ||
+                                      labelMap.get(lbl).label ||
+                                      labelMap.get(lbl).value ||
+                                      lbl}
+                                  </span>
+                                {/if}
+                              {:else}
+                                <span
+                                  class="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-secondary text-secondary-foreground truncate max-w-[150px]"
+                                  >{lbl}</span
+                                >
+                              {/if}
+                            {/if}
                           {/each}
                         </div>
                       {/if}
                     </div>
-                  </div>
-                </div>
-              {/if}
-              <div class="sticky top-0 z-10 bg-[var(--color-panel)] p-4 border-b border-border">
-                <div class="flex items-start justify-between gap-4 mb-2">
-                  <div class="flex-1 min-w-0">
-                    <strong class="text-lg font-semibold"
-                      >{threadSubject || $selectedMessage.subject}</strong
-                    >
-                    {#if Array.isArray($selectedMessage.labels) && $selectedMessage.labels.length}
-                      <div class="flex flex-wrap gap-1.5 mt-2">
-                        {#each $selectedMessage.labels as lbl}
-                          {#if typeof lbl === 'string' && lbl && lbl !== '[]'}
-                            {#if labelMap.get(lbl)}
-                              {#if labelMap.get(lbl).color}
-                                <span
-                                  class="inline-flex items-center px-2 py-0.5 rounded-full text-xs truncate max-w-[150px]"
-                                  style={`background:${labelMap.get(lbl).color}; color:#fff;`}
-                                >
-                                  {labelMap.get(lbl).name ||
-                                    labelMap.get(lbl).label ||
-                                    labelMap.get(lbl).value ||
-                                    lbl}
-                                </span>
-                              {:else}
-                                <span
-                                  class="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-secondary text-secondary-foreground truncate max-w-[150px]"
-                                >
-                                  {labelMap.get(lbl).name ||
-                                    labelMap.get(lbl).label ||
-                                    labelMap.get(lbl).value ||
-                                    lbl}
-                                </span>
-                              {/if}
-                            {:else}
-                              <span
-                                class="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-secondary text-secondary-foreground truncate max-w-[150px]"
-                                >{lbl}</span
-                              >
-                            {/if}
-                          {/if}
-                        {/each}
+                    <div class="flex items-center gap-2 shrink-0">
+                      <div
+                        class="inline-flex items-center px-2.5 py-1 text-xs font-medium bg-muted text-muted-foreground"
+                      >
+                        {$threadingEnabled && $selectedConversation
+                          ? $selectedFolder || $selectedMessage.folder
+                          : $selectedMessage.folder || $selectedFolder}
                       </div>
-                    {/if}
-                  </div>
-                  <div class="flex items-center gap-2 shrink-0">
-                    <div
-                      class="inline-flex items-center px-2.5 py-1 text-xs font-medium bg-muted text-muted-foreground"
-                    >
-                      {$threadingEnabled && $selectedConversation
-                        ? $selectedFolder || $selectedMessage.folder
-                        : $selectedMessage.folder || $selectedFolder}
-                    </div>
-                    {#if canReply}
-                      <button
-                        class="inline-flex items-center justify-center h-9 w-9 hover:bg-accent hover:text-accent-foreground"
-                        type="button"
-                        aria-label={isDefaultReplyAll() ? 'Reply All' : 'Reply'}
-                        data-tooltip={isDefaultReplyAll() ? 'Reply All (R)' : 'Reply (R)'}
-                        data-tooltip-position="bottom"
-                        onclick={() =>
-                          isDefaultReplyAll()
-                            ? mailboxView?.replyAll?.($selectedMessage)
-                            : mailboxView?.replyTo?.($selectedMessage)}
-                      >
-                        <svg
-                          class="h-4 w-4"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          stroke-width="2"
-                          stroke-linecap="round"
-                          stroke-linejoin="round"
-                          aria-hidden="true"
-                          ><polyline points="9 17 4 12 9 7"></polyline><path
-                            d="M20 18v-2a4 4 0 0 0-4-4H4"
-                          ></path></svg
+                      {#if canReply}
+                        <button
+                          class="inline-flex items-center justify-center h-9 w-9 hover:bg-accent hover:text-accent-foreground"
+                          type="button"
+                          aria-label={isDefaultReplyAll() ? 'Reply All' : 'Reply'}
+                          data-tooltip={isDefaultReplyAll() ? 'Reply All (R)' : 'Reply (R)'}
+                          data-tooltip-position="bottom"
+                          onclick={() =>
+                            isDefaultReplyAll()
+                              ? mailboxView?.replyAll?.($selectedMessage)
+                              : mailboxView?.replyTo?.($selectedMessage)}
                         >
-                      </button>
-                    {/if}
-                    <div class="relative" data-action-menu>
-                      <button
-                        class="inline-flex items-center justify-center h-9 w-9 hover:bg-accent hover:text-accent-foreground"
-                        type="button"
-                        aria-label="Message actions"
-                        data-tooltip="Message actions"
-                        data-tooltip-position="bottom"
-                        onclick={() => {
-                          actionMenuOpen = !actionMenuOpen;
-                        }}
-                      >
-                        ⋯
-                      </button>
-                      {#if actionMenuOpen}
-                        <div
-                          class="fixed inset-0 z-[99]"
-                          onpointerdown={() => (actionMenuOpen = false)}
-                          role="presentation"
-                          tabindex="-1"
-                        ></div>
-                        <div
-                          class="absolute right-0 z-[100] mt-1 min-w-[180px] border border-border bg-popover p-1 shadow-lg touch-manipulation"
-                          role="menu"
-                          tabindex="-1"
-                          onpointerdown={(e) => e.stopPropagation()}
-                          onclick={(e) => e.stopPropagation()}
-                          onkeydown={(e) => {
-                            if (e.key === 'Escape') actionMenuOpen = false;
+                          <svg
+                            class="h-4 w-4"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            aria-hidden="true"
+                            ><polyline points="9 17 4 12 9 7"></polyline><path
+                              d="M20 18v-2a4 4 0 0 0-4-4H4"
+                            ></path></svg
+                          >
+                        </button>
+                      {/if}
+                      <div class="relative" data-action-menu>
+                        <button
+                          class="inline-flex items-center justify-center h-9 w-9 hover:bg-accent hover:text-accent-foreground"
+                          type="button"
+                          aria-label="Message actions"
+                          data-tooltip="Message actions"
+                          data-tooltip-position="bottom"
+                          onclick={() => {
+                            actionMenuOpen = !actionMenuOpen;
                           }}
                         >
-                          {#if canReply}
-                            <button
-                              type="button"
-                              class="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground cursor-pointer active:bg-accent"
-                              onclick={() => {
-                                actionMenuOpen = false;
-                                mailboxView?.replyTo?.($selectedMessage);
-                              }}
-                            >
-                              <Reply class="h-4 w-4" />
-                              <span>Reply</span>
-                            </button>
-                            <button
-                              type="button"
-                              class="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground cursor-pointer active:bg-accent"
-                              onclick={() => {
-                                actionMenuOpen = false;
-                                mailboxView?.replyAll?.($selectedMessage);
-                              }}
-                            >
-                              <ReplyAll class="h-4 w-4" />
-                              <span>Reply all</span>
-                            </button>
-                          {/if}
-                          {#if canForward}
-                            <button
-                              type="button"
-                              class="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground cursor-pointer active:bg-accent"
-                              onclick={() => {
-                                actionMenuOpen = false;
-                                mailboxView?.forwardMessage?.($selectedMessage);
-                              }}
-                            >
-                              <Forward class="h-4 w-4" />
-                              <span>Forward</span>
-                            </button>
-                          {/if}
-                          {#if canEditDraft}
-                            <button
-                              type="button"
-                              class="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground cursor-pointer active:bg-accent"
-                              onclick={() => {
-                                actionMenuOpen = false;
-                                openDraftFromMessage($selectedMessage);
-                              }}
-                            >
-                              <FileEdit class="h-4 w-4" />
-                              <span>Edit draft</span>
-                            </button>
-                          {/if}
-                          {#if canToggleRead}
-                            <button
-                              type="button"
-                              class="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground cursor-pointer active:bg-accent"
-                              onclick={() => {
-                                actionMenuOpen = false;
-                                toggleReadMessage($selectedMessage);
-                              }}
-                            >
-                              <Eye class="h-4 w-4" />
-                              <span>{$selectedMessage.is_unread ? 'Mark Read' : 'Mark Unread'}</span
-                              >
-                            </button>
-                          {/if}
-                          {#if showReaderMenuDivider}
-                            <div class="my-1 h-px bg-border"></div>
-                          {/if}
-                          {#if canNotSpam}
-                            <button
-                              type="button"
-                              class="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground cursor-pointer active:bg-accent"
-                              onclick={() => {
-                                actionMenuOpen = false;
-                                markNotSpam();
-                              }}
-                            >
-                              <Inbox class="h-4 w-4" />
-                              <span>Not spam</span>
-                            </button>
-                          {/if}
-                          {#if canArchive}
-                            <button
-                              type="button"
-                              class="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground cursor-pointer active:bg-accent"
-                              onclick={() => {
-                                actionMenuOpen = false;
-                                archiveSelected();
-                              }}
-                            >
-                              <Archive class="h-4 w-4" />
-                              <span>Archive</span>
-                            </button>
-                          {/if}
-                          <button
-                            type="button"
-                            class="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground cursor-pointer active:bg-accent"
-                            onclick={() => {
-                              actionMenuOpen = false;
-                              deleteSelected();
+                          ⋯
+                        </button>
+                        {#if actionMenuOpen}
+                          <div
+                            class="fixed inset-0 z-[99]"
+                            onpointerdown={() => (actionMenuOpen = false)}
+                            role="presentation"
+                            tabindex="-1"
+                          ></div>
+                          <div
+                            class="absolute right-0 z-[100] mt-1 min-w-[180px] border border-border bg-popover p-1 shadow-lg touch-manipulation"
+                            role="menu"
+                            tabindex="-1"
+                            onpointerdown={(e) => e.stopPropagation()}
+                            onclick={(e) => e.stopPropagation()}
+                            onkeydown={(e) => {
+                              if (e.key === 'Escape') actionMenuOpen = false;
                             }}
                           >
-                            <Trash2 class="h-4 w-4" />
-                            <span>Delete</span>
-                          </button>
-                          {#if canDownloadOriginal}
-                            <button
-                              type="button"
-                              class="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground cursor-pointer active:bg-accent"
-                              onclick={() => {
-                                actionMenuOpen = false;
-                                mailboxView?.downloadOriginal?.($selectedMessage);
-                              }}
-                            >
-                              <Download class="h-4 w-4" />
-                              <span>Download original</span>
-                            </button>
-                          {/if}
-                          {#if canViewOriginal}
-                            <button
-                              type="button"
-                              class="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground cursor-pointer active:bg-accent"
-                              onclick={() => {
-                                actionMenuOpen = false;
-                                mailboxView?.viewOriginal?.($selectedMessage);
-                              }}
-                            >
-                              <MailSearch class="h-4 w-4" />
-                              <span>View original</span>
-                            </button>
-                          {/if}
-                          <div class="my-1 h-px bg-border"></div>
-                          <div class="relative" bind:this={readerMoveBtnEl}>
-                            <button
-                              type="button"
-                              class="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground cursor-pointer active:bg-accent"
-                              onclick={(e) => {
-                                e.stopPropagation();
-                                if (!readerMoveOpen && readerMoveBtnEl) {
-                                  const rect = readerMoveBtnEl.getBoundingClientRect();
-                                  const spaceRight = window.innerWidth - rect.right;
-                                  readerMoveMenuFlip = spaceRight < 180;
-                                }
-                                readerMoveOpen = !readerMoveOpen;
-                              }}
-                            >
-                              <FolderInput class="h-4 w-4" />
-                              <span class="flex-1 text-left">Move to…</span>
-                              <ChevronRight
-                                class={`h-4 w-4 transition-transform ${readerMoveMenuFlip ? 'rotate-180' : ''}`}
-                              />
-                            </button>
-                            {#if readerMoveOpen}
-                              <div
-                                class="absolute z-[101] min-w-[160px] border border-border bg-popover p-1 shadow-lg overflow-y-auto max-h-[300px]"
-                                class:left-full={!readerMoveMenuFlip}
-                                class:ml-1={!readerMoveMenuFlip}
-                                class:right-full={readerMoveMenuFlip}
-                                class:mr-1={readerMoveMenuFlip}
-                                style="top: 0;"
+                            {#if canReply}
+                              <button
+                                type="button"
+                                class="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground cursor-pointer active:bg-accent"
+                                onclick={() => {
+                                  actionMenuOpen = false;
+                                  mailboxView?.replyTo?.($selectedMessage);
+                                }}
                               >
-                                {#each availableMoveTargetsFromStore as folder}
-                                  <button
-                                    type="button"
-                                    class="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground cursor-pointer"
-                                    onclick={() => {
-                                      readerMoveOpen = false;
-                                      actionMenuOpen = false;
-                                      moveReaderTo(folder.path);
-                                    }}
-                                  >
-                                    <span>{folder.path || folder.name}</span>
-                                  </button>
-                                {/each}
-                              </div>
+                                <Reply class="h-4 w-4" />
+                                <span>Reply</span>
+                              </button>
+                              <button
+                                type="button"
+                                class="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground cursor-pointer active:bg-accent"
+                                onclick={() => {
+                                  actionMenuOpen = false;
+                                  mailboxView?.replyAll?.($selectedMessage);
+                                }}
+                              >
+                                <ReplyAll class="h-4 w-4" />
+                                <span>Reply all</span>
+                              </button>
                             {/if}
-                          </div>
-                          <div class="relative" bind:this={readerLabelBtnEl}>
+                            {#if canForward}
+                              <button
+                                type="button"
+                                class="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground cursor-pointer active:bg-accent"
+                                onclick={() => {
+                                  actionMenuOpen = false;
+                                  mailboxView?.forwardMessage?.($selectedMessage);
+                                }}
+                              >
+                                <Forward class="h-4 w-4" />
+                                <span>Forward</span>
+                              </button>
+                            {/if}
+                            {#if canEditDraft}
+                              <button
+                                type="button"
+                                class="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground cursor-pointer active:bg-accent"
+                                onclick={() => {
+                                  actionMenuOpen = false;
+                                  openDraftFromMessage($selectedMessage);
+                                }}
+                              >
+                                <FileEdit class="h-4 w-4" />
+                                <span>Edit draft</span>
+                              </button>
+                            {/if}
+                            {#if canToggleRead}
+                              <button
+                                type="button"
+                                class="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground cursor-pointer active:bg-accent"
+                                onclick={() => {
+                                  actionMenuOpen = false;
+                                  toggleReadMessage($selectedMessage);
+                                }}
+                              >
+                                <Eye class="h-4 w-4" />
+                                <span
+                                  >{$selectedMessage.is_unread ? 'Mark Read' : 'Mark Unread'}</span
+                                >
+                              </button>
+                            {/if}
+                            {#if showReaderMenuDivider}
+                              <div class="my-1 h-px bg-border"></div>
+                            {/if}
+                            {#if canNotSpam}
+                              <button
+                                type="button"
+                                class="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground cursor-pointer active:bg-accent"
+                                onclick={() => {
+                                  actionMenuOpen = false;
+                                  markNotSpam();
+                                }}
+                              >
+                                <Inbox class="h-4 w-4" />
+                                <span>Not spam</span>
+                              </button>
+                            {/if}
+                            {#if canArchive}
+                              <button
+                                type="button"
+                                class="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground cursor-pointer active:bg-accent"
+                                onclick={() => {
+                                  actionMenuOpen = false;
+                                  archiveSelected();
+                                }}
+                              >
+                                <Archive class="h-4 w-4" />
+                                <span>Archive</span>
+                              </button>
+                            {/if}
                             <button
                               type="button"
                               class="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground cursor-pointer active:bg-accent"
-                              onclick={(e) => {
-                                e.stopPropagation();
-                                if (!readerLabelMenuOpen && readerLabelBtnEl) {
-                                  const rect = readerLabelBtnEl.getBoundingClientRect();
-                                  const spaceRight = window.innerWidth - rect.right;
-                                  readerLabelMenuFlip = spaceRight < 180;
-                                }
-                                readerLabelMenuOpen = !readerLabelMenuOpen;
+                              onclick={() => {
+                                actionMenuOpen = false;
+                                deleteSelected();
                               }}
                             >
-                              <Tag class="h-4 w-4" />
-                              <span class="flex-1 text-left">Label as…</span>
-                              <ChevronRight
-                                class={`h-4 w-4 transition-transform ${readerLabelMenuFlip ? 'rotate-180' : ''}`}
-                              />
+                              <Trash2 class="h-4 w-4" />
+                              <span>Delete</span>
                             </button>
-                            {#if readerLabelMenuOpen}
-                              <div
-                                class="absolute z-[101] min-w-[160px] border border-border bg-popover p-1 shadow-lg overflow-y-auto max-h-[300px]"
-                                class:left-full={!readerLabelMenuFlip}
-                                class:ml-1={!readerLabelMenuFlip}
-                                class:right-full={readerLabelMenuFlip}
-                                class:mr-1={readerLabelMenuFlip}
-                                style="top: 0;"
+                            {#if canDownloadOriginal}
+                              <button
+                                type="button"
+                                class="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground cursor-pointer active:bg-accent"
+                                onclick={() => {
+                                  actionMenuOpen = false;
+                                  mailboxView?.downloadOriginal?.($selectedMessage);
+                                }}
                               >
-                                {#each availableLabelsFromStore as label}
+                                <Download class="h-4 w-4" />
+                                <span>Download original</span>
+                              </button>
+                            {/if}
+                            {#if canViewOriginal}
+                              <button
+                                type="button"
+                                class="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground cursor-pointer active:bg-accent"
+                                onclick={() => {
+                                  actionMenuOpen = false;
+                                  mailboxView?.viewOriginal?.($selectedMessage);
+                                }}
+                              >
+                                <MailSearch class="h-4 w-4" />
+                                <span>View original</span>
+                              </button>
+                            {/if}
+                            <div class="my-1 h-px bg-border"></div>
+                            <div class="relative" bind:this={readerMoveBtnEl}>
+                              <button
+                                type="button"
+                                class="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground cursor-pointer active:bg-accent"
+                                onclick={(e) => {
+                                  e.stopPropagation();
+                                  if (!readerMoveOpen && readerMoveBtnEl) {
+                                    const rect = readerMoveBtnEl.getBoundingClientRect();
+                                    const spaceRight = window.innerWidth - rect.right;
+                                    readerMoveMenuFlip = spaceRight < 180;
+                                  }
+                                  readerMoveOpen = !readerMoveOpen;
+                                }}
+                              >
+                                <FolderInput class="h-4 w-4" />
+                                <span class="flex-1 text-left">Move to…</span>
+                                <ChevronRight
+                                  class={`h-4 w-4 transition-transform ${readerMoveMenuFlip ? 'rotate-180' : ''}`}
+                                />
+                              </button>
+                              {#if readerMoveOpen}
+                                <div
+                                  class="absolute z-[101] min-w-[160px] border border-border bg-popover p-1 shadow-lg overflow-y-auto max-h-[300px]"
+                                  class:left-full={!readerMoveMenuFlip}
+                                  class:ml-1={!readerMoveMenuFlip}
+                                  class:right-full={readerMoveMenuFlip}
+                                  class:mr-1={readerMoveMenuFlip}
+                                  style="top: 0;"
+                                >
+                                  {#each availableMoveTargetsFromStore as folder}
+                                    <button
+                                      type="button"
+                                      class="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground cursor-pointer"
+                                      onclick={() => {
+                                        readerMoveOpen = false;
+                                        actionMenuOpen = false;
+                                        moveReaderTo(folder.path);
+                                      }}
+                                    >
+                                      <span>{folder.path || folder.name}</span>
+                                    </button>
+                                  {/each}
+                                </div>
+                              {/if}
+                            </div>
+                            <div class="relative" bind:this={readerLabelBtnEl}>
+                              <button
+                                type="button"
+                                class="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground cursor-pointer active:bg-accent"
+                                onclick={(e) => {
+                                  e.stopPropagation();
+                                  if (!readerLabelMenuOpen && readerLabelBtnEl) {
+                                    const rect = readerLabelBtnEl.getBoundingClientRect();
+                                    const spaceRight = window.innerWidth - rect.right;
+                                    readerLabelMenuFlip = spaceRight < 180;
+                                  }
+                                  readerLabelMenuOpen = !readerLabelMenuOpen;
+                                }}
+                              >
+                                <Tag class="h-4 w-4" />
+                                <span class="flex-1 text-left">Label as…</span>
+                                <ChevronRight
+                                  class={`h-4 w-4 transition-transform ${readerLabelMenuFlip ? 'rotate-180' : ''}`}
+                                />
+                              </button>
+                              {#if readerLabelMenuOpen}
+                                <div
+                                  class="absolute z-[101] min-w-[160px] border border-border bg-popover p-1 shadow-lg overflow-y-auto max-h-[300px]"
+                                  class:left-full={!readerLabelMenuFlip}
+                                  class:ml-1={!readerLabelMenuFlip}
+                                  class:right-full={readerLabelMenuFlip}
+                                  class:mr-1={readerLabelMenuFlip}
+                                  style="top: 0;"
+                                >
+                                  {#each availableLabelsFromStore as label}
+                                    <button
+                                      type="button"
+                                      class="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground cursor-pointer"
+                                      onclick={() => {
+                                        mailboxView?.contextLabel?.(
+                                          $selectedMessage,
+                                          label.id || label.keyword || label.value || label.name,
+                                        );
+                                        readerLabelMenuOpen = false;
+                                        actionMenuOpen = false;
+                                      }}
+                                    >
+                                      <span
+                                        class="w-2.5 h-2.5 rounded-full shrink-0"
+                                        style={`background:${label.color || '#9ca3af'}`}
+                                      ></span>
+                                      <span>{label.name || label.label || label.value}</span>
+                                    </button>
+                                  {/each}
+                                  <div class="my-1 h-px bg-border"></div>
                                   <button
                                     type="button"
                                     class="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground cursor-pointer"
                                     onclick={() => {
-                                      mailboxView?.contextLabel?.(
-                                        $selectedMessage,
-                                        label.id || label.keyword || label.value || label.name,
-                                      );
+                                      openLabelModal();
                                       readerLabelMenuOpen = false;
                                       actionMenuOpen = false;
                                     }}
                                   >
                                     <span
                                       class="w-2.5 h-2.5 rounded-full shrink-0"
-                                      style={`background:${label.color || '#9ca3af'}`}
+                                      style={`background:${labelFormColor || labelPalette[0]}`}
                                     ></span>
-                                    <span>{label.name || label.label || label.value}</span>
+                                    <span>New label</span>
                                   </button>
-                                {/each}
-                                <div class="my-1 h-px bg-border"></div>
-                                <button
-                                  type="button"
-                                  class="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground cursor-pointer"
-                                  onclick={() => {
-                                    openLabelModal();
-                                    readerLabelMenuOpen = false;
-                                    actionMenuOpen = false;
-                                  }}
-                                >
-                                  <span
-                                    class="w-2.5 h-2.5 rounded-full shrink-0"
-                                    style={`background:${labelFormColor || labelPalette[0]}`}
-                                  ></span>
-                                  <span>New label</span>
-                                </button>
-                              </div>
-                            {/if}
+                                </div>
+                              {/if}
+                            </div>
                           </div>
-                        </div>
-                      {/if}
-                    </div>
-                  </div>
-                </div>
-                <div class="space-y-1 text-sm">
-                  <div class="flex items-start gap-3">
-                    <div
-                      class="font-medium cursor-pointer hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                      data-tooltip="Click to copy"
-                      data-tooltip-position="bottom"
-                      role="button"
-                      tabindex="0"
-                      onclick={(e) =>
-                        copyAddressValue(
-                          extractAddressList($selectedMessage, 'from'),
-                          $selectedMessage.from,
-                          e,
-                        )}
-                      onkeydown={(e) =>
-                        handleAddressCopyKey(
-                          extractAddressList($selectedMessage, 'from'),
-                          $selectedMessage.from,
-                          e,
-                        )}
-                    >
-                      {#if extractAddressList($selectedMessage, 'from').length}
-                        {displayAddresses(extractAddressList($selectedMessage, 'from')).join(', ')}
-                      {:else}
-                        {$selectedMessage.from}
-                      {/if}
-                    </div>
-                    <button
-                      class="text-xs text-primary hover:underline cursor-pointer flex items-center gap-1"
-                      type="button"
-                      aria-label={showEmailDetails ? 'Hide details' : 'Show details'}
-                      title={showEmailDetails ? 'Hide details' : 'Show details'}
-                      onclick={() => (showEmailDetails = !showEmailDetails)}
-                    >
-                      <svg
-                        class="h-3 w-3 transition-transform"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="2"
-                      >
-                        {#if showEmailDetails}
-                          <polyline points="6 15 12 9 18 15"></polyline>
-                        {:else}
-                          <polyline points="6 9 12 15 18 9"></polyline>
                         {/if}
-                      </svg>
-                    </button>
+                      </div>
+                    </div>
                   </div>
-                  {#if showEmailDetails}
-                    <div class="mt-3 p-3 bg-muted/50 text-sm space-y-1">
-                      <div class="flex items-start gap-2">
-                        <span class="text-muted-foreground shrink-0 w-16">from:</span>
-                        <span
-                          class="flex-1 break-all cursor-pointer hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                          data-tooltip="Click to copy"
-                          role="button"
-                          tabindex="0"
-                          onclick={(e) =>
-                            copyAddressValue(
-                              extractAddressList($selectedMessage, 'from'),
-                              $selectedMessage.from,
-                              e,
-                            )}
-                          onkeydown={(e) =>
-                            handleAddressCopyKey(
-                              extractAddressList($selectedMessage, 'from'),
-                              $selectedMessage.from,
-                              e,
-                            )}
-                        >
+                  <div class="space-y-1 text-sm">
+                    <div class="flex items-start gap-3">
+                      <div
+                        class="font-medium cursor-pointer hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        data-tooltip="Click to copy"
+                        data-tooltip-position="bottom"
+                        role="button"
+                        tabindex="0"
+                        onclick={(e) =>
+                          copyAddressValue(
+                            extractAddressList($selectedMessage, 'from'),
+                            $selectedMessage.from,
+                            e,
+                          )}
+                        onkeydown={(e) =>
+                          handleAddressCopyKey(
+                            extractAddressList($selectedMessage, 'from'),
+                            $selectedMessage.from,
+                            e,
+                          )}
+                      >
+                        {#if extractAddressList($selectedMessage, 'from').length}
                           {displayAddresses(extractAddressList($selectedMessage, 'from')).join(
                             ', ',
-                          ) || $selectedMessage.from}
-                        </span>
+                          )}
+                        {:else}
+                          {$selectedMessage.from}
+                        {/if}
                       </div>
-                      <div class="flex items-start gap-2">
-                        <span class="text-muted-foreground shrink-0 w-16">to:</span>
-                        <span class="flex-1 break-all">
+                      <button
+                        class="text-xs text-primary hover:underline cursor-pointer flex items-center gap-1"
+                        type="button"
+                        aria-label={showEmailDetails ? 'Hide details' : 'Show details'}
+                        title={showEmailDetails ? 'Hide details' : 'Show details'}
+                        onclick={() => (showEmailDetails = !showEmailDetails)}
+                      >
+                        <svg
+                          class="h-3 w-3 transition-transform"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="2"
+                        >
+                          {#if showEmailDetails}
+                            <polyline points="6 15 12 9 18 15"></polyline>
+                          {:else}
+                            <polyline points="6 9 12 15 18 9"></polyline>
+                          {/if}
+                        </svg>
+                      </button>
+                    </div>
+                    {#if showEmailDetails}
+                      <div class="mt-3 p-3 bg-muted/50 text-sm space-y-1">
+                        <div class="flex items-start gap-2">
+                          <span class="text-muted-foreground shrink-0 w-16">from:</span>
+                          <span
+                            class="flex-1 break-all cursor-pointer hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                            data-tooltip="Click to copy"
+                            role="button"
+                            tabindex="0"
+                            onclick={(e) =>
+                              copyAddressValue(
+                                extractAddressList($selectedMessage, 'from'),
+                                $selectedMessage.from,
+                                e,
+                              )}
+                            onkeydown={(e) =>
+                              handleAddressCopyKey(
+                                extractAddressList($selectedMessage, 'from'),
+                                $selectedMessage.from,
+                                e,
+                              )}
+                          >
+                            {displayAddresses(extractAddressList($selectedMessage, 'from')).join(
+                              ', ',
+                            ) || $selectedMessage.from}
+                          </span>
+                        </div>
+                        <div class="flex items-start gap-2">
+                          <span class="text-muted-foreground shrink-0 w-16">to:</span>
+                          <span class="flex-1 break-all">
+                            <span
+                              class="hover:underline cursor-pointer"
+                              data-tooltip="Click to copy"
+                              role="button"
+                              tabindex="0"
+                              onclick={(e) =>
+                                copyAddressValue(
+                                  recipientsList,
+                                  $selectedMessage.to || $selectedMessage.recipients,
+                                  e,
+                                )}
+                              onkeydown={(e) =>
+                                handleAddressCopyKey(
+                                  recipientsList,
+                                  $selectedMessage.to || $selectedMessage.recipients,
+                                  e,
+                                )}
+                            >
+                              {displayAddresses(displayedRecipients).join(
+                                ', ',
+                              )}{#if recipientsList.length > 5 && !showAllRecipients}, ...{/if}
+                            </span>
+                            {#if recipientsList.length > 5}
+                              <button
+                                type="button"
+                                class="text-xs text-primary hover:underline cursor-pointer"
+                                onclick={() => (showAllRecipients = !showAllRecipients)}
+                              >
+                                {showAllRecipients
+                                  ? 'show less'
+                                  : `+${remainingRecipientsCount} more`}
+                              </button>
+                            {/if}
+                          </span>
+                        </div>
+                        {#if ccList.length}
+                          <div class="flex items-start gap-2">
+                            <span class="text-muted-foreground shrink-0 w-16">cc:</span>
+                            <span class="flex-1 break-all">
+                              <span
+                                class="hover:underline cursor-pointer"
+                                data-tooltip="Click to copy"
+                                role="button"
+                                tabindex="0"
+                                onclick={(e) => copyAddressValue(ccList, $selectedMessage.cc, e)}
+                                onkeydown={(e) =>
+                                  handleAddressCopyKey(ccList, $selectedMessage.cc, e)}
+                              >
+                                {displayAddresses(displayedCc).join(
+                                  ', ',
+                                )}{#if ccList.length > 5 && !showAllCc}, ...{/if}
+                              </span>
+                              {#if ccList.length > 5}
+                                <button
+                                  type="button"
+                                  class="text-xs text-primary hover:underline cursor-pointer"
+                                  onclick={() => (showAllCc = !showAllCc)}
+                                >
+                                  {showAllCc ? 'show less' : `+${remainingCcCount} more`}
+                                </button>
+                              {/if}
+                            </span>
+                          </div>
+                        {/if}
+                        <div class="flex items-start gap-2">
+                          <span class="text-muted-foreground shrink-0 w-16">date:</span>
+                          <span class="flex-1 break-all"
+                            >{formatReaderDate($selectedMessage.date)}</span
+                          >
+                        </div>
+                        <div class="flex items-start gap-2">
+                          <span class="text-muted-foreground shrink-0 w-16">subject:</span>
+                          <span class="flex-1 break-all">{$selectedMessage.subject}</span>
+                        </div>
+                        {#if getMailedBy($selectedMessage)}
+                          <div class="flex items-start gap-2">
+                            <span class="text-muted-foreground shrink-0 w-16">mailed-by:</span>
+                            <span class="flex-1 break-all">{getMailedBy($selectedMessage)}</span>
+                          </div>
+                        {/if}
+                        {#if getSignedBy($selectedMessage)}
+                          <div class="flex items-start gap-2">
+                            <span class="text-muted-foreground shrink-0 w-16">signed-by:</span>
+                            <span class="flex-1 break-all">{getSignedBy($selectedMessage)}</span>
+                          </div>
+                        {/if}
+                        {#if getSecurityInfo($selectedMessage)}
+                          <div class="flex items-start gap-2">
+                            <span class="text-muted-foreground shrink-0 w-16">security:</span>
+                            <span class="flex-1 break-all text-green-600 dark:text-green-400">
+                              {formatSecurityStatus(getSecurityInfo($selectedMessage))}
+                            </span>
+                          </div>
+                        {/if}
+                      </div>
+                    {:else}
+                      {#if getReplyToList($selectedMessage).length}
+                        <div class="flex items-center gap-2 mt-2 text-sm">
+                          <span class="text-muted-foreground shrink-0">Reply-To:</span>
+                          <span
+                            class="text-muted-foreground cursor-pointer hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                            data-tooltip="Click to copy"
+                            role="button"
+                            tabindex="0"
+                            onclick={(e) =>
+                              copyAddressValue(
+                                getReplyToList($selectedMessage),
+                                $selectedMessage.replyTo || $selectedMessage.reply_to,
+                                e,
+                              )}
+                            onkeydown={(e) =>
+                              handleAddressCopyKey(
+                                getReplyToList($selectedMessage),
+                                $selectedMessage.replyTo || $selectedMessage.reply_to,
+                                e,
+                              )}
+                          >
+                            {displayAddresses(getReplyToList($selectedMessage)).join(', ')}
+                          </span>
+                        </div>
+                      {/if}
+                      <div class="flex items-start gap-2 text-sm">
+                        <span class="text-muted-foreground shrink-0">To:</span>
+                        <span class="flex flex-wrap items-center gap-1">
                           <span
                             class="hover:underline cursor-pointer"
                             data-tooltip="Click to copy"
@@ -6987,9 +7135,9 @@
                         </span>
                       </div>
                       {#if ccList.length}
-                        <div class="flex items-start gap-2">
-                          <span class="text-muted-foreground shrink-0 w-16">cc:</span>
-                          <span class="flex-1 break-all">
+                        <div class="flex items-start gap-2 text-sm">
+                          <span class="text-muted-foreground shrink-0">Cc:</span>
+                          <span class="flex flex-wrap items-center gap-1">
                             <span
                               class="hover:underline cursor-pointer"
                               data-tooltip="Click to copy"
@@ -7015,622 +7163,507 @@
                           </span>
                         </div>
                       {/if}
-                      <div class="flex items-start gap-2">
-                        <span class="text-muted-foreground shrink-0 w-16">date:</span>
-                        <span class="flex-1 break-all"
-                          >{formatReaderDate($selectedMessage.date)}</span
-                        >
-                      </div>
-                      <div class="flex items-start gap-2">
-                        <span class="text-muted-foreground shrink-0 w-16">subject:</span>
-                        <span class="flex-1 break-all">{$selectedMessage.subject}</span>
-                      </div>
-                      {#if getMailedBy($selectedMessage)}
-                        <div class="flex items-start gap-2">
-                          <span class="text-muted-foreground shrink-0 w-16">mailed-by:</span>
-                          <span class="flex-1 break-all">{getMailedBy($selectedMessage)}</span>
-                        </div>
-                      {/if}
-                      {#if getSignedBy($selectedMessage)}
-                        <div class="flex items-start gap-2">
-                          <span class="text-muted-foreground shrink-0 w-16">signed-by:</span>
-                          <span class="flex-1 break-all">{getSignedBy($selectedMessage)}</span>
-                        </div>
-                      {/if}
-                      {#if getSecurityInfo($selectedMessage)}
-                        <div class="flex items-start gap-2">
-                          <span class="text-muted-foreground shrink-0 w-16">security:</span>
-                          <span class="flex-1 break-all text-green-600 dark:text-green-400">
-                            {formatSecurityStatus(getSecurityInfo($selectedMessage))}
-                          </span>
-                        </div>
-                      {/if}
-                    </div>
-                  {:else}
-                    {#if getReplyToList($selectedMessage).length}
-                      <div class="flex items-center gap-2 mt-2 text-sm">
-                        <span class="text-muted-foreground shrink-0">Reply-To:</span>
-                        <span
-                          class="text-muted-foreground cursor-pointer hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                          data-tooltip="Click to copy"
-                          role="button"
-                          tabindex="0"
-                          onclick={(e) =>
-                            copyAddressValue(
-                              getReplyToList($selectedMessage),
-                              $selectedMessage.replyTo || $selectedMessage.reply_to,
-                              e,
-                            )}
-                          onkeydown={(e) =>
-                            handleAddressCopyKey(
-                              getReplyToList($selectedMessage),
-                              $selectedMessage.replyTo || $selectedMessage.reply_to,
-                              e,
-                            )}
-                        >
-                          {displayAddresses(getReplyToList($selectedMessage)).join(', ')}
-                        </span>
+                      <div class="flex items-center gap-2">
+                        {formatReaderDate($selectedMessage.date)}
                       </div>
                     {/if}
-                    <div class="flex items-start gap-2 text-sm">
-                      <span class="text-muted-foreground shrink-0">To:</span>
-                      <span class="flex flex-wrap items-center gap-1">
-                        <span
-                          class="hover:underline cursor-pointer"
-                          data-tooltip="Click to copy"
-                          role="button"
-                          tabindex="0"
-                          onclick={(e) =>
-                            copyAddressValue(
-                              recipientsList,
-                              $selectedMessage.to || $selectedMessage.recipients,
-                              e,
-                            )}
-                          onkeydown={(e) =>
-                            handleAddressCopyKey(
-                              recipientsList,
-                              $selectedMessage.to || $selectedMessage.recipients,
-                              e,
-                            )}
-                        >
-                          {displayAddresses(displayedRecipients).join(
-                            ', ',
-                          )}{#if recipientsList.length > 5 && !showAllRecipients}, ...{/if}
-                        </span>
-                        {#if recipientsList.length > 5}
-                          <button
-                            type="button"
-                            class="text-xs text-primary hover:underline cursor-pointer"
-                            onclick={() => (showAllRecipients = !showAllRecipients)}
-                          >
-                            {showAllRecipients ? 'show less' : `+${remainingRecipientsCount} more`}
-                          </button>
-                        {/if}
-                      </span>
-                    </div>
-                    {#if ccList.length}
-                      <div class="flex items-start gap-2 text-sm">
-                        <span class="text-muted-foreground shrink-0">Cc:</span>
-                        <span class="flex flex-wrap items-center gap-1">
-                          <span
-                            class="hover:underline cursor-pointer"
-                            data-tooltip="Click to copy"
-                            role="button"
-                            tabindex="0"
-                            onclick={(e) => copyAddressValue(ccList, $selectedMessage.cc, e)}
-                            onkeydown={(e) => handleAddressCopyKey(ccList, $selectedMessage.cc, e)}
-                          >
-                            {displayAddresses(displayedCc).join(
-                              ', ',
-                            )}{#if ccList.length > 5 && !showAllCc}, ...{/if}
-                          </span>
-                          {#if ccList.length > 5}
-                            <button
-                              type="button"
-                              class="text-xs text-primary hover:underline cursor-pointer"
-                              onclick={() => (showAllCc = !showAllCc)}
-                            >
-                              {showAllCc ? 'show less' : `+${remainingCcCount} more`}
-                            </button>
-                          {/if}
-                        </span>
-                      </div>
-                    {/if}
-                    <div class="flex items-center gap-2">
-                      {formatReaderDate($selectedMessage.date)}
-                    </div>
-                  {/if}
-                </div>
-              </div>
-              {#if isThreaded}
-                <div
-                  class="flex items-center justify-between p-3 bg-muted/30 border-b border-border text-sm"
-                >
-                  <span class="text-muted-foreground"
-                    >{threadMessages.length} messages in this conversation</span
-                  >
-                  <div class="flex items-center gap-2">
-                    <button
-                      type="button"
-                      class="text-xs text-primary hover:underline cursor-pointer"
-                      onclick={expandAllThreadMessages}
-                      title="Expand all messages"
-                    >
-                      Expand all
-                    </button>
-                    <button
-                      type="button"
-                      class="text-xs text-primary hover:underline cursor-pointer"
-                      onclick={collapseAllThreadMessages}
-                      title="Collapse all messages"
-                    >
-                      Collapse all
-                    </button>
                   </div>
                 </div>
-                <div class="divide-y divide-border">
-                  {#each threadMessages as message (message.id)}
-                    {@const isExpanded = $expandedThreadMessages.has(message.id)}
-                    {@const isSelected = message.id === $selectedMessage?.id}
-                    {@const cachedBody = $threadMessageBodies.get(message.id)}
-                    <article
-                      class={`p-4 ${isExpanded ? 'border border-border shadow-sm bg-card mb-3' : ''} ${isSelected ? 'ring-2 ring-primary/20' : ''}`}
-                      data-message-id={message.id}
+                {#if isThreaded}
+                  <div
+                    class="flex items-center justify-between p-3 bg-muted/30 border-b border-border text-sm"
+                  >
+                    <span class="text-muted-foreground"
+                      >{threadMessages.length} messages in this conversation</span
                     >
+                    <div class="flex items-center gap-2">
                       <button
                         type="button"
-                        class="flex items-center gap-2 cursor-pointer hover:bg-accent/50 p-2 -m-2 mb-2"
-                        onclick={() => toggleThreadMessage(message)}
-                        aria-expanded={isExpanded}
+                        class="text-xs text-primary hover:underline cursor-pointer"
+                        onclick={expandAllThreadMessages}
+                        title="Expand all messages"
                       >
-                        <ChevronRight
-                          class={`h-4 w-4 transition-transform ${isExpanded ? 'rotate-90' : ''}`}
-                        />
-                        <span class="font-medium text-foreground truncate"
-                          >{extractDisplayName(message.from) || message.from}</span
-                        >
-                        <span class="text-xs text-muted-foreground ml-auto shrink-0"
-                          >{formatReaderDate(message.date)}</span
-                        >
+                        Expand all
                       </button>
-                      {#if isExpanded && isSelected}
-                        {#if showSkeleton}
-                          <div class="min-h-[120px] flex items-center justify-center p-6">
-                            <div class="w-full space-y-4 animate-pulse">
-                              <div class="space-y-2">
-                                <div class="h-5 w-3/4 bg-muted"></div>
-                                <div class="h-4 w-1/2 bg-muted"></div>
-                                <div class="h-3 w-24 bg-muted"></div>
-                              </div>
-                              <div class="space-y-2 pt-4">
-                                <div class="h-3 bg-muted" style="width: 90%"></div>
-                                <div class="h-3 bg-muted" style="width: 85%"></div>
-                                <div class="h-3 bg-muted" style="width: 92%"></div>
-                                <div class="h-3 bg-muted" style="width: 78%"></div>
-                                <div class="h-3 bg-muted" style="width: 88%"></div>
-                                <div class="h-3 bg-muted" style="width: 80%"></div>
-                                <div class="h-3 bg-muted" style="width: 70%"></div>
-                              </div>
-                            </div>
-                          </div>
-                        {:else}
-                          {#if $pgpLocked}
-                            <div
-                              class="flex items-center gap-3 p-3 mb-4 bg-blue-500/10 border border-blue-500/20 text-sm"
-                            >
-                              <Lock class="h-4.5 w-4.5 text-blue-500" />
-                              <span class="flex-1">
-                                This message is PGP encrypted and could not be decrypted.
-                              </span>
-                              <a
-                                href="/mailbox/settings#accounts"
-                                class="inline-flex items-center justify-center px-3 py-1.5 text-sm bg-blue-500/20 hover:bg-blue-500/30 text-blue-600 dark:text-blue-400"
-                              >
-                                Add PGP Key
-                              </a>
-                            </div>
-                          {/if}
-                          {#if $hasBlockedImages}
-                            <div
-                              class="flex items-center gap-3 p-3 mb-4 bg-amber-500/10 border border-amber-500/20 text-sm"
-                            >
-                              <ImageIcon class="h-4.5 w-4.5" />
-                              <span>
-                                {#if $trackingPixelCount > 0 && $blockedImageCount > 0}
-                                  {$trackingPixelCount} tracking pixel{$trackingPixelCount !== 1
-                                    ? 's'
-                                    : ''} and {$blockedImageCount} image{$blockedImageCount !== 1
-                                    ? 's'
-                                    : ''} blocked
-                                {:else if $trackingPixelCount > 0}
-                                  {$trackingPixelCount} tracking pixel{$trackingPixelCount !== 1
-                                    ? 's'
-                                    : ''} blocked
-                                {:else if $blockedImageCount > 0}
-                                  {$blockedImageCount} image{$blockedImageCount !== 1 ? 's' : ''} blocked
-                                {:else}
-                                  Images blocked for your privacy
-                                {/if}
-                              </span>
-                              <div style="display: flex; gap: 8px;">
-                                {#if $blockedImageCount > 0}
-                                  <button
-                                    class="inline-flex items-center justify-center px-3 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground"
-                                    type="button"
-                                    onclick={loadRemoteImages}
-                                  >
-                                    Load Images
-                                  </button>
-                                {/if}
-                                {#if $trackingPixelCount > 0}
-                                  <button
-                                    class="inline-flex items-center justify-center px-3 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground"
-                                    type="button"
-                                    onclick={loadAllIncludingPixels}
-                                    title="Not recommended: allows senders to track that you opened this email"
-                                  >
-                                    Load All
-                                  </button>
-                                {/if}
-                              </div>
-                            </div>
-                          {/if}
-                          <EmailIframe
-                            html={$messageBody}
-                            messageId={$selectedMessage?.id || $selectedMessage?.uid || ''}
-                            onLinkClick={handleIframeLinkClick}
-                            onFormSubmit={handleIframeFormSubmit}
+                      <button
+                        type="button"
+                        class="text-xs text-primary hover:underline cursor-pointer"
+                        onclick={collapseAllThreadMessages}
+                        title="Collapse all messages"
+                      >
+                        Collapse all
+                      </button>
+                    </div>
+                  </div>
+                  <div class="divide-y divide-border">
+                    {#each threadMessages as message (message.id)}
+                      {@const isExpanded = $expandedThreadMessages.has(message.id)}
+                      {@const isSelected = message.id === $selectedMessage?.id}
+                      {@const cachedBody = $threadMessageBodies.get(message.id)}
+                      <article
+                        class={`p-4 ${isExpanded ? 'border border-border shadow-sm bg-card mb-3' : ''} ${isSelected ? 'ring-2 ring-primary/20' : ''}`}
+                        data-message-id={message.id}
+                      >
+                        <button
+                          type="button"
+                          class="flex items-center gap-2 cursor-pointer hover:bg-accent/50 p-2 -m-2 mb-2"
+                          onclick={() => toggleThreadMessage(message)}
+                          aria-expanded={isExpanded}
+                        >
+                          <ChevronRight
+                            class={`h-4 w-4 transition-transform ${isExpanded ? 'rotate-90' : ''}`}
                           />
-                          {#if filterDownloadableAttachments($attachments).length}
-                            <div class="flex flex-wrap gap-2 mt-4 pt-4 border-t border-border">
-                              {#each filterDownloadableAttachments($attachments) as att}
-                                {#if isPreviewableImage(att) && att.href}
-                                  <div class="flex flex-col gap-1 max-w-[120px]">
+                          <span class="font-medium text-foreground truncate"
+                            >{extractDisplayName(message.from) || message.from}</span
+                          >
+                          <span class="text-xs text-muted-foreground ml-auto shrink-0"
+                            >{formatReaderDate(message.date)}</span
+                          >
+                        </button>
+                        {#if isExpanded && isSelected}
+                          {#if showSkeleton}
+                            <div class="min-h-[120px] flex items-center justify-center p-6">
+                              <div class="w-full space-y-4 animate-pulse">
+                                <div class="space-y-2">
+                                  <div class="h-5 w-3/4 bg-muted"></div>
+                                  <div class="h-4 w-1/2 bg-muted"></div>
+                                  <div class="h-3 w-24 bg-muted"></div>
+                                </div>
+                                <div class="space-y-2 pt-4">
+                                  <div class="h-3 bg-muted" style="width: 90%"></div>
+                                  <div class="h-3 bg-muted" style="width: 85%"></div>
+                                  <div class="h-3 bg-muted" style="width: 92%"></div>
+                                  <div class="h-3 bg-muted" style="width: 78%"></div>
+                                  <div class="h-3 bg-muted" style="width: 88%"></div>
+                                  <div class="h-3 bg-muted" style="width: 80%"></div>
+                                  <div class="h-3 bg-muted" style="width: 70%"></div>
+                                </div>
+                              </div>
+                            </div>
+                          {:else}
+                            {#if $pgpLocked}
+                              <div
+                                class="flex items-center gap-3 p-3 mb-4 bg-blue-500/10 border border-blue-500/20 text-sm"
+                              >
+                                <Lock class="h-4.5 w-4.5 text-blue-500" />
+                                <span class="flex-1">
+                                  This message is PGP encrypted and could not be decrypted.
+                                </span>
+                                <a
+                                  href="/mailbox/settings#accounts"
+                                  class="inline-flex items-center justify-center px-3 py-1.5 text-sm bg-blue-500/20 hover:bg-blue-500/30 text-blue-600 dark:text-blue-400"
+                                >
+                                  Add PGP Key
+                                </a>
+                              </div>
+                            {/if}
+                            {#if $hasBlockedImages}
+                              <div
+                                class="flex items-center gap-3 p-3 mb-4 bg-amber-500/10 border border-amber-500/20 text-sm"
+                              >
+                                <ImageIcon class="h-4.5 w-4.5" />
+                                <span>
+                                  {#if $trackingPixelCount > 0 && $blockedImageCount > 0}
+                                    {$trackingPixelCount} tracking pixel{$trackingPixelCount !== 1
+                                      ? 's'
+                                      : ''} and {$blockedImageCount} image{$blockedImageCount !== 1
+                                      ? 's'
+                                      : ''} blocked
+                                  {:else if $trackingPixelCount > 0}
+                                    {$trackingPixelCount} tracking pixel{$trackingPixelCount !== 1
+                                      ? 's'
+                                      : ''} blocked
+                                  {:else if $blockedImageCount > 0}
+                                    {$blockedImageCount} image{$blockedImageCount !== 1 ? 's' : ''} blocked
+                                  {:else}
+                                    Images blocked for your privacy
+                                  {/if}
+                                </span>
+                                <div style="display: flex; gap: 8px;">
+                                  {#if $blockedImageCount > 0}
+                                    <button
+                                      class="inline-flex items-center justify-center px-3 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground"
+                                      type="button"
+                                      onclick={loadRemoteImages}
+                                    >
+                                      Load Images
+                                    </button>
+                                  {/if}
+                                  {#if $trackingPixelCount > 0}
+                                    <button
+                                      class="inline-flex items-center justify-center px-3 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground"
+                                      type="button"
+                                      onclick={loadAllIncludingPixels}
+                                      title="Not recommended: allows senders to track that you opened this email"
+                                    >
+                                      Load All
+                                    </button>
+                                  {/if}
+                                </div>
+                              </div>
+                            {/if}
+                            <EmailIframe
+                              html={$messageBody}
+                              messageId={$selectedMessage?.id || $selectedMessage?.uid || ''}
+                              onLinkClick={handleIframeLinkClick}
+                              onFormSubmit={handleIframeFormSubmit}
+                            />
+                            {#if filterDownloadableAttachments($attachments).length}
+                              <div class="flex flex-wrap gap-2 mt-4 pt-4 border-t border-border">
+                                {#each filterDownloadableAttachments($attachments) as att}
+                                  {#if isPreviewableImage(att) && att.href}
+                                    <div class="flex flex-col gap-1 max-w-[120px]">
+                                      <button
+                                        type="button"
+                                        class="cursor-pointer rounded border border-border overflow-hidden hover:opacity-90 transition-opacity"
+                                        onclick={() =>
+                                          mailService.downloadAttachment(att, $selectedMessage)}
+                                        title="Download {att.name || att.filename}"
+                                      >
+                                        <img
+                                          src={att.href}
+                                          alt={att.name || att.filename}
+                                          class="max-h-20 max-w-[120px] object-contain"
+                                        />
+                                      </button>
+                                      <div
+                                        class="flex items-center gap-1.5 text-xs text-muted-foreground px-0.5"
+                                      >
+                                        <span class="truncate">{att.name || att.filename}</span>
+                                        {#if att.size}<span class="shrink-0"
+                                            >{formatAttachmentSize(att.size)}</span
+                                          >{/if}
+                                        <button
+                                          type="button"
+                                          class="shrink-0 hover:text-foreground transition-colors cursor-pointer"
+                                          onclick={() =>
+                                            mailService.downloadAttachment(att, $selectedMessage)}
+                                          title="Download"
+                                        >
+                                          <Download class="h-3.5 w-3.5" />
+                                        </button>
+                                      </div>
+                                    </div>
+                                  {:else}
                                     <button
                                       type="button"
-                                      class="cursor-pointer rounded border border-border overflow-hidden hover:opacity-90 transition-opacity"
+                                      class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm bg-secondary hover:bg-secondary/80 cursor-pointer transition-colors"
                                       onclick={() =>
                                         mailService.downloadAttachment(att, $selectedMessage)}
                                       title="Download {att.name || att.filename}"
                                     >
-                                      <img
-                                        src={att.href}
-                                        alt={att.name || att.filename}
-                                        class="max-h-20 max-w-[120px] object-contain"
-                                      />
-                                    </button>
-                                    <div
-                                      class="flex items-center gap-1.5 text-xs text-muted-foreground px-0.5"
-                                    >
-                                      <span class="truncate">{att.name || att.filename}</span>
-                                      {#if att.size}<span class="shrink-0"
+                                      <span>{att.name || att.filename}</span>
+                                      {#if att.size}<span class="text-xs text-muted-foreground"
                                           >{formatAttachmentSize(att.size)}</span
                                         >{/if}
-                                      <button
-                                        type="button"
-                                        class="shrink-0 hover:text-foreground transition-colors cursor-pointer"
-                                        onclick={() =>
-                                          mailService.downloadAttachment(att, $selectedMessage)}
-                                        title="Download"
-                                      >
-                                        <Download class="h-3.5 w-3.5" />
-                                      </button>
-                                    </div>
-                                  </div>
-                                {:else}
-                                  <button
-                                    type="button"
-                                    class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm bg-secondary hover:bg-secondary/80 cursor-pointer transition-colors"
-                                    onclick={() =>
-                                      mailService.downloadAttachment(att, $selectedMessage)}
-                                    title="Download {att.name || att.filename}"
-                                  >
-                                    <span>{att.name || att.filename}</span>
-                                    {#if att.size}<span class="text-xs text-muted-foreground"
-                                        >{formatAttachmentSize(att.size)}</span
-                                      >{/if}
-                                    <Download class="h-3.5 w-3.5 ml-1" />
-                                  </button>
-                                {/if}
-                              {/each}
-                            </div>
+                                      <Download class="h-3.5 w-3.5 ml-1" />
+                                    </button>
+                                  {/if}
+                                {/each}
+                              </div>
+                            {/if}
                           {/if}
-                        {/if}
-                      {:else if isExpanded && !isSelected}
-                        <!-- Expanded but not selected: show cached body if available -->
-                        {#if cachedBody?.loading}
-                          <div class="min-h-[120px] flex items-center justify-center p-6">
-                            <div class="w-full space-y-4 animate-pulse">
-                              <div class="space-y-2 pt-4">
-                                <div class="h-3 bg-muted" style="width: 90%"></div>
-                                <div class="h-3 bg-muted" style="width: 85%"></div>
-                                <div class="h-3 bg-muted" style="width: 78%"></div>
+                        {:else if isExpanded && !isSelected}
+                          <!-- Expanded but not selected: show cached body if available -->
+                          {#if cachedBody?.loading}
+                            <div class="min-h-[120px] flex items-center justify-center p-6">
+                              <div class="w-full space-y-4 animate-pulse">
+                                <div class="space-y-2 pt-4">
+                                  <div class="h-3 bg-muted" style="width: 90%"></div>
+                                  <div class="h-3 bg-muted" style="width: 85%"></div>
+                                  <div class="h-3 bg-muted" style="width: 78%"></div>
+                                </div>
                               </div>
                             </div>
-                          </div>
-                        {:else if cachedBody?.body}
-                          <EmailIframe
-                            html={cachedBody.body}
-                            messageId={message?.id || message?.uid || ''}
-                            onLinkClick={handleIframeLinkClick}
-                            onFormSubmit={handleIframeFormSubmit}
-                          />
-                        {:else}
-                          <!-- Fallback to snippet if body not yet loaded -->
-                          <div class="p-4 text-sm text-muted-foreground">
-                            <div class="text-sm text-muted-foreground">
-                              {message.snippet || message.textContent || ''}
+                          {:else if cachedBody?.body}
+                            <EmailIframe
+                              html={cachedBody.body}
+                              messageId={message?.id || message?.uid || ''}
+                              onLinkClick={handleIframeLinkClick}
+                              onFormSubmit={handleIframeFormSubmit}
+                            />
+                          {:else}
+                            <!-- Fallback to snippet if body not yet loaded -->
+                            <div class="p-4 text-sm text-muted-foreground">
+                              <div class="text-sm text-muted-foreground">
+                                {message.snippet || message.textContent || ''}
+                              </div>
                             </div>
+                          {/if}
+                        {:else if !isExpanded}
+                          <!-- Collapsed: show snippet inline -->
+                          <div class="text-sm text-muted-foreground truncate pl-6">
+                            {message.snippet || ''}
                           </div>
                         {/if}
-                      {:else if !isExpanded}
-                        <!-- Collapsed: show snippet inline -->
-                        <div class="text-sm text-muted-foreground truncate pl-6">
-                          {message.snippet || ''}
-                        </div>
-                      {/if}
-                    </article>
-                  {/each}
-                </div>
-              {:else if $selectedMessage}
-                {#if showSkeleton}
-                  <div class="min-h-[120px] flex items-center justify-center p-6">
-                    <div class="w-full space-y-4 animate-pulse">
-                      <div class="space-y-2">
-                        <div class="h-5 w-3/4 bg-muted"></div>
-                        <div class="h-4 w-1/2 bg-muted"></div>
-                        <div class="h-3 w-24 bg-muted"></div>
-                      </div>
-                      <div class="space-y-2 pt-4">
-                        <div class="h-3 bg-muted" style="width: 90%"></div>
-                        <div class="h-3 bg-muted" style="width: 85%"></div>
-                        <div class="h-3 bg-muted" style="width: 92%"></div>
-                        <div class="h-3 bg-muted" style="width: 78%"></div>
-                        <div class="h-3 bg-muted" style="width: 88%"></div>
-                        <div class="h-3 bg-muted" style="width: 80%"></div>
-                        <div class="h-3 bg-muted" style="width: 70%"></div>
-                      </div>
-                    </div>
+                      </article>
+                    {/each}
                   </div>
-                {:else}
-                  {#if $pgpLocked}
-                    <div
-                      class="flex items-center gap-3 p-3 mb-4 bg-blue-500/10 border border-blue-500/20 text-sm"
-                    >
-                      <Lock class="h-4.5 w-4.5 text-blue-500" />
-                      <span class="flex-1">
-                        This message is PGP encrypted and could not be decrypted.
-                      </span>
-                      <a
-                        href="/mailbox/settings#accounts"
-                        class="inline-flex items-center justify-center px-3 py-1.5 text-sm bg-blue-500/20 hover:bg-blue-500/30 text-blue-600 dark:text-blue-400"
-                      >
-                        Add PGP Key
-                      </a>
-                    </div>
-                  {/if}
-                  {#if $hasBlockedImages}
-                    <div
-                      class="flex items-center gap-3 p-3 mb-4 bg-amber-500/10 border border-amber-500/20 text-sm"
-                    >
-                      <ImageIcon class="h-4.5 w-4.5" />
-                      <span>
-                        {#if $trackingPixelCount > 0 && $blockedImageCount > 0}
-                          {$trackingPixelCount} tracking pixel{$trackingPixelCount !== 1 ? 's' : ''} and
-                          {$blockedImageCount} image{$blockedImageCount !== 1 ? 's' : ''} blocked
-                        {:else if $trackingPixelCount > 0}
-                          {$trackingPixelCount} tracking pixel{$trackingPixelCount !== 1 ? 's' : ''} blocked
-                        {:else if $blockedImageCount > 0}
-                          {$blockedImageCount} image{$blockedImageCount !== 1 ? 's' : ''} blocked
-                        {:else}
-                          Images blocked for your privacy
-                        {/if}
-                      </span>
-                      <div style="display: flex; gap: 8px;">
-                        {#if $blockedImageCount > 0}
-                          <button
-                            class="inline-flex items-center justify-center px-3 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground"
-                            type="button"
-                            onclick={loadRemoteImages}
-                          >
-                            Load Images
-                          </button>
-                        {/if}
-                        {#if $trackingPixelCount > 0}
-                          <button
-                            class="inline-flex items-center justify-center px-3 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground"
-                            type="button"
-                            onclick={loadAllIncludingPixels}
-                            title="Not recommended: allows senders to track that you opened this email"
-                          >
-                            Load All
-                          </button>
-                        {/if}
+                {:else if $selectedMessage}
+                  {#if showSkeleton}
+                    <div class="min-h-[120px] flex items-center justify-center p-6">
+                      <div class="w-full space-y-4 animate-pulse">
+                        <div class="space-y-2">
+                          <div class="h-5 w-3/4 bg-muted"></div>
+                          <div class="h-4 w-1/2 bg-muted"></div>
+                          <div class="h-3 w-24 bg-muted"></div>
+                        </div>
+                        <div class="space-y-2 pt-4">
+                          <div class="h-3 bg-muted" style="width: 90%"></div>
+                          <div class="h-3 bg-muted" style="width: 85%"></div>
+                          <div class="h-3 bg-muted" style="width: 92%"></div>
+                          <div class="h-3 bg-muted" style="width: 78%"></div>
+                          <div class="h-3 bg-muted" style="width: 88%"></div>
+                          <div class="h-3 bg-muted" style="width: 80%"></div>
+                          <div class="h-3 bg-muted" style="width: 70%"></div>
+                        </div>
                       </div>
                     </div>
-                  {/if}
-                  <EmailIframe
-                    html={$messageBody}
-                    messageId={$selectedMessage?.id || $selectedMessage?.uid || ''}
-                    onLinkClick={handleIframeLinkClick}
-                    onFormSubmit={handleIframeFormSubmit}
-                  />
-                  {#if filterDownloadableAttachments($attachments).length}
-                    <div class="flex flex-wrap gap-2 mt-4 pt-4 border-t border-border">
-                      {#each filterDownloadableAttachments($attachments) as att}
-                        {#if isPreviewableImage(att) && att.href}
-                          <div class="flex flex-col gap-1 max-w-[120px]">
+                  {:else}
+                    {#if $pgpLocked}
+                      <div
+                        class="flex items-center gap-3 p-3 mb-4 bg-blue-500/10 border border-blue-500/20 text-sm"
+                      >
+                        <Lock class="h-4.5 w-4.5 text-blue-500" />
+                        <span class="flex-1">
+                          This message is PGP encrypted and could not be decrypted.
+                        </span>
+                        <a
+                          href="/mailbox/settings#accounts"
+                          class="inline-flex items-center justify-center px-3 py-1.5 text-sm bg-blue-500/20 hover:bg-blue-500/30 text-blue-600 dark:text-blue-400"
+                        >
+                          Add PGP Key
+                        </a>
+                      </div>
+                    {/if}
+                    {#if $hasBlockedImages}
+                      <div
+                        class="flex items-center gap-3 p-3 mb-4 bg-amber-500/10 border border-amber-500/20 text-sm"
+                      >
+                        <ImageIcon class="h-4.5 w-4.5" />
+                        <span>
+                          {#if $trackingPixelCount > 0 && $blockedImageCount > 0}
+                            {$trackingPixelCount} tracking pixel{$trackingPixelCount !== 1
+                              ? 's'
+                              : ''} and
+                            {$blockedImageCount} image{$blockedImageCount !== 1 ? 's' : ''} blocked
+                          {:else if $trackingPixelCount > 0}
+                            {$trackingPixelCount} tracking pixel{$trackingPixelCount !== 1
+                              ? 's'
+                              : ''} blocked
+                          {:else if $blockedImageCount > 0}
+                            {$blockedImageCount} image{$blockedImageCount !== 1 ? 's' : ''} blocked
+                          {:else}
+                            Images blocked for your privacy
+                          {/if}
+                        </span>
+                        <div style="display: flex; gap: 8px;">
+                          {#if $blockedImageCount > 0}
+                            <button
+                              class="inline-flex items-center justify-center px-3 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground"
+                              type="button"
+                              onclick={loadRemoteImages}
+                            >
+                              Load Images
+                            </button>
+                          {/if}
+                          {#if $trackingPixelCount > 0}
+                            <button
+                              class="inline-flex items-center justify-center px-3 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground"
+                              type="button"
+                              onclick={loadAllIncludingPixels}
+                              title="Not recommended: allows senders to track that you opened this email"
+                            >
+                              Load All
+                            </button>
+                          {/if}
+                        </div>
+                      </div>
+                    {/if}
+                    <EmailIframe
+                      html={$messageBody}
+                      messageId={$selectedMessage?.id || $selectedMessage?.uid || ''}
+                      onLinkClick={handleIframeLinkClick}
+                      onFormSubmit={handleIframeFormSubmit}
+                    />
+                    {#if filterDownloadableAttachments($attachments).length}
+                      <div class="flex flex-wrap gap-2 mt-4 pt-4 border-t border-border">
+                        {#each filterDownloadableAttachments($attachments) as att}
+                          {#if isPreviewableImage(att) && att.href}
+                            <div class="flex flex-col gap-1 max-w-[120px]">
+                              <button
+                                type="button"
+                                class="cursor-pointer rounded border border-border overflow-hidden hover:opacity-90 transition-opacity"
+                                onclick={() =>
+                                  mailService.downloadAttachment(att, $selectedMessage)}
+                                title="Download {att.name || att.filename}"
+                              >
+                                <img
+                                  src={att.href}
+                                  alt={att.name || att.filename}
+                                  class="max-h-20 max-w-[120px] object-contain"
+                                />
+                              </button>
+                              <div
+                                class="flex items-center gap-1.5 text-xs text-muted-foreground px-0.5"
+                              >
+                                <span class="truncate">{att.name || att.filename}</span>
+                                {#if att.size}<span class="shrink-0"
+                                    >{formatAttachmentSize(att.size)}</span
+                                  >{/if}
+                                <button
+                                  type="button"
+                                  class="shrink-0 hover:text-foreground transition-colors cursor-pointer"
+                                  onclick={() =>
+                                    mailService.downloadAttachment(att, $selectedMessage)}
+                                  title="Download"
+                                >
+                                  <Download class="h-3.5 w-3.5" />
+                                </button>
+                              </div>
+                            </div>
+                          {:else}
                             <button
                               type="button"
-                              class="cursor-pointer rounded border border-border overflow-hidden hover:opacity-90 transition-opacity"
+                              class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm bg-secondary hover:bg-secondary/80 cursor-pointer transition-colors"
                               onclick={() => mailService.downloadAttachment(att, $selectedMessage)}
                               title="Download {att.name || att.filename}"
                             >
-                              <img
-                                src={att.href}
-                                alt={att.name || att.filename}
-                                class="max-h-20 max-w-[120px] object-contain"
-                              />
-                            </button>
-                            <div
-                              class="flex items-center gap-1.5 text-xs text-muted-foreground px-0.5"
-                            >
-                              <span class="truncate">{att.name || att.filename}</span>
-                              {#if att.size}<span class="shrink-0"
+                              <span>{att.name || att.filename}</span>
+                              {#if att.size}<span class="text-xs text-muted-foreground"
                                   >{formatAttachmentSize(att.size)}</span
                                 >{/if}
-                              <button
-                                type="button"
-                                class="shrink-0 hover:text-foreground transition-colors cursor-pointer"
-                                onclick={() =>
-                                  mailService.downloadAttachment(att, $selectedMessage)}
-                                title="Download"
-                              >
-                                <Download class="h-3.5 w-3.5" />
-                              </button>
-                            </div>
-                          </div>
-                        {:else}
-                          <button
-                            type="button"
-                            class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm bg-secondary hover:bg-secondary/80 cursor-pointer transition-colors"
-                            onclick={() => mailService.downloadAttachment(att, $selectedMessage)}
-                            title="Download {att.name || att.filename}"
-                          >
-                            <span>{att.name || att.filename}</span>
-                            {#if att.size}<span class="text-xs text-muted-foreground"
-                                >{formatAttachmentSize(att.size)}</span
-                              >{/if}
-                            <Download class="h-3.5 w-3.5 ml-1" />
-                          </button>
-                        {/if}
-                      {/each}
-                    </div>
+                              <Download class="h-3.5 w-3.5 ml-1" />
+                            </button>
+                          {/if}
+                        {/each}
+                      </div>
+                    {/if}
                   {/if}
                 {/if}
-              {/if}
-            {:else if outboxSelected}
-              <div class="px-3 py-2 text-sm text-muted-foreground"></div>
-            {:else if isProductivityLayout && readerTransitioning}
-              <div class="min-h-[120px] flex items-center justify-center p-6">
-                <div class="w-full space-y-4 animate-pulse">
-                  <div class="space-y-2">
-                    <div class="h-5 w-3/4 bg-muted"></div>
-                    <div class="h-4 w-1/2 bg-muted"></div>
-                    <div class="h-3 w-24 bg-muted"></div>
-                  </div>
-                  <div class="space-y-2 pt-4">
-                    <div class="h-3 bg-muted" style="width: 90%"></div>
-                    <div class="h-3 bg-muted" style="width: 85%"></div>
-                    <div class="h-3 bg-muted" style="width: 92%"></div>
-                    <div class="h-3 bg-muted" style="width: 78%"></div>
-                    <div class="h-3 bg-muted" style="width: 88%"></div>
-                    <div class="h-3 bg-muted" style="width: 80%"></div>
-                    <div class="h-3 bg-muted" style="width: 70%"></div>
+              {:else if outboxSelected}
+                <div class="px-3 py-2 text-sm text-muted-foreground"></div>
+              {:else if isProductivityLayout && readerTransitioning}
+                <div class="min-h-[120px] flex items-center justify-center p-6">
+                  <div class="w-full space-y-4 animate-pulse">
+                    <div class="space-y-2">
+                      <div class="h-5 w-3/4 bg-muted"></div>
+                      <div class="h-4 w-1/2 bg-muted"></div>
+                      <div class="h-3 w-24 bg-muted"></div>
+                    </div>
+                    <div class="space-y-2 pt-4">
+                      <div class="h-3 bg-muted" style="width: 90%"></div>
+                      <div class="h-3 bg-muted" style="width: 85%"></div>
+                      <div class="h-3 bg-muted" style="width: 92%"></div>
+                      <div class="h-3 bg-muted" style="width: 78%"></div>
+                      <div class="h-3 bg-muted" style="width: 88%"></div>
+                      <div class="h-3 bg-muted" style="width: 80%"></div>
+                      <div class="h-3 bg-muted" style="width: 70%"></div>
+                    </div>
                   </div>
                 </div>
-              </div>
-            {:else}
-              <div class="px-3 py-2 text-sm text-muted-foreground">
-                Select a message to preview.
-              </div>
-            {/if}
-          </section>
-        {/if}
-      </div>
-      <LabelModal
-        visible={labelModalVisible}
-        mode="create"
-        bind:name={labelFormName}
-        bind:color={labelFormColor}
-        palette={labelPalette}
-        error={labelModalError}
-        saving={labelModalSaving}
-        showClose={true}
-        onClose={closeLabelModal}
-        onSave={saveLabelModal}
-        onClearError={clearLabelModalError}
-      />
+              {:else}
+                <div class="px-3 py-2 text-sm text-muted-foreground">
+                  Select a message to preview.
+                </div>
+              {/if}
+            </section>
+          {/if}
+        </div>
+        <LabelModal
+          visible={labelModalVisible}
+          mode="create"
+          bind:name={labelFormName}
+          bind:color={labelFormColor}
+          palette={labelPalette}
+          error={labelModalError}
+          saving={labelModalSaving}
+          showClose={true}
+          onClose={closeLabelModal}
+          onSave={saveLabelModal}
+          onClearError={clearLabelModalError}
+        />
 
-      <!-- Confirmation Dialog -->
-      {#if confirmDialogVisible}
-        <div
-          class="fixed inset-0 z-50 bg-black/50 flex items-center justify-center"
-          role="presentation"
-          tabindex="-1"
-          onclick={(e) => {
-            if (e.target === e.currentTarget) hideConfirmDialog();
-          }}
-          onkeydown={(e) => e.key === 'Escape' && hideConfirmDialog()}
-        >
+        <!-- Confirmation Dialog -->
+        {#if confirmDialogVisible}
           <div
-            class="bg-background border border-border shadow-lg max-w-md w-full mx-4 p-6"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="confirm-title"
+            class="fixed inset-0 z-50 bg-black/50 flex items-center justify-center"
+            role="presentation"
+            tabindex="-1"
+            onclick={(e) => {
+              if (e.target === e.currentTarget) hideConfirmDialog();
+            }}
+            onkeydown={(e) => e.key === 'Escape' && hideConfirmDialog()}
           >
-            <div class="text-lg font-semibold mb-4">
-              <h3 id="confirm-title">{confirmDialogTitle}</h3>
-            </div>
-            <div class="text-sm text-muted-foreground mb-6">
-              <p>{confirmDialogMessage}</p>
-            </div>
-            <div class="flex justify-end gap-2">
-              <button
-                class="inline-flex items-center justify-center px-3 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground"
-                type="button"
-                onclick={hideConfirmDialog}
-              >
-                Cancel
-              </button>
-              <button
-                class={confirmDialogDanger
-                  ? 'inline-flex items-center justify-center px-4 py-2 text-sm font-medium bg-destructive text-destructive-foreground hover:bg-destructive/90'
-                  : 'inline-flex items-center justify-center px-4 py-2 text-sm font-medium bg-primary text-primary-foreground hover:bg-primary/90'}
-                type="button"
-                onclick={confirmAction}
-              >
-                Confirm
-              </button>
+            <div
+              class="bg-background border border-border shadow-lg max-w-md w-full mx-4 p-6"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="confirm-title"
+            >
+              <div class="text-lg font-semibold mb-4">
+                <h3 id="confirm-title">{confirmDialogTitle}</h3>
+              </div>
+              <div class="text-sm text-muted-foreground mb-6">
+                <p>{confirmDialogMessage}</p>
+              </div>
+              <div class="flex justify-end gap-2">
+                <button
+                  class="inline-flex items-center justify-center px-3 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground"
+                  type="button"
+                  onclick={hideConfirmDialog}
+                >
+                  Cancel
+                </button>
+                <button
+                  class={confirmDialogDanger
+                    ? 'inline-flex items-center justify-center px-4 py-2 text-sm font-medium bg-destructive text-destructive-foreground hover:bg-destructive/90'
+                    : 'inline-flex items-center justify-center px-4 py-2 text-sm font-medium bg-primary text-primary-foreground hover:bg-primary/90'}
+                  type="button"
+                  onclick={confirmAction}
+                >
+                  Confirm
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      {/if}
+        {/if}
 
-      <!-- Mobile Floating Action Button (FAB) for Compose -->
-      <Tooltip.Root>
-        <Tooltip.Trigger>
-          <Button
-            class={`fixed bottom-6 right-5 w-14 h-14 rounded-full shadow-lg z-50 md:hidden ${$sidebarOpen || $mobileReader ? 'hidden' : ''}`}
-            aria-label="Compose"
-            onclick={() => mailboxView?.composeModal?.open?.()}
-          >
-            <Pencil class="h-5 w-5" />
-          </Button>
-        </Tooltip.Trigger>
-        <Tooltip.Content side="left"><p>Compose</p></Tooltip.Content>
-      </Tooltip.Root>
+        <!-- Mobile Floating Action Button (FAB) for Compose -->
+        <Tooltip.Root>
+          <Tooltip.Trigger>
+            <Button
+              class={`fixed bottom-6 right-5 w-14 h-14 rounded-full shadow-lg z-50 md:hidden ${$sidebarOpen || $mobileReader ? 'hidden' : ''}`}
+              aria-label="Compose"
+              onclick={() => mailboxView?.composeModal?.open?.()}
+            >
+              <Pencil class="h-5 w-5" />
+            </Button>
+          </Tooltip.Trigger>
+          <Tooltip.Content side="left"><p>Compose</p></Tooltip.Content>
+        </Tooltip.Root>
 
-      <!-- Folder management components -->
-      {#if $folderContextMenu}
-        <FolderContextMenu
-          menu={$folderContextMenu}
-          onCreateSubfolder={handleCreateSubfolder}
-          onRename={handleRenameFolder}
-          onDelete={handleDeleteFolder}
-          onMarkAsRead={handleMarkFolderAsRead}
-          onClose={closeFolderContextMenu}
-          {isSystemFolder}
-        />
-      {/if}
+        <!-- Folder management components -->
+        {#if $folderContextMenu}
+          <FolderContextMenu
+            menu={$folderContextMenu}
+            onCreateSubfolder={handleCreateSubfolder}
+            onRename={handleRenameFolder}
+            onDelete={handleDeleteFolder}
+            onMarkAsRead={handleMarkFolderAsRead}
+            onClose={closeFolderContextMenu}
+            {isSystemFolder}
+          />
+        {/if}
 
-      {#if folderActionModal}
-        <FolderActionModal
-          action={folderActionModal.action}
-          folder={folderActionModal.folder}
-          onConfirm={handleFolderActionConfirm}
-          onClose={handleFolderActionClose}
-        />
+        {#if folderActionModal}
+          <FolderActionModal
+            action={folderActionModal.action}
+            folder={folderActionModal.folder}
+            onConfirm={handleFolderActionConfirm}
+            onClose={handleFolderActionClose}
+          />
+        {/if}
       {/if}
     </div>
   {/if}

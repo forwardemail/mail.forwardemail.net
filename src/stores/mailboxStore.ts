@@ -636,7 +636,7 @@ const createMailboxStore = () => {
           const res = await Remote.request(
             'Folders',
             {},
-            { method: 'GET', pathOverride: '/v1/folders' },
+            { method: 'GET', pathOverride: '/v1/folders?limit=100' },
           );
           const raw = res?.Result || res || [];
           list = Array.isArray(raw) ? raw : raw.Items || raw.items || [];
@@ -926,10 +926,10 @@ const createMailboxStore = () => {
     // Register eagerly BEFORE async network calls to close the race window
     // where concurrent loadMessages() callers miss the dedup guard
     let resolveInflight!: (v: unknown) => void;
-    let rejectInflight!: (e: unknown) => void;
+    let _rejectInflight!: (e: unknown) => void;
     const inflightDeferred = new Promise((res, rej) => {
       resolveInflight = res;
-      rejectInflight = rej;
+      _rejectInflight = rej;
     });
     inFlightMessageListRequest = { key: requestKey, promise: inflightDeferred };
 
@@ -1112,17 +1112,27 @@ const createMailboxStore = () => {
 
       // Guard against transient empty responses: if the server returns zero
       // messages for a non-search, non-filtered page-1 request but we already
-      // have cached data, keep the cache instead of clearing the inbox.
+      // have cached data (in IDB or the current store), keep the existing
+      // messages instead of clearing the inbox.
       // This handles intermittent backend storage issues (e.g. stale reads
-      // from distributed SQLite) that briefly return empty result sets.
+      // from distributed SQLite) that briefly return empty result sets,
+      // as well as cold-start scenarios where the IDB read fails after
+      // webview suspension (e.g. Tauri app returning from background)
+      // but the messages store still holds the previous data.
       const isBasicPage1 =
         !shouldAppend &&
         currentPage === 1 &&
         !queryParam &&
         !get(unreadOnly) &&
         !get(hasAttachmentsOnly);
-      if (isBasicPage1 && !merged.length && cachedPage.length) {
-        tracer.end({ status: 'transient_empty_kept_cache', cachedCount: cachedPage.length });
+      const existingStoreMessages = get(messages) || [];
+      const hasExistingData = cachedPage.length || existingStoreMessages.length;
+      if (isBasicPage1 && !merged.length && hasExistingData) {
+        tracer.end({
+          status: 'transient_empty_kept_cache',
+          cachedCount: cachedPage.length,
+          storeCount: existingStoreMessages.length,
+        });
         loading.set(false);
         error.set('');
         return;
@@ -1245,7 +1255,9 @@ const createMailboxStore = () => {
       }
       error.set(err?.message || 'Unable to load messages.');
       loading.set(false);
-      rejectInflight(err);
+      // Resolve (not reject) the dedup promise to avoid unhandled rejections
+      // from concurrent callers — the error is already set in the store.
+      resolveInflight(undefined);
       tracer.end({ status: 'error' });
     } finally {
       // Clear in-flight tracking

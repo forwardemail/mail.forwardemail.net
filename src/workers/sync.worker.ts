@@ -1131,6 +1131,8 @@ async function handleTask(taskId, task) {
 
 async function fetchFolders(account) {
   const url = new URL(`${apiBase.replace(/\/$/, '')}/v1/folders`);
+  // Request max folders to avoid pagination truncation (API default is 25)
+  url.searchParams.set('limit', '100');
   const res = await fetchWithTimeout(url.toString(), {
     method: 'GET',
     headers: {

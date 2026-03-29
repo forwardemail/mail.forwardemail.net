@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { downloadFile } from '../utils/download';
   import * as Dialog from '$lib/components/ui/dialog';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
@@ -307,13 +308,11 @@ End of Report
       timestamp: new Date().toISOString(),
     };
 
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `webmail-diagnostics-${Date.now()}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+    downloadFile(
+      JSON.stringify(data, null, 2),
+      `webmail-diagnostics-${Date.now()}.json`,
+      'application/json',
+    );
   }
 
   const feedbackTypeOptions = [
