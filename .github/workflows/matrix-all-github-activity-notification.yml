@@ -1,4 +1,4 @@
-name: "Matrix All Activity Notifications"
+name: 'Matrix All Activity Notifications'
 
 on:
   # Issues
@@ -17,7 +17,7 @@ on:
 
   # Pull Request Reviews
   # pull_request_review:
-    # types: [submitted] # , edited, dismissed]
+  # types: [submitted] # , edited, dismissed]
 
   # Pull Request Review Comments
   #pull_request_review_comment:
