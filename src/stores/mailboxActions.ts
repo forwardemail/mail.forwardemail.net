@@ -266,6 +266,14 @@ export const load = async () => {
 
     // Ensure settings network refresh finishes (best effort, non-blocking for UI)
     await settingsPromise;
+
+    // Retry storage stats with a forced fetch if the first attempt yielded no total.
+    // This handles the case where the initial fetchAccountData returned cached/stale
+    // data that lacked quota fields, or the request was still in-flight from
+    // syncSettings and resolved with partial data.
+    if (!get(storageTotal)) {
+      updateStorageStats(nextAccount, { force: true });
+    }
   })();
   try {
     return await loadPromise;
@@ -1302,11 +1310,11 @@ export const deleteLabel = async (keyword) => {
 /**
  * Update storage statistics
  */
-export const updateStorageStats = async (requestedAccount) => {
+export const updateStorageStats = async (requestedAccount, { force = false } = {}) => {
   const account = requestedAccount || Local.get('email') || 'default';
   try {
     // Get storage from Account endpoint (same as old MailboxView)
-    const res = await fetchAccountData();
+    const res = await fetchAccountData({ force });
     // Verify account hasn't switched while the request was in-flight
     const activeNow = Local.get('email') || 'default';
     if (activeNow !== account) return;
@@ -1583,8 +1591,9 @@ export const signOut = async () => {
     // Dispatch event to clear login form fields
     window.dispatchEvent(new CustomEvent('login-clear-fields'));
 
-    if (navigateRef) navigateRef('/');
-    else window.location.href = '/';
+    // Hard navigation with replace to guarantee all in-memory state is cleared
+    // and the current history entry is replaced (no back to stale mailbox).
+    window.location.replace('/');
   }
 };
 

@@ -107,13 +107,16 @@ function updateProgress(folder, payload) {
 async function runTask(task) {
   const settings = getSyncSettings();
   if (task.type === 'metadata') {
-    await sendSyncTask({
-      ...task,
-      account: currentAccount,
-      pageSize: task.pageSize || settings.pageSize || 50,
-      maxMessages: task.maxMessages || settings.maxHeaders,
-      pendingDeleteIds: getPendingDeleteIds(),
-    });
+    await sendSyncTask(
+      {
+        ...task,
+        account: currentAccount,
+        pageSize: task.pageSize || settings.pageSize || 50,
+        maxMessages: task.maxMessages || settings.maxHeaders,
+        pendingDeleteIds: getPendingDeleteIds(),
+      },
+      { timeout: 120_000 },
+    );
     if (task.wantBodies) {
       unshiftTask({
         type: 'bodies',

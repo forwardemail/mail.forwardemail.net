@@ -1018,7 +1018,7 @@
 
   const clearData = () => {
     Local.clear();
-    navigate?.('/') ?? (window.location.href = '/');
+    window.location.replace('/');
   };
 
   const signOut = async () => {
@@ -1204,7 +1204,7 @@
         'success',
       );
       setTimeout(() => {
-        navigate?.('/') ?? (window.location.href = '/');
+        window.location.replace('/');
       }, 1000);
     } catch (err) {
       setError((err as Error)?.message || 'Failed to force reset storage.');

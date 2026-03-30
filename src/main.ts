@@ -357,9 +357,10 @@ if (loginRoot) {
       onSuccess: (path = '/mailbox') => {
         mailboxActions.resetSessionState?.();
         if (viewModel.navigate) {
-          viewModel.navigate(path);
+          // Replace the login history entry so users cannot swipe back to it
+          viewModel.navigate(path, { replace: true });
         } else {
-          window.location.href = path;
+          window.location.replace(path);
         }
       },
     },
@@ -690,7 +691,7 @@ let starfieldDisposer = null;
 let themeUnsub = null;
 
 // SPA-style navigation to avoid reload flicker
-viewModel.navigate = (path) => {
+viewModel.navigate = (path, options) => {
   if (!path || typeof path !== 'string') return;
   const sameOrigin = path.startsWith('/');
   if (!sameOrigin) {
@@ -720,12 +721,19 @@ viewModel.navigate = (path) => {
     !Local.get('authToken') &&
     !Local.get('alias_auth')
   ) {
-    history.replaceState({}, '', '/');
+    history.replaceState({ route: 'login' }, '', '/');
     routeStore.set('login');
     return;
   }
 
-  history.pushState({}, '', path);
+  const useReplace = options?.replace === true;
+  const stateObj = { route: targetRoute };
+  if (useReplace) {
+    history.replaceState(stateObj, '', path);
+  } else {
+    history.pushState(stateObj, '', path);
+  }
+
   routeStore.set(detectRoute());
 
   // Dispatch event for Login component to clear fields when adding account
@@ -1448,12 +1456,17 @@ async function bootstrap() {
     ) {
       // Use navigate instead of full page reload to prevent flicker
       routeStore.set('login');
-      history.replaceState({}, '', '/');
+      history.replaceState({ route: 'login' }, '', '/');
       route = 'login';
     } else if (route === 'mailbox' && window.location.pathname === '/' && !isAddingAccount) {
       // Update URL to /mailbox when user is authenticated and on root path
       // But skip this if we're adding an account
-      history.replaceState({}, '', '/mailbox');
+      // Preserve any hash that may have been set by the Mailbox component's
+      // initial folder setup (e.g., #INBOX) during the async bootstrap gap.
+      const currentHash = window.location.hash || '';
+      // Merge with existing state to preserve folder info set by Mailbox component
+      const existingState = history.state || {};
+      history.replaceState({ ...existingState, route: 'mailbox' }, '', '/mailbox' + currentHash);
     }
 
     // Handle ?email= query parameter for account switching
@@ -1470,12 +1483,16 @@ async function bootstrap() {
           mailboxActions.switchAccount(normalizedEmail);
         }
         // Clean up URL — remove query params, go to /mailbox
-        history.replaceState({}, '', '/mailbox');
+        history.replaceState({ route: 'mailbox' }, '', '/mailbox');
         route = 'mailbox';
         routeStore.set('mailbox');
       } else {
         // Not logged in with this account — go to add-account login with email prefilled
-        history.replaceState({}, '', `/?add_account=true&email=${encodeURIComponent(emailParam)}`);
+        history.replaceState(
+          { route: 'login' },
+          '',
+          `/?add_account=true&email=${encodeURIComponent(emailParam)}`,
+        );
         route = 'login';
         routeStore.set('login');
         window.dispatchEvent(new CustomEvent('login-prefill-email', { detail: emailParam }));
@@ -1506,6 +1523,23 @@ async function bootstrap() {
       // sessionStorage should still have plaintext credentials from the
       // prior unlock, but if they were lost ensure they're available.
       restoreSessionCredentials();
+    } else if (!isLockEnabled()) {
+      // No app lock — credentials are stored as plaintext in localStorage.
+      // Ensure sessionStorage has a copy of each tab-scoped key.  The browser
+      // can clear sessionStorage under memory pressure or after a crash,
+      // leaving Local.get() with no session copy and causing silent 401s.
+      const tabKeys = ['alias_auth', 'api_key', 'authToken', 'email'];
+      for (const key of tabKeys) {
+        const prefixed = `webmail_${key}`;
+        try {
+          if (sessionStorage.getItem(prefixed) === null) {
+            const lv = localStorage.getItem(prefixed);
+            if (lv) sessionStorage.setItem(prefixed, lv);
+          }
+        } catch {
+          // ignore
+        }
+      }
     }
 
     // Signal that auth credentials are available and components can
@@ -1562,10 +1596,50 @@ async function bootstrap() {
       processMutationQueue();
     });
 
-    // Handle auth failures from WebSocket or API — show toast and prompt re-login
-    window.addEventListener('fe:auth-failed', () => {
-      toasts?.show?.('Session expired. Please sign in again.', 'error');
-    });
+    // ── Auth failure handling ─────────────────────────────────────────
+    // fe:auth-failed  — WebSocket auth failure (close code 4401/4403)
+    // fe:auth-expired — consecutive HTTP 401s detected by Remote.request()
+    //
+    // Both events trigger the same recovery: clear stale credentials,
+    // stop background services, and redirect to login so the user can
+    // re-authenticate.  A guard prevents double-firing within 5 seconds.
+    let _authRecoveryInProgress = false;
+
+    const handleAuthRecovery = (reason) => {
+      if (_authRecoveryInProgress) return;
+      _authRecoveryInProgress = true;
+
+      console.warn(`[auth] Forced re-auth triggered (${reason})`);
+      toasts?.show?.('Session expired. Redirecting to login\u2026', 'error', 4000);
+
+      // Clear stale credentials so the auth guard redirects to login
+      Local.remove('alias_auth');
+      Local.remove('api_key');
+      Local.remove('authToken');
+      // Clear session-scoped copies too
+      try {
+        sessionStorage.removeItem('webmail_alias_auth');
+        sessionStorage.removeItem('webmail_api_key');
+        sessionStorage.removeItem('webmail_authToken');
+      } catch {
+        // ignore
+      }
+
+      // Short delay so the toast is visible before navigation
+      setTimeout(() => {
+        // SPA navigation to login — avoids full page reload
+        history.replaceState({ route: 'login' }, '', '/');
+        routeStore.set('login');
+        updateRouteVisibility('login');
+        document.body.classList.remove('mailbox-mode');
+        // Dispatch event for Login component to clear fields
+        window.dispatchEvent(new CustomEvent('login-clear-fields'));
+        _authRecoveryInProgress = false;
+      }, 1500);
+    };
+
+    window.addEventListener('fe:auth-failed', () => handleAuthRecovery('websocket'));
+    window.addEventListener('fe:auth-expired', () => handleAuthRecovery('http-401'));
 
     // Tauri-specific native integrations (desktop + mobile)
     if (isTauri) {
@@ -1601,9 +1675,16 @@ async function bootstrap() {
     }
 
     if (canUseServiceWorker() && import.meta.env.PROD) {
-      window.addEventListener('load', () => {
+      // Register after page load to avoid competing with critical resources.
+      // If the load event already fired (bootstrap is async and may finish
+      // after load), register immediately.
+      if (document.readyState === 'complete') {
         registerServiceWorker();
-      });
+      } else {
+        window.addEventListener('load', () => {
+          registerServiceWorker();
+        });
+      }
     }
 
     // Web auto-updater: check GitHub releases + listen for newRelease WebSocket events
@@ -1912,7 +1993,35 @@ if (document.readyState === 'loading') {
 }
 
 window.addEventListener('popstate', () => {
-  routeStore.set(detectRoute());
+  const route = detectRoute();
+  const hasAuth = !!(Local.get('authToken') || Local.get('alias_auth'));
+  const isProtected =
+    route === 'mailbox' ||
+    route === 'settings' ||
+    route === 'profile' ||
+    route === 'calendar' ||
+    route === 'contacts';
+
+  if (isProtected && !hasAuth) {
+    // User pressed back into a protected route after signing out — redirect to login
+    history.replaceState({ route: 'login' }, '', '/');
+    routeStore.set('login');
+    return;
+  }
+
+  if (route === 'login' && hasAuth) {
+    // User pressed back into login while still authenticated — redirect to mailbox
+    history.replaceState({ route: 'mailbox' }, '', '/mailbox');
+    routeStore.set('mailbox');
+    return;
+  }
+
+  // Only update the route store if the route actually changed.
+  // For same-route popstate events (e.g., folder hash changes within /mailbox),
+  // skip the set to avoid re-triggering load() and other side effects.
+  if (route !== currentRoute()) {
+    routeStore.set(route);
+  }
 });
 
 // Handle hash-based deep links (e.g., /mailbox#compose=user@example.com or /mailbox#INBOX/12345)
@@ -1943,7 +2052,7 @@ handleHashActions = function () {
       }, 0);
     }
     // clear hash to avoid repeat
-    history.replaceState({}, '', window.location.pathname);
+    history.replaceState({ route: currentRoute() }, '', window.location.pathname);
   } else if (hash.startsWith('#addevent=')) {
     const addr = decodeURIComponent(hash.replace('#addevent=', ''));
     // Only set route if not already on calendar
@@ -1958,7 +2067,7 @@ handleHashActions = function () {
       }
     }, 0);
     // clear hash to avoid repeat
-    history.replaceState({}, '', window.location.pathname);
+    history.replaceState({ route: currentRoute() }, '', window.location.pathname);
   } else if (hash.startsWith('#search=')) {
     const term = decodeURIComponent(hash.replace('#search=', ''));
     // Only set route if not already on mailbox
@@ -1974,7 +2083,7 @@ handleHashActions = function () {
       }
     }, 0);
     // clear hash to avoid repeat
-    history.replaceState({}, '', window.location.pathname);
+    history.replaceState({ route: currentRoute() }, '', window.location.pathname);
   } else if (hash.length > 1 && hash.includes('/')) {
     // Message deep link: #FOLDER/MESSAGE_ID (e.g., #INBOX/12345)
     // This is handled by Mailbox.svelte's onMount, just ensure we're on mailbox route

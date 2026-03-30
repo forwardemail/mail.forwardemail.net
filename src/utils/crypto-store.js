@@ -529,6 +529,15 @@ async function unlockWithPasskey(prfOutput) {
         _dek = dek;
         _enabled = true;
         _initialized = true;
+        // Mark session as unlocked (parity with openVault)
+        try {
+          sessionStorage.setItem(SESSION_UNLOCKED_KEY, '1');
+        } catch {
+          // ignore
+        }
+        // Restore decrypted credentials to sessionStorage so Local.get()
+        // returns plaintext values for auth headers.
+        restoreSessionCredentials();
         return true;
       }
     } catch {
@@ -854,17 +863,33 @@ function writeSensitiveLocal(key, value) {
 function restoreSessionCredentials() {
   if (!_dek) return;
   const prefix = 'webmail_';
-  const tabScopedSensitive = ['alias_auth', 'api_key', 'authToken'];
+  const tabScopedSensitive = ['alias_auth', 'api_key', 'authToken', 'email'];
   for (const key of tabScopedSensitive) {
     const fullKey = `${prefix}${key}`;
     const localValue = localStorage.getItem(fullKey);
-    if (localValue && isEncrypted(localValue)) {
+    if (!localValue) continue;
+
+    if (isEncrypted(localValue)) {
+      // Decrypt and write plaintext to sessionStorage
       try {
         const decrypted = decryptValue(localValue);
         const plain = typeof decrypted === 'string' ? decrypted : JSON.stringify(decrypted);
         sessionStorage.setItem(fullKey, plain);
       } catch {
         // Cannot decrypt — ignore, auth will fail gracefully
+      }
+    } else {
+      // localStorage has plaintext (lock was never enabled, or was disabled).
+      // Ensure sessionStorage also has it — the browser may have cleared
+      // sessionStorage (memory pressure, crash recovery) while the tab was
+      // in the background, leaving Local.get() with no session copy.
+      try {
+        const existing = sessionStorage.getItem(fullKey);
+        if (existing === null) {
+          sessionStorage.setItem(fullKey, localValue);
+        }
+      } catch {
+        // ignore
       }
     }
   }

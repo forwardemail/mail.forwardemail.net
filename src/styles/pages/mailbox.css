@@ -217,6 +217,27 @@
   border-radius: 0;
 }
 
+/* Remove borders that sit flush against the window edges */
+.fe-folders {
+  border-left: none;
+  border-bottom: none;
+}
+
+.fe-reader {
+  border-right: none;
+  border-bottom: none;
+}
+
+/* Messages panel can be rightmost (reader hidden) or leftmost (sidebar collapsed) */
+.fe-messages {
+  border-right: none;
+  border-bottom: none;
+}
+
+.fe-shell-collapsed .fe-messages {
+  border-left: none;
+}
+
 .fe-folders .overflow-y-auto {
   scrollbar-width: none;
   -ms-overflow-style: none;
@@ -927,6 +948,8 @@ body.light-mode .fe-message-from {
     display: flex !important;
     flex: 1;
     min-height: 0;
+    border-left: none;
+    border-right: none;
   }
 
   .fe-folders.fe-folders-open ~ * .fe-messages {

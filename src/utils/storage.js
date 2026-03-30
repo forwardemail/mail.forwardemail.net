@@ -132,16 +132,36 @@ const cleanupAccountList = async (accounts) => {
 // multiple tabs can stay logged into different accounts independently.
 const TAB_SCOPED_KEYS = new Set(['email', 'alias_auth', 'api_key', 'authToken']);
 
+// Encrypted localStorage values start with this prefix (crypto-store.js).
+// If sessionStorage was cleared (e.g. by the browser under memory pressure)
+// and the localStorage fallback returns an encrypted blob, we must NOT copy
+// it to sessionStorage or return it — doing so would send garbage auth
+// headers to the API, causing persistent 401 errors.
+const ENCRYPTED_PREFIX = '\x00ENC\x01';
+
 export const Local = {
   get(key) {
     try {
       if (TAB_SCOPED_KEYS.has(key)) {
         const prefixedKey = `${PREFIX}${key}`;
         const sessionValue = sessionStorage.getItem(prefixedKey);
-        if (sessionValue !== null) return sessionValue;
+        if (sessionValue !== null) {
+          // Guard: if sessionStorage somehow contains an encrypted blob,
+          // treat it as missing so getAuthHeader() can throw properly.
+          if (sessionValue.startsWith(ENCRYPTED_PREFIX)) {
+            sessionStorage.removeItem(prefixedKey);
+            return null;
+          }
+          return sessionValue;
+        }
         // First read in this tab — copy from localStorage to lock in the account
         const localValue = localStorage.getItem(prefixedKey);
         if (localValue !== null) {
+          // Do NOT copy encrypted values — they are unusable without the DEK
+          // and would produce garbage auth headers (→ 401).
+          if (localValue.startsWith(ENCRYPTED_PREFIX)) {
+            return null;
+          }
           sessionStorage.setItem(prefixedKey, localValue);
         }
         return localValue;

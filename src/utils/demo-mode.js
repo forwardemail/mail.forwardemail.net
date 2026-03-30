@@ -221,9 +221,8 @@ export function exitDemoAndRedirect() {
   // Open sign-up page
   window.open(SIGN_UP_URL, '_blank', 'noopener,noreferrer');
 
-  // Navigate to login
-  window.location.hash = '#/login';
-  window.location.reload();
+  // Hard navigation to login with replace to clear the current history entry
+  window.location.replace('/');
 }
 
 /**

@@ -80,6 +80,18 @@
 
     // Listen for popstate (back/forward navigation)
     const handlePopState = () => {
+      // Only act when the user actually lands on the login page (pathname '/').
+      // Without this guard, every hash-change popstate inside /mailbox would
+      // trigger onSuccess and clobber the URL.
+      if (window.location.pathname !== '/') return;
+
+      // If user is authenticated and lands on login via back-navigation,
+      // redirect them to the mailbox (defense-in-depth alongside main.ts guard)
+      if (!getIsAddingAccount() && hasActiveSession()) {
+        onSuccess?.('/mailbox');
+        return;
+      }
+
       if (getIsAddingAccount()) {
         const params = new URLSearchParams(window.location.search);
         const emailParam = params.get('email');
@@ -123,7 +135,8 @@
   };
 
   const goToMailbox = () => {
-    window.location.href = '/mailbox';
+    // Use the SPA callback (which navigates with replace) instead of a hard reload
+    onSuccess?.('/mailbox');
   };
 
   /**

@@ -100,6 +100,120 @@
     </div>
 
     <script>
+      // Automatic chunk load error recovery.
+      // When a deploy changes chunk hashes, the browser may have a cached
+      // index.html that references old chunk filenames which now 404.
+      // This handler detects those failures, clears only the service worker
+      // and asset caches (preserving localStorage, IndexedDB, and auth),
+      // and reloads once.  A sessionStorage flag prevents infinite loops.
+      (function () {
+        var RECOVERY_KEY = '__fe_chunk_recovery';
+        var alreadyRecovering = false;
+
+        function clearAssetCachesAndReload() {
+          if (alreadyRecovering) return;
+          alreadyRecovering = true;
+
+          // Guard: if we already tried recovery this session, don't loop.
+          // Instead, fall through to the manual fallback UI.
+          if (sessionStorage.getItem(RECOVERY_KEY)) {
+            console.warn('[Recovery] Auto-recovery already attempted; showing fallback UI');
+            var fb = document.getElementById('fe-fallback-recovery');
+            if (fb) fb.style.display = 'block';
+            return;
+          }
+
+          // Mark that we're attempting recovery
+          sessionStorage.setItem(RECOVERY_KEY, Date.now().toString());
+          console.warn('[Recovery] Stale chunk detected — clearing asset caches and reloading');
+
+          Promise.resolve()
+            .then(function () {
+              // Unregister service workers so they don't serve stale assets
+              if ('serviceWorker' in navigator) {
+                return navigator.serviceWorker.getRegistrations().then(function (regs) {
+                  return Promise.all(
+                    regs.map(function (r) {
+                      return r.unregister();
+                    }),
+                  );
+                });
+              }
+            })
+            .then(function () {
+              // Clear all Cache Storage (static assets only — not localStorage or IndexedDB)
+              if ('caches' in window) {
+                return caches.keys().then(function (names) {
+                  return Promise.all(
+                    names.map(function (n) {
+                      return caches.delete(n);
+                    }),
+                  );
+                });
+              }
+            })
+            .then(function () {
+              // Short delay lets iOS finish SW teardown before reload
+              return new Promise(function (r) {
+                setTimeout(r, 300);
+              });
+            })
+            .then(function () {
+              // Cache-busting param bypasses any lingering SW fetch handler
+              window.location.href = window.location.pathname + '?_cb=' + Date.now();
+            })
+            .catch(function () {
+              window.location.href = window.location.pathname + '?_cb=' + Date.now();
+            });
+        }
+
+        // Listen for script/link load errors (chunk 404s fire as error events
+        // on the <script> or <link> element, and bubble to window in capture phase)
+        window.addEventListener(
+          'error',
+          function (event) {
+            var target = event.target || event.srcElement;
+            if (!target || !target.tagName) return;
+            var tag = target.tagName.toLowerCase();
+            // Only handle script/link load failures (not runtime JS errors)
+            if (((tag === 'script' || tag === 'link') && target.src) || target.href) {
+              var url = target.src || target.href || '';
+              // Only recover for chunk/asset files, not arbitrary resources
+              if (/\.(js|css)(\?|$)/.test(url)) {
+                console.error('[Recovery] Failed to load asset:', url);
+                clearAssetCachesAndReload();
+              }
+            }
+          },
+          true,
+        ); // capture phase to catch before the error is swallowed
+
+        // Also catch dynamic import() failures (Vite code-split chunks)
+        window.addEventListener('unhandledrejection', function (event) {
+          var reason = event.reason;
+          if (
+            reason &&
+            ((reason.message &&
+              (/Failed to fetch dynamically imported module/.test(reason.message) ||
+                /Loading chunk/.test(reason.message) ||
+                /error loading dynamically imported module/i.test(reason.message))) ||
+              reason.name === 'ChunkLoadError')
+          ) {
+            console.error('[Recovery] Dynamic import failed:', reason.message || reason);
+            event.preventDefault();
+            clearAssetCachesAndReload();
+          }
+        });
+
+        // Clear the recovery flag once the app bootstraps successfully,
+        // so the next deploy can trigger auto-recovery again.
+        var origMark = window.__markAppBootstrapped;
+        window.__markAppBootstrapped = function () {
+          sessionStorage.removeItem(RECOVERY_KEY);
+          if (typeof origMark === 'function') origMark();
+        };
+      })();
+
       // Show fallback UI if main script fails to load/execute within 15 seconds
       (function () {
         var timeout = setTimeout(function () {
@@ -110,15 +224,20 @@
         }, 15000);
 
         // Clear timeout once app bootstraps successfully
+        var origMark2 = window.__markAppBootstrapped;
         window.__markAppBootstrapped = function () {
           clearTimeout(timeout);
           window.__appBootstrapped = true;
+          if (typeof origMark2 === 'function') origMark2();
         };
 
-        // Handle fallback button click
+        // Handle fallback button click (manual recovery)
         document.getElementById('fe-fallback-clear-btn').addEventListener('click', function () {
           this.disabled = true;
           this.textContent = 'Clearing...';
+
+          // Clear the recovery guard so auto-recovery works after manual clear
+          sessionStorage.removeItem('__fe_chunk_recovery');
 
           Promise.resolve()
             .then(function () {

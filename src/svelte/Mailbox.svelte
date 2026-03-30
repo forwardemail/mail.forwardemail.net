@@ -369,7 +369,7 @@
   };
 
   const updateUrlWithFilters = () => {
-    if (skipFilterUrlUpdate || skipFolderUrlUpdate || !urlStateInitialized) return;
+    if (skipFilterUrlUpdate || skipFolderUrlUpdate || !urlStateInitialized || !isActive) return;
     const folder = get(selectedFolder);
     if (!folder) return;
     const currentMessage = get(source.state?.selectedMessage);
@@ -1995,17 +1995,26 @@
       // Use setTimeout to ensure messages have started loading
       skipFolderUrlUpdate = true;
       setTimeout(() => {
+        if (!isActive) {
+          skipFolderUrlUpdate = false;
+          return;
+        }
         navigateToMessage(initialHash.folder, initialHash.messageId, initialHash.filterState);
         skipFolderUrlUpdate = false;
       }, 100);
     } else {
       // No hash - set URL to current folder after it's loaded
       setTimeout(() => {
+        if (!isActive) return;
         const folder = get(selectedFolder);
         if (folder) {
           history.replaceState({ folder }, '', buildHashUrl(folder, null));
         } else {
+          // Suppress the subscribe's URL update — we'll replaceState ourselves
+          skipFolderUrlUpdate = true;
           mailboxStore?.actions?.selectFolder?.('INBOX');
+          history.replaceState({ folder: 'INBOX' }, '', buildHashUrl('INBOX', null));
+          skipFolderUrlUpdate = false;
         }
       }, 100);
     }
@@ -4439,12 +4448,18 @@
           selectionMode = false;
           // Update URL to reflect folder change (only if not triggered by popstate)
           // Always show just the folder - message selection happens separately
-          if (folder && !skipFolderUrlUpdate) {
+          if (folder && !skipFolderUrlUpdate && isActive) {
             const hash = buildHashUrl(folder, null);
             // Tab switches use replaceState to avoid polluting browser history
             if (tabSwitchInProgress) {
               history.replaceState({ folder }, '', hash);
               tabSwitchInProgress = false;
+              // Use replaceState when the current URL has no hash (bare /mailbox)
+              // to avoid creating a phantom history entry.  This only happens
+              // transiently right after login navigation before the initial
+              // folder hash is set.
+            } else if (!window.location.hash || window.location.hash === '#') {
+              history.replaceState({ folder }, '', hash);
             } else {
               history.pushState({ folder }, '', hash);
             }

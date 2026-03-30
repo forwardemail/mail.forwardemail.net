@@ -28,6 +28,34 @@ const TIMEOUT_BY_ACTION = {
 
 const addJitter = (delay) => delay + Math.random() * 1000;
 
+// ── Global 401 interception ──────────────────────────────────────────
+// Track consecutive auth failures across different actions.  When the
+// threshold is reached, dispatch a global event so the app can force
+// re-authentication instead of silently failing on every request.
+const AUTH_FAILURE_THRESHOLD = 3;
+const AUTH_FAILURE_COOLDOWN_MS = 30_000; // Don't fire more than once per 30s
+let _consecutiveAuthFailures = 0;
+let _lastAuthFailureDispatch = 0;
+
+function recordAuthSuccess() {
+  _consecutiveAuthFailures = 0;
+}
+
+function recordAuthFailure() {
+  _consecutiveAuthFailures++;
+  if (
+    _consecutiveAuthFailures >= AUTH_FAILURE_THRESHOLD &&
+    Date.now() - _lastAuthFailureDispatch > AUTH_FAILURE_COOLDOWN_MS
+  ) {
+    _lastAuthFailureDispatch = Date.now();
+    _consecutiveAuthFailures = 0;
+    // Dispatch on next microtick so the throwing caller can finish first
+    Promise.resolve().then(() => {
+      window.dispatchEvent(new CustomEvent('fe:auth-expired'));
+    });
+  }
+}
+
 // Create base ky instance with default configuration
 const api = ky.create({
   prefixUrl: config.apiBase,
@@ -153,6 +181,9 @@ export const Remote = {
     try {
       const response = await api(urlPath, kyOptions);
 
+      // Successful response — reset consecutive auth failure counter
+      recordAuthSuccess();
+
       // ky automatically parses JSON if content-type is application/json
       // For non-JSON responses, we need to handle differently
       const contentType = response.headers.get('content-type') || '';
@@ -173,6 +204,11 @@ export const Remote = {
         const err = new Error(error.message);
         err.status = error.response.status;
         err.isAuthError = error.response.status === 401 || error.response.status === 403;
+
+        // Track consecutive auth failures for global interception
+        if (err.isAuthError) {
+          recordAuthFailure();
+        }
 
         // Try to get error details from response
         try {

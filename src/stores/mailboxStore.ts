@@ -596,10 +596,14 @@ const createMailboxStore = () => {
         if (cached?.length) {
           const mappedCached = buildFolderList(cached);
           folders.set(mappedCached);
-          const inbox = mappedCached.find((f) => f.path?.toUpperCase?.() === 'INBOX');
-          const defaultFolder = inbox?.path || mappedCached[0]?.path;
-          if (defaultFolder) {
-            selectedFolder.set(defaultFolder);
+          // Only set default folder if none is currently selected
+          const currentFolder = get(selectedFolder);
+          if (!currentFolder || currentFolder === '') {
+            const inbox = mappedCached.find((f) => f.path?.toUpperCase?.() === 'INBOX');
+            const defaultFolder = inbox?.path || mappedCached[0]?.path;
+            if (defaultFolder) {
+              selectedFolder.set(defaultFolder);
+            }
           }
         }
       }

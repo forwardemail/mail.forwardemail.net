@@ -595,7 +595,7 @@ export function generateAccountInfo() {
     email: DEMO_EMAIL,
     plan: 'enhanced-protection',
     storage_used: 15728640, // ~15 MB
-    storage_limit: 10737418240, // 10 GB
+    storage_quota: 10737418240, // 10 GB
     created_at: daysAgo(60),
     locale: 'en',
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/New_York',

@@ -32,6 +32,24 @@ describe('buildAliasAuthHeader', () => {
   it('throws when required and no aliasAuth', () => {
     expect(() => buildAliasAuthHeader(null, { required: true })).toThrow('Authorization required');
   });
+
+  it('rejects encrypted alias_auth blobs', () => {
+    // Encrypted values start with \x00ENC\x01 — they should be treated as missing
+    const encrypted = '\x00ENC\x01someciphertext';
+    expect(buildAliasAuthHeader(encrypted)).toBe('');
+  });
+
+  it('throws when required and alias_auth is encrypted', () => {
+    const encrypted = '\x00ENC\x01someciphertext';
+    expect(() => buildAliasAuthHeader(encrypted, { required: true })).toThrow(
+      'Authorization required',
+    );
+  });
+
+  it('rejects alias_auth without colon separator', () => {
+    // alias_auth must be "email:password" — a value without colon is corrupt
+    expect(buildAliasAuthHeader('no-colon-here')).toBe('');
+  });
 });
 
 describe('buildApiKeyAuthHeader', () => {
@@ -43,6 +61,11 @@ describe('buildApiKeyAuthHeader', () => {
   it('returns empty string for null/undefined', () => {
     expect(buildApiKeyAuthHeader(null)).toBe('');
     expect(buildApiKeyAuthHeader(undefined)).toBe('');
+  });
+
+  it('rejects encrypted api_key blobs', () => {
+    const encrypted = '\x00ENC\x01someciphertext';
+    expect(buildApiKeyAuthHeader(encrypted)).toBe('');
   });
 });
 
@@ -73,5 +96,43 @@ describe('getAuthHeader', () => {
   it('returns empty when nothing available and not required', () => {
     vi.mocked(Local.get).mockReturnValue(null);
     expect(getAuthHeader()).toBe('');
+  });
+
+  it('treats encrypted alias_auth as missing and falls back to apiKey', () => {
+    vi.mocked(Local.get).mockImplementation((key) => {
+      if (key === 'alias_auth') return '\x00ENC\x01encrypted-blob';
+      if (key === 'api_key') return 'fallback-key';
+      return null;
+    });
+    const result = getAuthHeader();
+    expect(result).toBe(`Basic ${btoa('fallback-key:')}`);
+  });
+
+  it('treats encrypted alias_auth and encrypted apiKey both as missing', () => {
+    vi.mocked(Local.get).mockImplementation((key) => {
+      if (key === 'alias_auth') return '\x00ENC\x01encrypted-alias';
+      if (key === 'api_key') return '\x00ENC\x01encrypted-key';
+      return null;
+    });
+    expect(getAuthHeader()).toBe('');
+  });
+
+  it('throws when required and all credentials are encrypted', () => {
+    vi.mocked(Local.get).mockImplementation((key) => {
+      if (key === 'alias_auth') return '\x00ENC\x01encrypted-alias';
+      if (key === 'api_key') return '\x00ENC\x01encrypted-key';
+      return null;
+    });
+    expect(() => getAuthHeader({ required: true })).toThrow('Authorization required');
+  });
+
+  it('rejects alias_auth without colon and falls back to apiKey', () => {
+    vi.mocked(Local.get).mockImplementation((key) => {
+      if (key === 'alias_auth') return 'corrupt-no-colon';
+      if (key === 'api_key') return 'good-key';
+      return null;
+    });
+    const result = getAuthHeader();
+    expect(result).toBe(`Basic ${btoa('good-key:')}`);
   });
 });

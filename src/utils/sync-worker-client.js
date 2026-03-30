@@ -156,22 +156,22 @@ export function resetSyncWorkerReady() {
   pendingRequests.clear(error);
 }
 
-// Default timeout for sync tasks (10 seconds)
-const SYNC_TASK_TIMEOUT_MS = 10000;
+// Default timeout for sync tasks (2 minutes)
+const SYNC_TASK_TIMEOUT_MS = 120_000;
 
 /**
- * Create a promise that rejects after timeout
+ * Create a promise that rejects after timeout.
+ * Clears the timer when the task settles to avoid stale timers.
  */
 function withTimeout(promise, ms, taskId) {
-  return Promise.race([
-    promise,
-    new Promise((_, reject) => {
-      setTimeout(() => {
-        pendingTasks.reject(taskId, new Error(`Sync task timed out after ${ms}ms`));
-        reject(new Error(`Sync task timed out after ${ms}ms`));
-      }, ms);
-    }),
-  ]);
+  let timerId;
+  const timeout = new Promise((_, reject) => {
+    timerId = setTimeout(() => {
+      pendingTasks.reject(taskId, new Error(`Sync task timed out after ${ms}ms`));
+      reject(new Error(`Sync task timed out after ${ms}ms`));
+    }, ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timerId));
 }
 
 export async function sendSyncTask(task, options = {}) {
