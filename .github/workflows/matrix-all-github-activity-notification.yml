@@ -1,0 +1,366 @@
+name: "Matrix All Activity Notifications"
+
+on:
+  # Issues
+  issues:
+    types: [opened, closed, reopened]
+  # edited, assigned, unassigned, labeled, unlabeled, locked, unlocked, transferred, pinned, unpinned]
+
+  # Issue Comments
+  #issue_comment:
+  #  types: [created] #, edited, deleted]
+
+  # Pull Requests
+  pull_request:
+    types: [opened] # , edited, closed]
+  # , reopened, assigned, unassigned, review_requested, review_request_removed, labeled, unlabeled, synchronize, converted_to_draft, ready_for_review, locked, unlocked]
+
+  # Pull Request Reviews
+  # pull_request_review:
+    # types: [submitted] # , edited, dismissed]
+
+  # Pull Request Review Comments
+  #pull_request_review_comment:
+  #  types: [created] #, edited, deleted]
+
+  # Pushes to any branch AND tags
+  #push:
+  #  branches: ['**']
+  #  tags: ['**']
+
+  # Releases
+  release:
+    types: [published] #, unpublished, created, edited, deleted, prereleased, released]
+
+  # Stars
+  #watch:
+  #  types: [started]
+
+  # Forks
+  #fork:
+
+  # Discussions
+  discussion:
+    types: [created, answered] #, edited, deleted, pinned, unpinned, locked, unlocked, transferred, category_changed, answered, unanswered]
+
+  # Discussion Comments
+  #discussion_comment:
+  #  types: [created] #, edited, deleted]
+
+  # Wiki
+  gollum:
+
+  # Milestones
+  milestone:
+    types: [closed] # [created, closed, opened, edited, deleted]
+
+  # Labels
+  #label:
+  #  types: [created, edited, deleted]
+
+  # Branch/Tag creation and deletion
+  #create:
+  #delete:
+
+  # Deployment
+  deployment:
+  deployment_status:
+
+  # Pages
+  # page_build:
+
+  # Repository dispatch
+  # repository_dispatch:
+
+  # Public (when repo goes public)
+  public:
+
+  # Check runs
+  #check_run:
+  #  types: [created, completed, rerequested, requested_action]
+
+  # Check suites
+  #check_suite:
+  #  types: [completed, requested, rerequested]
+
+  # Branch protection rules
+  #branch_protection_rule:
+  #  types: [created, edited, deleted]
+
+  # Registry packages
+  registry_package:
+    types: [published, updated]
+
+  # Status (commit status)
+  # status:
+
+jobs:
+  notify-matrix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Determine activity type and format message
+        id: format
+        env:
+          # Set environment variables for all potentially problematic values
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_URL: ${{ github.event.issue.html_url }}
+          COMMENT_URL: ${{ github.event.comment.html_url }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_MERGED: ${{ github.event.pull_request.merged }}
+          REVIEW_URL: ${{ github.event.review.html_url }}
+          REF_NAME: ${{ github.ref_name }}
+          HEAD_COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+          COMPARE_URL: ${{ github.event.compare }}
+          RELEASE_NAME: ${{ github.event.release.name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_URL: ${{ github.event.release.html_url }}
+          ACTOR_NAME: ${{ github.actor }}
+          FORKEE_OWNER: ${{ github.event.forkee.owner.login }}
+          FORKEE_URL: ${{ github.event.forkee.html_url }}
+          DISCUSSION_TITLE: ${{ github.event.discussion.title }}
+          DISCUSSION_URL: ${{ github.event.discussion.html_url }}
+          PAGES_MODIFIED: ${{ join(github.event.pages.*.page_name, ', ') }}
+          MILESTONE_TITLE: ${{ github.event.milestone.title }}
+          MILESTONE_URL: ${{ github.event.milestone.html_url }}
+          LABEL_NAME: ${{ github.event.label.name }}
+          REF_VALUE: ${{ github.event.ref }}
+          REF_TYPE: ${{ github.event.ref_type }}
+          DEPLOYMENT_ENV: ${{ github.event.deployment.environment }}
+          DEPLOYMENT_STATUS_STATE: ${{ github.event.deployment_status.state }}
+          DEPLOYMENT_STATUS_URL: ${{ github.event.deployment_status.target_url }}
+          CHECK_RUN_NAME: ${{ github.event.check_run.name }}
+          CHECK_RUN_URL: ${{ github.event.check_run.html_url }}
+          CHECK_SUITE_CONCLUSION: ${{ github.event.check_suite.conclusion }}
+          CHECK_SUITE_URL: ${{ github.event.check_suite.html_url }}
+          PACKAGE_NAME: ${{ github.event.package.name }}
+          PACKAGE_URL: ${{ github.event.package.html_url }}
+          STATUS_STATE: ${{ github.event.state }}
+          TARGET_URL: ${{ github.event.target_url }}
+          REPO_URL: ${{ github.event.repository.html_url }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
+        run: |
+          echo "Event: $EVENT_NAME"
+          echo "Action: $EVENT_ACTION"
+
+          # Set default values
+          ICON="📝"
+          TITLE="GitHub Activity"
+          DESCRIPTION=""
+          URL="$REPO_URL"
+          ACTOR="$ACTOR_NAME"
+
+          case "$EVENT_NAME" in
+            "issues")
+              ICON="🐛"
+              case "$EVENT_ACTION" in
+                "opened") TITLE="New Issue Opened" ;;
+                "closed") TITLE="Issue Closed" ;;
+                "reopened") TITLE="Issue Reopened" ;;
+                "edited") TITLE="Issue Edited" ;;
+                "assigned") TITLE="Issue Assigned" ;;
+                "labeled") TITLE="Issue Labeled" ;;
+                *) TITLE="Issue $EVENT_ACTION" ;;
+              esac
+              DESCRIPTION="$ISSUE_TITLE"
+              URL="$ISSUE_URL"
+              ;;
+            "issue_comment")
+              ICON="💬"
+              TITLE="Issue Comment $EVENT_ACTION"
+              DESCRIPTION="On: $ISSUE_TITLE"
+              URL="$COMMENT_URL"
+              ;;
+            "pull_request")
+              ICON="🔀"
+              case "$EVENT_ACTION" in
+                "opened") TITLE="New Pull Request" ;;
+                "closed")
+                  if [[ "$PR_MERGED" == "true" ]]; then
+                    TITLE="Pull Request Merged"
+                    ICON="✅"
+                  else
+                    TITLE="Pull Request Closed"
+                  fi
+                  ;;
+                "reopened") TITLE="Pull Request Reopened" ;;
+                "ready_for_review") TITLE="Pull Request Ready for Review" ;;
+                *) TITLE="Pull Request $EVENT_ACTION" ;;
+              esac
+              DESCRIPTION="$PR_TITLE"
+              URL="$PR_URL"
+              ;;
+            "pull_request_review")
+              ICON="👀"
+              TITLE="Pull Request Review $EVENT_ACTION"
+              DESCRIPTION="On: $PR_TITLE"
+              URL="$REVIEW_URL"
+              ;;
+            "pull_request_review_comment")
+              ICON="💭"
+              TITLE="PR Review Comment $EVENT_ACTION"
+              DESCRIPTION="On: $PR_TITLE"
+              URL="$COMMENT_URL"
+              ;;
+            "push")
+              ICON="📤"
+              if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+                ICON="🏷️"
+                TITLE="Tag Pushed"
+                DESCRIPTION="Tag: $REF_NAME"
+              else
+                TITLE="Push to $REF_NAME"
+                DESCRIPTION="$HEAD_COMMIT_MESSAGE"
+              fi
+              URL="$COMPARE_URL"
+              ;;
+            "release")
+              ICON="🚀"
+              TITLE="Release $EVENT_ACTION"
+              # Use release name if available, otherwise use tag name
+              if [[ -n "$RELEASE_NAME" ]]; then
+                DESCRIPTION="$RELEASE_NAME"
+              else
+                DESCRIPTION="$RELEASE_TAG"
+              fi
+              URL="$RELEASE_URL"
+              ;;
+            "watch")
+              ICON="⭐"
+              TITLE="Repository Starred"
+              DESCRIPTION="New watcher: $ACTOR_NAME"
+              ;;
+            "fork")
+              ICON="🍴"
+              TITLE="Repository Forked"
+              DESCRIPTION="By $FORKEE_OWNER"
+              URL="$FORKEE_URL"
+              ;;
+            "discussion")
+              ICON="💬"
+              TITLE="Discussion $EVENT_ACTION"
+              DESCRIPTION="$DISCUSSION_TITLE"
+              URL="$DISCUSSION_URL"
+              ;;
+            "discussion_comment")
+              ICON="💬"
+              TITLE="Discussion Comment $EVENT_ACTION"
+              DESCRIPTION="On: $DISCUSSION_TITLE"
+              URL="$COMMENT_URL"
+              ;;
+            "gollum")
+              ICON="📖"
+              TITLE="Wiki Updated"
+              DESCRIPTION="Pages modified: $PAGES_MODIFIED"
+              ;;
+            "milestone")
+              ICON="🎯"
+              TITLE="Milestone $EVENT_ACTION"
+              DESCRIPTION="$MILESTONE_TITLE"
+              URL="$MILESTONE_URL"
+              ;;
+            "label")
+              ICON="🏷️"
+              TITLE="Label $EVENT_ACTION"
+              DESCRIPTION="$LABEL_NAME"
+              ;;
+            "create")
+              ICON="🌱"
+              TITLE="$REF_TYPE Created"
+              DESCRIPTION="$REF_VALUE"
+              ;;
+            "delete")
+              ICON="🗑️"
+              TITLE="$REF_TYPE Deleted"
+              DESCRIPTION="$REF_VALUE"
+              ;;
+            "deployment")
+              ICON="🚀"
+              TITLE="Deployment"
+              DESCRIPTION="Environment: $DEPLOYMENT_ENV"
+              ;;
+            "deployment_status")
+              ICON="🚀"
+              TITLE="Deployment Status"
+              DESCRIPTION="State: $DEPLOYMENT_STATUS_STATE"
+              URL="$DEPLOYMENT_STATUS_URL"
+              ;;
+            "page_build")
+              ICON="📄"
+              TITLE="Page Build"
+              DESCRIPTION="GitHub Pages build"
+              ;;
+            "repository_dispatch")
+              ICON="📡"
+              TITLE="Repository Dispatch"
+              DESCRIPTION="Event type: $EVENT_ACTION"
+              ;;
+            "public")
+              ICON="🌍"
+              TITLE="Repository Made Public"
+              DESCRIPTION="Repository is now public"
+              ;;
+            "check_run")
+              ICON="✅"
+              TITLE="Check Run $EVENT_ACTION"
+              DESCRIPTION="$CHECK_RUN_NAME"
+              URL="$CHECK_RUN_URL"
+              ;;
+            "check_suite")
+              ICON="✅"
+              TITLE="Check Suite $EVENT_ACTION"
+              DESCRIPTION="Conclusion: $CHECK_SUITE_CONCLUSION"
+              URL="$CHECK_SUITE_URL"
+              ;;
+            "branch_protection_rule")
+              ICON="🛡️"
+              TITLE="Branch Protection Rule $EVENT_ACTION"
+              DESCRIPTION="Rule updated"
+              ;;
+            "registry_package")
+              ICON="📦"
+              TITLE="Package $EVENT_ACTION"
+              DESCRIPTION="$PACKAGE_NAME"
+              URL="$PACKAGE_URL"
+              ;;
+            "status")
+              ICON="🔍"
+              TITLE="Status Update"
+              DESCRIPTION="State: $STATUS_STATE"
+              URL="$TARGET_URL"
+              ;;
+            *)
+              TITLE="$EVENT_NAME $EVENT_ACTION"
+              ;;
+          esac
+
+          # Output variables using proper escaping
+          {
+            echo "icon=$ICON"
+            echo "title=$TITLE"
+            echo "description=$DESCRIPTION"
+            echo "url=$URL"
+            echo "actor=$ACTOR"
+          } >> $GITHUB_OUTPUT
+
+      - name: Send Matrix notification
+        uses: lkiesow/matrix-notification@v1
+        with:
+          server: matrix.org
+          token: ${{ secrets.MATRIX_TOKEN }}
+          room: '!azsMvrsrqEENIcSLOe:matrix.org'
+          message: |
+            ${{ steps.format.outputs.icon }} ${{ steps.format.outputs.title }}
+
+            Actor: ${{ steps.format.outputs.actor }}
+            Repository: ${{ github.repository }}
+            ${{ steps.format.outputs.description && format('Details: {0}', steps.format.outputs.description) || '' }}
+
+            Link: ${{ steps.format.outputs.url }}
+          formatted_message: |
+            ${{ steps.format.outputs.icon }} <b>${{ steps.format.outputs.title }}</b><br><br>
+            <b>Actor:</b> ${{ steps.format.outputs.actor }}<br>
+            <b>Repository:</b> ${{ github.repository }}<br>
+            ${{ steps.format.outputs.description && format('<b>Details:</b> {0}<br>', steps.format.outputs.description) || '' }}
+            <br><b>Link:</b> <a href="${{ steps.format.outputs.url }}">${{ steps.format.outputs.url }}</a>
