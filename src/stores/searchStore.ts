@@ -9,6 +9,8 @@ import { SearchWorkerClient } from '../utils/search-worker-client';
 import { connectSearchWorker } from '../utils/sync-controller';
 import { indexProgress } from './mailboxActions';
 import { resolveSearchBodyIndexing } from '../utils/search-body-indexing.js';
+import { Remote } from '../utils/remote';
+import { isDemoMode } from '../utils/demo-mode';
 import type { Message, SearchStats, SearchResult } from '../types';
 import { warn } from '../utils/logger.ts';
 
@@ -302,6 +304,168 @@ const removeFromIndex = async (ids: string[] = []): Promise<void> => {
   refreshStats();
 };
 
+// ── Server-side search via Forward Email API ────────────────────────────
+// The API supports GET /v1/messages with search parameters:
+//   ?search=  (general text across all fields)
+//   ?subject= ?from= ?to= ?body= (field-specific)
+//   ?is_unread= ?is_flagged= ?has_attachments=
+//   ?since= ?before= ?folder=
+// Server search covers message bodies (including PGP-decrypted content
+// that was decrypted server-side) which the local FlexSearch index may
+// not have if the user never opened the message.
+
+interface ServerSearchParams {
+  search?: string;
+  subject?: string;
+  from?: string;
+  to?: string;
+  folder?: string;
+  is_unread?: boolean;
+  is_flagged?: boolean;
+  has_attachments?: boolean;
+  since?: string;
+  before?: string;
+  limit?: number;
+  page?: number;
+  raw?: boolean;
+  attachments?: boolean;
+}
+
+/**
+ * Build API query parameters from parsed search filters.
+ * Returns null if there is nothing meaningful to send to the server
+ * (e.g. filter-only queries that the server cannot evaluate).
+ */
+const buildServerSearchParams = (
+  text: string,
+  filters: ReturnType<typeof parseSearchQuery>['filters'],
+  folder: string | null,
+  limit: number,
+): ServerSearchParams | null => {
+  const params: ServerSearchParams = {
+    limit,
+    page: 1,
+    raw: false,
+    attachments: false,
+  };
+
+  // Free-text goes to the general `search` parameter which searches
+  // across subject, body, from, to, and other fields server-side.
+  if (text) {
+    params.search = text;
+  }
+
+  // Map structured operators to API-specific parameters
+  if (filters?.from?.length) {
+    params.from = filters.from.join(' ');
+  }
+  if (filters?.to?.length) {
+    params.to = filters.to.join(' ');
+  }
+  if (filters?.subject?.length) {
+    params.subject = filters.subject.join(' ');
+  }
+  if (filters.isUnread === true) {
+    params.is_unread = true;
+  }
+  if (filters.isStarred === true) {
+    params.is_flagged = true;
+  }
+  if (filters.hasAttachment === true) {
+    params.has_attachments = true;
+  }
+  if (filters.after) {
+    params.since = new Date(filters.after).toISOString();
+  }
+  if (filters.before) {
+    params.before = new Date(filters.before).toISOString();
+  }
+
+  // Folder
+  if (folder && folder !== 'all') {
+    params.folder = folder;
+  }
+
+  // Only send to server if there is at least one meaningful search param
+  const hasServerParam = params.search || params.from || params.to || params.subject;
+  if (!hasServerParam) return null;
+
+  return params;
+};
+
+/**
+ * Execute server-side search and return normalized results.
+ * Returns an empty array on any error (server search is best-effort).
+ */
+const serverSearch = async (
+  text: string,
+  filters: ReturnType<typeof parseSearchQuery>['filters'],
+  folder: string | null,
+  limit: number,
+): Promise<SearchResult[]> => {
+  // Skip server search in demo mode — there is no real API
+  if (isDemoMode()) return [];
+
+  const params = buildServerSearchParams(text, filters, folder, limit);
+  if (!params) return [];
+
+  try {
+    const response = await Remote.request('MessageList', params, {
+      method: 'GET',
+      pathOverride: '/v1/messages',
+      perfLabel: 'search.server',
+    });
+
+    // The API returns an array of message objects (or an object with a
+    // data/messages array depending on the endpoint version).
+    const messages: SearchResult[] = Array.isArray(response)
+      ? response
+      : Array.isArray(response?.data)
+        ? response.data
+        : Array.isArray(response?.messages)
+          ? response.messages
+          : [];
+
+    // Normalize dates for consistent sorting/display
+    return messages.map((msg: SearchResult) => {
+      const dateMs =
+        typeof msg.date === 'number'
+          ? msg.date
+          : Number.isFinite(Date.parse(String(msg.date || '')))
+            ? Date.parse(String(msg.date || ''))
+            : null;
+      return { ...msg, dateMs: dateMs ?? msg.date ?? null } as SearchResult;
+    });
+  } catch (err) {
+    // Server search is best-effort; local results are still returned
+    warn('[searchStore] server search failed, using local results only', err);
+    return [];
+  }
+};
+
+/**
+ * Merge local and server search results, deduplicating by message ID.
+ * Server results take priority (they may have more complete data).
+ */
+const mergeResults = (localHits: SearchResult[], serverHits: SearchResult[]): SearchResult[] => {
+  if (!serverHits.length) return localHits;
+  if (!localHits.length) return serverHits;
+
+  const byId = new Map<string, SearchResult>();
+
+  // Local results first (lower priority)
+  for (const hit of localHits) {
+    if (hit?.id) byId.set(hit.id, hit);
+  }
+
+  // Server results overwrite (higher priority — more complete data)
+  for (const hit of serverHits) {
+    if (hit?.id) byId.set(hit.id, hit);
+  }
+
+  return Array.from(byId.values());
+};
+
 const search = async (
   q: string,
   { folder = null, crossFolder = false, limit = 200, candidates = [] }: SearchOptions = {},
@@ -333,9 +497,20 @@ const search = async (
   const effectiveFolder = filters.folder || folder;
   const useCrossFolder = crossFolder || filters.scope === 'all' || effectiveFolder === 'all';
 
+  // ── Run local and server search in parallel ───────────────────────
+  // Local search provides instant results from the FlexSearch index.
+  // Server search provides comprehensive results including message
+  // bodies the user has never opened and PGP-decrypted content.
+  // We merge both, with server results taking priority on duplicates.
+
+  const serverFolder = useCrossFolder ? null : effectiveFolder;
+  const serverPromise = serverSearch(text, filters, serverFolder, limit);
+
+  // Local search path (worker or main-thread fallback)
+  let localHits: SearchResult[] = [];
+
   if (workerClient) {
     try {
-      // Only pass candidate IDs to avoid expensive serialization of full message objects
       const candidateIds = candidates?.length ? candidates.map((c) => c.id).filter(Boolean) : [];
       const res = await workerClient.search({
         account: accountId,
@@ -347,139 +522,137 @@ const search = async (
         includeBody: get(includeBody),
       });
       if (res?.stats) stats.set(res.stats);
-      results.set(res?.results || []);
-      return res?.results || [];
+      localHits = res?.results || [];
     } catch {
-      // ignore and fall back
+      // Fall through to main-thread search
     }
   }
 
-  // Fallback: ensure main-thread service exists
-  await ensureMainThreadService();
+  // Main-thread fallback if worker didn't produce results
+  if (!localHits.length && !workerClient) {
+    await ensureMainThreadService();
 
-  let hits: SearchResult[] = [];
-  if (!text) {
-    if (useCrossFolder || !effectiveFolder) {
-      hits = await db.messages.where('account').equals(accountId).toArray();
+    if (!text) {
+      if (useCrossFolder || !effectiveFolder) {
+        localHits = await db.messages.where('account').equals(accountId).toArray();
+      } else {
+        localHits = await db.messages
+          .where('[account+folder]')
+          .equals([accountId, effectiveFolder])
+          .toArray();
+      }
+    } else if (useCrossFolder || !candidates?.length) {
+      localHits = await searchService!.searchAllFolders(text, limit);
+      if (!useCrossFolder && effectiveFolder) {
+        localHits = localHits.filter(
+          (h) => (h.folder || '').toLowerCase() === effectiveFolder.toLowerCase(),
+        );
+      }
     } else {
-      hits = await db.messages
-        .where('[account+folder]')
-        .equals([accountId, effectiveFolder])
-        .toArray();
+      localHits = searchService!.search(text, candidates, {
+        folder: effectiveFolder,
+        limit,
+        crossFolder: useCrossFolder,
+      });
     }
-  } else if (useCrossFolder || !candidates?.length) {
-    hits = await searchService!.searchAllFolders(text, limit);
-    if (!useCrossFolder && effectiveFolder) {
-      hits = hits.filter((h) => (h.folder || '').toLowerCase() === effectiveFolder.toLowerCase());
-    }
-  } else {
-    hits = searchService!.search(text, candidates, {
-      folder: effectiveFolder,
-      limit,
-      crossFolder: useCrossFolder,
-    });
-  }
 
-  // Hydrate from cache when we don't already have full message objects
-  if (!candidates?.length) {
-    const ids = Array.from(new Set((hits || []).map((h) => h.id).filter(Boolean)));
-    if (ids.length) {
-      try {
-        const records = await db.messages.bulkGet(ids.map((id) => [accountId, id]));
-        const byId = new Map<string, SearchResult>();
-        records?.forEach((rec: SearchResult | undefined) => {
-          if (rec?.id) byId.set(rec.id, rec);
-        });
-        hits = hits.map((h) => {
-          const hydrated = byId.get(h.id);
-          if (hydrated) return hydrated;
-          const parsedDate =
-            typeof h.date === 'number'
-              ? h.date
-              : Number.isFinite(Date.parse(String(h.date) || ''))
-                ? Date.parse(String(h.date) || '')
-                : null;
-          return { ...h, dateMs: parsedDate, date: parsedDate || h.date || null } as SearchResult;
-        });
-      } catch (err) {
-        warn('[searchStore] hydrate results failed', err);
+    // Hydrate from cache when we don't already have full message objects
+    if (!candidates?.length) {
+      const ids = Array.from(new Set((localHits || []).map((h) => h.id).filter(Boolean)));
+      if (ids.length) {
+        try {
+          const records = await db.messages.bulkGet(ids.map((id) => [accountId, id]));
+          const byId = new Map<string, SearchResult>();
+          records?.forEach((rec: SearchResult | undefined) => {
+            if (rec?.id) byId.set(rec.id, rec);
+          });
+          localHits = localHits.map((h) => {
+            const hydrated = byId.get(h.id);
+            if (hydrated) return hydrated;
+            const parsedDate =
+              typeof h.date === 'number'
+                ? h.date
+                : Number.isFinite(Date.parse(String(h.date) || ''))
+                  ? Date.parse(String(h.date) || '')
+                  : null;
+            return { ...h, dateMs: parsedDate, date: parsedDate || h.date || null } as SearchResult;
+          });
+        } catch (err) {
+          warn('[searchStore] hydrate results failed', err);
+        }
       }
     }
   }
 
-  const filtered = applySearchFilters(hits || [], {
+  // Wait for server results (best-effort — already running in parallel)
+  const serverHits = await serverPromise;
+
+  // Merge local + server results, then apply client-side filters
+  const merged = mergeResults(localHits, serverHits);
+
+  const filtered = applySearchFilters(merged || [], {
     ...filters,
     folder: effectiveFolder,
     ast,
   });
+
+  // Also cache any new server-returned messages into IndexedDB so they
+  // appear in subsequent local searches and the message list.
+  if (serverHits.length) {
+    const localIds = new Set(localHits.map((h) => h.id).filter(Boolean));
+    const newFromServer = serverHits.filter((h) => h.id && !localIds.has(h.id));
+    if (newFromServer.length) {
+      // Fire-and-forget: index new messages for future local searches
+      indexMessages(newFromServer as Message[]).catch(() => {});
+      // Also cache into IndexedDB messages table
+      try {
+        const toCache = newFromServer.map((msg) => ({
+          ...msg,
+          account: accountId,
+          folder: msg.folder || effectiveFolder || 'INBOX',
+        }));
+        db.messages.bulkPut(toCache).catch(() => {});
+      } catch {
+        // best-effort caching
+      }
+    }
+  }
 
   results.set(filtered || []);
   return filtered;
 };
 
 const rebuildFromCache = async (options: RebuildOptions = {}): Promise<{ count: number }> => {
-  await ensureInitialized();
-  const account = accountId;
-  const silent = options.silent || false;
-  const startTime = Date.now();
-
+  const { silent = false } = options;
   loading.set(true);
-  indexProgress.set({
-    active: true,
-    current: 0,
-    total: 0,
-    message: 'Building search index...',
-  });
-  if (!silent) {
-    indexToastsRef?.show?.('Building search index...', 'info');
-  }
+  indexProgress.set({ active: true, current: 0, total: 0, message: 'Preparing index rebuild...' });
 
   try {
-    // Prefer using worker's dedicated rebuildFromCache action
     if (workerClient) {
-      const res = await workerClient.rebuildFromCache({
-        account,
+      const result = await workerClient.rebuildFromCache({
+        account: accountId,
         includeBody: get(includeBody),
       });
-      if (res?.stats) stats.set(res.stats);
+      if (result?.stats) stats.set(result.stats);
 
-      // Update health after rebuild
-      const healthResult = await workerClient.getHealth({
-        account,
-        includeBody: get(includeBody),
-      });
-      health.set(healthResult);
+      const count = result?.stats?.count || result?.count || 0;
+      indexProgress.set({ active: false, current: count, total: count, message: '' });
 
-      const elapsed = Math.round((Date.now() - startTime) / 1000);
-      indexProgress.set({ active: false, current: 0, total: 0, message: '' });
       if (!silent) {
-        indexToastsRef?.show?.(
-          `Search index built (${res?.count || 0} messages${elapsed > 2 ? `, ${elapsed}s` : ''})`,
-          'success',
-        );
+        indexToastsRef?.show?.(`Search index built (${count} messages)`, 'success');
       }
 
-      return { count: res?.count || 0 };
+      return { count };
     }
 
-    // Fallback to main thread
-    const messages = await db.messages.where('account').equals(account).toArray();
-    if (!messages?.length) {
-      stats.set({ count: 0, sizeBytes: 0, includeBody: get(includeBody), account });
-      indexProgress.set({ active: false, current: 0, total: 0, message: '' });
-      return { count: 0 };
-    }
-
-    indexProgress.update((p) => ({
-      ...p,
-      total: messages.length,
-      message: `Indexing ${messages.length} messages...`,
-    }));
-
+    // Fallback: main-thread rebuild
     await ensureMainThreadService();
+    const messages = await db.messages.where('account').equals(accountId).toArray();
+    const total = messages.length;
+
     let bodyMap: Map<string, string> | null = null;
     if (get(includeBody)) {
-      const keys = messages.map((msg: Message) => [account, msg.id]);
+      const keys = messages.map((msg) => [accountId, msg.id]);
       try {
         const bodies = await db.messageBodies.bulkGet(keys);
         bodyMap = new Map();
@@ -487,17 +660,32 @@ const rebuildFromCache = async (options: RebuildOptions = {}): Promise<{ count: 
           if (rec?.id) bodyMap!.set(rec.id, rec.textContent || rec.body || '');
         });
       } catch (err) {
-        warn('[searchStore] rebuild body lookup failed', err);
+        warn('search body lookup failed during rebuild', err);
       }
     }
 
-    await searchService!.reset(
-      messages.map((msg: Message) => mapMessageToDoc(msg, bodyMap?.get(msg.id) || '')),
-    );
+    const startTime = performance?.now ? performance.now() : Date.now();
+    const BATCH_SIZE = 500;
+    for (let i = 0; i < messages.length; i += BATCH_SIZE) {
+      const batch = messages.slice(i, i + BATCH_SIZE);
+      searchService!.upsertEntries(
+        batch.map((msg) => mapMessageToDoc(msg, bodyMap?.get(msg.id) || '')),
+      );
+      indexProgress.set({
+        active: true,
+        current: Math.min(i + BATCH_SIZE, total),
+        total,
+        message: `Indexing ${Math.min(i + BATCH_SIZE, total)} / ${total}`,
+      });
+    }
+    await searchService!.persist();
     refreshStats();
 
-    const elapsed = Math.round((Date.now() - startTime) / 1000);
-    indexProgress.set({ active: false, current: 0, total: 0, message: '' });
+    const elapsed = Math.round(
+      ((performance?.now ? performance.now() : Date.now()) - startTime) / 1000,
+    );
+    indexProgress.set({ active: false, current: total, total, message: '' });
+
     if (!silent) {
       indexToastsRef?.show?.(
         `Search index built (${messages.length} messages${elapsed > 2 ? `, ${elapsed}s` : ''})`,
