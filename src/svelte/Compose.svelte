@@ -668,12 +668,13 @@
     if (!contact) return null;
     if (typeof contact === 'string') {
       const email = contact.trim();
-      return email ? { email, name: '' } : null;
+      return email ? { email, name: '', company: '' } : null;
     }
     const c = contact as Record<string, unknown>;
     const email = ((c.email || c.address || c.value || c.text || '') as string).trim();
     const name = ((c.name || c.full_name || c.FullName || '') as string).trim();
-    return email ? { email, name } : null;
+    const company = ((c.company || c.Company || '') as string).trim();
+    return email ? { email, name, company } : null;
   };
 
   const normalizeContactList = (list: unknown[]) =>
@@ -745,8 +746,8 @@
   };
 
   const parseVCardBasics = (content: string) => {
-    if (!content) return { emails: [] as string[], name: '' };
-    const parsed: { emails: string[]; name?: string } = { emails: [] };
+    if (!content) return { emails: [] as string[], name: '', company: '' };
+    const parsed: { emails: string[]; name?: string; company?: string } = { emails: [] };
     const rawLines = content.split(/\r?\n/);
     const lines: string[] = [];
     for (const line of rawLines) {
@@ -773,6 +774,9 @@
         if (parts.length) parsed.name = parts.join(' ').replace(/\s+/g, ' ').trim();
       } else if (key === 'EMAIL' && value) {
         parsed.emails.push(value);
+      } else if (key === 'ORG' && !parsed.company) {
+        // ORG may have semicolon-separated parts (company;department;...)
+        parsed.company = value.split(';')[0].trim();
       }
     }
     return parsed;
@@ -790,9 +794,10 @@
       vcard.emails?.[0] ||
       '';
     const name = (c.full_name || c.name || c.FullName || vcard.name || '') as string;
+    const company = ((c.company || c.Company || vcard.company || '') as string).trim();
     const trimmedEmail = (email || '').trim();
     if (!trimmedEmail) return null;
-    return { email: trimmedEmail, name: (name || '').trim() };
+    return { email: trimmedEmail, name: (name || '').trim(), company };
   };
 
   const loadContactOptions = async () => {
@@ -891,13 +896,17 @@
     const seen = new Set<string>();
     recipientSuggestions = contacts
       .filter((contact) => {
-        const c = contact as { email: string; name: string };
+        const c = contact as { email: string; name: string; company?: string };
         const email = (c.email || '').trim();
         if (!email) return false;
         const emailLower = email.toLowerCase();
         if (existing.has(emailLower) || seen.has(emailLower)) return false;
         const nameLower = (c.name || '').toLowerCase();
-        const matches = emailLower.includes(queryLower) || nameLower.includes(queryLower);
+        const companyLower = (c.company || '').toLowerCase();
+        const matches =
+          emailLower.includes(queryLower) ||
+          nameLower.includes(queryLower) ||
+          companyLower.includes(queryLower);
         if (!matches) return false;
         seen.add(emailLower);
         return true;
@@ -2840,7 +2849,11 @@
                   >
                     <span
                       >{(contact as { name?: string; email: string }).name ||
-                        (contact as { email: string }).email}</span
+                        (contact as { email: string })
+                          .email}{#if (contact as { name?: string; company?: string }).name && (contact as { company?: string }).company}<span
+                          class="text-muted-foreground"
+                          >{' '}&mdash; {(contact as { company: string }).company}</span
+                        >{/if}</span
                     >
                     {#if (contact as { name?: string }).name}
                       <span class="text-xs text-muted-foreground"
@@ -2898,7 +2911,11 @@
                     >
                       <span
                         >{(contact as { name?: string; email: string }).name ||
-                          (contact as { email: string }).email}</span
+                          (contact as { email: string })
+                            .email}{#if (contact as { name?: string; company?: string }).name && (contact as { company?: string }).company}<span
+                            class="text-muted-foreground"
+                            >{' '}&mdash; {(contact as { company: string }).company}</span
+                          >{/if}</span
                       >
                       {#if (contact as { name?: string }).name}
                         <span class="text-xs text-muted-foreground"
@@ -2957,7 +2974,11 @@
                     >
                       <span
                         >{(contact as { name?: string; email: string }).name ||
-                          (contact as { email: string }).email}</span
+                          (contact as { email: string })
+                            .email}{#if (contact as { name?: string; company?: string }).name && (contact as { company?: string }).company}<span
+                            class="text-muted-foreground"
+                            >{' '}&mdash; {(contact as { company: string }).company}</span
+                          >{/if}</span
                       >
                       {#if (contact as { name?: string }).name}
                         <span class="text-xs text-muted-foreground"

@@ -51,15 +51,28 @@ async function writeCache(account, contacts) {
  */
 function normalizeContact(raw) {
   if (!raw) return null;
-  const email = (raw.email || raw.Email || '').trim();
+
+  // API returns emails as array of {value, type} objects;
+  // also handle legacy flat email/Email string fields
+  let email = '';
+  if (Array.isArray(raw.emails) && raw.emails.length > 0) {
+    email = (raw.emails[0].value || '').trim();
+  } else {
+    email = (raw.email || raw.Email || '').trim();
+  }
+
   if (!email) return null;
+
+  // API returns full_name; also handle name/Name/firstName+lastName
+  let name = raw.full_name || raw.name || raw.Name || '';
+  if (!name && raw.firstName) {
+    name = [raw.firstName, raw.lastName].filter(Boolean).join(' ');
+  }
+
   return {
     id: raw.id || raw.Id || email,
     email,
-    name:
-      raw.name || raw.Name || raw.firstName
-        ? [raw.firstName, raw.lastName].filter(Boolean).join(' ')
-        : '',
+    name,
     avatar: raw.avatar || '',
     company: raw.company || '',
   };

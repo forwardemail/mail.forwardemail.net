@@ -236,6 +236,8 @@
     if (currentFolder && source.actions?.loadMessages) {
       source.actions.loadMessages();
     }
+    // Update folder badge counts after draft removal
+    mailboxStore.actions.updateFolderUnreadCounts();
   };
 
   onMount(() => {

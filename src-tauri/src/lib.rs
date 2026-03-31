@@ -397,6 +397,22 @@ pub fn run() {
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running Forward Email");
+        .build(tauri::generate_context!())
+        .expect("error while building Forward Email")
+        .run(|app_handle, event| {
+            // macOS: re-show the main window when the dock icon is clicked
+            // and no windows are visible (e.g. after closing with the red ✕).
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen {
+                has_visible_windows, ..
+            } = event
+            {
+                if !has_visible_windows {
+                    if let Some(window) = app_handle.get_webview_window("main") {
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                    }
+                }
+            }
+        });
 }

@@ -26,7 +26,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self' ipc: https://ipc.localhost; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: https://ipc.localhost https://api.forwardemail.net wss://api.forwardemail.net https://api.github.com; img-src 'self' data: blob:; font-src 'self' data:; worker-src 'self' blob:; object-src 'none'",
+      "csp": "default-src 'self' ipc: https://ipc.localhost; script-src 'self' 'wasm-unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: https://ipc.localhost https://api.forwardemail.net wss://api.forwardemail.net https://api.github.com; img-src 'self' data: blob: https:; font-src 'self' data:; worker-src 'self' blob:; object-src 'none'",
       "freezePrototype": false,
       "pattern": {
         "use": "isolation",
