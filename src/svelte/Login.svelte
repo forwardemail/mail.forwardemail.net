@@ -128,10 +128,23 @@
 
   const submitButtonText = $derived(submitRequest ? 'Signing in...' : 'Sign In');
 
-  // Check if user has at least one logged-in account
+  // Check if user has at least one logged-in account with usable credentials.
+  // Stale account entries (left over from a previous session whose credentials
+  // were cleared) should not count — otherwise the "Try Demo" button is
+  // blocked with a confusing "Please sign out" error even though the user
+  // has no active session.
   const hasActiveSession = (): boolean => {
     const accounts = Accounts.getAll();
-    return Array.isArray(accounts) && accounts.length > 0;
+    if (!Array.isArray(accounts) || accounts.length === 0) return false;
+
+    // At least one account must have usable credentials
+    const hasCredentials = accounts.some((a) => a.aliasAuth || a.apiKey);
+    if (hasCredentials) return true;
+
+    // Also check the shared credential keys (single-account legacy path)
+    const aliasAuth = Local.get('alias_auth');
+    const authToken = Local.get('authToken');
+    return Boolean(aliasAuth || authToken);
   };
 
   const goToMailbox = () => {

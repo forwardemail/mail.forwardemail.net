@@ -4344,6 +4344,12 @@
     // Mailbox onMount races with bootstrap and fires API calls with
     // encrypted credentials → 401.
     appReady.then(() => {
+      // Don't fire API calls if the Mailbox isn't the active route.
+      // The component is always mounted (hidden via display:none on other
+      // routes), so without this guard it issues requests with no
+      // credentials when the user is on the login screen.
+      if (!isActive) return;
+
       if (mailboxStore?.actions?.loadFolders) {
         mailboxStore.actions
           .loadFolders()
