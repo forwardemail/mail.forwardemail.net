@@ -1,0 +1,176 @@
+{
+  "app": {
+    "title": "Webmail do Forward Email",
+    "loading": "Carregando..."
+  },
+  "folders": {
+    "inbox": "Caixa de entrada",
+    "drafts": "Rascunhos",
+    "sent": "Enviados",
+    "archive": "Arquivados",
+    "spam": "Spam",
+    "trash": "Lixeira",
+    "outbox": "Caixa de saída"
+  },
+  "actions": {
+    "compose": "Escrever",
+    "reply": "Responder",
+    "replyAll": "Responder a todos",
+    "forward": "Encaminhar",
+    "archive": "Arquivar",
+    "delete": "Excluir",
+    "move": "Mover",
+    "moveTo": "Mover para…",
+    "labelAs": "Marcar como…",
+    "markRead": "Marcar como lida",
+    "markUnread": "Marcar como não lida",
+    "refresh": "Atualizar",
+    "search": "Pesquisar",
+    "filters": "Filtros",
+    "prev": "Anterior",
+    "next": "Próximo",
+    "selectAll": "Selecionar tudo",
+    "clearFilters": "Limpar filtros",
+    "signOut": "Sair",
+    "settings": "Configurações",
+    "addAccount": "Adicionar conta",
+    "switchAccount": "Trocar de conta",
+    "downloadOriginal": "Baixar .eml",
+    "toggleSidebar": "Alternar barra lateral",
+    "backToList": "Voltar à lista"
+  },
+  "filters": {
+    "unreadOnly": "Somente não lidas",
+    "withAttachments": "Com anexos"
+  },
+  "messages": {
+    "noSubject": "(Sem assunto)",
+    "noMessages": "Nenhuma mensagem nesta pasta ainda.",
+    "from": "De",
+    "to": "Para",
+    "date": "Data",
+    "subject": "Assunto",
+    "preview": "Pré-Visualizar",
+    "pending": "Pendente",
+    "conversationCount": "{count} mensagens",
+    "selectedCount": "{count} mensagen(s) selecionada(s)"
+  },
+  "compose": {
+    "title": "Escrever e-mail",
+    "to": "Para",
+    "cc": "Cc",
+    "bcc": "Bcc",
+    "subject": "Assunto",
+    "send": "Enviar",
+    "discard": "Descartar",
+    "saveDraft": "Salvar rascunho",
+    "attachments": "Anexos",
+    "addAttachment": "Adicionar anexo",
+    "removeAttachment": "Remover",
+    "formatting": "Formatação",
+    "attachmentReminder": {
+      "title": "Esqueceu o anexo?",
+      "message": "Você mencionou \"{keyword}\" mas não anexou nenhum arquivo.",
+      "prompt": "Deseja adicionar um anexo ou enviar assim mesmo?",
+      "sendAnyway": "Enviar mesmo assim",
+      "addAttachment": "Adicionar anexo"
+    }
+  },
+  "bulk": {
+    "archiveSelected": "Arquivar selecionados",
+    "deleteSelected": "Excluir selecionados",
+    "moveSelected": "Mover selecionados",
+    "archived": "{count} mensagen(s) arquivada(s)",
+    "deleted": "{count} mensagen(s) excluída(s)",
+    "moved": "{count} mensagen(s) movida(s)",
+    "pickFolder": "Escolha uma pasta para mover as mensagens"
+  },
+  "contextMenu": {
+    "archive": "Arquivar",
+    "delete": "Excluir",
+    "permanentDelete": "Excluir permanentemente",
+    "reply": "Responder",
+    "forward": "Encaminhar",
+    "markRead": "Marcar como lida",
+    "markUnread": "Marcar como não lida",
+    "moveTo": "Mover para…",
+    "labelAs": "Marcar como…"
+  },
+  "settings": {
+    "title": "Configurações",
+    "general": "Geral",
+    "appearance": "Aparência",
+    "language": "Idioma",
+    "threading": "Visualização em Conversad",
+    "threadingEnabled": "Visualização em conversa ativada",
+    "threadingDisabled": "Visualização em conversa desativada",
+    "bodyIndexing": "Pesquisar nos conteúdo das mensagens",
+    "bodyIndexingEnabled": "Pesquisa no conteúdo ativada",
+    "bodyIndexingDisabled": "Pesquisa no conteúdo desativada",
+    "storage": "Armazenamento",
+    "storageUsed": "Armazenamento utilizado",
+    "localCache": "Cache local",
+    "indexedMessages": "Mensagens indexadas",
+    "syncPending": "Sincronização pendente",
+    "rebuildIndex": "Reconstruir índice de busca"
+  },
+  "errors": {
+    "loadMailbox": "Não foi possível carregar a caixa de entrada.",
+    "loadMessages": "Não foi possível carregar as mensagens.",
+    "loadMessage": "Não foi possível carregar a mensagem.",
+    "sendMessage": "Falha ao enviar mensagem.",
+    "deleteMessage": "Falha ao excluir mensagem.",
+    "moveMessage": "Falha ao mover mensagem.",
+    "archiveMessage": "Falha ao arquivar mensagem.",
+    "downloadOriginal": "Não foi possível baixar o original.",
+    "network": "Erro de rede. Verifique sua conexão.",
+    "unauthorized": "Sua sessão expirou. Faça login novamente.",
+    "unknown": "Ocorreu um erro inesperado."
+  },
+  "notifications": {
+    "messageSent": "Mensagem enviada com sucesso",
+    "draftSaved": "Rascunho salvo",
+    "messageArchived": "Mensagem arquivada",
+    "messageDeleted": "Mensagem excluída",
+    "messageMoved": "Mensagem movida",
+    "offline": "Você está offline. As alterações serão sincronizadas ao reconectar.",
+    "changeQueued": "Alteração enfileirada (offline)",
+    "changeQueuedSync": "Alteração enfileirada para ser sincronizada depois",
+    "deleteQueued": "Exclusão enfileirada (offline)",
+    "deleteQueuedSync": "Exclusão enfileirada para ser sincronizada depois",
+    "permanentDeleteQueued": "Exclusão permanente enfileirada (offline)",
+    "permanentDeleteQueuedSync": "Exclusão permanente enfileirada para ser sincronizada depois",
+    "moveQueued": "Mover enfileirado (offline)",
+    "moveQueuedSync": "As mensagens a ser movidas foram para a fila para serem sincronizadas depois",
+    "labelingNotImplemented": "Marcação ainda não implementada",
+    "archiveFolderNotFound": "Pasta de arquivo não encontrada"
+  },
+  "pgp": {
+    "encrypted": "Criptografado - tentando descriptografar…",
+    "decrypted": "Descriptografado com chave salva",
+    "unableToDecrypt": "Criptografado com PGP - não foi possível descriptografar com as chaves atuais"
+  },
+  "storage": {
+    "bytes": "{size} B",
+    "kilobytes": "{size} KB",
+    "megabytes": "{size} MB",
+    "gigabytes": "{size} GB"
+  },
+  "time": {
+    "today": "Hoje",
+    "yesterday": "Ontem",
+    "daysAgo": "há {count}d",
+    "weeksAgo": "há {count}sem",
+    "monthsAgo": "há {count}m"
+  },
+  "pagination": {
+    "page": "Página {page}",
+    "prev": "Anterior",
+    "next": "Próximo"
+  },
+  "labels": {
+    "important": "Importante",
+    "personal": "Pessoal",
+    "work": "Trabalho"
+  }
+}
