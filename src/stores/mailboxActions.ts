@@ -38,6 +38,7 @@ import { isTauri, isTauriDesktop, swReadyWithTimeout } from '../utils/platform.j
 import { downloadFile } from '../utils/download';
 import { warn } from '../utils/logger.ts';
 import { resetTabs } from './tabStore';
+import { parseReferences } from '../utils/threading';
 
 /**
  * Additional mailbox actions that were in MailboxView
@@ -711,6 +712,27 @@ export const replyTo = async (msg, options = {}) => {
     headerId ||
     '';
 
+  // Build References header per RFC 2822:
+  // New References = original message's References + original message's Message-ID
+  const parentRefs = parseReferences(
+    msg?.references ||
+      msg?.References ||
+      msg?.nodemailer?.references ||
+      msg?.nodemailer?.headers?.references ||
+      msg?.nodemailer?.headers?.References,
+  );
+  const normalizedInReplyTo = inReplyTo
+    ? inReplyTo.startsWith('<')
+      ? inReplyTo
+      : `<${inReplyTo}>`
+    : '';
+  // Append the parent's Message-ID if not already in the chain
+  const refsArray = [...parentRefs];
+  if (normalizedInReplyTo && !refsArray.includes(normalizedInReplyTo)) {
+    refsArray.push(normalizedInReplyTo);
+  }
+  const references = refsArray.join(' ');
+
   // Open compose immediately with loading state
   composeModalRef.reply?.({
     subject: addReplyPrefix(msg?.subject),
@@ -721,6 +743,7 @@ export const replyTo = async (msg, options = {}) => {
     html: '<p><br></p>', // Start with empty paragraph for cursor position
     bodyLoading: true, // Signal that body is loading
     inReplyTo,
+    references,
   });
 
   // Fetch body from cache (no network request)

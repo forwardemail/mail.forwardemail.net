@@ -424,6 +424,7 @@
   let mailtoData = $state<unknown>(null);
   let replyTo = $state('');
   let inReplyTo = $state('');
+  let references = $state('');
   let toInputEl = $state<HTMLInputElement | undefined>();
   let ccInputEl = $state<HTMLInputElement | undefined>();
   let bccInputEl = $state<HTMLInputElement | undefined>();
@@ -1160,6 +1161,7 @@
     bcc: [...bccList],
     replyTo,
     inReplyTo,
+    references,
     subject,
     body,
     isPlainText,
@@ -1231,6 +1233,7 @@
     bccInput = '';
     replyTo = '';
     inReplyTo = '';
+    references = '';
     subject = '';
     body = '';
     isPlainText = getPlainTextDefault();
@@ -1327,6 +1330,7 @@
     bccList = (d.data.bcc as string[]) || [];
     replyTo = (d.data.replyTo as string) || '';
     inReplyTo = (d.data.inReplyTo as string) || '';
+    references = (d.data.references as string) || '';
     subject = (d.data.subject as string) || '';
     body = (d.data.body as string) || '';
     isPlainText = (d.data.isPlainText as boolean) || false;
@@ -2065,6 +2069,7 @@
     if (bccRecipients.length) payload.bcc = bccRecipients;
     if (replyTo) payload.reply_to = replyTo;
     if (inReplyTo) payload.in_reply_to = inReplyTo;
+    if (references) payload.references = references;
     if (isPlainText) {
       payload.text = body;
     } else {
@@ -2389,6 +2394,7 @@
           bccList = draft.bcc || [];
           replyTo = draft.replyTo || '';
           inReplyTo = draft.inReplyTo || '';
+          references = draft.references || '';
           subject = draft.subject || '';
           body = draft.body || '';
           isPlainText = draft.isPlainText || false;
@@ -2436,6 +2442,11 @@
       inReplyTo = Array.isArray(inReplyToValue)
         ? (inReplyToValue as string[])[0]
         : (inReplyToValue as string) || '';
+    }
+    if (resolvedPrefill.references) {
+      references = Array.isArray(resolvedPrefill.references)
+        ? (resolvedPrefill.references as string[]).join(' ')
+        : (resolvedPrefill.references as string) || '';
     }
     if (resolvedPrefill.subject) subject = resolvedPrefill.subject as string;
     if (isPlainText && resolvedPrefill.text) {
