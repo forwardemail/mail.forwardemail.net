@@ -723,7 +723,7 @@ const createMailboxStore = () => {
         f.unseenCount ??
         null;
       const unreadCount = readNumber(unreadRaw);
-      const totalCount = readNumber(f.total ?? f.message_count ?? f.count);
+      const totalCount = readNumber(f.total ?? f.messages ?? f.message_count ?? f.count);
 
       return {
         id: f.id || f._id || f.folder_id || f.uid || f.uidnext || f.uidvalidity || f.uid_validity,

@@ -934,11 +934,12 @@
   // Folder change tracking removed (was causing loops) - skeleton shown via $loading instead
 
   // Delayed empty state: only show after settling to avoid flicker
-  const EMPTY_STATE_DELAY_MS = 150;
+  const EMPTY_STATE_DELAY_MS = 600;
   let showEmptyState = $state(false);
   let emptyStateTimeoutId: ReturnType<typeof setTimeout> | null = null;
   $effect(() => {
-    const shouldBeEmpty = listIsEmpty && !$loading && !syncingSelectedFolder;
+    const shouldBeEmpty =
+      listIsEmpty && !$loading && !syncingSelectedFolder && !messageLoadInProgress;
     if (shouldBeEmpty) {
       // Delay showing empty state to allow debounced data to settle
       if (!emptyStateTimeoutId) {
@@ -3606,6 +3607,35 @@
   );
   const inboxFolderPath = $derived(resolveFolderPath(null, ['INBOX'], $folders));
 
+  let selectedFolderTotalCount = $state(null);
+  $effect(() => {
+    const foldersVal = $folders;
+    const selected = $selectedFolder;
+    if (!foldersVal || !selected) {
+      selectedFolderTotalCount = null;
+      return;
+    }
+    const folder = foldersVal.find((f) => f.path === selected);
+    if (folder?.totalCount != null) {
+      selectedFolderTotalCount = folder.totalCount;
+    } else {
+      // Fallback: count cached messages in IndexedDB
+      const account = $currentAccount || 'default';
+      db.messages
+        .where('[account+folder]')
+        .equals([account, selected])
+        .count()
+        .then((count) => {
+          if ($selectedFolder === selected) {
+            selectedFolderTotalCount = count || null;
+          }
+        })
+        .catch(() => {
+          selectedFolderTotalCount = null;
+        });
+    }
+  });
+
   const isDraftFolder = (folder) => {
     const folderKey = normalizeFolderKey(folder);
     const draftsKey = normalizeFolderKey(draftsFolderPath);
@@ -4144,6 +4174,15 @@
         },
         onError: (err) => {
           if (!isActiveLoad()) return;
+          // Suppress toast for 404 / "not found" errors — common in Trash where
+          // messages are permanently deleted server-side but still cached locally.
+          // Silently prune the stale entry from the message list instead.
+          const status = (err as { status?: number })?.status;
+          const msg404 = status === 404 || /not (found|exist)/i.test(err?.message || '');
+          if (msg404) {
+            pruneMessages([msg.id]);
+            return;
+          }
           mailboxView?.toasts?.show?.(err?.message || 'Unable to load message', 'error');
         },
         perf: tracer,
@@ -4188,6 +4227,20 @@
       } catch {
         // ignore
       }
+    }
+    // Remove stale entries from IndexedDB so they don't reappear on reload
+    const account = $currentAccount || Local.get('email') || 'default';
+    for (const id of ids) {
+      db.messages
+        .where('[account+id]')
+        .equals([account, id])
+        .delete()
+        .catch(() => {});
+      db.messageBodies
+        .where('[account+id]')
+        .equals([account, id])
+        .delete()
+        .catch(() => {});
     }
   };
   const nextPage = () => {
@@ -5389,7 +5442,13 @@
                   </div>
                 </div>
                 <span class="text-sm font-medium text-muted-foreground"
-                  >{outboxSelected ? 'Outbox' : $selectedFolder}</span
+                  >{outboxSelected
+                    ? 'Outbox'
+                    : $selectedFolder}{#if selectedFolderTotalCount != null}
+                    <span class="text-xs text-muted-foreground/60 ml-1"
+                      >({selectedFolderTotalCount.toLocaleString()})</span
+                    >
+                  {/if}</span
                 >
               </div>
             {/if}
