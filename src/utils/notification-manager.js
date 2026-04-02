@@ -373,9 +373,14 @@ function handleMailboxRenamed(data) {
 
 function handleCalendarEventCreated(data) {
   if (!data || typeof data !== 'object') return;
-  const summary = sanitize(data.summary || data.event?.summary || 'New event', MAX_BODY_LEN);
+  const isTask = data.componentType === 'VTODO';
+  const label = isTask ? 'Task' : 'Event';
+  const summary = sanitize(
+    data.summary || data.event?.summary || `New ${label.toLowerCase()}`,
+    MAX_BODY_LEN,
+  );
   showNotification({
-    title: 'Calendar Event Created',
+    title: `Calendar ${label} Created`,
     body: summary,
     tag: sanitize(`cal-event-${data.id || Date.now()}`, MAX_TAG_LEN),
     data: { path: '#calendar' },
@@ -384,9 +389,11 @@ function handleCalendarEventCreated(data) {
 
 function handleCalendarEventUpdated(data) {
   if (!data || typeof data !== 'object') return;
-  const summary = sanitize(data.summary || data.event?.summary || 'Event updated', MAX_BODY_LEN);
+  const isTask = data.componentType === 'VTODO';
+  const label = isTask ? 'Task' : 'Event';
+  const summary = sanitize(data.summary || data.event?.summary || `${label} updated`, MAX_BODY_LEN);
   showNotification({
-    title: 'Calendar Event Updated',
+    title: `Calendar ${label} Updated`,
     body: summary,
     tag: sanitize(`cal-event-update-${data.id || Date.now()}`, MAX_TAG_LEN),
     data: { path: '#calendar' },
