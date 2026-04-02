@@ -5,6 +5,7 @@ import { writable } from 'svelte/store';
 import { saveSentCopy } from './sent-copy.js';
 import { warn } from './logger.ts';
 import { isDemoMode, showDemoBlockedToast } from './demo-mode';
+import { isOnline } from './network-status';
 
 /**
  * Outbox Service
@@ -97,7 +98,7 @@ export async function queueEmail(emailData, options = {}) {
   await updateOutboxCount();
 
   // Only trigger immediate processing if not scheduled and online
-  if (!skipProcess && !isScheduled && navigator.onLine) {
+  if (!skipProcess && !isScheduled && isOnline()) {
     processOutbox();
   }
 
@@ -295,7 +296,7 @@ async function sendOutboxItem(item) {
  * Process all pending outbox items
  */
 export async function processOutbox() {
-  if (!navigator.onLine) {
+  if (!isOnline()) {
     return { processed: 0, sent: 0, failed: 0 };
   }
 
@@ -313,7 +314,7 @@ export async function processOutbox() {
 
     for (const item of pending) {
       // Check if still online before each send
-      if (!navigator.onLine) {
+      if (!isOnline()) {
         break;
       }
 
@@ -369,7 +370,7 @@ export async function retryOutboxItem(id) {
   await updateOutboxCount();
 
   // Trigger processing
-  if (navigator.onLine) {
+  if (isOnline()) {
     return processOutbox();
   }
 
@@ -395,7 +396,7 @@ export async function retryAllFailed() {
 
   await updateOutboxCount();
 
-  if (navigator.onLine) {
+  if (isOnline()) {
     return processOutbox();
   }
 
@@ -477,13 +478,13 @@ export function startOutboxProcessor() {
   }
 
   // Process immediately on start
-  if (navigator.onLine) {
+  if (isOnline()) {
     processOutbox();
   }
 
   // Check every 30 seconds for items ready to retry
   processorInterval = setInterval(() => {
-    if (navigator.onLine && !processorRunning) {
+    if (isOnline() && !processorRunning) {
       processOutbox();
     }
   }, 30000);

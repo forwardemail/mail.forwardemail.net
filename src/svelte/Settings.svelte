@@ -581,11 +581,16 @@
     refreshHybridOverrides();
 
     await loadAccounts();
-    try {
-      await searchStore.actions.ensureInitialized();
-      await searchStore.actions.refreshSavedSearches();
-    } catch (err) {
-      console.warn('Failed to init search store', err);
+    // Only initialize search store when credentials are available.
+    // Settings.svelte is always mounted; on the login page this would
+    // trigger sync-worker connection errors ("Missing auth header").
+    if (Local.get('alias_auth') || Local.get('api_key') || Local.get('authToken')) {
+      try {
+        await searchStore.actions.ensureInitialized();
+        await searchStore.actions.refreshSavedSearches();
+      } catch (err) {
+        console.warn('Failed to init search store', err);
+      }
     }
     await loadLabelsList();
   };

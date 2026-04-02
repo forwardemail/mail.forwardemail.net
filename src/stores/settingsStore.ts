@@ -17,6 +17,7 @@ import {
 import type { SettingDefinition } from './settingsRegistry';
 import type { Label, PgpKey } from '../types';
 import { warn } from '../utils/logger.ts';
+import { getAuthHeader } from '../utils/auth';
 
 export interface RemoteSettings {
   mail: {
@@ -87,6 +88,14 @@ interface AccountCacheEntry {
 const accountFetchCache = new Map<string, AccountCacheEntry>();
 
 export async function fetchAccountData({ force = false } = {}): Promise<unknown> {
+  // Bail early if no credentials are available (e.g. on the login page).
+  // Settings.svelte is always mounted and its onMount calls fetchSettings()
+  // which calls this function — without this guard it would make an API call
+  // with no auth header and produce console errors.
+  if (!getAuthHeader({ allowApiKey: true })) {
+    throw new Error('No credentials available');
+  }
+
   const account = Local.get('email') || 'default';
   const now = Date.now();
   const entry = accountFetchCache.get(account);
@@ -752,7 +761,11 @@ export async function fetchSettings(): Promise<RemoteSettings> {
 
     return get(remoteSettings);
   } catch (err: unknown) {
-    warn('[settingsStore] Failed to fetch settings:', err);
+    // Suppress warning for expected no-credentials case (login page)
+    const errMsg = err instanceof Error ? err.message : '';
+    if (!errMsg.includes('No credentials available')) {
+      warn('[settingsStore] Failed to fetch settings:', err);
+    }
     const message = err instanceof Error ? err.message : 'Failed to fetch settings';
     settingsError.set(message);
 
@@ -924,7 +937,11 @@ export async function fetchLabels(includeHidden = false, { force = false } = {})
 
     return get(settingsLabels);
   } catch (err) {
-    warn('[settingsStore] Failed to fetch labels:', err);
+    // Suppress warning for expected no-credentials case (login page)
+    const errMsg = err instanceof Error ? err.message : '';
+    if (!errMsg.includes('No credentials available')) {
+      warn('[settingsStore] Failed to fetch labels:', err);
+    }
     // Keep using cached labels
     return get(settingsLabels);
   }

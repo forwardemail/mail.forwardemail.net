@@ -115,6 +115,30 @@ export default defineConfig({
   // production build; for the dev server we simply skip pre-bundling so
   // Vite serves the files directly and our resolveId hook can intercept.
   optimizeDeps: {
+    // Pre-bundle deps that live behind dynamic imports (Calendar.svelte,
+    // Compose.svelte) so Vite discovers them at startup instead of mid-session.
+    // Late discovery triggers dep re-optimization which regenerates ALL chunk
+    // hashes and 404s every chunk URL the browser already loaded.
+    include: [
+      // Calendar.svelte deps
+      '@schedule-x/calendar',
+      '@schedule-x/svelte',
+      // NOTE: @schedule-x/theme-default is CSS-only (no JS entry) so it
+      // cannot be pre-bundled.  Vite handles CSS imports separately.
+      // Compose.svelte deps (only used behind dynamic import)
+      '@tiptap/extension-placeholder',
+      '@tiptap/extension-highlight',
+      '@tiptap/extension-underline',
+      '@tiptap/extension-text-style',
+      '@tiptap/extension-text-align',
+      '@tiptap/extension-color',
+      '@tiptap/extension-font-family',
+      '@tiptap/extension-image',
+      '@tiptap/extension-table',
+      '@tiptap/extension-table-row',
+      '@tiptap/extension-table-cell',
+      '@tiptap/extension-table-header',
+    ],
     exclude: ['libsodium-wrappers'],
   },
   esbuild: {

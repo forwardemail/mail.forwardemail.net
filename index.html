@@ -176,7 +176,7 @@
             if (!target || !target.tagName) return;
             var tag = target.tagName.toLowerCase();
             // Only handle script/link load failures (not runtime JS errors)
-            if (((tag === 'script' || tag === 'link') && target.src) || target.href) {
+            if ((tag === 'script' && target.src) || (tag === 'link' && target.href)) {
               var url = target.src || target.href || '';
               // Only recover for chunk/asset files, not arbitrary resources
               if (/\.(js|css)(\?|$)/.test(url)) {

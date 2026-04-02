@@ -28,6 +28,7 @@
 
 import { createSyncCore } from './sync-core.js';
 import { isTauri } from './platform.js';
+import { isOnline } from './network-status';
 
 let _core = null;
 let _heartbeat = null;
@@ -87,14 +88,14 @@ export function initSyncShim() {
 
   // Periodic heartbeat (replaces SW periodic sync)
   _heartbeat = setInterval(() => {
-    if (navigator.onLine) {
+    if (isOnline()) {
       debouncedProcessMutations();
     }
   }, HEARTBEAT_MS);
 
   // Visibility change (process mutations when app comes to foreground)
   _visibilityHandler = () => {
-    if (document.visibilityState === 'visible' && navigator.onLine && _core) {
+    if (document.visibilityState === 'visible' && isOnline() && _core) {
       debouncedProcessMutations();
     }
   };
@@ -159,7 +160,7 @@ async function _setupTauriHooks() {
 
     // Tauri emits a 'tauri://focus' event when the window gains focus.
     const unlistenFocus = await listen('tauri://focus', () => {
-      if (navigator.onLine && _core) {
+      if (isOnline() && _core) {
         debouncedProcessMutations();
       }
     });
@@ -167,7 +168,7 @@ async function _setupTauriHooks() {
 
     // Also listen for the custom 'tauri-ready' event from our Rust backend.
     const unlistenReady = await listen('tauri-ready', () => {
-      if (navigator.onLine && _core) {
+      if (isOnline() && _core) {
         debouncedProcessMutations();
       }
     });

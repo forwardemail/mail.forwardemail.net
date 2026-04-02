@@ -185,6 +185,7 @@
     openMessageTab,
   } from '../stores/tabStore';
   import { isTauriDesktop } from '../utils/platform.js';
+  import { onlineStatus, checkConnectivity } from '../utils/network-status';
 
   const isBodyPrefetchEnabled = () => getEffectiveSettingValue('cache_prefetch_enabled') !== false;
 
@@ -1092,20 +1093,15 @@
   let isDarkMode = $state(false);
 
   // Network status tracking for offline banner
-  let isOffline = $state(typeof navigator !== 'undefined' ? !navigator.onLine : false);
+  // Uses verified network status instead of raw navigator.onLine (unreliable on Linux,
+  // corporate/VPN networks, and after sleep/resume — see discussion #489).
+  let isOffline = $state(false);
+  let checkingConnectivity = $state(false);
   $effect(() => {
-    const goOffline = () => {
-      isOffline = true;
-    };
-    const goOnline = () => {
-      isOffline = false;
-    };
-    window.addEventListener('offline', goOffline);
-    window.addEventListener('online', goOnline);
-    return () => {
-      window.removeEventListener('offline', goOffline);
-      window.removeEventListener('online', goOnline);
-    };
+    const unsub = onlineStatus.subscribe((online) => {
+      isOffline = !online;
+    });
+    return unsub;
   });
 
   const updateThemeState = () => {
@@ -4415,9 +4411,13 @@
       }
     });
     // Initialize search store for saved search suggestions
-    searchStore?.actions?.ensureInitialized?.().then(() => {
-      searchStore?.actions?.refreshSavedSearches?.();
-    });
+    // Only initialize when the mailbox is active (isActive) to prevent
+    // sync-worker connection errors on the login page.
+    if (isActive) {
+      searchStore?.actions?.ensureInitialized?.().then(() => {
+        searchStore?.actions?.refreshSavedSearches?.();
+      });
+    }
     const closeHandler = (e) => {
       // macOS Ctrl+Click fires both contextmenu and click — ignore the click
       if (e?.ctrlKey) return;
@@ -4741,6 +4741,21 @@
         >
           <WifiOff class="h-3.5 w-3.5 shrink-0" />
           <span>You're offline. Cached messages are still available.</span>
+          <button
+            type="button"
+            class="ml-1 underline hover:no-underline font-medium"
+            disabled={checkingConnectivity}
+            onclick={async () => {
+              checkingConnectivity = true;
+              try {
+                await checkConnectivity({ force: true });
+              } finally {
+                checkingConnectivity = false;
+              }
+            }}
+          >
+            {checkingConnectivity ? 'Checking…' : 'Retry'}
+          </button>
         </div>
       {/if}
       <div class="flex items-center gap-3 px-4 py-2 bg-muted/50 dark:bg-background">

@@ -59,6 +59,8 @@ import {
 import { effectiveLayoutMode } from './settingsStore';
 import { normalizeLayoutMode } from './settingsRegistry';
 import { warn } from '../utils/logger.ts';
+import { isOnline } from '../utils/network-status';
+import { getAuthHeader } from '../utils/auth';
 
 // Folders that are always protected from rename/delete
 const ALWAYS_PROTECTED = new Set(['INBOX', 'OUTBOX']);
@@ -581,6 +583,14 @@ const createMailboxStore = () => {
   };
 
   const loadFolders = async (options = {}) => {
+    // Bail early when no credentials are available (e.g. on the login page).
+    // Settings.svelte is always mounted and its currentAccount subscription
+    // calls loadFolders() — without this guard it triggers sync-worker and
+    // Remote.request errors because auth headers are missing.
+    if (!getAuthHeader({ allowApiKey: true })) {
+      return;
+    }
+
     const account = Local.get('email') || 'default';
     const { force = false } = options;
     const state = folderLoadState.get(account) || { promise: null, lastFetchAt: 0 };
@@ -1496,7 +1506,7 @@ const createMailboxStore = () => {
       permanent,
     };
 
-    if (!navigator.onLine) {
+    if (!isOnline()) {
       await queueMutation('delete', mutationPayload);
       return;
     }
@@ -1716,7 +1726,7 @@ const createMailboxStore = () => {
       targetFolder: target,
     };
 
-    if (!navigator.onLine) {
+    if (!isOnline()) {
       await queueMutation('move', mutationPayload);
       result.success = true;
       return result;

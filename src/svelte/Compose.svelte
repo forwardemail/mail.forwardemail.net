@@ -87,6 +87,7 @@
     createAutosaveTimer,
   } from '../utils/draft-service';
   import { shouldShowAttachmentReminder } from '../utils/attachment-reminder';
+  import { isOnline as checkIsOnline } from '../utils/network-status';
   import {
     attachmentReminder,
     getEffectiveSettingValue,
@@ -2178,7 +2179,7 @@
     sending = true;
     error = '';
     success = '';
-    const isOnline = navigator.onLine;
+    const isOnline = checkIsOnline();
     if (!isOnline) {
       try {
         await queueEmail(payload);

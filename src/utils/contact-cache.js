@@ -2,6 +2,7 @@ import { db } from './db';
 import { Local } from './storage';
 import { Remote } from './remote';
 import { warn } from './logger.ts';
+import { isOnline } from './network-status';
 
 /**
  * Contact Cache
@@ -118,7 +119,7 @@ export async function getContacts(options = {}) {
     const cached = await readCache(account);
     if (cached) {
       const isStale = Date.now() - cached.updatedAt > CACHE_TTL_MS;
-      if (isStale && navigator.onLine) {
+      if (isStale && isOnline()) {
         // Background refresh — return stale data immediately
         fetchAndCache(account).catch(() => {});
       }
@@ -127,7 +128,7 @@ export async function getContacts(options = {}) {
   }
 
   // No cache — must fetch
-  if (!navigator.onLine) return [];
+  if (!isOnline()) return [];
 
   try {
     return await fetchAndCache(account);

@@ -9,11 +9,13 @@
     "pnpm": ">=9.0.0"
   },
   "scripts": {
+    "clean:vite": "rm -rf node_modules/.vite",
+    "predev": "pnpm run clean:vite",
     "dev": "vite",
     "tauri": "tauri",
-    "prebuild": "node scripts/validate-schema-version.js",
+    "prebuild": "pnpm run clean:vite && node scripts/validate-schema-version.js",
     "build": "vite build && workbox generateSW workbox.config.cjs",
-    "preview": "vite preview",
+    "preview": "pnpm run clean:vite && vite preview",
     "check": "svelte-check",
     "analyze": "ANALYZE=true pnpm build",
     "lhci:collect": "lhci collect --config=./lighthouserc.cjs",

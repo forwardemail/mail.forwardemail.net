@@ -6,6 +6,7 @@ import { config } from '../config';
 import { writable } from 'svelte/store';
 import { warn } from './logger.ts';
 import { swReadyWithTimeout } from './platform.js';
+import { isOnline } from './network-status';
 
 /**
  * Offline Mutation Queue
@@ -103,7 +104,7 @@ export async function queueMutation(type, payload) {
   await writeQueue(account, queue);
 
   // If online, process immediately; otherwise register Background Sync
-  if (navigator.onLine) {
+  if (isOnline()) {
     processMutationQueue();
   } else {
     registerBackgroundSync();
@@ -199,7 +200,7 @@ async function executeMutation(mutation) {
  * Process the mutation queue — execute pending mutations in order.
  */
 export async function processMutationQueue() {
-  if (processing || !navigator.onLine) return;
+  if (processing || !isOnline()) return;
 
   const account = getAccount();
   const queue = await readQueue(account);
@@ -211,7 +212,7 @@ export async function processMutationQueue() {
   try {
     let modified = false;
     for (const mutation of queue) {
-      if (!navigator.onLine) break;
+      if (!isOnline()) break;
       if (mutation.status === 'completed') continue;
       if (mutation.status === 'failed' && mutation.retryCount >= MAX_RETRIES) continue;
 
@@ -304,13 +305,13 @@ export function initMutationQueue() {
   }
 
   // Process any pending mutations on startup
-  if (navigator.onLine) {
+  if (isOnline()) {
     processMutationQueue();
   }
 
   // Periodic check for mutations with expired backoff
   setInterval(() => {
-    if (navigator.onLine && !processing) {
+    if (isOnline() && !processing) {
       processMutationQueue();
     }
   }, 30000);

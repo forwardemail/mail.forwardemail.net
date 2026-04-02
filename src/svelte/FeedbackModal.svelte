@@ -11,6 +11,7 @@
   import CheckIcon from '@lucide/svelte/icons/check';
   import { Local } from '../utils/storage';
   import { Remote } from '../utils/remote';
+  import { isOnline } from '../utils/network-status';
 
   interface Props {
     onClose?: () => void;
@@ -82,7 +83,7 @@
       language: navigator.language,
       screenResolution: `${window.screen.width}x${window.screen.height}`,
       viewportSize: `${window.innerWidth}x${window.innerHeight}`,
-      online: navigator.onLine,
+      online: isOnline(),
       cookiesEnabled: navigator.cookieEnabled,
       doNotTrack: navigator.doNotTrack,
       timestamp: new Date().toISOString(),

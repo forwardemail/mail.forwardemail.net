@@ -39,6 +39,7 @@ import { downloadFile } from '../utils/download';
 import { warn } from '../utils/logger.ts';
 import { resetTabs } from './tabStore';
 import { parseReferences } from '../utils/threading';
+import { isOnline } from '../utils/network-status';
 
 /**
  * Additional mailbox actions that were in MailboxView
@@ -292,7 +293,7 @@ export const load = async () => {
  * cache the first page of metadata for instant account switching.
  */
 function prefetchAdjacentAccounts(activeAccount) {
-  if (!navigator.onLine || !('serviceWorker' in navigator)) return;
+  if (!isOnline() || !('serviceWorker' in navigator)) return;
   const allAccounts = Accounts.getAll();
   if (allAccounts.length <= 1) return;
 
@@ -382,7 +383,7 @@ export const toggleRead = async (msg) => {
     folder: msg.folder,
   };
 
-  if (!navigator.onLine) {
+  if (!isOnline()) {
     await queueMutation('toggleRead', mutationPayload);
     return;
   }
@@ -467,7 +468,7 @@ export const toggleStar = async (msg) => {
     folder: msg.folder,
   };
 
-  if (!navigator.onLine) {
+  if (!isOnline()) {
     await queueMutation('toggleStar', mutationPayload);
     return;
   }
@@ -949,7 +950,7 @@ export const contextLabel = async (msgOrLabel, labelMaybe, options = {}) => {
     labels: nextLabels,
   };
 
-  if (!navigator.onLine) {
+  if (!isOnline()) {
     await queueMutation('label', mutationPayload);
     if (!silent) {
       const verb =

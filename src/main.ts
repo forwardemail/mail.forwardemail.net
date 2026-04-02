@@ -98,6 +98,7 @@ import {
 } from './utils/inactivity-timer.js';
 import { startOutboxProcessor, processOutbox } from './utils/outbox-service';
 import { initMutationQueue, processMutationQueue } from './utils/mutation-queue';
+import { initNetworkStatus } from './utils/network-status';
 import { syncPendingDrafts } from './utils/draft-service';
 import { setIndexToasts, searchStore } from './stores/searchStore';
 import { setDemoToasts } from './utils/demo-mode';
@@ -417,7 +418,24 @@ let calendarApi = {
 };
 
 const calendarActive = writable(currentRoute() === 'calendar');
-if (calendarRoot) {
+
+// Flag set after bootstrap() completes.  routeStore.subscribe fires
+// immediately on subscription (before bootstrap), so without this guard
+// mountCalendar/mountContacts would run on the login page and crash.
+let _bootstrapComplete = false;
+
+// Flag to track whether background services (sync, outbox, keyboard shortcuts,
+// etc.) have been started.  They are deferred until the first authenticated
+// mailbox route to avoid errors on the login page, but must only start once.
+let _backgroundServicesStarted = false;
+
+// Defer Calendar mounting until after bootstrap.
+// Mounting complex Svelte 5 components (tooltips, dropdowns) into hidden
+// containers on the login page causes next_sibling_getter runtime crashes.
+let _calendarMountAttempts = 0;
+function mountCalendar() {
+  if (_calendarApp || !calendarRoot || _calendarMountAttempts >= 3) return;
+  _calendarMountAttempts++;
   loadCalendarComponent()
     .then(({ default: Calendar }) => {
       _calendarApp = mount(Calendar, {
@@ -429,7 +447,6 @@ if (calendarRoot) {
           registerApi: (api: typeof calendarApi) => {
             if (api) {
               calendarApi = api;
-              // If user is currently on calendar, ensure initial render
               if (currentRoute() === 'calendar') {
                 calendarApi.reload?.();
               }
@@ -440,6 +457,12 @@ if (calendarRoot) {
     })
     .catch((err) => {
       console.error('Failed to load calendar component', err);
+      // Retry after a delay — Vite dev server may be re-optimizing deps
+      // which temporarily invalidates chunk URLs.  A short wait lets the
+      // new chunks become available before retrying the dynamic import.
+      if (_calendarMountAttempts < 3) {
+        setTimeout(() => mountCalendar(), 2000);
+      }
     });
 }
 
@@ -453,9 +476,18 @@ let contactsApi = {
   reload: () => {},
 };
 
-if (contactsRoot) {
+// Defer Contacts mounting until the user is authenticated.
+// Same rationale as Calendar — Svelte 5 dropdown/floating-layer
+// components crash with next_sibling_getter errors in hidden containers.
+let _contactsMountAttempts = 0;
+function mountContacts() {
+  if (!contactsRoot || _contactsMountAttempts >= 3) return;
+  // Guard: only mount once (successful mount sets dataset.mounted)
+  if (contactsRoot.dataset.mounted) return;
+  _contactsMountAttempts++;
   loadContactsComponent()
     .then(({ default: Contacts }) => {
+      contactsRoot.dataset.mounted = '1';
       mount(Contacts, {
         target: contactsRoot,
         props: {
@@ -474,6 +506,10 @@ if (contactsRoot) {
     })
     .catch((err) => {
       console.error('Failed to load contacts component', err);
+      // Retry after a delay — same rationale as mountCalendar.
+      if (_contactsMountAttempts < 3) {
+        setTimeout(() => mountContacts(), 2000);
+      }
     });
 }
 
@@ -868,12 +904,36 @@ routeStore.subscribe((route) => {
   mailboxActive.set(route === 'mailbox');
   calendarActive.set(route === 'calendar');
   profileActive.set(route === 'profile');
-  if (mailboxMode) {
+  if (mailboxMode && _bootstrapComplete) {
+    // Lazily mount Calendar and Contacts on first authenticated route.
+    // They are deferred to avoid Svelte 5 runtime crashes on the login page.
+    mountCalendar();
+    mountContacts();
+    // Start background services on first authenticated route if bootstrap
+    // ran on the login page (where mailboxMode was false).  These must only
+    // start once — the flag prevents duplicate timers/listeners.
+    if (!_backgroundServicesStarted) {
+      _backgroundServicesStarted = true;
+      startAutoMetadataSync();
+      initKeyboardShortcuts();
+      startOutboxProcessor();
+      syncPendingDrafts();
+      initMutationQueue();
+      window.addEventListener('online', () => {
+        processOutbox();
+        syncPendingDrafts();
+        processMutationQueue();
+      });
+    }
     if (starfieldDisposer) {
       starfieldDisposer();
       starfieldDisposer = null;
     }
-  } else if (!starfieldDisposer) {
+  } else if (!mailboxMode && !starfieldDisposer) {
+    // Only init starfield on non-mailbox routes (login page).
+    // The extra !mailboxMode guard prevents the starfield from starting
+    // when _bootstrapComplete is still false on the initial subscription
+    // fire (before bootstrap runs).
     starfieldDisposer = initStarfield();
   }
   updateRouteVisibility(route);
@@ -1579,22 +1639,50 @@ async function bootstrap() {
     if (route === 'settings') viewModel.settingsModal.open();
     if (route === 'calendar') viewModel.calendarView.load();
     if (route === 'contacts') contactsApi.reload?.();
+    // Mark bootstrap complete so routeStore.subscribe can mount components
+    // on subsequent route changes (e.g. navigating to calendar/contacts).
+    _bootstrapComplete = true;
+
+    // Mount Calendar and Contacts lazily on first authenticated route
+    if (mailboxMode) {
+      mountCalendar();
+      mountContacts();
+      // Dispose starfield if it was started (e.g. from the initial
+      // routeStore.subscribe fire before _bootstrapComplete was set).
+      if (starfieldDisposer) {
+        starfieldDisposer();
+        starfieldDisposer = null;
+      }
+    }
     if (!starfieldDisposer && !mailboxMode) {
       starfieldDisposer = initStarfield();
     }
-    startAutoMetadataSync();
-    initKeyboardShortcuts();
+    // Initialize verified network status (replaces unreliable navigator.onLine)
+    // This runs regardless of route so the offline banner works everywhere.
+    initNetworkStatus();
 
-    // Start outbox processor for offline email queue with retry
-    startOutboxProcessor();
-    syncPendingDrafts();
-    initMutationQueue();
+    // Start background services when the user is authenticated and on a
+    // mailbox-related route.  Running these on the login page causes console
+    // errors because auth headers are missing.  The _backgroundServicesStarted
+    // flag ensures they only start once; if bootstrap runs on the login page
+    // the routeStore.subscribe handler will start them on the first
+    // post-login route change instead.
+    if (mailboxMode && !_backgroundServicesStarted) {
+      _backgroundServicesStarted = true;
+      startAutoMetadataSync();
+      initKeyboardShortcuts();
 
-    window.addEventListener('online', () => {
-      processOutbox(); // New outbox service
+      // Start outbox processor for offline email queue with retry
+      startOutboxProcessor();
       syncPendingDrafts();
-      processMutationQueue();
-    });
+      initMutationQueue();
+
+      window.addEventListener('online', () => {
+        processOutbox(); // New outbox service
+        syncPendingDrafts();
+        processMutationQueue();
+      });
+    }
 
     // ── Auth failure handling ─────────────────────────────────────────
     // fe:auth-failed  — WebSocket auth failure (close code 4401/4403)
