@@ -1,0 +1,19 @@
+BEGIN:VCARD
+VERSION:3.0
+PRODID:-//Apple Inc.//iPhone OS 17.0//EN
+N:Appleseed;Johnny;;;
+FN:Johnny Appleseed
+item1.EMAIL;type=INTERNET;type=HOME;type=pref:johnny@icloud.com
+item2.EMAIL;type=INTERNET;type=WORK:johnny@apple.com
+item1.TEL;type=CELL;type=VOICE;type=pref:+1 (555) 123-4567
+item2.TEL;type=HOME;type=VOICE:+1 (555) 987-6543
+item3.TEL;type=WORK;type=VOICE:+1 (555) 456-7890
+item1.ADR;type=HOME;type=pref:;;1 Infinite Loop;Cupertino;CA;95014;United States
+item1.X-ABADR:us
+item4.URL;type=pref:https://www.apple.com
+item4.X-ABLabel:_$!<HomePage>!$_
+ORG:Apple Inc.;Engineering
+TITLE:Chief Seed Officer
+BDAY:19850224
+NOTE:Met at WWDC 2024.\nGreat conversation about trees.
+END:VCARD

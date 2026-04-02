@@ -1,0 +1,7 @@
+BEGIN:VCARD
+VERSION:4.0
+FN:Uri Test
+TEL;VALUE=uri:tel:+15551234567
+TEL;VALUE=uri;TYPE=home:tel:+15559876543
+EMAIL:uri.test@example.com
+END:VCARD

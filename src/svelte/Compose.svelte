@@ -767,7 +767,10 @@
       if (colonIndex === -1) continue;
       const keyPart = line.slice(0, colonIndex);
       const value = unescapeText(line.slice(colonIndex + 1));
-      const key = keyPart.split(';')[0].toUpperCase();
+      // Strip vCard property group prefixes (e.g. "item1.EMAIL" → "EMAIL").
+      // iOS/macOS Contacts generates grouped properties like item1.TEL, item2.EMAIL, etc.
+      const rawKey = keyPart.split(';')[0].toUpperCase();
+      const key = rawKey.includes('.') ? rawKey.split('.').pop()! : rawKey;
       if (key === 'FN' && !parsed.name) {
         parsed.name = value;
       } else if (key === 'N' && !parsed.name) {

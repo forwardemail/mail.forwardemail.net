@@ -60,7 +60,10 @@
     website: string;
     birthday: string;
     photo: string;
+    address: string;
     raw?: unknown;
+    /** Original vCard content from the server — used for round-trip-safe saves. */
+    _originalContent?: string;
   }
 
   interface Props {
@@ -89,7 +92,8 @@
       draft.timezone !== selectedContact.timezone ||
       draft.website !== selectedContact.website ||
       draft.birthday !== selectedContact.birthday ||
-      draft.photo !== selectedContact.photo
+      draft.photo !== selectedContact.photo ||
+      draft.address !== selectedContact.address
     );
   });
   let loading = $state(false);
@@ -109,6 +113,7 @@
     website: '',
     birthday: '',
     photo: '',
+    address: '',
   });
 
   let modalContact = $state<Contact>(emptyContact());
@@ -241,23 +246,233 @@
     return colors[hash % colors.length];
   };
 
-  const generateVCard = (contact: Contact): string => {
+  /**
+   * Escape a text value for vCard output.
+   */
+  const escapeVCardText = (value: string): string =>
+    value.replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\n/g, '\\n');
+
+  /**
+   * Build a fresh minimal vCard from a Contact (used for brand-new contacts).
+   */
+  const buildFreshVCard = (contact: Contact): string => {
     const lines = ['BEGIN:VCARD', 'VERSION:3.0'];
-    if (contact.name) lines.push(`FN:${contact.name}`);
+    if (contact.name) lines.push(`FN:${escapeVCardText(contact.name)}`);
     if (contact.email) lines.push(`EMAIL;TYPE=INTERNET:${contact.email}`);
     if (contact.phone) lines.push(`TEL:${contact.phone}`);
-    if (contact.company) lines.push(`ORG:${contact.company}`);
-    if (contact.jobTitle) lines.push(`TITLE:${contact.jobTitle}`);
+    if (contact.company) lines.push(`ORG:${escapeVCardText(contact.company)}`);
+    if (contact.jobTitle) lines.push(`TITLE:${escapeVCardText(contact.jobTitle)}`);
     if (contact.website) lines.push(`URL:${contact.website}`);
+    if (contact.address) lines.push(`ADR:${escapeVCardText(contact.address)}`);
     if (contact.birthday) lines.push(`BDAY:${contact.birthday.replace(/-/g, '')}`);
     if (contact.timezone) lines.push(`TZ:${contact.timezone}`);
-    if (contact.notes) lines.push(`NOTE:${contact.notes.replace(/\n/g, '\\n')}`);
+    if (contact.notes) lines.push(`NOTE:${escapeVCardText(contact.notes)}`);
     if (contact.photo) {
       const photoData = contact.photo.replace(/^data:image\/[^;]+;base64,/, '');
       lines.push(`PHOTO;ENCODING=b;TYPE=PNG:${photoData}`);
     }
     lines.push('END:VCARD');
     return lines.join('\r\n');
+  };
+
+  /**
+   * Extract the vCard property key from a raw line key-part, stripping group
+   * prefixes (e.g. "item1.TEL;type=CELL" → "TEL") and parameters.
+   */
+  const vcardPropKey = (keyPart: string): string => {
+    const rawKey = keyPart.split(';')[0].toUpperCase();
+    return rawKey.includes('.') ? rawKey.split('.').pop()! : rawKey;
+  };
+
+  /**
+   * Round-trip-safe vCard generator.  When the contact has original vCard
+   * content from the server (_originalContent), edits are merged back into
+   * that content so that all properties the UI does not edit (extra phones,
+   * extra emails, addresses, labels, vendor extensions, UID, PRODID, REV,
+   * N, X-ABLabel, etc.) are preserved verbatim.
+   *
+   * For brand-new contacts (no _originalContent), a fresh vCard is built.
+   */
+  const generateVCard = (contact: Contact): string => {
+    if (!contact._originalContent) return buildFreshVCard(contact);
+
+    // Unfold the original content
+    const rawLines = contact._originalContent.split(/\r?\n/);
+    const lines: string[] = [];
+    for (const line of rawLines) {
+      if (!line) continue;
+      if (/^[ \t]/.test(line) && lines.length) {
+        lines[lines.length - 1] += line.slice(1);
+      } else {
+        lines.push(line);
+      }
+    }
+
+    // Track which editable properties we've seen so we know what to insert
+    let fnSeen = false;
+    let firstEmailSeen = false;
+    let firstTelSeen = false;
+    let noteSeen = false;
+    let orgSeen = false;
+    let titleSeen = false;
+    let urlSeen = false;
+    let adrSeen = false;
+    let bdaySeen = false;
+    let tzSeen = false;
+    let photoSeen = false;
+
+    const result: string[] = [];
+
+    for (const line of lines) {
+      const colonIndex = line.indexOf(':');
+      if (colonIndex === -1) {
+        result.push(line);
+        continue;
+      }
+
+      const keyPart = line.slice(0, colonIndex);
+      const key = vcardPropKey(keyPart);
+
+      if (key === 'BEGIN' || key === 'END' || key === 'VERSION') {
+        result.push(line);
+        continue;
+      }
+
+      if (key === 'FN') {
+        if (!fnSeen) {
+          fnSeen = true;
+          if (contact.name) {
+            result.push(`FN:${escapeVCardText(contact.name)}`);
+          }
+          // If name is empty, drop the FN line
+        } else {
+          result.push(line); // preserve additional FN lines
+        }
+      } else if (key === 'EMAIL') {
+        if (!firstEmailSeen) {
+          firstEmailSeen = true;
+          if (contact.email) {
+            // Preserve the original parameters (TYPE=INTERNET, etc.)
+            result.push(`${keyPart}:${contact.email}`);
+          }
+          // If email cleared, drop this line
+        } else {
+          result.push(line); // preserve additional emails verbatim
+        }
+      } else if (key === 'TEL') {
+        if (!firstTelSeen) {
+          firstTelSeen = true;
+          if (contact.phone) {
+            result.push(`${keyPart}:${contact.phone}`);
+          }
+        } else {
+          result.push(line); // preserve additional phones verbatim
+        }
+      } else if (key === 'NOTE') {
+        if (!noteSeen) {
+          noteSeen = true;
+          if (contact.notes) {
+            result.push(`NOTE:${escapeVCardText(contact.notes)}`);
+          }
+        } else {
+          result.push(line);
+        }
+      } else if (key === 'ORG') {
+        if (!orgSeen) {
+          orgSeen = true;
+          if (contact.company) {
+            result.push(`ORG:${escapeVCardText(contact.company)}`);
+          }
+        } else {
+          result.push(line);
+        }
+      } else if (key === 'TITLE') {
+        if (!titleSeen) {
+          titleSeen = true;
+          if (contact.jobTitle) {
+            result.push(`TITLE:${escapeVCardText(contact.jobTitle)}`);
+          }
+        } else {
+          result.push(line);
+        }
+      } else if (key === 'URL') {
+        if (!urlSeen) {
+          urlSeen = true;
+          if (contact.website) {
+            result.push(`${keyPart}:${contact.website}`);
+          }
+        } else {
+          result.push(line);
+        }
+      } else if (key === 'ADR') {
+        if (!adrSeen) {
+          adrSeen = true;
+          if (contact.address) {
+            result.push(`${keyPart}:${contact.address}`);
+          }
+        } else {
+          result.push(line);
+        }
+      } else if (key === 'BDAY') {
+        if (!bdaySeen) {
+          bdaySeen = true;
+          if (contact.birthday) {
+            result.push(`BDAY:${contact.birthday.replace(/-/g, '')}`);
+          }
+        } else {
+          result.push(line);
+        }
+      } else if (key === 'TZ') {
+        if (!tzSeen) {
+          tzSeen = true;
+          if (contact.timezone) {
+            result.push(`TZ:${contact.timezone}`);
+          }
+        } else {
+          result.push(line);
+        }
+      } else if (key === 'PHOTO') {
+        if (!photoSeen) {
+          photoSeen = true;
+          if (contact.photo) {
+            const photoData = contact.photo.replace(/^data:image\/[^;]+;base64,/, '');
+            result.push(`PHOTO;ENCODING=b;TYPE=PNG:${photoData}`);
+          }
+        } else {
+          result.push(line);
+        }
+      } else {
+        // Preserve ALL unknown/unedited properties verbatim:
+        // N, PRODID, UID, REV, X-ABLabel, X-ABADR, X-ABUID, etc.
+        result.push(line);
+      }
+    }
+
+    // Insert any new fields the user added that weren't in the original
+    const insertBefore = result.findIndex((l) => l.toUpperCase().startsWith('END:VCARD'));
+    const insertAt = insertBefore >= 0 ? insertBefore : result.length;
+    const toInsert: string[] = [];
+
+    if (!fnSeen && contact.name) toInsert.push(`FN:${escapeVCardText(contact.name)}`);
+    if (!firstEmailSeen && contact.email) toInsert.push(`EMAIL;TYPE=INTERNET:${contact.email}`);
+    if (!firstTelSeen && contact.phone) toInsert.push(`TEL:${contact.phone}`);
+    if (!orgSeen && contact.company) toInsert.push(`ORG:${escapeVCardText(contact.company)}`);
+    if (!titleSeen && contact.jobTitle) toInsert.push(`TITLE:${escapeVCardText(contact.jobTitle)}`);
+    if (!urlSeen && contact.website) toInsert.push(`URL:${contact.website}`);
+    if (!adrSeen && contact.address) toInsert.push(`ADR:${escapeVCardText(contact.address)}`);
+    if (!bdaySeen && contact.birthday) toInsert.push(`BDAY:${contact.birthday.replace(/-/g, '')}`);
+    if (!tzSeen && contact.timezone) toInsert.push(`TZ:${contact.timezone}`);
+    if (!noteSeen && contact.notes) toInsert.push(`NOTE:${escapeVCardText(contact.notes)}`);
+    if (!photoSeen && contact.photo) {
+      const photoData = contact.photo.replace(/^data:image\/[^;]+;base64,/, '');
+      toInsert.push(`PHOTO;ENCODING=b;TYPE=PNG:${photoData}`);
+    }
+
+    if (toInsert.length) {
+      result.splice(insertAt, 0, ...toInsert);
+    }
+
+    return result.join('\r\n');
   };
 
   interface ParsedVCard {
@@ -295,7 +510,10 @@
       if (colonIndex === -1) continue;
       const keyPart = line.slice(0, colonIndex);
       const value = unescapeText(line.slice(colonIndex + 1));
-      const key = keyPart.split(';')[0].toUpperCase();
+      // Strip vCard property group prefixes (e.g. "item1.TEL" → "TEL").
+      // iOS/macOS Contacts generates grouped properties like item1.TEL, item2.EMAIL, etc.
+      const rawKey = keyPart.split(';')[0].toUpperCase();
+      const key = rawKey.includes('.') ? rawKey.split('.').pop()! : rawKey;
 
       if (key === 'FN' && !parsed.name) {
         parsed.name = value;
@@ -306,7 +524,9 @@
       } else if (key === 'EMAIL') {
         if (value) parsed.emails.push(value);
       } else if (key === 'TEL') {
-        if (value) parsed.phones.push(value);
+        // Handle VALUE=uri format: "tel:+15551234567" → "+15551234567"
+        const phone = value.replace(/^tel:/i, '');
+        if (phone) parsed.phones.push(phone);
       } else if (key === 'NOTE') {
         parsed.notes = value;
       } else if (key === 'ORG') {
@@ -340,7 +560,9 @@
 
   const exportVCard = (contact: Contact | null) => {
     if (!contact) return;
-    const vcardContent = generateVCard(contact);
+    // Use the original server content for export when available to preserve
+    // all properties the UI doesn't edit (extra phones, addresses, labels, etc.).
+    const vcardContent = contact._originalContent || generateVCard(contact);
     const filename = (contact.name || contact.email || 'contact').replace(/[^a-z0-9]/gi, '_');
     downloadFile(vcardContent, `${filename}.vcf`, 'text/vcard;charset=utf-8');
     toasts?.show?.('vCard exported', 'success');
@@ -469,7 +691,9 @@
         (c) =>
           (c.name && c.name.toLowerCase().includes(q)) ||
           (c.email && c.email.toLowerCase().includes(q)) ||
-          (c.company && c.company.toLowerCase().includes(q)),
+          (c.company && c.company.toLowerCase().includes(q)) ||
+          (c.phone && c.phone.toLowerCase().includes(q)) ||
+          (c.address && c.address.toLowerCase().includes(q)),
       ),
     );
   };
@@ -483,7 +707,8 @@
         contact.jobTitle ||
         contact.timezone ||
         contact.website ||
-        contact.birthday
+        contact.birthday ||
+        contact.address
       );
     }
   };
@@ -549,7 +774,9 @@
           website: vcard.website || '',
           birthday: vcard.birthday || '',
           photo: vcard.photo || '',
+          address: vcard.address || '',
           raw: c,
+          _originalContent: (c.content as string) || '',
         };
       });
       contacts = mapped;
@@ -612,6 +839,8 @@
         website: draft.website || '',
         birthday: draft.birthday || '',
         photo: draft.photo || '',
+        address: draft.address || '',
+        _originalContent: draft._originalContent,
       };
       const vCardContent = generateVCard(contactData);
       const payload = {
@@ -649,6 +878,8 @@
                 website: vcardData.website || draft.website || '',
                 birthday: vcardData.birthday || draft.birthday || '',
                 photo: vcardData.photo || draft.photo || '',
+                address: vcardData.address || draft.address || '',
+                _originalContent: (updated?.content as string) || draft._originalContent || '',
               }
             : c,
         );
@@ -680,7 +911,9 @@
           website: vcardData.website || draft.website || '',
           birthday: vcardData.birthday || draft.birthday || '',
           photo: vcardData.photo || draft.photo || '',
+          address: vcardData.address || draft.address || '',
           raw: created,
+          _originalContent: (created?.content as string) || '',
         };
         contacts = [mapped, ...contacts];
         selectedContact = mapped;
@@ -728,6 +961,8 @@
         website: modalContact.website || '',
         birthday: modalContact.birthday || '',
         photo: modalContact.photo || '',
+        address: modalContact.address || '',
+        _originalContent: modalContact._originalContent,
       };
       const vCardContent = generateVCard(contactData);
       const payload = {
@@ -765,6 +1000,9 @@
                 website: vcardData.website || modalContact.website || '',
                 birthday: vcardData.birthday || modalContact.birthday || '',
                 photo: vcardData.photo || modalContact.photo || '',
+                address: vcardData.address || modalContact.address || '',
+                _originalContent:
+                  (updated?.content as string) || modalContact._originalContent || '',
               }
             : c,
         );
@@ -796,7 +1034,9 @@
           website: vcardData.website || modalContact.website || '',
           birthday: vcardData.birthday || modalContact.birthday || '',
           photo: vcardData.photo || modalContact.photo || '',
+          address: vcardData.address || modalContact.address || '',
           raw: created,
+          _originalContent: (created?.content as string) || '',
         };
         contacts = [mapped, ...contacts];
         selectedContact = mapped;
@@ -1129,7 +1369,7 @@
                   <ChevronRight class="h-4 w-4" />
                 {/if}
                 <span>Additional info</span>
-                {#if !optionalFieldsExpanded && (draft.company || draft.jobTitle || draft.timezone || draft.website || draft.birthday)}
+                {#if !optionalFieldsExpanded && (draft.company || draft.jobTitle || draft.timezone || draft.website || draft.birthday || draft.address)}
                   <span class="text-primary">*</span>
                 {/if}
               </button>
@@ -1165,6 +1405,15 @@
                   <div class="space-y-2">
                     <Label for="contact-birthday">Birthday</Label>
                     <Input id="contact-birthday" type="date" bind:value={draft.birthday} />
+                  </div>
+                  <div class="space-y-2">
+                    <Label for="contact-address">Address</Label>
+                    <Input
+                      id="contact-address"
+                      type="text"
+                      placeholder="Street, City, State, ZIP"
+                      bind:value={draft.address}
+                    />
                   </div>
                 </div>
               {/if}
@@ -1213,6 +1462,15 @@
       <div class="space-y-2">
         <Label for="modal-phone">Phone</Label>
         <Input id="modal-phone" type="tel" bind:value={modalContact.phone} />
+      </div>
+      <div class="space-y-2">
+        <Label for="modal-address">Address</Label>
+        <Input
+          id="modal-address"
+          type="text"
+          placeholder="Street, City, State, ZIP"
+          bind:value={modalContact.address}
+        />
       </div>
       <div class="space-y-2">
         <Label for="modal-notes">Notes</Label>
