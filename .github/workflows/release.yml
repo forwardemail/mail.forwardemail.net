@@ -3,10 +3,9 @@ name: Release
 # Triggered when `np` (or manual `git tag`) pushes a semver tag.
 # Orchestrates: GitHub Release creation -> Desktop builds -> Mobile builds -> Checksums.
 on:
-  # Disabled automatic tag triggers until desktop/mobile release pipelines are ready.
-  # push:
-  #   tags:
-  #     - 'v*'
+  push:
+    tags:
+      - 'v*'
   workflow_dispatch:
     inputs:
       version:

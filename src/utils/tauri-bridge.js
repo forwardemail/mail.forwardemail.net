@@ -176,6 +176,53 @@ export async function onSingleInstance(handler) {
 }
 
 /**
+ * Register a handler for the Android hardware/gesture back button.
+ * Returns an unlisten function.
+ */
+export async function onBackButton(handler) {
+  return listen('app:back-button', () => {
+    if (typeof handler === 'function') handler();
+  });
+}
+
+/**
+ * Trigger haptic feedback via the Vibration API (Android WebView).
+ * Styles: 'light' (10ms), 'medium' (20ms), 'heavy' (30ms),
+ *         'success' (pattern), 'error' (pattern)
+ * No-op on platforms without navigator.vibrate.
+ */
+export function triggerHaptic(style = 'light') {
+  if (typeof navigator === 'undefined' || !navigator.vibrate) return;
+  const patterns = {
+    light: 10,
+    medium: 20,
+    heavy: 30,
+    success: [10, 50, 10],
+    error: [20, 40, 20, 40, 20],
+  };
+  navigator.vibrate(patterns[style] || 10);
+}
+
+/**
+ * Register a handler for Android share intents (ACTION_SEND).
+ * The Android MainActivity dispatches 'app:share-received' CustomEvents.
+ * Returns an unsubscribe function.
+ */
+export function onShareReceived(handler) {
+  if (typeof handler !== 'function') return () => {};
+  const listener = (event) => {
+    const detail = event?.detail;
+    if (!detail) return;
+    handler({
+      subject: sanitizeString(String(detail.subject || ''), 1024),
+      text: sanitizeString(String(detail.text || ''), 65536),
+    });
+  };
+  window.addEventListener('app:share-received', listener);
+  return () => window.removeEventListener('app:share-received', listener);
+}
+
+/**
  * Initialize the Tauri bridge.
  * Call once during app bootstrap.
  */

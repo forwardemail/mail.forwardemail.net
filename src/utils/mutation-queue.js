@@ -5,8 +5,8 @@ import { getAuthHeader } from './auth';
 import { config } from '../config';
 import { writable } from 'svelte/store';
 import { warn } from './logger.ts';
-import { swReadyWithTimeout } from './platform.js';
 import { isOnline } from './network-status';
+import { swReadyWithTimeout, isTauri } from './platform.js';
 
 /**
  * Offline Mutation Queue
@@ -307,6 +307,18 @@ export function initMutationQueue() {
   // Process any pending mutations on startup
   if (isOnline()) {
     processMutationQueue();
+  }
+
+  // On Tauri (mobile/desktop), SW Background Sync is unavailable.
+  // Process queued mutations when the app resumes from background.
+  if (isTauri) {
+    import('./background-service.js').then(({ onResume }) => {
+      onResume(() => {
+        if (navigator.onLine && !processing) {
+          processMutationQueue();
+        }
+      });
+    });
   }
 
   // Periodic check for mutations with expired backoff

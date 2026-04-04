@@ -81,7 +81,7 @@ document.head.appendChild(style);
 import './utils/error-logger';
 
 import { sendSyncTask, terminateSyncWorker } from './utils/sync-worker-client.js';
-import { canUseServiceWorker, isTauri, isTauriDesktop } from './utils/platform.js';
+import { canUseServiceWorker, isTauri, isTauriDesktop, isTauriMobile } from './utils/platform.js';
 import { openComposeWindow, initComposeWindowListener } from './utils/compose-window';
 import {
   isLockEnabled,
@@ -1731,7 +1731,19 @@ async function bootstrap() {
 
     // Tauri-specific native integrations (desktop + mobile)
     if (isTauri) {
-      import('./utils/tauri-bridge.js').then(({ initTauriBridge }) => initTauriBridge());
+      import('./utils/tauri-bridge.js').then(({ initTauriBridge, onShareReceived }) => {
+        initTauriBridge();
+        // Handle Android share intents → open Compose with shared content
+        onShareReceived((data: { subject: string; text: string }) => {
+          if (viewModel?.mailboxView?.composeModal?.open) {
+            viewModel.mailboxView.composeModal.open({
+              subject: data.subject,
+              body: data.text,
+              text: data.text,
+            });
+          }
+        });
+      });
       import('./utils/updater-bridge.js').then(({ initAutoUpdater, handleWsNewRelease }) => {
         initAutoUpdater();
         // Route fe:new-release events from the releaseWatcher to the Tauri updater
@@ -1748,9 +1760,17 @@ async function bootstrap() {
       );
       // Initialize background service for app lifecycle management (tray keep-alive,
       // foreground/background detection, push token management)
-      import('./utils/background-service.js').then(({ initBackgroundService }) =>
-        initBackgroundService(),
-      );
+      import('./utils/background-service.js').then(({ initBackgroundService, onResume }) => {
+        initBackgroundService();
+        // On mobile, sync and process queued mutations when the app resumes
+        if (isTauriMobile) {
+          onResume(() => {
+            processMutationQueue();
+            import('./utils/sync-controller.js').then(({ resumeSync }) => resumeSync());
+            window.dispatchEvent(new CustomEvent('fe:force-reconnect'));
+          });
+        }
+      });
       // Initialize push notifications on mobile (APNs, FCM, UnifiedPush fallback)
       import('./utils/push-notifications.js').then(({ initPushNotifications }) => {
         const authToken = Local.get('authToken') || Local.get('api_key') || '';

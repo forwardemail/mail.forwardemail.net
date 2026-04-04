@@ -8,6 +8,18 @@
   box-sizing: border-box;
 }
 
+/*
+ * Android WebView doesn't support env(safe-area-inset-*).
+ * MainActivity.kt injects --safe-area-inset-* CSS variables from WindowInsets.
+ * Map them to the env() fallback so all existing env() usages work.
+ */
+:root {
+  --sai-top: var(--safe-area-inset-top, 0px);
+  --sai-bottom: var(--safe-area-inset-bottom, 0px);
+  --sai-left: var(--safe-area-inset-left, 0px);
+  --sai-right: var(--safe-area-inset-right, 0px);
+}
+
 html {
   height: 100%;
   margin: 0;

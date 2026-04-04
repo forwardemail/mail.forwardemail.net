@@ -1,6 +1,10 @@
 export const mockFolders = [
-  { path: 'INBOX', name: 'Inbox', count: 2, level: 0 },
+  { path: 'INBOX', name: 'Inbox', count: 3, level: 0 },
+  { path: 'SENT', name: 'Sent', count: 0, level: 0 },
+  { path: 'Drafts', name: 'Drafts', count: 0, level: 0 },
+  { path: 'TRASH', name: 'Trash', count: 0, level: 0 },
   { path: 'Archive', name: 'Archive', count: 0, level: 0 },
+  { path: 'Spam', name: 'Spam', count: 0, level: 0 },
 ];
 
 export const mockMessages = [
@@ -23,6 +27,16 @@ export const mockMessages = [
     Date: new Date(Date.now() - 3600 * 1000).toISOString(),
     flags: ['\\Seen'],
     has_attachment: true,
+  },
+  {
+    Uid: 'msg-3',
+    folder: 'INBOX',
+    Subject: 'Starred important message',
+    From: { Email: 'boss@example.com', Display: 'Boss' },
+    snippet: 'Please review the attached proposal.',
+    Date: new Date(Date.now() - 7200 * 1000).toISOString(),
+    flags: ['\\Flagged'],
+    has_attachment: false,
   },
 ];
 

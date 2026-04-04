@@ -950,6 +950,7 @@ body.light-mode .fe-message-from {
     min-height: 0;
     border-left: none;
     border-right: none;
+    padding-bottom: var(--sai-bottom, env(safe-area-inset-bottom, 0px));
   }
 
   .fe-folders.fe-folders-open ~ * .fe-messages {
@@ -965,7 +966,9 @@ body.light-mode .fe-message-from {
   }
 
   .mobile-reader .fe-messages {
-    display: none;
+    /* Keep rendered underneath the reader (no display:none) so the list
+       doesn't re-render when closing. The reader covers it with position:fixed. */
+    pointer-events: none;
   }
 
   .mobile-reader .fe-reader {
@@ -977,10 +980,33 @@ body.light-mode .fe-message-from {
     background: var(--color-panel);
     border-radius: 0;
     border: none;
-    padding: 0 0 calc(24px + env(safe-area-inset-bottom, 0px));
+    padding: 0 0 calc(24px + var(--sai-bottom, env(safe-area-inset-bottom, 0px)));
     overflow-y: auto;
     touch-action: pan-y; /* Allow vertical scroll, enable horizontal swipe gestures */
     z-index: var(--z-modal); /* 60 - above everything except sidebar */
+    animation: fe-reader-slide-in 0.25s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
+  }
+
+  .mobile-reader-closing .fe-reader {
+    animation: fe-reader-slide-out 0.25s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
+  }
+
+  @keyframes fe-reader-slide-in {
+    from {
+      transform: translateX(100%);
+    }
+    to {
+      transform: translateX(0);
+    }
+  }
+
+  @keyframes fe-reader-slide-out {
+    from {
+      transform: translateX(0);
+    }
+    to {
+      transform: translateX(100%);
+    }
   }
 
   .mobile-reader .fe-reader > *:not(.fe-reader-backbar) {
@@ -1002,7 +1028,7 @@ body.light-mode .fe-message-from {
     position: sticky;
     top: 0;
     padding: 12px 14px;
-    padding-top: max(12px, env(safe-area-inset-top));
+    padding-top: max(12px, var(--sai-top, env(safe-area-inset-top, 0px)));
     background: linear-gradient(180deg, rgba(11, 18, 32, 0.95), rgba(11, 18, 32, 0.85));
     border-bottom: 1px solid var(--color-border);
     z-index: 10;

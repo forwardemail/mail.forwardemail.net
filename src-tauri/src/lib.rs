@@ -22,6 +22,7 @@ struct DeepLinkPayload {
     urls: Vec<String>,
 }
 
+#[cfg(desktop)]
 #[derive(Clone, Serialize)]
 struct SingleInstancePayload {
     args: Vec<String>,
@@ -270,6 +271,7 @@ fn is_valid_deep_link(url: &str) -> bool {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[allow(unused_mut)]
     let mut builder = tauri::Builder::default();
 
     // Desktop-only plugins
@@ -368,6 +370,15 @@ pub fn run() {
                 })?;
             }
 
+            // Forward Android back button to the frontend
+            #[cfg(mobile)]
+            {
+                let back_handle = app.handle().clone();
+                app.listen("tauri://back-button", move |_event| {
+                    let _ = back_handle.emit("app:back-button", ());
+                });
+            }
+
             // Register deep-link handler with URL validation
             let handle = app.handle().clone();
             app.listen("deep-link://new-url", move |event| {
@@ -399,16 +410,16 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("error while building Forward Email")
-        .run(|app_handle, event| {
+        .run(|_app_handle, _event| {
             // macOS: re-show the main window when the dock icon is clicked
             // and no windows are visible (e.g. after closing with the red ✕).
             #[cfg(target_os = "macos")]
             if let tauri::RunEvent::Reopen {
                 has_visible_windows, ..
-            } = event
+            } = _event
             {
                 if !has_visible_windows {
-                    if let Some(window) = app_handle.get_webview_window("main") {
+                    if let Some(window) = _app_handle.get_webview_window("main") {
                         let _ = window.show();
                         let _ = window.set_focus();
                     }

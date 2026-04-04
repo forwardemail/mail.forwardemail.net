@@ -101,7 +101,7 @@ export async function requestPermission() {
  * @param {Object} [options.data]    - arbitrary data attached to the notification
  * @param {string} [options.channelId] - Android notification channel
  */
-export async function notify({ title, body, icon, tag, data, channelId }) {
+export async function notify({ title, body, icon, tag, data, channelId, number }) {
   // Sanitise all string inputs
   const safeTitle = sanitize(title, MAX_TITLE_LENGTH);
   const safeBody = sanitize(body, MAX_BODY_LENGTH);
@@ -111,7 +111,14 @@ export async function notify({ title, body, icon, tag, data, channelId }) {
 
   if (isTauri) {
     const safeChannel = channelId && ALLOWED_CHANNEL_IDS.has(channelId) ? channelId : undefined;
-    return _notifyTauri({ title: safeTitle, body: safeBody, channelId: safeChannel, data });
+    const safeNumber = typeof number === 'number' && number > 0 ? Math.round(number) : undefined;
+    return _notifyTauri({
+      title: safeTitle,
+      body: safeBody,
+      channelId: safeChannel,
+      data,
+      number: safeNumber,
+    });
   }
 
   return _notifyWeb({ title: safeTitle, body: safeBody, icon, tag: safeTag, data });
@@ -219,7 +226,7 @@ async function _requestTauriPermission() {
   }
 }
 
-async function _notifyTauri({ title, body, channelId, data }) {
+async function _notifyTauri({ title, body, channelId, data, number }) {
   const mod = await ensureTauriNotification();
   if (!mod) return;
   try {
@@ -227,6 +234,8 @@ async function _notifyTauri({ title, body, channelId, data }) {
     if (!granted) return;
     const payload = { title, body: body || '', actionTypeId: 'default-mail' };
     if (channelId) payload.channelId = channelId;
+    // Android uses the number field for app icon badge count
+    if (typeof number === 'number' && number > 0) payload.number = number;
     if (data && typeof data === 'object') {
       const extra = {};
       if (data.path) extra.path = String(data.path);

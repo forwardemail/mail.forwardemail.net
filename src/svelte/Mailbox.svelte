@@ -47,6 +47,8 @@
     getMessageFromName,
     getMessageToName,
     getProfileInitials,
+    getInitials,
+    getAvatarColor,
   } from './mailbox/utils/avatar-helpers.js';
   import {
     getMailedBy,
@@ -60,6 +62,8 @@
   import { getSyncSettings } from '../utils/sync-settings.js';
   import { parseMailto, mailtoToPrefill } from '../utils/mailto';
   import MailtoPrompt from './components/MailtoPrompt.svelte';
+  import { isTauriMobile } from '../utils/platform.js';
+  import { onBackButton, triggerHaptic } from '../utils/tauri-bridge.js';
   import {
     outboxCount,
     outboxProcessing,
@@ -508,6 +512,7 @@
   let accountMenuOpen = storeToStore(mailboxView?.accountMenuOpen, false);
   let sidebarOpen = chooseWritableStore(source.state?.sidebarOpen, mailboxView?.sidebarOpen, true);
   let mobileReader = storeToStore(mailboxView?.mobileReader, false);
+  let readerClosing = $state(false);
   let layoutModeStore = storeToStore(mailboxView?.layoutMode, 'full');
   let showFiltersStore = chooseWritableStore(
     source.state?.showFilters,
@@ -662,6 +667,7 @@
   let swipeStartTime = 0;
   let swipeVelocity = 0;
   let swipeAnimating = $state(false);
+  let swipeThresholdCrossed = false;
 
   // Reader swipe navigation state
   let readerSwipeStartX = 0;
@@ -1447,28 +1453,37 @@
     mobileReader.set?.(true);
   };
   const closeReaderFullscreen = ({ clearSelection = false, updateUrl = true } = {}) => {
-    if (mailboxView?.mobileReader?.set) {
-      mailboxView.mobileReader.set(false);
-    } else if (typeof mailboxView?.mobileReader === 'function') {
-      mailboxView.mobileReader(false);
-    }
-    mobileReader.set?.(false);
     readerMoveOpen = false;
     readerToolbarMoveOpen = false;
 
-    // Clear selection and update URL if requested (e.g., back button)
-    if (clearSelection) {
-      source.state?.selectedMessage?.set?.(null);
-      updateSelectedConversation(null);
-    }
-
-    // Update URL to show just the folder (remove message from URL)
-    if (updateUrl) {
-      const folder = get(selectedFolder);
-      if (folder) {
-        const hash = buildHashUrl(folder, null);
-        history.pushState({ folder }, '', hash);
+    const finishClose = () => {
+      if (mailboxView?.mobileReader?.set) {
+        mailboxView.mobileReader.set(false);
+      } else if (typeof mailboxView?.mobileReader === 'function') {
+        mailboxView.mobileReader(false);
       }
+      mobileReader.set?.(false);
+      readerClosing = false;
+
+      if (clearSelection) {
+        source.state?.selectedMessage?.set?.(null);
+        updateSelectedConversation(null);
+      }
+      if (updateUrl) {
+        const folder = get(selectedFolder);
+        if (folder) {
+          const hash = buildHashUrl(folder, null);
+          history.pushState({ folder }, '', hash);
+        }
+      }
+    };
+
+    // On mobile, animate the reader sliding out before removing it
+    if (isMobileViewport() && get(mobileReader)) {
+      readerClosing = true;
+      setTimeout(finishClose, 250); // match CSS animation duration
+    } else {
+      finishClose();
     }
   };
 
@@ -2389,6 +2404,7 @@
     pullToRefreshActive = false;
 
     if (pullDistance > 60 && !isRefreshing) {
+      triggerHaptic('light');
       isRefreshing = true;
       isPulling = false;
 
@@ -2469,6 +2485,14 @@
       }
       // Apply rubber-band resistance
       swipeDistance = applyResistance(deltaX);
+      // Haptic feedback when crossing the action threshold
+      const overThreshold = Math.abs(swipeDistance) >= SWIPE_THRESHOLD;
+      if (overThreshold && !swipeThresholdCrossed) {
+        swipeThresholdCrossed = true;
+        triggerHaptic('light');
+      } else if (!overThreshold && swipeThresholdCrossed) {
+        swipeThresholdCrossed = false;
+      }
       // touch-action already constrains default scrolling on mobile
     }
   };
@@ -2486,6 +2510,7 @@
       distance > SWIPE_THRESHOLD || (velocity > VELOCITY_THRESHOLD && distance > 40);
 
     if (shouldTrigger && swiping) {
+      triggerHaptic('medium');
       swipeAnimating = true;
       // Animate off screen with spring-like motion
       const screenWidth = window.innerWidth;
@@ -2525,6 +2550,7 @@
     swiping = false;
     swipeVelocity = 0;
     swipeAnimating = false;
+    swipeThresholdCrossed = false;
   };
 
   // Drag and drop handlers
@@ -3603,6 +3629,15 @@
   );
   const inboxFolderPath = $derived(resolveFolderPath(null, ['INBOX'], $folders));
 
+  // ── Mobile tab bar state ──────────────────────────────────────────────────
+  const inboxUnseenCount = $derived(($folders || []).find((f) => f.path === 'INBOX')?.count || 0);
+  const mobileActiveTab = $derived.by(() => {
+    if ($searchActiveStore) return 'search';
+    return 'inbox';
+  });
+  // FAB visibility: show on mobile when reader and sidebar are closed
+  const showMobileFab = $derived(isMobile && !$mobileReader && !$sidebarOpen);
+
   let selectedFolderTotalCount = $state(null);
   $effect(() => {
     const foldersVal = $folders;
@@ -4449,6 +4484,36 @@
       });
     }
 
+    // Android back button navigation stack
+    if (isTauriMobile) {
+      onBackButton(() => {
+        // 1. Close reader if open
+        if (get(mobileReader)) {
+          closeReaderFullscreen({ clearSelection: true });
+          return;
+        }
+        // 3. Close sidebar if open
+        if (get(sidebarOpen)) {
+          sidebarOpen.set(false);
+          return;
+        }
+        // 3. Clear search if active
+        if (get(searchActiveStore)) {
+          onSearch('');
+          return;
+        }
+        // 4. Navigate to inbox if not already there
+        if (get(selectedFolder) !== 'INBOX') {
+          if (mailboxStore?.actions?.selectFolder) {
+            mailboxStore.actions.selectFolder('INBOX');
+          }
+          return;
+        }
+        // 5. Default: minimize the app
+        import('@tauri-apps/plugin-process').then(({ exit }) => exit(0)).catch(() => {});
+      });
+    }
+
     // Set up infinite scroll observer for mobile
     if (typeof window !== 'undefined' && 'IntersectionObserver' in window) {
       infiniteScrollObserver = new IntersectionObserver(
@@ -4733,7 +4798,11 @@
 
 <Tooltip.Provider>
   {#if isActive}
-    <div class="fe-mailbox-wrapper" class:mobile-reader={$mobileReader}>
+    <div
+      class="fe-mailbox-wrapper"
+      class:mobile-reader={$mobileReader}
+      class:mobile-reader-closing={readerClosing}
+    >
       {#if isOffline}
         <div
           class="flex items-center justify-center gap-2 px-4 py-1.5 bg-yellow-500/15 border-b border-yellow-500/25 text-yellow-700 dark:text-yellow-400 text-sm"
@@ -4758,7 +4827,10 @@
           </button>
         </div>
       {/if}
-      <div class="flex items-center gap-3 px-4 py-2 bg-muted/50 dark:bg-background">
+      <div
+        class="flex items-center gap-3 px-4 py-2 bg-muted/50 dark:bg-background"
+        style="padding-top: max(0.5rem, var(--sai-top, env(safe-area-inset-top, 0px)))"
+      >
         <Tooltip.Root>
           <Tooltip.Trigger>
             <button
@@ -5669,11 +5741,22 @@
                         : -60 + pullDistance}px"
                     >
                       <div
-                        class={`h-5 w-5 rounded-full border-2 border-border border-t-primary ${isRefreshing ? 'animate-spin' : ''}`}
+                        class={`h-5 w-5 ${isRefreshing ? 'animate-spin' : ''}`}
+                        style={!isRefreshing
+                          ? `transform: rotate(${Math.min(pullDistance / 60, 1) * 180}deg); transition: transform 0.1s ease-out`
+                          : ''}
                       >
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                          <circle cx="12" cy="12" r="10" opacity="0.25" />
-                          <path d="M12 2a10 10 0 0 1 10 10" stroke-linecap="round" />
+                        <svg
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="2"
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          class="h-5 w-5"
+                        >
+                          <line x1="12" y1="5" x2="12" y2="19" />
+                          <polyline points="19 12 12 19 5 12" />
                         </svg>
                       </div>
                       <span
@@ -5737,7 +5820,7 @@
                             </div>
                           {/if}
                           <div
-                            class={`flex items-center gap-3 px-3 py-1.5 cursor-pointer ${swiping && swipeItemId === conv.id ? 'user-select-none' : ''} ${window.innerWidth > 640 ? 'cursor-grab active:cursor-grabbing' : ''}`}
+                            class={`flex items-center gap-3 cursor-pointer ${isMobile ? 'px-4 py-3' : 'px-3 py-1.5'} ${swiping && swipeItemId === conv.id ? 'user-select-none' : ''} ${window.innerWidth > 640 ? 'cursor-grab active:cursor-grabbing' : ''}`}
                             data-conversation-row
                             role="button"
                             tabindex="0"
@@ -5774,91 +5857,96 @@
                               ? 'none'
                               : 'transform 0.25s cubic-bezier(0.25, 0.46, 0.45, 0.94)'};"
                           >
-                            <button
-                              class={`relative w-8 h-8 rounded flex items-center justify-center shrink-0 transition-colors ${($selectedConversationIds || []).includes(conv.id) ? 'text-primary' : 'text-muted-foreground hover:text-foreground'}`}
-                              type="button"
-                              aria-label={($selectedConversationIds || []).includes(conv.id)
-                                ? 'Deselect'
-                                : 'Select'}
-                              onclick={(e) => {
-                                e.stopPropagation();
-                                toggleSelection(conv, e);
-                              }}
-                            >
-                              {#if ($selectedConversationIds || []).includes(conv.id)}
-                                <CheckSquare class="h-5 w-5" />
-                              {:else}
-                                <Square class="h-5 w-5" />
-                              {/if}
-                            </button>
-                            <!-- Gmail-style: two rows -->
-                            <div class="flex-1 min-w-0 flex flex-col gap-0.5 text-[13px]">
-                              <!-- Row 1: From | Subject | Date -->
-                              <div class="flex items-center gap-3">
-                                <div
-                                  class="w-[30%] min-w-[140px] max-w-[280px] shrink-0 flex items-center gap-1"
-                                >
-                                  {#if conv.hasUnread || conv.is_unread}
-                                    <span class="w-1.5 h-1.5 rounded-full bg-primary shrink-0"
-                                    ></span>
-                                  {/if}
-                                  <span
-                                    class={`truncate ${conv.hasUnread || conv.is_unread ? 'font-semibold' : ''}`}
-                                    >{listIsSentFolder
-                                      ? `To: ${getConversationToName(conv) || getConversationFromName(conv)}`
-                                      : getConversationFromName(conv)}</span
+                            {#if isMobile}
+                              <!-- Mobile: avatar + two-line layout -->
+                              <button
+                                class="relative w-10 h-10 rounded-full flex items-center justify-center shrink-0 text-white text-xs font-semibold"
+                                type="button"
+                                style="background: {($selectedConversationIds || []).includes(
+                                  conv.id,
+                                )
+                                  ? 'hsl(var(--primary))'
+                                  : getAvatarColor(getConversationFromDisplay(conv))}"
+                                aria-label={($selectedConversationIds || []).includes(conv.id)
+                                  ? 'Deselect'
+                                  : 'Select'}
+                                onclick={(e) => {
+                                  e.stopPropagation();
+                                  toggleSelection(conv, e);
+                                }}
+                              >
+                                {#if ($selectedConversationIds || []).includes(conv.id)}
+                                  <svg
+                                    viewBox="0 0 24 24"
+                                    class="h-5 w-5"
+                                    fill="none"
+                                    stroke="white"
+                                    stroke-width="3"
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
                                   >
-                                  {#if conv.messageCount > 1}
-                                    <span class="text-[11px] text-muted-foreground shrink-0"
-                                      >({conv.messageCount})</span
-                                    >
-                                  {/if}
-                                </div>
-                                <div
-                                  class="flex-1 min-w-0 flex items-baseline gap-1 overflow-hidden"
-                                >
-                                  <span
-                                    class={`truncate ${conv.hasUnread || conv.is_unread ? 'font-medium' : ''}`}
-                                    >{conv.displaySubject || conv.subject}</span
-                                  >
-                                  {#if truncatePreview(mailboxView?.getConversationPreview?.(conv) || conv.snippet || '', 80)}
+                                    <polyline points="20 6 9 17 4 12" />
+                                  </svg>
+                                {:else}
+                                  {getInitials(getConversationFromDisplay(conv))}
+                                {/if}
+                              </button>
+                              <div class="flex-1 min-w-0 flex flex-col gap-0.5">
+                                <!-- Line 1: From + Date -->
+                                <div class="flex items-center justify-between gap-2">
+                                  <div class="flex items-center gap-1.5 min-w-0">
+                                    {#if conv.hasUnread || conv.is_unread}
+                                      <span class="w-2 h-2 rounded-full bg-primary shrink-0"></span>
+                                    {/if}
                                     <span
-                                      class="text-muted-foreground font-normal text-xs truncate"
+                                      class={`truncate text-sm ${conv.hasUnread || conv.is_unread ? 'font-semibold' : ''}`}
                                     >
-                                      &mdash; {truncatePreview(
-                                        mailboxView?.getConversationPreview?.(conv) ||
-                                          conv.snippet ||
-                                          '',
-                                        80,
-                                      )}
+                                      {listIsSentFolder
+                                        ? `To: ${getConversationToName(conv) || getConversationFromName(conv)}`
+                                        : getConversationFromName(conv)}
                                     </span>
-                                  {/if}
+                                    {#if conv.messageCount > 1}
+                                      <span class="text-xs text-muted-foreground shrink-0"
+                                        >({conv.messageCount})</span
+                                      >
+                                    {/if}
+                                  </div>
+                                  <span
+                                    class="text-xs text-muted-foreground whitespace-nowrap shrink-0"
+                                  >
+                                    {formatCompactDate(conv.latestDate || conv.date)}
+                                  </span>
                                 </div>
-                                <div
-                                  class="flex items-center gap-1.5 shrink-0 text-muted-foreground"
-                                >
-                                  {#if hasConversationReplies(conv)}
-                                    <svg viewBox="0 0 24 24" class="h-3 w-3" aria-hidden="true">
-                                      <path
-                                        d="M9 17l-5-5 5-5"
-                                        fill="none"
-                                        stroke="currentColor"
-                                        stroke-width="2"
-                                        stroke-linecap="round"
-                                        stroke-linejoin="round"
-                                      ></path>
-                                      <path
-                                        d="M20 18v-2a4 4 0 0 0-4-4H4"
-                                        fill="none"
-                                        stroke="currentColor"
-                                        stroke-width="2"
-                                        stroke-linecap="round"
-                                        stroke-linejoin="round"
-                                      ></path>
-                                    </svg>
+                                <!-- Line 2: Subject + Preview + Star -->
+                                <div class="flex items-center gap-2">
+                                  <div class="flex-1 min-w-0 flex items-baseline gap-1 text-sm">
+                                    <span
+                                      class={`truncate ${conv.hasUnread || conv.is_unread ? 'font-medium' : 'text-muted-foreground'}`}
+                                    >
+                                      {conv.displaySubject || conv.subject}
+                                    </span>
+                                    {#if truncatePreview(mailboxView?.getConversationPreview?.(conv) || conv.snippet || '', 60)}
+                                      <span class="text-muted-foreground text-xs truncate">
+                                        &mdash; {truncatePreview(
+                                          mailboxView?.getConversationPreview?.(conv) ||
+                                            conv.snippet ||
+                                            '',
+                                          60,
+                                        )}
+                                      </span>
+                                    {/if}
+                                  </div>
+                                  {#if conv.flagged}
+                                    <Star
+                                      class="h-4 w-4 text-yellow-400 fill-yellow-400 shrink-0"
+                                    />
                                   {/if}
                                   {#if hasAttachments(conv)}
-                                    <svg viewBox="0 0 24 24" class="h-3 w-3" aria-hidden="true">
+                                    <svg
+                                      viewBox="0 0 24 24"
+                                      class="h-3.5 w-3.5 text-muted-foreground shrink-0"
+                                      aria-hidden="true"
+                                    >
                                       <path
                                         d="M21.44 11.05l-8.49 8.49a5 5 0 0 1-7.07-7.07l9.19-9.19a3 3 0 1 1 4.24 4.24l-9.19 9.19a1 1 0 1 1-1.41-1.41l8.49-8.49"
                                         fill="none"
@@ -5869,43 +5957,142 @@
                                       ></path>
                                     </svg>
                                   {/if}
-                                  <span class="text-[11px] whitespace-nowrap">
-                                    {#if conv.latestDate}
-                                      {formatCompactDate(conv.latestDate)}
-                                    {:else}
-                                      {formatCompactDate(conv.date)}
-                                    {/if}
-                                  </span>
                                 </div>
                               </div>
-                              {#if Array.isArray(conv.labels) && conv.labels.length > 0}
-                                <!-- Row 2: Labels -->
-                                <div class="flex items-center gap-1">
-                                  {#each conv.labels.slice(0, 3) as lbl}
-                                    {#if typeof lbl === 'string' && lbl && lbl !== '[]'}
-                                      {#if labelMap.get(lbl)}
-                                        <span
-                                          class="inline-flex items-center px-1.5 py-0.5 text-[10px] truncate max-w-[80px]"
-                                          style={labelMap.get(lbl).color
-                                            ? `background:${labelMap.get(lbl).color}; color:#fff;`
-                                            : ''}
-                                        >
-                                          {labelMap.get(lbl).name ||
-                                            labelMap.get(lbl).label ||
-                                            labelMap.get(lbl).value ||
-                                            lbl}
-                                        </span>
-                                      {/if}
+                            {:else}
+                              <!-- Desktop: checkbox + single-line layout -->
+                              <button
+                                class={`relative w-8 h-8 rounded flex items-center justify-center shrink-0 transition-colors ${($selectedConversationIds || []).includes(conv.id) ? 'text-primary' : 'text-muted-foreground hover:text-foreground'}`}
+                                type="button"
+                                aria-label={($selectedConversationIds || []).includes(conv.id)
+                                  ? 'Deselect'
+                                  : 'Select'}
+                                onclick={(e) => {
+                                  e.stopPropagation();
+                                  toggleSelection(conv, e);
+                                }}
+                              >
+                                {#if ($selectedConversationIds || []).includes(conv.id)}
+                                  <CheckSquare class="h-5 w-5" />
+                                {:else}
+                                  <Square class="h-5 w-5" />
+                                {/if}
+                              </button>
+                              <div class="flex-1 min-w-0 flex flex-col gap-0.5 text-[13px]">
+                                <!-- Row 1: From | Subject | Date -->
+                                <div class="flex items-center gap-3">
+                                  <div
+                                    class="w-[30%] min-w-[140px] max-w-[280px] shrink-0 flex items-center gap-1"
+                                  >
+                                    {#if conv.hasUnread || conv.is_unread}
+                                      <span class="w-1.5 h-1.5 rounded-full bg-primary shrink-0"
+                                      ></span>
                                     {/if}
-                                  {/each}
-                                  {#if conv.labels.length > 3}
-                                    <span class="text-[10px] text-muted-foreground"
-                                      >+{conv.labels.length - 3}</span
+                                    <span
+                                      class={`truncate ${conv.hasUnread || conv.is_unread ? 'font-semibold' : ''}`}
+                                      >{listIsSentFolder
+                                        ? `To: ${getConversationToName(conv) || getConversationFromName(conv)}`
+                                        : getConversationFromName(conv)}</span
                                     >
-                                  {/if}
+                                    {#if conv.messageCount > 1}
+                                      <span class="text-[11px] text-muted-foreground shrink-0"
+                                        >({conv.messageCount})</span
+                                      >
+                                    {/if}
+                                  </div>
+                                  <div
+                                    class="flex-1 min-w-0 flex items-baseline gap-1 overflow-hidden"
+                                  >
+                                    <span
+                                      class={`truncate ${conv.hasUnread || conv.is_unread ? 'font-medium' : ''}`}
+                                      >{conv.displaySubject || conv.subject}</span
+                                    >
+                                    {#if truncatePreview(mailboxView?.getConversationPreview?.(conv) || conv.snippet || '', 80)}
+                                      <span
+                                        class="text-muted-foreground font-normal text-xs truncate"
+                                      >
+                                        &mdash; {truncatePreview(
+                                          mailboxView?.getConversationPreview?.(conv) ||
+                                            conv.snippet ||
+                                            '',
+                                          80,
+                                        )}
+                                      </span>
+                                    {/if}
+                                  </div>
+                                  <div
+                                    class="flex items-center gap-1.5 shrink-0 text-muted-foreground"
+                                  >
+                                    {#if hasConversationReplies(conv)}
+                                      <svg viewBox="0 0 24 24" class="h-3 w-3" aria-hidden="true">
+                                        <path
+                                          d="M9 17l-5-5 5-5"
+                                          fill="none"
+                                          stroke="currentColor"
+                                          stroke-width="2"
+                                          stroke-linecap="round"
+                                          stroke-linejoin="round"
+                                        ></path>
+                                        <path
+                                          d="M20 18v-2a4 4 0 0 0-4-4H4"
+                                          fill="none"
+                                          stroke="currentColor"
+                                          stroke-width="2"
+                                          stroke-linecap="round"
+                                          stroke-linejoin="round"
+                                        ></path>
+                                      </svg>
+                                    {/if}
+                                    {#if hasAttachments(conv)}
+                                      <svg viewBox="0 0 24 24" class="h-3 w-3" aria-hidden="true">
+                                        <path
+                                          d="M21.44 11.05l-8.49 8.49a5 5 0 0 1-7.07-7.07l9.19-9.19a3 3 0 1 1 4.24 4.24l-9.19 9.19a1 1 0 1 1-1.41-1.41l8.49-8.49"
+                                          fill="none"
+                                          stroke="currentColor"
+                                          stroke-width="2"
+                                          stroke-linecap="round"
+                                          stroke-linejoin="round"
+                                        ></path>
+                                      </svg>
+                                    {/if}
+                                    <span class="text-[11px] whitespace-nowrap">
+                                      {#if conv.latestDate}
+                                        {formatCompactDate(conv.latestDate)}
+                                      {:else}
+                                        {formatCompactDate(conv.date)}
+                                      {/if}
+                                    </span>
+                                  </div>
                                 </div>
-                              {/if}
-                            </div>
+                                {#if Array.isArray(conv.labels) && conv.labels.length > 0}
+                                  <!-- Labels row -->
+                                  <div class="flex items-center gap-1">
+                                    {#each conv.labels.slice(0, 3) as lbl}
+                                      {#if typeof lbl === 'string' && lbl && lbl !== '[]'}
+                                        {#if labelMap.get(lbl)}
+                                          <span
+                                            class="inline-flex items-center px-1.5 py-0.5 text-[10px] truncate max-w-[80px]"
+                                            style={labelMap.get(lbl).color
+                                              ? `background:${labelMap.get(lbl).color}; color:#fff;`
+                                              : ''}
+                                          >
+                                            {labelMap.get(lbl).name ||
+                                              labelMap.get(lbl).label ||
+                                              labelMap.get(lbl).value ||
+                                              lbl}
+                                          </span>
+                                        {/if}
+                                      {/if}
+                                    {/each}
+                                    {#if conv.labels.length > 3}
+                                      <span class="text-[10px] text-muted-foreground"
+                                        >+{conv.labels.length - 3}</span
+                                      >
+                                    {/if}
+                                  </div>
+                                {/if}
+                              </div>
+                            {/if}
                           </div>
                         </li>
                       {/each}
@@ -7726,19 +7913,17 @@
           </div>
         {/if}
 
-        <!-- Mobile Floating Action Button (FAB) for Compose -->
-        <Tooltip.Root>
-          <Tooltip.Trigger>
-            <Button
-              class={`fixed bottom-6 right-5 w-14 h-14 rounded-full shadow-lg z-50 md:hidden ${$sidebarOpen || $mobileReader ? 'hidden' : ''}`}
-              aria-label="Compose"
-              onclick={() => mailboxView?.composeModal?.open?.()}
-            >
-              <Pencil class="h-5 w-5" />
-            </Button>
-          </Tooltip.Trigger>
-          <Tooltip.Content side="left"><p>Compose</p></Tooltip.Content>
-        </Tooltip.Root>
+        <!-- Mobile Floating Action Button (FAB) for Compose — Gmail style -->
+        {#if showMobileFab}
+          <Button
+            class="fixed bottom-6 right-5 w-14 h-14 rounded-full shadow-lg z-50 md:hidden"
+            style="margin-bottom: var(--sai-bottom, env(safe-area-inset-bottom, 0px))"
+            aria-label="Compose"
+            onclick={() => mailboxView?.composeModal?.open?.()}
+          >
+            <Pencil class="h-5 w-5" />
+          </Button>
+        {/if}
 
         <!-- Folder management components -->
         {#if $folderContextMenu}

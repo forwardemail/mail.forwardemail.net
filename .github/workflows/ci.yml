@@ -88,9 +88,7 @@ jobs:
         run: find dist -name '*.map' -delete
 
       - name: Install Playwright browsers
-        if: github.event_name == 'pull_request'
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install --with-deps chromium webkit
 
       - name: E2E tests
-        if: github.event_name == 'pull_request'
         run: pnpm test:e2e

@@ -1,10 +1,9 @@
 name: Release Desktop (Tauri)
 
 on:
-  # Disabled automatic tag triggers until desktop release pipeline is ready.
-  # push:
-  #   tags:
-  #     - 'v*'
+  push:
+    tags:
+      - 'desktop-v*'
   workflow_call:
     inputs:
       version:
@@ -13,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag (e.g. v0.2.0)'
+        description: 'Release tag (e.g. desktop-v0.1.0)'
         required: true
         type: string
 
@@ -125,7 +124,11 @@ jobs:
 
       - name: Set updater signing config
         run: |
-          jq '.plugins.updater.pubkey = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IERGQjFEOEEzRjRGNTNDODUKUldTRlBQWDBvOWl4MzEzcGl5Uk9IdUc5UnpjVmVBVFFhQndXdHFnQ2lxSXdVKzZ6aGFWbktxZFgK" | .bundle.createUpdaterArtifacts = true' src-tauri/tauri.conf.json > src-tauri/tauri.conf.json.tmp && mv src-tauri/tauri.conf.json.tmp src-tauri/tauri.conf.json
+          if [ -n "$TAURI_KEY" ]; then
+            jq '.plugins.updater.pubkey = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IERGQjFEOEEzRjRGNTNDODUKUldTRlBQWDBvOWl4MzEzcGl5Uk9IdUc5UnpjVmVBVFFhQndXdHFnQ2lxSXdVKzZ6aGFWbktxZFgK" | .bundle.createUpdaterArtifacts = true' src-tauri/tauri.conf.json > src-tauri/tauri.conf.json.tmp && mv src-tauri/tauri.conf.json.tmp src-tauri/tauri.conf.json
+          fi
+        env:
+          TAURI_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
 
       - name: Build and release Tauri app
         uses: tauri-apps/tauri-action@v0
@@ -145,22 +148,8 @@ jobs:
           WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
           WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
         with:
-          tagName: v${{ inputs.version || github.event.inputs.tag || github.ref_name }}
-          releaseName: 'Forward Email v${{ inputs.version || github.event.inputs.tag || github.ref_name }}'
-          releaseBody: |
-            See the [CHANGELOG](https://github.com/forwardemail/mail.forwardemail.net/blob/main/CHANGELOG.md) for details.
-
-            ## Desktop Downloads
-            | Platform | Architecture | File |
-            |----------|-------------|------|
-            | macOS | Apple Silicon (arm64) | `.dmg` |
-            | macOS | Intel (x64) | `.dmg` |
-            | Windows | x64 | `.msi` / `.exe` |
-            | Linux | x64 | `.AppImage` / `.deb` |
-
-            ## Auto-Update
-            Desktop apps will automatically check for updates and prompt to install.
-            All update packages are cryptographically signed and verified before installation.
+          tagName: desktop-v${{ inputs.version || github.event.inputs.tag || github.ref_name }}
+          releaseName: 'Forward Email Desktop ${{ inputs.version || github.event.inputs.tag || github.ref_name }}'
           releaseDraft: true
           prerelease: false
           args: --target ${{ matrix.target }}

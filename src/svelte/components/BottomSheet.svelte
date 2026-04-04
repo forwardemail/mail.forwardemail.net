@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import X from '@lucide/svelte/icons/x';
+  import { triggerHaptic } from '../../utils/tauri-bridge.js';
 
   interface Action {
     label: string;
@@ -47,6 +48,7 @@
 
     // If dragged more than 100px down, close the sheet
     if (currentY > 100) {
+      triggerHaptic('light');
       onClose();
     }
 

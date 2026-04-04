@@ -147,6 +147,9 @@ export default defineConfig({
   server: {
     port: 5174,
     strictPort: true,
+    // Listen on all interfaces so Android emulator can reach the dev server
+    // via adb reverse (which tunnels to 127.0.0.1, not ::1).
+    host: '0.0.0.0',
   },
   build: {
     target: 'esnext',

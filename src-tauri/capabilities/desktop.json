@@ -6,7 +6,8 @@
   "permissions": [
     "updater:allow-check",
     "updater:allow-download-and-install",
-    "window-state:default"
+    "window-state:default",
+    "global-shortcut:allow-is-registered"
   ],
   "platforms": ["linux", "macOS", "windows"]
 }

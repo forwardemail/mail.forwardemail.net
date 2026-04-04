@@ -16,8 +16,19 @@ export default defineConfig({
   },
   projects: [
     {
-      name: 'chromium',
+      name: 'desktop-chromium',
       use: { ...devices['Desktop Chrome'] },
+    },
+    {
+      name: 'mobile-android',
+      use: { ...devices['Pixel 7'] },
+      // Only run tests explicitly written for mobile viewports
+      testMatch: /mailbox\.spec/,
+    },
+    {
+      name: 'mobile-ios',
+      use: { ...devices['iPhone 14'] },
+      testMatch: /mailbox\.spec/,
     },
   ],
   webServer: {

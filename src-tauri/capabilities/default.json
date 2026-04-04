@@ -39,8 +39,7 @@
     "os:default",
     "dialog:allow-save",
     "fs:allow-write-file",
-    "opener:allow-open-path",
-    "global-shortcut:allow-is-registered"
+    "opener:allow-open-path"
   ],
   "platforms": ["linux", "macOS", "windows", "android", "iOS"]
 }
