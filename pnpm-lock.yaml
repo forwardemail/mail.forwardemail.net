@@ -4,6 +4,10 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+overrides:
+  preact: '>=10.29.1'
+  markdown-it: '>=14.1.1'
+
 importers:
 
   .:
@@ -28,10 +32,10 @@ importers:
         version: 2.3.5
       '@schedule-x/calendar':
         specifier: ^1.63.1
-        version: 1.63.1(@preact/signals@1.3.2(preact@10.27.2))(preact@10.27.2)
+        version: 1.63.1(@preact/signals@1.3.2(preact@10.29.1))(preact@10.29.1)
       '@schedule-x/svelte':
         specifier: ^3.0.0
-        version: 3.0.0(@schedule-x/calendar@1.63.1(@preact/signals@1.3.2(preact@10.27.2))(preact@10.27.2))(@schedule-x/shared@3.4.2(@preact/signals@1.3.2(preact@10.27.2)))(svelte@5.48.0)
+        version: 3.0.0(@schedule-x/calendar@1.63.1(@preact/signals@1.3.2(preact@10.29.1))(preact@10.29.1))(@schedule-x/shared@3.4.2(@preact/signals@1.3.2(preact@10.29.1)))(svelte@5.48.0)
       '@schedule-x/theme-default':
         specifier: ^1.13.4
         version: 1.63.1
@@ -156,8 +160,8 @@ importers:
         specifier: ^2.6.0
         version: 2.6.0
       preact:
-        specifier: ^10.24.3
-        version: 10.27.2
+        specifier: '>=10.29.1'
+        version: 10.29.1
       svelte:
         specifier: ^5.48.0
         version: 5.48.0
@@ -1402,7 +1406,7 @@ packages:
   '@preact/signals@1.3.2':
     resolution: {integrity: sha512-naxcJgUJ6BTOROJ7C3QML7KvwKwCXQJYTc5L/b0eEsdYgPB6SxwoQ1vDGcS0Q7GVjAenVq/tXrybVdFShHYZWg==}
     peerDependencies:
-      preact: 10.x
+      preact: '>=10.29.1'
 
   '@puppeteer/browsers@1.9.1':
     resolution: {integrity: sha512-PuvK6xZzGhKPvlx3fpfdM2kYY3P/hB1URtK8wA7XUJ6prn6pp22zvJHu48th0SGcHL9SutbPHrFuQgfXTFobWA==}
@@ -1587,7 +1591,7 @@ packages:
     resolution: {integrity: sha512-SKWU88Xf9OYiZ1Z103mh7Gk2DjSj0jajlIK/ndEC/4BH9PvYhsLLWnGdbyBzuAFUJMQK7h/gHWaDAKhkb6qenw==}
     peerDependencies:
       '@preact/signals': ^1.1.5
-      preact: ^10.19.2
+      preact: '>=10.29.1'
 
   '@schedule-x/shared@3.4.2':
     resolution: {integrity: sha512-l7TV14tx+17wCyuTwc0Dk3gKua5R7wo6itY5owUnUq4NgKegZM0S7Odw6A2zAnr/7+X47K/MFSWoYVEPCC+Hmg==}
@@ -4238,8 +4242,8 @@ packages:
     resolution: {integrity: sha512-hdN1wVrZbb29eBGiGjJbeP8JbKjq1urkHJ/LIP/NY48MZ1QVXUsQBV1G1zvYFHn1XE06cwjBsOI2K3Ulnj1YXQ==}
     engines: {node: '>=8'}
 
-  markdown-it@14.1.0:
-    resolution: {integrity: sha512-a54IwgWPaeBCAAsv13YgmALOF1elABB08FxO9i+r4VFk5Vl4pKokRPeX8u5TCgSsPi6ec1otfLjdOpVcgbpshg==}
+  markdown-it@14.1.1:
+    resolution: {integrity: sha512-BuU2qnTti9YKgK5N+IeMubp14ZUKUUw7yeJbkjtosvHiP0AZ5c8IAgEMk79D0eC8F23r4Ac/q8cAIFdm2FtyoA==}
     hasBin: true
 
   marked@12.0.2:
@@ -4756,8 +4760,8 @@ packages:
     resolution: {integrity: sha512-3Ybi1tAuwAP9s0r1UQ2J4n5Y0G05bJkpUIO0/bI9MhwmD70S5aTWbXGBwxHrelT+XM1k6dM0pk+SwNkpTRN7Pg==}
     engines: {node: ^10 || ^12 || >=14}
 
-  preact@10.27.2:
-    resolution: {integrity: sha512-5SYSgFKSyhCbk6SrXyMpqjb5+MQBgfvEKE/OC+PujcY34sOpqtr+0AZQtPYx5IA6VxynQ7rUPCtKzyovpj9Bpg==}
+  preact@10.29.1:
+    resolution: {integrity: sha512-gQCLc/vWroE8lIpleXtdJhTFDogTdZG9AjMUpVkDf2iTCNwYNWA+u16dL41TqUDJO4gm2IgrcMv3uTpjd4Pwmg==}
 
   prelude-ls@1.2.1:
     resolution: {integrity: sha512-vkcDPrRZo1QZLbn5RLGPpg/WmIQ65qoWWhcGKf/b5eplkkarX0m9z8ppCat4mlOqUsWpyNuYgO3VRyrYHSzX5g==}
@@ -7417,10 +7421,10 @@ snapshots:
 
   '@preact/signals-core@1.12.1': {}
 
-  '@preact/signals@1.3.2(preact@10.27.2)':
+  '@preact/signals@1.3.2(preact@10.29.1)':
     dependencies:
       '@preact/signals-core': 1.12.1
-      preact: 10.27.2
+      preact: 10.29.1
 
   '@puppeteer/browsers@1.9.1':
     dependencies:
@@ -7560,19 +7564,19 @@ snapshots:
     transitivePeerDependencies:
       - zenObservable
 
-  '@schedule-x/calendar@1.63.1(@preact/signals@1.3.2(preact@10.27.2))(preact@10.27.2)':
+  '@schedule-x/calendar@1.63.1(@preact/signals@1.3.2(preact@10.29.1))(preact@10.29.1)':
     dependencies:
-      '@preact/signals': 1.3.2(preact@10.27.2)
-      preact: 10.27.2
+      '@preact/signals': 1.3.2(preact@10.29.1)
+      preact: 10.29.1
 
-  '@schedule-x/shared@3.4.2(@preact/signals@1.3.2(preact@10.27.2))':
+  '@schedule-x/shared@3.4.2(@preact/signals@1.3.2(preact@10.29.1))':
     dependencies:
-      '@preact/signals': 1.3.2(preact@10.27.2)
+      '@preact/signals': 1.3.2(preact@10.29.1)
 
-  '@schedule-x/svelte@3.0.0(@schedule-x/calendar@1.63.1(@preact/signals@1.3.2(preact@10.27.2))(preact@10.27.2))(@schedule-x/shared@3.4.2(@preact/signals@1.3.2(preact@10.27.2)))(svelte@5.48.0)':
+  '@schedule-x/svelte@3.0.0(@schedule-x/calendar@1.63.1(@preact/signals@1.3.2(preact@10.29.1))(preact@10.29.1))(@schedule-x/shared@3.4.2(@preact/signals@1.3.2(preact@10.29.1)))(svelte@5.48.0)':
     dependencies:
-      '@schedule-x/calendar': 1.63.1(@preact/signals@1.3.2(preact@10.27.2))(preact@10.27.2)
-      '@schedule-x/shared': 3.4.2(@preact/signals@1.3.2(preact@10.27.2))
+      '@schedule-x/calendar': 1.63.1(@preact/signals@1.3.2(preact@10.29.1))(preact@10.29.1)
+      '@schedule-x/shared': 3.4.2(@preact/signals@1.3.2(preact@10.29.1))
       svelte: 5.48.0
 
   '@schedule-x/theme-default@1.63.1': {}
@@ -10397,7 +10401,7 @@ snapshots:
 
   map-obj@4.3.0: {}
 
-  markdown-it@14.1.0:
+  markdown-it@14.1.1:
     dependencies:
       argparse: 2.0.1
       entities: 4.5.0
@@ -10911,7 +10915,7 @@ snapshots:
       picocolors: 1.1.1
       source-map-js: 1.2.1
 
-  preact@10.27.2: {}
+  preact@10.29.1: {}
 
   prelude-ls@1.2.1: {}
 
@@ -10977,7 +10981,7 @@ snapshots:
   prosemirror-markdown@1.13.2:
     dependencies:
       '@types/markdown-it': 14.1.2
-      markdown-it: 14.1.0
+      markdown-it: 14.1.1
       prosemirror-model: 1.25.4
 
   prosemirror-menu@1.2.5:

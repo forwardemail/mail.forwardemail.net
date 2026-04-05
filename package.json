@@ -159,5 +159,11 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/forwardemail/mail.forwardemail.net.git"
+  },
+  "pnpm": {
+    "overrides": {
+      "preact": ">=10.29.1",
+      "markdown-it": ">=14.1.1"
+    }
   }
 }
