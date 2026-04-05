@@ -11,7 +11,7 @@ test.describe('Calendar Navigation', () => {
   test('should show calendar header with actions', async ({ page }) => {
     await page.goto('/calendar');
     await expect(page.getByRole('heading', { name: 'Calendar' })).toBeVisible();
-    await expect(page.getByRole('button', { name: /New Event/i })).toBeVisible();
+    await expect(page.getByRole('button', { name: '+ New Event' })).toBeVisible();
     await expect(page.getByLabel('Import calendar')).toBeVisible();
   });
 
