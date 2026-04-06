@@ -261,14 +261,51 @@ export async function initBadgeFromStore() {
 
 // ── Event -> Notification Mapping ───────────────────────────────────────────
 
+// Folder names that should never trigger new-message notifications or badge
+// increments.  Drafts is the primary case: saving a draft creates a server-side
+// message which fires a newMessage WS event, but the user should not be notified
+// about their own draft.
+const SILENT_FOLDERS = new Set(['DRAFTS', 'DRAFT']);
+
+/**
+ * Resolve the mailbox identifier from a newMessage WS payload to a
+ * human-readable folder path.  The server may send a MongoDB ObjectId
+ * or a path string (e.g. "INBOX", "Drafts").  We try the folder store
+ * first (by id / _id / path) and fall back to the raw value.
+ */
+async function resolveMailboxPath(identifier) {
+  if (!identifier) return 'INBOX';
+  try {
+    const { get } = await import('svelte/store');
+    const { mailboxStore } = await import('../stores/mailboxStore');
+    const folders = get(mailboxStore.state.folders) || [];
+    const match =
+      folders.find((f) => String(f.id) === identifier) ||
+      folders.find((f) => String(f._id) === identifier) ||
+      folders.find((f) => f.path?.toUpperCase?.() === identifier.toUpperCase());
+    if (match) return match.path || identifier;
+  } catch {
+    // Store may not be ready — fall through to raw value
+  }
+  return identifier;
+}
+
 async function handleNewMessage(data) {
   if (!data || typeof data !== 'object') return;
 
-  incrementBadge(1);
-
   const msg = data.message || data;
   const uid = msg.uid || msg.id;
-  const mailbox = msg.mailbox || 'INBOX';
+  // The mailbox identifier lives at the top level of the WS payload
+  // (data.mailbox), NOT inside data.message.
+  const rawMailbox = data.mailbox || msg.mailbox || 'INBOX';
+  const mailbox = await resolveMailboxPath(rawMailbox);
+
+  // Skip notifications for folders the user doesn't need alerts about
+  // (e.g. Drafts — saving a draft fires a newMessage event on the server).
+  const upperPath = (mailbox || '').toUpperCase();
+  if (SILENT_FOLDERS.has(upperPath)) return;
+
+  incrementBadge(1);
 
   let from =
     msg.from?.text ||

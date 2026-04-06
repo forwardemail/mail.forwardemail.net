@@ -1635,6 +1635,10 @@ export const switchAccount = (accountObj) => {
   const email = accountObj?.email || accountObj;
   if (!email) return Promise.resolve();
 
+  // Ignore if the requested account is already active
+  const active = get(currentAccount) || Local.get('email') || '';
+  if (active === email) return Promise.resolve();
+
   // If a cooldown is active, replace the pending target (trailing call wins)
   if (switchCooldownTimer) {
     switchPendingEmail = email;

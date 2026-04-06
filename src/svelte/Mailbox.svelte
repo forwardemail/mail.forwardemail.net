@@ -5090,7 +5090,8 @@
                     {#each $accounts as acct}
                       <button
                         type="button"
-                        class={`flex items-center w-full px-3 py-2 text-sm transition-colors ${acct.email === $currentAccount ? 'bg-accent text-accent-foreground' : 'hover:bg-accent'}`}
+                        class={`flex items-center w-full px-3 py-2 text-sm transition-colors ${acct.email === $currentAccount ? 'bg-accent text-accent-foreground cursor-default' : 'hover:bg-accent'}`}
+                        disabled={acct.email === $currentAccount}
                         onclick={() => mailboxView?.switchAccount?.(acct)}
                       >
                         <span class="truncate">{acct.email}</span>
