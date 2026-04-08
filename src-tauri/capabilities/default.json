@@ -38,6 +38,7 @@
     "log:allow-log",
     "os:default",
     "dialog:allow-save",
+    "dialog:allow-open",
     "fs:allow-write-file",
     "opener:allow-open-path"
   ],
