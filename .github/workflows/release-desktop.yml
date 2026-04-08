@@ -9,6 +9,10 @@ on:
       version:
         required: true
         type: string
+      release_id:
+        required: false
+        type: string
+        description: 'Existing GitHub Release ID to upload artifacts to (skips creating a new release)'
   workflow_dispatch:
     inputs:
       tag:
@@ -154,6 +158,7 @@ jobs:
         with:
           tagName: v${{ inputs.version || github.event.inputs.tag || github.ref_name }}
           releaseName: 'Forward Email v${{ inputs.version || github.event.inputs.tag || github.ref_name }}'
+          releaseId: ${{ inputs.release_id || '' }}
           releaseDraft: true
           prerelease: false
           args: --target ${{ matrix.target }}

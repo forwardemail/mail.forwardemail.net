@@ -63,6 +63,7 @@ jobs:
     uses: ./.github/workflows/release-desktop.yml
     with:
       version: ${{ needs.create-release.outputs.version }}
+      release_id: ${{ needs.create-release.outputs.release_id }}
     secrets: inherit
 
   # ── 3. Generate checksums ──────────────────────────────────────────────
