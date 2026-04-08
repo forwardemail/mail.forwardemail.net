@@ -4,9 +4,9 @@ This document outlines the process for creating releases for the web, desktop, a
 
 ## Release Flows
 
-There are two independent release flows, each triggered by a different tag pattern:
+All platforms share a single version. Running `pnpm release` bumps `package.json`, `tauri.conf.json`, and `Cargo.toml` together via the `version` lifecycle hook.
 
-### Full Release (Webmail + Desktop): `v*` tag
+### Unified Release: `v*` tag
 
 Triggers [`release.yml`](../.github/workflows/release.yml), which orchestrates:
 
@@ -16,30 +16,16 @@ Triggers [`release.yml`](../.github/workflows/release.yml), which orchestrates:
 4. **Publishing** the draft triggers [`deploy.yml`](../.github/workflows/deploy.yml) → deploys webmail to Cloudflare R2
 
 ```bash
-pnpm release          # np bumps version, creates v* tag, pushes
-# — or manually —
-git tag v0.7.0 && git push origin v0.7.0
+pnpm release          # np bumps version across all files, creates v* tag, pushes
 ```
 
-### Desktop-Only Release: `desktop-v*` tag
+### Desktop-Only Hotfix: `desktop-v*` tag (optional)
 
-Triggers [`release-desktop.yml`](../.github/workflows/release-desktop.yml) directly:
-
-1. Runs security audit (cargo audit + npm audit)
-2. Builds desktop binaries for all platforms
-3. Creates a **draft** GitHub Release with the desktop artifacts
-4. Does **not** deploy webmail
+For hotfixes that only affect the desktop app without a webmail deploy:
 
 ```bash
-git tag desktop-v0.7.0 && git push origin desktop-v0.7.0
+pnpm release:desktop patch
 ```
-
-### Summary
-
-| Tag              | Webmail Deploy   | Desktop Build | Mobile Build |
-| ---------------- | ---------------- | ------------- | ------------ |
-| `v0.7.0`         | Yes (on publish) | Yes           | Future       |
-| `desktop-v0.7.0` | No               | Yes           | No           |
 
 ## CI Pipeline
 

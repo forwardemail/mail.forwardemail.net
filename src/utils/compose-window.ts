@@ -12,10 +12,29 @@
  * This avoids race conditions from fixed-delay timers.
  */
 
+import { Local } from './storage';
+
 let composeCounter = 0;
 
 // Pending init data keyed by window label — consumed on compose:ready
-const pendingInits = new Map<string, { action: string; prefill: Record<string, unknown> }>();
+const pendingInits = new Map<
+  string,
+  { action: string; prefill: Record<string, unknown>; auth: Record<string, string> }
+>();
+
+/**
+ * Collect auth credentials from localStorage to pass to compose windows.
+ * On Windows, WebView2 may isolate storage per webview, so compose windows
+ * need auth credentials sent explicitly via Tauri events.
+ */
+function collectAuth(): Record<string, string> {
+  return {
+    alias_auth: Local.get('alias_auth') || '',
+    api_key: Local.get('api_key') || '',
+    email: Local.get('email') || '',
+    authToken: Local.get('authToken') || '',
+  };
+}
 
 export interface ComposeWindowOptions {
   action?: 'open' | 'reply' | 'forward';
@@ -54,10 +73,13 @@ export async function openComposeWindow(options?: ComposeWindowOptions): Promise
 
     const label = `compose-${Date.now()}-${++composeCounter}`;
 
-    // Store init data for when the window signals ready
+    // Store init data for when the window signals ready.
+    // Include auth credentials for Windows WebView2 compatibility
+    // (WebView2 may isolate localStorage per webview).
     pendingInits.set(label, {
       action: options?.action || 'open',
       prefill: options?.prefill || {},
+      auth: collectAuth(),
     });
 
     const win = new WebviewWindow(label, {

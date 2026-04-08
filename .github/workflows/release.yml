@@ -57,14 +57,18 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # Desktop and mobile builds are triggered independently via their own tags:
-  #   desktop-v* → release-desktop.yml
-  #   mobile-v*  → release-mobile.yml (future)
-  # This keeps webmail releases fast and avoids rebuilding native apps unnecessarily.
+  # ── 2. Build Desktop (Tauri) ────────────────────────────────────────────
+  build-desktop:
+    needs: create-release
+    uses: ./.github/workflows/release-desktop.yml
+    with:
+      version: ${{ needs.create-release.outputs.version }}
+    secrets: inherit
 
-  # ── 2. Generate checksums (if artifacts exist) ─────────────────────────
+  # ── 3. Generate checksums ──────────────────────────────────────────────
   checksums:
-    needs: [create-release]
+    needs: [create-release, build-desktop]
+    if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Download all release artifacts

@@ -443,7 +443,8 @@ async function handleCachedPgpRaw(
     return true;
   }
   debugLog('[PGP] Cached message still locked');
-  onPgpStatus?.({ locked: true });
+  const hasKeys = (await getStoredKeys()).length > 0;
+  onPgpStatus?.({ locked: true, hasKeys });
   if (allowPgpPrompt) {
     const errorMsg =
       result.message || 'PGP encrypted message. Unable to decrypt with current keys.';

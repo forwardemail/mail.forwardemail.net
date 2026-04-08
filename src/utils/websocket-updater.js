@@ -95,7 +95,12 @@ function createWebSocketUpdater() {
     if (typeof mailboxStore.actions.invalidateFolderInMemCache === 'function') {
       mailboxStore.actions.invalidateFolderInMemCache(account, currentFolder);
     }
-    mailboxStore.actions.loadMessages();
+    // Skip loadMessages when search is active — search results use searchResults
+    // store, not messages. Calling loadMessages during search can cause the UI
+    // to briefly flash "no results" as the derived filteredMessages re-evaluates.
+    if (!get(mailboxStore.state.searchActive)) {
+      mailboxStore.actions.loadMessages();
+    }
 
     // Background metadata sync for the current folder
     const folders = get(mailboxStore.state.folders) || [];
@@ -160,7 +165,9 @@ function createWebSocketUpdater() {
       if (typeof mailboxStore.actions.invalidateFolderInMemCache === 'function') {
         mailboxStore.actions.invalidateFolderInMemCache(account, currentFolder);
       }
-      mailboxStore.actions.loadMessages();
+      if (!get(mailboxStore.state.searchActive)) {
+        mailboxStore.actions.loadMessages();
+      }
     }
 
     // Always update sidebar unread counts

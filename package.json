@@ -43,7 +43,8 @@
     "tauri:ios:dev": "tauri ios dev",
     "tauri:ios:build": "tauri ios build",
     "tauri:icon": "tauri icon src-tauri/icons/app-icon.png",
-    "tauri:signer:generate": "tauri signer generate -w ~/.tauri/forwardemail.key"
+    "tauri:signer:generate": "tauri signer generate -w ~/.tauri/forwardemail.key",
+    "version": "node scripts/sync-version.js && git add src-tauri/tauri.conf.json src-tauri/Cargo.toml"
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.2.8",

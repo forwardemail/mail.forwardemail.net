@@ -473,6 +473,7 @@
   let trackingPixelCount = writable(0);
   let blockedImageCount = writable(0);
   let pgpLocked = writable(false);
+  let pgpHasKeys = writable(false);
   let loading = chooseStore(source.state?.loading, mailboxView?.loading, false);
   let messageLoading = chooseStore(
     source.state?.messageLoading,
@@ -4113,6 +4114,7 @@
         onPgpStatus: (status) => {
           if (!isActiveLoad()) return;
           pgpLocked.set(status.locked || false);
+          pgpHasKeys.set(status.hasKeys || false);
         },
         onMeta: (meta) => {
           if (!isActiveLoad()) return;
@@ -7532,14 +7534,35 @@
                               >
                                 <Lock class="h-4.5 w-4.5 text-blue-500" />
                                 <span class="flex-1">
-                                  This message is PGP encrypted and could not be decrypted.
+                                  {$pgpHasKeys
+                                    ? 'This message is PGP encrypted. Enter your passphrase to decrypt.'
+                                    : 'This message is PGP encrypted and could not be decrypted.'}
                                 </span>
-                                <a
-                                  href="/mailbox/settings#accounts"
-                                  class="inline-flex items-center justify-center px-3 py-1.5 text-sm bg-blue-500/20 hover:bg-blue-500/30 text-blue-600 dark:text-blue-400"
-                                >
-                                  Add PGP Key
-                                </a>
+                                {#if $pgpHasKeys}
+                                  <button
+                                    type="button"
+                                    class="inline-flex items-center justify-center px-3 py-1.5 text-sm bg-blue-500/20 hover:bg-blue-500/30 text-blue-600 dark:text-blue-400"
+                                    onclick={() => {
+                                      const msg = source.state?.selectedMessage
+                                        ? get(selectedMessage)
+                                        : null;
+                                      if (msg) {
+                                        messageLoadInProgress = false;
+                                        activeMessageId = null;
+                                        loadMessage(msg);
+                                      }
+                                    }}
+                                  >
+                                    Retry Decryption
+                                  </button>
+                                {:else}
+                                  <a
+                                    href="/mailbox/settings#accounts"
+                                    class="inline-flex items-center justify-center px-3 py-1.5 text-sm bg-blue-500/20 hover:bg-blue-500/30 text-blue-600 dark:text-blue-400"
+                                  >
+                                    Add PGP Key
+                                  </a>
+                                {/if}
                               </div>
                             {/if}
                             {#if $hasBlockedImages}
@@ -7711,14 +7734,35 @@
                       >
                         <Lock class="h-4.5 w-4.5 text-blue-500" />
                         <span class="flex-1">
-                          This message is PGP encrypted and could not be decrypted.
+                          {$pgpHasKeys
+                            ? 'This message is PGP encrypted. Enter your passphrase to decrypt.'
+                            : 'This message is PGP encrypted and could not be decrypted.'}
                         </span>
-                        <a
-                          href="/mailbox/settings#accounts"
-                          class="inline-flex items-center justify-center px-3 py-1.5 text-sm bg-blue-500/20 hover:bg-blue-500/30 text-blue-600 dark:text-blue-400"
-                        >
-                          Add PGP Key
-                        </a>
+                        {#if $pgpHasKeys}
+                          <button
+                            type="button"
+                            class="inline-flex items-center justify-center px-3 py-1.5 text-sm bg-blue-500/20 hover:bg-blue-500/30 text-blue-600 dark:text-blue-400"
+                            onclick={() => {
+                              const msg = source.state?.selectedMessage
+                                ? get(selectedMessage)
+                                : null;
+                              if (msg) {
+                                messageLoadInProgress = false;
+                                activeMessageId = null;
+                                loadMessage(msg);
+                              }
+                            }}
+                          >
+                            Retry Decryption
+                          </button>
+                        {:else}
+                          <a
+                            href="/mailbox/settings#accounts"
+                            class="inline-flex items-center justify-center px-3 py-1.5 text-sm bg-blue-500/20 hover:bg-blue-500/30 text-blue-600 dark:text-blue-400"
+                          >
+                            Add PGP Key
+                          </a>
+                        {/if}
                       </div>
                     {/if}
                     {#if $hasBlockedImages}

@@ -90,10 +90,31 @@ async function initFromTauriEvent() {
       if (initialized) return;
       initialized = true;
 
-      const { action, prefill } = event.payload as {
+      const { action, prefill, auth } = event.payload as {
         action?: string;
         prefill?: Record<string, unknown>;
+        auth?: Record<string, string>;
       };
+
+      // Inject auth credentials into storage for this webview.
+      // On Windows, WebView2 may isolate storage per webview, so the
+      // compose window needs credentials passed explicitly from main.
+      // Keys must use the 'webmail_' prefix to match the Local utility.
+      if (auth) {
+        const PREFIX = 'webmail_';
+        for (const [key, value] of Object.entries(auth)) {
+          if (value) {
+            try {
+              const prefixedKey = `${PREFIX}${key}`;
+              localStorage.setItem(prefixedKey, value);
+              sessionStorage.setItem(prefixedKey, value);
+            } catch {
+              // Storage may be unavailable
+            }
+          }
+        }
+      }
+
       if (action === 'reply' && typeof composeApi.reply === 'function') {
         composeApi.reply(prefill);
       } else if (action === 'forward' && typeof composeApi.forward === 'function') {
