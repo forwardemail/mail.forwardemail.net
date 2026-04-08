@@ -71,26 +71,43 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - name: Download all release artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-          merge-multiple: true
+      - name: Download release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          mkdir -p artifacts
+          gh release download "v${{ needs.create-release.outputs.version }}" \
+            --dir artifacts \
+            --pattern '*.dmg' \
+            --pattern '*.app.tar.gz' \
+            --pattern '*.app.tar.gz.sig' \
+            --pattern '*.msi' \
+            --pattern '*.msi.zip' \
+            --pattern '*.msi.zip.sig' \
+            --pattern '*.nsis.zip' \
+            --pattern '*.nsis.zip.sig' \
+            --pattern '*.deb' \
+            --pattern '*.AppImage' \
+            --pattern '*.AppImage.tar.gz' \
+            --pattern '*.AppImage.tar.gz.sig' \
+            --pattern '*.apk' \
+            --pattern '*.aab' \
+            --pattern '*.ipa' \
+            || echo "No matching assets found (some patterns may not match)"
 
       - name: Generate SHA-256 checksums
         run: |
           cd artifacts
-          find . -type f \( -name '*.dmg' -o -name '*.app.tar.gz' \
-            -o -name '*.app.tar.gz.sig' \
-            -o -name '*.msi' -o -name '*.msi.zip' -o -name '*.msi.zip.sig' \
-            -o -name '*.nsis.zip' -o -name '*.nsis.zip.sig' \
-            -o -name '*.deb' -o -name '*.AppImage' \
-            -o -name '*.AppImage.tar.gz' -o -name '*.AppImage.tar.gz.sig' \
-            -o -name '*.apk' -o -name '*.aab' -o -name '*.ipa' \) \
-            -exec sha256sum {} + | sort -k2 > SHA256SUMS.txt
-          echo "=== SHA256SUMS.txt ==="
-          cat SHA256SUMS.txt
-          echo "=== File count: $(wc -l < SHA256SUMS.txt) ==="
+          if ls *.* 1>/dev/null 2>&1; then
+            sha256sum * | sort -k2 > SHA256SUMS.txt
+            echo "=== SHA256SUMS.txt ==="
+            cat SHA256SUMS.txt
+            echo "=== File count: $(wc -l < SHA256SUMS.txt) ==="
+          else
+            echo "No artifacts found to checksum"
+            exit 1
+          fi
 
       - name: Upload checksums to release
         uses: softprops/action-gh-release@v2
@@ -99,3 +116,16 @@ jobs:
           files: artifacts/SHA256SUMS.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ── 4. Publish the release ─────────────────────────────────────────────
+  publish:
+    needs: [create-release, checksums]
+    if: success()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish release (remove draft status)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release edit "v${{ needs.create-release.outputs.version }}" --draft=false

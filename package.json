@@ -155,6 +155,7 @@
   "np": {
     "branch": "main",
     "publish": false,
+    "releaseDraft": false,
     "message": "chore(release): %s"
   },
   "repository": {
