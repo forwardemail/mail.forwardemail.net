@@ -789,6 +789,24 @@ viewModel.settingsModal.navigate = viewModel.navigate;
 mailboxActions.setNavigate(viewModel.navigate);
 
 viewModel.pgpPassphraseModal = passphraseApi;
+
+// Block <input type="file"> clicks on Tauri desktop — WebKit's runOpenPanel
+// delegate panics in WKWebView, crashing the app. All file picking is handled
+// by the Tauri dialog plugin via pickFiles() in file-picker.ts instead.
+if (isTauriDesktop) {
+  document.addEventListener(
+    'click',
+    (e) => {
+      const target = e.target as HTMLElement;
+      if (target instanceof HTMLInputElement && target.type === 'file') {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+      }
+    },
+    true,
+  );
+}
+
 // Compose: Tauri desktop uses separate native windows, web/mobile uses in-app modal
 if (isTauriDesktop) {
   viewModel.mailboxView.composeModal = {

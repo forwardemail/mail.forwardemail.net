@@ -16,6 +16,20 @@ import Compose from './svelte/Compose.svelte';
 import { createToastHost } from './svelte/toastsHost';
 import { getEffectiveSettingValue } from './stores/settingsStore';
 
+// Block <input type="file"> — WebKit's runOpenPanel crashes Tauri on macOS.
+// File picking uses Tauri's dialog plugin instead (see file-picker.ts).
+document.addEventListener(
+  'click',
+  (e) => {
+    const target = e.target as HTMLElement;
+    if (target instanceof HTMLInputElement && target.type === 'file') {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+    }
+  },
+  true,
+);
+
 // Apply theme from localStorage (shared with main window)
 function applyTheme() {
   const theme = getEffectiveSettingValue('theme') || 'system';
