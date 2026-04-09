@@ -179,6 +179,10 @@
   import Sun from '@lucide/svelte/icons/sun';
   import Moon from '@lucide/svelte/icons/moon';
   import WifiOff from '@lucide/svelte/icons/wifi-off';
+  import MailOpen from '@lucide/svelte/icons/mail-open';
+  import EyeOff from '@lucide/svelte/icons/eye-off';
+  import StarOff from '@lucide/svelte/icons/star-off';
+  import EllipsisVertical from '@lucide/svelte/icons/ellipsis-vertical';
   import EmailIframe from './components/EmailIframe.svelte';
   import TabBar from './components/TabBar.svelte';
   import MessageTab from './components/MessageTab.svelte';
@@ -531,6 +535,8 @@
     mailboxView?.bulkMoveOpen,
     false,
   );
+  let bulkLabelOpen = $state(false);
+  let bulkMoreOpen = $state(false);
   let availableMoveTargets = chooseStore(
     source.state?.availableMoveTargets,
     mailboxView?.availableMoveTargets,
@@ -2156,6 +2162,12 @@
       ) {
         labelMenuOpen = false;
       }
+      if (bulkLabelOpen && !e.target?.closest?.('[data-bulk-label]')) {
+        bulkLabelOpen = false;
+      }
+      if (bulkMoreOpen && !e.target?.closest?.('[data-bulk-more]')) {
+        bulkMoreOpen = false;
+      }
       // Close action menu when clicking outside
       if (actionMenuOpen && !e.target?.closest?.('[data-action-menu]')) {
         actionMenuOpen = false;
@@ -3408,6 +3420,24 @@
     });
   };
 
+  const bulkSpam = async () => {
+    const path = spamFolderPath;
+    if (!path) {
+      showToast('Spam folder not found', 'error');
+      return;
+    }
+    await bulkMoveTo(path);
+  };
+
+  const bulkNotSpam = async () => {
+    const path = inboxFolderPath;
+    if (!path) {
+      showToast('Inbox folder not found', 'error');
+      return;
+    }
+    await bulkMoveTo(path);
+  };
+
   const openContextMenu = (event, item) => {
     event?.preventDefault?.();
     const isConversation = Array.isArray(item?.messages);
@@ -3629,6 +3659,9 @@
     resolveFolderPath('getArchiveFolderPath', ['ARCHIVE'], $folders),
   );
   const inboxFolderPath = $derived(resolveFolderPath(null, ['INBOX'], $folders));
+  const spamFolderPath = $derived(
+    resolveFolderPath('getSpamFolderPath', ['SPAM', 'JUNK'], $folders),
+  );
 
   // ── Mobile tab bar state ──────────────────────────────────────────────────
   const inboxUnseenCount = $derived(($folders || []).find((f) => f.path === 'INBOX')?.count || 0);
@@ -3728,6 +3761,13 @@
   const canEditDraft = $derived($selectedMessage && isDraftMessage($selectedMessage));
   const canNotSpam = $derived(readerIsSpamOrJunk);
   const showReaderMenuDivider = $derived(canReply || canForward || canEditDraft || canToggleRead);
+
+  // ── Bulk-action bar folder awareness ─────────────────────────────────────
+  const listIsSpamOrJunk = $derived(matchesFolderKey($selectedFolder, ['SPAM', 'JUNK']));
+  const listIsTrashFolder = $derived(
+    matchesFolderKey($selectedFolder, ['TRASH', 'DELETED', 'DELETED ITEMS']),
+  );
+  const listIsDraftFolder = $derived(isDraftFolder($selectedFolder));
 
   const openDraftFromMessage = async (msg) => {
     if (!msg || !mailboxView?.composeModal?.open) return;
@@ -5550,7 +5590,7 @@
                 >
                   <span>{$selectedConversationIds.length}</span>
                 </div>
-                <div class="flex items-center gap-1">
+                <div class="flex items-center gap-1 flex-wrap">
                   <button
                     class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
                     type="button"
@@ -5561,7 +5601,51 @@
                   >
                     <X class="h-5 w-5" />
                   </button>
-                  {#if $selectedFolder?.toUpperCase?.() !== 'ARCHIVE'}
+                  {#if !listIsDraftFolder && !listIsTrashFolder && !listIsSpamOrJunk}
+                    <button
+                      class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                      type="button"
+                      aria-label="Mark as read"
+                      data-tooltip="Mark as read"
+                      data-tooltip-position="bottom"
+                      onclick={bulkMarkAsRead}
+                    >
+                      <MailOpen class="h-5 w-5" />
+                    </button>
+                    <button
+                      class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                      type="button"
+                      aria-label="Mark as unread"
+                      data-tooltip="Mark as unread"
+                      data-tooltip-position="bottom"
+                      onclick={bulkMarkAsUnread}
+                    >
+                      <EyeOff class="h-5 w-5" />
+                    </button>
+                  {/if}
+                  {#if !listIsDraftFolder}
+                    <button
+                      class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                      type="button"
+                      aria-label="Star selected"
+                      data-tooltip="Star selected"
+                      data-tooltip-position="bottom"
+                      onclick={bulkStar}
+                    >
+                      <Star class="h-5 w-5" />
+                    </button>
+                    <button
+                      class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                      type="button"
+                      aria-label="Unstar selected"
+                      data-tooltip="Unstar selected"
+                      data-tooltip-position="bottom"
+                      onclick={bulkUnstar}
+                    >
+                      <StarOff class="h-5 w-5" />
+                    </button>
+                  {/if}
+                  {#if !matchesFolderKey( $selectedFolder, ['ARCHIVE'], ) && !listIsSpamOrJunk && !listIsDraftFolder && !listIsTrashFolder}
                     <button
                       class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
                       type="button"
@@ -5571,6 +5655,29 @@
                       onclick={bulkArchive}
                     >
                       <Archive class="h-5 w-5" />
+                    </button>
+                  {/if}
+                  {#if listIsSpamOrJunk}
+                    <button
+                      class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                      type="button"
+                      aria-label="Not spam"
+                      data-tooltip="Not spam"
+                      data-tooltip-position="bottom"
+                      onclick={bulkNotSpam}
+                    >
+                      <Inbox class="h-5 w-5" />
+                    </button>
+                  {:else if !listIsDraftFolder && !listIsTrashFolder}
+                    <button
+                      class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                      type="button"
+                      aria-label="Report spam"
+                      data-tooltip="Report spam"
+                      data-tooltip-position="bottom"
+                      onclick={bulkSpam}
+                    >
+                      <ShieldAlert class="h-5 w-5" />
                     </button>
                   {/if}
                   <button
@@ -5591,6 +5698,8 @@
                       data-tooltip="Move selected"
                       data-tooltip-position="bottom"
                       onclick={() => {
+                        bulkLabelOpen = false;
+                        bulkMoreOpen = false;
                         if (bulkMoveOpen?.update) {
                           bulkMoveOpen.update((v) => !v);
                         } else if (mailboxView?.toggleBulkMove) {
@@ -5613,6 +5722,79 @@
                             {folder.path || folder.name}
                           </button>
                         {/each}
+                      </div>
+                    {/if}
+                  </div>
+                  <div class="relative" data-bulk-label>
+                    <button
+                      class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                      type="button"
+                      aria-label="Label selected"
+                      aria-expanded={bulkLabelOpen}
+                      data-tooltip="Label selected"
+                      data-tooltip-position="bottom"
+                      onclick={() => {
+                        bulkMoreOpen = false;
+                        if (bulkMoveOpen?.set) bulkMoveOpen.set(false);
+                        bulkLabelOpen = !bulkLabelOpen;
+                      }}
+                    >
+                      <Tag class="h-5 w-5" />
+                    </button>
+                    {#if bulkLabelOpen}
+                      <div
+                        class="absolute right-0 z-50 mt-1 min-w-[160px] max-h-[300px] overflow-y-auto border border-border bg-popover p-1 shadow-md"
+                      >
+                        <div
+                          class="px-2 py-1 text-xs font-medium text-muted-foreground uppercase tracking-wider"
+                        >
+                          Apply label
+                        </div>
+                        {#if !availableLabelsFromStore.length}
+                          <div class="px-3 py-2 text-sm text-muted-foreground">No labels yet.</div>
+                        {/if}
+                        {#each availableLabelsFromStore as label}
+                          {#if label}
+                            <button
+                              type="button"
+                              class={`flex items-center gap-2 w-full px-3 py-2 text-sm transition-colors ${labelState(label) === 'all' ? 'bg-accent text-accent-foreground' : 'hover:bg-accent'}`}
+                              aria-pressed={labelState(label) === 'all'}
+                              data-state={labelState(label)}
+                              onclick={() => {
+                                applyLabelToTargets(label);
+                                bulkLabelOpen = false;
+                              }}
+                            >
+                              <span
+                                class="w-2.5 h-2.5 rounded-full shrink-0"
+                                style={`background:${label.color || '#9ca3af'}`}
+                              ></span>
+                              <span class="flex-1 text-left"
+                                >{label.name || label.label || label.value}</span
+                              >
+                              {#if labelState(label) === 'partial'}
+                                <span class="text-muted-foreground">&bull;</span>
+                              {:else if labelState(label) === 'all'}
+                                <Check class="h-4 w-4 shrink-0" />
+                              {/if}
+                            </button>
+                          {/if}
+                        {/each}
+                        <div class="my-1 h-px bg-border"></div>
+                        <button
+                          type="button"
+                          class="flex items-center gap-2 w-full px-3 py-2 text-sm transition-colors hover:bg-accent text-muted-foreground"
+                          onclick={() => {
+                            openLabelModal();
+                            bulkLabelOpen = false;
+                          }}
+                        >
+                          <span
+                            class="w-2.5 h-2.5 rounded-full shrink-0"
+                            style={`background:${labelFormColor || labelPalette[0]}`}
+                          ></span>
+                          <span>Create new label</span>
+                        </button>
                       </div>
                     {/if}
                   </div>
