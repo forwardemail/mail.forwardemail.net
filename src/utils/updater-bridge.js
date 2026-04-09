@@ -27,6 +27,7 @@ let _updater;
 let _lastCheckTime = 0;
 let _wsUnsubscribe = null;
 let _autoCheckInterval = null;
+let _loggedLocationIssue = false;
 const MIN_CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
 async function ensureUpdater() {
@@ -106,6 +107,42 @@ export async function checkForUpdates() {
 }
 
 /**
+ * Detect macOS install location issues that prevent in-place updates:
+ *   - App Translocation (running from a randomized read-only path because
+ *     the user opened it directly from the DMG without dragging to Applications)
+ *   - App is in ~/Downloads or another non-/Applications location
+ *
+ * macOS-only — Windows and Linux don't have these constraints.
+ * Returns a friendly error message if the install location is bad,
+ * or null if the location looks fine.
+ */
+async function getInstallLocationIssue() {
+  try {
+    const { platform } = await import('@tauri-apps/plugin-os');
+    if (platform() !== 'macos') return null;
+
+    const { resourceDir } = await import('@tauri-apps/api/path');
+    const path = await resourceDir();
+    if (typeof path !== 'string') return null;
+    // App Translocation puts the app under /private/var/folders/.../AppTranslocation/
+    if (path.includes('AppTranslocation') || path.includes('/private/var/folders/')) {
+      return 'The app is running from a temporary location (App Translocation). Please move "Forward Email" to your Applications folder and reopen it to enable updates.';
+    }
+    // Apps not in /Applications can't be updated reliably
+    if (
+      path.startsWith('/Users/') &&
+      !path.includes('/Applications/') &&
+      (path.includes('/Downloads/') || path.includes('/Desktop/'))
+    ) {
+      return 'Please move "Forward Email" to your Applications folder to enable updates.';
+    }
+  } catch {
+    // path/os API not available — skip detection
+  }
+  return null;
+}
+
+/**
  * Download and install a previously checked update.
  * The Tauri updater plugin automatically selects the correct binary
  * for the current architecture from the GitHub release assets.
@@ -115,6 +152,14 @@ export async function checkForUpdates() {
  */
 export async function downloadAndInstall(updateInfo, onProgress) {
   if (!isTauriDesktop || !updateInfo?._update) return;
+
+  // Check for known install location issues before downloading
+  const locationIssue = await getInstallLocationIssue();
+  if (locationIssue) {
+    const err = new Error(locationIssue);
+    err.code = 'BAD_INSTALL_LOCATION';
+    throw err;
+  }
 
   try {
     let downloaded = 0;
@@ -143,6 +188,18 @@ export async function downloadAndInstall(updateInfo, onProgress) {
       }
     });
   } catch (err) {
+    // Translate the cryptic Tauri error into a user-friendly message
+    const message = String(err?.message || err || '');
+    if (message.includes('Failed to move the new app into place')) {
+      const detected = await getInstallLocationIssue();
+      const friendly = new Error(
+        detected ||
+          'Could not install the update because the app location is not writable. Try reinstalling the app or running with administrator permissions.',
+      );
+      friendly.code = 'BAD_INSTALL_LOCATION';
+      console.error('[updater-bridge] install failed (bad location):', err);
+      throw friendly;
+    }
     console.error('[updater-bridge] download/install failed:', err);
     throw err;
   }
@@ -228,6 +285,21 @@ export async function initAutoUpdater(options = {}) {
         await downloadAndInstall(info, onProgress);
       }
     } catch (err) {
+      // Suppress repeated install-location warnings — only log once per session
+      if (err?.code === 'BAD_INSTALL_LOCATION') {
+        if (!_loggedLocationIssue) {
+          _loggedLocationIssue = true;
+          console.warn('[updater-bridge]', err.message);
+          if (typeof options.onError === 'function') {
+            try {
+              options.onError(err);
+            } catch {
+              // Ignore handler errors
+            }
+          }
+        }
+        return;
+      }
       console.warn('[updater-bridge] Auto-update check failed:', err);
     }
   }

@@ -39,6 +39,17 @@
   import AlertCircle from '@lucide/svelte/icons/alert-circle';
   import CheckCircle from '@lucide/svelte/icons/check-circle';
   import AlertTriangle from '@lucide/svelte/icons/alert-triangle';
+  import Download from '@lucide/svelte/icons/download';
+  import ChevronDown from '@lucide/svelte/icons/chevron-down';
+  import ExternalLink from '@lucide/svelte/icons/external-link';
+  import { isTauriDesktop } from '../utils/platform.js';
+  import {
+    getLatestDesktopRelease,
+    detectPlatform as detectDesktopPlatform,
+    resolveAssetForPlatform,
+    groupAssetsByPlatform,
+    formatAssetSize,
+  } from '../utils/desktop-download.js';
   import {
     accounts,
     currentAccount,
@@ -356,6 +367,49 @@
   // Update check state
   let checkingForUpdates = $state(false);
   let updateCheckResult = $state('');
+
+  // Desktop download state (browser-only, resolved lazily on first
+  // view of the "About & Help" section).
+  const DESKTOP_RELEASES_URL =
+    'https://github.com/forwardemail/mail.forwardemail.net/releases/latest';
+  let desktopRelease = $state<any>(null);
+  let desktopPlatform = $state<{
+    os: 'mac' | 'windows' | 'linux' | 'unknown';
+    arch: 'x64' | 'arm64' | 'unknown';
+    label: string;
+  } | null>(null);
+  let desktopPrimaryAsset = $state<any>(null);
+  let desktopAssetGroups = $state<{ mac: any[]; windows: any[]; linux: any[] }>({
+    mac: [],
+    windows: [],
+    linux: [],
+  });
+  let desktopLoading = $state(false);
+  let desktopError = $state('');
+  let otherPlatformsOpen = $state(false);
+
+  $effect(() => {
+    if (section !== 'help') return;
+    if (isTauriDesktop) return;
+    if (desktopRelease || desktopLoading) return;
+
+    desktopLoading = true;
+    desktopError = '';
+    (async () => {
+      try {
+        const [rel, plat] = await Promise.all([getLatestDesktopRelease(), detectDesktopPlatform()]);
+        desktopRelease = rel;
+        desktopPlatform = plat;
+        desktopAssetGroups = groupAssetsByPlatform(rel.assets);
+        desktopPrimaryAsset = resolveAssetForPlatform(rel.assets, plat);
+      } catch (err) {
+        desktopError = err instanceof Error ? err.message : 'Failed to fetch the latest release';
+        console.warn('[Settings] Desktop release fetch failed:', err);
+      } finally {
+        desktopLoading = false;
+      }
+    })();
+  });
 
   async function handleCheckForUpdates() {
     checkingForUpdates = true;
@@ -2123,6 +2177,134 @@
       {/if}
 
       {#if section === 'help'}
+        {#if !isTauriDesktop}
+          <Card.Root>
+            <Card.Header>
+              <Card.Title>Download Desktop App</Card.Title>
+              <Card.Description>
+                Install the native desktop app for faster startup, system notifications, and offline
+                support. After installing, the app updates itself automatically.
+              </Card.Description>
+            </Card.Header>
+            <Card.Content class="space-y-3">
+              {#if desktopLoading}
+                <div class="text-sm text-muted-foreground">Loading latest release…</div>
+              {:else if desktopError || !desktopRelease}
+                <div class="space-y-2 text-sm">
+                  <div class="text-muted-foreground">Couldn't auto-detect the latest release.</div>
+                  <Button
+                    variant="outline"
+                    href={DESKTOP_RELEASES_URL}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    <ExternalLink class="mr-2 h-4 w-4" />
+                    View all downloads on GitHub
+                  </Button>
+                </div>
+              {:else}
+                {#if desktopPrimaryAsset}
+                  <Button
+                    href={desktopPrimaryAsset.url}
+                    download={desktopPrimaryAsset.name}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    <Download class="mr-2 h-4 w-4" />
+                    Download for {desktopPlatform?.label ?? 'your platform'}
+                  </Button>
+                  <div class="text-xs text-muted-foreground">
+                    Version {desktopRelease.version}
+                    {#if desktopPrimaryAsset.size}
+                      · {formatAssetSize(desktopPrimaryAsset.size)}
+                    {/if}
+                    · {desktopPrimaryAsset.format.toUpperCase()}
+                  </div>
+                {:else}
+                  <div class="text-sm text-muted-foreground">
+                    We couldn't pick an installer for your platform automatically. Use the options
+                    below.
+                  </div>
+                {/if}
+
+                {#if desktopPlatform?.os === 'mac'}
+                  <p class="text-xs text-muted-foreground">
+                    Open the DMG and drag Forward Email to your Applications folder.
+                  </p>
+                {:else if desktopPlatform?.os === 'windows'}
+                  <p class="text-xs text-muted-foreground">
+                    Run the installer and follow the prompts. Windows may ask you to confirm.
+                  </p>
+                {:else if desktopPlatform?.os === 'linux'}
+                  <p class="text-xs text-muted-foreground">
+                    Make the AppImage executable (<code>chmod +x</code>) and run it, or install the
+                    <code>.deb</code>
+                    / <code>.rpm</code> with your package manager.
+                  </p>
+                {/if}
+
+                <button
+                  type="button"
+                  class="flex items-center gap-1 text-xs text-sky-500 hover:text-sky-400 hover:underline"
+                  onclick={() => (otherPlatformsOpen = !otherPlatformsOpen)}
+                  aria-expanded={otherPlatformsOpen}
+                >
+                  <ChevronDown
+                    class="h-3 w-3 transition-transform {otherPlatformsOpen ? 'rotate-180' : ''}"
+                  />
+                  {otherPlatformsOpen ? 'Hide other platforms' : 'Other platforms'}
+                </button>
+
+                {#if otherPlatformsOpen}
+                  <div class="space-y-3 border-t border-border pt-3">
+                    {#each [{ key: 'mac', label: 'macOS' }, { key: 'windows', label: 'Windows' }, { key: 'linux', label: 'Linux' }] as group (group.key)}
+                      {@const entries =
+                        desktopAssetGroups[group.key as 'mac' | 'windows' | 'linux']}
+                      {#if entries.length > 0}
+                        <div>
+                          <div class="mb-1 text-xs font-semibold uppercase text-muted-foreground">
+                            {group.label}
+                          </div>
+                          <ul class="space-y-1 text-sm">
+                            {#each entries as asset (asset.name)}
+                              <li>
+                                <a
+                                  href={asset.url}
+                                  download={asset.name}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  class="text-sky-500 hover:text-sky-400 hover:underline"
+                                >
+                                  {asset.name}
+                                </a>
+                                {#if asset.size}
+                                  <span class="text-xs text-muted-foreground">
+                                    ({formatAssetSize(asset.size)})
+                                  </span>
+                                {/if}
+                              </li>
+                            {/each}
+                          </ul>
+                        </div>
+                      {/if}
+                    {/each}
+                    <div class="pt-1 text-xs">
+                      <a
+                        href={desktopRelease.htmlUrl || DESKTOP_RELEASES_URL}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        class="text-sky-500 hover:text-sky-400 hover:underline"
+                      >
+                        View full release notes on GitHub →
+                      </a>
+                    </div>
+                  </div>
+                {/if}
+              {/if}
+            </Card.Content>
+          </Card.Root>
+        {/if}
+
         <Card.Root>
           <Card.Header>
             <Card.Title>Send Feedback</Card.Title>
