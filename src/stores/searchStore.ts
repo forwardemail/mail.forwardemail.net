@@ -426,7 +426,7 @@ const serverSearch = async (
           ? response.messages
           : [];
 
-    // Normalize dates for consistent sorting/display
+    // Normalize dates and ensure folder is set for consistent filtering
     return messages.map((msg: SearchResult) => {
       const dateMs =
         typeof msg.date === 'number'
@@ -434,7 +434,11 @@ const serverSearch = async (
           : Number.isFinite(Date.parse(String(msg.date || '')))
             ? Date.parse(String(msg.date || ''))
             : null;
-      return { ...msg, dateMs: dateMs ?? msg.date ?? null } as SearchResult;
+      return {
+        ...msg,
+        folder: msg.folder || msg.folder_path || folder || 'INBOX',
+        dateMs: dateMs ?? msg.date ?? null,
+      } as SearchResult;
     });
   } catch (err) {
     // Server search is best-effort; local results are still returned
@@ -508,6 +512,7 @@ const search = async (
 
   // Local search path (worker or main-thread fallback)
   let localHits: SearchResult[] = [];
+  let workerSearchFailed = false;
 
   if (workerClient) {
     try {
@@ -524,12 +529,12 @@ const search = async (
       if (res?.stats) stats.set(res.stats);
       localHits = res?.results || [];
     } catch {
-      // Fall through to main-thread search
+      workerSearchFailed = true;
     }
   }
 
-  // Main-thread fallback if worker didn't produce results
-  if (!localHits.length && !workerClient) {
+  // Main-thread fallback if worker is unavailable or failed
+  if (!localHits.length && (!workerClient || workerSearchFailed)) {
     await ensureMainThreadService();
 
     if (!text) {

@@ -263,6 +263,7 @@ export function createAutosaveTimer(getDraftData, handlers = {}) {
   let debounceTimer = null;
   let lastSaveHash = '';
   let dirty = false;
+  let stopped = false;
   const { onSave, onError, onStart } = handlers;
 
   const checkAndSave = async () => {
@@ -293,6 +294,7 @@ export function createAutosaveTimer(getDraftData, handlers = {}) {
       }, AUTOSAVE_INTERVAL);
     },
     stop() {
+      stopped = true;
       if (timer) {
         clearInterval(timer);
         timer = null;
@@ -304,6 +306,7 @@ export function createAutosaveTimer(getDraftData, handlers = {}) {
     },
     saveNow: checkAndSave,
     markDirty() {
+      if (stopped) return;
       dirty = true;
       if (debounceTimer) clearTimeout(debounceTimer);
       debounceTimer = setTimeout(checkAndSave, AUTOSAVE_DEBOUNCE);

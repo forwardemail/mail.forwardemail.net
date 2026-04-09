@@ -12,6 +12,24 @@
  * @param isDarkMode - Whether the app is in dark mode
  * @returns Complete HTML document string for srcdoc
  */
+// Cache the SHA-256 hash of the embedded script for CSP.
+// The hash is computed once (async) and used for all subsequent calls.
+let scriptHashCache: string | null = null;
+
+async function computeScriptHash(scriptText: string): Promise<string> {
+  const data = new TextEncoder().encode(scriptText);
+  const hash = await crypto.subtle.digest('SHA-256', data);
+  return `'sha256-${btoa(String.fromCharCode(...new Uint8Array(hash)))}'`;
+}
+
+// Eagerly compute the hash on module load
+const hashReady = computeScriptHash(getEmbeddedScript('*')).then((h) => {
+  scriptHashCache = h;
+});
+
+/** Ensure the script hash is ready (call once at startup). */
+export const ensureScriptHash = () => hashReady;
+
 export function buildIframeSrcdoc(
   emailHtml: string,
   isDarkMode: boolean = false,
@@ -20,17 +38,17 @@ export function buildIframeSrcdoc(
   const bodyClass = isDarkMode ? 'fe-iframe-dark' : 'fe-iframe-light';
   const safeOrigin = parentOrigin.replace(/'/g, "\\'").replace(/\\/g, '\\\\');
   const scriptContent = getEmbeddedScript(safeOrigin);
-  // The iframe is sandboxed (sandbox="allow-scripts") so 'unsafe-inline' here
-  // only applies within the isolated srcdoc context — not the parent page.
-  // Using a hash is fragile because the browser hashes the full text node
-  // between <script>…</script> including template-literal whitespace.
+
+  // Use the pre-computed hash if available, otherwise fall back to 'unsafe-inline'.
+  // The hash satisfies CSP even when Tauri/WebKit nonce handling disables 'unsafe-inline'.
+  const scriptCsp = scriptHashCache ? `${scriptHashCache} 'unsafe-inline'` : "'unsafe-inline'";
 
   return `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data: https: http:; font-src data: https:; script-src 'unsafe-inline';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data: https: http:; font-src data: https:; script-src ${scriptCsp};">
   <style>
     ${getResetStyles()}
     ${getAppearanceStyles()}
@@ -41,9 +59,7 @@ export function buildIframeSrcdoc(
   <div class="fe-email-content">
     ${emailHtml}
   </div>
-  <script>
-    ${scriptContent}
-  </script>
+  <script>${scriptContent}</script>
 </body>
 </html>`;
 }

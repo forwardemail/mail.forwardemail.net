@@ -2,6 +2,7 @@
   import { onMount, onDestroy } from 'svelte';
   import type { Readable, Unsubscriber } from 'svelte/store';
   import { downloadFile } from '../utils/download';
+  import { pickFiles } from '../utils/file-picker';
   import { ScheduleXCalendar } from '@schedule-x/svelte';
   import { createCalendar, viewDay, viewWeek, viewMonthGrid } from '@schedule-x/calendar';
   import '@schedule-x/theme-default/dist/index.css';
@@ -863,15 +864,21 @@
     focusTitleInput();
   };
 
-  const importICS = async (event: Event) => {
-    const target = event.target as HTMLInputElement;
-    const file = target?.files?.[0];
+  const importICS = async (eventOrFiles: Event | File[]) => {
+    let file: File | undefined;
+    let target: HTMLInputElement | null = null;
+    if (Array.isArray(eventOrFiles)) {
+      file = eventOrFiles[0];
+    } else {
+      target = eventOrFiles.target as HTMLInputElement;
+      file = target?.files?.[0];
+    }
     if (!file) return;
 
     const maxSize = 5 * 1024 * 1024;
     if (file.size > maxSize) {
       toasts?.show?.('File too large. Maximum size is 5MB.', 'error');
-      target.value = '';
+      if (target) target.value = '';
       return;
     }
 
@@ -969,7 +976,7 @@
         'error',
       );
     } finally {
-      target.value = '';
+      if (target) target.value = '';
     }
   };
 
@@ -2311,7 +2318,14 @@
               size="icon"
               aria-label="Import calendar"
               class="import-menu"
-              onclick={() => document.getElementById('import-ics-input')?.click()}
+              onclick={async () => {
+                const files = await pickFiles({ accept: '.ics,text/calendar' });
+                if (files) {
+                  importICS(files);
+                  return;
+                }
+                document.getElementById('import-ics-input')?.click();
+              }}
             >
               <Import class="h-4 w-4" />
             </Button>

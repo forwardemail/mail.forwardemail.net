@@ -69,6 +69,7 @@
   import TableCell from '@tiptap/extension-table-cell';
   import TableHeader from '@tiptap/extension-table-header';
   import { bufferToDataUrl, extractTextContent } from '../utils/mime-utils.js';
+  import { pickFiles } from '../utils/file-picker';
   import { i18n } from '../utils/i18n';
   import { Remote } from '../utils/remote';
   import { getContacts, mergeRecentAddresses } from '../utils/contact-cache';
@@ -1813,18 +1814,26 @@
     }
   };
 
-  const triggerFilePicker = () => {
+  const triggerFilePicker = async () => {
+    const files = await pickFiles({ multiple: true });
+    if (files) {
+      await processSelectedFiles(files);
+      return;
+    }
     attachInputEl?.click();
   };
 
-  const triggerImagePicker = () => {
+  const triggerImagePicker = async () => {
+    const files = await pickFiles({ accept: 'image/*' });
+    if (files?.[0]) {
+      processSelectedImage(files[0]);
+      return;
+    }
     imageInputEl?.click();
   };
 
-  const onFilesSelected = async (_: unknown, event: Event) => {
-    const target = event.target as HTMLInputElement;
-    const files = target?.files;
-    if (!files?.length) return;
+  const processSelectedFiles = async (files: File[] | FileList) => {
+    if (!files.length) return;
     attachmentError = '';
     attachmentLoading += files.length;
     try {
@@ -1851,17 +1860,20 @@
       attachmentError = (err as Error)?.message || 'Failed to read file';
     } finally {
       attachmentLoading -= files.length;
-      target.value = '';
     }
   };
 
-  const onImageSelected = async (_: unknown, event: Event) => {
+  const onFilesSelected = async (_: unknown, event: Event) => {
     const target = event.target as HTMLInputElement;
-    const file = target?.files?.[0];
-    if (!file) return;
+    const files = target?.files;
+    if (!files?.length) return;
+    await processSelectedFiles(files);
+    target.value = '';
+  };
+
+  const processSelectedImage = (file: File) => {
     if (!file.type.startsWith('image/')) {
       attachmentError = 'Please select an image file';
-      target.value = '';
       return;
     }
     const reader = new FileReader();
@@ -1871,6 +1883,13 @@
       markDraftDirty();
     };
     reader.readAsDataURL(file);
+  };
+
+  const onImageSelected = async (_: unknown, event: Event) => {
+    const target = event.target as HTMLInputElement;
+    const file = target?.files?.[0];
+    if (!file) return;
+    processSelectedImage(file);
     target.value = '';
   };
 
@@ -1999,7 +2018,6 @@
     if (!html) return false;
     if (typeof DOMParser === 'undefined') return true;
     try {
-      if (html.includes('&lt;') || html.includes('&gt;')) return false;
       const doc = new DOMParser().parseFromString(html, 'text/html');
       if (!doc.body) return false;
       if (doc.getElementsByTagName('parsererror').length > 0) return false;

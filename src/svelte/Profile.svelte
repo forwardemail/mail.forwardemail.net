@@ -14,6 +14,8 @@
   import CalendarIcon from '@lucide/svelte/icons/calendar';
   import SettingsIcon from '@lucide/svelte/icons/settings';
   import Camera from '@lucide/svelte/icons/camera';
+  import { pickFiles } from '../utils/file-picker';
+  import { isTauriDesktop } from '../utils/platform.js';
   import {
     accounts,
     currentAccount,
@@ -131,14 +133,20 @@
     return canvas.toDataURL('image/png', 0.9);
   };
 
-  const handlePhotoSelect = async (event: Event) => {
-    const target = event.target as HTMLInputElement;
-    const file = target?.files?.[0];
+  const handlePhotoSelect = async (eventOrFiles: Event | File[]) => {
+    let file: File | undefined;
+    let target: HTMLInputElement | null = null;
+    if (Array.isArray(eventOrFiles)) {
+      file = eventOrFiles[0];
+    } else {
+      target = eventOrFiles.target as HTMLInputElement;
+      file = target?.files?.[0];
+    }
     if (!file) return;
     photoError = '';
     if (!file.type.startsWith('image/')) {
       photoError = 'Please choose an image file.';
-      target.value = '';
+      if (target) target.value = '';
       return;
     }
     try {
@@ -153,7 +161,7 @@
     } catch (err) {
       photoError = (err as Error)?.message || 'Unable to upload image.';
     } finally {
-      target.value = '';
+      if (target) target.value = '';
     }
   };
 
@@ -200,9 +208,16 @@
     <!-- Profile Card -->
     <Card.Root>
       <Card.Content class="flex gap-4 p-4 max-sm:flex-col max-sm:items-start">
+        <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
         <label
           for="profile-photo-upload"
           class="group relative h-[72px] w-[72px] shrink-0 cursor-pointer overflow-hidden rounded-full border border-border bg-muted transition-colors hover:border-primary max-sm:h-16 max-sm:w-16"
+          onclick={async (e) => {
+            if (!isTauriDesktop) return;
+            e.preventDefault();
+            const files = await pickFiles({ accept: 'image/*' });
+            if (files) handlePhotoSelect(files);
+          }}
         >
           {#if photoValue}
             <img src={photoValue} alt="Profile" class="h-full w-full object-cover" />

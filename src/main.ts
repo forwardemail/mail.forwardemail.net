@@ -796,10 +796,14 @@ if (isTauriDesktop) {
       openComposeWindow({ action: 'open', prefill });
     },
     close: () => {},
-    forward: (prefill) => {
-      const rawBody = get(messageBody) || prefill?.body || '';
-      const cleanBody = mailboxActions.stripQuoteCollapseMarkup(rawBody);
+    forward: async (prefill) => {
       const selectedMsg = get(selectedMessage);
+      let rawBody = get(messageBody) || '';
+      if (!rawBody) {
+        rawBody = (await mailboxActions.getMessageBodyForReply(selectedMsg || prefill)) || '';
+      }
+      if (!rawBody) rawBody = prefill?.body || '';
+      const cleanBody = mailboxActions.stripQuoteCollapseMarkup(rawBody);
       const quotedHtml = mailboxActions.buildForwardQuotedBody(
         selectedMsg || { subject: prefill?.subject },
         cleanBody,
@@ -812,13 +816,24 @@ if (isTauriDesktop) {
         },
       });
     },
-    reply: (prefill) => {
+    reply: async (prefill) => {
       // Build the quoted reply body immediately since the compose window
       // is a separate Tauri webview and updateReplyBody can't reach it.
-      // Always use messageBody from the store (the actual email content),
-      // NOT prefill.html which is just a '<p><br></p>' placeholder from replyTo().
-      const rawBody = get(messageBody) || prefill?.body || '';
-      const cleanBody = mailboxActions.stripQuoteCollapseMarkup(rawBody);
+      // Try multiple sources: store → IDB cache → snippet/prefill body.
+      const selected = get(selectedMessage);
+      let rawBody = get(messageBody) || '';
+      // Always try IDB cache if store body looks empty or is just the wrapper
+      if (!rawBody || rawBody.length < 50) {
+        const cached = (await mailboxActions.getMessageBodyForReply(selected || prefill)) || '';
+        if (cached) rawBody = cached;
+      }
+      if (!rawBody) rawBody = prefill?.body || '';
+      let cleanBody = mailboxActions.stripQuoteCollapseMarkup(rawBody);
+      // Use snippet/textContent as final fallback
+      if (!cleanBody || cleanBody.replace(/<[^>]*>/g, '').trim().length < 5) {
+        const msg = selected || prefill;
+        cleanBody = msg?.snippet || msg?.textContent || cleanBody || '';
+      }
       const quotedHtml = mailboxActions.buildReplyQuotedBody(
         { from: prefill?.from, date: prefill?.date },
         cleanBody,
@@ -833,6 +848,7 @@ if (isTauriDesktop) {
           date: prefill?.date,
           html: quotedHtml,
           inReplyTo: prefill?.inReplyTo,
+          references: prefill?.references,
         },
       });
     },

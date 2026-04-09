@@ -2,6 +2,8 @@
   import { onMount, onDestroy } from 'svelte';
   import type { Unsubscriber } from 'svelte/store';
   import { downloadFile } from '../utils/download';
+  import { pickFiles } from '../utils/file-picker';
+  import { isTauriDesktop } from '../utils/platform.js';
   import { Remote } from '../utils/remote';
   import { Local } from '../utils/storage';
   import {
@@ -162,14 +164,20 @@
     return canvas.toDataURL('image/png', 0.9);
   };
 
-  const handlePhotoSelect = async (event: Event) => {
-    const target = event.target as HTMLInputElement;
-    const file = target?.files?.[0];
+  const handlePhotoSelect = async (eventOrFiles: Event | File[]) => {
+    let file: File | undefined;
+    let target: HTMLInputElement | null = null;
+    if (Array.isArray(eventOrFiles)) {
+      file = eventOrFiles[0];
+    } else {
+      target = eventOrFiles.target as HTMLInputElement;
+      file = target?.files?.[0];
+    }
     if (!file) return;
 
     if (!file.type.startsWith('image/')) {
       toasts?.show?.('Please choose an image file.', 'error');
-      target.value = '';
+      if (target) target.value = '';
       return;
     }
 
@@ -185,7 +193,7 @@
     } catch (err) {
       toasts?.show?.((err as Error)?.message || 'Unable to upload image.', 'error');
     } finally {
-      target.value = '';
+      if (target) target.value = '';
     }
   };
 
@@ -568,15 +576,21 @@
     toasts?.show?.('vCard exported', 'success');
   };
 
-  const importVCard = async (event: Event) => {
-    const target = event.target as HTMLInputElement;
-    const file = target?.files?.[0];
+  const importVCard = async (eventOrFiles: Event | File[]) => {
+    let file: File | undefined;
+    let target: HTMLInputElement | null = null;
+    if (Array.isArray(eventOrFiles)) {
+      file = eventOrFiles[0];
+    } else {
+      target = eventOrFiles.target as HTMLInputElement;
+      file = target?.files?.[0];
+    }
     if (!file) return;
 
     const maxSize = 25 * 1024 * 1024; // 25MB to support large backups
     if (file.size > maxSize) {
       toasts?.show?.('File too large. Maximum size is 25MB.', 'error');
-      target.value = '';
+      if (target) target.value = '';
       return;
     }
 
@@ -668,7 +682,7 @@
         'error',
       );
     } finally {
-      target.value = '';
+      if (target) target.value = '';
       importMenuOpen = false;
     }
   };
@@ -1163,7 +1177,15 @@
         {/snippet}
       </DropdownMenu.Trigger>
       <DropdownMenu.Content align="end">
-        <DropdownMenu.Item class="cursor-pointer p-0">
+        <DropdownMenu.Item
+          class="cursor-pointer p-0"
+          onclick={async (e) => {
+            if (!isTauriDesktop) return;
+            e.preventDefault();
+            const files = await pickFiles({ accept: '.vcf,text/vcard' });
+            if (files) importVCard(files);
+          }}
+        >
           <label class="flex w-full cursor-pointer items-center gap-2 px-2 py-1.5">
             <input type="file" accept=".vcf,text/vcard" onchange={importVCard} class="hidden" />
             <span>Import vCard</span>
@@ -1257,10 +1279,17 @@
           >
             <ChevronLeft class="h-5 w-5" />
           </Button>
+          <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
           <label
             for="contact-photo-upload"
             class="group relative h-14 w-14 shrink-0 cursor-pointer overflow-hidden rounded-full"
             style="background-color: {getAvatarColor(draft)}"
+            onclick={async (e) => {
+              if (!isTauriDesktop) return;
+              e.preventDefault();
+              const files = await pickFiles({ accept: 'image/*' });
+              if (files) handlePhotoSelect(files);
+            }}
           >
             {#if draft.photo}
               <img

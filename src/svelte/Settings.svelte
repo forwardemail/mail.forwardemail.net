@@ -2100,7 +2100,7 @@
             >
           </Card.Header>
           <Card.Content>
-            <div class="max-h-96 overflow-y-auto border border-border">
+            <div class="max-h-[600px] overflow-y-auto border border-border">
               <div
                 class="sticky top-0 grid grid-cols-[1fr_auto] gap-4 border-b border-border bg-muted p-3 font-semibold"
               >

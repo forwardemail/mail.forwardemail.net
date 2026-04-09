@@ -565,7 +565,7 @@ export const stripQuoteCollapseMarkup = (html: string) => {
 /**
  * Get the body for a message - checks store first, then fetches from cache
  */
-const getMessageBodyForReply = async (msg) => {
+export const getMessageBodyForReply = async (msg) => {
   const msgId = getMessageApiId(msg);
   if (!msgId) return '';
 
@@ -645,7 +645,7 @@ export const buildReplyQuotedBody = (msg, originalBody) => {
   const attribution = dateStr ? `On ${dateStr}, ${fromName} wrote:` : `${fromName} wrote:`;
   const encoded = encodeRawHtml(originalBody);
 
-  return `<p><br></p><p><br></p><p><br></p><p class="fe-reply-attribution">${attribution}</p><blockquote data-raw-html="${encoded}" data-raw-variant="reply"></blockquote>`;
+  return `<p><br></p><p><br></p><p class="fe-reply-attribution">${attribution}</p><blockquote data-raw-html="${encoded}" data-raw-variant="reply"></blockquote>`;
 };
 
 /**

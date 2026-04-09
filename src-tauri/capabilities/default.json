@@ -39,6 +39,7 @@
     "os:default",
     "dialog:allow-save",
     "dialog:allow-open",
+    "fs:allow-read-file",
     "fs:allow-write-file",
     "opener:allow-open-path"
   ],
