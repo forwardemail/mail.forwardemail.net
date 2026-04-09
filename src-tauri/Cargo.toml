@@ -1,6 +1,6 @@
 [package]
 name = "forwardemail-desktop"
-version = "0.7.4"
+version = "0.7.5"
 description = "Forward Email - Privacy-focused email client"
 authors = ["Forward Email <support@forwardemail.net>"]
 license = "BUSL-1.1"
