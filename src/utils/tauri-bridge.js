@@ -69,6 +69,7 @@ export function isTauri() {
 const ALLOWED_COMMANDS = new Set([
   'get_app_version',
   'get_platform',
+  'get_build_info',
   'set_badge_count',
   'toggle_window_visibility',
 ]);
@@ -117,6 +118,14 @@ export async function getAppVersion() {
  */
 export async function getPlatform() {
   return invoke('get_platform');
+}
+
+/**
+ * Get build metadata for the About dialog.
+ * Returns { version, buildDate, os, arch, license }.
+ */
+export async function getBuildInfo() {
+  return invoke('get_build_info');
 }
 
 /**

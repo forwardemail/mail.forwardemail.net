@@ -184,6 +184,7 @@
   import StarOff from '@lucide/svelte/icons/star-off';
   import EllipsisVertical from '@lucide/svelte/icons/ellipsis-vertical';
   import EmailIframe from './components/EmailIframe.svelte';
+  import AboutDialog from './AboutDialog.svelte';
   import TabBar from './components/TabBar.svelte';
   import MessageTab from './components/MessageTab.svelte';
   import {
@@ -642,6 +643,7 @@
   let contextLabelSubmenuEl = $state<HTMLElement | null>(null);
 
   // Confirmation dialogs
+  let aboutDialogOpen = $state(false);
   let confirmDialogVisible = $state(false);
   let confirmDialogTitle = $state('');
   let confirmDialogMessage = $state('');
@@ -3512,13 +3514,44 @@
     await bulkMoveTo(path);
   };
 
-  const openContextMenu = (event, item) => {
+  const openContextMenu = async (event, item) => {
     event?.preventDefault?.();
     const isConversation = Array.isArray(item?.messages);
     const msg = isConversation ? item?.messages?.slice?.(-1)?.[0] : item;
     if (!msg) return;
     contextMenuConversation = isConversation ? item : null;
     contextMenuMessage = { ...msg };
+
+    // On Tauri desktop, show a native OS context menu
+    if (isTauriDesktop) {
+      const { showNativeContextMenu } = await import('../utils/native-context-menu');
+      const shown = await showNativeContextMenu({
+        message: msg,
+        actions: {
+          onToggleRead: contextToggleRead,
+          onReply: contextReply,
+          onForward: contextForward,
+          onArchive: contextArchive,
+          onDelete: contextDelete,
+          onMoveTo: contextMoveTo,
+          onToggleStar: () => {
+            if (!contextMenuMessage) return;
+            toggleStarMessage(contextMenuMessage);
+            closeContextMenu();
+          },
+        },
+        folders: (availableMoveTargetsFromStore.length
+          ? availableMoveTargetsFromStore
+          : get(availableMoveTargets)) as { path: string; name?: string }[],
+        isArchiveFolder: matchesFolderKey($selectedFolder, ['ARCHIVE']),
+        isDraftFolder: listIsDraftFolder,
+        isTrashFolder: listIsTrashFolder,
+        isSpamFolder: listIsSpamOrJunk,
+      });
+      if (shown) return; // Native menu handled it
+    }
+
+    // Fallback: HTML context menu (web / mobile / native menu failed)
     const padding = 8;
     const menuW = 240;
     const menuH = 300;
@@ -4583,7 +4616,7 @@
     // Tauri external link handler is registered globally in main.ts
 
     if (isTauri) {
-      // Listen for "New Message" from native menu bar / tray
+      // Listen for native menu bar / tray events
       import('@tauri-apps/api/event').then(({ listen }) => {
         listen('menu:new-message', () => {
           mailboxView?.composeModal?.open?.();
@@ -4591,11 +4624,14 @@
           menuUnlisten = unlisten;
         });
 
-        // Listen for "Check for New Mail" from tray
         listen('menu:check-mail', () => {
           reloadMessages();
         }).then((unlisten) => {
           checkMailUnlisten = unlisten;
+        });
+
+        listen('menu:about', () => {
+          aboutDialogOpen = true;
         });
       });
     }
@@ -8073,6 +8109,8 @@
             </div>
           </div>
         {/if}
+
+        <AboutDialog bind:open={aboutDialogOpen} />
 
         <!-- Mobile Floating Action Button (FAB) for Compose — Gmail style -->
         {#if showMobileFab}

@@ -37,6 +37,7 @@
 
     "log:allow-log",
     "os:default",
+    "core:menu:default",
     "dialog:allow-save",
     "dialog:allow-open",
     "fs:allow-read-file",

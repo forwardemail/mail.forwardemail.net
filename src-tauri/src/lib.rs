@@ -4,7 +4,7 @@ use tauri::{Emitter, Listener, Manager};
 #[cfg(desktop)]
 use tauri::{
     image::Image,
-    menu::{AboutMetadata, Menu, MenuItem, PredefinedMenuItem, Submenu},
+    menu::{Menu, MenuItem, PredefinedMenuItem, Submenu},
     tray::TrayIconBuilder,
 };
 
@@ -46,6 +46,18 @@ fn get_platform() -> String {
     let os = std::env::consts::OS;
     let arch = std::env::consts::ARCH;
     format!("{}-{}", os, arch)
+}
+
+/// Returns build metadata for the About dialog (all compile-time constants).
+#[tauri::command]
+fn get_build_info() -> std::collections::HashMap<String, String> {
+    let mut info = std::collections::HashMap::new();
+    info.insert("version".into(), env!("CARGO_PKG_VERSION").to_string());
+    info.insert("buildDate".into(), env!("BUILD_DATE").to_string());
+    info.insert("os".into(), std::env::consts::OS.to_string());
+    info.insert("arch".into(), std::env::consts::ARCH.to_string());
+    info.insert("license".into(), env!("CARGO_PKG_LICENSE").to_string());
+    info
 }
 
 /// Sets the dock/taskbar badge count.
@@ -171,21 +183,14 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(desktop)]
 fn setup_menu(app: &tauri::App) -> Result<Menu<tauri::Wry>, Box<dyn std::error::Error>> {
     // App menu (macOS shows this as the application menu)
-    let about_metadata = AboutMetadata {
-        version: Some(env!("CARGO_PKG_VERSION").to_string()),
-        authors: Some(vec!["Forward Email <support@forwardemail.net>".to_string()]),
-        website: Some("https://forwardemail.net".to_string()),
-        website_label: Some("forwardemail.net".to_string()),
-        license: Some("BUSL-1.1".to_string()),
-        ..Default::default()
-    };
+    let about_item = MenuItem::with_id(app, "about", "About Forward Email", true, None::<&str>)?;
 
     let app_menu = Submenu::with_items(
         app,
         "Forward Email",
         true,
         &[
-            &PredefinedMenuItem::about(app, Some("About Forward Email"), Some(about_metadata))?,
+            &about_item,
             &PredefinedMenuItem::separator(app)?,
             &PredefinedMenuItem::services(app, None)?,
             &PredefinedMenuItem::separator(app)?,
@@ -315,6 +320,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_app_version,
             get_platform,
+            get_build_info,
             set_badge_count,
             #[cfg(desktop)]
             toggle_window_visibility,
@@ -327,6 +333,11 @@ pub fn run() {
                 app.set_menu(menu)?;
 
                 app.on_menu_event(|app, event| match event.id().as_ref() {
+                    "about" => {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.emit("menu:about", ());
+                        }
+                    }
                     "new_message" => {
                         if let Some(window) = app.get_webview_window("main") {
                             let _ = window.emit("menu:new-message", ());

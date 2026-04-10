@@ -46,6 +46,22 @@ jobs:
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
+      # Clean slate: delete any pre-existing release for this tag so we don't
+      # end up with duplicate releases (e.g., from a previous failed run that
+      # left a stale draft, or from a re-trigger). The git tag is preserved.
+      - name: Delete any pre-existing release for this tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          TAG="v${{ steps.version.outputs.version }}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Found existing release $TAG — deleting to start clean"
+            gh release delete "$TAG" --yes --cleanup-tag=false
+          else
+            echo "No existing release for $TAG"
+          fi
+
       - name: Create GitHub Release
         id: create
         uses: softprops/action-gh-release@v2

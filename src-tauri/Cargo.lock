@@ -1223,7 +1223,7 @@ dependencies = [
 
 [[package]]
 name = "forwardemail-desktop"
-version = "0.7.6"
+version = "0.7.7"
 dependencies = [
  "log",
  "objc",
@@ -1243,6 +1243,7 @@ dependencies = [
  "tauri-plugin-single-instance",
  "tauri-plugin-updater",
  "tauri-plugin-window-state",
+ "time",
 ]
 
 [[package]]

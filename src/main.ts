@@ -114,7 +114,7 @@ import { markBootstrapReady, markAppReady } from './utils/bootstrap-ready.js';
 import { initPerfObservers } from './utils/perf-logger.ts';
 import { attemptRecovery } from './utils/db-recovery';
 import { parseMailto, mailtoToPrefill } from './utils/mailto';
-import { selectedFolder } from './stores/folderStore';
+import { selectedFolder, folders } from './stores/folderStore';
 import {
   messageBody,
   selectedMessage,
@@ -685,6 +685,15 @@ if (mailboxRoot) {
   if (isTauriDesktop) {
     resetTabs('INBOX');
     initComposeWindowListener();
+
+    // Keep dock/taskbar badge in sync with INBOX unread count
+    folders.subscribe((list) => {
+      const inbox = list.find((f) => f.path?.toUpperCase?.() === 'INBOX');
+      const count = inbox?.count ?? 0;
+      import('./utils/notification-manager.js')
+        .then(({ setBadgeCount }) => setBadgeCount(count))
+        .catch(() => {});
+    });
   }
 
   // Tauri: intercept all external link clicks app-wide and open via system browser.
