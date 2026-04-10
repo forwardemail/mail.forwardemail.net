@@ -66,18 +66,28 @@ jobs:
       release_id: ${{ needs.create-release.outputs.release_id }}
     secrets: inherit
 
-  # ── 3. Generate checksums ──────────────────────────────────────────────
+  # ── 3. Generate checksums (best-effort) ────────────────────────────────
   checksums:
     needs: [create-release, build-desktop]
-    if: always()
+    if: needs.build-desktop.result == 'success'
     runs-on: ubuntu-latest
     steps:
+      - name: List existing release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          echo "=== Release v${{ needs.create-release.outputs.version }} assets ==="
+          gh release view "v${{ needs.create-release.outputs.version }}" \
+            --json assets --jq '.assets[].name' || echo "Failed to list assets"
+
       - name: Download release assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: |
           mkdir -p artifacts
+          # Download all non-checksum files from the release
           gh release download "v${{ needs.create-release.outputs.version }}" \
             --dir artifacts \
             --pattern '*.dmg' \
@@ -88,29 +98,37 @@ jobs:
             --pattern '*.msi.zip.sig' \
             --pattern '*.nsis.zip' \
             --pattern '*.nsis.zip.sig' \
+            --pattern '*.exe' \
             --pattern '*.deb' \
+            --pattern '*.rpm' \
             --pattern '*.AppImage' \
             --pattern '*.AppImage.tar.gz' \
             --pattern '*.AppImage.tar.gz.sig' \
             --pattern '*.apk' \
             --pattern '*.aab' \
-            --pattern '*.ipa' \
-            || echo "No matching assets found (some patterns may not match)"
+            --pattern '*.ipa' || true
+          echo "=== Downloaded files ==="
+          ls -la artifacts/ || true
 
       - name: Generate SHA-256 checksums
+        id: sums
         run: |
           cd artifacts
-          if ls *.* 1>/dev/null 2>&1; then
-            sha256sum * | sort -k2 > SHA256SUMS.txt
+          shopt -s nullglob
+          files=( * )
+          if [ ${#files[@]} -gt 0 ]; then
+            sha256sum -- "${files[@]}" | LC_ALL=C sort > SHA256SUMS.txt
             echo "=== SHA256SUMS.txt ==="
             cat SHA256SUMS.txt
             echo "=== File count: $(wc -l < SHA256SUMS.txt) ==="
+            echo "generated=true" >> "$GITHUB_OUTPUT"
           else
-            echo "No artifacts found to checksum"
-            exit 1
+            echo "No artifacts found to checksum — skipping (release will publish without SHA256SUMS.txt)"
+            echo "generated=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Upload checksums to release
+        if: steps.sums.outputs.generated == 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ needs.create-release.outputs.version }}
@@ -119,9 +137,11 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # ── 4. Publish the release ─────────────────────────────────────────────
+  # Publish as long as the desktop build succeeded — checksums are best-effort
+  # and shouldn't block publishing the actual binaries.
   publish:
-    needs: [create-release, checksums]
-    if: success()
+    needs: [create-release, build-desktop, checksums]
+    if: always() && needs.build-desktop.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - name: Publish release (remove draft status)
