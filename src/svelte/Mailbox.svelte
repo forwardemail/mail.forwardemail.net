@@ -3314,12 +3314,14 @@
   // Helper for parallel bulk message updates
   const bulkUpdateMessages = async (
     messages,
-    { payload, skipIf, onSuccess, successVerb, failVerb },
+    { buildPayload, buildLocalUpdate, skipIf, successVerb, failVerb },
   ) => {
     const CONCURRENCY = 6;
     let updatedCount = 0;
     let missingIdCount = 0;
     let failedCount = 0;
+    const account = Local.get('email') || 'default';
+    const folder = get(selectedFolder);
 
     // Filter messages and prepare work items
     const workItems = [];
@@ -3333,24 +3335,68 @@
       workItems.push({ msg, apiId });
     }
 
-    // Process in parallel chunks
+    if (!workItems.length) {
+      if (missingIdCount > 0) {
+        showToast(
+          `Skipped ${missingIdCount} message${missingIdCount === 1 ? '' : 's'}: missing server message id`,
+          'error',
+        );
+      }
+      return;
+    }
+
+    // Optimistic UI update
+    const list = source.state?.messages ? get(messagesStore) || [] : [];
+    const updatedIds = new Set(workItems.map(({ msg }) => msg.id));
+    const optimisticList = list.map((m) => {
+      if (!updatedIds.has(m.id)) return m;
+      const localUpdate = buildLocalUpdate(m);
+      return localUpdate ? { ...m, ...localUpdate } : m;
+    });
+    if (source.state?.messages?.set) {
+      messagesStore.set(optimisticList);
+    }
+
+    // Register pending flag mutations for each message
+    for (const { msg } of workItems) {
+      const localUpdate = buildLocalUpdate(msg);
+      if (localUpdate) {
+        mailboxStore?.actions?.addPendingFlagMutation?.(msg.id, localUpdate);
+      }
+    }
+
+    // Process API calls in parallel chunks
     for (let i = 0; i < workItems.length; i += CONCURRENCY) {
       const chunk = workItems.slice(i, i + CONCURRENCY);
       const results = await Promise.allSettled(
         chunk.map(async ({ msg, apiId }) => {
-          await Remote.request('MessageUpdate', payload, {
+          const apiPayload = buildPayload(msg);
+          await Remote.request('MessageUpdate', apiPayload, {
             method: 'PUT',
             pathOverride: `/v1/messages/${encodeURIComponent(apiId)}`,
           });
-          onSuccess?.(msg);
+          // Update IDB cache
+          const localUpdate = buildLocalUpdate(msg);
+          if (localUpdate) {
+            await db.messages
+              .where('[account+id]')
+              .equals([account, msg.id])
+              .modify(localUpdate)
+              .catch(() => {});
+          }
           return true;
         }),
       );
       results.forEach((r) => (r.status === 'fulfilled' ? updatedCount++ : failedCount++));
     }
 
+    // Update unread counts and invalidate cache
+    mailboxStore.actions.updateFolderUnreadCounts();
+    if (account && folder) {
+      mailboxStore.actions.invalidateFolderInMemCache?.(account, folder);
+    }
+
     clearSelection();
-    await reloadMessages();
 
     if (updatedCount > 0) {
       showToast(
@@ -3376,11 +3422,19 @@
     const messages = getSelectedMessagesFromConversations();
     if (!messages.length) return;
     await bulkUpdateMessages(messages, {
-      payload: { seen: true },
-      skipIf: (msg) => msg.seen,
-      onSuccess: (msg) => (msg.seen = true),
-      successVerb: 'Marked',
-      failVerb: 'mark',
+      skipIf: (msg) => !msg.is_unread,
+      buildPayload: (msg) => {
+        const flags = new Set(msg.flags || []);
+        flags.add('\\Seen');
+        return { flags: Array.from(flags) };
+      },
+      buildLocalUpdate: (msg) => {
+        const flags = new Set(msg.flags || []);
+        flags.add('\\Seen');
+        return { is_unread: false, is_unread_index: 0, flags: Array.from(flags) };
+      },
+      successVerb: 'Marked as read',
+      failVerb: 'mark as read',
     });
   };
 
@@ -3388,11 +3442,17 @@
     const messages = getSelectedMessagesFromConversations();
     if (!messages.length) return;
     await bulkUpdateMessages(messages, {
-      payload: { seen: false },
-      skipIf: (msg) => !msg.seen,
-      onSuccess: (msg) => (msg.seen = false),
-      successVerb: 'Marked',
-      failVerb: 'mark',
+      skipIf: (msg) => msg.is_unread,
+      buildPayload: (msg) => {
+        const flags = (msg.flags || []).filter((f) => f !== '\\Seen');
+        return { flags };
+      },
+      buildLocalUpdate: (msg) => {
+        const flags = (msg.flags || []).filter((f) => f !== '\\Seen');
+        return { is_unread: true, is_unread_index: 1, flags };
+      },
+      successVerb: 'Marked as unread',
+      failVerb: 'mark as unread',
     });
   };
 
@@ -3400,9 +3460,17 @@
     const messages = getSelectedMessagesFromConversations();
     if (!messages.length) return;
     await bulkUpdateMessages(messages, {
-      payload: { flagged: true },
-      skipIf: (msg) => msg.flagged,
-      onSuccess: (msg) => (msg.flagged = true),
+      skipIf: (msg) => msg.is_starred || (msg.flags || []).includes('\\Flagged'),
+      buildPayload: (msg) => {
+        const flags = new Set(msg.flags || []);
+        flags.add('\\Flagged');
+        return { flags: Array.from(flags) };
+      },
+      buildLocalUpdate: (msg) => {
+        const flags = new Set(msg.flags || []);
+        flags.add('\\Flagged');
+        return { is_starred: true, flags: Array.from(flags) };
+      },
       successVerb: 'Starred',
       failVerb: 'star',
     });
@@ -3412,9 +3480,15 @@
     const messages = getSelectedMessagesFromConversations();
     if (!messages.length) return;
     await bulkUpdateMessages(messages, {
-      payload: { flagged: false },
-      skipIf: (msg) => !msg.flagged,
-      onSuccess: (msg) => (msg.flagged = false),
+      skipIf: (msg) => !msg.is_starred && !(msg.flags || []).includes('\\Flagged'),
+      buildPayload: (msg) => {
+        const flags = (msg.flags || []).filter((f) => f !== '\\Flagged');
+        return { flags };
+      },
+      buildLocalUpdate: (msg) => {
+        const flags = (msg.flags || []).filter((f) => f !== '\\Flagged');
+        return { is_starred: false, flags };
+      },
       successVerb: 'Unstarred',
       failVerb: 'unstar',
     });
