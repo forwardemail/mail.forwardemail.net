@@ -128,6 +128,7 @@ jobs:
 
       - name: Verify release_id is set when called via workflow_call
         if: github.event_name == 'workflow_call' || inputs.release_id != null
+        shell: bash
         run: |
           if [ -z "${{ inputs.release_id }}" ]; then
             echo "::error::release_id input is required to prevent duplicate releases."
