@@ -60,8 +60,15 @@ if (composeRoot) {
         composeApi = api;
         initFromTauriEvent();
       },
-      onSent: async (result?: { archive?: boolean; queued?: boolean }) => {
-        // Notify main window about the send
+      onSent: async (result?: {
+        archive?: boolean;
+        queued?: boolean;
+        draftId?: string;
+        serverDraftId?: string;
+        sourceMessageId?: string;
+      }) => {
+        // Notify main window about the send so it can clean up the draft
+        // (the compose webview can't access IDB / db worker reliably).
         try {
           const { emit } = await import('@tauri-apps/api/event');
           await emit('compose:sent', result || {});

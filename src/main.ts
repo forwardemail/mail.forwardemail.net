@@ -99,7 +99,7 @@ import {
 import { startOutboxProcessor, processOutbox } from './utils/outbox-service';
 import { initMutationQueue, processMutationQueue } from './utils/mutation-queue';
 import { initNetworkStatus } from './utils/network-status';
-import { syncPendingDrafts } from './utils/draft-service';
+import { syncPendingDrafts, deleteDraft } from './utils/draft-service';
 import { setIndexToasts, searchStore } from './stores/searchStore';
 import { setDemoToasts } from './utils/demo-mode';
 import { setNotificationToasts } from './utils/notification-manager';
@@ -876,10 +876,71 @@ if (isTauriDesktop) {
     isVisible: () => false,
   };
 
-  // Listen for compose:sent events from compose windows
+  // Listen for compose:sent events from compose windows.
+  // The compose webview can't reliably access IDB / db worker, so it
+  // relays draft + source IDs back here for the main window to clean up.
   import('@tauri-apps/api/event').then(({ listen }) => {
-    listen('compose:sent', (event) => {
-      const result = event.payload as { archive?: boolean; queued?: boolean } | undefined;
+    listen('compose:sent', async (event) => {
+      const result = event.payload as
+        | {
+            archive?: boolean;
+            queued?: boolean;
+            draftId?: string;
+            serverDraftId?: string;
+            sourceMessageId?: string;
+          }
+        | undefined;
+
+      // Clean up local draft record (IDB)
+      if (result?.draftId) {
+        try {
+          await deleteDraft(result.draftId);
+        } catch (err) {
+          console.warn('[main] Failed to delete local draft after send:', err);
+        }
+      }
+
+      // Delete server-side draft and source draft message via API.
+      // Use dynamic imports to avoid bloating the main bundle.
+      const idsToDelete = new Set<string>();
+      if (result?.sourceMessageId) idsToDelete.add(result.sourceMessageId);
+      if (result?.serverDraftId && result.serverDraftId !== result.sourceMessageId) {
+        idsToDelete.add(result.serverDraftId);
+      }
+      if (idsToDelete.size) {
+        try {
+          const { Remote } = await import('./utils/remote');
+          const { db } = await import('./utils/db');
+          const account = (await import('./utils/storage')).Local.get('email') || 'default';
+          for (const id of idsToDelete) {
+            // Server delete (404 = already gone)
+            try {
+              await Remote.request(
+                'MessageDelete',
+                {},
+                {
+                  method: 'DELETE',
+                  pathOverride: `/v1/messages/${encodeURIComponent(id)}?permanent=1`,
+                },
+              );
+            } catch (err) {
+              const status = (err as { status?: number })?.status;
+              if (status !== 404) {
+                console.warn('[main] Failed to delete server draft after send:', err);
+              }
+            }
+            // Local cache delete (best effort)
+            try {
+              await db.messages.where('[account+id]').equals([account, id]).delete();
+            } catch {
+              // Ignore — main goal was server cleanup
+            }
+          }
+        } catch (err) {
+          console.warn('[main] Draft cleanup imports failed:', err);
+        }
+      }
+
       if (result?.archive) {
         const msg = get(selectedMessage);
         if (msg) mailboxActions.archiveMessage(msg).catch(() => {});

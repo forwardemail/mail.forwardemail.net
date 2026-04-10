@@ -126,7 +126,7 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Set updater signing config
+      - name: Enable updater artifacts
         if: env.TAURI_SIGNING_PRIVATE_KEY != ''
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -134,7 +134,7 @@ jobs:
         run: |
           const fs = require('fs');
           const conf = JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json', 'utf8'));
-          conf.plugins.updater.pubkey = 'dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDdCRjY2OTc5RDA0RkI0MUQKUldRZHRFL1FlV24yZTV4ZThJeERhR3hTUXJRdUNqU0dRbXJrTjBjN2VycldUMXpWOG5pb3Q2SUEK';
+          // pubkey is already committed in tauri.conf.json
           conf.bundle.createUpdaterArtifacts = true;
           fs.writeFileSync('src-tauri/tauri.conf.json', JSON.stringify(conf, null, 2) + '\n');
 

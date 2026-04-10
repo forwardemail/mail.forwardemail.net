@@ -2240,13 +2240,15 @@
       if (!nativeWindow) {
         await saveSentCopyWrapper(payload);
       }
+      // Capture IDs before reset() clears them — needed for cleanup
+      const msgIdToDelete = sourceMessageId;
+      const serverDraftIdToDelete = currentDraftServerId;
+      const draftIdToDelete = currentDraftId;
       // Draft/source cleanup uses IDB which isn't available in native window
       if (!nativeWindow) {
-        const msgIdToDelete = sourceMessageId;
-        const serverDraftIdToDelete = currentDraftServerId;
-        if (currentDraftId) {
+        if (draftIdToDelete) {
           try {
-            await deleteDraft(currentDraftId);
+            await deleteDraft(draftIdToDelete);
           } catch (err) {
             console.error('[Compose] Failed to delete draft after send:', err);
             toasts?.show?.('Warning: Failed to delete draft', 'warning');
@@ -2270,7 +2272,12 @@
       setVisible(false);
       const shouldArchive = archiveAfterSend;
       reset();
-      onSent?.({ archive: shouldArchive });
+      onSent?.({
+        archive: shouldArchive,
+        draftId: draftIdToDelete,
+        serverDraftId: serverDraftIdToDelete,
+        sourceMessageId: msgIdToDelete,
+      });
     } catch (err) {
       const e = err as { message?: string; status?: number };
       if (e.message?.includes('network') || e.message?.includes('fetch') || e.status === 0) {
