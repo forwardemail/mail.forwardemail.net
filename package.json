@@ -55,7 +55,7 @@
     "@passwordless-id/webauthn": "^2.1.2",
     "@schedule-x/calendar": "^1.63.1",
     "@schedule-x/svelte": "^3.0.0",
-    "@schedule-x/theme-default": "^1.13.4",
+    "@schedule-x/theme-default": "^4.4.0",
     "@tauri-apps/api": "^2.10.1",
     "@tauri-apps/plugin-deep-link": "^2.4.7",
     "@tauri-apps/plugin-dialog": "^2.6.0",
