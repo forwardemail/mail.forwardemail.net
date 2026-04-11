@@ -142,7 +142,11 @@ function createResponse(object, path, request) {
   // Security headers
   headers.set('X-Content-Type-Options', 'nosniff');
   headers.set('X-Frame-Options', 'DENY');
-  headers.set('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  headers.set('Strict-Transport-Security', 'max-age=31536000; includeSubDomains; preload');
+  headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+  headers.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()');
+  headers.set('X-Permitted-Cross-Domain-Policies', 'none');
+  headers.set('Cross-Origin-Opener-Policy', 'same-origin');
 
   // CORS for fonts (needed for cross-origin font loading)
   if (path.match(/\.(woff2?|ttf|otf|eot)$/)) {

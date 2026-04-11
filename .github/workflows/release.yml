@@ -30,7 +30,9 @@ jobs:
       upload_url: ${{ steps.create.outputs.upload_url }}
       version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
 
       - name: Extract and validate version
         id: version
@@ -64,7 +66,7 @@ jobs:
 
       - name: Create GitHub Release
         id: create
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe # v2.6.1
         with:
           draft: true
           prerelease: false
@@ -145,7 +147,7 @@ jobs:
 
       - name: Upload checksums to release
         if: steps.sums.outputs.generated == 'true'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe # v2.6.1
         with:
           tag_name: v${{ needs.create-release.outputs.version }}
           files: artifacts/SHA256SUMS.txt
