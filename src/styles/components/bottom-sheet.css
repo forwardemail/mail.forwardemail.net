@@ -41,7 +41,7 @@
   overflow: hidden;
   animation: fe-sheet-slide-up 0.3s ease-out;
   touch-action: none;
-  padding-bottom: env(safe-area-inset-bottom, 0);
+  padding-bottom: var(--sai-bottom, env(safe-area-inset-bottom, 0px));
 }
 
 @keyframes fe-sheet-slide-up {

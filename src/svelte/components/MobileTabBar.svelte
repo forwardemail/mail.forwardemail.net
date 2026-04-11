@@ -90,8 +90,8 @@
 
 <style>
   .fe-mobile-tabbar {
-    padding-bottom: env(safe-area-inset-bottom, 0px);
-    height: calc(56px + env(safe-area-inset-bottom, 0px));
+    padding-bottom: var(--sai-bottom, env(safe-area-inset-bottom, 0px));
+    height: calc(56px + var(--sai-bottom, env(safe-area-inset-bottom, 0px)));
   }
 
   .fe-mobile-tab {

@@ -658,11 +658,9 @@
     }
   }
 
-  /* Safe area insets for mobile */
-  @supports (padding: env(safe-area-inset-top)) {
-    .lock-screen {
-      padding-top: env(safe-area-inset-top);
-      padding-bottom: env(safe-area-inset-bottom);
-    }
+  /* Safe area insets for mobile (--sai-* injected by Android WebView) */
+  .lock-screen {
+    padding-top: var(--sai-top, env(safe-area-inset-top, 0px));
+    padding-bottom: var(--sai-bottom, env(safe-area-inset-bottom, 0px));
   }
 </style>

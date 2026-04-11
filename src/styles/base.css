@@ -140,17 +140,15 @@ body.light-mode:not(.mailbox-mode) {
   color: var(--color-text);
 }
 
-/* Mobile keyboard handling */
-@supports (padding: env(safe-area-inset-bottom)) {
-  body {
-    padding-bottom: env(safe-area-inset-bottom);
-  }
+/* Mobile safe area handling (--sai-* injected by Android WebView) */
+body {
+  padding-bottom: var(--sai-bottom, env(safe-area-inset-bottom, 0px));
+}
 
-  .fe-compose-modal,
-  .fe-reader,
-  .fe-message-list {
-    padding-bottom: calc(16px + env(safe-area-inset-bottom));
-  }
+.fe-compose-modal,
+.fe-reader,
+.fe-message-list {
+  padding-bottom: calc(16px + var(--sai-bottom, env(safe-area-inset-bottom, 0px)));
 }
 
 /* Ensure inputs don't trigger zoom on iOS */

@@ -105,6 +105,9 @@ jobs:
       - name: Sync Android version
         run: node scripts/sync-version.cjs
 
+      - name: Inject custom MainActivity.kt
+        run: node scripts/inject-android-mainactivity.cjs
+
       - name: Inject signing config into build.gradle.kts
         run: node scripts/inject-android-signing.cjs
 
