@@ -65,7 +65,7 @@ jobs:
           # Update bucket name in wrangler.toml from R2_BUCKET variable
           sed -i "s/bucket_name = \"myselfhosted-webmail-test-1\"/bucket_name = \"${R2_BUCKET}\"/" worker/wrangler.toml
           cd worker
-          pnpm install --frozen-lockfile
+          pnpm install --no-frozen-lockfile
           npx wrangler deploy
 
       - name: Purge Cloudflare Cache
