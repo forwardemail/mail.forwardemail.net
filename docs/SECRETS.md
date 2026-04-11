@@ -72,6 +72,41 @@ This document lists all GitHub Secrets required for the CI/CD workflows to build
 
 ## Setup Instructions
 
+### Generating the Android Keystore
+
+No Google/Android developer account is required for signing APKs. The keystore is self-managed. A [Google Play Developer account](https://play.google.com/console/) ($25 one-time) is only needed for Play Store distribution.
+
+```bash
+# Generate a new keystore with a signing key
+keytool -genkeypair \
+  -v \
+  -keystore forwardemail.jks \
+  -alias forwardemail \
+  -keyalg RSA \
+  -keysize 2048 \
+  -validity 10000 \
+  -storepass <choose-a-strong-password> \
+  -keypass <choose-a-strong-password> \
+  -dname "CN=Forward Email, O=Forward Email LLC, L=Austin, ST=Texas, C=US"
+
+# Encode for GitHub Secrets
+base64 -i forwardemail.jks | pbcopy   # macOS — copies to clipboard
+base64 -w 0 forwardemail.jks          # Linux — prints to stdout
+```
+
+Then add the following secrets to the `release` environment in GitHub:
+
+| Secret                      | Value                                   |
+| --------------------------- | --------------------------------------- |
+| `ANDROID_KEYSTORE_BASE64`   | Output of the `base64` command above    |
+| `ANDROID_KEYSTORE_PASSWORD` | The password you chose for `-storepass` |
+| `ANDROID_KEY_ALIAS`         | `forwardemail`                          |
+| `ANDROID_KEY_PASSWORD`      | The password you chose for `-keypass`   |
+
+> **Important**: Back up the `.jks` file securely (e.g., 1Password vault). If lost, you cannot update apps signed with it on the Play Store. For GitHub Releases / sideloading, a new key can be generated, but users will see an "untrusted update" warning.
+
+The signing config in `build.gradle.kts` reads these values from environment variables at build time. When the env vars are absent (local development), the build produces an unsigned APK.
+
 ### Generating the Tauri Signing Key
 
 ```bash
@@ -101,7 +136,7 @@ base64 -w 0 certificate.p12
 ### Verifying Secrets Are Set
 
 All required secrets can be verified in the repository settings at:
-`Settings → Secrets and variables → Actions`
+`Settings → Secrets and variables → Actions → Environments → release`
 
 The CI workflows will fail with clear error messages if any required secret is missing.
 

@@ -84,10 +84,18 @@ jobs:
       release_id: ${{ needs.create-release.outputs.release_id }}
     secrets: inherit
 
+  # ── 2b. Build Android APK ──────────────────────────────────────────────
+  build-android:
+    needs: create-release
+    uses: ./.github/workflows/release-mobile.yml
+    with:
+      version: ${{ needs.create-release.outputs.version }}
+    secrets: inherit
+
   # ── 3. Generate checksums (best-effort) ────────────────────────────────
   checksums:
-    needs: [create-release, build-desktop]
-    if: needs.build-desktop.result == 'success'
+    needs: [create-release, build-desktop, build-android]
+    if: always() && needs.build-desktop.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - name: List existing release assets
@@ -158,7 +166,7 @@ jobs:
   # Publish as long as the desktop build succeeded — checksums are best-effort
   # and shouldn't block publishing the actual binaries.
   publish:
-    needs: [create-release, build-desktop, checksums]
+    needs: [create-release, build-desktop, build-android, checksums]
     if: always() && needs.build-desktop.result == 'success'
     runs-on: ubuntu-latest
     steps:

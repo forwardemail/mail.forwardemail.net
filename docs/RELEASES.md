@@ -12,8 +12,11 @@ Triggers [`release.yml`](../.github/workflows/release.yml), which orchestrates:
 
 1. Creates a **draft** GitHub Release
 2. Builds desktop binaries for macOS (arm64 + x64), Windows (x64), Linux (x64)
-3. Generates `SHA256SUMS.txt` for all artifacts
-4. **Publishing** the draft triggers [`deploy.yml`](../.github/workflows/deploy.yml) → deploys webmail to Cloudflare R2
+3. Builds Android APK + AAB (signed, runs in parallel with desktop)
+4. Generates `SHA256SUMS.txt` for all artifacts (desktop + mobile)
+5. **Publishing** the draft triggers [`deploy.yml`](../.github/workflows/deploy.yml) → deploys webmail to Cloudflare R2
+
+Android build failures do not block the desktop release or publishing.
 
 ```bash
 pnpm release          # np bumps version across all files, creates v* tag, pushes
@@ -46,6 +49,18 @@ pnpm release
 
 `np` prompts for patch/minor/major, creates the `v*` tag, and pushes to trigger the full release flow.
 
+### Version Sync
+
+The `version` lifecycle hook in `package.json` runs [`scripts/sync-version.cjs`](../scripts/sync-version.cjs), which updates:
+
+| File                                         | Field                         | Example         |
+| -------------------------------------------- | ----------------------------- | --------------- |
+| `src-tauri/tauri.conf.json`                  | `version`                     | `0.8.2`         |
+| `src-tauri/Cargo.toml`                       | `version`                     | `0.8.2`         |
+| `src-tauri/gen/android/app/tauri.properties` | `versionName` + `versionCode` | `0.8.2` / `802` |
+
+The Android `versionCode` is derived as `major * 10000 + minor * 100 + patch` (e.g., `0.8.2` = `802`, `1.0.0` = `10000`). This ensures it always increments with each semver bump, as required by the Play Store.
+
 ## Manual Release
 
 Trigger any workflow manually via GitHub Actions:
@@ -64,23 +79,32 @@ Trigger any workflow manually via GitHub Actions:
 | Windows  | x64                   | `.msi`, `.nsis.zip`, `.nsis.zip.sig`     |
 | Linux    | x64                   | `.AppImage`, `.deb`                      |
 
-### Mobile (Future)
+### Android
 
-| Platform | Files                                   |
-| -------- | --------------------------------------- |
-| Android  | `.apk` (universal), `.aab` (Play Store) |
-| iOS      | `.ipa` (App Store)                      |
+| File                                      | Description                                     |
+| ----------------------------------------- | ----------------------------------------------- |
+| `forwardemail-mail_<version>_android.apk` | Signed universal APK for sideloading            |
+| `forwardemail-mail_<version>_android.aab` | Signed Android App Bundle for Play Store upload |
+
+Built by [`release-mobile.yml`](../.github/workflows/release-mobile.yml). Requires Android signing secrets in the `release` environment (see [SECRETS.md](./SECRETS.md#generating-the-android-keystore)).
+
+### iOS (Future)
+
+| File   | Description      |
+| ------ | ---------------- |
+| `.ipa` | App Store upload |
 
 ## Code Signing
 
 Signing is automatic when secrets are configured. Without secrets, builds are unsigned but still functional.
 
-| Platform     | Signing                           | Notes                               |
-| ------------ | --------------------------------- | ----------------------------------- |
-| macOS        | Apple Developer ID + notarization | Users won't see Gatekeeper warnings |
-| Windows      | EV certificate (optional)         | Avoids SmartScreen warnings         |
-| Linux        | None needed                       | AppImage/deb work unsigned          |
-| Auto-updater | Ed25519 key                       | Required for `.sig` files           |
+| Platform     | Signing                           | Notes                                     |
+| ------------ | --------------------------------- | ----------------------------------------- |
+| macOS        | Apple Developer ID + notarization | Users won't see Gatekeeper warnings       |
+| Windows      | EV certificate (optional)         | Avoids SmartScreen warnings               |
+| Linux        | None needed                       | AppImage/deb work unsigned                |
+| Android      | Self-managed keystore (`.jks`)    | Required for Play Store; optional for APK |
+| Auto-updater | Ed25519 key                       | Required for `.sig` files                 |
 
 See [SECRETS.md](./SECRETS.md) for the full list of required secrets and [desktop-ci-secrets.md](./desktop-ci-secrets.md) for detailed setup.
 

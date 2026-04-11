@@ -82,8 +82,6 @@ jobs:
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
-        with:
-          version: ${{ env.PNPM_VERSION }}
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -109,10 +107,27 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: pnpm tauri android build
 
+      - name: Rename APK with version
+        run: |
+          VERSION="${{ inputs.version || inputs.tag || github.ref_name }}"
+          VERSION="${VERSION#v}"
+          APK_DIR="src-tauri/gen/android/app/build/outputs/apk"
+          AAB_DIR="src-tauri/gen/android/app/build/outputs/bundle"
+          # Find and rename APKs
+          find "$APK_DIR" -name '*.apk' -type f | while read -r f; do
+            dir=$(dirname "$f")
+            mv "$f" "$dir/forwardemail-mail_${VERSION}_android.apk"
+          done
+          # Find and rename AABs
+          find "$AAB_DIR" -name '*.aab' -type f | while read -r f; do
+            dir=$(dirname "$f")
+            mv "$f" "$dir/forwardemail-mail_${VERSION}_android.aab"
+          done
+
       - name: Upload signed APK/AAB to release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          tag_name: v${{ inputs.version || inputs.tag || github.ref_name }}
           files: |
             src-tauri/gen/android/app/build/outputs/apk/**/*.apk
             src-tauri/gen/android/app/build/outputs/bundle/**/*.aab
@@ -129,6 +144,7 @@ jobs:
           rm -f /tmp/keystore.jks
 
   ios:
+    if: false # Disabled until iOS signing is set up
     runs-on: macos-latest
     name: Release iOS (signed IPA)
     # Use the 'release' environment for scoped secrets
