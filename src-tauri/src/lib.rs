@@ -1,4 +1,5 @@
 use serde::Serialize;
+use std::sync::Mutex;
 use tauri::{Emitter, Listener, Manager};
 
 #[cfg(desktop)]
@@ -29,10 +30,23 @@ struct SingleInstancePayload {
     cwd: String,
 }
 
+/// Holds deep-link URLs that arrived before the frontend was ready.
+/// The frontend calls `get_pending_deep_links` once during bootstrap
+/// to drain any URLs that arrived during cold start.
+struct PendingDeepLinks(Mutex<Vec<String>>);
+
 // ── IPC Commands ─────────────────────────────────────────────────────────────
 //
 // Every command validates its inputs on the Rust side.  The frontend is never
 // trusted — all values are bounds-checked and sanitised before use.
+
+/// Drain and return any deep-link URLs that arrived before the frontend
+/// was ready (cold-start race condition fix).
+#[tauri::command]
+fn get_pending_deep_links(state: tauri::State<'_, PendingDeepLinks>) -> Vec<String> {
+    let mut queue = state.0.lock().unwrap_or_else(|e| e.into_inner());
+    queue.drain(..).collect()
+}
 
 /// Returns the current app version (compile-time constant, no user input).
 #[tauri::command]
@@ -112,6 +126,200 @@ fn toggle_window_visibility(app: tauri::AppHandle) -> Result<(), String> {
         window.set_focus().map_err(|e: tauri::Error| e.to_string())?;
     }
     Ok(())
+}
+
+// ── Mailto Handler Commands ─────────────────────────────────────────────────
+//
+// Cross-platform default mailto: handler check and registration.
+//
+// macOS:  Uses CoreServices LSCopyDefaultHandlerForURLScheme (read-only,
+//         works inside the App Sandbox) and LSSetDefaultHandlerForURLScheme
+//         (write — returns -54 inside the sandbox).  When the write fails
+//         we open Apple Mail so the user can change the setting manually.
+//
+// Windows / Linux:  Delegates to the tauri-plugin-deep-link register() and
+//         is_registered() APIs, which use the Windows registry and xdg-mime
+//         respectively.
+
+/// Result of checking whether we are the default mailto handler.
+#[derive(Clone, Serialize)]
+struct MailtoStatus {
+    /// "default" | "not_default" | "unknown"
+    status: String,
+    /// The bundle ID of the current default handler (macOS only, empty otherwise)
+    current_handler: String,
+}
+
+/// Check if this app is the default mailto: handler.
+#[cfg(desktop)]
+#[tauri::command]
+async fn is_default_mailto_handler(
+    app: tauri::AppHandle,
+) -> Result<MailtoStatus, String> {
+    is_default_mailto_handler_impl(&app).await
+}
+
+#[cfg(all(desktop, target_os = "macos"))]
+async fn is_default_mailto_handler_impl(
+    _app: &tauri::AppHandle,
+) -> Result<MailtoStatus, String> {
+    use core_foundation::base::TCFType;
+    use core_foundation::string::{CFString, CFStringRef};
+
+    unsafe {
+        let scheme = CFString::new("mailto");
+        let handler: CFStringRef = LSCopyDefaultHandlerForURLScheme(scheme.as_concrete_TypeRef());
+
+        if handler.is_null() {
+            return Ok(MailtoStatus {
+                status: "unknown".to_string(),
+                current_handler: String::new(),
+            });
+        }
+
+        let handler_cf = CFString::wrap_under_create_rule(handler);
+        let handler_str = handler_cf.to_string();
+
+        let is_us = handler_str == "net.forwardemail.mail";
+
+        Ok(MailtoStatus {
+            status: if is_us {
+                "default".to_string()
+            } else {
+                "not_default".to_string()
+            },
+            current_handler: handler_str,
+        })
+    }
+}
+
+#[cfg(all(desktop, any(target_os = "windows", target_os = "linux")))]
+async fn is_default_mailto_handler_impl(
+    app: &tauri::AppHandle,
+) -> Result<MailtoStatus, String> {
+    use tauri_plugin_deep_link::DeepLinkExt;
+
+    match app.deep_link().is_registered("mailto") {
+        Ok(true) => Ok(MailtoStatus {
+            status: "default".to_string(),
+            current_handler: String::new(),
+        }),
+        Ok(false) => Ok(MailtoStatus {
+            status: "not_default".to_string(),
+            current_handler: String::new(),
+        }),
+        Err(e) => {
+            log::warn!("deep-link is_registered check failed: {}", e);
+            Ok(MailtoStatus {
+                status: "unknown".to_string(),
+                current_handler: String::new(),
+            })
+        }
+    }
+}
+
+/// Result of attempting to set the default mailto handler.
+#[derive(Clone, Serialize)]
+struct SetMailtoResult {
+    /// "registered" | "open_mail_settings" | "error"
+    method: String,
+    /// Human-readable message for the user
+    message: String,
+}
+
+/// Attempt to set this app as the default mailto: handler.
+#[cfg(desktop)]
+#[tauri::command]
+async fn set_default_mailto_handler(
+    app: tauri::AppHandle,
+) -> Result<SetMailtoResult, String> {
+    set_default_mailto_handler_impl(&app).await
+}
+
+#[cfg(all(desktop, target_os = "macos"))]
+async fn set_default_mailto_handler_impl(
+    _app: &tauri::AppHandle,
+) -> Result<SetMailtoResult, String> {
+    use core_foundation::base::TCFType;
+    use core_foundation::string::CFString;
+
+    unsafe {
+        let scheme = CFString::new("mailto");
+        let bundle_id = CFString::new("net.forwardemail.mail");
+
+        let result = LSSetDefaultHandlerForURLScheme(
+            scheme.as_concrete_TypeRef(),
+            bundle_id.as_concrete_TypeRef(),
+        );
+
+        if result == 0 {
+            // noErr \u{2014} success (works for non-sandboxed builds)
+            return Ok(SetMailtoResult {
+                method: "registered".to_string(),
+                message: "Forward Email is now your default email app.".to_string(),
+            });
+        }
+
+        // Error -54 (or any error): App Sandbox blocks this call.
+        // Open Apple Mail so the user can change the setting manually.
+        log::info!(
+            "LSSetDefaultHandlerForURLScheme returned {}, falling back to Mail.app settings",
+            result
+        );
+
+        let open_result = std::process::Command::new("open")
+            .arg("-b")
+            .arg("com.apple.mail")
+            .output();
+
+        match open_result {
+            Ok(_) => Ok(SetMailtoResult {
+                method: "open_mail_settings".to_string(),
+                message: "Apple Mail has been opened. Please go to Mail \u{2192} Settings \u{2192} General \u{2192} \"Default email reader\" and select Forward Email.".to_string(),
+            }),
+            Err(e) => Ok(SetMailtoResult {
+                method: "open_mail_settings".to_string(),
+                message: format!(
+                    "Please open Apple Mail, then go to Mail \u{2192} Settings \u{2192} General \u{2192} \"Default email reader\" and select Forward Email. (Could not open Mail automatically: {})",
+                    e
+                ),
+            }),
+        }
+    }
+}
+
+#[cfg(all(desktop, any(target_os = "windows", target_os = "linux")))]
+async fn set_default_mailto_handler_impl(
+    app: &tauri::AppHandle,
+) -> Result<SetMailtoResult, String> {
+    use tauri_plugin_deep_link::DeepLinkExt;
+
+    match app.deep_link().register("mailto") {
+        Ok(_) => Ok(SetMailtoResult {
+            method: "registered".to_string(),
+            message: "Forward Email is now your default email app.".to_string(),
+        }),
+        Err(e) => {
+            log::error!("deep-link register failed: {}", e);
+            Ok(SetMailtoResult {
+                method: "error".to_string(),
+                message: format!("Failed to register as default email handler: {}", e),
+            })
+        }
+    }
+}
+
+// CoreServices FFI declarations for macOS
+#[cfg(target_os = "macos")]
+extern "C" {
+    fn LSCopyDefaultHandlerForURLScheme(
+        inURLScheme: core_foundation::string::CFStringRef,
+    ) -> core_foundation::string::CFStringRef;
+
+    fn LSSetDefaultHandlerForURLScheme(
+        inURLScheme: core_foundation::string::CFStringRef,
+        inHandlerBundleID: core_foundation::string::CFStringRef,
+    ) -> i32;
 }
 
 // ── Tray Icon ────────────────────────────────────────────────────────────────
@@ -322,9 +530,15 @@ pub fn run() {
             get_platform,
             get_build_info,
             set_badge_count,
+            get_pending_deep_links,
             #[cfg(desktop)]
             toggle_window_visibility,
+            #[cfg(desktop)]
+            is_default_mailto_handler,
+            #[cfg(desktop)]
+            set_default_mailto_handler,
         ])
+        .manage(PendingDeepLinks(Mutex::new(Vec::new())))
         .setup(|app| {
             // Set up native menu bar and tray icon on desktop
             #[cfg(desktop)]
@@ -390,7 +604,31 @@ pub fn run() {
                 });
             }
 
-            // Register deep-link handler with URL validation
+            // ── Cold-start deep-link capture ────────────────────────────
+            // On cold start the OS delivers the URL before the webview JS
+            // is ready.  We capture it here and the frontend drains it via
+            // the `get_pending_deep_links` IPC command.
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                if let Ok(Some(urls)) = app.deep_link().get_current() {
+                    let safe_urls: Vec<String> = urls
+                        .into_iter()
+                        .map(|u| u.to_string())
+                        .filter(|u| is_valid_deep_link(u))
+                        .collect();
+                    if !safe_urls.is_empty() {
+                        if let Some(state) = app.try_state::<PendingDeepLinks>() {
+                            let mut queue = state.0.lock().unwrap_or_else(|e| e.into_inner());
+                            queue.extend(safe_urls);
+                        }
+                    }
+                }
+            }
+
+            // Register deep-link handler with URL validation.
+            // When the app is already running, URLs arrive here.
+            // We also push to the pending queue in case the frontend
+            // listener isn't ready yet (e.g. page reload).
             let handle = app.handle().clone();
             app.listen("deep-link://new-url", move |event| {
                 if let Ok(urls) = serde_json::from_str::<Vec<String>>(event.payload()) {
@@ -400,6 +638,11 @@ pub fn run() {
                         .filter(|u| is_valid_deep_link(u))
                         .collect();
                     if !safe_urls.is_empty() {
+                        // Also push to pending queue as a safety net
+                        if let Some(state) = handle.try_state::<PendingDeepLinks>() {
+                            let mut queue = state.0.lock().unwrap_or_else(|e| e.into_inner());
+                            queue.extend(safe_urls.clone());
+                        }
                         let _ = handle.emit(
                             "deep-link-received",
                             DeepLinkPayload { urls: safe_urls },

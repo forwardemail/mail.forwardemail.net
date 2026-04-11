@@ -1833,6 +1833,52 @@ async function bootstrap() {
     window.addEventListener('fe:auth-failed', () => handleAuthRecovery('websocket'));
     window.addEventListener('fe:auth-expired', () => handleAuthRecovery('http-401'));
 
+    // Register deep-link and single-instance event handlers BEFORE
+    // initTauriBridge() so they are ready when pending cold-start URLs
+    // are drained.  The tauri-bridge dispatches 'app:deep-link' and
+    // 'app:single-instance' CustomEvents on window.
+    window.addEventListener('app:deep-link', (event: Event) => {
+      const url = (event as CustomEvent)?.detail?.url;
+      if (!url || typeof url !== 'string') return;
+
+      const trimmed = url.trim();
+
+      // Handle mailto: deep links → open Compose with prefilled fields
+      if (trimmed.toLowerCase().startsWith('mailto:')) {
+        const parsed = parseMailto(trimmed);
+        if (viewModel?.mailboxView?.composeModal?.open) {
+          viewModel.mailboxView.composeModal.open(mailtoToPrefill(parsed));
+        }
+        return;
+      }
+
+      // Handle forwardemail:// deep links → navigate to the path
+      if (trimmed.toLowerCase().startsWith('forwardemail://')) {
+        const path = trimmed.replace(/^forwardemail:\/\//i, '/');
+        if (viewModel?.navigate && /^\/[a-z]/.test(path)) {
+          viewModel.navigate(path);
+        }
+      }
+    });
+
+    // Handle single-instance events (second app launch with mailto: arg)
+    // When the user clicks a mailto: link while the app is already running,
+    // Tauri sends the URL via the single-instance plugin.
+    window.addEventListener('app:single-instance', (event: Event) => {
+      const args = (event as CustomEvent)?.detail?.args;
+      if (!Array.isArray(args)) return;
+
+      for (const arg of args) {
+        if (typeof arg === 'string' && arg.toLowerCase().startsWith('mailto:')) {
+          const parsed = parseMailto(arg);
+          if (viewModel?.mailboxView?.composeModal?.open) {
+            viewModel.mailboxView.composeModal.open(mailtoToPrefill(parsed));
+          }
+          break;
+        }
+      }
+    });
+
     // Tauri-specific native integrations (desktop + mobile)
     if (isTauri) {
       import('./utils/tauri-bridge.js').then(({ initTauriBridge, onShareReceived }) => {
@@ -2004,60 +2050,15 @@ async function bootstrap() {
       );
     }
 
-    // Register as mailto: handler on the web (not in Tauri — Tauri handles via OS registration)
-    if (!isTauri && navigator.registerProtocolHandler) {
-      try {
-        // The %s placeholder is replaced by the browser with the full mailto: URI.
-        // Use the same URL format as mailto-handler.js: /#compose?mailto=%s
-        navigator.registerProtocolHandler('mailto', `${window.location.origin}/#compose?mailto=%s`);
-      } catch (err) {
-        console.warn('[main] Failed to register mailto: handler', err);
-      }
-    }
+    // NOTE: We intentionally do NOT auto-register as the browser's mailto:
+    // handler here.  Chromium checks its internal protocol handler BEFORE
+    // the OS default, so auto-registering the web app would prevent the
+    // desktop app from ever receiving mailto: links from the browser.
+    // Instead, the user explicitly opts in via Settings > Default Email App
+    // or the one-time MailtoPrompt banner.  See mailto-handler.js.
 
-    // Listen for deep-link events from Tauri (mailto:, forwardemail://)
-    // The tauri-bridge dispatches 'app:deep-link' CustomEvents on window.
-    window.addEventListener('app:deep-link', (event: Event) => {
-      const url = (event as CustomEvent)?.detail?.url;
-      if (!url || typeof url !== 'string') return;
-
-      const trimmed = url.trim();
-
-      // Handle mailto: deep links → open Compose with prefilled fields
-      if (trimmed.toLowerCase().startsWith('mailto:')) {
-        const parsed = parseMailto(trimmed);
-        if (viewModel?.mailboxView?.composeModal?.open) {
-          viewModel.mailboxView.composeModal.open(mailtoToPrefill(parsed));
-        }
-        return;
-      }
-
-      // Handle forwardemail:// deep links → navigate to the path
-      if (trimmed.toLowerCase().startsWith('forwardemail://')) {
-        const path = trimmed.replace(/^forwardemail:\/\//i, '/');
-        if (viewModel?.navigate && /^\/[a-z]/.test(path)) {
-          viewModel.navigate(path);
-        }
-      }
-    });
-
-    // Handle single-instance events (second app launch with mailto: arg)
-    // When the user clicks a mailto: link while the app is already running,
-    // Tauri sends the URL via the single-instance plugin.
-    window.addEventListener('app:single-instance', (event: Event) => {
-      const args = (event as CustomEvent)?.detail?.args;
-      if (!Array.isArray(args)) return;
-
-      for (const arg of args) {
-        if (typeof arg === 'string' && arg.toLowerCase().startsWith('mailto:')) {
-          const parsed = parseMailto(arg);
-          if (viewModel?.mailboxView?.composeModal?.open) {
-            viewModel.mailboxView.composeModal.open(mailtoToPrefill(parsed));
-          }
-          break;
-        }
-      }
-    });
+    // Deep-link and single-instance listeners are registered earlier
+    // (before initTauriBridge) so they are ready for cold-start URLs.
   } catch (error) {
     console.error('[main] bootstrap failed', error);
 

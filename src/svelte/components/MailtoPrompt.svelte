@@ -12,11 +12,14 @@
   let { account = '' } = $props();
 
   let visible = $state(false);
+  /** @type {string | null} */
+  let instructionMessage = $state(null);
 
   // Use $effect so the timer is cleaned up on account change (re-runs when account changes)
   $effect(() => {
     const currentAccount = account;
     visible = false;
+    instructionMessage = null;
     if (shouldShowMailtoPrompt(currentAccount)) {
       const timer = setTimeout(() => {
         visible = true;
@@ -25,15 +28,23 @@
     }
   });
 
-  function handleSetDefault() {
-    registerAsMailtoHandler();
-    markPromptShown(account);
-    visible = false;
+  async function handleSetDefault() {
+    const result = await registerAsMailtoHandler();
+
+    if (result.method === 'open_mail_settings') {
+      // macOS sandbox: show instructions inline, don't dismiss yet
+      instructionMessage = result.message || null;
+      markPromptShown(account);
+    } else {
+      markPromptShown(account);
+      visible = false;
+    }
   }
 
   function handleDismiss() {
     markPromptShown(account);
     visible = false;
+    instructionMessage = null;
   }
 </script>
 
@@ -44,16 +55,21 @@
     aria-live="polite"
   >
     <div
-      class="flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3 shadow-lg"
+      class="flex max-w-lg flex-col gap-2 rounded-lg border border-border bg-card px-4 py-3 shadow-lg"
     >
-      <Mail class="h-5 w-5 shrink-0 text-primary" />
-      <p class="text-sm">Set Forward Email as your default email app?</p>
-      <div class="flex shrink-0 gap-2">
-        <Button size="sm" onclick={handleSetDefault}>Set as default</Button>
-        <Button size="sm" variant="ghost" onclick={handleDismiss} aria-label="Dismiss">
-          <X class="h-4 w-4" />
-        </Button>
+      <div class="flex items-center gap-3">
+        <Mail class="h-5 w-5 shrink-0 text-primary" />
+        <p class="text-sm">Set Forward Email as your default email app?</p>
+        <div class="flex shrink-0 gap-2">
+          <Button size="sm" onclick={handleSetDefault}>Set as default</Button>
+          <Button size="sm" variant="ghost" onclick={handleDismiss} aria-label="Dismiss">
+            <X class="h-4 w-4" />
+          </Button>
+        </div>
       </div>
+      {#if instructionMessage}
+        <p class="text-xs text-muted-foreground">{instructionMessage}</p>
+      {/if}
     </div>
   </div>
 {/if}

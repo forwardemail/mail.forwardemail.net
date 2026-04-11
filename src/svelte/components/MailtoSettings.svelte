@@ -6,33 +6,53 @@
   import CheckCircle from '@lucide/svelte/icons/check-circle';
   import AlertCircle from '@lucide/svelte/icons/alert-circle';
   import HelpCircle from '@lucide/svelte/icons/help-circle';
+  import ExternalLink from '@lucide/svelte/icons/external-link';
   import {
-    isProtocolHandlerSupported,
+    isMailtoHandlerSupported,
     registerAsMailtoHandler,
     getRegistrationStatus,
   } from '../../utils/mailto-handler.js';
-  import { isTauri } from '../../utils/platform.js';
 
   let supported = $state(false);
+  /** @type {'default' | 'not_default' | 'declined' | 'unknown'} */
   let status = $state('unknown');
   let registering = $state(false);
-  // Only show on desktop web — Tauri handles mailto natively, mobile web doesn't support it
+  /** @type {string | null} */
+  let instructionMessage = $state(null);
   let visible = $state(false);
 
-  onMount(() => {
-    supported = isProtocolHandlerSupported();
-    status = getRegistrationStatus();
-    visible = !isTauri && supported;
+  onMount(async () => {
+    supported = isMailtoHandlerSupported();
+    if (supported) {
+      status = await getRegistrationStatus();
+    }
+    visible = supported;
   });
 
-  function handleRegister() {
+  async function handleRegister() {
     registering = true;
+    instructionMessage = null;
     try {
-      const success = registerAsMailtoHandler();
-      if (success) {
-        // Re-check status after a brief delay (browser may show prompt)
-        setTimeout(() => {
-          status = getRegistrationStatus();
+      const result = await registerAsMailtoHandler();
+
+      if (result.method === 'open_mail_settings') {
+        // macOS sandbox: show the instructions from the Rust backend
+        instructionMessage = result.message || null;
+        // Re-check status after a delay (user may have changed it in Mail.app)
+        setTimeout(async () => {
+          status = await getRegistrationStatus();
+        }, 5000);
+      } else if (result.success) {
+        // Direct registration succeeded (Windows/Linux/non-sandboxed macOS)
+        status = 'default';
+      } else if (result.message) {
+        instructionMessage = result.message;
+      }
+
+      // Re-check status after a brief delay for web browser prompts
+      if (!result.method || result.method === 'registered') {
+        setTimeout(async () => {
+          status = await getRegistrationStatus();
           registering = false;
         }, 1000);
       } else {
@@ -57,7 +77,7 @@
     </Card.Header>
     <Card.Content class="space-y-4">
       <div class="flex items-center gap-2 text-sm">
-        {#if status === 'registered'}
+        {#if status === 'default'}
           <CheckCircle class="h-4 w-4 text-green-600 dark:text-green-400" />
           <span class="text-green-600 dark:text-green-400">
             Forward Email is set as your default email app.
@@ -67,6 +87,11 @@
           <span class="text-orange-500">
             Registration was previously declined. You may need to update your browser settings.
           </span>
+        {:else if status === 'not_default'}
+          <AlertCircle class="h-4 w-4 text-muted-foreground" />
+          <span class="text-muted-foreground">
+            Another app is currently set as the default email handler.
+          </span>
         {:else}
           <HelpCircle class="h-4 w-4 text-muted-foreground" />
           <span class="text-muted-foreground">
@@ -75,15 +100,24 @@
         {/if}
       </div>
 
+      {#if instructionMessage}
+        <div
+          class="flex items-start gap-2 rounded-md border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800 dark:border-blue-800 dark:bg-blue-950 dark:text-blue-200"
+        >
+          <ExternalLink class="mt-0.5 h-4 w-4 shrink-0" />
+          <p class="whitespace-pre-line">{instructionMessage}</p>
+        </div>
+      {/if}
+
       <Button
-        variant={status === 'registered' ? 'outline' : 'default'}
+        variant={status === 'default' ? 'outline' : 'default'}
         size="sm"
         onclick={handleRegister}
         disabled={registering}
       >
         {#if registering}
           Registering...
-        {:else if status === 'registered'}
+        {:else if status === 'default'}
           Re-register as default
         {:else}
           Set as default email app

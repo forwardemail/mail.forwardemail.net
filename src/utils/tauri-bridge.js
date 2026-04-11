@@ -72,6 +72,9 @@ const ALLOWED_COMMANDS = new Set([
   'get_build_info',
   'set_badge_count',
   'toggle_window_visibility',
+  'is_default_mailto_handler',
+  'set_default_mailto_handler',
+  'get_pending_deep_links',
 ]);
 
 export async function invoke(cmd, args) {
@@ -147,6 +150,33 @@ export async function setBadgeCount(count) {
  */
 export async function toggleWindowVisibility() {
   return invoke('toggle_window_visibility');
+}
+
+/**
+ * Check if this app is the default mailto: handler.
+ *
+ * Returns { status: 'default' | 'not_default' | 'unknown', currentHandler: string }
+ *
+ * - macOS: Uses CoreServices LSCopyDefaultHandlerForURLScheme
+ * - Windows: Uses registry via deep-link plugin
+ * - Linux: Uses xdg-mime via deep-link plugin
+ */
+export async function isDefaultMailtoHandler() {
+  return invoke('is_default_mailto_handler');
+}
+
+/**
+ * Attempt to set this app as the default mailto: handler.
+ *
+ * Returns { method: 'registered' | 'open_mail_settings' | 'error', message: string }
+ *
+ * - macOS (sandbox): Opens Apple Mail settings with instructions
+ * - macOS (non-sandbox): Calls LSSetDefaultHandlerForURLScheme directly
+ * - Windows: Registers via Windows registry
+ * - Linux: Registers via xdg-mime
+ */
+export async function setDefaultMailtoHandler() {
+  return invoke('set_default_mailto_handler');
 }
 
 /**
@@ -232,6 +262,14 @@ export function onShareReceived(handler) {
 }
 
 /**
+ * Drain any deep-link URLs that arrived before the frontend was ready
+ * (cold-start race condition).  Returns an array of URL strings.
+ */
+export async function getPendingDeepLinks() {
+  return invoke('get_pending_deep_links');
+}
+
+/**
  * Initialize the Tauri bridge.
  * Call once during app bootstrap.
  */
@@ -250,6 +288,23 @@ export async function initTauriBridge() {
   await onSingleInstance((payload) => {
     window.dispatchEvent(new CustomEvent('app:single-instance', { detail: payload }));
   });
+
+  // Drain any deep-link URLs that arrived before listeners were ready
+  // (cold-start: OS delivered the URL before the webview JS loaded).
+  try {
+    const pending = await getPendingDeepLinks();
+    if (Array.isArray(pending)) {
+      for (const url of pending) {
+        if (isValidDeepLink(url)) {
+          window.dispatchEvent(
+            new CustomEvent('app:deep-link', { detail: { url: sanitizeString(url, 2048) } }),
+          );
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('[tauri-bridge] Failed to drain pending deep links:', err);
+  }
 
   console.log('[tauri-bridge] initialized');
 }

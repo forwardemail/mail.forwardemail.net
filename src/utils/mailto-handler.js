@@ -1,20 +1,25 @@
 /**
  * Forward Email – Mailto Handler Registration
  *
- * Manages the `mailto:` protocol handler registration for the web app.
+ * Manages the `mailto:` protocol handler registration across all platforms:
+ *
+ * Web:   Uses navigator.registerProtocolHandler()
+ * Tauri: Uses native Rust IPC commands that delegate to:
+ *   - macOS:   CoreServices LSCopyDefaultHandlerForURLScheme / LSSetDefaultHandlerForURLScheme
+ *   - Windows: Registry via tauri-plugin-deep-link
+ *   - Linux:   xdg-mime via tauri-plugin-deep-link
+ *
  * Shows a one-time prompt on first INBOX render after sign-in, and
  * provides Settings UI integration to check status and re-register.
- *
- * Web: Uses navigator.registerProtocolHandler()
- * Tauri: Deep-link registration is handled natively in src-tauri/
  *
  * Hardening:
  *   - localStorage key is scoped per account to avoid cross-account leakage.
  *   - Registration URL is validated before use.
  *   - All string inputs are sanitised.
+ *   - Tauri IPC results are type-checked before use.
  */
 
-import { isTauri } from './platform.js';
+import { isTauri, isTauriDesktop } from './platform.js';
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
@@ -55,55 +60,112 @@ export function markPromptShown(account) {
  * Check if the browser supports registerProtocolHandler.
  */
 export function isProtocolHandlerSupported() {
-  if (isTauri) return false; // Tauri handles this natively
+  if (isTauri) return false; // Tauri uses native IPC instead
   return (
     typeof navigator !== 'undefined' && typeof navigator.registerProtocolHandler === 'function'
   );
 }
 
 /**
+ * Whether the current platform supports mailto handler management.
+ * True for: desktop web (registerProtocolHandler) and Tauri desktop.
+ */
+export function isMailtoHandlerSupported() {
+  if (isTauriDesktop) return true;
+  return isProtocolHandlerSupported();
+}
+
+/**
  * Attempt to register as the default mailto: handler.
  *
- * The URL template must include `%s` which the browser replaces with the
- * mailto: URL. We route it through the app's hash-based routing.
+ * Web: Uses navigator.registerProtocolHandler()
+ * Tauri: Uses the native set_default_mailto_handler IPC command
  *
- * @returns {boolean} true if registration was attempted (no error thrown)
+ * @returns {Promise<{ success: boolean, method?: string, message?: string }>}
  */
-export function registerAsMailtoHandler() {
-  if (!isProtocolHandlerSupported()) return false;
+export async function registerAsMailtoHandler() {
+  // ── Tauri desktop path ──
+  if (isTauriDesktop) {
+    try {
+      const { setDefaultMailtoHandler } = await import('./tauri-bridge.js');
+      const result = await setDefaultMailtoHandler();
+
+      if (!result || typeof result !== 'object') {
+        return { success: false, message: 'No response from native handler' };
+      }
+
+      // Persist status for quick synchronous checks
+      if (result.method === 'registered') {
+        try {
+          localStorage.setItem(REGISTRATION_STATUS_KEY, 'registered');
+        } catch {
+          // ignore
+        }
+      }
+
+      return {
+        success: result.method === 'registered',
+        method: result.method,
+        message: result.message,
+      };
+    } catch (err) {
+      console.warn('[mailto-handler] Tauri registration failed:', err);
+      return { success: false, message: String(err) };
+    }
+  }
+
+  // ── Web path ──
+  if (!isProtocolHandlerSupported()) return { success: false };
 
   try {
-    // Build the handler URL: current origin + /#compose?mailto=%s
     const origin = window.location.origin;
     const handlerUrl = `${origin}/#compose?mailto=${HANDLER_URL_TEMPLATE}`;
 
     navigator.registerProtocolHandler('mailto', handlerUrl);
-    // Persist optimistic status since most browsers don't expose a check API
     try {
       localStorage.setItem(REGISTRATION_STATUS_KEY, 'registered');
     } catch {
       // ignore
     }
-    return true;
+    return { success: true, method: 'registered' };
   } catch (err) {
     console.warn('[mailto-handler] Registration failed:', err);
-    return false;
+    return { success: false, message: String(err) };
   }
 }
 
 /**
  * Check if we are currently registered as the mailto: handler.
  *
- * Note: The Web API `navigator.isProtocolHandlerRegistered()` is not
- * widely supported. We use a best-effort approach:
- *   - If the API exists, use it
- *   - Otherwise, return 'unknown'
- *
- * @returns {'registered' | 'declined' | 'unknown'}
+ * @returns {Promise<'default' | 'not_default' | 'declined' | 'unknown'>}
  */
-export function getRegistrationStatus() {
-  if (isTauri) return 'registered'; // Tauri registers natively
+export async function getRegistrationStatus() {
+  // ── Tauri desktop path ──
+  if (isTauriDesktop) {
+    try {
+      const { isDefaultMailtoHandler } = await import('./tauri-bridge.js');
+      const result = await isDefaultMailtoHandler();
 
+      if (result && typeof result === 'object' && typeof result.status === 'string') {
+        return result.status; // 'default' | 'not_default' | 'unknown'
+      }
+    } catch (err) {
+      console.warn('[mailto-handler] Tauri status check failed:', err);
+    }
+
+    // Fall back to optimistic localStorage
+    try {
+      if (localStorage.getItem(REGISTRATION_STATUS_KEY) === 'registered') {
+        return 'default';
+      }
+    } catch {
+      // ignore
+    }
+
+    return 'unknown';
+  }
+
+  // ── Web path ──
   if (!isProtocolHandlerSupported()) return 'unknown';
 
   try {
@@ -112,7 +174,7 @@ export function getRegistrationStatus() {
       const origin = window.location.origin;
       const handlerUrl = `${origin}/#compose?mailto=${HANDLER_URL_TEMPLATE}`;
       const result = navigator.isProtocolHandlerRegistered('mailto', handlerUrl);
-      if (result === 'registered') return 'registered';
+      if (result === 'registered') return 'default';
       if (result === 'declined') return 'declined';
     }
   } catch {
@@ -122,7 +184,7 @@ export function getRegistrationStatus() {
   // Fall back to optimistic status from a previous registerAsMailtoHandler() call
   try {
     if (localStorage.getItem(REGISTRATION_STATUS_KEY) === 'registered') {
-      return 'registered';
+      return 'default';
     }
   } catch {
     // ignore
@@ -132,9 +194,27 @@ export function getRegistrationStatus() {
 }
 
 /**
+ * Synchronous variant for quick checks (uses localStorage only).
+ * For accurate status, prefer the async getRegistrationStatus().
+ *
+ * @returns {'default' | 'not_default' | 'unknown'}
+ */
+export function getRegistrationStatusSync() {
+  try {
+    if (localStorage.getItem(REGISTRATION_STATUS_KEY) === 'registered') {
+      return 'default';
+    }
+  } catch {
+    // ignore
+  }
+  return 'unknown';
+}
+
+/**
  * Unregister as the mailto: handler.
  *
  * Note: `navigator.unregisterProtocolHandler()` is not widely supported.
+ * On Tauri, unregistration is not currently supported.
  *
  * @returns {boolean} true if unregistration was attempted
  */
@@ -197,14 +277,19 @@ export async function resolveMailtoFromHash(hash) {
 
 /**
  * Should the mailto prompt be shown?
- * Returns true only once per account, on web platform, when the API is supported.
+ *
+ * Returns true when:
+ * - The platform supports mailto handler management
+ * - The prompt hasn't been shown for this account yet
+ * - We are NOT already the default handler (sync check)
  *
  * @param {string} account - Current user email
  * @returns {boolean}
  */
 export function shouldShowMailtoPrompt(account) {
-  if (isTauri) return false;
-  if (!isProtocolHandlerSupported()) return false;
+  if (!isMailtoHandlerSupported()) return false;
   if (hasPromptBeenShown(account)) return false;
+  // Don't show if we already know we're the default
+  if (getRegistrationStatusSync() === 'default') return false;
   return true;
 }
