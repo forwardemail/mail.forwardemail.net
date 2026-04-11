@@ -127,6 +127,7 @@
   let importMenuOpen = $state(false);
   let lastAccount = Local.get('email') || '';
   let loadRequestId = 0;
+  const CONTACTS_PAGE_SIZE = 500;
   const activeEmail = $derived($currentAccount || Local.get('email') || '');
   const totalContacts = $derived(contacts.length);
   const filteredContacts = $derived(filtered.length);
@@ -761,19 +762,46 @@
     navigate?.('/mailbox#search=' + encodeURIComponent(contact?.email || ''));
   };
 
+  const getContactsList = (response: unknown): unknown[] => {
+    if (Array.isArray(response)) return response;
+    return (
+      (response as { Result?: unknown[]; contacts?: unknown[] })?.Result ||
+      (response as { contacts?: unknown[] })?.contacts ||
+      []
+    );
+  };
+
+  const loadAllContacts = async (requestId: number) => {
+    const allContacts: Record<string, unknown>[] = [];
+
+    for (let page = 1; page < 10_000; page += 1) {
+      const response = await Remote.request('Contacts', {
+        page,
+        limit: CONTACTS_PAGE_SIZE,
+      });
+
+      if (requestId !== loadRequestId) return null;
+
+      const pageContacts = getContactsList(response) as Record<string, unknown>[];
+      allContacts.push(...pageContacts);
+
+      if (pageContacts.length < CONTACTS_PAGE_SIZE) {
+        break;
+      }
+    }
+
+    return allContacts;
+  };
+
   const load = async () => {
     const requestId = ++loadRequestId;
+    const previousSelectedId = selectedContact?.id || draft?.id || null;
     loading = true;
     error = '';
     try {
-      const res = await Remote.request('Contacts', { limit: 500 });
-      if (requestId !== loadRequestId) return;
-      const list = Array.isArray(res)
-        ? res
-        : (res as { Result?: unknown[]; contacts?: unknown[] })?.Result ||
-          (res as { contacts?: unknown[] })?.contacts ||
-          [];
-      const mapped: Contact[] = (list || []).map((c: Record<string, unknown>) => {
+      const list = await loadAllContacts(requestId);
+      if (!list || requestId !== loadRequestId) return;
+      const mapped: Contact[] = list.map((c: Record<string, unknown>) => {
         const vcard = parseVCard(c.content as string);
         return {
           id: (c.id || c.contact_id || c.uid || c.Id) as string,
@@ -804,10 +832,21 @@
       });
       contacts = mapped;
       applyFilter();
+
+      const nextSelectedContact = previousSelectedId
+        ? mapped.find((contact) => contact.id === previousSelectedId) || null
+        : null;
+
       if (isMobileViewport()) {
-        if (selectedContact) selectContact(null);
-      } else if (!selectedContact && mapped.length) {
+        if (selectedContact && !nextSelectedContact) {
+          selectContact(null);
+        }
+      } else if (nextSelectedContact) {
+        selectContact(nextSelectedContact);
+      } else if (mapped.length) {
         selectContact(mapped[0]);
+      } else {
+        selectContact(null);
       }
     } catch (err) {
       if (requestId !== loadRequestId) return;
@@ -1120,6 +1159,11 @@
         selectContact(contacts[0]);
       }
     };
+    const handleContactsChanged = () => {
+      if (lastAccount) {
+        load();
+      }
+    };
 
     accountUnsub = currentAccount.subscribe((acct) => {
       if (acct !== lastAccount) {
@@ -1130,6 +1174,9 @@
         }
       }
     });
+
+    window.addEventListener('fe:contacts-changed', handleContactsChanged);
+    window.addEventListener('fe:contact-changed', handleContactsChanged);
 
     load();
     handleViewportChange(mediaQuery);
@@ -1143,7 +1190,8 @@
     });
 
     return () => {
-      accountUnsub?.();
+      window.removeEventListener('fe:contacts-changed', handleContactsChanged);
+      window.removeEventListener('fe:contact-changed', handleContactsChanged);
       if (mediaQuery) {
         if (mediaQuery.removeEventListener) {
           mediaQuery.removeEventListener('change', handleViewportChange);

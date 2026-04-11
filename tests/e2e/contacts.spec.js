@@ -3,6 +3,18 @@ import { mockApi } from './mockApi.js';
 import { setupAuthenticatedSession } from '../fixtures/calendar-helpers.js';
 import { navigateToContacts, searchContacts, selectContact } from '../fixtures/contacts-helpers.js';
 
+const buildPaginatedContacts = (total) =>
+  Array.from({ length: total }, (_, index) => {
+    const id = String(index + 1).padStart(3, '0');
+    return {
+      id: `contact-${id}`,
+      full_name: `Paged Contact ${id}`,
+      emails: [{ value: `paged-${id}@example.com` }],
+      phone_numbers: [],
+      content: `BEGIN:VCARD\nVERSION:3.0\nFN:Paged Contact ${id}\nEMAIL;TYPE=INTERNET:paged-${id}@example.com\nEND:VCARD`,
+    };
+  });
+
 test.describe('Contacts Page Navigation', () => {
   test.beforeEach(async ({ page }) => {
     await mockApi(page);
@@ -118,6 +130,51 @@ test.describe('Contacts Search', () => {
 
     await expect(page.getByText('4 contacts', { exact: true }).first()).toBeVisible();
     await expect(page.locator('li button')).toHaveCount(4);
+  });
+
+  test('should load every contacts page and show the full total', async ({ browser }) => {
+    const page = await browser.newPage();
+    await mockApi(page, { contacts: buildPaginatedContacts(754) });
+    await setupAuthenticatedSession(page);
+    await navigateToContacts(page);
+
+    await expect(page.getByText('754 contacts', { exact: true }).first()).toBeVisible();
+    await expect(page.locator('li button').filter({ hasText: 'Paged Contact 754' })).toBeVisible();
+
+    await page.close();
+  });
+
+  test('should refresh the total after a server-side contact addition event', async ({
+    browser,
+  }) => {
+    const page = await browser.newPage();
+    await mockApi(page, { contacts: buildPaginatedContacts(500) });
+    await setupAuthenticatedSession(page);
+    await navigateToContacts(page);
+
+    await expect(page.getByText('500 contacts', { exact: true }).first()).toBeVisible();
+
+    await page.evaluate(async () => {
+      await fetch('/v1/contacts', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          full_name: 'Server Added Contact',
+          emails: [{ value: 'server-added@example.com' }],
+          content:
+            'BEGIN:VCARD\nVERSION:3.0\nFN:Server Added Contact\nEMAIL;TYPE=INTERNET:server-added@example.com\nEND:VCARD',
+        }),
+      });
+
+      window.dispatchEvent(new CustomEvent('fe:contact-changed', { detail: { source: 'test' } }));
+    });
+
+    await expect(page.getByText('501 contacts', { exact: true }).first()).toBeVisible();
+    await expect(
+      page.locator('li button').filter({ hasText: 'Server Added Contact' }),
+    ).toBeVisible();
+
+    await page.close();
   });
 });
 

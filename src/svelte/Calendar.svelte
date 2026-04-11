@@ -107,6 +107,9 @@
   let viewportWidth = $state(typeof window !== 'undefined' ? window.innerWidth : 1024);
 
   const MOBILE_BREAKPOINT = 768;
+  const MAX_PAGINATION_PAGES = 10_000;
+  const CALENDARS_PAGE_SIZE = 50;
+  const CALENDAR_EVENTS_PAGE_SIZE = 500;
   const isMobile = $derived(viewportWidth <= MOBILE_BREAKPOINT);
 
   // On mobile, show all calendars; on desktop, use the user's selection
@@ -141,6 +144,53 @@
     (cal as Record<string, unknown>)?.calendar_id ||
     (cal as Record<string, unknown>)?.uid ||
     '';
+
+  const getCalendarsList = (response: unknown): unknown[] => {
+    if (Array.isArray(response)) return response;
+    return (
+      (response as { Result?: unknown[]; calendars?: unknown[] })?.Result ||
+      (response as { calendars?: unknown[] })?.calendars ||
+      []
+    );
+  };
+
+  const getCalendarEventsList = (response: unknown): unknown[] => {
+    if (Array.isArray(response)) return response;
+    return (
+      (response as { Result?: unknown[]; events?: unknown[] })?.Result ||
+      (response as { events?: unknown[] })?.events ||
+      []
+    );
+  };
+
+  const loadPaginatedCalendarResource = async (
+    requestId: number,
+    endpoint: 'Calendars' | 'CalendarEvents',
+    params: Record<string, unknown>,
+    pageSize: number,
+    getList: (response: unknown) => unknown[],
+  ): Promise<unknown[] | null> => {
+    const items: unknown[] = [];
+
+    for (let page = 1; page < MAX_PAGINATION_PAGES; page += 1) {
+      const response = await Remote.request(endpoint, {
+        ...params,
+        page,
+        limit: pageSize,
+      });
+
+      if (requestId !== loadRequestId) return null;
+
+      const batch = getList(response);
+      items.push(...batch);
+
+      if (batch.length < pageSize) {
+        break;
+      }
+    }
+
+    return items;
+  };
 
   // Map Apple CalDAV internal constants to user-friendly display names
   // These are static variable names that Apple iOS/macOS CalDAV uses internally
@@ -1278,14 +1328,15 @@
     attempt = 1,
   ): Promise<void> => {
     try {
-      const res = await Remote.request('CalendarEvents', { limit: 500 });
-      if (requestId !== loadRequestId) return;
-      const list = Array.isArray(res)
-        ? res
-        : (res as Record<string, unknown>)?.Result ||
-          (res as Record<string, unknown>)?.events ||
-          [];
-      const mapped = mapCalendarEvents(list as unknown[]);
+      const list = await loadPaginatedCalendarResource(
+        requestId,
+        'CalendarEvents',
+        {},
+        CALENDAR_EVENTS_PAGE_SIZE,
+        getCalendarEventsList,
+      );
+      if (!list || requestId !== loadRequestId) return;
+      const mapped = mapCalendarEvents(list);
       allEvents = mapped;
       eventsScope = 'all';
       eventsScopeCalendarId = '';
@@ -1321,14 +1372,15 @@
       return;
     }
     try {
-      const res = await Remote.request('CalendarEvents', { calendar_id: calendarId, limit: 500 });
-      if (requestId !== loadRequestId) return;
-      const list = Array.isArray(res)
-        ? res
-        : (res as Record<string, unknown>)?.Result ||
-          (res as Record<string, unknown>)?.events ||
-          [];
-      const mapped = mapCalendarEvents(list as unknown[], calendarId);
+      const list = await loadPaginatedCalendarResource(
+        requestId,
+        'CalendarEvents',
+        { calendar_id: calendarId },
+        CALENDAR_EVENTS_PAGE_SIZE,
+        getCalendarEventsList,
+      );
+      if (!list || requestId !== loadRequestId) return;
+      const mapped = mapCalendarEvents(list, calendarId);
       allEvents = mapped;
       eventsScope = 'calendar';
       eventsScopeCalendarId = calendarId;
@@ -1413,13 +1465,14 @@
     }
 
     try {
-      const res = await Remote.request('Calendars', { limit: 50 });
-      if (requestId !== loadRequestId) return;
-      const list = Array.isArray(res)
-        ? res
-        : (res as Record<string, unknown>)?.Result ||
-          (res as Record<string, unknown>)?.calendars ||
-          [];
+      const list = await loadPaginatedCalendarResource(
+        requestId,
+        'Calendars',
+        {},
+        CALENDARS_PAGE_SIZE,
+        getCalendarsList,
+      );
+      if (!list || requestId !== loadRequestId) return;
       const finalList = Array.isArray(list) ? (list as unknown[]) : [];
       calendars = finalList;
       await db.meta.put({ key: calendarsCacheKey, value: finalList, updatedAt: Date.now() });

@@ -14,6 +14,7 @@ import { isOnline } from './network-status';
 
 const CONTACT_KEY_PREFIX = 'contacts_';
 const CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes
+const CONTACTS_PAGE_SIZE = 500;
 
 function getAccount() {
   return Local.get('email') || 'default';
@@ -91,12 +92,33 @@ function sortContacts(contacts) {
 }
 
 /**
+ * Extract a contacts list from the API response.
+ */
+function getContactsList(response) {
+  if (Array.isArray(response)) return response;
+  return response?.Result || response?.contacts || [];
+}
+
+/**
  * Fetch contacts from the API and update the cache.
  */
 async function fetchAndCache(account) {
-  const res = await Remote.request('Contacts', { limit: 500 });
-  const list = Array.isArray(res) ? res : res?.Result || res?.contacts || [];
-  const contacts = sortContacts((list || []).map(normalizeContact).filter(Boolean));
+  const allContacts = [];
+
+  for (let page = 1; page < 10_000; page += 1) {
+    const res = await Remote.request('Contacts', {
+      page,
+      limit: CONTACTS_PAGE_SIZE,
+    });
+    const list = getContactsList(res);
+    allContacts.push(...list);
+
+    if (list.length < CONTACTS_PAGE_SIZE) {
+      break;
+    }
+  }
+
+  const contacts = sortContacts(allContacts.map(normalizeContact).filter(Boolean));
   await writeCache(account, contacts).catch(() => {});
   return contacts;
 }

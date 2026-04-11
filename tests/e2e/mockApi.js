@@ -14,6 +14,14 @@ const jsonResponse = (route, payload, status = 200, headers = {}) =>
     body: JSON.stringify(payload),
   });
 
+const paginateItems = (items, url, fallbackLimit = items.length || 1) => {
+  const page = Number(url.searchParams.get('page') || '1');
+  const limit = Number(url.searchParams.get('limit') || String(fallbackLimit));
+  const start = Math.max(page - 1, 0) * limit;
+  const end = start + limit;
+  return items.slice(start, end);
+};
+
 export async function mockApi(page, overrides = {}) {
   const folders = structuredClone(overrides.folders || mockFolders);
   const messages = structuredClone(overrides.messages || mockMessages);
@@ -51,7 +59,7 @@ export async function mockApi(page, overrides = {}) {
     const contactId = parts[parts.length - 1];
 
     if (method === 'GET') {
-      return jsonResponse(route, { Result: contacts });
+      return jsonResponse(route, { Result: paginateItems(contacts, url, contacts.length || 500) });
     }
 
     if (method === 'POST') {
@@ -90,7 +98,10 @@ export async function mockApi(page, overrides = {}) {
     return jsonResponse(route, { Result: { success: true } });
   });
 
-  await page.route('**/v1/calendars**', (route) => jsonResponse(route, { Result: calendars }));
+  await page.route('**/v1/calendars**', (route) => {
+    const url = new URL(route.request().url());
+    return jsonResponse(route, { Result: paginateItems(calendars, url, calendars.length || 50) });
+  });
   await page.route('**/v1/calendar-events**', (route) => {
     const method = route.request().method();
     const url = new URL(route.request().url());
@@ -98,7 +109,13 @@ export async function mockApi(page, overrides = {}) {
     const eventId = parts[parts.length - 1];
 
     if (method === 'GET') {
-      return jsonResponse(route, { Result: events });
+      const calendarId = url.searchParams.get('calendar_id') || '';
+      const scopedEvents = calendarId
+        ? events.filter((event) => event.calendar_id === calendarId)
+        : events;
+      return jsonResponse(route, {
+        Result: paginateItems(scopedEvents, url, scopedEvents.length || 500),
+      });
     }
 
     if (method === 'POST') {
