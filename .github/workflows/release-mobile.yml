@@ -10,6 +10,10 @@ on:
       version:
         required: true
         type: string
+      release_id:
+        description: 'Existing GitHub Release ID to upload artifacts to'
+        required: false
+        type: string
   workflow_dispatch:
     inputs:
       tag:
@@ -125,15 +129,21 @@ jobs:
           done
 
       - name: Upload signed APK/AAB to release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v${{ inputs.version || inputs.tag || github.ref_name }}
-          files: |
-            src-tauri/gen/android/app/build/outputs/apk/**/*.apk
-            src-tauri/gen/android/app/build/outputs/bundle/**/*.aab
-          draft: true
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          TAG="v${{ inputs.version || inputs.tag || github.ref_name }}"
+          # Collect built artifacts
+          FILES=()
+          while IFS= read -r f; do FILES+=("$f"); done < <(find src-tauri/gen/android/app/build/outputs/apk -name '*.apk' -type f)
+          while IFS= read -r f; do FILES+=("$f"); done < <(find src-tauri/gen/android/app/build/outputs/bundle -name '*.aab' -type f)
+          if [ ${#FILES[@]} -eq 0 ]; then
+            echo "::error::No APK/AAB files found to upload"
+            exit 1
+          fi
+          echo "Uploading ${#FILES[@]} file(s) to release $TAG"
+          gh release upload "$TAG" "${FILES[@]}" --clobber
 
       - name: Clean up keystore
         if: always()
