@@ -1,8 +1,11 @@
 name: Deploy
 
 on:
-  release:
-    types: [published]
+  # NOTE: The release: [published] trigger does NOT fire when the release is
+  # published by GITHUB_TOKEN in the release.yml orchestrator (GitHub blocks
+  # workflow-to-workflow chaining via GITHUB_TOKEN). The deploy step is inlined
+  # in release.yml instead. This workflow is kept for manual re-deploys.
+  workflow_dispatch:
 
 # Default to no permissions
 permissions: {}
