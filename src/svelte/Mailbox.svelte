@@ -3317,187 +3317,268 @@
     }
   };
 
-  // Helper for parallel bulk message updates
-  const bulkUpdateMessages = async (
-    messages,
-    { buildPayload, buildLocalUpdate, skipIf, successVerb, failVerb },
-  ) => {
-    const CONCURRENCY = 6;
-    let updatedCount = 0;
-    let missingIdCount = 0;
-    let failedCount = 0;
-    const account = Local.get('email') || 'default';
-    const folder = get(selectedFolder);
+  // ── Single-message flag helpers ──────────────────────────────────────
+  // These mirror the proven markMessageRead pattern: re-read from the
+  // store for fresh flags, optimistic UI, pending-mutation guard, await
+  // the API call, then write to IDB + invalidate caches.  The bulk
+  // wrappers below call these sequentially for each selected message.
 
-    // Filter messages and prepare work items
-    const workItems = [];
-    for (const msg of messages) {
-      if (skipIf?.(msg)) continue;
-      const apiId = getMessageApiId(msg);
-      if (!apiId) {
-        missingIdCount++;
-        continue;
-      }
-      workItems.push({ msg, apiId });
-    }
-
-    if (!workItems.length) {
-      if (missingIdCount > 0) {
-        showToast(
-          `Skipped ${missingIdCount} message${missingIdCount === 1 ? '' : 's'}: missing server message id`,
-          'error',
-        );
-      }
-      return;
-    }
-
-    // Optimistic UI update
+  const markMessageUnread = async (msg) => {
+    if (!msg) return;
     const list = source.state?.messages ? get(messagesStore) || [] : [];
-    const updatedIds = new Set(workItems.map(({ msg }) => msg.id));
-    const optimisticList = list.map((m) => {
-      if (!updatedIds.has(m.id)) return m;
-      const localUpdate = buildLocalUpdate(m);
-      return localUpdate ? { ...m, ...localUpdate } : m;
-    });
+    const current = list.find((m) => m.id === msg.id) || msg;
+    if (current.is_unread) return; // already unread
+    const previousList = list;
+    const currentFlags = Array.isArray(current.flags) ? current.flags : [];
+    const newFlags = currentFlags.filter((f) => f !== '\\Seen');
+    const updated = {
+      ...current,
+      is_unread: true,
+      is_unread_index: 1,
+      flags: newFlags,
+    };
     if (source.state?.messages?.set) {
-      messagesStore.set(optimisticList);
+      mailboxStore.state.messages.set(list.map((m) => (m.id === updated.id ? updated : m)));
     }
-
-    // Register pending flag mutations for each message
-    for (const { msg } of workItems) {
-      const localUpdate = buildLocalUpdate(msg);
-      if (localUpdate) {
-        mailboxStore?.actions?.addPendingFlagMutation?.(msg.id, localUpdate);
+    mailboxStore?.actions?.addPendingFlagMutation?.(updated.id, {
+      is_unread: true,
+      is_unread_index: 1,
+      flags: updated.flags,
+    });
+    try {
+      const apiId = getMessageApiId(updated);
+      if (!apiId) {
+        console.warn('markMessageUnread failed: missing message id');
+        showMissingMessageIdToast('mark as unread');
+        reloadMessages();
+        return;
       }
-    }
-
-    // Process API calls in parallel chunks
-    for (let i = 0; i < workItems.length; i += CONCURRENCY) {
-      const chunk = workItems.slice(i, i + CONCURRENCY);
-      const results = await Promise.allSettled(
-        chunk.map(async ({ msg, apiId }) => {
-          const apiPayload = buildPayload(msg);
-          await Remote.request('MessageUpdate', apiPayload, {
-            method: 'PUT',
-            pathOverride: `/v1/messages/${encodeURIComponent(apiId)}`,
-          });
-          // Update IDB cache
-          const localUpdate = buildLocalUpdate(msg);
-          if (localUpdate) {
-            await db.messages
-              .where('[account+id]')
-              .equals([account, msg.id])
-              .modify(localUpdate)
-              .catch(() => {});
-          }
-          return true;
-        }),
+      await Remote.request(
+        'MessageUpdate',
+        { flags: updated.flags },
+        {
+          method: 'PUT',
+          pathOverride: `/v1/messages/${encodeURIComponent(apiId)}`,
+        },
       );
-      results.forEach((r) => (r.status === 'fulfilled' ? updatedCount++ : failedCount++));
-    }
-
-    // Update unread counts and invalidate cache
-    mailboxStore.actions.updateFolderUnreadCounts();
-    if (account && folder) {
-      mailboxStore.actions.invalidateFolderInMemCache?.(account, folder);
-    }
-
-    clearSelection();
-
-    if (updatedCount > 0) {
-      showToast(
-        `${successVerb} ${updatedCount} message${updatedCount === 1 ? '' : 's'}`,
-        'success',
-      );
-    }
-    if (missingIdCount > 0) {
-      showToast(
-        `Skipped ${missingIdCount} message${missingIdCount === 1 ? '' : 's'}: missing server message id`,
-        'error',
-      );
-    }
-    if (failedCount > 0) {
-      showToast(
-        `Failed to ${failVerb} ${failedCount} message${failedCount === 1 ? '' : 's'}`,
-        'error',
-      );
+      const account = Local.get('email') || 'default';
+      const changes = { is_unread: true, is_unread_index: 1, flags: updated.flags };
+      await db.messages.where('[account+id]').equals([account, updated.id]).modify(changes);
+      mailboxStore.actions.updateFolderUnreadCounts();
+      const folder = get(selectedFolder);
+      if (account && folder) {
+        mailboxStore.actions.invalidateFolderInMemCache(account, folder);
+      }
+    } catch (err) {
+      console.warn('markMessageUnread failed', err);
+      if (source.state?.messages?.set && previousList) {
+        mailboxStore.state.messages.set(previousList);
+      }
     }
   };
+
+  const markMessageStarred = async (msg) => {
+    if (!msg) return;
+    const list = source.state?.messages ? get(messagesStore) || [] : [];
+    const current = list.find((m) => m.id === msg.id) || msg;
+    if (current.is_starred || (Array.isArray(current.flags) && current.flags.includes('\\Flagged')))
+      return; // already starred
+    const previousList = list;
+    const currentFlags = Array.isArray(current.flags) ? current.flags : [];
+    const newFlags = [...new Set([...currentFlags, '\\Flagged'])];
+    const updated = {
+      ...current,
+      is_starred: true,
+      is_flagged: true,
+      flags: newFlags,
+    };
+    if (source.state?.messages?.set) {
+      mailboxStore.state.messages.set(list.map((m) => (m.id === updated.id ? updated : m)));
+    }
+    mailboxStore?.actions?.addPendingFlagMutation?.(updated.id, {
+      is_starred: true,
+      is_flagged: true,
+      flags: updated.flags,
+    });
+    try {
+      const apiId = getMessageApiId(updated);
+      if (!apiId) {
+        console.warn('markMessageStarred failed: missing message id');
+        showMissingMessageIdToast('star');
+        reloadMessages();
+        return;
+      }
+      await Remote.request(
+        'MessageUpdate',
+        { flags: updated.flags },
+        {
+          method: 'PUT',
+          pathOverride: `/v1/messages/${encodeURIComponent(apiId)}`,
+        },
+      );
+      const account = Local.get('email') || 'default';
+      const changes = { is_starred: true, is_flagged: true, flags: updated.flags };
+      await db.messages.where('[account+id]').equals([account, updated.id]).modify(changes);
+      mailboxStore.actions.updateFolderUnreadCounts();
+      const folder = get(selectedFolder);
+      if (account && folder) {
+        mailboxStore.actions.invalidateFolderInMemCache(account, folder);
+      }
+    } catch (err) {
+      console.warn('markMessageStarred failed', err);
+      if (source.state?.messages?.set && previousList) {
+        mailboxStore.state.messages.set(previousList);
+      }
+    }
+  };
+
+  const markMessageUnstarred = async (msg) => {
+    if (!msg) return;
+    const list = source.state?.messages ? get(messagesStore) || [] : [];
+    const current = list.find((m) => m.id === msg.id) || msg;
+    if (
+      !current.is_starred &&
+      !(Array.isArray(current.flags) && current.flags.includes('\\Flagged'))
+    )
+      return; // already unstarred
+    const previousList = list;
+    const currentFlags = Array.isArray(current.flags) ? current.flags : [];
+    const newFlags = currentFlags.filter((f) => f !== '\\Flagged');
+    const updated = {
+      ...current,
+      is_starred: false,
+      is_flagged: false,
+      flags: newFlags,
+    };
+    if (source.state?.messages?.set) {
+      mailboxStore.state.messages.set(list.map((m) => (m.id === updated.id ? updated : m)));
+    }
+    mailboxStore?.actions?.addPendingFlagMutation?.(updated.id, {
+      is_starred: false,
+      is_flagged: false,
+      flags: updated.flags,
+    });
+    try {
+      const apiId = getMessageApiId(updated);
+      if (!apiId) {
+        console.warn('markMessageUnstarred failed: missing message id');
+        showMissingMessageIdToast('unstar');
+        reloadMessages();
+        return;
+      }
+      await Remote.request(
+        'MessageUpdate',
+        { flags: updated.flags },
+        {
+          method: 'PUT',
+          pathOverride: `/v1/messages/${encodeURIComponent(apiId)}`,
+        },
+      );
+      const account = Local.get('email') || 'default';
+      const changes = { is_starred: false, is_flagged: false, flags: updated.flags };
+      await db.messages.where('[account+id]').equals([account, updated.id]).modify(changes);
+      mailboxStore.actions.updateFolderUnreadCounts();
+      const folder = get(selectedFolder);
+      if (account && folder) {
+        mailboxStore.actions.invalidateFolderInMemCache(account, folder);
+      }
+    } catch (err) {
+      console.warn('markMessageUnstarred failed', err);
+      if (source.state?.messages?.set && previousList) {
+        mailboxStore.state.messages.set(previousList);
+      }
+    }
+  };
+
+  // ── Bulk action wrappers ────────────────────────────────────────────
+  // Process messages sequentially so each iteration re-reads the store
+  // for fresh flags (avoids the race condition where parallel API calls
+  // trigger WS-driven refreshes that overwrite IDB with stale data).
 
   const bulkMarkAsRead = async () => {
     const messages = getSelectedMessagesFromConversations();
     if (!messages.length) return;
-    await bulkUpdateMessages(messages, {
-      skipIf: (msg) => !msg.is_unread,
-      buildPayload: (msg) => {
-        const flags = new Set(msg.flags || []);
-        flags.add('\\Seen');
-        return { flags: Array.from(flags) };
-      },
-      buildLocalUpdate: (msg) => {
-        const flags = new Set(msg.flags || []);
-        flags.add('\\Seen');
-        return { is_unread: false, is_unread_index: 0, flags: Array.from(flags) };
-      },
-      successVerb: 'Marked as read',
-      failVerb: 'mark as read',
-    });
+    let updatedCount = 0;
+    for (const msg of messages) {
+      const current =
+        (source.state?.messages ? get(messagesStore) || [] : []).find((m) => m.id === msg.id) ||
+        msg;
+      if (!current.is_unread) continue;
+      await markMessageRead(current);
+      updatedCount++;
+    }
+    clearSelection();
+    if (updatedCount > 0) {
+      showToast(
+        `Marked as read ${updatedCount} message${updatedCount === 1 ? '' : 's'}`,
+        'success',
+      );
+    }
   };
 
   const bulkMarkAsUnread = async () => {
     const messages = getSelectedMessagesFromConversations();
     if (!messages.length) return;
-    await bulkUpdateMessages(messages, {
-      skipIf: (msg) => msg.is_unread,
-      buildPayload: (msg) => {
-        const flags = (msg.flags || []).filter((f) => f !== '\\Seen');
-        return { flags };
-      },
-      buildLocalUpdate: (msg) => {
-        const flags = (msg.flags || []).filter((f) => f !== '\\Seen');
-        return { is_unread: true, is_unread_index: 1, flags };
-      },
-      successVerb: 'Marked as unread',
-      failVerb: 'mark as unread',
-    });
+    let updatedCount = 0;
+    for (const msg of messages) {
+      const current =
+        (source.state?.messages ? get(messagesStore) || [] : []).find((m) => m.id === msg.id) ||
+        msg;
+      if (current.is_unread) continue;
+      await markMessageUnread(current);
+      updatedCount++;
+    }
+    clearSelection();
+    if (updatedCount > 0) {
+      showToast(
+        `Marked as unread ${updatedCount} message${updatedCount === 1 ? '' : 's'}`,
+        'success',
+      );
+    }
   };
 
   const bulkStar = async () => {
     const messages = getSelectedMessagesFromConversations();
     if (!messages.length) return;
-    await bulkUpdateMessages(messages, {
-      skipIf: (msg) => msg.is_starred || (msg.flags || []).includes('\\Flagged'),
-      buildPayload: (msg) => {
-        const flags = new Set(msg.flags || []);
-        flags.add('\\Flagged');
-        return { flags: Array.from(flags) };
-      },
-      buildLocalUpdate: (msg) => {
-        const flags = new Set(msg.flags || []);
-        flags.add('\\Flagged');
-        return { is_starred: true, flags: Array.from(flags) };
-      },
-      successVerb: 'Starred',
-      failVerb: 'star',
-    });
+    let updatedCount = 0;
+    for (const msg of messages) {
+      const current =
+        (source.state?.messages ? get(messagesStore) || [] : []).find((m) => m.id === msg.id) ||
+        msg;
+      if (
+        current.is_starred ||
+        (Array.isArray(current.flags) && current.flags.includes('\\Flagged'))
+      )
+        continue;
+      await markMessageStarred(current);
+      updatedCount++;
+    }
+    clearSelection();
+    if (updatedCount > 0) {
+      showToast(`Starred ${updatedCount} message${updatedCount === 1 ? '' : 's'}`, 'success');
+    }
   };
 
   const bulkUnstar = async () => {
     const messages = getSelectedMessagesFromConversations();
     if (!messages.length) return;
-    await bulkUpdateMessages(messages, {
-      skipIf: (msg) => !msg.is_starred && !(msg.flags || []).includes('\\Flagged'),
-      buildPayload: (msg) => {
-        const flags = (msg.flags || []).filter((f) => f !== '\\Flagged');
-        return { flags };
-      },
-      buildLocalUpdate: (msg) => {
-        const flags = (msg.flags || []).filter((f) => f !== '\\Flagged');
-        return { is_starred: false, flags };
-      },
-      successVerb: 'Unstarred',
-      failVerb: 'unstar',
-    });
+    let updatedCount = 0;
+    for (const msg of messages) {
+      const current =
+        (source.state?.messages ? get(messagesStore) || [] : []).find((m) => m.id === msg.id) ||
+        msg;
+      if (
+        !current.is_starred &&
+        !(Array.isArray(current.flags) && current.flags.includes('\\Flagged'))
+      )
+        continue;
+      await markMessageUnstarred(current);
+      updatedCount++;
+    }
+    clearSelection();
+    if (updatedCount > 0) {
+      showToast(`Unstarred ${updatedCount} message${updatedCount === 1 ? '' : 's'}`, 'success');
+    }
   };
 
   const bulkSpam = async () => {
