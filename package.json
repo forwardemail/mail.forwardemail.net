@@ -70,7 +70,7 @@
     "@tiptap/extension-color": "^2.6.6",
     "@tiptap/extension-font-family": "^2.6.6",
     "@tiptap/extension-highlight": "^2.6.6",
-    "@tiptap/extension-image": "^2.6.6",
+    "@tiptap/extension-image": "^2.27.2",
     "@tiptap/extension-link": "^2.6.6",
     "@tiptap/extension-placeholder": "^2.6.6",
     "@tiptap/extension-table": "^2.6.6",
