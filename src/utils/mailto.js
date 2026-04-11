@@ -1,19 +1,54 @@
 import { dedupeAddresses } from './address';
 
-const decodeMailtoValue = (value = '') => {
+/**
+ * Percent-decode a single value per RFC 3986 / RFC 6068.
+ *
+ * Unlike application/x-www-form-urlencoded (used by URLSearchParams),
+ * RFC 6068 treats `+` as a **literal** plus sign — only `%20` represents
+ * a space.  We therefore use `decodeURIComponent` directly without any
+ * `+`-to-space substitution.
+ */
+const decodeRfc6068 = (value = '') => {
   if (!value) return '';
   try {
-    return decodeURIComponent(String(value).replace(/\+/g, ' '));
+    return decodeURIComponent(String(value));
   } catch {
     return String(value);
   }
 };
 
+/**
+ * Split a comma- or semicolon-separated address list and percent-decode
+ * each entry.  Per RFC 6068 §2, multiple addresses in the `to` header
+ * (or the path portion) are separated by commas.
+ */
 const splitAddressList = (value = '') =>
-  decodeMailtoValue(value)
+  decodeRfc6068(value)
     .split(/[;,]/)
     .map((part) => part.trim())
     .filter(Boolean);
+
+/**
+ * Parse the query component of a mailto URI per RFC 6068 §2.
+ *
+ * RFC 6068 uses standard percent-encoding (RFC 3986), **not**
+ * application/x-www-form-urlencoded.  `URLSearchParams` must not be used
+ * here because it converts `+` to spaces, which violates the RFC.
+ *
+ * Returns an array of `[key, value]` pairs (keys lowercased).
+ */
+const parseMailtoQuery = (queryPart = '') => {
+  const pairs = [];
+  if (!queryPart) return pairs;
+  for (const segment of queryPart.split('&')) {
+    const eqIdx = segment.indexOf('=');
+    if (eqIdx === -1) continue;
+    const key = decodeRfc6068(segment.slice(0, eqIdx)).toLowerCase();
+    const value = decodeRfc6068(segment.slice(eqIdx + 1));
+    pairs.push([key, value]);
+  }
+  return pairs;
+};
 
 export const parseMailto = (input = '') => {
   const result = {
@@ -40,41 +75,26 @@ export const parseMailto = (input = '') => {
     result.to.push(...splitAddressList(addressPart));
   }
 
-  const params = new URLSearchParams(queryPart);
-  params.forEach((value, key) => {
-    const lower = String(key).toLowerCase();
-    if (lower === 'to') {
+  for (const [key, value] of parseMailtoQuery(queryPart)) {
+    if (key === 'to') {
       result.to.push(...splitAddressList(value));
-      return;
-    }
-    if (lower === 'cc') {
+    } else if (key === 'cc') {
       result.cc.push(...splitAddressList(value));
-      return;
-    }
-    if (lower === 'bcc') {
+    } else if (key === 'bcc') {
       result.bcc.push(...splitAddressList(value));
-      return;
+    } else if (key === 'subject') {
+      result.subject = result.subject || value;
+    } else if (key === 'body') {
+      result.body = result.body ? `${result.body}\n${value}` : value;
+    } else if (key === 'reply-to' || key === 'replyto') {
+      result.replyTo = result.replyTo || value;
+    } else if (key === 'in-reply-to' || key === 'inreplyto') {
+      result.inReplyTo = result.inReplyTo || value;
+    } else {
+      if (!result.other[key]) result.other[key] = [];
+      result.other[key].push(value);
     }
-    if (lower === 'subject') {
-      result.subject = result.subject || decodeMailtoValue(value);
-      return;
-    }
-    if (lower === 'body') {
-      const next = decodeMailtoValue(value);
-      result.body = result.body ? `${result.body}\n${next}` : next;
-      return;
-    }
-    if (lower === 'reply-to' || lower === 'replyto') {
-      result.replyTo = result.replyTo || decodeMailtoValue(value);
-      return;
-    }
-    if (lower === 'in-reply-to' || lower === 'inreplyto') {
-      result.inReplyTo = result.inReplyTo || decodeMailtoValue(value);
-      return;
-    }
-    if (!result.other[lower]) result.other[lower] = [];
-    result.other[lower].push(decodeMailtoValue(value));
-  });
+  }
 
   result.to = dedupeAddresses(result.to);
   result.cc = dedupeAddresses(result.cc);

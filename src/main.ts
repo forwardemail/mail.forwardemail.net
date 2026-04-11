@@ -2007,8 +2007,9 @@ async function bootstrap() {
     // Register as mailto: handler on the web (not in Tauri — Tauri handles via OS registration)
     if (!isTauri && navigator.registerProtocolHandler) {
       try {
-        // The %s placeholder is replaced by the browser with the full mailto: URI
-        navigator.registerProtocolHandler('mailto', `${window.location.origin}/mailbox#mailto=%s`);
+        // The %s placeholder is replaced by the browser with the full mailto: URI.
+        // Use the same URL format as mailto-handler.js: /#compose?mailto=%s
+        navigator.registerProtocolHandler('mailto', `${window.location.origin}/#compose?mailto=%s`);
       } catch (err) {
         console.warn('[main] Failed to register mailto: handler', err);
       }
@@ -2239,7 +2240,29 @@ window.addEventListener('popstate', () => {
 // Handle hash-based deep links (e.g., /mailbox#compose=user@example.com or /mailbox#INBOX/12345)
 handleHashActions = function () {
   const hash = window.location.hash || '';
-  if (hash.startsWith('#compose=') || hash.startsWith('#mailto=')) {
+  // ── mailto: handler deep-link ──────────────────────────────────────────
+  // The mailto-handler.js registers: {origin}/#compose?mailto=%s
+  // Browsers replace %s with the percent-encoded mailto: URI, producing
+  // hashes like: #compose?mailto=mailto%3Auser%40example.com%3Fsubject%3DHello
+  // Handle this format FIRST because it would otherwise fall through the
+  // #compose= / #mailto= checks (the fourth character is '?' not '=').
+  if (hash.startsWith('#compose?mailto=')) {
+    const raw = hash.slice('#compose?mailto='.length);
+    // The browser percent-encodes the entire mailto: URI when substituting
+    // %s, so a single decodeURIComponent recovers the original RFC 6068 URL.
+    const mailtoUrl = decodeURIComponent(raw).trim();
+    if (mailtoUrl) {
+      const current = currentRoute();
+      if (current !== 'mailbox') {
+        routeStore.set('mailbox');
+      }
+      setTimeout(() => {
+        const parsed = parseMailto(mailtoUrl);
+        viewModel.mailboxView.composeModal.open(mailtoToPrefill(parsed));
+      }, 0);
+    }
+    history.replaceState({ route: currentRoute() }, '', window.location.pathname);
+  } else if (hash.startsWith('#compose=') || hash.startsWith('#mailto=')) {
     const rawValue = hash.startsWith('#compose=')
       ? decodeURIComponent(hash.replace('#compose=', ''))
       : decodeURIComponent(hash.replace('#mailto=', ''));

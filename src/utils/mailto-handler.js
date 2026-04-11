@@ -173,10 +173,23 @@ export function parseMailtoFromHash(hash) {
   const mailtoUrl = decodeURIComponent(content.slice('compose?mailto='.length));
   if (!mailtoUrl.toLowerCase().startsWith('mailto:')) return null;
 
-  // Delegate to the existing mailto parser
+  return { mailtoUrl };
+}
+
+/**
+ * Async variant that resolves the mailto URL into compose-ready prefill data.
+ * Prefer this over parseMailtoFromHash when you need the full prefill object.
+ *
+ * @param {string} hash - The window.location.hash value
+ * @returns {Promise<Object|null>} Parsed prefill data or null
+ */
+export async function resolveMailtoFromHash(hash) {
+  const result = parseMailtoFromHash(hash);
+  if (!result) return null;
+
   try {
-    const { parseMailto, mailtoToPrefill } = require('./mailto.js');
-    return mailtoToPrefill(parseMailto(mailtoUrl));
+    const { parseMailto, mailtoToPrefill } = await import('./mailto.js');
+    return mailtoToPrefill(parseMailto(result.mailtoUrl));
   } catch {
     return null;
   }
