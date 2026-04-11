@@ -6,6 +6,7 @@
   import { ScheduleXCalendar } from '@schedule-x/svelte';
   import { createCalendar, viewDay, viewWeek, viewMonthGrid } from '@schedule-x/calendar';
   import '@schedule-x/theme-default/dist/index.css';
+  import DOMPurify from 'dompurify';
   import { i18n } from '../utils/i18n';
   import { Local } from '../utils/storage';
   import { Remote } from '../utils/remote';
@@ -234,6 +235,7 @@
     timezone: '',
     attendees: '',
     notify: 0,
+    _editingRawDescription: false,
   });
 
   let editEvent = $state({
@@ -252,6 +254,7 @@
     timezone: '',
     attendees: '',
     notify: 0,
+    _editingRawDescription: false,
   });
 
   const timeOptions = Array.from({ length: 12 * 4 }, (_, idx) => {
@@ -365,6 +368,27 @@
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#39;');
+
+  const containsHtml = (value: string) => /<[a-z][\s\S]*>/i.test(value || '');
+
+  const sanitizeDescription = (value: string) =>
+    DOMPurify.sanitize(value || '', {
+      USE_PROFILES: { html: true },
+      FORBID_TAGS: [
+        'script',
+        'style',
+        'iframe',
+        'object',
+        'embed',
+        'form',
+        'input',
+        'textarea',
+        'select',
+        'button',
+      ],
+      FORBID_ATTR: ['onerror', 'onload', 'onclick', 'onmouseover'],
+      ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto|tel):|[^a-z]|[a-z+.-]+(?:[^a-z+.-:]|$))/i,
+    });
 
   // Sanitize data for Web Worker postMessage (removes non-cloneable properties)
   const sanitizeForWorker = <T,>(data: T): T => {
@@ -853,6 +877,7 @@
       timezone,
       attendees,
       notify,
+      _editingRawDescription: false,
     };
     editEventModal = false;
     newEventModal = true;
@@ -1662,6 +1687,7 @@
       timezone: '',
       attendees: '',
       notify: 0,
+      _editingRawDescription: false,
     };
     optionalFieldsExpanded = false;
     modalDirty = false;
@@ -1766,6 +1792,7 @@
       timezone: '',
       attendees: '',
       notify: 0,
+      _editingRawDescription: false,
     };
     newEventModal = true;
     showNewStartPicker = false;
@@ -1955,6 +1982,7 @@
       timezone: (fullEvent.timezone as string) || '',
       attendees: (fullEvent.attendees as string) || '',
       notify: (fullEvent.notify as number) || 0,
+      _editingRawDescription: false,
     };
     optionalFieldsExpanded = !!(
       fullEvent.location ||
@@ -2590,18 +2618,33 @@
         {/if}
         <div class="space-y-2">
           <Label for="event-description">Description</Label>
-          <Textarea
-            id="event-description"
-            rows={3}
-            placeholder="Add notes or details"
-            bind:value={newEvent.description}
-            bind:this={descriptionRef}
-            oninput={(e) => {
-              autoExpand(e.currentTarget as HTMLTextAreaElement);
-              modalDirty = true;
-            }}
-            class="min-h-[60px] max-h-[200px] resize-none"
-          />
+          {#if containsHtml(newEvent.description) && !newEvent._editingRawDescription}
+            <div
+              class="prose prose-sm dark:prose-invert max-w-none p-3 border border-border rounded-md bg-muted/30 max-h-[200px] overflow-y-auto"
+            >
+              {@html sanitizeDescription(newEvent.description)}
+            </div>
+            <button
+              type="button"
+              class="text-xs text-muted-foreground hover:text-foreground"
+              onclick={() => {
+                newEvent._editingRawDescription = true;
+              }}>Edit source</button
+            >
+          {:else}
+            <Textarea
+              id="event-description"
+              rows={3}
+              placeholder="Add notes or details"
+              bind:value={newEvent.description}
+              bind:this={descriptionRef}
+              oninput={(e) => {
+                autoExpand(e.currentTarget as HTMLTextAreaElement);
+                modalDirty = true;
+              }}
+              class="min-h-[60px] max-h-[200px] resize-none"
+            />
+          {/if}
         </div>
 
         <Separator />
@@ -2829,7 +2872,22 @@
         </div>
         <div class="space-y-2">
           <Label>Description</Label>
-          <Textarea rows={5} bind:value={editEvent.description} />
+          {#if containsHtml(editEvent.description) && !editEvent._editingRawDescription}
+            <div
+              class="prose prose-sm dark:prose-invert max-w-none p-3 border border-border rounded-md bg-muted/30 max-h-[200px] overflow-y-auto"
+            >
+              {@html sanitizeDescription(editEvent.description)}
+            </div>
+            <button
+              type="button"
+              class="text-xs text-muted-foreground hover:text-foreground"
+              onclick={() => {
+                editEvent._editingRawDescription = true;
+              }}>Edit source</button
+            >
+          {:else}
+            <Textarea rows={5} bind:value={editEvent.description} />
+          {/if}
         </div>
 
         <Separator />
