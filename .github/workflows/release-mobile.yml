@@ -102,6 +102,42 @@ jobs:
       - name: Initialize Android project
         run: pnpm tauri android init
 
+      - name: Sync Android version
+        run: node scripts/sync-version.cjs
+
+      - name: Inject signing config into build.gradle.kts
+        run: |
+          GRADLE_FILE="src-tauri/gen/android/app/build.gradle.kts"
+          # Insert signingConfigs block and wire it to the release buildType
+          node -e "
+          const fs = require('fs');
+          let gradle = fs.readFileSync('$GRADLE_FILE', 'utf8');
+
+          // Add signingConfigs block after 'android {'
+          const signingBlock = \`
+    signingConfigs {
+        create(\"release\") {
+            storeFile = file(System.getenv(\"ANDROID_KEYSTORE\") ?: \"/dev/null\")
+            storePassword = System.getenv(\"ANDROID_KEYSTORE_PASSWORD\") ?: \"\"
+            keyAlias = System.getenv(\"ANDROID_KEY_ALIAS\") ?: \"\"
+            keyPassword = System.getenv(\"ANDROID_KEY_PASSWORD\") ?: \"\"
+        }
+    }\`;
+          gradle = gradle.replace(
+            /defaultConfig\s*\{/,
+            signingBlock + '\n    defaultConfig {'
+          );
+
+          // Wire signing config to release buildType
+          gradle = gradle.replace(
+            /getByName\(\"release\"\)\s*\{/,
+            'getByName(\"release\") {\n            signingConfig = signingConfigs.getByName(\"release\")'
+          );
+
+          fs.writeFileSync('$GRADLE_FILE', gradle);
+          console.log('Injected signing config into build.gradle.kts');
+          "
+
       - name: Build Android (release, signed)
         env:
           NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.0.12077973
