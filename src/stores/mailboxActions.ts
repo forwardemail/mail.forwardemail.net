@@ -152,21 +152,36 @@ export const computeReplyTargets = (msg = {}, options = {}) => {
   const nonMeTo = toList.filter((a) => !isSelf(a));
   const nonMeCc = ccList.filter((a) => !isSelf(a));
 
-  // For simple reply, prioritize the sender (FROM/Reply-To), not the TO recipients
-  const pickReplyAnchor = () =>
-    nonMeReplyTo[0] || replyToList[0] || nonMeFrom[0] || fromList[0] || nonMeTo[0] || toList[0];
+  // Check if the message was sent by the current user
+  const isOwnMessage = fromList.length > 0 && fromList.every((a) => isSelf(a));
+
+  // For simple reply, prioritize the sender — but if the message is from
+  // yourself (sent copy), reply to the original TO recipients instead.
+  const pickReplyAnchor = () => {
+    if (isOwnMessage) {
+      return nonMeTo[0] || toList[0] || nonMeReplyTo[0] || replyToList[0];
+    }
+    return (
+      nonMeReplyTo[0] || replyToList[0] || nonMeFrom[0] || fromList[0] || nonMeTo[0] || toList[0]
+    );
+  };
 
   let toRecipients = [];
   if (replyAll) {
-    // Step 1: Add the sender (prefer reply-to, fallback to from)
-    if (nonMeReplyTo.length) {
-      toRecipients.push(...nonMeReplyTo);
-    } else if (nonMeFrom.length) {
-      toRecipients.push(...nonMeFrom);
+    if (isOwnMessage) {
+      // Replying to own message: TO recipients are the primary targets
+      toRecipients.push(...nonMeTo);
+      if (!toRecipients.length) toRecipients.push(...toList);
+    } else {
+      // Step 1: Add the sender (prefer reply-to, fallback to from)
+      if (nonMeReplyTo.length) {
+        toRecipients.push(...nonMeReplyTo);
+      } else if (nonMeFrom.length) {
+        toRecipients.push(...nonMeFrom);
+      }
+      // Step 2: Add all non-self TO recipients
+      toRecipients.push(...nonMeTo);
     }
-
-    // Step 2: Add all non-self TO recipients
-    toRecipients.push(...nonMeTo);
   } else {
     // For simple reply, always include the anchor (even if it's yourself)
     const anchor = pickReplyAnchor();

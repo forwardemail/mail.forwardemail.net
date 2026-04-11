@@ -66,6 +66,7 @@ if (composeRoot) {
         draftId?: string;
         serverDraftId?: string;
         sourceMessageId?: string;
+        sentCopyPayload?: Record<string, unknown>;
       }) => {
         // Notify main window about the send so it can clean up the draft
         // (the compose webview can't access IDB / db worker reliably).

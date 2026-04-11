@@ -897,6 +897,7 @@ if (isTauriDesktop) {
             draftId?: string;
             serverDraftId?: string;
             sourceMessageId?: string;
+            sentCopyPayload?: Record<string, unknown>;
           }
         | undefined;
 
@@ -947,6 +948,51 @@ if (isTauriDesktop) {
           }
         } catch (err) {
           console.warn('[main] Draft cleanup imports failed:', err);
+        }
+      }
+
+      // Save sent copy — the native compose window can't access IDB so we handle it here
+      if (result?.sentCopyPayload) {
+        try {
+          const { saveSentCopy } = await import('./utils/sent-copy.js');
+          await saveSentCopy(result.sentCopyPayload);
+        } catch (err) {
+          console.warn('[main] Failed to save sent copy:', err);
+        }
+
+        // Set \Answered flag on the original message if this was a reply
+        const origId = result.sentCopyPayload.replyToMessageId as string;
+        if (origId) {
+          try {
+            const { Remote } = await import('./utils/remote');
+            const { db } = await import('./utils/db');
+            const account = (await import('./utils/storage')).Local.get('email') || 'default';
+            const records = await db.messages
+              .where('[account+id]')
+              .equals([account, origId])
+              .toArray();
+            const msg = records?.[0];
+            if (msg) {
+              const flags: string[] = Array.isArray(msg.flags) ? msg.flags : [];
+              if (!flags.includes('\\Answered')) {
+                const newFlags = [...flags, '\\Answered'];
+                await db.messages
+                  .where('[account+id]')
+                  .equals([account, origId])
+                  .modify({ flags: newFlags });
+                await Remote.request(
+                  'MessageUpdate',
+                  {
+                    flags: newFlags,
+                    folder: (result.sentCopyPayload.replyToMessageFolder as string) || msg.folder,
+                  },
+                  { method: 'PUT', pathOverride: `/v1/messages/${encodeURIComponent(origId)}` },
+                );
+              }
+            }
+          } catch (err) {
+            console.warn('[main] Failed to set \\Answered flag:', err);
+          }
         }
       }
 

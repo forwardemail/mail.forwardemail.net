@@ -2275,8 +2275,8 @@
       delete apiPayload._replyToMessageId;
       delete apiPayload._replyToMessageFolder;
       await Remote.request('Emails', apiPayload, { method: 'POST' });
-      // Skip saveSentCopy in native window — the db worker isn't initialized
-      // in the compose webview, so IDB access hangs. The server handles sent copy.
+      // In native window, the main window handles sent copy + \Answered flag
+      // via the compose:sent event (IDB isn't available in the compose webview).
       if (!nativeWindow) {
         await saveSentCopyWrapper(payload);
         // Mark original message as \Answered after successful reply
@@ -2313,12 +2313,30 @@
       toasts?.show?.('Message sent', 'success');
       setVisible(false);
       const shouldArchive = archiveAfterSend;
+      // Build a lightweight sent copy payload for the main window (strip attachment content)
+      const sentCopyPayload = nativeWindow
+        ? {
+            from: payload.from,
+            to: payload.to,
+            cc: payload.cc,
+            bcc: payload.bcc,
+            subject: payload.subject,
+            html: payload.html,
+            text: payload.text,
+            inReplyTo: payload.inReplyTo,
+            references: payload.references,
+            has_attachment: payload.has_attachment || false,
+            replyToMessageId: payload._replyToMessageId || null,
+            replyToMessageFolder: payload._replyToMessageFolder || null,
+          }
+        : null;
       reset();
       onSent?.({
         archive: shouldArchive,
         draftId: draftIdToDelete,
         serverDraftId: serverDraftIdToDelete,
         sourceMessageId: msgIdToDelete,
+        sentCopyPayload,
       });
     } catch (err) {
       const e = err as { message?: string; status?: number };
