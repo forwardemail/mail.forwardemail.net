@@ -92,7 +92,7 @@
     "ky": "^1.14.1",
     "libsodium-wrappers": "^0.7.16",
     "lucide-svelte": "^0.562.0",
-    "marked": "^12.0.2",
+    "marked": "^18.0.0",
     "msgpackr": "^1.11.0",
     "openpgp": "^6.2.2",
     "postal-mime": "^2.6.0",
