@@ -97,9 +97,11 @@ export async function createContact(page, contactData) {
  * Select a contact from the list by name
  */
 export async function selectContact(page, contactName) {
-  const contactRow = page.locator('li button').filter({ hasText: contactName });
+  const contactRow = page.locator('li button').filter({ hasText: contactName }).first();
+  await expect(contactRow).toBeVisible();
+  await contactRow.scrollIntoViewIfNeeded();
   await contactRow.click();
-  await page.waitForTimeout(300);
+  await expect(page.getByLabel('Name', { exact: true }).first()).toHaveValue(contactName);
 }
 
 /**

@@ -128,6 +128,15 @@
   let lastAccount = Local.get('email') || '';
   let loadRequestId = 0;
   const activeEmail = $derived($currentAccount || Local.get('email') || '');
+  const totalContacts = $derived(contacts.length);
+  const filteredContacts = $derived(filtered.length);
+  const hasSearchQuery = $derived((query || '').trim().length > 0);
+  const totalContactsLabel = $derived(`${totalContacts} contact${totalContacts === 1 ? '' : 's'}`);
+  const visibleContactsLabel = $derived(
+    hasSearchQuery
+      ? `Showing ${filteredContacts} of ${totalContacts} contact${totalContacts === 1 ? '' : 's'}`
+      : totalContactsLabel,
+  );
   const isMobileViewport = () =>
     typeof window !== 'undefined' &&
     typeof window.matchMedia === 'function' &&
@@ -834,10 +843,6 @@
     if (!draft) return;
     const name = (draft.name || '').trim();
     const email = (draft.email || '').trim();
-    if (!email) {
-      error = 'Email is required.';
-      return;
-    }
     loading = true;
     error = '';
     try {
@@ -958,11 +963,6 @@
     try {
       const name = (modalContact.name || '').trim();
       const email = (modalContact.email || '').trim();
-      if (!email) {
-        modalError = 'Email is required.';
-        modalSaving = false;
-        return;
-      }
       const contactData: Contact = {
         id: modalContact.id,
         name,
@@ -1165,6 +1165,7 @@
     <div class="flex flex-col">
       <h1 class="text-lg font-semibold">Contacts</h1>
       <span class="text-xs text-muted-foreground">{activeEmail}</span>
+      <span class="text-xs text-muted-foreground">{totalContactsLabel}</span>
     </div>
   </div>
   <div class="flex items-center gap-2">
@@ -1210,7 +1211,10 @@
 <div class="grid h-[calc(100vh-3.5rem)] grid-cols-1 md:grid-cols-[320px_1fr]">
   <!-- Contact List -->
   <div class="flex flex-col border-r border-border {selectedContact ? 'hidden md:flex' : 'flex'}">
-    <div class="p-3">
+    <div class="space-y-2 p-3">
+      <div class="flex items-center justify-between gap-2 px-1">
+        <span class="text-xs text-muted-foreground">{visibleContactsLabel}</span>
+      </div>
       <div class="relative">
         <Search class="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
         <Input
@@ -1255,7 +1259,11 @@
               </Avatar.Root>
               <div class="min-w-0 flex-1">
                 <div class="truncate font-medium">{contact.name || contact.email || 'Contact'}</div>
-                <div class="truncate text-xs text-muted-foreground">{contact.email}</div>
+                {#if contact.email || contact.phone || contact.company}
+                  <div class="truncate text-xs text-muted-foreground">
+                    {contact.email || contact.phone || contact.company}
+                  </div>
+                {/if}
               </div>
             </button>
           </li>
@@ -1312,10 +1320,13 @@
           </label>
           <div class="min-w-0 flex-1">
             <div class="text-lg font-semibold">
-              {draft.name || selectedContact.name || selectedContact.email}
+              {draft.name || selectedContact.name || selectedContact.email || 'Contact'}
             </div>
-            <div class="text-sm text-muted-foreground">{selectedContact.email}</div>
+            {#if selectedContact.email}
+              <div class="text-sm text-muted-foreground">{selectedContact.email}</div>
+            {/if}
           </div>
+
           <DropdownMenu.Root>
             <DropdownMenu.Trigger>
               {#snippet child({ props })}
@@ -1325,7 +1336,10 @@
               {/snippet}
             </DropdownMenu.Trigger>
             <DropdownMenu.Content align="end" class="w-48">
-              <DropdownMenu.Item onclick={() => startMail(selectedContact)}>
+              <DropdownMenu.Item
+                onclick={() => startMail(selectedContact)}
+                disabled={!selectedContact?.email}
+              >
                 <Mail class="mr-2 h-4 w-4" />
                 Email
               </DropdownMenu.Item>
@@ -1333,7 +1347,10 @@
                 <CalendarPlus class="mr-2 h-4 w-4" />
                 Add event
               </DropdownMenu.Item>
-              <DropdownMenu.Item onclick={() => viewEmails(selectedContact)}>
+              <DropdownMenu.Item
+                onclick={() => viewEmails(selectedContact)}
+                disabled={!selectedContact?.email}
+              >
                 <Search class="mr-2 h-4 w-4" />
                 View emails
               </DropdownMenu.Item>
@@ -1486,7 +1503,7 @@
       </div>
       <div class="space-y-2">
         <Label for="modal-email">Email</Label>
-        <Input id="modal-email" type="email" bind:value={modalContact.email} required />
+        <Input id="modal-email" type="email" bind:value={modalContact.email} />
       </div>
       <div class="space-y-2">
         <Label for="modal-phone">Phone</Label>

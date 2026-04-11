@@ -35,26 +35,22 @@ test.describe('Contact Creation - Modal', () => {
     await expect(modal.getByText(/New contact/i)).toBeVisible();
   });
 
-  test('should create contact with required fields only', async ({ page }) => {
+  test('should create contact with name and email', async ({ page }) => {
+    await expect(page.getByText('4 contacts', { exact: true }).first()).toBeVisible();
+
     const modal = await openNewContactModal(page);
 
-    // Fill required fields within the dialog scope
     await fillContactForm(modal, {
       name: 'Test User',
       email: 'test@example.com',
     });
 
-    // Save
     await modal.locator('button:has-text("Save")').click();
-
-    // Wait for modal to close
     await page.waitForSelector('div[role="dialog"]', { state: 'hidden', timeout: 5000 });
-
-    // Wait for success toast
     await waitForSuccessToast(page, '');
 
-    // Verify contact appears in list
     await verifyContactInList(page, { name: 'Test User', email: 'test@example.com' });
+    await expect(page.getByText('5 contacts', { exact: true }).first()).toBeVisible();
   });
 
   test('should create contact with all fields', async ({ page }) => {
@@ -95,21 +91,28 @@ test.describe('Contact Creation - Modal', () => {
     await expect(page.getByText('complete@example.com').first()).toBeVisible();
   });
 
-  test('should validate email is required', async ({ page }) => {
+  test('should create contact without an email address', async ({ page }) => {
+    await expect(page.getByText('4 contacts', { exact: true }).first()).toBeVisible();
+
     const modal = await openNewContactModal(page);
 
-    // Fill name but leave email empty
     await fillContactForm(modal, {
       name: 'No Email User',
       email: '',
+      phone: '555-2020',
     });
 
-    // Try to save
     await modal.locator('button:has-text("Save")').click();
+    await page.waitForSelector('div[role="dialog"]', { state: 'hidden', timeout: 5000 });
+    await waitForSuccessToast(page, '');
 
-    // Modal should stay open
-    await page.waitForTimeout(500);
-    await expect(modal).toBeVisible();
+    await verifyContactInList(page, { name: 'No Email User' });
+    await expect(page.getByText('5 contacts', { exact: true }).first()).toBeVisible();
+
+    await page.reload();
+    await navigateToContacts(page);
+    await verifyContactInList(page, { name: 'No Email User' });
+    await expect(page.getByText('5 contacts', { exact: true }).first()).toBeVisible();
   });
 
   test('should cancel contact creation', async ({ page }) => {
@@ -221,7 +224,6 @@ test.describe('Contact Update - Inline Editing', () => {
     await saveContactInline(page);
 
     // Verify notes updated (value is in a textbox input)
-    await selectContact(page, 'Bob Smith');
     await expect(page.getByLabel('Notes', { exact: true }).first()).toHaveValue(
       'Updated notes for Bob',
     );
@@ -267,20 +269,27 @@ test.describe('Contact Update - Inline Editing', () => {
     await expect(page.getByText('Changed Name')).not.toBeVisible();
   });
 
-  test('should validate email on update', async ({ page }) => {
-    // Use Alice Johnson (not renamed by earlier tests in this suite)
+  test('should allow clearing the email address on update', async ({ page }) => {
     await selectContact(page, 'Alice Johnson');
 
-    // Try to clear email using the labeled input
     const emailInput = page.getByLabel('Email', { exact: true }).first();
     await emailInput.fill('');
 
-    // Try to save
     await page.click('button:has-text("Save")');
-
-    // Should stay in edit mode or show error
     await page.waitForTimeout(500);
-    await expect(page.locator('button:has-text("Save")')).toBeVisible();
+
+    await selectContact(page, 'Alice Johnson');
+    await expect(page.getByLabel('Email', { exact: true }).first()).toHaveValue('');
+
+    await openActionsMenu(page);
+    await expect(page.getByRole('menuitem', { name: 'Email', exact: true })).toHaveAttribute(
+      'data-disabled',
+      '',
+    );
+    await expect(page.getByRole('menuitem', { name: 'View emails', exact: true })).toHaveAttribute(
+      'data-disabled',
+      '',
+    );
   });
 });
 
@@ -309,19 +318,15 @@ test.describe('Contact Deletion', () => {
   test('should delete contact after confirmation', async ({ page }) => {
     await selectContact(page, 'David Chen');
 
-    // Delete contact via menu
     await openActionsMenu(page);
     await clickMenuItem(page, 'Delete');
 
-    // Confirm deletion (dialog buttons ARE button role)
     const confirmModal = page.getByRole('dialog');
     await confirmModal.locator('button:has-text("Delete")').click();
-
-    // Wait for modal to close
     await page.waitForSelector('div[role="dialog"]', { state: 'hidden', timeout: 5000 });
 
-    // Verify contact removed from list
     await verifyContactNotInList(page, 'David Chen');
+    await expect(page.getByText('3 contacts', { exact: true }).first()).toBeVisible();
   });
 
   test('should cancel deletion', async ({ page }) => {

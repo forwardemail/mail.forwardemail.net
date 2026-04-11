@@ -15,12 +15,12 @@ const jsonResponse = (route, payload, status = 200, headers = {}) =>
   });
 
 export async function mockApi(page, overrides = {}) {
-  const folders = overrides.folders || mockFolders;
-  const messages = overrides.messages || mockMessages;
-  const messageBodies = overrides.messageBodies || mockMessageBodies;
-  const contacts = overrides.contacts || mockContacts;
-  const calendars = overrides.calendars || mockCalendars;
-  const events = overrides.events || mockEvents;
+  const folders = structuredClone(overrides.folders || mockFolders);
+  const messages = structuredClone(overrides.messages || mockMessages);
+  const messageBodies = structuredClone(overrides.messageBodies || mockMessageBodies);
+  const contacts = structuredClone(overrides.contacts || mockContacts);
+  const calendars = structuredClone(overrides.calendars || mockCalendars);
+  const events = structuredClone(overrides.events || mockEvents);
 
   await page.route('**/v1/folders**', (route) => jsonResponse(route, { Result: folders }));
 

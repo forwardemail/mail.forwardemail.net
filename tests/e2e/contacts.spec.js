@@ -10,11 +10,12 @@ test.describe('Contacts Page Navigation', () => {
   });
 
   test('should show contacts header with actions', async ({ page }) => {
-    await page.goto('/contacts');
+    await navigateToContacts(page);
     await expect(page.getByText('Contacts', { exact: true }).first()).toBeVisible();
     await expect(page.getByRole('button', { name: /New contact/i })).toBeVisible();
     await expect(page.getByRole('button', { name: /Import/i })).toBeVisible();
     await expect(page.getByLabel('Back', { exact: true }).first()).toBeVisible();
+    await expect(page.getByText('4 contacts', { exact: true }).first()).toBeVisible();
   });
 
   test('should display contacts list', async ({ page }) => {
@@ -96,18 +97,27 @@ test.describe('Contacts Search', () => {
   });
 
   test('should clear search and restore full list', async ({ page }) => {
-    // First search for something
     await searchContacts(page, 'Alice');
     await expect(page.locator('li button').filter({ hasText: 'Alice Johnson' })).toBeVisible();
     await expect(page.locator('li button').filter({ hasText: 'Bob Smith' })).toHaveCount(0);
+    await expect(page.getByText('Showing 1 of 4 contacts', { exact: true })).toBeVisible();
 
-    // Clear search
     await searchContacts(page, '');
 
-    // All contacts should be visible again
     await expect(page.locator('li button').filter({ hasText: 'Alice Johnson' })).toBeVisible();
     await expect(page.locator('li button').filter({ hasText: 'Bob Smith' })).toBeVisible();
     await expect(page.locator('li button').filter({ hasText: 'Carol Williams' })).toBeVisible();
+    await expect(page.getByText('4 contacts', { exact: true }).first()).toBeVisible();
+  });
+
+  test('should preserve the contact count after reload', async ({ page }) => {
+    await expect(page.getByText('4 contacts', { exact: true }).first()).toBeVisible();
+
+    await page.reload();
+    await navigateToContacts(page);
+
+    await expect(page.getByText('4 contacts', { exact: true }).first()).toBeVisible();
+    await expect(page.locator('li button')).toHaveCount(4);
   });
 });
 
