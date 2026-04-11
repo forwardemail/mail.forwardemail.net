@@ -206,6 +206,8 @@
         date: message.date || message.created_at,
         html: quotedBody,
         inReplyTo: message.header_message_id || message.msgid || message.id,
+        replyToMessageId: message.id || null,
+        replyToMessageFolder: message.folder || null,
       },
     });
   }

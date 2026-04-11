@@ -1000,9 +1000,13 @@
 
   const hasAttachments = (item) => {
     if (!item) return false;
+    // When the full attachments array is available, use filterDownloadableAttachments
+    // to exclude inline CID images (e.g. signature logos)
+    if (Array.isArray(item.attachments) && item.attachments.length) {
+      return filterDownloadableAttachments(item.attachments).length > 0;
+    }
     if (item.has_attachments) return true;
     if (item.attachment_count > 0) return true;
-    if (Array.isArray(item.attachments) && item.attachments.length) return true;
     if (item.latestHasAttachments) return true;
     if (Array.isArray(item.messages)) {
       return item.messages.some((m) => hasAttachments(m));
@@ -1672,7 +1676,7 @@
       return next;
     });
   };
-  const hasConversationReplies = (conv) => Boolean(conv?.hasReply) || (conv?.messageCount || 0) > 1;
+  const hasUserReplied = (conv) => Boolean(conv?.hasReply);
   const refresh = () => {
     if (mailboxStore?.actions?.loadMessages) mailboxStore.actions.loadMessages();
     else mailboxView?.loadMessages?.();
@@ -6178,7 +6182,7 @@
                                   <div
                                     class="flex items-center gap-1.5 shrink-0 text-muted-foreground"
                                   >
-                                    {#if hasConversationReplies(conv)}
+                                    {#if hasUserReplied(conv)}
                                       <svg viewBox="0 0 24 24" class="h-3 w-3" aria-hidden="true">
                                         <path
                                           d="M9 17l-5-5 5-5"
@@ -7768,60 +7772,6 @@
                               onLinkClick={handleIframeLinkClick}
                               onFormSubmit={handleIframeFormSubmit}
                             />
-                            {#if filterDownloadableAttachments($attachments).length}
-                              <div class="flex flex-wrap gap-2 mt-4 pt-4 border-t border-border">
-                                {#each filterDownloadableAttachments($attachments) as att}
-                                  {#if isPreviewableImage(att) && att.href}
-                                    <div class="flex flex-col gap-1 max-w-[120px]">
-                                      <button
-                                        type="button"
-                                        class="cursor-pointer rounded border border-border overflow-hidden hover:opacity-90 transition-opacity"
-                                        onclick={() =>
-                                          mailService.downloadAttachment(att, $selectedMessage)}
-                                        title="Download {att.name || att.filename}"
-                                      >
-                                        <img
-                                          src={att.href}
-                                          alt={att.name || att.filename}
-                                          class="max-h-20 max-w-[120px] object-contain"
-                                        />
-                                      </button>
-                                      <div
-                                        class="flex items-center gap-1.5 text-xs text-muted-foreground px-0.5"
-                                      >
-                                        <span class="truncate">{att.name || att.filename}</span>
-                                        {#if att.size}<span class="shrink-0"
-                                            >{formatAttachmentSize(att.size)}</span
-                                          >{/if}
-                                        <button
-                                          type="button"
-                                          class="shrink-0 hover:text-foreground transition-colors cursor-pointer"
-                                          onclick={() =>
-                                            mailService.downloadAttachment(att, $selectedMessage)}
-                                          title="Download"
-                                        >
-                                          <Download class="h-3.5 w-3.5" />
-                                        </button>
-                                      </div>
-                                    </div>
-                                  {:else}
-                                    <button
-                                      type="button"
-                                      class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm bg-secondary hover:bg-secondary/80 cursor-pointer transition-colors"
-                                      onclick={() =>
-                                        mailService.downloadAttachment(att, $selectedMessage)}
-                                      title="Download {att.name || att.filename}"
-                                    >
-                                      <span>{att.name || att.filename}</span>
-                                      {#if att.size}<span class="text-xs text-muted-foreground"
-                                          >{formatAttachmentSize(att.size)}</span
-                                        >{/if}
-                                      <Download class="h-3.5 w-3.5 ml-1" />
-                                    </button>
-                                  {/if}
-                                {/each}
-                              </div>
-                            {/if}
                           {/if}
                         {:else if isExpanded && !isSelected}
                           <!-- Expanded but not selected: show cached body if available -->
@@ -7859,6 +7809,89 @@
                       </article>
                     {/each}
                   </div>
+                  <!-- Aggregated attachment strip for the entire thread -->
+                  {@const allThreadAttachments = threadMessages.reduce((acc, msg) => {
+                    const atts =
+                      msg.id === $selectedMessage?.id
+                        ? filterDownloadableAttachments($attachments)
+                        : filterDownloadableAttachments(
+                            $threadMessageBodies.get(msg.id)?.attachments || [],
+                          );
+                    if (atts.length) acc.push({ message: msg, attachments: atts });
+                    return acc;
+                  }, [])}
+                  {#if allThreadAttachments.length}
+                    <div class="border-t border-border p-4">
+                      <div class="flex items-center gap-2 mb-3 text-sm text-muted-foreground">
+                        <Paperclip class="h-4 w-4" />
+                        <span
+                          >{allThreadAttachments.reduce((n, g) => n + g.attachments.length, 0)} attachment{allThreadAttachments.reduce(
+                            (n, g) => n + g.attachments.length,
+                            0,
+                          ) === 1
+                            ? ''
+                            : 's'}</span
+                        >
+                      </div>
+                      {#each allThreadAttachments as group}
+                        {#if allThreadAttachments.length > 1}
+                          <div class="text-xs text-muted-foreground mb-1.5 mt-3 first:mt-0">
+                            {extractDisplayName(group.message.from) || group.message.from}
+                          </div>
+                        {/if}
+                        <div class="flex flex-wrap gap-2">
+                          {#each group.attachments as att}
+                            {#if isPreviewableImage(att) && att.href}
+                              <div class="flex flex-col gap-1 max-w-[120px]">
+                                <button
+                                  type="button"
+                                  class="cursor-pointer rounded border border-border overflow-hidden hover:opacity-90 transition-opacity"
+                                  onclick={() => mailService.downloadAttachment(att, group.message)}
+                                  title="Download {att.name || att.filename}"
+                                >
+                                  <img
+                                    src={att.href}
+                                    alt={att.name || att.filename}
+                                    class="max-h-20 max-w-[120px] object-contain"
+                                  />
+                                </button>
+                                <div
+                                  class="flex items-center gap-1.5 text-xs text-muted-foreground px-0.5"
+                                >
+                                  <span class="truncate">{att.name || att.filename}</span>
+                                  {#if att.size}<span class="shrink-0"
+                                      >{formatAttachmentSize(att.size)}</span
+                                    >{/if}
+                                  <button
+                                    type="button"
+                                    class="shrink-0 hover:text-foreground transition-colors cursor-pointer"
+                                    onclick={() =>
+                                      mailService.downloadAttachment(att, group.message)}
+                                    title="Download"
+                                  >
+                                    <Download class="h-3.5 w-3.5" />
+                                  </button>
+                                </div>
+                              </div>
+                            {:else}
+                              <button
+                                type="button"
+                                class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm bg-secondary hover:bg-secondary/80 cursor-pointer transition-colors"
+                                onclick={() => mailService.downloadAttachment(att, group.message)}
+                                title="Download {att.name || att.filename}"
+                              >
+                                <span>{att.name || att.filename}</span>
+                                {#if att.size}<span class="text-xs text-muted-foreground"
+                                    >{formatAttachmentSize(att.size)}</span
+                                  >{/if}
+                                <Download class="h-3.5 w-3.5 ml-1" />
+                              </button>
+                            {/if}
+                          {/each}
+                        </div>
+                      {/each}
+                    </div>
+                  {/if}
                 {:else if $selectedMessage}
                   {#if showSkeleton}
                     <div class="min-h-[120px] flex items-center justify-center p-6">

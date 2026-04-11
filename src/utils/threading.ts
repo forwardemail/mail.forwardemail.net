@@ -381,8 +381,12 @@ export function groupIntoConversations(messages: MessageLike[]): ConversationRes
       conversation.hasUnread = true;
     }
 
-    const hasReplyHeaders = getInReplyTo(message) || getReferences(message).length > 0;
-    if (hasReplyHeaders || hasAnsweredFlag(message)) {
+    // Only use the \Answered IMAP flag (set on messages the user replied to).
+    // Generic In-Reply-To/References headers fire for every reply in a thread
+    // (including from other people), so we don't use those here.
+    // The conversation-grouper also augments hasReply via the replyTargets
+    // index built from Sent folder messages.
+    if (hasAnsweredFlag(message)) {
       conversation.hasReply = true;
     }
 

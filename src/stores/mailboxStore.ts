@@ -421,10 +421,31 @@ const createMailboxStore = () => {
 
     try {
       const since = now - REPLY_INDEX_LOOKBACK_DAYS * 24 * 60 * 60 * 1000;
-      const sentMessages = await db.messages
+      let sentMessages = await db.messages
         .where('[account+folder+date]')
         .between([account, sentFolder, since], [account, sentFolder, Dexie.maxKey], true, true)
         .toArray();
+
+      // If no sent messages in IDB, bootstrap from API so the reply index
+      // works even if the user has never opened the Sent folder.
+      if (!sentMessages.length) {
+        try {
+          const res = await Remote.request(
+            'MessageList',
+            { folder: sentFolder, limit: 200 },
+            { method: 'GET', pathOverride: '/v1/messages' },
+          );
+          const items = Array.isArray(res) ? res : res?.data || res?.messages || [];
+          if (items.length) {
+            const normalized = items.map((m) => normalizeMessageForCache(m, account, sentFolder));
+            await db.messages.bulkPut(normalized).catch(() => {});
+            sentMessages = normalized;
+          }
+        } catch (fetchErr) {
+          warn('[replies] Failed to bootstrap sent messages from API', fetchErr);
+        }
+      }
+
       const targets = new Set();
       const index = new Map();
       sentMessages.forEach((msg) => {

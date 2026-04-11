@@ -61,7 +61,7 @@ export const createConversationGrouper = () => {
     const stable = grouped.map((conv) => {
       conv.messages = deduplicateMessages(conv.messages);
       conv.is_unread = conv.hasUnread;
-      if (targetSet.size && !conv.hasReply) {
+      if (targetSet.size) {
         conv.hasReply = conv.messages.some((message) =>
           targetSet.has(message?.header_message_id || message?.message_id || message?.id),
         );

@@ -427,6 +427,8 @@
   let replyTo = $state('');
   let inReplyTo = $state('');
   let references = $state('');
+  let replyToMessageId = $state<string | null>(null);
+  let replyToMessageFolder = $state<string | null>(null);
   let toInputEl = $state<HTMLInputElement | undefined>();
   let ccInputEl = $state<HTMLInputElement | undefined>();
   let bccInputEl = $state<HTMLInputElement | undefined>();
@@ -1239,6 +1241,8 @@
     replyTo = '';
     inReplyTo = '';
     references = '';
+    replyToMessageId = null;
+    replyToMessageFolder = null;
     subject = '';
     body = '';
     isPlainText = getPlainTextDefault();
@@ -2090,8 +2094,10 @@
     if (ccRecipients.length) payload.cc = ccRecipients;
     if (bccRecipients.length) payload.bcc = bccRecipients;
     if (replyTo) payload.reply_to = replyTo;
-    if (inReplyTo) payload.in_reply_to = inReplyTo;
+    if (inReplyTo) payload.inReplyTo = inReplyTo;
     if (references) payload.references = references;
+    if (replyToMessageId) payload._replyToMessageId = replyToMessageId;
+    if (replyToMessageFolder) payload._replyToMessageFolder = replyToMessageFolder;
     if (isPlainText) {
       payload.text = body;
     } else {
@@ -2112,6 +2118,36 @@
       payload.has_attachment = true;
     }
     return payload;
+  };
+
+  const markOriginalAsAnswered = async () => {
+    if (!replyToMessageId) return;
+    const account = Local.get('email') || 'default';
+    try {
+      // Read current message from IDB to get existing flags
+      const records = await db.messages
+        .where('[account+id]')
+        .equals([account, replyToMessageId])
+        .toArray();
+      const msg = records?.[0];
+      if (!msg) return;
+      const currentFlags: string[] = Array.isArray(msg.flags) ? msg.flags : [];
+      if (currentFlags.includes('\\Answered')) return; // Already flagged
+      const newFlags = [...currentFlags, '\\Answered'];
+      // Optimistic IDB update
+      await db.messages
+        .where('[account+id]')
+        .equals([account, replyToMessageId])
+        .modify({ flags: newFlags });
+      // Sync to server
+      await Remote.request(
+        'MessageUpdate',
+        { flags: newFlags, folder: replyToMessageFolder || msg.folder },
+        { method: 'PUT', pathOverride: `/v1/messages/${encodeURIComponent(replyToMessageId)}` },
+      );
+    } catch (err) {
+      console.warn('[Compose] Failed to set \\Answered flag on original message:', err);
+    }
   };
 
   const saveSentCopyWrapper = async (payload: Record<string, unknown>) => {
@@ -2234,11 +2270,17 @@
       return;
     }
     try {
-      await Remote.request('Emails', payload, { method: 'POST' });
+      // Strip internal fields before sending to API
+      const apiPayload = { ...payload };
+      delete apiPayload._replyToMessageId;
+      delete apiPayload._replyToMessageFolder;
+      await Remote.request('Emails', apiPayload, { method: 'POST' });
       // Skip saveSentCopy in native window — the db worker isn't initialized
       // in the compose webview, so IDB access hangs. The server handles sent copy.
       if (!nativeWindow) {
         await saveSentCopyWrapper(payload);
+        // Mark original message as \Answered after successful reply
+        markOriginalAsAnswered();
       }
       // Capture IDs before reset() clears them — needed for cleanup
       const msgIdToDelete = sourceMessageId;
@@ -2476,6 +2518,12 @@
       references = Array.isArray(resolvedPrefill.references)
         ? (resolvedPrefill.references as string[]).join(' ')
         : (resolvedPrefill.references as string) || '';
+    }
+    if (resolvedPrefill.replyToMessageId) {
+      replyToMessageId = resolvedPrefill.replyToMessageId as string;
+    }
+    if (resolvedPrefill.replyToMessageFolder) {
+      replyToMessageFolder = resolvedPrefill.replyToMessageFolder as string;
     }
     if (resolvedPrefill.subject) subject = resolvedPrefill.subject as string;
     if (isPlainText && resolvedPrefill.text) {

@@ -735,6 +735,7 @@ export const replyTo = async (msg, options = {}) => {
   const references = refsArray.join(' ');
 
   // Open compose immediately with loading state
+  const replyToApiId = getMessageApiId(msg);
   composeModalRef.reply?.({
     subject: addReplyPrefix(msg?.subject),
     from: msg?.from,
@@ -745,6 +746,8 @@ export const replyTo = async (msg, options = {}) => {
     bodyLoading: true, // Signal that body is loading
     inReplyTo,
     references,
+    replyToMessageId: replyToApiId || null,
+    replyToMessageFolder: msg?.folder || null,
   });
 
   // Fetch body from cache (no network request)

@@ -225,6 +225,9 @@ async function sendOutboxItem(item) {
   try {
     // Build payload - include send_at if this was a scheduled email
     const payload = { ...item.emailData };
+    // Strip internal fields before sending to API
+    delete payload._replyToMessageId;
+    delete payload._replyToMessageFolder;
     if (item.sendAt) {
       const scheduledDate = formatRfc3339(item.sendAt);
       if (scheduledDate) {
@@ -241,6 +244,35 @@ async function sendOutboxItem(item) {
     } catch (sentErr) {
       console.error('[Outbox] Failed to save sent copy:', sentErr);
       // Don't fail the overall send if saving to Sent fails
+    }
+
+    // Mark original message as \Answered if this was a reply
+    const origMsgId = item.emailData?._replyToMessageId;
+    if (origMsgId) {
+      try {
+        const records = await db.messages
+          .where('[account+id]')
+          .equals([account, origMsgId])
+          .toArray();
+        const msg = records?.[0];
+        if (msg) {
+          const currentFlags = Array.isArray(msg.flags) ? msg.flags : [];
+          if (!currentFlags.includes('\\Answered')) {
+            const newFlags = [...currentFlags, '\\Answered'];
+            await db.messages
+              .where('[account+id]')
+              .equals([account, origMsgId])
+              .modify({ flags: newFlags });
+            await Remote.request(
+              'MessageUpdate',
+              { flags: newFlags, folder: item.emailData._replyToMessageFolder || msg.folder },
+              { method: 'PUT', pathOverride: `/v1/messages/${encodeURIComponent(origMsgId)}` },
+            );
+          }
+        }
+      } catch (flagErr) {
+        warn('[Outbox] Failed to set \\Answered flag on original message:', flagErr);
+      }
     }
 
     // Success - mark as sent
