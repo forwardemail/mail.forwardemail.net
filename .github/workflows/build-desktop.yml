@@ -25,7 +25,9 @@ env:
 
 jobs:
   # Supply chain audit job — runs before builds
+  # Skip for dependabot PRs — ci.yml already validates the update
   audit:
+    if: github.actor != 'dependabot[bot]'
     runs-on: ubuntu-22.04
     name: Security Audit
     steps:
@@ -58,6 +60,7 @@ jobs:
         continue-on-error: true
 
   build:
+    if: github.actor != 'dependabot[bot]'
     needs: audit
     strategy:
       fail-fast: false
