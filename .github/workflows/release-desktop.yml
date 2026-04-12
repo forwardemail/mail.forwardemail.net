@@ -126,6 +126,13 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Sync version from package.json to tauri.conf.json + Cargo.toml
+        # Safeguard: `np`/`pnpm version` should run this via the package.json
+        # "version" hook, but if it doesn't (e.g. version bump didn't include
+        # the updated files), artifact filenames would use a stale version.
+        shell: bash
+        run: node scripts/sync-version.cjs
+
       - name: Verify release_id is set when called via workflow_call
         if: github.event_name == 'workflow_call' || inputs.release_id != null
         shell: bash

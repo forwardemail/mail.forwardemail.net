@@ -51,17 +51,24 @@ jobs:
       # Clean slate: delete any pre-existing release for this tag so we don't
       # end up with duplicate releases (e.g., from a previous failed run that
       # left a stale draft, or from a re-trigger). The git tag is preserved.
-      - name: Delete any pre-existing release for this tag
+      - name: Delete any pre-existing releases for this tag
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: |
           TAG="v${{ steps.version.outputs.version }}"
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Found existing release $TAG — deleting to start clean"
-            gh release delete "$TAG" --yes --cleanup-tag=false
+          # Use gh api directly — `gh release view/delete TAG` uses
+          # /releases/tags/{tag} which does NOT find draft releases,
+          # so stale drafts from failed runs would linger.
+          ids=$(gh api "repos/${GH_REPO}/releases" --paginate \
+            --jq ".[] | select(.tag_name==\"$TAG\") | .id")
+          if [ -z "$ids" ]; then
+            echo "No existing releases for $TAG"
           else
-            echo "No existing release for $TAG"
+            for id in $ids; do
+              echo "Deleting release id=$id (tag=$TAG)"
+              gh api -X DELETE "repos/${GH_REPO}/releases/${id}" || true
+            done
           fi
 
       - name: Create GitHub Release
@@ -71,6 +78,7 @@ jobs:
           draft: true
           prerelease: false
           generate_release_notes: true
+          tag_name: v${{ steps.version.outputs.version }}
           name: v${{ steps.version.outputs.version }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -103,39 +111,33 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
+          RELEASE_ID: ${{ needs.create-release.outputs.release_id }}
         run: |
-          echo "=== Release v${{ needs.create-release.outputs.version }} assets ==="
-          gh release view "v${{ needs.create-release.outputs.version }}" \
-            --json assets --jq '.assets[].name' || echo "Failed to list assets"
+          echo "=== Release id=${RELEASE_ID} assets ==="
+          gh api "repos/${GH_REPO}/releases/${RELEASE_ID}/assets" \
+            --jq '.[].name' || echo "Failed to list assets"
 
       - name: Download release assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
+          RELEASE_ID: ${{ needs.create-release.outputs.release_id }}
         run: |
+          # Use release_id via gh api — `gh release download TAG` uses
+          # /releases/tags/{tag} which doesn't find draft releases.
           mkdir -p artifacts
-          # Download all non-checksum files from the release
-          gh release download "v${{ needs.create-release.outputs.version }}" \
-            --dir artifacts \
-            --pattern '*.dmg' \
-            --pattern '*.app.tar.gz' \
-            --pattern '*.app.tar.gz.sig' \
-            --pattern '*.msi' \
-            --pattern '*.msi.zip' \
-            --pattern '*.msi.zip.sig' \
-            --pattern '*.nsis.zip' \
-            --pattern '*.nsis.zip.sig' \
-            --pattern '*.exe' \
-            --pattern '*.deb' \
-            --pattern '*.rpm' \
-            --pattern '*.AppImage' \
-            --pattern '*.AppImage.tar.gz' \
-            --pattern '*.AppImage.tar.gz.sig' \
-            --pattern '*.apk' \
-            --pattern '*.aab' \
-            --pattern '*.ipa' || true
+          cd artifacts
+          patterns='\.(dmg|app\.tar\.gz|app\.tar\.gz\.sig|msi|msi\.zip|msi\.zip\.sig|nsis\.zip|nsis\.zip\.sig|exe|deb|rpm|AppImage|AppImage\.tar\.gz|AppImage\.tar\.gz\.sig|apk|aab|ipa)$'
+          gh api "repos/${GH_REPO}/releases/${RELEASE_ID}/assets" \
+            --jq ".[] | select(.name | test(\"${patterns}\")) | [.id, .name] | @tsv" | \
+            while IFS=$'\t' read -r asset_id asset_name; do
+              [ -z "$asset_id" ] && continue
+              echo "→ $asset_name"
+              gh api -H "Accept: application/octet-stream" \
+                "repos/${GH_REPO}/releases/assets/${asset_id}" > "$asset_name" || true
+            done
           echo "=== Downloaded files ==="
-          ls -la artifacts/ || true
+          ls -la . || true
 
       - name: Generate SHA-256 checksums
         id: sums
@@ -156,12 +158,26 @@ jobs:
 
       - name: Upload checksums to release
         if: steps.sums.outputs.generated == 'true'
-        uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe # v2.6.1
-        with:
-          tag_name: v${{ needs.create-release.outputs.version }}
-          files: artifacts/SHA256SUMS.txt
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_ID: ${{ needs.create-release.outputs.release_id }}
+        run: |
+          # Use release_id via gh api instead of softprops/action-gh-release,
+          # which uses the /releases/tags/{tag} endpoint that does NOT find
+          # draft releases and would create a duplicate non-draft release.
+          cd artifacts
+          name="SHA256SUMS.txt"
+          existing_id=$(gh api "repos/${GH_REPO}/releases/${RELEASE_ID}/assets" \
+            --jq ".[] | select(.name==\"$name\") | .id" | head -n 1)
+          if [ -n "$existing_id" ]; then
+            gh api -X DELETE "repos/${GH_REPO}/releases/assets/${existing_id}" || true
+          fi
+          gh api \
+            --method POST \
+            -H "Content-Type: text/plain" \
+            "https://uploads.github.com/repos/${GH_REPO}/releases/${RELEASE_ID}/assets?name=${name}" \
+            --input "$name"
 
   # ── 4. Publish the release ─────────────────────────────────────────────
   # Publish as long as the desktop build succeeded — checksums are best-effort
@@ -175,8 +191,13 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
+          RELEASE_ID: ${{ needs.create-release.outputs.release_id }}
         run: |
-          gh release edit "v${{ needs.create-release.outputs.version }}" --draft=false
+          # Use release_id via gh api — `gh release edit TAG` uses
+          # /releases/tags/{tag} which does NOT find draft releases.
+          gh api --method PATCH "repos/${GH_REPO}/releases/${RELEASE_ID}" \
+            -f draft=false \
+            -F make_latest=true
 
   # ── 5. Deploy web app ─────────────────────────────────────────────────
   # Inline deploy because GITHUB_TOKEN events don't trigger other workflows,
