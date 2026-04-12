@@ -2,6 +2,7 @@ package net.forwardemail.mail
 
 import android.content.Intent
 import android.os.Bundle
+import android.view.View
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.enableEdgeToEdge
@@ -17,6 +18,21 @@ class MainActivity : TauriActivity() {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
     handleShareIntent(intent)
+
+    // Pad the activity's root content view with system bar insets.
+    // This ensures web content never draws under the status bar or
+    // navigation bar regardless of where Tauri mounts its WebView.
+    val rootView = findViewById<View>(android.R.id.content)
+    ViewCompat.setOnApplyWindowInsetsListener(rootView) { view, insets ->
+      val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+      val imeInsets = insets.getInsets(WindowInsetsCompat.Type.ime())
+      val bottomInset = maxOf(systemBars.bottom, imeInsets.bottom)
+      view.setPadding(systemBars.left, systemBars.top, systemBars.right, bottomInset)
+      // Also inject CSS vars for any components that want fine-grained control
+      webView?.let { injectInsetsCss(it, systemBars.top, systemBars.bottom, systemBars.left, systemBars.right) }
+      WindowInsetsCompat.CONSUMED
+    }
+    ViewCompat.requestApplyInsets(rootView)
   }
 
   override fun onWebViewCreate(webView: WebView) {
@@ -28,52 +44,6 @@ class MainActivity : TauriActivity() {
       pendingShareJs = null
     }
 
-    applySystemBarInsets(webView)
-  }
-
-  /**
-   * Handle Android system bar insets (status bar, navigation bar, gestures).
-   *
-   * We use a two-layered approach for maximum reliability:
-   *   1. Pad the WebView itself so content doesn't draw under the system bars
-   *      (no need for CSS to compensate; works on all pages immediately).
-   *   2. Also inject --safe-area-inset-* CSS variables for any components
-   *      that want fine-grained control (e.g. sticky elements that should
-   *      extend to the edge with their own background).
-   */
-  private fun applySystemBarInsets(webView: WebView) {
-    ViewCompat.setOnApplyWindowInsetsListener(webView) { view, insets ->
-      val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
-      val imeInsets = insets.getInsets(WindowInsetsCompat.Type.ime())
-
-      // Pad the WebView directly with system bar insets so content never
-      // draws under the status bar or navigation bar. IME (keyboard) bottom
-      // takes precedence over the navigation bar when the keyboard is up.
-      val bottomInset = maxOf(systemBars.bottom, imeInsets.bottom)
-      view.setPadding(systemBars.left, systemBars.top, systemBars.right, bottomInset)
-
-      // Also expose insets as CSS variables for components that need them
-      val density = view.resources.displayMetrics.density
-      val top = (systemBars.top / density).toInt()
-      val bottom = (systemBars.bottom / density).toInt()
-      val left = (systemBars.left / density).toInt()
-      val right = (systemBars.right / density).toInt()
-
-      val js = """
-        (function() {
-          var style = document.documentElement.style;
-          style.setProperty('--safe-area-inset-top', '${top}px');
-          style.setProperty('--safe-area-inset-bottom', '${bottom}px');
-          style.setProperty('--safe-area-inset-left', '${left}px');
-          style.setProperty('--safe-area-inset-right', '${right}px');
-        })();
-      """.trimIndent()
-      lastInsetsJs = js
-      webView.evaluateJavascript(js, null)
-
-      insets
-    }
-
     // Re-inject CSS variables after each page load so navigation doesn't lose them
     webView.webViewClient = object : WebViewClient() {
       override fun onPageFinished(view: WebView?, url: String?) {
@@ -82,7 +52,28 @@ class MainActivity : TauriActivity() {
       }
     }
 
-    ViewCompat.requestApplyInsets(webView)
+    // Trigger an initial insets pass now that the WebView exists
+    ViewCompat.requestApplyInsets(findViewById(android.R.id.content))
+  }
+
+  private fun injectInsetsCss(webView: WebView, topPx: Int, bottomPx: Int, leftPx: Int, rightPx: Int) {
+    val density = webView.resources.displayMetrics.density
+    val top = (topPx / density).toInt()
+    val bottom = (bottomPx / density).toInt()
+    val left = (leftPx / density).toInt()
+    val right = (rightPx / density).toInt()
+
+    val js = """
+      (function() {
+        var style = document.documentElement.style;
+        style.setProperty('--safe-area-inset-top', '${top}px');
+        style.setProperty('--safe-area-inset-bottom', '${bottom}px');
+        style.setProperty('--safe-area-inset-left', '${left}px');
+        style.setProperty('--safe-area-inset-right', '${right}px');
+      })();
+    """.trimIndent()
+    lastInsetsJs = js
+    webView.evaluateJavascript(js, null)
   }
 
   override fun onNewIntent(intent: Intent) {

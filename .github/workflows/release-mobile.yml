@@ -141,6 +141,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
+          RELEASE_ID: ${{ inputs.release_id }}
         run: |
           TAG="v${{ inputs.version || inputs.tag || github.ref_name }}"
           # Collect built artifacts
@@ -151,8 +152,36 @@ jobs:
             echo "::error::No APK/AAB files found to upload"
             exit 1
           fi
-          echo "Uploading ${#FILES[@]} file(s) to release $TAG"
-          gh release upload "$TAG" "${FILES[@]}" --clobber
+
+          # `gh release upload TAG` uses the /releases/tags/{tag} API which
+          # does NOT find draft releases. Use the release_id directly via
+          # the GitHub API to upload to the existing draft.
+          if [ -z "$RELEASE_ID" ]; then
+            # Fallback: look up the release ID (includes drafts) by tag
+            RELEASE_ID=$(gh api "repos/${GH_REPO}/releases" --jq ".[] | select(.tag_name==\"$TAG\") | .id" | head -n 1)
+          fi
+          if [ -z "$RELEASE_ID" ]; then
+            echo "::error::Could not find release for tag $TAG"
+            exit 1
+          fi
+          echo "Uploading ${#FILES[@]} file(s) to release id=$RELEASE_ID (tag=$TAG)"
+
+          # Upload each file via the GitHub asset upload endpoint
+          for f in "${FILES[@]}"; do
+            name=$(basename "$f")
+            echo "  → $name"
+            # Delete any existing asset with the same name (clobber behavior)
+            existing_id=$(gh api "repos/${GH_REPO}/releases/${RELEASE_ID}/assets" \
+              --jq ".[] | select(.name==\"$name\") | .id" | head -n 1)
+            if [ -n "$existing_id" ]; then
+              gh api -X DELETE "repos/${GH_REPO}/releases/assets/${existing_id}" || true
+            fi
+            gh api \
+              --method POST \
+              -H "Content-Type: application/octet-stream" \
+              "https://uploads.github.com/repos/${GH_REPO}/releases/${RELEASE_ID}/assets?name=${name}" \
+              --input "$f"
+          done
 
       - name: Clean up keystore
         if: always()

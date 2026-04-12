@@ -532,6 +532,49 @@ function getEmbeddedScript(parentOrigin: string): string {
         setTimeout(reportHeight, 350);
       }, true);
 
+      /**
+       * Horizontal swipe detection — forward next/prev navigation intents
+       * to the parent so mobile users can swipe across the email body, not
+       * only on the sticky header area. Touch events inside an iframe don't
+       * bubble to the parent window, so we detect here and postMessage.
+       */
+      (function() {
+        var swipeStartX = 0;
+        var swipeStartY = 0;
+        var swipeActive = false;
+        var swipeDirection = null;
+
+        document.addEventListener('touchstart', function(e) {
+          if (!e.touches || e.touches.length !== 1) return;
+          swipeStartX = e.touches[0].clientX;
+          swipeStartY = e.touches[0].clientY;
+          swipeActive = false;
+          swipeDirection = null;
+          parent.postMessage({ type: 'swipe', payload: { phase: 'start', x: swipeStartX, y: swipeStartY } }, TARGET_ORIGIN);
+        }, { passive: true });
+
+        document.addEventListener('touchmove', function(e) {
+          if (!e.touches || e.touches.length !== 1 || !swipeStartX) return;
+          var dx = e.touches[0].clientX - swipeStartX;
+          var dy = e.touches[0].clientY - swipeStartY;
+          if (!swipeActive && Math.abs(dx) > 15 && Math.abs(dx) > Math.abs(dy) * 2) {
+            swipeActive = true;
+            swipeDirection = dx > 0 ? 'right' : 'left';
+          }
+          if (swipeActive) {
+            parent.postMessage({ type: 'swipe', payload: { phase: 'move', dx: dx, dy: dy } }, TARGET_ORIGIN);
+          }
+        }, { passive: true });
+
+        document.addEventListener('touchend', function() {
+          parent.postMessage({ type: 'swipe', payload: { phase: 'end', active: swipeActive, direction: swipeDirection } }, TARGET_ORIGIN);
+          swipeStartX = 0;
+          swipeStartY = 0;
+          swipeActive = false;
+          swipeDirection = null;
+        }, { passive: true });
+      })();
+
       // Note: 'ready' message is sent at the START of this script to ensure
       // parent is notified even if subsequent initialization fails
     })();

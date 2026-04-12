@@ -2771,6 +2771,46 @@
     };
   });
 
+  /**
+   * Handle swipe gestures forwarded from inside the EmailIframe. Touch events
+   * inside the iframe don't bubble to the parent, so the iframe srcdoc posts
+   * swipe phase events to us and we reuse the same reader swipe logic.
+   */
+  const handleIframeSwipe = (phase, detail) => {
+    if (window.innerWidth > 640) return;
+    if (!$mobileReader) return;
+    if (phase === 'start') {
+      readerSwipeStartX = typeof detail?.x === 'number' ? detail.x : 0;
+      readerSwipeStartY = typeof detail?.y === 'number' ? detail.y : 0;
+      readerSwipeDistance = 0;
+      readerSwiping = false;
+      readerSwipeDirection = null;
+    } else if (phase === 'move') {
+      if (!readerSwipeStartX) return;
+      const dx = typeof detail?.dx === 'number' ? detail.dx : 0;
+      const dy = typeof detail?.dy === 'number' ? detail.dy : 0;
+      if (!readerSwiping && Math.abs(dx) > 15 && Math.abs(dx) > Math.abs(dy) * 2) {
+        readerSwiping = true;
+        readerSwipeDirection = dx > 0 ? 'right' : 'left';
+      }
+      if (readerSwiping) {
+        readerSwipeDistance = dx;
+      }
+    } else if (phase === 'end') {
+      const distance = Math.abs(readerSwipeDistance);
+      const direction = readerSwipeDistance > 0 ? 'right' : 'left';
+      if (distance > 50 && readerSwiping) {
+        if (direction === 'left') selectNext();
+        else selectPrevious();
+      }
+      readerSwipeStartX = 0;
+      readerSwipeStartY = 0;
+      readerSwipeDistance = 0;
+      readerSwiping = false;
+      readerSwipeDirection = null;
+    }
+  };
+
   const archiveMessage = async (msg) => {
     if (!msg) return;
     const targets = msg?.messages?.length ? msg.messages : [msg];
@@ -7852,6 +7892,7 @@
                               messageId={$selectedMessage?.id || $selectedMessage?.uid || ''}
                               onLinkClick={handleIframeLinkClick}
                               onFormSubmit={handleIframeFormSubmit}
+                              onSwipe={handleIframeSwipe}
                             />
                           {/if}
                         {:else if isExpanded && !isSelected}
@@ -7872,6 +7913,7 @@
                               messageId={message?.id || message?.uid || ''}
                               onLinkClick={handleIframeLinkClick}
                               onFormSubmit={handleIframeFormSubmit}
+                              onSwipe={handleIframeSwipe}
                             />
                           {:else}
                             <!-- Fallback to snippet if body not yet loaded -->
@@ -8080,6 +8122,7 @@
                       messageId={$selectedMessage?.id || $selectedMessage?.uid || ''}
                       onLinkClick={handleIframeLinkClick}
                       onFormSubmit={handleIframeFormSubmit}
+                      onSwipe={handleIframeSwipe}
                     />
                     {#if filterDownloadableAttachments($attachments).length}
                       <div class="flex flex-wrap gap-2 mt-4 pt-4 border-t border-border">

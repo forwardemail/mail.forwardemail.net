@@ -9,9 +9,10 @@
     onLinkClick?: (url: string, isMailto: boolean) => void;
     onHeightChange?: (height: number) => void;
     onFormSubmit?: (action: string, method: string, data: Record<string, unknown>) => void;
+    onSwipe?: (phase: 'start' | 'move' | 'end', detail: Record<string, unknown>) => void;
   }
 
-  let { html, messageId, onLinkClick, onHeightChange, onFormSubmit }: Props = $props();
+  let { html, messageId, onLinkClick, onHeightChange, onFormSubmit, onSwipe }: Props = $props();
 
   // State declarations
   let iframeRef: HTMLIFrameElement | null = $state(null);
@@ -205,7 +206,7 @@
     }
 
     // Only accept messages with our known types
-    const validTypes = ['height', 'link', 'form', 'ready'];
+    const validTypes = ['height', 'link', 'form', 'ready', 'swipe'];
     if (!validTypes.includes(data.type)) {
       return;
     }
@@ -251,6 +252,12 @@
             data.payload.method || 'get',
             data.payload.data || {},
           );
+        }
+        break;
+
+      case 'swipe':
+        if (data.payload?.phase) {
+          onSwipe?.(data.payload.phase, data.payload);
         }
         break;
     }
