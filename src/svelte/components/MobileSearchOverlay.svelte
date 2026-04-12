@@ -240,7 +240,7 @@
     align-items: center;
     gap: 8px;
     padding: 8px 12px;
-    padding-top: calc(8px + var(--sai-top, env(safe-area-inset-top, 0px)));
+    padding-top: calc(8px + env(safe-area-inset-top, 0px));
     border-bottom: 1px solid var(--color-border, hsl(var(--border)));
     background: var(--color-background, hsl(var(--background)));
   }

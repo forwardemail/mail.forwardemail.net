@@ -5066,7 +5066,7 @@
       {/if}
       <div
         class="flex items-center gap-3 px-4 py-2 bg-muted/50 dark:bg-background"
-        style="padding-top: max(0.5rem, var(--sai-top, env(safe-area-inset-top, 0px)))"
+        style="padding-top: max(0.5rem, env(safe-area-inset-top, 0px))"
       >
         <Tooltip.Root>
           <Tooltip.Trigger>
@@ -8230,7 +8230,7 @@
         {#if showMobileFab}
           <Button
             class="fixed bottom-6 right-5 w-14 h-14 rounded-full shadow-lg z-50 md:hidden"
-            style="margin-bottom: var(--sai-bottom, env(safe-area-inset-bottom, 0px))"
+            style="margin-bottom: env(safe-area-inset-bottom, 0px)"
             aria-label="Compose"
             onclick={() => mailboxView?.composeModal?.open?.()}
           >

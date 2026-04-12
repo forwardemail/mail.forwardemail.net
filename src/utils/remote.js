@@ -184,6 +184,11 @@ export const Remote = {
       // Successful response — reset consecutive auth failure counter
       recordAuthSuccess();
 
+      // Allow callers to explicitly request text (e.g. raw RFC822 EML downloads)
+      if (options.responseAs === 'text') {
+        return await response.text();
+      }
+
       // ky automatically parses JSON if content-type is application/json
       // For non-JSON responses, we need to handle differently
       const contentType = response.headers.get('content-type') || '';
@@ -193,7 +198,9 @@ export const Remote = {
         return await response.json();
       }
 
-      return null;
+      // Fallback: return raw text for any non-JSON response rather than null
+      // so callers that expected a body get something useful (e.g. message/rfc822)
+      return await response.text();
     } catch (error) {
       console.error(`Remote.${action} failed:`, error);
 

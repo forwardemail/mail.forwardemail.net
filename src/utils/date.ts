@@ -57,9 +57,11 @@ const readerDateTimeOptions: Intl.DateTimeFormatOptions = {
 export function toDate(value: DateInput): Date | null {
   if (value instanceof Date) return value;
   if (value === undefined || value === null) return null;
+  // Treat empty string and 0 as missing values rather than the Unix epoch
+  if (value === '' || value === 0) return null;
 
   const num = typeof value === 'number' ? value : Number(value);
-  if (typeof value === 'number' || Number.isFinite(num)) {
+  if (typeof value === 'number' || (Number.isFinite(num) && num !== 0)) {
     const ts = typeof value === 'number' ? value : num;
     return new Date(ts < 1e12 ? ts * 1000 : ts);
   }

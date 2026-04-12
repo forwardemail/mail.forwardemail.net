@@ -399,11 +399,17 @@ export function groupIntoConversations(messages: MessageLike[]): ConversationRes
       conversation.hasAttachment = true;
     }
 
-    const messageDate = new Date(
-      (message.dateMs as number) || (message.date as number) || (message.Date as number) || 0,
-    );
-    if (!conversation.latestDate || messageDate > conversation.latestDate) {
-      conversation.latestDate = messageDate;
+    // Skip messages with no usable date rather than falling back to epoch (1970)
+    const dateValue =
+      (message.dateMs as number) || (message.date as number) || (message.Date as number);
+    if (dateValue) {
+      const messageDate = new Date(dateValue);
+      if (
+        Number.isFinite(messageDate.getTime()) &&
+        (!conversation.latestDate || messageDate > conversation.latestDate)
+      ) {
+        conversation.latestDate = messageDate;
+      }
     }
 
     const messageUid = getMessageUidValue(message);

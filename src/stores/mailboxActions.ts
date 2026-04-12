@@ -1981,6 +1981,8 @@ const fetchRawOriginal = async (msg) => {
       {
         method: 'GET',
         pathOverride: `/v1/messages/${encodeURIComponent(apiId)}?folder=${encodeURIComponent(folder || '')}&raw=true`,
+        // Server returns raw RFC822 text (message/rfc822), not JSON
+        responseAs: 'text',
       },
     );
     return res?.Result || res || null;
@@ -2001,6 +2003,8 @@ const fetchEmlOriginal = async (msg) => {
       {
         method: 'GET',
         pathOverride: `/v1/messages/${encodeURIComponent(apiId)}?folder=${encodeURIComponent(folder || '')}&eml=true`,
+        // Server returns raw RFC822 text (message/rfc822), not JSON
+        responseAs: 'text',
       },
     );
     return res?.Result || res || null;

@@ -11,6 +11,7 @@ import androidx.core.view.WindowInsetsCompat
 class MainActivity : TauriActivity() {
   private var webView: WebView? = null
   private var pendingShareJs: String? = null
+  private var lastInsetsJs: String? = null
 
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
@@ -27,17 +28,31 @@ class MainActivity : TauriActivity() {
       pendingShareJs = null
     }
 
-    // Inject safe area insets as CSS variables — Android WebView doesn't
-    // support env(safe-area-inset-*) natively, so we read WindowInsets
-    // and set them as custom properties on the document root.
-    injectSafeAreaInsets(webView)
+    applySystemBarInsets(webView)
   }
 
-  private var lastInsetsJs: String? = null
-
-  private fun injectSafeAreaInsets(webView: WebView) {
+  /**
+   * Handle Android system bar insets (status bar, navigation bar, gestures).
+   *
+   * We use a two-layered approach for maximum reliability:
+   *   1. Pad the WebView itself so content doesn't draw under the system bars
+   *      (no need for CSS to compensate; works on all pages immediately).
+   *   2. Also inject --safe-area-inset-* CSS variables for any components
+   *      that want fine-grained control (e.g. sticky elements that should
+   *      extend to the edge with their own background).
+   */
+  private fun applySystemBarInsets(webView: WebView) {
     ViewCompat.setOnApplyWindowInsetsListener(webView) { view, insets ->
       val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+      val imeInsets = insets.getInsets(WindowInsetsCompat.Type.ime())
+
+      // Pad the WebView directly with system bar insets so content never
+      // draws under the status bar or navigation bar. IME (keyboard) bottom
+      // takes precedence over the navigation bar when the keyboard is up.
+      val bottomInset = maxOf(systemBars.bottom, imeInsets.bottom)
+      view.setPadding(systemBars.left, systemBars.top, systemBars.right, bottomInset)
+
+      // Also expose insets as CSS variables for components that need them
       val density = view.resources.displayMetrics.density
       val top = (systemBars.top / density).toInt()
       val bottom = (systemBars.bottom / density).toInt()
@@ -59,7 +74,7 @@ class MainActivity : TauriActivity() {
       insets
     }
 
-    // Re-inject after each page load so navigation doesn't lose the values
+    // Re-inject CSS variables after each page load so navigation doesn't lose them
     webView.webViewClient = object : WebViewClient() {
       override fun onPageFinished(view: WebView?, url: String?) {
         super.onPageFinished(view, url)
@@ -67,7 +82,6 @@ class MainActivity : TauriActivity() {
       }
     }
 
-    // Trigger an initial insets pass
     ViewCompat.requestApplyInsets(webView)
   }
 

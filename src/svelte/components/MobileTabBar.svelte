@@ -90,8 +90,10 @@
 
 <style>
   .fe-mobile-tabbar {
-    padding-bottom: var(--sai-bottom, env(safe-area-inset-bottom, 0px));
-    height: calc(56px + var(--sai-bottom, env(safe-area-inset-bottom, 0px)));
+    /* Android: WebView is padded natively, so no extra inset needed.
+     * iOS: env() provides the home indicator inset. */
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    height: calc(56px + env(safe-area-inset-bottom, 0px));
   }
 
   .fe-mobile-tab {

@@ -140,16 +140,10 @@ body.light-mode:not(.mailbox-mode) {
   color: var(--color-text);
 }
 
-/* Mobile safe area handling (--sai-* injected by Android WebView) */
-body {
-  padding-bottom: var(--sai-bottom, env(safe-area-inset-bottom, 0px));
-}
-
-.fe-compose-modal,
-.fe-reader,
-.fe-message-list {
-  padding-bottom: calc(16px + var(--sai-bottom, env(safe-area-inset-bottom, 0px)));
-}
+/* Note: Android WebView is padded with system bar insets at the native level
+ * (see MainActivity.kt), so body/app content never draws under the status bar
+ * or navigation bar. iOS uses env() directly. CSS vars are kept available
+ * for components that want to extend into the safe area intentionally. */
 
 /* Ensure inputs don't trigger zoom on iOS */
 @media (max-width: 640px) {
