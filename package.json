@@ -32,6 +32,7 @@
     "format": "prettier . --check",
     "format:fix": "prettier . --write",
     "prepare": "husky install",
+    "prerelease": "bash scripts/prerelease.sh",
     "release": "np",
     "release:desktop": "bash scripts/release-desktop.sh",
     "tauri:check-cache": "bash scripts/check-cargo-cache.sh",

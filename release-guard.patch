@@ -1,0 +1,124 @@
+diff --git a/package.json b/package.json
+index 49abe91..416392b 100644
+--- a/package.json
++++ b/package.json
+@@ -32,6 +32,7 @@
+     "format": "prettier . --check",
+     "format:fix": "prettier . --write",
+     "prepare": "husky install",
++    "prerelease": "bash scripts/prerelease.sh",
+     "release": "np",
+     "release:desktop": "bash scripts/release-desktop.sh",
+     "tauri:check-cache": "bash scripts/check-cargo-cache.sh",
+diff --git a/scripts/prerelease.sh b/scripts/prerelease.sh
+new file mode 100755
+index 0000000..0b82873
+--- /dev/null
++++ b/scripts/prerelease.sh
+@@ -0,0 +1,49 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++# ── Pre-release guard ────────────────────────────────────────────────
++# Runs automatically before `pnpm release` (via the npm "prerelease"
++# lifecycle hook).  Ensures the local checkout is fully synced with
++# the remote so that `np` never bumps from a stale version.
++#
++# Without this, a user who forgot `git pull && git fetch --tags` could
++# accidentally create a duplicate version tag (e.g. two "0.9.5" bumps
++# from different machines).  np's own tag-existence check is skipped
++# when `publish: false`.
++# ─────────────────────────────────────────────────────────────────────
++
++echo "🔄 Pre-release: syncing with remote..."
++
++# 1. Ensure we're on the main branch
++BRANCH=$(git branch --show-current)
++if [ "$BRANCH" != "main" ]; then
++  echo "❌ Error: must be on the main branch (currently on '$BRANCH')."
++  exit 1
++fi
++
++# 2. Ensure working tree is clean (allow untracked files)
++if [ -n "$(git diff --cached --name-only)" ] || [ -n "$(git diff --name-only)" ]; then
++  echo "❌ Error: working tree has uncommitted changes. Commit or stash first."
++  exit 1
++fi
++
++# 3. Pull latest commits so package.json has the current version
++git pull --rebase origin main
++
++# 4. Fetch all tags (after pull so we have the latest commit history)
++git fetch --tags --force origin
++
++# 5. Verify local package.json version matches the latest tag
++CURRENT_VERSION=$(node -e "console.log(require('./package.json').version)")
++LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "none")
++
++# Strip the 'v' prefix from the tag for comparison
++LATEST_TAG_VERSION="${LATEST_TAG#v}"
++
++if [ "$LATEST_TAG" != "none" ] && [ "$CURRENT_VERSION" != "$LATEST_TAG_VERSION" ]; then
++  echo "⚠️  Warning: package.json version ($CURRENT_VERSION) differs from latest tag ($LATEST_TAG)."
++  echo "   This may indicate the local checkout is out of sync."
++  echo "   Continuing anyway — np will determine the correct next version."
++fi
++
++echo "✅ Pre-release: local checkout is synced (version: $CURRENT_VERSION, latest tag: $LATEST_TAG)"
+diff --git a/scripts/release-desktop.sh b/scripts/release-desktop.sh
+index e7fe9c0..b2dd119 100755
+--- a/scripts/release-desktop.sh
++++ b/scripts/release-desktop.sh
+@@ -13,12 +13,6 @@ set -euo pipefail
+ TAURI_CONF="src-tauri/tauri.conf.json"
+ CARGO_TOML="src-tauri/Cargo.toml"
+ 
+-# Ensure clean working tree (allow untracked files)
+-if [ -n "$(git diff --cached --name-only)" ] || [ -n "$(git diff --name-only)" ]; then
+-  echo "Error: working tree has uncommitted changes. Commit or stash first."
+-  exit 1
+-fi
+-
+ # Ensure we're on main
+ BRANCH=$(git branch --show-current)
+ if [ "$BRANCH" != "main" ]; then
+@@ -26,6 +20,22 @@ if [ "$BRANCH" != "main" ]; then
+   exit 1
+ fi
+ 
++# Ensure clean working tree (allow untracked files)
++if [ -n "$(git diff --cached --name-only)" ] || [ -n "$(git diff --name-only)" ]; then
++  echo "Error: working tree has uncommitted changes. Commit or stash first."
++  exit 1
++fi
++
++# ── Sync with remote ──────────────────────────────────────────────────
++# Pull latest commits first so local files (tauri.conf.json, Cargo.toml)
++# reflect the current version, then fetch all tags so we can detect
++# duplicates.  Without this, a user who hasn't synced could accidentally
++# create a duplicate version tag.
++echo "🔄 Syncing with remote..."
++git pull --rebase origin main
++git fetch --tags --force origin
++echo "✅ Local checkout is synced with remote."
++
+ # Read current version from tauri.conf.json
+ CURRENT=$(node -e "console.log(require('./$TAURI_CONF').version)")
+ echo "Current desktop version: $CURRENT"
+@@ -82,6 +92,16 @@ fi
+ 
+ TAG="desktop-v$NEW_VERSION"
+ 
++# Verify the tag doesn't already exist (locally or on remote)
++if git rev-parse --quiet --verify "refs/tags/$TAG" >/dev/null 2>&1; then
++  echo "Error: tag '$TAG' already exists locally. Is this version already released?"
++  exit 1
++fi
++if git ls-remote --tags origin "refs/tags/$TAG" 2>/dev/null | grep -q "$TAG"; then
++  echo "Error: tag '$TAG' already exists on remote. Is this version already released?"
++  exit 1
++fi
++
+ # Commit and tag
+ git add "$TAURI_CONF" "$CARGO_TOML"
+ git commit -m "chore(release): desktop $NEW_VERSION"

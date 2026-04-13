@@ -13,18 +13,28 @@ set -euo pipefail
 TAURI_CONF="src-tauri/tauri.conf.json"
 CARGO_TOML="src-tauri/Cargo.toml"
 
-# Ensure clean working tree (allow untracked files)
-if [ -n "$(git diff --cached --name-only)" ] || [ -n "$(git diff --name-only)" ]; then
-  echo "Error: working tree has uncommitted changes. Commit or stash first."
-  exit 1
-fi
-
 # Ensure we're on main
 BRANCH=$(git branch --show-current)
 if [ "$BRANCH" != "main" ]; then
   echo "Error: must be on main branch (currently on $BRANCH)."
   exit 1
 fi
+
+# Ensure clean working tree (allow untracked files)
+if [ -n "$(git diff --cached --name-only)" ] || [ -n "$(git diff --name-only)" ]; then
+  echo "Error: working tree has uncommitted changes. Commit or stash first."
+  exit 1
+fi
+
+# ── Sync with remote ──────────────────────────────────────────────────
+# Pull latest commits first so local files (tauri.conf.json, Cargo.toml)
+# reflect the current version, then fetch all tags so we can detect
+# duplicates.  Without this, a user who hasn't synced could accidentally
+# create a duplicate version tag.
+echo "🔄 Syncing with remote..."
+git pull --rebase origin main
+git fetch --tags --force origin
+echo "✅ Local checkout is synced with remote."
 
 # Read current version from tauri.conf.json
 CURRENT=$(node -e "console.log(require('./$TAURI_CONF').version)")
@@ -81,6 +91,16 @@ if [ "$TAURI_VER" != "$NEW_VERSION" ] || [ "$CARGO_VER" != "$NEW_VERSION" ]; the
 fi
 
 TAG="desktop-v$NEW_VERSION"
+
+# Verify the tag doesn't already exist (locally or on remote)
+if git rev-parse --quiet --verify "refs/tags/$TAG" >/dev/null 2>&1; then
+  echo "Error: tag '$TAG' already exists locally. Is this version already released?"
+  exit 1
+fi
+if git ls-remote --tags origin "refs/tags/$TAG" 2>/dev/null | grep -q "$TAG"; then
+  echo "Error: tag '$TAG' already exists on remote. Is this version already released?"
+  exit 1
+fi
 
 # Commit and tag
 git add "$TAURI_CONF" "$CARGO_TOML"
