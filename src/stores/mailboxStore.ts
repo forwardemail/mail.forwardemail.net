@@ -1542,8 +1542,12 @@ const createMailboxStore = () => {
       if (permanent) path += '?permanent=1';
       await Remote.request('MessageDelete', {}, { method: 'DELETE', pathOverride: path });
     } catch (err) {
-      warn('deleteMessage failed, queuing for retry', err);
-      await queueMutation('delete', mutationPayload);
+      // 404 means the message is already gone server-side — treat as success
+      const is404 = err?.status === 404 || /not (found|exist)/i.test(err?.message || '');
+      if (!is404) {
+        warn('deleteMessage failed, queuing for retry', err);
+        await queueMutation('delete', mutationPayload);
+      }
     }
   };
 
@@ -1638,7 +1642,16 @@ const createMailboxStore = () => {
           successfulDeletes.push(chunk[idx]);
           results.push(true);
         } else {
-          results.push(false);
+          // Treat 404 / "not found" as success — the message is already
+          // gone server-side (e.g. expunged by another client or cleanup job).
+          const reason = result.reason;
+          const is404 = reason?.status === 404 || /not (found|exist)/i.test(reason?.message || '');
+          if (is404) {
+            successfulDeletes.push(chunk[idx]);
+            results.push(true);
+          } else {
+            results.push(false);
+          }
         }
       });
     }
@@ -2298,7 +2311,15 @@ const createMailboxStore = () => {
           if (result.status === 'fulfilled') {
             successCount++;
           } else {
-            failCount++;
+            // Treat 404 / "not found" as success — message already gone server-side
+            const reason = result.reason;
+            const is404 =
+              reason?.status === 404 || /not (found|exist)/i.test(reason?.message || '');
+            if (is404) {
+              successCount++;
+            } else {
+              failCount++;
+            }
           }
         });
       }
