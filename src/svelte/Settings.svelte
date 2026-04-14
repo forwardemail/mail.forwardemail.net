@@ -42,7 +42,21 @@
   import Download from '@lucide/svelte/icons/download';
   import ChevronDown from '@lucide/svelte/icons/chevron-down';
   import ExternalLink from '@lucide/svelte/icons/external-link';
-  import { isTauriDesktop } from '../utils/platform.js';
+  import { isTauri, isTauriDesktop } from '../utils/platform.js';
+
+  const openExternal = async (url: string) => {
+    if (isTauri) {
+      try {
+        const { openUrl } = await import('@tauri-apps/plugin-opener');
+        await openUrl(url);
+        return;
+      } catch (err) {
+        console.warn('[Settings] opener failed:', err);
+        return;
+      }
+    }
+    window.open(url, '_blank', 'noopener,noreferrer');
+  };
   import {
     getLatestDesktopRelease,
     detectPlatform as detectDesktopPlatform,
@@ -1438,7 +1452,7 @@
               <Button
                 variant="outline"
                 class="mt-4"
-                onclick={() => window.open('https://forwardemail.net/my-account/billing', '_blank')}
+                onclick={() => openExternal('https://forwardemail.net/my-account/billing')}
               >
                 Increase storage
               </Button>

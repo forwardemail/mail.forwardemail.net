@@ -133,35 +133,40 @@ function triggerDownload(href: string, filename: string): void {
   document.body.removeChild(a);
 }
 
+// IPC payloads above this size have been observed to crash macOS WKWebView
+// when passed to writeFile in a single call. Chunked append keeps each
+// round-trip small.
+const TAURI_WRITE_CHUNK_SIZE = 512 * 1024;
+
 async function triggerDownloadTauri(href: string, filename: string): Promise<void> {
+  // Defer dialog to next tick — opening NSSavePanel from inside the
+  // originating click handler can crash the webview process on macOS.
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
   const { save } = await import('@tauri-apps/plugin-dialog');
   const { writeFile } = await import('@tauri-apps/plugin-fs');
 
-  // Show native save dialog first (small IPC call)
   const filePath = await save({ defaultPath: filename });
-  if (!filePath) return; // User cancelled
+  if (!filePath) return;
 
-  // Convert href to binary data
-  let data: Uint8Array;
-  if (href.startsWith('data:')) {
-    const match = href.match(/^data:[^;]+;base64,(.+)$/);
-    if (match) {
-      const binary = atob(match[1]);
-      data = new Uint8Array(binary.length);
-      for (let i = 0; i < binary.length; i++) {
-        data[i] = binary.charCodeAt(i);
-      }
-    } else {
-      const response = await fetch(href);
-      data = new Uint8Array(await response.arrayBuffer());
-    }
-  } else {
-    const response = await fetch(href);
-    data = new Uint8Array(await response.arrayBuffer());
+  // Use native Blob APIs instead of an atob loop — avoids allocating a
+  // JS string the size of the payload.
+  const response = await fetch(href);
+  const buffer = await response.arrayBuffer();
+  const bytes = new Uint8Array(buffer);
+
+  if (bytes.byteLength <= TAURI_WRITE_CHUNK_SIZE) {
+    await writeFile(filePath, bytes);
+    return;
   }
 
-  // Write to user-selected path via fs plugin (binary IPC, no JSON serialization)
-  await writeFile(filePath, data);
+  for (let offset = 0; offset < bytes.byteLength; offset += TAURI_WRITE_CHUNK_SIZE) {
+    const chunk = bytes.subarray(
+      offset,
+      Math.min(offset + TAURI_WRITE_CHUNK_SIZE, bytes.byteLength),
+    );
+    await writeFile(filePath, chunk, { append: offset > 0 });
+  }
 }
 
 function isCachedBodyComplete(cached: CachedBody | undefined): boolean {

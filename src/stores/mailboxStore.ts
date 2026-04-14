@@ -469,11 +469,14 @@ const createMailboxStore = () => {
     }
   };
 
+  // Stale-search guard — stops overlapping calls from flickering results.
+  let searchMessagesGeneration = 0;
   const searchMessages = async (term) => {
     const rawTerm = term ?? '';
     const q = rawTerm.trim();
     const searchQuery = buildSearchQuery(q);
     query.set(rawTerm);
+    const generation = ++searchMessagesGeneration;
 
     if (!searchQuery) {
       searchResults.set([]);
@@ -496,6 +499,8 @@ const createMailboxStore = () => {
           candidates: [],
         })) || [];
 
+      if (generation !== searchMessagesGeneration) return;
+
       searchResults.set(results);
       searchActive.set(true);
       hasNextPage.set(false);
@@ -512,7 +517,7 @@ const createMailboxStore = () => {
       const toasts = get(toastsRef);
       toasts?.show?.('Search failed. Please try again.', 'error');
     } finally {
-      searching.set(false);
+      if (generation === searchMessagesGeneration) searching.set(false);
     }
   };
 

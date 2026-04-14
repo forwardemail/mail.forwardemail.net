@@ -12,10 +12,10 @@
       try {
         const { openUrl } = await import('@tauri-apps/plugin-opener');
         await openUrl(url);
-        return;
-      } catch {
-        /* fall through */
+      } catch (err) {
+        console.warn('[AboutDialog] opener failed:', err);
       }
+      return;
     }
     window.open(url, '_blank', 'noopener,noreferrer');
   };

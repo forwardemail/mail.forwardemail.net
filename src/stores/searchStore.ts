@@ -82,6 +82,10 @@ let workerClient: SearchWorkerClient | null = null;
 let syncWorkerConnected = false;
 let startupCheckDone = false;
 
+// Incremented on every search() call — results from stale generations are
+// discarded so rapid typing doesn't let an earlier query overwrite a later one.
+let searchGeneration = 0;
+
 const refreshStats = (): void => {
   if (!searchService) return;
   stats.set(searchService.getStats());
@@ -474,6 +478,7 @@ const search = async (
   q: string,
   { folder = null, crossFolder = false, limit = 200, candidates = [] }: SearchOptions = {},
 ): Promise<SearchResult[]> => {
+  const generation = ++searchGeneration;
   await ensureInitialized();
   const parsed = parseSearchQuery(q || '');
   const { text, filters, ast } = parsed;
@@ -494,7 +499,7 @@ const search = async (
     ast;
 
   if (!hasFilters) {
-    results.set([]);
+    if (generation === searchGeneration) results.set([]);
     return [];
   }
 
@@ -591,6 +596,9 @@ const search = async (
 
   // Wait for server results (best-effort — already running in parallel)
   const serverHits = await serverPromise;
+
+  // A newer search has started — discard these results.
+  if (generation !== searchGeneration) return [];
 
   // Merge local + server results, then apply client-side filters
   const merged = mergeResults(localHits, serverHits);

@@ -4608,14 +4608,13 @@
       const parsed = parseMailto(url);
       mailboxView?.composeModal?.open?.(mailtoToPrefill(parsed));
     } else if (isTauri) {
-      // Tauri: window.open doesn't open the system browser.
-      // Use the opener plugin to launch external URLs.
+      // `window.open` in WKWebView creates a child frame blocked by our
+      // CSP frame-src. Never fall back to it on Tauri — surface the error.
       try {
         const { openUrl } = await import('@tauri-apps/plugin-opener');
         await openUrl(url);
       } catch (err) {
         console.warn('[Mailbox] Failed to open URL via Tauri opener:', err);
-        window.open(url, '_blank', 'noopener,noreferrer');
       }
     } else {
       window.open(url, '_blank', 'noopener,noreferrer');
@@ -4658,9 +4657,7 @@
         if (isTauri) {
           import('@tauri-apps/plugin-opener')
             .then(({ openUrl }) => openUrl(link.href))
-            .catch(() => {
-              window.open(link.href, '_blank', 'noopener,noreferrer');
-            });
+            .catch((err) => console.warn('[Mailbox] opener failed:', err));
         } else {
           window.open(link.href, '_blank', 'noopener,noreferrer');
         }

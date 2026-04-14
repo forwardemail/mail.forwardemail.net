@@ -44,10 +44,18 @@ export function downloadFile(
   }
 }
 
+// IPC payloads above this size have been observed to crash macOS WKWebView
+// when passed to writeFile in a single call.
+const TAURI_WRITE_CHUNK_SIZE = 512 * 1024;
+
 async function downloadFileTauri(
   content: string | ArrayBuffer | Uint8Array,
   filename: string,
 ): Promise<void> {
+  // Defer dialog to next tick — opening NSSavePanel from inside the
+  // originating click handler can crash the webview process on macOS.
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
   const { save } = await import('@tauri-apps/plugin-dialog');
   const { writeFile } = await import('@tauri-apps/plugin-fs');
 
@@ -56,5 +64,14 @@ async function downloadFileTauri(
 
   const data =
     typeof content === 'string' ? new TextEncoder().encode(content) : new Uint8Array(content);
-  await writeFile(filePath, data);
+
+  if (data.byteLength <= TAURI_WRITE_CHUNK_SIZE) {
+    await writeFile(filePath, data);
+    return;
+  }
+
+  for (let offset = 0; offset < data.byteLength; offset += TAURI_WRITE_CHUNK_SIZE) {
+    const chunk = data.subarray(offset, Math.min(offset + TAURI_WRITE_CHUNK_SIZE, data.byteLength));
+    await writeFile(filePath, chunk, { append: offset > 0 });
+  }
 }
