@@ -464,9 +464,45 @@ function getEmbeddedScript(parentOrigin: string): string {
       });
 
       /**
+       * Quote toggle handling — registered BEFORE the link handler so that
+       * clicks on the toggle button always resolve to a toggle, even if the
+       * email HTML wraps the quote section in an anchor. We use
+       * stopImmediatePropagation to prevent the link handler (or any later
+       * capture-phase listener on document) from running on the same event.
+       */
+      document.addEventListener('click', function(e) {
+        var toggle = e.target.closest ? e.target.closest('.fe-quote-toggle') : null;
+        if (!toggle) return;
+
+        e.preventDefault();
+        e.stopPropagation();
+        if (typeof e.stopImmediatePropagation === 'function') {
+          e.stopImmediatePropagation();
+        }
+
+        var wrapper = toggle.closest('.fe-quote-wrapper');
+        if (!wrapper) return;
+
+        var isCollapsed = wrapper.classList.contains('fe-quote-collapsed');
+        wrapper.classList.toggle('fe-quote-collapsed');
+
+        var label = toggle.querySelector('.fe-quote-label');
+        if (label) {
+          label.textContent = isCollapsed ? 'Hide quoted text' : 'Show quoted text';
+        }
+
+        // Report new height after toggle animation
+        setTimeout(reportHeight, 50);
+        setTimeout(reportHeight, 350);
+      }, true);
+
+      /**
        * Link click interception
        */
       document.addEventListener('click', function(e) {
+        // Defensive: if the click originated from (or within) a quote toggle,
+        // skip link handling even if stopImmediatePropagation didn't fire.
+        if (e.target.closest && e.target.closest('.fe-quote-toggle')) return;
         var link = e.target.closest('a');
         if (link && link.href) {
           e.preventDefault();
@@ -504,32 +540,6 @@ function getEmbeddedScript(parentOrigin: string): string {
             data: formData
           }
         }, TARGET_ORIGIN);
-      }, true);
-
-      /**
-       * Quote toggle handling
-       */
-      document.addEventListener('click', function(e) {
-        var toggle = e.target.closest('.fe-quote-toggle');
-        if (!toggle) return;
-
-        e.preventDefault();
-        e.stopPropagation();
-
-        var wrapper = toggle.closest('.fe-quote-wrapper');
-        if (!wrapper) return;
-
-        var isCollapsed = wrapper.classList.contains('fe-quote-collapsed');
-        wrapper.classList.toggle('fe-quote-collapsed');
-
-        var label = toggle.querySelector('.fe-quote-label');
-        if (label) {
-          label.textContent = isCollapsed ? 'Hide quoted text' : 'Show quoted text';
-        }
-
-        // Report new height after toggle animation
-        setTimeout(reportHeight, 50);
-        setTimeout(reportHeight, 350);
       }, true);
 
       /**

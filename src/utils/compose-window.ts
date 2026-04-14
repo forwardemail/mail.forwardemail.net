@@ -82,6 +82,12 @@ export async function openComposeWindow(options?: ComposeWindowOptions): Promise
       auth: collectAuth(),
     });
 
+    // Defer WebviewWindow creation off the current AppKit event tick.
+    // macOS 26+ WebKit crashes inside WebPageProxy::dispatchSetObscuredContentInsets
+    // when a webview is constructed synchronously from a click handler; yielding
+    // to the next tick lets the originating event finish dispatching first.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
     const win = new WebviewWindow(label, {
       title:
         options?.action === 'reply'
