@@ -2795,26 +2795,31 @@
             </Tooltip.Root>
           {/if}
 
-          <Button variant="ghost" size="icon" class="md:hidden" onclick={triggerFilePicker}>
-            <Paperclip class="h-5 w-5" />
+          <Button
+            variant="ghost"
+            size="icon"
+            class="md:hidden h-12 w-12"
+            onclick={triggerFilePicker}
+          >
+            <Paperclip size={32} />
           </Button>
           <Button
             variant="ghost"
             size="icon"
-            class="md:hidden h-10 w-10"
+            class="md:hidden h-12 w-12"
             onclick={send}
             disabled={sending}
           >
-            <Send class="h-6 w-6 text-blue-400" />
+            <Send size={32} class="text-blue-400" />
           </Button>
           <div class="relative md:hidden">
             <Button
               variant="ghost"
               size="icon"
-              class="mobile-menu"
+              class="mobile-menu h-12 w-12"
               onclick={() => (showMobileMenu = !showMobileMenu)}
             >
-              <MoreVertical class="h-5 w-5" />
+              <MoreVertical size={32} />
             </Button>
             {#if showMobileMenu}
               {@const hasContent =
@@ -2893,7 +2898,7 @@
         <div class="space-y-2 shrink-0">
           <div class="relative">
             <div
-              class="flex flex-wrap items-center gap-1.5 min-h-[44px] md:min-h-[38px] px-3 py-2 md:py-1.5 border border-input bg-background transition-colors focus-within:border-primary"
+              class="flex flex-wrap items-center gap-1.5 min-h-[44px] md:min-h-[38px] px-3 py-2 md:py-1.5 border border-input bg-background shadow-xs transition-[color,box-shadow] outline-none focus-within:border-ring focus-within:ring-ring/50 focus-within:ring-[3px]"
             >
               {#each toList as rec}
                 <Badge variant="secondary" class="gap-1 pl-2 pr-1 text-base md:text-sm">
@@ -2975,7 +2980,7 @@
           {#if showCc}
             <div class="relative">
               <div
-                class="flex flex-wrap items-center gap-1.5 min-h-[44px] md:min-h-[38px] px-3 py-2 md:py-1.5 border border-input bg-background transition-colors focus-within:border-primary"
+                class="flex flex-wrap items-center gap-1.5 min-h-[44px] md:min-h-[38px] px-3 py-2 md:py-1.5 border border-input bg-background shadow-xs transition-[color,box-shadow] outline-none focus-within:border-ring focus-within:ring-ring/50 focus-within:ring-[3px]"
               >
                 {#each ccList as rec}
                   <Badge variant="secondary" class="gap-1 pl-2 pr-1 text-base md:text-sm">
@@ -3038,7 +3043,7 @@
           {#if showBcc}
             <div class="relative">
               <div
-                class="flex flex-wrap items-center gap-1.5 min-h-[44px] md:min-h-[38px] px-3 py-2 md:py-1.5 border border-input bg-background transition-colors focus-within:border-primary"
+                class="flex flex-wrap items-center gap-1.5 min-h-[44px] md:min-h-[38px] px-3 py-2 md:py-1.5 border border-input bg-background shadow-xs transition-[color,box-shadow] outline-none focus-within:border-ring focus-within:ring-ring/50 focus-within:ring-[3px]"
               >
                 {#each bccList as rec}
                   <Badge variant="secondary" class="gap-1 pl-2 pr-1 text-base md:text-sm">
@@ -3776,6 +3781,16 @@
     outline: none;
     flex: 1;
     min-height: 200px;
+    font-size: 1rem;
+    line-height: 1.6;
+  }
+
+  /* Desktop viewport — use the original compact size */
+  @media (min-width: 768px) {
+    :global(.rich-editor .ProseMirror) {
+      font-size: 0.875rem;
+      line-height: 1.5;
+    }
   }
 
   :global(.rich-editor .ProseMirror p.is-editor-empty:first-child::before) {

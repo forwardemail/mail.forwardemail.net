@@ -265,6 +265,71 @@
 
   let themeObserver: MutationObserver | null = null;
 
+  // Android WebView can swallow touch events inside iframes before they
+  // reach document-level listeners in the srcdoc. Since we use
+  // allow-same-origin on Tauri, attach touch listeners directly on the
+  // iframe's contentDocument from the parent as a reliable fallback.
+  let swipeState = {
+    startX: 0,
+    startY: 0,
+    active: false,
+    direction: null as 'left' | 'right' | null,
+  };
+
+  const onIframeTouchStart = (e: TouchEvent) => {
+    if (!e.touches || e.touches.length !== 1) return;
+    swipeState.startX = e.touches[0].clientX;
+    swipeState.startY = e.touches[0].clientY;
+    swipeState.active = false;
+    swipeState.direction = null;
+    onSwipe?.('start', { x: swipeState.startX, y: swipeState.startY });
+  };
+
+  const onIframeTouchMove = (e: TouchEvent) => {
+    if (!e.touches || e.touches.length !== 1 || !swipeState.startX) return;
+    const dx = e.touches[0].clientX - swipeState.startX;
+    const dy = e.touches[0].clientY - swipeState.startY;
+    if (!swipeState.active && Math.abs(dx) > 15 && Math.abs(dx) > Math.abs(dy) * 2) {
+      swipeState.active = true;
+      swipeState.direction = dx > 0 ? 'right' : 'left';
+    }
+    if (swipeState.active) {
+      onSwipe?.('move', { dx, dy });
+    }
+  };
+
+  const onIframeTouchEnd = () => {
+    onSwipe?.('end', { active: swipeState.active, direction: swipeState.direction });
+    swipeState.startX = 0;
+    swipeState.startY = 0;
+    swipeState.active = false;
+    swipeState.direction = null;
+  };
+
+  let attachedDoc: Document | null = null;
+
+  const attachIframeTouchListeners = () => {
+    if (!iframeRef) return;
+    try {
+      const doc = iframeRef.contentDocument;
+      if (!doc || doc === attachedDoc) return;
+      // Clean up previous listeners
+      if (attachedDoc) {
+        attachedDoc.removeEventListener('touchstart', onIframeTouchStart);
+        attachedDoc.removeEventListener('touchmove', onIframeTouchMove);
+        attachedDoc.removeEventListener('touchend', onIframeTouchEnd);
+        attachedDoc.removeEventListener('touchcancel', onIframeTouchEnd);
+      }
+      doc.addEventListener('touchstart', onIframeTouchStart, { passive: true, capture: true });
+      doc.addEventListener('touchmove', onIframeTouchMove, { passive: true, capture: true });
+      doc.addEventListener('touchend', onIframeTouchEnd, { passive: true, capture: true });
+      doc.addEventListener('touchcancel', onIframeTouchEnd, { passive: true, capture: true });
+      attachedDoc = doc;
+    } catch {
+      // Cross-origin iframe — fall back to postMessage from the srcdoc
+    }
+  };
+
   onMount(() => {
     mounted = true;
     window.addEventListener('message', handleMessage);
@@ -297,6 +362,15 @@
     themeObserver?.disconnect();
     stopHeightPolling();
 
+    // Detach iframe touch listeners
+    if (attachedDoc) {
+      attachedDoc.removeEventListener('touchstart', onIframeTouchStart);
+      attachedDoc.removeEventListener('touchmove', onIframeTouchMove);
+      attachedDoc.removeEventListener('touchend', onIframeTouchEnd);
+      attachedDoc.removeEventListener('touchcancel', onIframeTouchEnd);
+      attachedDoc = null;
+    }
+
     // Clear any pending recovery timeout
     if (recoveryTimeoutId) {
       clearTimeout(recoveryTimeoutId);
@@ -321,6 +395,7 @@
         title="Email content"
         class="fe-email-iframe"
         style="height: {iframeHeight}px;"
+        onload={attachIframeTouchListeners}
       ></iframe>
     {:else}
       <!-- Show a minimal placeholder when no content yet -->

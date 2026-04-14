@@ -18,35 +18,44 @@
     arrowClasses?: string;
     portalProps?: WithoutChildrenOrChild<ComponentProps<typeof TooltipPortal>>;
   } = $props();
+
+  // Suppress tooltip content on touch devices (mobile web + Tauri mobile).
+  // `(hover: none)` identifies inputs that can't hover, which is the tooltip's trigger.
+  const isTouch =
+    typeof window !== 'undefined' &&
+    typeof window.matchMedia === 'function' &&
+    window.matchMedia('(hover: none)').matches;
 </script>
 
-<TooltipPortal {...portalProps}>
-  <TooltipPrimitive.Content
-    bind:ref
-    data-slot="tooltip-content"
-    {sideOffset}
-    {side}
-    class={cn(
-      'bg-foreground text-background animate-in fade-in-0 zoom-in-95 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-end-2 data-[side=right]:slide-in-from-start-2 data-[side=top]:slide-in-from-bottom-2 z-[9999] w-fit origin-(--bits-tooltip-content-transform-origin) px-3 py-1.5 text-xs text-balance',
-      className,
-    )}
-    {...restProps}
-  >
-    {@render children?.()}
-    <TooltipPrimitive.Arrow>
-      {#snippet child({ props })}
-        <div
-          class={cn(
-            'bg-foreground z-[9999] size-2.5 rotate-45',
-            'data-[side=top]:translate-x-1/2 data-[side=top]:translate-y-[calc(-50%_+_2px)]',
-            'data-[side=bottom]:-translate-x-1/2 data-[side=bottom]:-translate-y-[calc(-50%_+_1px)]',
-            'data-[side=right]:translate-x-[calc(50%_+_2px)] data-[side=right]:translate-y-1/2',
-            'data-[side=left]:-translate-y-[calc(50%_-_3px)]',
-            arrowClasses,
-          )}
-          {...props}
-        ></div>
-      {/snippet}
-    </TooltipPrimitive.Arrow>
-  </TooltipPrimitive.Content>
-</TooltipPortal>
+{#if !isTouch}
+  <TooltipPortal {...portalProps}>
+    <TooltipPrimitive.Content
+      bind:ref
+      data-slot="tooltip-content"
+      {sideOffset}
+      {side}
+      class={cn(
+        'bg-foreground text-background animate-in fade-in-0 zoom-in-95 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-end-2 data-[side=right]:slide-in-from-start-2 data-[side=top]:slide-in-from-bottom-2 z-[9999] w-fit origin-(--bits-tooltip-content-transform-origin) px-3 py-1.5 text-xs text-balance',
+        className,
+      )}
+      {...restProps}
+    >
+      {@render children?.()}
+      <TooltipPrimitive.Arrow>
+        {#snippet child({ props })}
+          <div
+            class={cn(
+              'bg-foreground z-[9999] size-2.5 rotate-45',
+              'data-[side=top]:translate-x-1/2 data-[side=top]:translate-y-[calc(-50%_+_2px)]',
+              'data-[side=bottom]:-translate-x-1/2 data-[side=bottom]:-translate-y-[calc(-50%_+_1px)]',
+              'data-[side=right]:translate-x-[calc(50%_+_2px)] data-[side=right]:translate-y-1/2',
+              'data-[side=left]:-translate-y-[calc(50%_-_3px)]',
+              arrowClasses,
+            )}
+            {...props}
+          ></div>
+        {/snippet}
+      </TooltipPrimitive.Arrow>
+    </TooltipPrimitive.Content>
+  </TooltipPortal>
+{/if}
