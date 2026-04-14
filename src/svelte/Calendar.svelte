@@ -2342,6 +2342,7 @@
   <div class="calendar-page flex flex-col h-full">
     <div
       class="flex items-center justify-between gap-3 border-b border-border bg-background px-4 py-3 shrink-0"
+      style="padding-top: max(0.75rem, env(safe-area-inset-top, 0px))"
     >
       <div class="flex items-center gap-3 min-w-0">
         <Button

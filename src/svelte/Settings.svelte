@@ -1299,7 +1299,10 @@
   ];
 </script>
 
-<div class="flex h-14 items-center gap-3 px-4">
+<div
+  class="flex h-14 items-center gap-3 px-4"
+  style="padding-top: env(safe-area-inset-top, 0px); box-sizing: content-box;"
+>
   <Button variant="ghost" size="icon" onclick={() => window.history.back()} aria-label="Back">
     <ChevronLeft class="h-5 w-5" />
   </Button>

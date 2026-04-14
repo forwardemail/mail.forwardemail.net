@@ -2675,6 +2675,7 @@
     >
       <header
         class="flex items-center justify-between gap-2 px-4 py-3 border-b border-border bg-muted/30"
+        style="padding-top: max(0.75rem, env(safe-area-inset-top, 0px))"
       >
         <Button variant="ghost" size="icon" class="md:hidden" onclick={() => closeComposer()}>
           <ChevronLeft class="h-5 w-5" />
@@ -3183,7 +3184,10 @@
         </div>
       {/if}
 
-      <footer class="border-t border-border bg-muted/30 p-3">
+      <footer
+        class="border-t border-border bg-muted/30 p-3"
+        style="padding-bottom: max(0.75rem, env(safe-area-inset-bottom, 0px))"
+      >
         {#if !isPlainText}
           <div
             class="hidden md:flex flex-wrap items-center gap-1 mb-3 p-2 bg-background border border-border shadow-md"

@@ -9,15 +9,22 @@
 }
 
 /*
- * Android WebView doesn't support env(safe-area-inset-*).
- * MainActivity.kt injects --safe-area-inset-* CSS variables from WindowInsets.
- * Map them to the env() fallback so all existing env() usages work.
+ * Unified safe-area source.
+ * iOS WKWebView populates env(safe-area-inset-*) natively when the HTML
+ * meta viewport includes viewport-fit=cover (it does).
+ * Android WebView returns 0 for env() — MainActivity.kt overrides these
+ * same vars as inline styles on :root using WindowInsets values, which
+ * win over this stylesheet declaration.
  */
 :root {
-  --sai-top: var(--safe-area-inset-top, 0px);
-  --sai-bottom: var(--safe-area-inset-bottom, 0px);
-  --sai-left: var(--safe-area-inset-left, 0px);
-  --sai-right: var(--safe-area-inset-right, 0px);
+  --safe-area-inset-top: env(safe-area-inset-top, 0px);
+  --safe-area-inset-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-area-inset-left: env(safe-area-inset-left, 0px);
+  --safe-area-inset-right: env(safe-area-inset-right, 0px);
+  --sai-top: var(--safe-area-inset-top);
+  --sai-bottom: var(--safe-area-inset-bottom);
+  --sai-left: var(--safe-area-inset-left);
+  --sai-right: var(--safe-area-inset-right);
 }
 
 html {

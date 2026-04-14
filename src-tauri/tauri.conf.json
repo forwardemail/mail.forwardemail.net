@@ -77,7 +77,7 @@
       }
     },
     "iOS": {
-      "developmentTeam": null
+      "developmentTeam": "FH83QMJS7P"
     },
     "android": {
       "minSdkVersion": 24

@@ -1205,7 +1205,10 @@
   });
 </script>
 
-<div class="flex h-14 items-center justify-between border-b border-border bg-background px-4">
+<div
+  class="flex h-14 items-center justify-between border-b border-border bg-background px-4"
+  style="padding-top: env(safe-area-inset-top, 0px); box-sizing: content-box;"
+>
   <div class="flex items-center gap-3">
     <Button variant="ghost" size="icon" onclick={() => navigate?.('/mailbox')} aria-label="Back">
       <ChevronLeft class="h-5 w-5" />

@@ -105,8 +105,8 @@ jobs:
           retention-days: 7
 
   ios:
-    runs-on: macos-latest
-    name: Build iOS (unsigned)
+    runs-on: macos-14
+    name: Build iOS (unsigned simulator)
 
     steps:
       - name: Checkout
@@ -115,7 +115,7 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
+          targets: aarch64-apple-ios-sim,x86_64-apple-ios
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
@@ -135,18 +135,24 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Select latest Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+
       - name: Initialize iOS project
+        env:
+          # CI=true disables interactive prompts during `tauri ios init`.
+          # Simulator builds don't need a real team; device signing does.
+          CI: 'true'
         run: pnpm tauri ios init
 
       - name: Build iOS (debug, simulator)
-        run: pnpm tauri ios build --debug
-        continue-on-error: true
+        run: pnpm tauri ios build --debug --target aarch64-sim
 
-      - name: Upload iOS build
+      - name: Upload iOS simulator app
         uses: actions/upload-artifact@v4
-        if: success()
         with:
-          name: ios-debug-build
+          name: ios-simulator-app
           path: |
             src-tauri/gen/apple/build/**/*.app
           retention-days: 7
+          if-no-files-found: error

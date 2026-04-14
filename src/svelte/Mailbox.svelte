@@ -6866,7 +6866,10 @@
               {#if outboxSelected && selectedOutboxItem}
                 <!-- Outbox Item Reader -->
                 {#if $mobileReader}
-                  <div class="flex items-center gap-2 p-2 border-b border-border">
+                  <div
+                    class="flex items-center gap-2 p-2 border-b border-border"
+                    style="padding-top: max(0.5rem, env(safe-area-inset-top, 0px))"
+                  >
                     <button
                       class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
                       type="button"
@@ -6999,6 +7002,7 @@
                 {#if isProductivityLayout || $mobileReader}
                   <div
                     class="sticky top-0 z-20 bg-[var(--color-panel)] flex items-center gap-2 p-2 border-b border-border"
+                    style="padding-top: max(0.5rem, env(safe-area-inset-top, 0px))"
                   >
                     <button
                       class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
@@ -8269,8 +8273,8 @@
         <!-- Mobile Floating Action Button (FAB) for Compose — Gmail style -->
         {#if showMobileFab}
           <Button
-            class="fixed bottom-6 right-5 w-14 h-14 rounded-full shadow-lg z-50 md:hidden"
-            style="margin-bottom: env(safe-area-inset-bottom, 0px)"
+            class="fixed right-5 w-14 h-14 rounded-full shadow-lg z-50 md:hidden"
+            style="bottom: calc(1.5rem + env(safe-area-inset-bottom, 0px))"
             aria-label="Compose"
             onclick={() => mailboxView?.composeModal?.open?.()}
           >

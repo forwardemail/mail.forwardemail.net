@@ -41,8 +41,8 @@
     "tauri:build:debug": "pnpm tauri:check-cache && tauri build --debug",
     "tauri:android:dev": "bash scripts/android-dev.sh",
     "tauri:android:build": "bash scripts/android-build.sh",
-    "tauri:ios:dev": "tauri ios dev",
-    "tauri:ios:build": "tauri ios build",
+    "tauri:ios:dev": "bash scripts/ios-dev.sh",
+    "tauri:ios:build": "bash scripts/ios-build.sh",
     "tauri:icon": "tauri icon src-tauri/icons/app-icon.png",
     "tauri:signer:generate": "tauri signer generate -w ~/.tauri/forwardemail.key",
     "version": "node scripts/sync-version.cjs && git add src-tauri/tauri.conf.json src-tauri/Cargo.toml"
