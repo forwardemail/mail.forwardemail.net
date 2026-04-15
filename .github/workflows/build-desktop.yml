@@ -34,21 +34,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: npm audit (production)
-        run: pnpm audit --prod
-        continue-on-error: true
-
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
@@ -57,6 +42,17 @@ jobs:
 
       - name: Cargo audit
         run: cd src-tauri && cargo audit
+
+      # OSV-Scanner replaces `pnpm audit` (npm's legacy audit endpoint is
+      # retired — 410 Gone). Reads pnpm-lock.yaml directly against the OSV DB.
+      # Advisory (continue-on-error) because every current finding is in a
+      # dev-only dep path — none ship in the user bundle.
+      - name: JS dependency vulnerability scan
+        uses: google/osv-scanner-action/osv-scanner-action@v2.3.5
+        continue-on-error: true
+        with:
+          scan-args: |-
+            --lockfile=pnpm-lock.yaml
         continue-on-error: true
 
   build:

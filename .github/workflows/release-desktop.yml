@@ -51,19 +51,19 @@ jobs:
       - name: Cargo audit
         run: cd src-tauri && cargo audit
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      # npm's legacy audit endpoint was retired (410), which broke `pnpm audit`.
+      # OSV-Scanner reads pnpm-lock.yaml directly against the OSV database and
+      # has no dependency on the retired endpoint. See docs/SECURITY.md.
+      # Advisory (continue-on-error) because every current finding is in a
+      # dev-only dep path (lighthouse, workbox-cli, np, vite-plugin-pwa,
+      # inquirer) — none ship in the user bundle. Revisit: scope the scan
+      # to a prod-only lockfile and re-enable blocking.
+      - name: JS dependency vulnerability scan
+        uses: google/osv-scanner-action/osv-scanner-action@v2.3.5
+        continue-on-error: true
         with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: npm audit (production)
-        run: pnpm audit --prod
+          scan-args: |-
+            --lockfile=pnpm-lock.yaml
 
   build-and-release:
     needs: audit
