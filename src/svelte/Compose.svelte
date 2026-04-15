@@ -2199,6 +2199,7 @@
       setVisible(false);
       reset();
       onSent?.({ queued: true, scheduled: true, sendAt });
+      if (nativeWindow) closeNativeWindow();
     } catch (err) {
       console.error('[Compose] Failed to schedule email', err);
       error = 'Failed to schedule message. Please try again.';
@@ -2261,6 +2262,7 @@
         const shouldArchive = archiveAfterSend;
         reset();
         onSent?.({ queued: true, archive: shouldArchive });
+        if (nativeWindow) closeNativeWindow();
       } catch (err) {
         error = 'Failed to queue message';
         toasts?.show?.(error, 'error');
@@ -2338,6 +2340,7 @@
         sourceMessageId: msgIdToDelete,
         sentCopyPayload,
       });
+      if (nativeWindow) closeNativeWindow();
     } catch (err) {
       const e = err as { message?: string; status?: number };
       if (e.message?.includes('network') || e.message?.includes('fetch') || e.status === 0) {
@@ -2364,6 +2367,7 @@
           const shouldArchive = archiveAfterSend;
           reset();
           onSent?.({ queued: true, archive: shouldArchive });
+          if (nativeWindow) closeNativeWindow();
         } catch (queueErr) {
           error = e?.message || 'Send failed';
           toasts?.show?.(error, 'error');
