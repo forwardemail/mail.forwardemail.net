@@ -2,6 +2,9 @@ use serde::Serialize;
 use std::sync::Mutex;
 use tauri::{Emitter, Listener, Manager};
 
+mod diagnostics;
+mod redaction;
+
 #[cfg(desktop)]
 use tauri::{
     image::Image,
@@ -521,7 +524,42 @@ pub fn run() {
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_log::Builder::new().build())
+        .plugin({
+            use tauri_plugin_log::{RotationStrategy, Target, TargetKind};
+            use time::macros::format_description;
+
+            // 5 × 1 MB rotated log files keep a ~5 MB ceiling per device.
+            // Every line passes through `redaction::redact` before hitting
+            // disk, stdout, or the webview bridge — so secrets captured by
+            // third-party crates (updater, tauri internals, plugins) never
+            // enter the log in plaintext.
+            let ts_fmt = format_description!(
+                "[year]-[month]-[day]T[hour]:[minute]:[second]"
+            );
+
+            tauri_plugin_log::Builder::new()
+                .targets([
+                    Target::new(TargetKind::Stdout),
+                    Target::new(TargetKind::LogDir { file_name: None }),
+                    Target::new(TargetKind::Webview),
+                ])
+                .max_file_size(1_000_000)
+                .rotation_strategy(RotationStrategy::KeepSome(5))
+                .format(move |out, message, record| {
+                    let redacted = redaction::redact(&message.to_string());
+                    let ts = time::OffsetDateTime::now_utc()
+                        .format(ts_fmt)
+                        .unwrap_or_else(|_| String::from("?"));
+                    out.finish(format_args!(
+                        "{}Z [{}][{}] {}",
+                        ts,
+                        record.level(),
+                        record.target(),
+                        redacted
+                    ));
+                })
+                .build()
+        })
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
@@ -531,6 +569,9 @@ pub fn run() {
             get_build_info,
             set_badge_count,
             get_pending_deep_links,
+            diagnostics::get_log_path,
+            diagnostics::read_recent_logs,
+            diagnostics::clear_logs,
             #[cfg(desktop)]
             toggle_window_visibility,
             #[cfg(desktop)]

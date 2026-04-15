@@ -1,0 +1,106 @@
+{
+  "version": 1,
+  "note": "Shared fixture for src/utils/redaction.ts and src-tauri/src/redaction.rs. Both implementations must produce expected[i] for input[i]. Do not hand-edit expected values — regenerate via the TS impl if patterns change, then verify the Rust suite still passes.",
+  "cases": [
+    {
+      "name": "empty string passes through",
+      "input": "",
+      "expected": ""
+    },
+    {
+      "name": "no secrets passes through",
+      "input": "no secrets here",
+      "expected": "no secrets here"
+    },
+    {
+      "name": "bearer token in header line",
+      "input": "Authorization: Bearer abc1234567890xyz",
+      "expected": "Authorization: [REDACTED] [REDACTED]"
+    },
+    {
+      "name": "bearer token in JSON header map",
+      "input": "{\"authorization\":\"Bearer xyz12345678\",\"foo\":1}",
+      "expected": "{\"authorization\":\"[REDACTED] [REDACTED]\",\"foo\":1}"
+    },
+    {
+      "name": "basic auth",
+      "input": "Basic dXNlcjpwYXNzd29yZA==",
+      "expected": "Basic [REDACTED]"
+    },
+    {
+      "name": "password key=value in log line",
+      "input": "password=hunter2 and more",
+      "expected": "password=[REDACTED] and more"
+    },
+    {
+      "name": "api_key with colon and space",
+      "input": "api_key: sk_live_abc123xyz",
+      "expected": "api_key=[REDACTED]"
+    },
+    {
+      "name": "token with trailing context",
+      "input": "token=abc123 next=foo",
+      "expected": "token=[REDACTED] next=foo"
+    },
+    {
+      "name": "secret key",
+      "input": "secret: topsecret123",
+      "expected": "secret=[REDACTED]"
+    },
+    {
+      "name": "emails redacted and case-insensitive-stable",
+      "input": "Sending mail to user@example.com from Alice@Example.COM",
+      "expected": "Sending mail to <email:ddaa05fb> from <email:94a4b546>"
+    },
+    {
+      "name": "complex email with plus tag and multi-dot tld",
+      "input": "contact foo.bar+tag@sub.domain.co.uk",
+      "expected": "contact <email:7d8d8793>"
+    },
+    {
+      "name": "macos home dir path",
+      "input": "Path error: /Users/shaun/Documents/secrets.txt exists",
+      "expected": "Path error: ~/Documents/secrets.txt exists"
+    },
+    {
+      "name": "linux home dir path",
+      "input": "Failed: /home/alice/code/repo/src/main.rs line 42",
+      "expected": "Failed: ~/code/repo/src/main.rs line 42"
+    },
+    {
+      "name": "windows home dir path",
+      "input": "Windows path C:\\Users\\Bob\\AppData\\Roaming",
+      "expected": "Windows path C:\\Users\\~\\AppData\\Roaming"
+    },
+    {
+      "name": "api_key in URL query string",
+      "input": "Query: /api/v1?api_key=secret123&user=foo",
+      "expected": "Query: /api/v1?api_key=[REDACTED]"
+    },
+    {
+      "name": "curl with bearer header",
+      "input": "curl -H \"Authorization: Bearer tok_abc12345\" https://api.example.com",
+      "expected": "curl -H \"Authorization: [REDACTED] [REDACTED]\" https://api.example.com"
+    },
+    {
+      "name": "multiple patterns combined",
+      "input": "Log: contact foo.bar+tag@sub.domain.co.uk failed, retry /Users/shaun next",
+      "expected": "Log: contact <email:7d8d8793> failed, retry ~ next"
+    },
+    {
+      "name": "credential keyword without value leaves text intact",
+      "input": "the password field is required",
+      "expected": "the password field is required"
+    },
+    {
+      "name": "short bearer value below threshold is not redacted",
+      "input": "Bearer abc",
+      "expected": "Bearer abc"
+    },
+    {
+      "name": "email inside stack trace",
+      "input": "Error: user shaun@forwardemail.net not found\n    at handler (file.js:10:5)",
+      "expected": "Error: user <email:3192f268> not found\n    at handler (file.js:10:5)"
+    }
+  ]
+}

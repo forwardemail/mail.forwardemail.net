@@ -9,9 +9,23 @@
   import { Label } from '$lib/components/ui/label';
   import * as Alert from '$lib/components/ui/alert';
   import CheckIcon from '@lucide/svelte/icons/check';
+  import CopyIcon from '@lucide/svelte/icons/copy';
   import { Local } from '../utils/storage';
   import { Remote } from '../utils/remote';
   import { isOnline } from '../utils/network-status';
+  import { isTauri } from '../utils/platform';
+  import { readRecentLogs } from '../utils/tauri-bridge';
+  import {
+    buildPayload,
+    buildEmailSubject,
+    buildEmailBody,
+    generateCorrelationId,
+    type FeedbackType,
+    type FeedbackConsents,
+    type FeedbackSources,
+    type SystemInfo,
+    type LogEntry,
+  } from '../utils/feedback-payload';
 
   interface Props {
     onClose?: () => void;
@@ -19,157 +33,156 @@
 
   let { onClose = () => {} }: Props = $props();
 
-  let feedbackType = $state<'bug' | 'feature' | 'question' | 'other'>('bug');
+  let feedbackType = $state<FeedbackType>('bug');
   let subject = $state('');
   let description = $state('');
-  let includeSystemInfo = $state(true);
-  let includeLogs = $state(true);
+
+  // All consent toggles default to OFF — the user opts in per category, and
+  // the preview pane shows exactly what each toggle adds before send.
+  let consentSystem = $state(false);
+  let consentJsErrors = $state(false);
+  let consentNativeLogs = $state(false);
+  let consentNetworkErrors = $state(false);
+  let showPreview = $state(false);
+
   let submitting = $state(false);
   let submitError = $state('');
   let submitSuccess = $state(false);
+  let copied = $state(false);
 
-  // Collect diagnostic data
-  interface SystemInfo {
-    userAgent: string;
-    platform: string;
-    language: string;
-    screenResolution: string;
-    viewportSize: string;
-    online: boolean;
-    cookiesEnabled: boolean;
-    doNotTrack: string | null;
-    timestamp: string;
-    url: string;
-    appVersion: string;
-    account: string;
-    activeEmail: string;
-    storageQuota?: {
-      usage: number | undefined;
-      quota: number | undefined;
-      percentUsed: string;
-    };
-    serviceWorker?: {
-      active: boolean;
-      scope?: string;
-    };
-  }
+  // Correlation ID is generated once per modal open and stays stable so the
+  // preview matches the submitted payload byte-for-byte.
+  const correlationId = generateCorrelationId();
 
-  interface LogEntry {
-    timestamp?: string;
-    message?: string;
-    url?: string;
-    error?: string;
-    [key: string]: unknown;
-  }
+  let systemInfo = $state<SystemInfo>({});
+  let jsErrors = $state<LogEntry[]>([]);
+  let networkErrors = $state<LogEntry[]>([]);
+  let nativeLogs = $state<string>('');
+  let nativeLogsLoading = $state(false);
+  let nativeLogsError = $state('');
 
-  let systemInfo = $state<SystemInfo>({} as SystemInfo);
-  let recentLogs = $state<LogEntry[]>([]);
-  let infoCollected = false;
+  const showNativeLogsToggle = isTauri;
 
   $effect(() => {
-    // Only collect once to avoid infinite loop
-    if (!infoCollected) {
-      infoCollected = true;
-      collectSystemInfo();
-      collectRecentLogs();
+    collectSystemInfo();
+    collectJsErrors();
+    collectNetworkErrors();
+  });
+
+  // Lazy-load native logs only when the user opts in (and only on Tauri).
+  $effect(() => {
+    if (consentNativeLogs && isTauri && !nativeLogs && !nativeLogsLoading) {
+      nativeLogsLoading = true;
+      nativeLogsError = '';
+      readRecentLogs(65536)
+        .then((tail: string) => {
+          nativeLogs = tail || '(log file is empty)';
+        })
+        .catch((e: unknown) => {
+          nativeLogsError = e instanceof Error ? e.message : String(e);
+        })
+        .finally(() => {
+          nativeLogsLoading = false;
+        });
     }
   });
 
   function collectSystemInfo() {
     const activeEmail = Local.get('email') || 'unknown';
-    systemInfo = {
+    const info: SystemInfo = {
       userAgent: navigator.userAgent,
       platform: navigator.platform,
       language: navigator.language,
       screenResolution: `${window.screen.width}x${window.screen.height}`,
       viewportSize: `${window.innerWidth}x${window.innerHeight}`,
       online: isOnline(),
-      cookiesEnabled: navigator.cookieEnabled,
-      doNotTrack: navigator.doNotTrack,
-      timestamp: new Date().toISOString(),
-      url: window.location.href,
       appVersion: import.meta.env.VITE_PKG_VERSION || '0.0.0',
-      account: activeEmail,
-      activeEmail: activeEmail,
+      activeEmail,
     };
 
-    if (navigator.storage && navigator.storage.estimate) {
-      navigator.storage.estimate().then((estimate) => {
-        systemInfo.storageQuota = {
-          usage: estimate.usage,
-          quota: estimate.quota,
-          percentUsed: ((estimate.usage! / estimate.quota!) * 100).toFixed(2),
-        };
-      });
-    }
-
-    if (navigator.serviceWorker && navigator.serviceWorker.controller) {
-      systemInfo.serviceWorker = {
+    if (navigator.serviceWorker?.controller) {
+      info.serviceWorker = {
         active: true,
         scope: navigator.serviceWorker.controller.scriptURL,
       };
     } else {
-      systemInfo.serviceWorker = { active: false };
+      info.serviceWorker = { active: false };
+    }
+
+    systemInfo = info;
+
+    if (navigator.storage?.estimate) {
+      navigator.storage.estimate().then((estimate) => {
+        const usage = estimate.usage ?? 0;
+        const quota = estimate.quota ?? 0;
+        systemInfo = {
+          ...systemInfo,
+          storageQuota: {
+            usage,
+            quota,
+            percentUsed: quota > 0 ? ((usage / quota) * 100).toFixed(2) : '0',
+          },
+        };
+      });
     }
   }
 
-  function collectRecentLogs() {
+  function collectJsErrors() {
     try {
-      const storedLogs = sessionStorage.getItem('app_logs');
-      if (storedLogs) {
-        const logs = JSON.parse(storedLogs);
-        recentLogs = logs.slice(-50);
-      }
-
-      const dbErrors = sessionStorage.getItem('db_errors');
-      if (dbErrors) {
-        const errors = JSON.parse(dbErrors);
-        recentLogs = [...recentLogs, ...errors.slice(-20)];
-      }
-
-      const apiErrors = sessionStorage.getItem('api_errors');
-      if (apiErrors) {
-        const errors = JSON.parse(apiErrors);
-        recentLogs = [...recentLogs, ...errors.slice(-20)];
-      }
-    } catch (error) {
-      console.error('Failed to collect logs:', error);
-      recentLogs = [{ timestamp: new Date().toISOString(), error: (error as Error).message }];
+      const stored = sessionStorage.getItem('app_logs');
+      if (stored) jsErrors = (JSON.parse(stored) as LogEntry[]).slice(-50);
+    } catch {
+      jsErrors = [];
     }
   }
 
-  function sanitizeLogs(logs: LogEntry[]): LogEntry[] {
-    return logs.map((log) => {
-      const sanitized = { ...log };
-
-      if (sanitized.message) {
-        sanitized.message = sanitized.message
-          .replace(/Bearer\s+[A-Za-z0-9-._~+/]+=*/g, 'Bearer [REDACTED]')
-          .replace(/password[=:]\s*["']?[^"'\s]+["']?/gi, 'password=[REDACTED]')
-          .replace(/api[_-]?key[=:]\s*["']?[^"'\s]+["']?/gi, 'api_key=[REDACTED]')
-          .replace(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g, '[EMAIL]');
-      }
-
-      if (sanitized.url) {
-        try {
-          const url = new URL(sanitized.url);
-          sanitized.url = url.pathname + url.search;
-        } catch {
-          // Keep as-is if URL parsing fails
-        }
-      }
-
-      return sanitized;
-    });
+  function collectNetworkErrors() {
+    try {
+      const apiErrors = sessionStorage.getItem('api_errors');
+      const dbErrors = sessionStorage.getItem('db_errors');
+      const a: LogEntry[] = apiErrors ? JSON.parse(apiErrors) : [];
+      const d: LogEntry[] = dbErrors ? JSON.parse(dbErrors) : [];
+      networkErrors = [...a.slice(-20), ...d.slice(-10)];
+    } catch {
+      networkErrors = [];
+    }
   }
 
-  interface FeedbackData {
-    type: string;
-    subject: string;
-    description: string;
-    systemInfo: SystemInfo | null;
-    logs: LogEntry[] | null;
-    timestamp: string;
+  const consents = $derived<FeedbackConsents>({
+    systemInfo: consentSystem,
+    jsErrors: consentJsErrors,
+    nativeLogs: consentNativeLogs,
+    networkErrors: consentNetworkErrors,
+  });
+
+  const sources = $derived<FeedbackSources>({
+    systemInfo,
+    jsErrors,
+    nativeLogs,
+    networkErrors,
+  });
+
+  const previewPayload = $derived(
+    buildPayload({
+      type: feedbackType,
+      subject,
+      description,
+      correlationId,
+      consents,
+      sources,
+    }),
+  );
+
+  const previewJson = $derived(JSON.stringify(previewPayload, null, 2));
+
+  async function copyCorrelationId() {
+    try {
+      await navigator.clipboard.writeText(correlationId);
+      copied = true;
+      setTimeout(() => (copied = false), 2000);
+    } catch {
+      // ignore — clipboard may be unavailable in some webview contexts
+    }
   }
 
   async function handleSubmit() {
@@ -182,35 +195,28 @@
     submitError = '';
 
     try {
-      const feedbackData: FeedbackData = {
-        type: feedbackType,
-        subject: subject || getFeedbackSubject(),
-        description,
-        systemInfo: includeSystemInfo ? systemInfo : null,
-        logs: includeLogs ? sanitizeLogs(recentLogs) : null,
-        timestamp: new Date().toISOString(),
-      };
-
-      const emailBody = formatFeedbackEmail(feedbackData);
+      const payload = previewPayload;
+      const emailSubject = buildEmailSubject(payload, subject);
+      const emailBody = buildEmailBody(payload);
 
       const aliasAuth = Local.get('alias_auth') || '';
       const aliasEmail = aliasAuth.includes(':') ? aliasAuth.split(':')[0] : aliasAuth;
       const from = aliasEmail || Local.get('email') || 'webmail-feedback@forwardemail.net';
 
-      const payload = {
-        from,
-        to: ['support@forwardemail.net'],
-        subject: feedbackData.subject,
-        text: emailBody,
-        has_attachment: false,
-      };
-
-      await Remote.request('Emails', payload, { method: 'POST' });
+      await Remote.request(
+        'Emails',
+        {
+          from,
+          to: ['support@forwardemail.net'],
+          subject: emailSubject,
+          text: emailBody,
+          has_attachment: false,
+        },
+        { method: 'POST' },
+      );
 
       submitSuccess = true;
-      setTimeout(() => {
-        onClose();
-      }, 5000);
+      setTimeout(onClose, 5000);
     } catch (error) {
       console.error('Failed to submit feedback:', error);
       submitError = (error as Error).message || 'Failed to submit feedback. Please try again.';
@@ -219,104 +225,11 @@
     }
   }
 
-  function getFeedbackSubject(): string {
-    const typeLabels: Record<string, string> = {
-      bug: 'Bug Report',
-      feature: 'Feature Request',
-      question: 'Question',
-      other: 'Feedback',
-    };
-    return `Webmail ${typeLabels[feedbackType]}: ${description.slice(0, 50)}...`;
-  }
-
-  function formatFeedbackEmail(data: FeedbackData): string {
-    const aliasAuth = Local.get('alias_auth') || '';
-    const aliasEmail = aliasAuth.includes(':') ? aliasAuth.split(':')[0] : aliasAuth;
-    const userEmail = aliasEmail || Local.get('email') || 'unknown';
-
-    let email = `Webmail Feedback Submission
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Type: ${data.type.toUpperCase()}
-From: ${userEmail}
-Submitted: ${data.timestamp}
-
-${data.subject ? `Subject: ${data.subject}\n` : ''}
-Description:
-${data.description}
-
-`;
-
-    if (data.systemInfo) {
-      email += `
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-System Information
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-User Agent: ${data.systemInfo.userAgent}
-Platform: ${data.systemInfo.platform}
-Language: ${data.systemInfo.language}
-Screen: ${data.systemInfo.screenResolution}
-Viewport: ${data.systemInfo.viewportSize}
-Online: ${data.systemInfo.online}
-URL: ${data.systemInfo.url}
-App Version: ${data.systemInfo.appVersion}
-Active Email: ${data.systemInfo.activeEmail || data.systemInfo.account}
-
-`;
-
-      if (data.systemInfo.storageQuota) {
-        email += `Storage Quota:
-  Used: ${((data.systemInfo.storageQuota.usage || 0) / 1024 / 1024).toFixed(2)} MB
-  Total: ${((data.systemInfo.storageQuota.quota || 0) / 1024 / 1024).toFixed(2)} MB
-  Percent: ${data.systemInfo.storageQuota.percentUsed}%
-
-`;
-      }
-
-      if (data.systemInfo.serviceWorker) {
-        email += `Service Worker:
-  Active: ${data.systemInfo.serviceWorker.active}
-  ${data.systemInfo.serviceWorker.scope ? `Scope: ${data.systemInfo.serviceWorker.scope}` : ''}
-
-`;
-      }
-    }
-
-    if (data.logs && data.logs.length > 0) {
-      email += `
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Recent Logs (Last ${data.logs.length} entries)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-${data.logs.map((log) => JSON.stringify(log, null, 2)).join('\n\n')}
-`;
-    }
-
-    email += `
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-End of Report
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-`;
-
-    return email;
-  }
-
   function downloadDiagnostics() {
-    const data = {
-      systemInfo,
-      logs: sanitizeLogs(recentLogs),
-      timestamp: new Date().toISOString(),
-    };
-
-    downloadFile(
-      JSON.stringify(data, null, 2),
-      `webmail-diagnostics-${Date.now()}.json`,
-      'application/json',
-    );
+    downloadFile(previewJson, `webmail-feedback-${correlationId}.json`, 'application/json');
   }
 
-  const feedbackTypeOptions = [
+  const feedbackTypeOptions: { value: FeedbackType; label: string }[] = [
     { value: 'bug', label: 'Bug Report' },
     { value: 'feature', label: 'Feature Request' },
     { value: 'question', label: 'Question' },
@@ -340,6 +253,9 @@ End of Report
           </div>
           <h3 class="mb-2 text-lg font-semibold">Thank you for your feedback!</h3>
           <p class="text-muted-foreground">
+            Reference: <code class="font-mono">{correlationId}</code>
+          </p>
+          <p class="mt-2 text-muted-foreground">
             We've received your message and will get back to you soon.
           </p>
         </div>
@@ -397,30 +313,100 @@ End of Report
             </p>
           </div>
 
-          <div class="grid gap-3">
+          <div class="grid gap-3 rounded-md border p-3">
+            <p class="text-sm font-medium">Optional diagnostics — all off by default</p>
+            <p class="text-xs text-muted-foreground">
+              Pick what you're comfortable sharing. Sensitive values (tokens, email addresses, home
+              directory paths) are redacted before send. Use "Preview" below to see exactly what
+              will be transmitted.
+            </p>
+
             <div class="flex items-start gap-3">
-              <Checkbox id="include-system" bind:checked={includeSystemInfo} />
+              <Checkbox id="consent-system" bind:checked={consentSystem} />
               <div class="grid gap-1">
-                <Label for="include-system" class="cursor-pointer">Include system information</Label
-                >
+                <Label for="consent-system" class="cursor-pointer">System information</Label>
                 <p class="text-xs text-muted-foreground">
-                  Helps us debug issues (browser, OS, screen size, storage usage)
+                  App version, browser, OS, viewport, storage usage.
                 </p>
               </div>
             </div>
 
             <div class="flex items-start gap-3">
-              <Checkbox id="include-logs" bind:checked={includeLogs} />
+              <Checkbox id="consent-js-errors" bind:checked={consentJsErrors} />
               <div class="grid gap-1">
-                <Label for="include-logs" class="cursor-pointer">
-                  Include recent error logs ({recentLogs.length} entries)
+                <Label for="consent-js-errors" class="cursor-pointer">
+                  Recent JS errors ({jsErrors.length})
                 </Label>
                 <p class="text-xs text-muted-foreground">
-                  Diagnostic data is sanitized to remove sensitive information
+                  Last 50 unhandled errors and rejections from this session.
                 </p>
               </div>
             </div>
+
+            <div class="flex items-start gap-3">
+              <Checkbox id="consent-network-errors" bind:checked={consentNetworkErrors} />
+              <div class="grid gap-1">
+                <Label for="consent-network-errors" class="cursor-pointer">
+                  Network &amp; database errors ({networkErrors.length})
+                </Label>
+                <p class="text-xs text-muted-foreground">
+                  Failed API calls and IndexedDB operations from this session.
+                </p>
+              </div>
+            </div>
+
+            {#if showNativeLogsToggle}
+              <div class="flex items-start gap-3">
+                <Checkbox id="consent-native-logs" bind:checked={consentNativeLogs} />
+                <div class="grid gap-1">
+                  <Label for="consent-native-logs" class="cursor-pointer">
+                    Native log tail
+                    {#if nativeLogsLoading}<span class="text-muted-foreground">(loading…)</span
+                      >{/if}
+                  </Label>
+                  <p class="text-xs text-muted-foreground">
+                    Last 64 KB of the desktop/mobile log file (updater, plugins, Rust panics).
+                  </p>
+                  {#if nativeLogsError}
+                    <p class="text-destructive text-xs">{nativeLogsError}</p>
+                  {/if}
+                </div>
+              </div>
+            {/if}
           </div>
+
+          <div class="rounded-md border bg-muted/30 p-3">
+            <div class="flex items-center justify-between gap-2">
+              <span class="text-xs text-muted-foreground">Reference (for support)</span>
+              <button
+                type="button"
+                onclick={copyCorrelationId}
+                class="hover:text-foreground text-xs text-muted-foreground inline-flex items-center gap-1"
+                title="Copy reference"
+              >
+                <code class="font-mono text-foreground">{correlationId}</code>
+                {#if copied}
+                  <CheckIcon class="h-3 w-3" />
+                {:else}
+                  <CopyIcon class="h-3 w-3" />
+                {/if}
+              </button>
+            </div>
+          </div>
+
+          <details
+            class="rounded-md border p-3"
+            ontoggle={(e) => (showPreview = (e.currentTarget as HTMLDetailsElement).open)}
+          >
+            <summary class="cursor-pointer text-sm font-medium">
+              Preview what will be sent
+            </summary>
+            {#if showPreview}
+              <pre class="mt-2 max-h-64 overflow-auto rounded bg-background p-2 text-xs"><code
+                  >{previewJson}</code
+                ></pre>
+            {/if}
+          </details>
 
           {#if submitError}
             <Alert.Root variant="destructive">
@@ -434,7 +420,7 @@ End of Report
     {#if !submitSuccess}
       <Dialog.Footer class="flex-col gap-2 sm:flex-row sm:justify-between">
         <Button variant="outline" onclick={downloadDiagnostics} disabled={submitting}>
-          Download Diagnostics
+          Download Preview
         </Button>
         <div class="flex gap-2">
           <Button variant="ghost" onclick={onClose} disabled={submitting}>Cancel</Button>

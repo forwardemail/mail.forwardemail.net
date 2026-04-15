@@ -1228,6 +1228,7 @@ dependencies = [
  "core-foundation",
  "log",
  "objc",
+ "regex",
  "serde",
  "serde_json",
  "tauri",

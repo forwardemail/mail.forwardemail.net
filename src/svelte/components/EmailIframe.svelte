@@ -45,15 +45,12 @@
   const hasContent = $derived(html && html.length > 0);
   const contentSignature = $derived(`${messageId}:${themeVersion}:${hasContent}`);
 
-  // Build srcdoc - reactively updates when html or dark mode changes
+  // Build srcdoc — reactively updates when html or dark mode changes. The
+  // runtime script is loaded from /email-iframe.js (parent origin) and uses
+  // `*` as postMessage target; we validate event.source on receive.
   const srcdoc = $derived.by(() => {
     const darkMode = mounted ? isDarkMode : detectDarkMode();
-    // Use '*' as targetOrigin for srcdoc iframes — Tauri's custom scheme
-    // (tauri://localhost) is not recognized by postMessage in WRY's webview,
-    // causing height reports to be silently dropped. This is safe because:
-    // 1. The iframe is sandboxed (sandbox="allow-scripts")
-    // 2. We validate event.source === iframeRef.contentWindow on receive
-    return buildIframeSrcdoc(html || '', darkMode, '*');
+    return buildIframeSrcdoc(html || '', darkMode);
   });
 
   // Measure iframe content height directly via contentDocument.

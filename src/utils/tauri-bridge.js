@@ -75,6 +75,9 @@ const ALLOWED_COMMANDS = new Set([
   'is_default_mailto_handler',
   'set_default_mailto_handler',
   'get_pending_deep_links',
+  'get_log_path',
+  'read_recent_logs',
+  'clear_logs',
 ]);
 
 export async function invoke(cmd, args) {
@@ -129,6 +132,34 @@ export async function getPlatform() {
  */
 export async function getBuildInfo() {
   return invoke('get_build_info');
+}
+
+/**
+ * Read the tail of the latest native log file (Phase 2 diagnostics).
+ * Returns the empty string when no log file exists yet or when not running
+ * inside Tauri. Maximum 256 KB regardless of the requested size.
+ */
+export async function readRecentLogs(maxBytes = 65536) {
+  if (!isTauri()) return '';
+  const result = await invoke('read_recent_logs', { maxBytes });
+  return typeof result === 'string' ? result : '';
+}
+
+/**
+ * Path to the app's log directory, for surfacing in the Settings UI.
+ */
+export async function getLogPath() {
+  if (!isTauri()) return '';
+  const result = await invoke('get_log_path');
+  return typeof result === 'string' ? result : '';
+}
+
+/**
+ * Delete every .log file in the log directory.
+ */
+export async function clearLogs() {
+  if (!isTauri()) return;
+  await invoke('clear_logs');
 }
 
 /**

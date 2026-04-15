@@ -1,54 +1,32 @@
 /**
- * Iframe Srcdoc Builder
+ * Iframe srcdoc builder.
  *
- * Builds the HTML document for sandboxed email rendering.
- * Includes CSS for light/dark modes and JS for height measurement/link interception.
+ * Builds the HTML document for sandboxed email rendering. The runtime script
+ * lives at /email-iframe.js (served from the parent origin) rather than
+ * inline — Tauri's dev runtime injects a nonce into the webview CSP, and
+ * inherited CSPs on srcdoc iframes ignore `'unsafe-inline'` once any nonce
+ * is present. An external `'self'` script is immune to that interaction.
  */
 
-/**
- * Build the srcdoc HTML for the email iframe
- *
- * @param emailHtml - Sanitized email HTML content
- * @param isDarkMode - Whether the app is in dark mode
- * @returns Complete HTML document string for srcdoc
- */
-// Cache the SHA-256 hash of the embedded script for CSP.
-// The hash is computed once (async) and used for all subsequent calls.
-let scriptHashCache: string | null = null;
+const SCRIPT_URL = '/email-iframe.js';
 
-async function computeScriptHash(scriptText: string): Promise<string> {
-  const data = new TextEncoder().encode(scriptText);
-  const hash = await crypto.subtle.digest('SHA-256', data);
-  return `'sha256-${btoa(String.fromCharCode(...new Uint8Array(hash)))}'`;
+function parentOrigin(): string {
+  return typeof window !== 'undefined' && window.location?.origin
+    ? window.location.origin
+    : "'self'";
 }
 
-// Eagerly compute the hash on module load
-const hashReady = computeScriptHash(getEmbeddedScript('*')).then((h) => {
-  scriptHashCache = h;
-});
-
-/** Ensure the script hash is ready (call once at startup). */
-export const ensureScriptHash = () => hashReady;
-
-export function buildIframeSrcdoc(
-  emailHtml: string,
-  isDarkMode: boolean = false,
-  parentOrigin: string = '*',
-): string {
+export function buildIframeSrcdoc(emailHtml: string, isDarkMode: boolean = false): string {
   const bodyClass = isDarkMode ? 'fe-iframe-dark' : 'fe-iframe-light';
-  const safeOrigin = parentOrigin.replace(/'/g, "\\'").replace(/\\/g, '\\\\');
-  const scriptContent = getEmbeddedScript(safeOrigin);
-
-  // Use the pre-computed hash if available, otherwise fall back to 'unsafe-inline'.
-  // The hash satisfies CSP even when Tauri/WebKit nonce handling disables 'unsafe-inline'.
-  const scriptCsp = scriptHashCache ? `${scriptHashCache} 'unsafe-inline'` : "'unsafe-inline'";
+  const origin = parentOrigin();
+  const scriptSrc = `${origin}${SCRIPT_URL}`;
 
   return `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data: https: http:; font-src data: https:; script-src ${scriptCsp};">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data: https: http:; font-src data: https:; script-src ${origin};">
   <style>
     ${getResetStyles()}
     ${getAppearanceStyles()}
@@ -59,7 +37,7 @@ export function buildIframeSrcdoc(
   <div class="fe-email-content">
     ${emailHtml}
   </div>
-  <script>${scriptContent}</script>
+  <script src="${scriptSrc}"></script>
 </body>
 </html>`;
 }
@@ -290,303 +268,5 @@ function getQuoteToggleStyles(): string {
     .fe-quote-label {
       font-size: 11px;
     }
-  `;
-}
-
-function getEmbeddedScript(parentOrigin: string): string {
-  return `
-    (function() {
-      'use strict';
-
-      var TARGET_ORIGIN = '${parentOrigin}';
-
-      // Send ready message FIRST - ensures parent knows iframe is alive even if other code fails
-      try {
-        parent.postMessage({ type: 'ready', payload: {} }, TARGET_ORIGIN);
-      } catch (e) {
-        // Ignore - parent might not be accessible
-      }
-
-      // Configuration
-      var STYLE_PROPS_TO_STRIP = ['color', 'background-color', 'background'];
-      var HEIGHT_REPORT_DELAYS = [0, 50, 100, 200, 500, 1000];
-
-      /**
-       * Strip inline color/background styles from an element
-       * This prevents invisible text caused by white-on-white or dark-on-dark
-       */
-      function stripElementStyles(el) {
-        if (!el || !el.style) return;
-        STYLE_PROPS_TO_STRIP.forEach(function(prop) {
-          if (el.style.getPropertyValue(prop)) {
-            el.style.removeProperty(prop);
-          }
-        });
-      }
-
-      /**
-       * Strip inline styles from all elements in the document
-       */
-      function stripAllInlineStyles() {
-        var elements = document.querySelectorAll('*');
-        elements.forEach(stripElementStyles);
-      }
-
-      /**
-       * Set up a MutationObserver to strip styles from dynamically added content
-       */
-      function observeForNewContent() {
-        if (typeof MutationObserver === 'undefined') return;
-
-        var observer = new MutationObserver(function(mutations) {
-          mutations.forEach(function(mutation) {
-            // Handle added nodes
-            mutation.addedNodes.forEach(function(node) {
-              if (node.nodeType === 1) { // Element node
-                stripElementStyles(node);
-                // Also strip from children
-                if (node.querySelectorAll) {
-                  node.querySelectorAll('*').forEach(stripElementStyles);
-                }
-              }
-            });
-            // Handle attribute changes (style attribute modified)
-            if (mutation.type === 'attributes' && mutation.attributeName === 'style') {
-              stripElementStyles(mutation.target);
-            }
-          });
-        });
-
-        observer.observe(document.body, {
-          childList: true,
-          subtree: true,
-          attributes: true,
-          attributeFilter: ['style']
-        });
-      }
-
-      /**
-       * Run style stripping with multiple timing strategies
-       */
-      function ensureStylesStripped() {
-        // Run immediately
-        stripAllInlineStyles();
-
-        // Run after next animation frame
-        if (typeof requestAnimationFrame !== 'undefined') {
-          requestAnimationFrame(function() {
-            stripAllInlineStyles();
-            // And one more after that
-            requestAnimationFrame(stripAllInlineStyles);
-          });
-        }
-
-        // Run after a short delay as fallback
-        setTimeout(stripAllInlineStyles, 10);
-      }
-
-      // Initialize style stripping
-      ensureStylesStripped();
-
-      // Handle different document ready states
-      if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', function() {
-          ensureStylesStripped();
-          observeForNewContent();
-        });
-      } else {
-        // DOM already loaded
-        setTimeout(function() {
-          ensureStylesStripped();
-          observeForNewContent();
-        }, 0);
-      }
-
-      // Also run on window load (after images, etc.)
-      window.addEventListener('load', ensureStylesStripped);
-
-      /**
-       * Height measurement and reporting
-       */
-      function reportHeight() {
-        var content = document.querySelector('.fe-email-content');
-        var contentHeight = content ? content.getBoundingClientRect().height : 0;
-
-        var height = Math.max(
-          contentHeight,
-          document.body.scrollHeight,
-          document.body.offsetHeight,
-          document.documentElement.scrollHeight,
-          document.documentElement.offsetHeight
-        );
-
-        // Ensure minimum height and round up
-        height = Math.max(Math.ceil(height), 50);
-
-        parent.postMessage({ type: 'height', payload: { height: height } }, TARGET_ORIGIN);
-      }
-
-      // Report height at multiple intervals to catch all rendering phases
-      HEIGHT_REPORT_DELAYS.forEach(function(delay) {
-        setTimeout(reportHeight, delay);
-      });
-
-      // Also report height when DOM is fully ready
-      if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', reportHeight);
-      }
-      window.addEventListener('load', reportHeight);
-
-      // Use ResizeObserver for efficient ongoing height updates
-      if (typeof ResizeObserver !== 'undefined') {
-        var ro = new ResizeObserver(function() {
-          // Debounce rapid resize events
-          clearTimeout(ro._timeout);
-          ro._timeout = setTimeout(reportHeight, 16);
-        });
-        ro.observe(document.body);
-
-        var content = document.querySelector('.fe-email-content');
-        if (content) {
-          ro.observe(content);
-        }
-      } else {
-        // Fallback polling for older browsers
-        setInterval(reportHeight, 500);
-      }
-
-      // Report height after images load
-      document.querySelectorAll('img').forEach(function(img) {
-        if (!img.complete) {
-          img.addEventListener('load', reportHeight);
-          img.addEventListener('error', reportHeight);
-        }
-      });
-
-      /**
-       * Quote toggle handling — registered BEFORE the link handler so that
-       * clicks on the toggle button always resolve to a toggle, even if the
-       * email HTML wraps the quote section in an anchor. We use
-       * stopImmediatePropagation to prevent the link handler (or any later
-       * capture-phase listener on document) from running on the same event.
-       */
-      document.addEventListener('click', function(e) {
-        var toggle = e.target.closest ? e.target.closest('.fe-quote-toggle') : null;
-        if (!toggle) return;
-
-        e.preventDefault();
-        e.stopPropagation();
-        if (typeof e.stopImmediatePropagation === 'function') {
-          e.stopImmediatePropagation();
-        }
-
-        var wrapper = toggle.closest('.fe-quote-wrapper');
-        if (!wrapper) return;
-
-        var isCollapsed = wrapper.classList.contains('fe-quote-collapsed');
-        wrapper.classList.toggle('fe-quote-collapsed');
-
-        var label = toggle.querySelector('.fe-quote-label');
-        if (label) {
-          label.textContent = isCollapsed ? 'Hide quoted text' : 'Show quoted text';
-        }
-
-        // Report new height after toggle animation
-        setTimeout(reportHeight, 50);
-        setTimeout(reportHeight, 350);
-      }, true);
-
-      /**
-       * Link click interception
-       */
-      document.addEventListener('click', function(e) {
-        // Defensive: if the click originated from (or within) a quote toggle,
-        // skip link handling even if stopImmediatePropagation didn't fire.
-        if (e.target.closest && e.target.closest('.fe-quote-toggle')) return;
-        var link = e.target.closest('a');
-        if (link && link.href) {
-          e.preventDefault();
-          e.stopPropagation();
-          var url = link.href;
-          var isMailto = url.toLowerCase().startsWith('mailto:');
-          parent.postMessage({
-            type: 'link',
-            payload: { url: url, isMailto: isMailto }
-          }, TARGET_ORIGIN);
-        }
-      }, true);
-
-      /**
-       * Form submission blocking
-       */
-      document.addEventListener('submit', function(e) {
-        e.preventDefault();
-        e.stopPropagation();
-        var form = e.target;
-        var formData = {};
-        try {
-          var data = new FormData(form);
-          data.forEach(function(value, key) {
-            formData[key] = value;
-          });
-        } catch (err) {
-          // Ignore FormData errors
-        }
-        parent.postMessage({
-          type: 'form',
-          payload: {
-            action: form.action || '',
-            method: form.method || 'get',
-            data: formData
-          }
-        }, TARGET_ORIGIN);
-      }, true);
-
-      /**
-       * Horizontal swipe detection — forward next/prev navigation intents
-       * to the parent so mobile users can swipe across the email body, not
-       * only on the sticky header area. Touch events inside an iframe don't
-       * bubble to the parent window, so we detect here and postMessage.
-       */
-      (function() {
-        var swipeStartX = 0;
-        var swipeStartY = 0;
-        var swipeActive = false;
-        var swipeDirection = null;
-
-        document.addEventListener('touchstart', function(e) {
-          if (!e.touches || e.touches.length !== 1) return;
-          swipeStartX = e.touches[0].clientX;
-          swipeStartY = e.touches[0].clientY;
-          swipeActive = false;
-          swipeDirection = null;
-          parent.postMessage({ type: 'swipe', payload: { phase: 'start', x: swipeStartX, y: swipeStartY } }, TARGET_ORIGIN);
-        }, { passive: true });
-
-        document.addEventListener('touchmove', function(e) {
-          if (!e.touches || e.touches.length !== 1 || !swipeStartX) return;
-          var dx = e.touches[0].clientX - swipeStartX;
-          var dy = e.touches[0].clientY - swipeStartY;
-          if (!swipeActive && Math.abs(dx) > 15 && Math.abs(dx) > Math.abs(dy) * 2) {
-            swipeActive = true;
-            swipeDirection = dx > 0 ? 'right' : 'left';
-          }
-          if (swipeActive) {
-            parent.postMessage({ type: 'swipe', payload: { phase: 'move', dx: dx, dy: dy } }, TARGET_ORIGIN);
-          }
-        }, { passive: true });
-
-        document.addEventListener('touchend', function() {
-          parent.postMessage({ type: 'swipe', payload: { phase: 'end', active: swipeActive, direction: swipeDirection } }, TARGET_ORIGIN);
-          swipeStartX = 0;
-          swipeStartY = 0;
-          swipeActive = false;
-          swipeDirection = null;
-        }, { passive: true });
-      })();
-
-      // Note: 'ready' message is sent at the START of this script to ensure
-      // parent is notified even if subsequent initialization fails
-    })();
   `;
 }

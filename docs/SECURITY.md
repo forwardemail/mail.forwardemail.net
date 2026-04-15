@@ -50,6 +50,30 @@ The CSP is defined in `src-tauri/tauri.conf.json` and enforces the following res
 
 The `dangerousRemoteDomainIpcAccess` array is empty, meaning no remote domains can invoke Tauri IPC commands.
 
+### Cross-Platform Gotchas
+
+CSP enforcement is not uniform across the three runtimes. Changes to `script-src`, `frame-src`, or anything the email iframe touches must be validated on each one.
+
+**1. Three distinct policies are active.**
+
+| Runtime    | Policy source                       | Parent origin           |
+| ---------- | ----------------------------------- | ----------------------- |
+| Web (PWA)  | `<meta http-equiv>` in `index.html` | `https://webmail.…`     |
+| Tauri dev  | `src-tauri/tauri.conf.json` → `csp` | `http://localhost:5174` |
+| Tauri prod | `src-tauri/tauri.conf.json` → `csp` | `tauri://localhost`     |
+
+`vite.config.js` strips the `<meta>` CSP for Tauri builds (the `strip-csp-meta-for-tauri` plugin) so the two policies don't collide into a more-restrictive union.
+
+**2. Tauri injects a nonce at runtime for its IPC bootstrap.** Per CSP spec, _once any nonce or hash is present in `script-src`, `'unsafe-inline'` is ignored_ for scripts that don't match. This silently breaks inline scripts that "worked" on web or in release builds. Symptom: `Refused to execute a script because its hash, its nonce, or 'unsafe-inline' does not appear in the script-src directive` even though `'unsafe-inline'` is clearly in the declared CSP.
+
+**3. Sandboxed srcdoc iframes inherit the parent's CSP.** They add their own meta CSP on top — the effective policy is the intersection (most restrictive wins). So point 2 propagates into every email iframe. An inline script that works on web will fail inside the same iframe under Tauri dev.
+
+**4. The email iframe uses an external script, not inline.** `public/email-iframe.js` is loaded via `<script src="${parent-origin}/email-iframe.js">` (see `src/utils/iframe-srcdoc.ts`). The srcdoc CSP is `script-src ${parent-origin}`. This side-steps the nonce-kills-unsafe-inline interaction because origin matches are unaffected by nonce presence. The previous hash-based approach had a race (the async SHA-256 computation wasn't always ready by first render) and would have been defeated by any future change to the script text. Do not revert to inline without also removing Tauri's nonce injection (which is not optional — it's part of the IPC bootstrap).
+
+**5. When a link inside the email iframe appears to silently fail,** check the _iframe's_ devtools frame, not the top-level page. Two errors typically appear together: the srcdoc script is blocked (script-src), then the iframe's `<a>` navigates to the link target, which is blocked by the parent's `frame-src` because it's an external origin. Fix the first and the second goes away — the external script registers the capture-phase click interceptor that postMessages the URL up to `handleIframeLinkClick` in `Mailbox.svelte`, which calls `openUrl()` instead of navigating.
+
+**6. When adding a new external origin (script, frame, connect),** update _both_ `index.html` and `src-tauri/tauri.conf.json`. It's easy to miss one; the web build will silently work while Tauri rejects, or vice versa.
+
 ## IPC Isolation Pattern
 
 The application uses Tauri's **isolation pattern** (`src-tauri/isolation/index.html`), which interposes a sandboxed iframe between the main webview and the Tauri IPC bridge. The isolation script performs the following checks on every IPC message:

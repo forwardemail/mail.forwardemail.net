@@ -13,6 +13,7 @@ module.exports = {
     '**/*.{woff2,woff,png,svg,ico}',
     'manifest.json',
     'sw-*.js',
+    'email-iframe.js',
   ],
   swDest: 'dist/sw.js',
   // Import sync handler for background sync

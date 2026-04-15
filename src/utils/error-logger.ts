@@ -3,6 +3,8 @@
  * Captures errors, stores them in sessionStorage, and provides them to the feedback system
  */
 
+import { redact } from './redaction';
+
 const MAX_LOG_ENTRIES = 100;
 const MAX_LOG_SIZE = 500 * 1024; // 500KB max
 const LOG_KEY = 'app_logs';
@@ -11,32 +13,7 @@ const API_ERROR_KEY = 'api_errors';
 const hasWindow = typeof window !== 'undefined';
 const hasStorage = typeof sessionStorage !== 'undefined';
 
-/**
- * Patterns that match sensitive data in log strings.
- * Each tuple is [regex, replacement]. Regexes use the `gi` flag so
- * a fresh match state is created per `.replace()` call.
- */
-const SENSITIVE_PATTERNS: [RegExp, string][] = [
-  // Basic / Bearer auth header values
-  [/\b(Basic|Bearer)\s+[A-Za-z0-9+/=_-]{8,}/gi, '$1 [REDACTED]'],
-  // Key=value pairs for known credential keys (in URLs, query strings, logs)
-  [/\b(alias_auth|api_key|password|token|secret|credential)[=:]\s*\S+/gi, '$1=[REDACTED]'],
-  // "authorization" header in stringified objects / headers dumps
-  [/(["']?authorization["']?\s*[:=]\s*["']?)[^"'\s,}]+/gi, '$1[REDACTED]'],
-];
-
-/**
- * Redact sensitive patterns (auth headers, tokens, credentials) from a string
- * before it is persisted to sessionStorage / exported via feedback.
- */
-function sanitize(str: string | undefined): string {
-  if (!str || typeof str !== 'string') return str || '';
-  let result = str;
-  for (const [pattern, replacement] of SENSITIVE_PATTERNS) {
-    result = result.replace(pattern, replacement);
-  }
-  return result;
-}
+const sanitize = (str: string | undefined): string => redact(str);
 
 export interface LogEntry {
   type: string;
