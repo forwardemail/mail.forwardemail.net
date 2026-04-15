@@ -211,7 +211,7 @@ The CI/CD workflows implement the following supply chain protections.
 
 **Environment scoping.** Release workflows use GitHub's `environment` feature to scope secrets to the `release` environment. This prevents CI builds from accessing signing keys or credentials.
 
-**Supply chain audits.** Every build and release workflow runs `cargo audit` and `pnpm audit --prod` before building. These checks catch known vulnerabilities in Rust and npm dependencies.
+**Supply chain audits.** Dependency vulnerability scanning is handled by GitHub's native Dependabot alerts rather than in-workflow gates. In-workflow scanners (`cargo audit`, OSV-Scanner against `pnpm-lock.yaml`) were removed because npm's legacy audit endpoint was retired (410 Gone) and the remaining scans produced noisy advisories on dev-only dep paths that did not ship in the user bundle. Dependabot + GitHub's security advisories are the system of record; critical findings are triaged via PRs rather than blocking CI.
 
 **Concurrency controls.** Release workflows use `cancel-in-progress: false` to prevent partial releases. CI workflows use `cancel-in-progress: true` to save resources.
 

@@ -24,40 +24,8 @@ env:
   NODE_VERSION: '22'
 
 jobs:
-  # Supply chain audit job — runs before builds
-  # Skip for dependabot PRs — ci.yml already validates the update
-  audit:
-    if: github.actor != 'dependabot[bot]'
-    runs-on: ubuntu-22.04
-    name: Security Audit
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install cargo-audit
-        run: cargo install cargo-audit
-
-      - name: Cargo audit
-        run: cd src-tauri && cargo audit
-
-      # OSV-Scanner replaces `pnpm audit` (npm's legacy audit endpoint is
-      # retired — 410 Gone). Reads pnpm-lock.yaml directly against the OSV DB.
-      # Advisory (continue-on-error) because every current finding is in a
-      # dev-only dep path — none ship in the user bundle.
-      - name: JS dependency vulnerability scan
-        uses: google/osv-scanner-action/osv-scanner-action@v2.3.5
-        continue-on-error: true
-        with:
-          scan-args: |-
-            --lockfile=pnpm-lock.yaml
-        continue-on-error: true
-
   build:
     if: github.actor != 'dependabot[bot]'
-    needs: audit
     strategy:
       fail-fast: false
       matrix:

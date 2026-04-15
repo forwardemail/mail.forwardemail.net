@@ -19,9 +19,10 @@ The build matrix compiles for **4 platforms in parallel**:
 
 ## Build Pipeline
 
-1. **Audit** — Runs `npm audit --prod` and `cargo audit` before any builds
-2. **Build** — Compiles for all platforms (unsigned CI binaries)
-3. **Upload** — Artifacts available for 7 days in the PR's artifacts section
+1. **Build** — Compiles for all platforms (unsigned CI binaries)
+2. **Upload** — Artifacts available for 7 days in the PR's artifacts section
+
+Dependency vulnerabilities are surfaced by GitHub's Dependabot alerts on the repository rather than as an in-workflow gate.
 
 ## Download and Test
 

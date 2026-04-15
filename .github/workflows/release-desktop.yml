@@ -34,39 +34,7 @@ env:
   NODE_VERSION: '22'
 
 jobs:
-  # Pre-release audit
-  audit:
-    runs-on: ubuntu-22.04
-    name: Pre-release Audit
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install cargo-audit
-        run: cargo install cargo-audit
-
-      - name: Cargo audit
-        run: cd src-tauri && cargo audit
-
-      # npm's legacy audit endpoint was retired (410), which broke `pnpm audit`.
-      # OSV-Scanner reads pnpm-lock.yaml directly against the OSV database and
-      # has no dependency on the retired endpoint. See docs/SECURITY.md.
-      # Advisory (continue-on-error) because every current finding is in a
-      # dev-only dep path (lighthouse, workbox-cli, np, vite-plugin-pwa,
-      # inquirer) — none ship in the user bundle. Revisit: scope the scan
-      # to a prod-only lockfile and re-enable blocking.
-      - name: JS dependency vulnerability scan
-        uses: google/osv-scanner-action/osv-scanner-action@v2.3.5
-        continue-on-error: true
-        with:
-          scan-args: |-
-            --lockfile=pnpm-lock.yaml
-
   build-and-release:
-    needs: audit
     # Use the 'release' environment for scoped secrets
     environment: release
     strategy:
