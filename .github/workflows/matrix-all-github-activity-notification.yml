@@ -1,12 +1,98 @@
 name: 'Matrix All Activity Notifications'
 
 on:
+  # Issues
   issues:
     types: [opened, closed, reopened]
+  # edited, assigned, unassigned, labeled, unlabeled, locked, unlocked, transferred, pinned, unpinned]
+
+  # Issue Comments
+  #issue_comment:
+  #  types: [created] #, edited, deleted]
+
+  # Pull Requests
+  pull_request:
+    types: [opened] # , edited, closed]
+  # , reopened, assigned, unassigned, review_requested, review_request_removed, labeled, unlabeled, synchronize, converted_to_draft, ready_for_review, locked, unlocked]
+
+  # Pull Request Reviews
+  # pull_request_review:
+  # types: [submitted] # , edited, dismissed]
+
+  # Pull Request Review Comments
+  #pull_request_review_comment:
+  #  types: [created] #, edited, deleted]
+
+  # Pushes to any branch AND tags
+  #push:
+  #  branches: ['**']
+  #  tags: ['**']
+
+  # Releases
   release:
-    types: [published]
+    types: [published] #, unpublished, created, edited, deleted, prereleased, released]
+
+  # Stars
+  #watch:
+  #  types: [started]
+
+  # Forks
+  #fork:
+
+  # Discussions
   discussion:
     types: [created, answered] #, edited, deleted, pinned, unpinned, locked, unlocked, transferred, category_changed, answered, unanswered]
+
+  # Discussion Comments
+  #discussion_comment:
+  #  types: [created] #, edited, deleted]
+
+  # Wiki
+  gollum:
+
+  # Milestones
+  milestone:
+    types: [closed] # [created, closed, opened, edited, deleted]
+
+  # Labels
+  #label:
+  #  types: [created, edited, deleted]
+
+  # Branch/Tag creation and deletion
+  #create:
+  #delete:
+
+  # Deployment
+  deployment:
+  deployment_status:
+
+  # Pages
+  # page_build:
+
+  # Repository dispatch
+  # repository_dispatch:
+
+  # Public (when repo goes public)
+  public:
+
+  # Check runs
+  #check_run:
+  #  types: [created, completed, rerequested, requested_action]
+
+  # Check suites
+  #check_suite:
+  #  types: [completed, requested, rerequested]
+
+  # Branch protection rules
+  #branch_protection_rule:
+  #  types: [created, edited, deleted]
+
+  # Registry packages
+  registry_package:
+    types: [published, updated]
+
+  # Status (commit status)
+  # status:
 
 # Restrict permissions to minimum needed
 permissions: {}
@@ -266,64 +352,22 @@ jobs:
         if: env.MATRIX_TOKEN != ''
         env:
           MATRIX_TOKEN: ${{ secrets.MATRIX_TOKEN }}
-          MATRIX_ROOM: '!azsMvrsrqEENIcSLOe:matrix.org'
-          MATRIX_SERVER: 'https://matrix.org'
-          MSG_ICON: ${{ steps.format.outputs.icon }}
-          MSG_TITLE: ${{ steps.format.outputs.title }}
-          MSG_DESCRIPTION: ${{ steps.format.outputs.description }}
-          MSG_URL: ${{ steps.format.outputs.url }}
-          MSG_ACTOR: ${{ steps.format.outputs.actor }}
-          MSG_REPO: ${{ github.repository }}
-        run: |
-          # Build plain-text body
-          BODY="${MSG_ICON} ${MSG_TITLE}
+        uses: lkiesow/matrix-notification@v1
+        with:
+          server: matrix.org
+          token: ${{ secrets.MATRIX_TOKEN }}
+          room: '!azsMvrsrqEENIcSLOe:matrix.org'
+          message: |
+            ${{ steps.format.outputs.icon }} ${{ steps.format.outputs.title }}
 
-          Actor: ${MSG_ACTOR}
-          Repository: ${MSG_REPO}"
-          if [[ -n "$MSG_DESCRIPTION" ]]; then
-            BODY="${BODY}
-          Details: ${MSG_DESCRIPTION}"
-          fi
-          BODY="${BODY}
+            Actor: ${{ steps.format.outputs.actor }}
+            Repository: ${{ github.repository }}
+            ${{ steps.format.outputs.description && format('Details: {0}', steps.format.outputs.description) || '' }}
 
-          Link: ${MSG_URL}"
-
-          # Build HTML formatted body
-          FORMATTED_BODY="${MSG_ICON} <b>${MSG_TITLE}</b><br><br>"
-          FORMATTED_BODY="${FORMATTED_BODY}<b>Actor:</b> ${MSG_ACTOR}<br>"
-          FORMATTED_BODY="${FORMATTED_BODY}<b>Repository:</b> ${MSG_REPO}<br>"
-          if [[ -n "$MSG_DESCRIPTION" ]]; then
-            FORMATTED_BODY="${FORMATTED_BODY}<b>Details:</b> ${MSG_DESCRIPTION}<br>"
-          fi
-          FORMATTED_BODY="${FORMATTED_BODY}<br><b>Link:</b> <a href=\"${MSG_URL}\">${MSG_URL}</a>"
-
-          # Generate unique transaction ID
-          TXN_ID="gh_$(date +%s%N)_${RANDOM}"
-
-          # URL-encode the room ID
-          ENCODED_ROOM=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${MATRIX_ROOM}'))")
-
-          # Export so python3 subprocess can read them
-          export BODY
-          export FORMATTED_BODY
-
-          # Build JSON payload via python3 (handles escaping safely)
-          PAYLOAD=$(python3 -c "
-          import json, os
-          print(json.dumps({
-              'msgtype': 'm.text',
-              'body': os.environ['BODY'],
-              'format': 'org.matrix.custom.html',
-              'formatted_body': os.environ['FORMATTED_BODY']
-          }))
-          ")
-
-          # Send via Matrix Client-Server API
-          curl -sf -X PUT \
-            "${MATRIX_SERVER}/_matrix/client/v3/rooms/${ENCODED_ROOM}/send/m.room.message/${TXN_ID}" \
-            -H "Authorization: Bearer ${MATRIX_TOKEN}" \
-            -H "Content-Type: application/json" \
-            --data "${PAYLOAD}" \
-            --max-time 30 \
-            --retry 3 \
-            --retry-delay 5
+            Link: ${{ steps.format.outputs.url }}
+          formatted_message: |
+            ${{ steps.format.outputs.icon }} <b>${{ steps.format.outputs.title }}</b><br><br>
+            <b>Actor:</b> ${{ steps.format.outputs.actor }}<br>
+            <b>Repository:</b> ${{ github.repository }}<br>
+            ${{ steps.format.outputs.description && format('<b>Details:</b> {0}<br>', steps.format.outputs.description) || '' }}
+            <br><b>Link:</b> <a href="${{ steps.format.outputs.url }}">${{ steps.format.outputs.url }}</a>
