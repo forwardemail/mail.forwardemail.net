@@ -5,6 +5,7 @@ import {
   navigateToContacts,
   openNewContactModal,
   fillContactForm,
+  createContact,
   selectContact,
   editContactInline,
   saveContactInline,
@@ -38,17 +39,11 @@ test.describe('Contact Creation - Modal', () => {
   test('should create contact with name and email', async ({ page }) => {
     await expect(page.getByText('4 contacts', { exact: true }).first()).toBeVisible();
 
-    const modal = await openNewContactModal(page);
+    // createContact() waits for the POST response + modal to close + the
+    // new row to appear — deterministic, no sleeps.
+    await createContact(page, { name: 'Test User', email: 'test@example.com' });
 
-    await fillContactForm(modal, {
-      name: 'Test User',
-      email: 'test@example.com',
-    });
-
-    await modal.locator('button:has-text("Save")').click();
-    await page.waitForSelector('div[role="dialog"]', { state: 'hidden', timeout: 5000 });
     await waitForSuccessToast(page, '');
-
     await verifyContactInList(page, { name: 'Test User', email: 'test@example.com' });
     await expect(page.getByText('5 contacts', { exact: true }).first()).toBeVisible();
   });
