@@ -690,6 +690,7 @@
   let dragOverFolder = $state<string | null>(null);
   let dragExpandTimeout: ReturnType<typeof setTimeout> | null = null;
   let dragEnterCounter = 0;
+  let dragScrollInterval: ReturnType<typeof setInterval> | null = null;
 
   async function loadOutboxItems() {
     try {
@@ -2607,6 +2608,10 @@
       clearTimeout(dragExpandTimeout);
       dragExpandTimeout = null;
     }
+    if (dragScrollInterval) {
+      clearInterval(dragScrollInterval);
+      dragScrollInterval = null;
+    }
     document.body.classList.remove('dragging');
   };
 
@@ -2652,6 +2657,29 @@
     // fires continuously while hovering, so this recovers the state.
     if (dragOverFolder !== folder.path) {
       dragOverFolder = folder.path;
+    }
+
+    // Auto-scroll the folder list when dragging near its top/bottom edge.
+    // This lets users reach folders that are off-screen during drag-and-drop.
+    const EDGE_ZONE = 40; // px from edge to trigger scroll
+    const SCROLL_SPEED = 6; // px per frame
+    const folderListEl = (e.target as HTMLElement)?.closest?.('.overflow-y-auto');
+    if (folderListEl) {
+      const rect = folderListEl.getBoundingClientRect();
+      const y = e.clientY;
+      const nearTop = y - rect.top < EDGE_ZONE;
+      const nearBottom = rect.bottom - y < EDGE_ZONE;
+      if (nearTop || nearBottom) {
+        if (!dragScrollInterval) {
+          dragScrollInterval = setInterval(() => {
+            if (nearTop) folderListEl.scrollTop -= SCROLL_SPEED;
+            else folderListEl.scrollTop += SCROLL_SPEED;
+          }, 16);
+        }
+      } else if (dragScrollInterval) {
+        clearInterval(dragScrollInterval);
+        dragScrollInterval = null;
+      }
     }
   };
 
@@ -3242,11 +3270,21 @@
     const targets = resolveDeleteTargetsHelper(messagesToDelete);
     if (!targets.length) return;
 
-    // Remove from UI optimistically
-    const currentMessages = get(messagesStore);
+    // Remove from UI optimistically.
+    // Wrap in requestAnimationFrame so the current event-loop tick
+    // completes before we mutate the store.  On macOS 26+ WebKit,
+    // synchronous store updates that trigger webview layout changes
+    // can race with pending dispatchSetObscuredContentInsets calls,
+    // causing a use-after-free crash (EXC_BAD_ACCESS).
     const idsToRemove = new Set(targets.map((m) => m.id));
-    messagesStore.set(currentMessages.filter((m) => !idsToRemove.has(m.id)));
-    clearSelection();
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => {
+        const currentMessages = get(messagesStore);
+        messagesStore.set(currentMessages.filter((m) => !idsToRemove.has(m.id)));
+        clearSelection();
+        resolve();
+      });
+    });
 
     try {
       if (mailboxStore?.actions?.bulkDeleteMessages) {

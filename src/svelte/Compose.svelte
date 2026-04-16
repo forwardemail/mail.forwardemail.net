@@ -1219,9 +1219,12 @@
       // macOS 26+ WebKit crashes inside
       // WebPageProxy::dispatchSetObscuredContentInsets when a webview
       // is destroyed synchronously during a JS callback (e.g. after
-      // send completes).  Yielding to the next tick lets the
-      // originating event finish dispatching first.
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      // send completes or a draft is discarded).  A zero-delay
+      // setTimeout is insufficient on macOS 26.3+ because the
+      // RunLoop may still have pending dispatchSetObscuredContentInsets
+      // calls queued.  100 ms gives WebKit enough time to drain its
+      // internal layout/geometry queue before the WebPageProxy is freed.
+      await new Promise((resolve) => setTimeout(resolve, 100));
       getCurrentWindow().close();
     } catch {
       window.close();

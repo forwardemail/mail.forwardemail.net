@@ -749,11 +749,34 @@ export const replyTo = async (msg, options = {}) => {
   }
   const references = refsArray.join(' ');
 
+  // Determine which of the user's own accounts received this message.
+  // The `from` field in the prefill must be the user's address (the one
+  // that appeared in To/CC of the original message), NOT the sender's
+  // address.  Using the sender's address causes the SMTP API to reject
+  // with "From header must be equal to ..." when replying from a
+  // secondary account.
+  const selfEmails = getUserEmails();
+  const toList = extractAddressList(msg, 'to');
+  const ccList = extractAddressList(msg, 'cc');
+  const allRecipients = [...toList, ...ccList];
+  let replyFromAddress = '';
+  for (const addr of allRecipients) {
+    const email = normalizeEmail(addr);
+    if (email && selfEmails.has(email)) {
+      replyFromAddress = email;
+      break;
+    }
+  }
+  // Fallback: use the current account email
+  if (!replyFromAddress) {
+    replyFromAddress = get(currentAccount) || Local.get('email') || '';
+  }
+
   // Open compose immediately with loading state
   const replyToApiId = getMessageApiId(msg);
   composeModalRef.reply?.({
     subject: addReplyPrefix(msg?.subject),
-    from: msg?.from,
+    from: replyFromAddress,
     to: targets.to,
     cc: targets.cc,
     date: msg?.date || msg?.dateMs,

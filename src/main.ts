@@ -734,6 +734,7 @@ let handleHashActions;
 let autoSyncTimer = null;
 let starfieldDisposer = null;
 let themeUnsub = null;
+let systemThemeMediaQuery = null;
 
 // SPA-style navigation to avoid reload flicker
 viewModel.navigate = (path, options) => {
@@ -1765,6 +1766,18 @@ async function bootstrap() {
     viewModel.settingsModal.applyFont = applyFont;
     themeUnsub?.();
     themeUnsub = effectiveTheme.subscribe((value) => applyTheme(value || 'system'));
+
+    // Listen for OS-level light/dark mode changes so the app reacts
+    // immediately when the system theme switches (e.g. macOS auto
+    // appearance schedule).  Without this listener, applyTheme only
+    // runs when the user-facing setting store changes.
+    if (systemThemeMediaQuery) {
+      systemThemeMediaQuery.removeEventListener('change', applyTheme);
+    }
+    if (window.matchMedia) {
+      systemThemeMediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+      systemThemeMediaQuery.addEventListener('change', () => applyTheme());
+    }
 
     // Apply saved font preference
     const currentAcct = Local.get('email') || 'default';

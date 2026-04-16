@@ -283,7 +283,7 @@
 
 .fe-reader {
   overflow-y: auto;
-  overflow-x: hidden;
+  overflow-x: auto;
   padding: 10px 20px;
 }
 
