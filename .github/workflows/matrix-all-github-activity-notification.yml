@@ -1,8 +1,12 @@
 name: 'Matrix All Activity Notifications'
 
 on:
+  issues:
+    types: [opened, closed, reopened]
   release:
     types: [published]
+  discussion:
+    types: [created, answered] #, edited, deleted, pinned, unpinned, locked, unlocked, transferred, category_changed, answered, unanswered]
 
 # Restrict permissions to minimum needed
 permissions: {}
