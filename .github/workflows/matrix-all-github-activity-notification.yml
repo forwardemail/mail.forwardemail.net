@@ -100,8 +100,6 @@ permissions: {}
 jobs:
   notify-matrix:
     runs-on: ubuntu-latest
-    # Skip if MATRIX_TOKEN is not available (e.g. dependabot PRs)
-    if: ${{ secrets.MATRIX_TOKEN != '' }}
     steps:
       - name: Determine activity type and format message
         id: format
@@ -350,6 +348,8 @@ jobs:
           } >> $GITHUB_OUTPUT
 
       - name: Send Matrix notification
+        # Skip if MATRIX_TOKEN is not available (e.g. dependabot PRs)
+        if: env.MATRIX_TOKEN != ''
         env:
           MATRIX_TOKEN: ${{ secrets.MATRIX_TOKEN }}
           MATRIX_ROOM: '!azsMvrsrqEENIcSLOe:matrix.org'
