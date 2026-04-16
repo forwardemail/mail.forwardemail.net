@@ -26,8 +26,8 @@ jobs:
   create-release:
     runs-on: ubuntu-latest
     outputs:
-      release_id: ${{ steps.create.outputs.id }}
-      upload_url: ${{ steps.create.outputs.upload_url }}
+      release_id: ${{ steps.resolve.outputs.release_id }}
+      upload_url: ${{ steps.resolve.outputs.upload_url }}
       version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -48,40 +48,78 @@ jobs:
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-      # Clean slate: delete any pre-existing release for this tag so we don't
-      # end up with duplicate releases (e.g., from a previous failed run that
-      # left a stale draft, or from a re-trigger). The git tag is preserved.
-      - name: Delete any pre-existing releases for this tag
+      # Reuse the release that `np` already created (preserving its release
+      # notes and author).  Only create a new one when no release exists for
+      # this tag (e.g. manual tag push or workflow_dispatch).
+      #
+      # If a *draft* release exists from a previous failed CI run, delete it
+      # first so we don't accumulate stale drafts — but never delete a
+      # published release that `np` created.
+      - name: Resolve or create GitHub Release
+        id: resolve
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: |
           TAG="v${{ steps.version.outputs.version }}"
-          # Use gh api directly — `gh release view/delete TAG` uses
-          # /releases/tags/{tag} which does NOT find draft releases,
-          # so stale drafts from failed runs would linger.
-          ids=$(gh api "repos/${GH_REPO}/releases" --paginate \
-            --jq ".[] | select(.tag_name==\"$TAG\") | .id")
-          if [ -z "$ids" ]; then
-            echo "No existing releases for $TAG"
-          else
-            for id in $ids; do
-              echo "Deleting release id=$id (tag=$TAG)"
-              gh api -X DELETE "repos/${GH_REPO}/releases/${id}" || true
-            done
-          fi
 
-      - name: Create GitHub Release
-        id: create
-        uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe # v2.6.1
-        with:
-          draft: true
-          prerelease: false
-          generate_release_notes: true
-          tag_name: v${{ steps.version.outputs.version }}
-          name: v${{ steps.version.outputs.version }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Fetch all releases for this tag (including drafts).
+          # gh api /releases/tags/{tag} does NOT return drafts, so we
+          # paginate the full list and filter by tag_name.
+          releases=$(gh api "repos/${GH_REPO}/releases" --paginate \
+            --jq "[.[] | select(.tag_name==\"$TAG\")]")
+
+          # Look for a published (non-draft) release first — this is the
+          # one `np` created with the author's release notes.
+          published_id=$(echo "$releases" | jq -r '[.[] | select(.draft==false)] | first // empty | .id')
+
+          if [ -n "$published_id" ]; then
+            echo "Found existing published release id=$published_id for $TAG — reusing it"
+
+            # Delete any stale drafts that may have been left by a previous
+            # failed CI run (they would be duplicates).
+            draft_ids=$(echo "$releases" | jq -r '[.[] | select(.draft==true)] | .[].id')
+            for did in $draft_ids; do
+              echo "Deleting stale draft release id=$did"
+              gh api -X DELETE "repos/${GH_REPO}/releases/${did}" || true
+            done
+
+            # Convert to draft so tauri-action can upload assets to it
+            # (tauri-action expects releaseDraft: true).
+            gh api --method PATCH "repos/${GH_REPO}/releases/${published_id}" \
+              -f draft=true
+
+            upload_url=$(gh api "repos/${GH_REPO}/releases/${published_id}" \
+              --jq '.upload_url')
+
+            echo "release_id=$published_id" >> "$GITHUB_OUTPUT"
+            echo "upload_url=$upload_url" >> "$GITHUB_OUTPUT"
+          else
+            echo "No published release found for $TAG"
+
+            # Delete any stale drafts from previous failed runs
+            draft_ids=$(echo "$releases" | jq -r '.[].id')
+            for did in $draft_ids; do
+              echo "Deleting stale draft release id=$did"
+              gh api -X DELETE "repos/${GH_REPO}/releases/${did}" || true
+            done
+
+            # Create a new release (only happens for manual tag pushes
+            # or workflow_dispatch where np didn't run).
+            echo "Creating new GitHub Release for $TAG"
+            response=$(gh api --method POST "repos/${GH_REPO}/releases" \
+              -f tag_name="$TAG" \
+              -f name="$TAG" \
+              -F draft=true \
+              -F prerelease=false \
+              -F generate_release_notes=true)
+
+            release_id=$(echo "$response" | jq -r '.id')
+            upload_url=$(echo "$response" | jq -r '.upload_url')
+
+            echo "release_id=$release_id" >> "$GITHUB_OUTPUT"
+            echo "upload_url=$upload_url" >> "$GITHUB_OUTPUT"
+          fi
 
   # ── 2. Build Desktop (Tauri) ────────────────────────────────────────────
   build-desktop:
