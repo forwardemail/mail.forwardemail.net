@@ -11,6 +11,8 @@ import {
   openActionsMenu,
   clickMenuItem,
   getContactInitials,
+  createContact,
+  verifyContactInList,
 } from '../fixtures/contacts-helpers.js';
 
 test.describe('Contact Photo Management', () => {
@@ -94,16 +96,16 @@ test.describe('Optional Fields', () => {
   test('should collapse optional fields section', async ({ page }) => {
     await selectContact(page, 'Carol Williams');
 
-    // Expand
-    await toggleOptionalFields(page);
-    await page.waitForTimeout(300);
+    const companyField = page.getByLabel('Company', { exact: true }).first();
 
-    // Collapse
-    await toggleOptionalFields(page);
-    await page.waitForTimeout(300);
+    // Carol has optional fields populated so the section auto-expands on
+    // select. Force a known "expanded" baseline regardless, then toggle
+    // to verify collapse removes the Company field from the DOM.
+    await ensureOptionalFieldsExpanded(page);
+    await expect(companyField).toBeVisible({ timeout: 2000 });
 
-    // Fields should be hidden or collapsed
-    // (Implementation may vary, but toggle should work)
+    await toggleOptionalFields(page);
+    await expect(companyField).not.toBeVisible({ timeout: 2000 });
   });
 
   test('should show indicator when optional fields have values', async ({ page }) => {
@@ -201,12 +203,13 @@ test.describe('Optional Fields', () => {
 
     await saveContactInline(page);
 
-    // Verify birthday saved
+    // Verify birthday saved by re-selecting the contact and checking the
+    // optional section surfaces the value we wrote.
     await selectContact(page, 'Bob Smith');
-    await toggleOptionalFields(page);
-
-    // Birthday should be visible (format may vary)
-    await page.waitForTimeout(500);
+    await ensureOptionalFieldsExpanded(page);
+    await expect(page.getByLabel('Birthday', { exact: true }).first()).toHaveValue('1985-03-15', {
+      timeout: 2000,
+    });
   });
 });
 
@@ -219,38 +222,23 @@ test.describe('Integration Actions', () => {
 
   test('should navigate to compose email', async ({ page }) => {
     await selectContact(page, 'Alice Johnson');
-
-    // Click Email action via dropdown menu
     await openActionsMenu(page);
     await clickMenuItem(page, 'Email');
-
-    // Should navigate to mailbox with compose
-    await page.waitForTimeout(500);
-    expect(page.url()).toContain('mailbox');
+    await page.waitForURL(/mailbox/, { timeout: 5000 });
   });
 
   test('should navigate to add calendar event', async ({ page }) => {
     await selectContact(page, 'Bob Smith');
-
-    // Click Add event action via dropdown menu
     await openActionsMenu(page);
     await clickMenuItem(page, 'Add event');
-
-    // Should navigate to calendar
-    await page.waitForTimeout(500);
-    expect(page.url()).toContain('calendar');
+    await page.waitForURL(/calendar/, { timeout: 5000 });
   });
 
   test('should navigate to view emails from contact', async ({ page }) => {
     await selectContact(page, 'Carol Williams');
-
-    // Click View emails action via dropdown menu
     await openActionsMenu(page);
     await clickMenuItem(page, 'View emails');
-
-    // Should navigate to mailbox with search
-    await page.waitForTimeout(500);
-    expect(page.url()).toContain('mailbox');
+    await page.waitForURL(/mailbox/, { timeout: 5000 });
   });
 
   test('should show all action buttons', async ({ page }) => {
@@ -269,13 +257,11 @@ test.describe('Integration Actions', () => {
 
   test('should close actions menu after action', async ({ page }) => {
     await selectContact(page, 'Bob Smith');
-
-    // Open menu and click an action
     await openActionsMenu(page);
     await clickMenuItem(page, 'Email');
-
-    // Menu should close after action (navigates away)
-    await page.waitForTimeout(300);
+    // The menu closes because Email action navigates to /mailbox.
+    await page.waitForURL(/mailbox/, { timeout: 5000 });
+    await expect(page.getByRole('menu')).not.toBeVisible();
   });
 });
 
@@ -306,58 +292,28 @@ test.describe('Error Handling & Edge Cases', () => {
   test('should handle very long contact names', async ({ page }) => {
     await navigateToContacts(page);
 
-    // Create contact with long name
-    await page.getByRole('button', { name: /New contact/i }).click();
-    await page.waitForTimeout(300);
-
     const longName = 'A'.repeat(100) + ' ' + 'B'.repeat(100);
-    const dialog = page.getByRole('dialog');
-    await dialog.getByLabel('Name', { exact: true }).first().fill(longName);
-    await dialog.getByLabel('Email', { exact: true }).first().fill('longname@example.com');
-
-    await dialog.locator('button:has-text("Save")').click();
-    await page.waitForSelector('div[role="dialog"]', { state: 'hidden', timeout: 5000 });
+    await createContact(page, { name: longName, email: 'longname@example.com' });
 
     // Should still display (may be truncated in list)
-    const contactRow = page.locator('li button').filter({ hasText: 'longname@example.com' });
-    await expect(contactRow).toBeVisible();
+    await verifyContactInList(page, { email: 'longname@example.com' });
   });
 
   test('should handle very long email addresses', async ({ page }) => {
     await navigateToContacts(page);
 
-    // Create contact with long email
-    await page.getByRole('button', { name: /New contact/i }).click();
-    await page.waitForTimeout(300);
-
     const longEmail = 'a'.repeat(50) + '@' + 'b'.repeat(50) + '.com';
-    const dialog = page.getByRole('dialog');
-    await dialog.getByLabel('Name', { exact: true }).first().fill('Long Email User');
-    await dialog.getByLabel('Email', { exact: true }).first().fill(longEmail);
+    await createContact(page, { name: 'Long Email User', email: longEmail });
 
-    await dialog.locator('button:has-text("Save")').click();
-    await page.waitForSelector('div[role="dialog"]', { state: 'hidden', timeout: 5000 });
-
-    // Should still display (may be truncated)
-    await expect(page.locator('li button').filter({ hasText: 'Long Email User' })).toBeVisible();
+    await verifyContactInList(page, { name: 'Long Email User' });
   });
 
   test('should handle special characters in name', async ({ page }) => {
     await navigateToContacts(page);
 
-    // Create contact with special characters
-    await page.getByRole('button', { name: /New contact/i }).click();
-    await page.waitForTimeout(300);
+    await createContact(page, { name: "O'Neil & Sons", email: 'oneil@example.com' });
 
-    const dialog = page.getByRole('dialog');
-    await dialog.getByLabel('Name', { exact: true }).first().fill("O'Neil & Sons");
-    await dialog.getByLabel('Email', { exact: true }).first().fill('oneil@example.com');
-
-    await dialog.locator('button:has-text("Save")').click();
-    await page.waitForSelector('div[role="dialog"]', { state: 'hidden', timeout: 5000 });
-
-    // Should properly display special characters
-    await expect(page.locator('li button').filter({ hasText: "O'Neil & Sons" })).toBeVisible();
+    await verifyContactInList(page, { name: "O'Neil & Sons" });
   });
 });
 

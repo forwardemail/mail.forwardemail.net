@@ -2354,7 +2354,7 @@
           <ChevronLeft class="h-5 w-5" />
         </Button>
         <div class="min-w-0">
-          <h1 class="text-lg font-semibold truncate">Calendar</h1>
+          <h1 class="text-lg font-semibold truncate" data-testid="calendar-header">Calendar</h1>
           <span
             class="text-xs text-muted-foreground truncate block"
             title="Events stored privately for this account"
@@ -2440,7 +2440,11 @@
           Loading calendar...
         </div>
       {:else if calendarInstance}
-        <div class="sx-wrapper border border-border" class:is-dark={calendarIsDark}>
+        <div
+          class="sx-wrapper border border-border"
+          class:is-dark={calendarIsDark}
+          data-testid="calendar-ready"
+        >
           <ScheduleXCalendar calendarApp={calendarInstance} />
         </div>
         <div

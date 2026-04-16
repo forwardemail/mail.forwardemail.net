@@ -34,35 +34,21 @@ const buildEvents = (count, calendarId = 'default') =>
 
 test.describe('Calendar Navigation', () => {
   test.beforeEach(async ({ page }) => {
-    await mockApi(page);
+    // Auth FIRST (init script runs before any page scripts), then mocks.
     await setupAuthenticatedSession(page);
+    await mockApi(page);
   });
 
   test('should show calendar header with actions', async ({ page }) => {
     await page.goto('/calendar');
-    await expect(page.getByRole('heading', { name: 'Calendar' })).toBeVisible();
+    await expect(page.getByTestId('calendar-header')).toBeVisible();
     await expect(page.getByRole('button', { name: '+ New Event' })).toBeVisible();
     await expect(page.getByLabel('Import calendar')).toBeVisible();
   });
 
   test('should display Schedule-X calendar component', async ({ page }) => {
     await page.goto('/calendar');
-    await page.waitForSelector('.sx-svelte-calendar-wrapper', { timeout: 10000 });
-    const calendar = page.locator('.sx-svelte-calendar-wrapper').first();
-    await expect(calendar).toBeVisible();
-  });
-
-  test.skip('should show existing events on calendar', async ({ page }) => {
-    // Note: Skipping this test because Schedule-X event rendering timing is complex
-    // The upload, create, and edit tests provide better coverage
-    await page.goto('/calendar');
-    await page.waitForSelector('.sx-svelte-calendar-wrapper', { timeout: 10000 });
-    await page.waitForTimeout(2000);
-
-    const eventElements = page.locator('.sx__event, .sx__month-grid-event, .sx__time-grid-event');
-    const morningStandup = page.locator('text=Morning Standup');
-
-    await expect(eventElements.or(morningStandup).first()).toBeVisible({ timeout: 5000 });
+    await expect(page.getByTestId('calendar-ready')).toBeVisible({ timeout: 10_000 });
   });
 });
 
@@ -76,14 +62,14 @@ test.describe('Calendar Pagination', () => {
       calendarPages.push(Number(url.searchParams.get('page') || '1'));
     });
 
+    await setupAuthenticatedSession(page);
     await mockApi(page, {
       calendars: buildCalendars(51),
       events: [],
     });
-    await setupAuthenticatedSession(page);
 
     await page.goto('/calendar');
-    await page.waitForSelector('.sx-svelte-calendar-wrapper', { timeout: 10000 });
+    await expect(page.getByTestId('calendar-ready')).toBeVisible({ timeout: 10_000 });
 
     await expect
       .poll(() => [...new Set(calendarPages)].sort((left, right) => left - right))
@@ -102,14 +88,14 @@ test.describe('Calendar Pagination', () => {
       });
     });
 
+    await setupAuthenticatedSession(page);
     await mockApi(page, {
       calendars: [buildCalendars(1)[0]],
       events: buildEvents(501, 'calendar-1'),
     });
-    await setupAuthenticatedSession(page);
 
     await page.goto('/calendar');
-    await page.waitForSelector('.sx-svelte-calendar-wrapper', { timeout: 10000 });
+    await expect(page.getByTestId('calendar-ready')).toBeVisible({ timeout: 10_000 });
 
     await expect
       .poll(() =>

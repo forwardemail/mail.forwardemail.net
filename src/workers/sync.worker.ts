@@ -14,6 +14,18 @@ import {
   applyInlineAttachments,
   extractTextContent,
 } from '../utils/mime-utils.js';
+import {
+  toUid,
+  toKey,
+  accountKey,
+  coerceLabelList,
+  hasFromValue,
+  hasMeaningfulDraft,
+  buildDraftPayload,
+  parseResultList,
+  isPgpContent,
+  worklistFromHeaders,
+} from './sync-pure.ts';
 
 // ============================================================================
 // Database Client via MessageChannel
@@ -110,9 +122,6 @@ const FETCH_TIMEOUT_MS = 30000; // 30s timeout for individual fetch calls
 const manifests = new Map(); // key: `${account}::${folder}`
 const inFlightBodyRequests = new Map(); // key: `${account}::${id}`
 
-const toKey = (account, folder) => `${account}::${folder}`;
-const accountKey = (account) => account || 'default';
-
 // ============================================================================
 // Manifest Management
 // ============================================================================
@@ -169,63 +178,6 @@ async function updateManifest(account, folder, updates = {}) {
 // ============================================================================
 // Utilities
 // ============================================================================
-
-function toUid(value) {
-  const num = Number(value);
-  return Number.isFinite(num) ? num : value || 0;
-}
-
-function coerceLabelList(value) {
-  const normalizeLabel = (label) => {
-    const normalized = String(label ?? '').trim();
-    if (!normalized || /^\[\s*\]$/.test(normalized)) return '';
-    return normalized;
-  };
-  if (Array.isArray(value)) {
-    return value.map((label) => normalizeLabel(label)).filter(Boolean);
-  }
-  if (typeof value === 'string') {
-    return value
-      .split(',')
-      .map((label) => normalizeLabel(label))
-      .filter(Boolean);
-  }
-  return [];
-}
-
-function hasFromValue(value) {
-  return typeof value === 'string' && value.trim().length > 0;
-}
-
-function hasMeaningfulDraft(draft) {
-  return !!(
-    (draft.to && draft.to.length > 0) ||
-    (draft.cc && draft.cc.length > 0) ||
-    (draft.bcc && draft.bcc.length > 0) ||
-    (draft.subject && draft.subject.trim()) ||
-    (draft.body && draft.body.trim())
-  );
-}
-
-function buildDraftPayload(draft) {
-  return {
-    from: draft.from || draft.account || '',
-    to: draft.to || [],
-    cc: draft.cc || [],
-    bcc: draft.bcc || [],
-    subject: draft.subject || '',
-    html: draft.isPlainText ? undefined : draft.body || '',
-    text: draft.isPlainText ? draft.body || '' : undefined,
-    attachments: (draft.attachments || []).map((att) => ({
-      filename: att.name || att.filename,
-      contentType: att.contentType,
-      content: att.content,
-      encoding: 'base64',
-    })),
-    has_attachment: Array.isArray(draft.attachments) && draft.attachments.length > 0,
-    folder: draft.folder || 'Drafts',
-  };
-}
 
 async function syncDraftRecord(draft) {
   const payload = buildDraftPayload(draft);
@@ -360,10 +312,6 @@ async function fetchMessageList(params = {}) {
   return res.json();
 }
 
-function parseResultList(res) {
-  return res?.Result?.List || res?.Result || res || [];
-}
-
 async function runMetadataTask(task, postProgress) {
   const account = accountKey(task.account);
   const folder = task.folder;
@@ -462,24 +410,6 @@ async function runMetadataTask(task, postProgress) {
     lastUID,
     lastModSeq,
   };
-}
-
-function worklistFromHeaders(headers, bodies, maxMessages) {
-  const worklist = [];
-  headers.slice(0, maxMessages || headers.length).forEach((msg, idx) => {
-    const cached = bodies[idx];
-    const hasAttachment = msg?.has_attachment;
-    const hasStalePgp =
-      cached?.body && typeof cached.body === 'string' && isPgpContent(cached.body);
-    if (!cached?.body || hasStalePgp) {
-      worklist.push(msg);
-      return;
-    }
-    if (hasAttachment && !(cached.attachments || []).length) {
-      worklist.push(msg);
-    }
-  });
-  return worklist;
 }
 
 async function runBodiesTask(task, postProgress) {
@@ -870,16 +800,6 @@ function extractPgpArmor(raw) {
     return raw.substring(beginIdx, endIdx + '-----END PGP MESSAGE-----'.length);
   }
   return raw;
-}
-
-/**
- * Detect if raw content is PGP-encrypted (inline or PGP/MIME).
- */
-function isPgpContent(raw) {
-  if (!raw || typeof raw !== 'string') return false;
-  if (raw.includes('-----BEGIN PGP MESSAGE-----')) return true;
-  if (raw.includes('multipart/encrypted') && raw.includes('application/pgp-encrypted')) return true;
-  return false;
 }
 
 let lastDecryptError = '';

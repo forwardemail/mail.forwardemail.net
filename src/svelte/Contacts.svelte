@@ -1214,9 +1214,11 @@
       <ChevronLeft class="h-5 w-5" />
     </Button>
     <div class="flex flex-col">
-      <h1 class="text-lg font-semibold">Contacts</h1>
+      <h1 class="text-lg font-semibold" data-testid="contacts-header">Contacts</h1>
       <span class="text-xs text-muted-foreground">{activeEmail}</span>
-      <span class="text-xs text-muted-foreground">{totalContactsLabel}</span>
+      <span class="text-xs text-muted-foreground" data-testid="contacts-count"
+        >{totalContactsLabel}</span
+      >
     </div>
   </div>
   <div class="flex items-center gap-2">
@@ -1277,7 +1279,12 @@
         />
       </div>
     </div>
-    <ul class="flex-1 overflow-y-auto">
+    <ul
+      class="flex-1 overflow-y-auto"
+      data-testid="contact-list"
+      data-loading={loading ? 'true' : 'false'}
+      data-count={filtered.length}
+    >
       {#if loading}
         <li class="p-4 text-center text-sm text-muted-foreground">Loading contacts...</li>
       {:else if filtered.length === 0}
@@ -1287,6 +1294,10 @@
           <li>
             <button
               type="button"
+              data-testid="contact-item"
+              data-contact-id={contact.id}
+              data-contact-name={contact.name || ''}
+              data-contact-email={contact.email || ''}
               class="flex w-full items-center gap-3 border-l-[3px] px-3 py-2.5 text-left hover:bg-accent/50 {selectedContact?.id ===
               contact.id
                 ? 'border-l-primary bg-primary/10'

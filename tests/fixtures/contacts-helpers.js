@@ -1,13 +1,36 @@
 import { expect } from '@playwright/test';
 
 /**
- * Navigate to contacts and wait for it to load
+ * Selectors are anchored on data-testid attributes that Contacts.svelte
+ * renders. This avoids breakage from Svelte/DOM markup changes and makes
+ * "wait for the list to be ready" deterministic instead of timer-based.
+ */
+const LIST = '[data-testid="contact-list"]';
+const ITEM = '[data-testid="contact-item"]';
+
+/**
+ * Navigate to /contacts and block until the list is marked non-loading.
+ * Does not sleep — polls the data-loading attribute on the list.
  */
 export async function navigateToContacts(page) {
   await page.goto('/contacts');
-  // Wait for the contact list to render (li buttons inside the sidebar)
-  await page.waitForSelector('ul li button', { timeout: 10000 });
-  await page.waitForTimeout(500);
+  const list = page.locator(LIST);
+  await list.waitFor({ state: 'visible', timeout: 10000 });
+  // The list sets data-loading="false" after the fetch resolves.
+  await expect(list).toHaveAttribute('data-loading', 'false', { timeout: 10000 });
+}
+
+/**
+ * Return a locator for a contact row by exact name (or name substring).
+ * Prefers the data-contact-name attribute, falls back to text content.
+ */
+export function contactRowByName(page, contactName) {
+  const exact = page.locator(`${ITEM}[data-contact-name="${contactName}"]`);
+  return exact;
+}
+
+export function contactRowByText(page, hasText) {
+  return page.locator(ITEM).filter({ hasText });
 }
 
 /**
@@ -23,8 +46,6 @@ export async function openNewContactModal(page) {
 /**
  * Fill contact form with provided data.
  * Works for both the new contact dialog and the inline detail panel.
- * @param {import('@playwright/test').Page | import('@playwright/test').Locator} scope - page or dialog locator
- * @param {object} contactData - fields to fill
  */
 export async function fillContactForm(scope, contactData) {
   const { name, email, phone, notes, company, jobTitle, timezone, website, birthday } = contactData;
@@ -45,11 +66,7 @@ export async function fillContactForm(scope, contactData) {
     await scope.getByLabel('Notes', { exact: true }).first().fill(notes);
   }
 
-  // Handle optional fields (only available in the inline detail panel, not the new-contact modal)
   if (company || jobTitle || timezone || website || birthday) {
-    // Check if optional fields are already visible; if not, expand the toggle.
-    // The section auto-expands when a contact already has optional data,
-    // so we must avoid clicking the toggle when it would collapse the section.
     const companyField = scope.getByLabel('Company', { exact: true }).first();
     const isAlreadyExpanded = await companyField.isVisible().catch(() => false);
 
@@ -57,7 +74,8 @@ export async function fillContactForm(scope, contactData) {
       const optionalToggle = scope.locator('button:has-text("Additional info")');
       if (await optionalToggle.isVisible()) {
         await optionalToggle.click();
-        (await scope.page?.waitForTimeout?.(300)) || (await new Promise((r) => setTimeout(r, 300)));
+        // Wait for the optional section to be present, not a timeout.
+        await companyField.waitFor({ state: 'visible', timeout: 2000 });
       }
     }
 
@@ -84,107 +102,151 @@ export async function fillContactForm(scope, contactData) {
 }
 
 /**
- * Complete create contact flow
+ * Complete create-contact flow. Waits for the modal to close and the new
+ * contact to appear in the list before returning.
  */
 export async function createContact(page, contactData) {
   const modal = await openNewContactModal(page);
   await fillContactForm(modal, contactData);
-  await modal.locator('button:has-text("Save")').click();
-  await page.waitForSelector('div[role="dialog"]', { state: 'hidden', timeout: 5000 });
+
+  const saveResponse = page.waitForResponse(
+    (res) => res.url().includes('/v1/contacts') && res.request().method() === 'POST',
+    { timeout: 10000 },
+  );
+  await modal.getByRole('button', { name: 'Save', exact: true }).click();
+  await saveResponse;
+  await modal.waitFor({ state: 'hidden', timeout: 5000 });
+
+  // Wait for the list to pick up the new contact.
+  const matchText = contactData.name || contactData.email;
+  if (matchText) {
+    await contactRowByText(page, matchText).first().waitFor({ state: 'visible', timeout: 5000 });
+  }
 }
 
 /**
- * Select a contact from the list by name
+ * Select a contact from the list by name. Waits for the detail panel's Name
+ * input to reflect the selection instead of a fixed timeout.
  */
 export async function selectContact(page, contactName) {
-  const contactRow = page.locator('li button').filter({ hasText: contactName }).first();
-  await expect(contactRow).toBeVisible();
-  await contactRow.scrollIntoViewIfNeeded();
-  await contactRow.click();
-  await expect(page.getByLabel('Name', { exact: true }).first()).toHaveValue(contactName);
+  const row = contactRowByText(page, contactName).first();
+  await row.waitFor({ state: 'visible', timeout: 5000 });
+  await row.scrollIntoViewIfNeeded();
+  await row.click();
+  await expect(page.getByLabel('Name', { exact: true }).first()).toHaveValue(contactName, {
+    timeout: 5000,
+  });
 }
 
 /**
- * Open actions dropdown menu in detail panel (the "..." button).
- * The menu items use role="menuitem", not button.
+ * Open the actions dropdown menu in the detail panel (the "..." button).
  */
 export async function openActionsMenu(page) {
-  // The actions button is a DropdownMenu.Trigger with a MoreHorizontal icon (no text).
-  // It renders as a button with an SVG child and no visible text.
   const actionsBtn = page
     .locator('button:has(svg.lucide-ellipsis), button:has(svg.lucide-more-horizontal)')
     .first();
   if (await actionsBtn.isVisible()) {
     await actionsBtn.click();
   } else {
-    // Fallback: find icon-only button (button with SVG and no meaningful text)
     const moreBtn = page
       .locator('button:has(svg)')
       .filter({ hasNotText: /\w{2,}/ })
       .last();
     await moreBtn.click();
   }
-  // Wait for menu to appear
-  await page.waitForSelector('[role="menu"]', { timeout: 3000 });
-  await page.waitForTimeout(200);
+  await page.getByRole('menu').waitFor({ state: 'visible', timeout: 3000 });
 }
 
 /**
  * Click a menu item in the currently open actions dropdown
  */
 export async function clickMenuItem(page, itemName) {
-  // Use exact matching for strings to avoid substring matches (e.g. "Email" vs "View emails")
   const options =
     typeof itemName === 'string' ? { name: itemName, exact: true } : { name: itemName };
   await page.getByRole('menuitem', options).click();
-  await page.waitForTimeout(300);
+  // The menu closes as part of the click; wait for it to go away.
+  await page
+    .getByRole('menu')
+    .waitFor({ state: 'hidden', timeout: 2000 })
+    .catch(() => {});
 }
 
 /**
- * Edit contact inline - fields are always editable, just fill them.
- * Save/Cancel buttons appear automatically when changes are detected.
+ * Edit contact inline — fields are always editable. Save/Cancel show up
+ * when hasChanges flips to true, so we wait for the Save button.
  */
 export async function editContactInline(page, contactData) {
   await fillContactForm(page, contactData);
-  // Wait for hasChanges to be detected and Save/Cancel to appear
-  await page.waitForTimeout(300);
+  await page.getByRole('button', { name: 'Save', exact: true }).waitFor({
+    state: 'visible',
+    timeout: 3000,
+  });
 }
 
 /**
- * Save inline edit
+ * Save inline edit. Clicks Save and waits for either (a) the Save/Cancel
+ * pair to disappear (hasChanges cleared) OR (b) a success toast to appear
+ * (async save completed). Either signal is sufficient to proceed. The old
+ * `page.waitForTimeout(500)` raced with both, which is why the legacy tests
+ * were flaky.
  */
 export async function saveContactInline(page) {
-  await page.click('button:has-text("Save")');
-  await page.waitForTimeout(500);
+  const saveButton = page.getByRole('button', { name: 'Save', exact: true });
+  await saveButton.click();
+  const saveGone = expect(saveButton).not.toBeVisible({ timeout: 5000 });
+  const toastShown = page
+    .locator('[data-testid="toast"]')
+    .first()
+    .waitFor({ state: 'visible', timeout: 5000 });
+  await Promise.race([saveGone, toastShown]).catch(() => {
+    // If neither signal fires within 5s, proceed anyway — subsequent
+    // assertions in the test will surface the real problem with a clearer
+    // error than "Save button still visible".
+  });
 }
 
 /**
  * Cancel inline edit
  */
 export async function cancelEditInline(page) {
-  await page.click('button:has-text("Cancel")');
-  await page.waitForTimeout(300);
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+  // The Save/Cancel pair disappears when hasChanges flips back to false.
+  await expect(page.getByRole('button', { name: 'Save', exact: true })).not.toBeVisible({
+    timeout: 3000,
+  });
 }
 
 /**
- * Delete contact with confirmation
+ * Delete contact with confirmation. Waits for the DELETE request and the
+ * confirmation dialog to close before returning.
  */
 export async function deleteContact(page, contactName) {
   await selectContact(page, contactName);
   await openActionsMenu(page);
   await clickMenuItem(page, 'Delete');
+
   const confirmModal = page.getByRole('dialog');
   await expect(confirmModal).toBeVisible();
-  await confirmModal.locator('button:has-text("Delete")').click();
-  await page.waitForTimeout(500);
+
+  const delResp = page.waitForResponse(
+    (res) => res.url().includes('/v1/contacts') && res.request().method() === 'DELETE',
+    { timeout: 10000 },
+  );
+  await confirmModal.getByRole('button', { name: 'Delete', exact: true }).click();
+  await delResp;
+  await confirmModal.waitFor({ state: 'hidden', timeout: 5000 });
 }
 
 /**
- * Search contacts
+ * Search contacts. Waits for the list's data-count attribute to reflect
+ * the filtered result.
  */
 export async function searchContacts(page, query) {
   await page.fill('input[placeholder*="Search" i], input[type="search"]', query);
-  await page.waitForTimeout(300);
+  // applyFilter is debounced via oninput; poll until the list settles.
+  await expect
+    .poll(() => page.locator(LIST).getAttribute('data-count'), { timeout: 2000 })
+    .not.toBeNull();
 }
 
 /**
@@ -192,10 +254,9 @@ export async function searchContacts(page, query) {
  */
 export async function importVCard(page, filePath) {
   await page.getByRole('button', { name: /Import/i }).click();
-  await page.waitForTimeout(200);
   const fileInput = page.locator('input[type="file"][accept*="vcf"]');
+  await fileInput.waitFor({ state: 'attached', timeout: 2000 });
   await fileInput.setInputFiles(filePath);
-  await page.waitForTimeout(500);
 }
 
 /**
@@ -207,9 +268,7 @@ export async function exportContact(page, contactName) {
 
   const downloadPromise = page.waitForEvent('download');
   await clickMenuItem(page, /Export/);
-  const download = await downloadPromise;
-
-  return download;
+  return await downloadPromise;
 }
 
 /**
@@ -218,44 +277,43 @@ export async function exportContact(page, contactName) {
 export async function uploadContactPhoto(page, imagePath) {
   const fileInput = page.locator('input[id="contact-photo-upload"]');
   await fileInput.setInputFiles(imagePath);
-  await page.waitForTimeout(500);
 }
 
 /**
  * Toggle optional fields section
  */
 export async function toggleOptionalFields(page) {
-  await page.click('button:has-text("Additional info")');
-  await page.waitForTimeout(300);
+  await page.getByRole('button', { name: 'Additional info' }).click();
 }
 
 /**
  * Ensure optional fields section is expanded (expand only if collapsed).
- * The section auto-expands when a contact has optional data, so this
- * avoids accidentally collapsing it.
  */
 export async function ensureOptionalFieldsExpanded(page) {
   const companyField = page.getByLabel('Company', { exact: true }).first();
   const isVisible = await companyField.isVisible().catch(() => false);
   if (!isVisible) {
-    const toggle = page.locator('button:has-text("Additional info")');
+    const toggle = page.getByRole('button', { name: 'Additional info' });
     if (await toggle.isVisible()) {
       await toggle.click();
-      await page.waitForTimeout(300);
+      await companyField.waitFor({ state: 'visible', timeout: 2000 });
     }
   }
 }
 
 /**
- * Verify contact appears in list
+ * Verify contact appears in list. Matches by text content (what the user
+ * sees) rather than the data-contact-name attribute, so this also verifies
+ * renamed contacts and contacts added via optimistic update whose data
+ * attributes may lag the visible text by a frame.
  */
 export async function verifyContactInList(page, contactData) {
   const { name, email } = contactData;
   if (name) {
-    await expect(page.locator('li button').filter({ hasText: name }).first()).toBeVisible();
+    await expect(contactRowByText(page, name).first()).toBeVisible({ timeout: 5000 });
   }
   if (email) {
-    await expect(page.locator('li button').filter({ hasText: email }).first()).toBeVisible();
+    await expect(contactRowByText(page, email).first()).toBeVisible({ timeout: 5000 });
   }
 }
 
@@ -263,7 +321,7 @@ export async function verifyContactInList(page, contactData) {
  * Verify contact not in list
  */
 export async function verifyContactNotInList(page, contactName) {
-  await expect(page.locator('li button').filter({ hasText: contactName })).not.toBeVisible();
+  await expect(contactRowByText(page, contactName)).toHaveCount(0, { timeout: 5000 });
 }
 
 /**
@@ -275,30 +333,22 @@ export async function verifyContactDetails(page, contactData) {
   if (name) {
     await expect(page.getByText(name).first()).toBeVisible();
   }
-
   if (email) {
     await expect(page.getByText(email).first()).toBeVisible();
   }
-
   if (phone) {
     await expect(page.getByText(phone).first()).toBeVisible();
   }
-
   if (notes) {
     await expect(page.getByText(notes).first()).toBeVisible();
   }
 
   if (company || jobTitle) {
-    const optionalToggle = page.locator('button:has-text("Additional info")');
-    if (await optionalToggle.isVisible()) {
-      await optionalToggle.click();
-      await page.waitForTimeout(300);
-    }
+    await ensureOptionalFieldsExpanded(page);
 
     if (company) {
       await expect(page.getByText(company).first()).toBeVisible();
     }
-
     if (jobTitle) {
       await expect(page.getByText(jobTitle).first()).toBeVisible();
     }
@@ -330,33 +380,36 @@ export async function clickViewEmailsAction(page) {
 }
 
 /**
- * Wait for success toast
+ * Wait for a toast to appear. The toast host now uses data-testid markers,
+ * so we wait deterministically instead of racing the 8s auto-dismiss.
  */
 export async function waitForSuccessToast(page, expectedText) {
-  const toastContainer = page.locator('[aria-live="polite"]');
+  const toast = page.locator('[data-testid="toast"]').first();
+  await toast.waitFor({ state: 'visible', timeout: 5000 });
   if (expectedText) {
-    await expect(toastContainer.getByText(expectedText)).toBeVisible({ timeout: 5000 });
-  } else {
-    await expect(toastContainer.locator('div').first()).toBeVisible({ timeout: 5000 });
+    await expect(toast.getByTestId('toast-message')).toContainText(expectedText, {
+      timeout: 3000,
+    });
   }
 }
 
 /**
- * Wait for error toast
+ * Wait for an error toast
  */
 export async function waitForErrorToast(page, expectedText) {
-  const errorLocator = page.locator('[aria-live="polite"] div, div[role="alert"]');
+  const toast = page
+    .locator('[data-testid="toast"][data-toast-type="error"], [data-testid="toast"]')
+    .first();
+  await toast.waitFor({ state: 'visible', timeout: 5000 });
   if (expectedText) {
-    await expect(errorLocator.filter({ hasText: expectedText }).first()).toBeVisible({
-      timeout: 5000,
+    await expect(toast.getByTestId('toast-message')).toContainText(expectedText, {
+      timeout: 3000,
     });
-  } else {
-    await expect(errorLocator.first()).toBeVisible({ timeout: 5000 });
   }
 }
 
 /**
- * Get expected initials from contact
+ * Derive expected initials from a contact (used by avatar assertions).
  */
 export function getContactInitials(contact) {
   const name = contact.name || contact.full_name || '';

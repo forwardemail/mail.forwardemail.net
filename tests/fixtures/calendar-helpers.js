@@ -1,30 +1,47 @@
 import { expect } from '@playwright/test';
 
 /**
- * Set up authenticated session for calendar tests
+ * Install an auth bootstrap into the page so every navigation starts with a
+ * valid session in localStorage AND the tab-scoped sessionStorage keys the
+ * storage layer looks at first. Must be called before `page.goto`.
  */
 export async function setupAuthenticatedSession(page) {
   await page.addInitScript(() => {
-    localStorage.setItem('webmail_authToken', 'mock-auth-token-12345');
-    localStorage.setItem('webmail_email', 'test@example.com');
-    localStorage.setItem('webmail_alias_auth', 'test@example.com:mock-password');
+    try {
+      localStorage.setItem('webmail_authToken', 'mock-auth-token-12345');
+      localStorage.setItem('webmail_email', 'test@example.com');
+      localStorage.setItem('webmail_alias_auth', 'test@example.com:mock-password');
+      // Tab-scoped keys (see TAB_SCOPED_KEYS in src/utils/storage.js) are
+      // read from sessionStorage first, so seed them there too to avoid a
+      // race where the first read returns null before the copy-on-read fires.
+      sessionStorage.setItem('alias_auth', 'test@example.com:mock-password');
+      sessionStorage.setItem('email', 'test@example.com');
+      sessionStorage.setItem('authToken', 'mock-auth-token-12345');
+    } catch {
+      // storage may be unavailable in edge cases — ignore and let the test fail with
+      // a more informative error later.
+    }
   });
 }
 
 /**
- * Navigate to calendar and wait for it to load
+ * Navigate to /calendar and wait for the Schedule-X component to finish mounting.
+ * Uses the `data-testid="calendar-ready"` marker the app renders once
+ * calendarInstance is created, so it survives Schedule-X internal class
+ * renames.
  */
 export async function navigateToCalendar(page) {
   await page.goto('/calendar');
-  await page.waitForSelector('.sx-svelte-calendar-wrapper', { timeout: 10000 });
-  await page.waitForTimeout(500);
+  await page
+    .locator('[data-testid="calendar-ready"]')
+    .waitFor({ state: 'visible', timeout: 10000 });
 }
 
 /**
  * Open new event modal
  */
 export async function openNewEventModal(page) {
-  await page.click('button:has-text("+ New Event")');
+  await page.getByRole('button', { name: '+ New Event' }).click();
   const modal = page.getByRole('dialog');
   await expect(modal).toBeVisible();
   return modal;
@@ -107,16 +124,14 @@ export async function fillEventForm(page, eventData) {
  * Save event form
  */
 export async function saveEventForm(page) {
-  await page.click('button:has-text("Save")');
-  await page.waitForSelector('div[role="dialog"]', { state: 'hidden', timeout: 5000 });
+  await page.getByRole('dialog').getByRole('button', { name: 'Save', exact: true }).click();
+  await page.getByRole('dialog').waitFor({ state: 'hidden', timeout: 5000 });
 }
 
 /**
  * Upload ICS file
  */
 export async function uploadICSFile(page, filePath) {
-  // Calendar page has nested Import buttons (tooltip trigger + actual button),
-  // use the input[type="file"] directly via setInputFiles
   const fileInput = page.locator(
     'input[type="file"][accept*="ics"], input[type="file"][accept*="calendar"]',
   );
@@ -124,14 +139,15 @@ export async function uploadICSFile(page, filePath) {
 }
 
 /**
- * Wait for success toast with specific message
+ * Wait for success toast. Polls the toast list rather than sleeping.
  */
 export async function waitForSuccessToast(page, expectedText) {
-  const toastContainer = page.locator('[aria-live="polite"]');
+  const toast = page.locator('[data-testid="toast"]').first();
+  await toast.waitFor({ state: 'visible', timeout: 5000 });
   if (expectedText) {
-    await expect(toastContainer.getByText(expectedText)).toBeVisible({ timeout: 5000 });
-  } else {
-    await expect(toastContainer.locator('div').first()).toBeVisible({ timeout: 5000 });
+    await expect(toast.getByTestId('toast-message')).toHaveText(
+      typeof expectedText === 'string' ? expect.stringContaining(expectedText) : expectedText,
+    );
   }
 }
 
@@ -139,36 +155,39 @@ export async function waitForSuccessToast(page, expectedText) {
  * Wait for error toast
  */
 export async function waitForErrorToast(page) {
-  const errorLocator = page.locator('[aria-live="polite"] div, div[role="alert"]');
-  await expect(errorLocator.first()).toBeVisible({ timeout: 5000 });
+  await page
+    .locator('[data-testid="toast"][data-toast-type="error"], [data-testid="toast"]')
+    .first()
+    .waitFor({ state: 'visible', timeout: 5000 });
 }
 
 /**
- * Click on calendar event by title
+ * Click on calendar event by title. Polls for Schedule-X to render events
+ * instead of sleeping.
  */
 export async function clickCalendarEvent(page, eventTitle) {
-  await page.waitForTimeout(1000);
-  const eventElement = page.locator('[class*="sx__"]').filter({ hasText: eventTitle });
-  await eventElement.first().click();
-  await page.waitForSelector('div[role="dialog"]');
+  const eventElement = page.locator('[class*="sx__"]').filter({ hasText: eventTitle }).first();
+  await eventElement.waitFor({ state: 'visible', timeout: 5000 });
+  await eventElement.click();
+  await page.getByRole('dialog').waitFor({ state: 'visible', timeout: 5000 });
 }
 
 /**
  * Verify event exists on calendar
  */
 export async function verifyEventOnCalendar(page, eventTitle) {
-  await page.waitForTimeout(500);
-  const eventElement = page.locator('[class*="sx__"]').filter({ hasText: eventTitle });
-  await expect(eventElement.first()).toBeVisible();
+  await expect(page.locator('[class*="sx__"]').filter({ hasText: eventTitle }).first()).toBeVisible(
+    { timeout: 5000 },
+  );
 }
 
 /**
  * Verify event does not exist on calendar
  */
 export async function verifyEventNotOnCalendar(page, eventTitle) {
-  await page.waitForTimeout(500);
-  const eventElement = page.locator('[class*="sx__"]').filter({ hasText: eventTitle });
-  await expect(eventElement).not.toBeVisible();
+  await expect(
+    page.locator('[class*="sx__"]').filter({ hasText: eventTitle }).first(),
+  ).not.toBeVisible({ timeout: 3000 });
 }
 
 /**
@@ -182,7 +201,7 @@ export async function deleteEventFromModal(page) {
   await expect(confirmModal).toBeVisible();
   await confirmModal.locator('button:has-text("Delete")').click();
 
-  await page.waitForSelector('div[role="dialog"]', { state: 'hidden', timeout: 5000 });
+  await confirmModal.waitFor({ state: 'hidden', timeout: 5000 });
 }
 
 /**

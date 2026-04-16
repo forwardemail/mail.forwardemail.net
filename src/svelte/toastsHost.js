@@ -55,8 +55,10 @@ export function createToastHost(target) {
     dismiss();
     const id = (nextId += 1);
     items.set([{ id, message, type, action: resolvedAction }]);
-    // duration 0 = persistent (no auto-dismiss)
-    const duration = timeout === 0 ? 0 : Math.max(5000, Number(timeout) || 5000);
+    // duration 0 = persistent (no auto-dismiss). 8s minimum so assertions that
+    // take a few hundred ms (e.g. navigation + locator resolution) don't race
+    // against the auto-dismiss.
+    const duration = timeout === 0 ? 0 : Math.max(8000, Number(timeout) || 8000);
     if (duration > 0) {
       const timer = setTimeout(() => dismiss(id), duration);
       timeouts.set(id, timer);

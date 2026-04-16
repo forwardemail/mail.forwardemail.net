@@ -60,10 +60,19 @@
   };
 </script>
 
-<div class="fixed bottom-4 right-4 z-50 flex flex-col gap-2" aria-live="polite">
+<div
+  class="fixed bottom-4 right-4 z-50 flex flex-col gap-2"
+  aria-live="polite"
+  data-testid="toast-list"
+>
   {#each toastList as toast (toast.id)}
-    <div class={getToastClasses(toast.type)} transition:fade={{ duration: 200 }}>
-      <span class="text-sm">{toast.message}</span>
+    <div
+      class={getToastClasses(toast.type)}
+      transition:fade={{ duration: 200 }}
+      data-testid="toast"
+      data-toast-type={toast.type || 'info'}
+    >
+      <span class="text-sm" data-testid="toast-message">{toast.message}</span>
       <div class="flex items-center gap-1">
         {#if toast.action}
           <Button
