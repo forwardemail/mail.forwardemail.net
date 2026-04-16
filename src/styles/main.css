@@ -200,3 +200,37 @@
   border-top-color: transparent;
   border-bottom-color: rgb(250 250 250 / 0.95);
 }
+
+/* ============================================
+   FORM INPUT DARK MODE FIX
+   Native radio buttons, checkboxes, and other form controls use the
+   CSS accent-color property. In dark mode, --primary resolves to a
+   very light gray (oklch 0.929) which makes checked/unchecked states
+   indistinguishable. Override with a vivid blue so the selected state
+   is clearly visible against the dark background.
+   ============================================ */
+.dark input[type='radio'],
+.dark input[type='checkbox'],
+.dark input[type='range'] {
+  accent-color: oklch(0.488 0.243 264.376);
+}
+
+/* Ensure native date/time/color pickers render legibly in dark mode */
+.dark input[type='date'],
+.dark input[type='time'],
+.dark input[type='datetime-local'] {
+  color-scheme: dark;
+}
+
+/* Light mode: use the standard primary color for accent */
+:root:not(.dark) input[type='radio'],
+:root:not(.dark) input[type='checkbox'],
+:root:not(.dark) input[type='range'] {
+  accent-color: oklch(0.208 0.042 265.755);
+}
+
+:root:not(.dark) input[type='date'],
+:root:not(.dark) input[type='time'],
+:root:not(.dark) input[type='datetime-local'] {
+  color-scheme: light;
+}
