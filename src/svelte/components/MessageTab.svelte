@@ -28,6 +28,13 @@
   import ShieldAlert from '@lucide/svelte/icons/shield-alert';
   import ImageIcon from '@lucide/svelte/icons/image';
   import Loader2 from '@lucide/svelte/icons/loader-2';
+  import FileText from '@lucide/svelte/icons/file-text';
+  import ChevronDown from '@lucide/svelte/icons/chevron-down';
+  import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
+  import DOMPurify from 'dompurify';
+  import { templates as templatesStore } from '../../stores/userContentStore';
+  import type { Template } from '../../types/userContent';
+  import { resolveTemplateVars } from '../../utils/template-vars';
 
   // Services
   import { mailService } from '../../stores/mailService';
@@ -212,6 +219,37 @@
     });
   }
 
+  const replyTemplates = $derived(
+    ($templatesStore || []).filter((t: Template) => t.useInReplies !== false),
+  );
+
+  function replyWithTemplate(tpl: Template) {
+    if (!message) return;
+    const from = message.from || '';
+    const cleanBody = stripQuoteCollapseMarkup(body);
+    const quotedBody = buildReplyQuotedBody(message, cleanBody);
+    const resolved = resolveTemplateVars(tpl.body || '', {
+      from,
+      subject: message.subject || '',
+      date: message.date || message.created_at,
+    });
+    const templateHtml = DOMPurify.sanitize(resolved);
+    const composedHtml = `${templateHtml}${quotedBody || ''}`;
+    openComposeWindow({
+      action: 'reply',
+      prefill: {
+        subject: addReplyPrefix(message.subject),
+        from,
+        to: from,
+        date: message.date || message.created_at,
+        html: composedHtml,
+        inReplyTo: message.header_message_id || message.msgid || message.id,
+        replyToMessageId: message.id || null,
+        replyToMessageFolder: message.folder || null,
+      },
+    });
+  }
+
   function handleForward() {
     if (!message) return;
     // Strip quote-collapse viewing markup before encoding for forward
@@ -315,6 +353,39 @@
         </Tooltip.Trigger>
         <Tooltip.Content><p>Forward message</p></Tooltip.Content>
       </Tooltip.Root>
+
+      {#if replyTemplates.length === 1}
+        <Tooltip.Root>
+          <Tooltip.Trigger>
+            <Button variant="ghost" size="sm" onclick={() => replyWithTemplate(replyTemplates[0])}>
+              <FileText class="h-4 w-4 mr-1" />
+              Reply with template
+            </Button>
+          </Tooltip.Trigger>
+          <Tooltip.Content>
+            <p>Reply using "{replyTemplates[0].name}"</p>
+          </Tooltip.Content>
+        </Tooltip.Root>
+      {:else if replyTemplates.length > 1}
+        <DropdownMenu.Root>
+          <DropdownMenu.Trigger>
+            {#snippet child({ props })}
+              <Button {...props} variant="ghost" size="sm" class="gap-1">
+                <FileText class="h-4 w-4" />
+                <span>Reply with template</span>
+                <ChevronDown class="h-3 w-3" />
+              </Button>
+            {/snippet}
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Content align="start" class="max-w-sm">
+            {#each replyTemplates as tpl (tpl.id)}
+              <DropdownMenu.Item onclick={() => replyWithTemplate(tpl)}>
+                <span class="truncate">{tpl.name}</span>
+              </DropdownMenu.Item>
+            {/each}
+          </DropdownMenu.Content>
+        </DropdownMenu.Root>
+      {/if}
     </div>
 
     <div class="flex-1"></div>

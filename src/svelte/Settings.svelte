@@ -104,6 +104,21 @@
   import { LABEL_PALETTE, pickLabelColor as pickLabelColorFromPalette } from '../utils/labels.js';
   import FeedbackModal from './FeedbackModal.svelte';
   import LabelModal from './components/LabelModal.svelte';
+  import TemplateModal from './components/TemplateModal.svelte';
+  import SignatureModal from './components/SignatureModal.svelte';
+  import {
+    templates as templatesStore,
+    signatures as signaturesStore,
+    userContentLoading,
+    createTemplate,
+    updateTemplate,
+    deleteTemplate as deleteTemplateRecord,
+    createSignature,
+    updateSignature,
+    deleteSignature as deleteSignatureRecord,
+    setDefaultSignature,
+  } from '../stores/userContentStore';
+  import type { Template, Signature } from '../types/userContent';
 
   interface ToastApi {
     show?: (message: string, type?: string) => void;
@@ -1287,11 +1302,183 @@
     }
   };
 
+  // ── Templates & Signatures state ────────────────────────────────────
+  let templateModalVisible = $state(false);
+  let templateModalSaving = $state(false);
+  let templateModalError = $state('');
+  let templateModalMode = $state<'create' | 'edit'>('create');
+  let templateModalId = $state<string | null>(null);
+  let templateModalName = $state('');
+  let templateModalBody = $state('');
+  let templateModalUseInReplies = $state(true);
+  let templateDeleting = $state('');
+
+  let signatureModalVisible = $state(false);
+  let signatureModalSaving = $state(false);
+  let signatureModalError = $state('');
+  let signatureModalMode = $state<'create' | 'edit'>('create');
+  let signatureModalId = $state<string | null>(null);
+  let signatureModalName = $state('');
+  let signatureModalBody = $state('');
+  let signatureModalIsDefault = $state(false);
+  let signatureModalLockDefault = $state(false);
+  let signatureDeleting = $state('');
+
+  const templatesList = $derived($templatesStore || []);
+  const signaturesList = $derived($signaturesStore || []);
+
+  const openCreateTemplateModal = () => {
+    templateModalMode = 'create';
+    templateModalId = null;
+    templateModalName = '';
+    templateModalBody = '';
+    templateModalUseInReplies = true;
+    templateModalError = '';
+    templateModalVisible = true;
+  };
+
+  const openEditTemplateModal = (tpl: Template) => {
+    templateModalMode = 'edit';
+    templateModalId = tpl.id;
+    templateModalName = tpl.name;
+    templateModalBody = tpl.body;
+    templateModalUseInReplies = tpl.useInReplies !== false;
+    templateModalError = '';
+    templateModalVisible = true;
+  };
+
+  const closeTemplateModal = () => {
+    templateModalVisible = false;
+  };
+
+  const clearTemplateModalError = () => {
+    templateModalError = '';
+  };
+
+  const saveTemplateModal = async () => {
+    if (!templateModalName.trim()) {
+      templateModalError = 'Name is required';
+      return;
+    }
+    templateModalSaving = true;
+    try {
+      if (templateModalMode === 'edit' && templateModalId) {
+        await updateTemplate(templateModalId, {
+          name: templateModalName,
+          body: templateModalBody,
+          useInReplies: templateModalUseInReplies,
+        });
+      } else {
+        await createTemplate({
+          name: templateModalName,
+          body: templateModalBody,
+          useInReplies: templateModalUseInReplies,
+        });
+      }
+      templateModalVisible = false;
+    } catch (err) {
+      templateModalError = (err as Error)?.message || 'Failed to save template';
+    } finally {
+      templateModalSaving = false;
+    }
+  };
+
+  const deleteTemplate = async (tpl: Template) => {
+    templateDeleting = tpl.id;
+    try {
+      await deleteTemplateRecord(tpl.id);
+    } catch {
+      // Error swallowed — the store rolled back on failure
+    } finally {
+      templateDeleting = '';
+    }
+  };
+
+  const openCreateSignatureModal = () => {
+    signatureModalMode = 'create';
+    signatureModalId = null;
+    signatureModalName = '';
+    signatureModalBody = '';
+    signatureModalIsDefault = signaturesList.length === 0;
+    signatureModalLockDefault = signaturesList.length === 0;
+    signatureModalError = '';
+    signatureModalVisible = true;
+  };
+
+  const openEditSignatureModal = (sig: Signature) => {
+    signatureModalMode = 'edit';
+    signatureModalId = sig.id;
+    signatureModalName = sig.name;
+    signatureModalBody = sig.body;
+    signatureModalIsDefault = sig.isDefault;
+    // Prevent un-defaulting the only signature
+    signatureModalLockDefault = sig.isDefault && signaturesList.length === 1;
+    signatureModalError = '';
+    signatureModalVisible = true;
+  };
+
+  const closeSignatureModal = () => {
+    signatureModalVisible = false;
+  };
+
+  const clearSignatureModalError = () => {
+    signatureModalError = '';
+  };
+
+  const saveSignatureModal = async () => {
+    if (!signatureModalName.trim()) {
+      signatureModalError = 'Name is required';
+      return;
+    }
+    signatureModalSaving = true;
+    try {
+      if (signatureModalMode === 'edit' && signatureModalId) {
+        await updateSignature(signatureModalId, {
+          name: signatureModalName,
+          body: signatureModalBody,
+          isDefault: signatureModalIsDefault,
+        });
+      } else {
+        await createSignature({
+          name: signatureModalName,
+          body: signatureModalBody,
+          isDefault: signatureModalIsDefault,
+        });
+      }
+      signatureModalVisible = false;
+    } catch (err) {
+      signatureModalError = (err as Error)?.message || 'Failed to save signature';
+    } finally {
+      signatureModalSaving = false;
+    }
+  };
+
+  const deleteSignature = async (sig: Signature) => {
+    signatureDeleting = sig.id;
+    try {
+      await deleteSignatureRecord(sig.id);
+    } catch {
+      // rolled back by store on failure
+    } finally {
+      signatureDeleting = '';
+    }
+  };
+
+  const makeSignatureDefault = async (sig: Signature) => {
+    try {
+      await setDefaultSignature(sig.id);
+    } catch {
+      // rolled back by store on failure
+    }
+  };
+
   const sections = [
     { id: 'general', label: 'General' },
     { id: 'appearance', label: 'Appearance' },
     { id: 'privacy', label: 'Privacy & Security' },
     { id: 'folders', label: 'Folders & Labels' },
+    { id: 'templates', label: 'Templates' },
+    { id: 'signatures', label: 'Signatures' },
     { id: 'search', label: 'Search' },
     { id: 'advanced', label: 'Advanced' },
     { id: 'shortcuts', label: 'Keyboard Shortcuts' },
@@ -1897,6 +2084,136 @@
         </Card.Root>
       {/if}
 
+      {#if section === 'templates'}
+        <Card.Root>
+          <Card.Header>
+            <Card.Title>Templates</Card.Title>
+            <Card.Description>
+              Reusable bodies you can insert while composing or use to reply quickly.
+            </Card.Description>
+          </Card.Header>
+          <Card.Content class="space-y-4">
+            <div class="flex items-center justify-between">
+              <span class="text-sm text-muted-foreground">Your templates</span>
+              <Button variant="ghost" size="sm" onclick={openCreateTemplateModal}>
+                Add template
+              </Button>
+            </div>
+            <div class="space-y-2">
+              {#if $userContentLoading && !templatesList.length}
+                <p class="text-sm text-muted-foreground">Loading templates...</p>
+              {:else if templatesList.length}
+                {#each templatesList as tpl (tpl.id)}
+                  <div class="flex items-center justify-between border border-border p-2">
+                    <div class="min-w-0">
+                      <div class="font-medium truncate">{tpl.name}</div>
+                      <div class="text-xs text-muted-foreground">
+                        {tpl.useInReplies ? 'Available in reply picker' : 'Compose-only'}
+                      </div>
+                    </div>
+                    <div class="flex gap-1 shrink-0">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onclick={() => openEditTemplateModal(tpl)}
+                        aria-label="Edit"
+                      >
+                        <Pencil class="h-4 w-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onclick={() => deleteTemplate(tpl)}
+                        disabled={templateDeleting === tpl.id}
+                        aria-label="Remove"
+                      >
+                        <X class="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </div>
+                {/each}
+              {:else}
+                <p class="text-sm text-muted-foreground">
+                  No templates yet. Create one to reuse common replies.
+                </p>
+              {/if}
+            </div>
+          </Card.Content>
+        </Card.Root>
+      {/if}
+
+      {#if section === 'signatures'}
+        <Card.Root>
+          <Card.Header>
+            <Card.Title>Signatures</Card.Title>
+            <Card.Description>
+              The default signature is auto-appended to new messages. You can switch or remove it
+              per-compose.
+            </Card.Description>
+          </Card.Header>
+          <Card.Content class="space-y-4">
+            <div class="flex items-center justify-between">
+              <span class="text-sm text-muted-foreground">Your signatures</span>
+              <Button variant="ghost" size="sm" onclick={openCreateSignatureModal}>
+                Add signature
+              </Button>
+            </div>
+            <div class="space-y-2">
+              {#if $userContentLoading && !signaturesList.length}
+                <p class="text-sm text-muted-foreground">Loading signatures...</p>
+              {:else if signaturesList.length}
+                {#each signaturesList as sig (sig.id)}
+                  <div class="flex items-center justify-between border border-border p-2">
+                    <div class="min-w-0">
+                      <div class="flex items-center gap-2">
+                        <span class="font-medium truncate">{sig.name}</span>
+                        {#if sig.isDefault}
+                          <span class="text-xs px-1.5 py-0.5 bg-primary/10 text-primary rounded"
+                            >Default</span
+                          >
+                        {/if}
+                      </div>
+                      {#if !sig.isDefault}
+                        <button
+                          type="button"
+                          class="text-xs text-muted-foreground underline mt-1"
+                          onclick={() => makeSignatureDefault(sig)}
+                        >
+                          Set as default
+                        </button>
+                      {/if}
+                    </div>
+                    <div class="flex gap-1 shrink-0">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onclick={() => openEditSignatureModal(sig)}
+                        aria-label="Edit"
+                      >
+                        <Pencil class="h-4 w-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onclick={() => deleteSignature(sig)}
+                        disabled={signatureDeleting === sig.id}
+                        aria-label="Remove"
+                      >
+                        <X class="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </div>
+                {/each}
+              {:else}
+                <p class="text-sm text-muted-foreground">
+                  No signatures yet. Create one to auto-append to outgoing mail.
+                </p>
+              {/if}
+            </div>
+          </Card.Content>
+        </Card.Root>
+      {/if}
+
       {#if section === 'search'}
         <Card.Root>
           <Card.Header>
@@ -2456,6 +2773,33 @@
   onClose={closeLabelModal}
   onSave={saveLabelModal}
   onClearError={clearLabelModalError}
+/>
+
+<TemplateModal
+  visible={templateModalVisible}
+  mode={templateModalMode}
+  bind:name={templateModalName}
+  bind:body={templateModalBody}
+  bind:useInReplies={templateModalUseInReplies}
+  error={templateModalError}
+  saving={templateModalSaving}
+  onClose={closeTemplateModal}
+  onSave={saveTemplateModal}
+  onClearError={clearTemplateModalError}
+/>
+
+<SignatureModal
+  visible={signatureModalVisible}
+  mode={signatureModalMode}
+  bind:name={signatureModalName}
+  bind:body={signatureModalBody}
+  bind:isDefault={signatureModalIsDefault}
+  lockDefault={signatureModalLockDefault}
+  error={signatureModalError}
+  saving={signatureModalSaving}
+  onClose={closeSignatureModal}
+  onSave={saveSignatureModal}
+  onClearError={clearSignatureModalError}
 />
 
 <Dialog.Root bind:open={rebuildConfirmVisible}>

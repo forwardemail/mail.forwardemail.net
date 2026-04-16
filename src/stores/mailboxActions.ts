@@ -40,6 +40,7 @@ import { warn } from '../utils/logger.ts';
 import { resetTabs } from './tabStore';
 import { parseReferences } from '../utils/threading';
 import { isOnline } from '../utils/network-status';
+import { loadUserContent } from './userContentStore';
 
 /**
  * Additional mailbox actions that were in MailboxView
@@ -223,6 +224,8 @@ export const load = async () => {
     const settingsPromise = syncSettings().catch((err) => {
       warn('syncSettings background refresh failed', err);
     });
+
+    loadUserContent(nextAccount).catch(() => {});
 
     // loadFolders must complete before loadMessages (sets selectedFolder)
     const foldersResult = await mailboxStore.actions.loadFolders().then(
@@ -1828,6 +1831,9 @@ const performAccountSwitch = async (email) => {
   if (cached.settingsLabels.length) {
     settingsLabels.set(cached.settingsLabels);
   }
+
+  // Load per-account templates and signatures (fire and forget)
+  loadUserContent(email).catch(() => {});
 
   // Reset tabs for new account (desktop only)
   if (isTauriDesktop) {

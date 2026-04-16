@@ -1,6 +1,6 @@
 <script lang="ts">
   import { tick, onMount, onDestroy } from 'svelte';
-  import { writable } from 'svelte/store';
+  import { writable, get } from 'svelte/store';
   import { Editor, Node, Extension } from '@tiptap/core';
   import StarterKit from '@tiptap/starter-kit';
   import LinkBase from '@tiptap/extension-link';
@@ -94,6 +94,23 @@
     getEffectiveSettingValue,
     profileName,
   } from '../stores/settingsStore';
+  import {
+    templates as templatesStore,
+    signatures as signaturesStore,
+    defaultSignature,
+    createTemplate,
+    updateTemplate,
+    findTemplateByName,
+    loadUserContent,
+  } from '../stores/userContentStore';
+  import type { Template, Signature } from '../types/userContent';
+  import { SIGNATURE_MARKER_ATTR } from '../types/userContent';
+  import {
+    injectSignatureIntoHtml,
+    swapSignatureInEditor,
+    stripSignatureFromHtml,
+    stripQuotedBlocksFromHtml,
+  } from '../utils/compose-signature';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
   import { Textarea } from '$lib/components/ui/textarea';
@@ -134,6 +151,8 @@
   import ChevronDown from '@lucide/svelte/icons/chevron-down';
   import Archive from '@lucide/svelte/icons/archive';
   import RemoveFormatting from '@lucide/svelte/icons/remove-formatting';
+  import FileText from '@lucide/svelte/icons/file-text';
+  import PenLine from '@lucide/svelte/icons/pen-line';
 
   interface ToastApi {
     show?: (message: string, type?: string) => void;
@@ -480,6 +499,20 @@
       : '#000000',
   );
   let highlightColor = $state('#fef08a');
+
+  // Templates & Signatures
+  let activeSignatureId = $state<string | null>(null);
+  let showTemplatesMenu = $state(false);
+  let showSignatureMenu = $state(false);
+  let saveAsTemplateOpen = $state(false);
+  let saveAsTemplateName = $state('');
+  let saveAsTemplateUseInReplies = $state(true);
+  let saveAsTemplateError = $state('');
+  let saveAsTemplateSaving = $state(false);
+  let saveAsTemplateOverwriteId = $state<string | null>(null);
+  let composeActionFromReply = $state(false);
+  const availableTemplates = $derived<Template[]>($templatesStore || []);
+  const availableSignatures = $derived<Signature[]>($signaturesStore || []);
   let alignment = $state<'left' | 'center' | 'right'>('left');
 
   const FONT_FAMILIES = [
@@ -1289,6 +1322,144 @@
     editorView = null;
     editorReady = false;
     clearRecipientSuggestions();
+    activeSignatureId = null;
+    showTemplatesMenu = false;
+    showSignatureMenu = false;
+    saveAsTemplateOpen = false;
+    saveAsTemplateName = '';
+    saveAsTemplateError = '';
+    saveAsTemplateOverwriteId = null;
+    composeActionFromReply = false;
+  };
+
+  // ── Template & Signature actions ────────────────────────────────────
+
+  const applySignatureSelection = (id: string | null) => {
+    if (isPlainText) return;
+    const sig = id ? availableSignatures.find((s) => s.id === id) || null : null;
+    activeSignatureId = sig?.id || null;
+    if (editorView) {
+      swapSignatureInEditor(editorView, sig);
+    } else {
+      body = sig
+        ? injectSignatureIntoHtml(stripSignatureFromHtml(body), sig)
+        : stripSignatureFromHtml(body);
+    }
+  };
+
+  // Matches the attribution paragraph ("On X, Y wrote:") that sits immediately
+  // before the quoted blockquote. TipTap strips the `fe-reply-attribution`
+  // class when re-serializing, so we identify it by position — the last <p>
+  // adjacent to `<blockquote data-raw-html=...>` — rather than by class.
+  const attributionBeforeQuoteRegex =
+    /<p(?:\s[^>]*)?>(?:(?!<p[\s>])[\s\S])*?<\/p>(?=\s*<blockquote[^>]*data-raw-html=)/i;
+
+  // Normalize template HTML that may have been saved from inside a reply
+  // scaffold: drop the "On X wrote:" attribution line (both class-tagged and
+  // plain variants) and any leading/trailing empty paragraphs that were
+  // sitting above/below the user's text.
+  const normalizeTemplateHtml = (html: string) =>
+    html
+      .replace(/<p[^>]*class="[^"]*fe-reply-attribution[^"]*"[^>]*>[\s\S]*?<\/p>/gi, '')
+      .replace(/^(?:\s*<p[^>]*>\s*(?:<br[^>]*>)?\s*<\/p>\s*)+/i, '')
+      .replace(/(?:\s*<p[^>]*>\s*(?:<br[^>]*>)?\s*<\/p>\s*)+$/i, '');
+
+  const insertTemplateAtCursor = (tpl: Template) => {
+    if (!tpl) return;
+    const contentHtml = normalizeTemplateHtml(DOMPurify.sanitize(tpl.body || ''));
+    if (!editorView) {
+      body = `${body || ''}${contentHtml}`;
+      return;
+    }
+    const currentHtml = editorView.getHTML();
+    const hasQuote = /<blockquote[^>]*data-raw-html=/i.test(currentHtml);
+    // Strip the attribution paragraph from the user-area emptiness check so a
+    // fresh reply counts as empty and the template can land on line 1. Order
+    // matters: the attribution regex relies on the blockquote being present
+    // (it matches the <p> immediately before it), so strip the attribution
+    // *before* stripping the quote.
+    const userArea = stripQuotedBlocksFromHtml(
+      stripSignatureFromHtml(currentHtml).replace(attributionBeforeQuoteRegex, ''),
+    );
+    const emptyParagraphs = /^\s*(<p[^>]*>\s*(<br[^>]*>)?\s*<\/p>\s*)*$/i;
+    const isEmpty = emptyParagraphs.test(userArea);
+    if (isEmpty) {
+      const sig = activeSignatureId
+        ? availableSignatures.find((s) => s.id === activeSignatureId) || null
+        : null;
+      let next = contentHtml;
+      if (sig) next = injectSignatureIntoHtml(next, sig);
+      const attrMatch = attributionBeforeQuoteRegex.exec(currentHtml);
+      const quoteMatch = hasQuote
+        ? /<blockquote[^>]*data-raw-html=[^>]*>[\s\S]*?<\/blockquote>/i.exec(currentHtml)
+        : null;
+      // Two blank paragraphs separate the template/signature from the reply
+      // attribution so the user's content doesn't visually merge with the
+      // quoted thread below.
+      if (attrMatch || quoteMatch) next = `${next}<p><br></p><p><br></p>`;
+      if (attrMatch) next = `${next}${attrMatch[0]}`;
+      if (quoteMatch) next = `${next}${quoteMatch[0]}`;
+      editorView.commands.setContent(next);
+      editorView.commands.focus('start');
+    } else {
+      editorView.chain().focus().insertContent(contentHtml).run();
+    }
+  };
+
+  const openSaveAsTemplate = () => {
+    const currentHtml = editorView ? editorView.getHTML() : body;
+    const withoutAttribution = currentHtml.replace(attributionBeforeQuoteRegex, '');
+    const stripped = stripSignatureFromHtml(stripQuotedBlocksFromHtml(withoutAttribution));
+    const sanitized = normalizeTemplateHtml(DOMPurify.sanitize(stripped)).trim();
+    if (!sanitized) {
+      toasts?.show?.('Nothing to save as template', 'info');
+      return;
+    }
+    saveAsTemplateName = subject || '';
+    saveAsTemplateUseInReplies = composeActionFromReply;
+    saveAsTemplateError = '';
+    saveAsTemplateOverwriteId = null;
+    saveAsTemplateOpen = true;
+  };
+
+  const confirmSaveAsTemplate = async () => {
+    const name = saveAsTemplateName.trim();
+    if (!name) {
+      saveAsTemplateError = 'Name is required';
+      return;
+    }
+    const currentHtml = editorView ? editorView.getHTML() : body;
+    const withoutAttribution = currentHtml.replace(attributionBeforeQuoteRegex, '');
+    const stripped = stripSignatureFromHtml(stripQuotedBlocksFromHtml(withoutAttribution));
+    const sanitized = normalizeTemplateHtml(DOMPurify.sanitize(stripped));
+    saveAsTemplateSaving = true;
+    try {
+      const duplicate = !saveAsTemplateOverwriteId ? findTemplateByName(name) : null;
+      if (duplicate && !saveAsTemplateOverwriteId) {
+        saveAsTemplateOverwriteId = duplicate.id;
+        saveAsTemplateError = `A template named "${duplicate.name}" already exists — save again to overwrite.`;
+        return;
+      }
+      if (saveAsTemplateOverwriteId) {
+        await updateTemplate(saveAsTemplateOverwriteId, {
+          name,
+          body: sanitized,
+          useInReplies: saveAsTemplateUseInReplies,
+        });
+      } else {
+        await createTemplate({
+          name,
+          body: sanitized,
+          useInReplies: saveAsTemplateUseInReplies,
+        });
+      }
+      saveAsTemplateOpen = false;
+      toasts?.show?.('Template saved', 'success');
+    } catch (err) {
+      saveAsTemplateError = (err as Error)?.message || 'Failed to save template';
+    } finally {
+      saveAsTemplateSaving = false;
+    }
   };
 
   const isDesktopViewport = () => typeof window !== 'undefined' && window.innerWidth >= 768;
@@ -2558,6 +2729,24 @@
     } else if (resolvedPrefill.html && !isPlainText) {
       body = resolvedPrefill.html as string;
     }
+
+    // Auto-append default signature for fresh compose (not draft resume).
+    // Skipped in plain-text mode — signature would leak HTML tags.
+    if (!resolvedPrefill.draftId && !isPlainText) {
+      composeActionFromReply = Boolean(resolvedPrefill.html || resolvedPrefill.inReplyTo);
+      const sig = get(defaultSignature);
+      if (sig) {
+        activeSignatureId = sig.id;
+        if (editorView) {
+          const current = editorView.getHTML();
+          const withSig = injectSignatureIntoHtml(current, sig);
+          editorView.commands.setContent(withSig);
+        } else {
+          body = injectSignatureIntoHtml(body, sig);
+        }
+      }
+    }
+
     if (ccList.length) showCc = true;
     if (bccList.length) showBcc = true;
     if (replyTo) showReplyTo = true;
@@ -2664,7 +2853,7 @@
       class:md:top-auto={!nativeWindow && !expanded}
       class:w-full={!nativeWindow && !expanded}
       class:h-full={!nativeWindow && !expanded}
-      class:md:w-[560px]={!nativeWindow && !expanded && !compact}
+      class:md:w-[600px]={!nativeWindow && !expanded && !compact}
       class:md:h-[600px]={!nativeWindow && !expanded && !compact}
       class:md:w-[650px]={!nativeWindow && !expanded && compact}
       class:md:h-[700px]={!nativeWindow && !expanded && compact}
@@ -2881,6 +3070,18 @@
                 >
                   <Save class="h-4 w-4" />
                   Save as draft
+                </button>
+                <button
+                  type="button"
+                  class="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground disabled:opacity-50 disabled:pointer-events-none"
+                  disabled={!hasContent}
+                  onclick={() => {
+                    showMobileMenu = false;
+                    openSaveAsTemplate();
+                  }}
+                >
+                  <Save class="h-4 w-4" />
+                  Save as template
                 </button>
                 <button
                   type="button"
@@ -3323,6 +3524,96 @@
               <Tooltip.Content><p>Insert link</p></Tooltip.Content>
             </Tooltip.Root>
 
+            {#if availableTemplates.length}
+              <div class="relative">
+                <Tooltip.Root>
+                  <Tooltip.Trigger>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      aria-label="Insert a template"
+                      onclick={() => {
+                        showTemplatesMenu = !showTemplatesMenu;
+                        showSignatureMenu = false;
+                      }}
+                    >
+                      <FileText class="h-4 w-4" />
+                    </Button>
+                  </Tooltip.Trigger>
+                  <Tooltip.Content><p>Use template</p></Tooltip.Content>
+                </Tooltip.Root>
+                {#if showTemplatesMenu}
+                  <div
+                    class="absolute right-0 top-full mt-1 min-w-[200px] max-w-[min(22rem,calc(100vw-2rem))] border border-border bg-popover p-1 shadow-lg z-[100]"
+                  >
+                    {#each availableTemplates as tpl (tpl.id)}
+                      <button
+                        type="button"
+                        class="w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-accent hover:text-accent-foreground"
+                        onclick={() => {
+                          showTemplatesMenu = false;
+                          insertTemplateAtCursor(tpl);
+                        }}
+                      >
+                        <span class="truncate">{tpl.name}</span>
+                      </button>
+                    {/each}
+                  </div>
+                {/if}
+              </div>
+            {/if}
+
+            {#if availableSignatures.length}
+              <div class="relative">
+                <Tooltip.Root>
+                  <Tooltip.Trigger>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      aria-label="Switch or remove the signature"
+                      onclick={() => {
+                        showSignatureMenu = !showSignatureMenu;
+                        showTemplatesMenu = false;
+                      }}
+                    >
+                      <PenLine class="h-4 w-4" />
+                    </Button>
+                  </Tooltip.Trigger>
+                  <Tooltip.Content><p>Switch or remove the signature</p></Tooltip.Content>
+                </Tooltip.Root>
+                {#if showSignatureMenu}
+                  <div
+                    class="absolute right-0 top-full mt-1 min-w-[200px] max-w-[min(22rem,calc(100vw-2rem))] border border-border bg-popover p-1 shadow-lg z-[100]"
+                  >
+                    <button
+                      type="button"
+                      class="w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-accent hover:text-accent-foreground"
+                      onclick={() => {
+                        showSignatureMenu = false;
+                        applySignatureSelection(null);
+                      }}
+                    >
+                      <span class:font-semibold={activeSignatureId === null}>None</span>
+                    </button>
+                    {#each availableSignatures as sig (sig.id)}
+                      <button
+                        type="button"
+                        class="w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-accent hover:text-accent-foreground"
+                        onclick={() => {
+                          showSignatureMenu = false;
+                          applySignatureSelection(sig.id);
+                        }}
+                      >
+                        <span class="truncate" class:font-semibold={activeSignatureId === sig.id}>
+                          {sig.name}{sig.isDefault ? ' (default)' : ''}
+                        </span>
+                      </button>
+                    {/each}
+                  </div>
+                {/if}
+              </div>
+            {/if}
+
             <Tooltip.Root>
               <Tooltip.Trigger>
                 <Button
@@ -3624,6 +3915,44 @@
         <Dialog.Footer>
           <Button variant="ghost" onclick={() => (showDiscardModal = false)}>Cancel</Button>
           <Button variant="destructive" onclick={confirmDiscardDraft}>Discard</Button>
+        </Dialog.Footer>
+      </Dialog.Content>
+    </Dialog.Root>
+
+    <Dialog.Root bind:open={saveAsTemplateOpen}>
+      <Dialog.Content class="sm:max-w-[460px]">
+        <Dialog.Header>
+          <Dialog.Title>Save as template</Dialog.Title>
+          <Dialog.Description>
+            The current body is saved as a reusable template. Quoted replies and signatures are
+            stripped.
+          </Dialog.Description>
+        </Dialog.Header>
+        <div class="py-2 space-y-4">
+          <div class="space-y-2">
+            <Label for="save-tpl-name">Name</Label>
+            <Input
+              id="save-tpl-name"
+              placeholder="Template name"
+              bind:value={saveAsTemplateName}
+              oninput={() => (saveAsTemplateError = '')}
+            />
+          </div>
+          <label class="flex items-center gap-2">
+            <input type="checkbox" bind:checked={saveAsTemplateUseInReplies} />
+            <span class="text-sm">Available in "Reply with template"</span>
+          </label>
+          {#if saveAsTemplateError}
+            <Alert.Root variant="destructive">
+              <Alert.Description>{saveAsTemplateError}</Alert.Description>
+            </Alert.Root>
+          {/if}
+        </div>
+        <Dialog.Footer>
+          <Button variant="ghost" onclick={() => (saveAsTemplateOpen = false)}>Cancel</Button>
+          <Button onclick={confirmSaveAsTemplate} disabled={saveAsTemplateSaving}>
+            {saveAsTemplateSaving ? 'Saving...' : saveAsTemplateOverwriteId ? 'Overwrite' : 'Save'}
+          </Button>
         </Dialog.Footer>
       </Dialog.Content>
     </Dialog.Root>

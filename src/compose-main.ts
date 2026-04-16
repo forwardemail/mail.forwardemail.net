@@ -15,6 +15,8 @@ import { mount } from 'svelte';
 import Compose from './svelte/Compose.svelte';
 import { createToastHost } from './svelte/toastsHost';
 import { getEffectiveSettingValue } from './stores/settingsStore';
+import { loadUserContent } from './stores/userContentStore';
+import { ensureDbReady } from './utils/db';
 
 // Block <input type="file"> — WebKit's runOpenPanel crashes Tauri on macOS.
 // File picking uses Tauri's dialog plugin instead (see file-picker.ts).
@@ -108,7 +110,7 @@ async function initFromTauriEvent() {
     let initialized = false;
 
     // Listen for prefill data from the main window
-    listen('compose:init', (event: { payload: unknown }) => {
+    listen('compose:init', async (event: { payload: unknown }) => {
       if (initialized) return;
       initialized = true;
 
@@ -136,6 +138,13 @@ async function initFromTauriEvent() {
           }
         }
       }
+
+      // Load templates and signatures for this compose window before
+      // opening — auth credentials above must land first so the active
+      // account resolves correctly. The compose window has its own
+      // JS context, so the db worker must be initialized here too.
+      await ensureDbReady().catch(() => false);
+      await loadUserContent().catch(() => {});
 
       if (action === 'reply' && typeof composeApi.reply === 'function') {
         composeApi.reply(prefill);
