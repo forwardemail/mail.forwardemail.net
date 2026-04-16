@@ -14,6 +14,9 @@ import Settings from './svelte/Settings.svelte';
 import Passphrase from './svelte/PassphraseModal.svelte';
 import Mailbox from './svelte/Mailbox.svelte';
 import Profile from './svelte/Profile.svelte';
+import Calendar from './svelte/Calendar.svelte';
+import Contacts from './svelte/Contacts.svelte';
+import Compose from './svelte/Compose.svelte';
 import { mailService } from './stores/mailService';
 import { mailboxStore } from './stores/mailboxStore';
 import { effectiveTheme, getEffectiveSettingValue } from './stores/settingsStore';
@@ -148,9 +151,14 @@ if (isTauriDesktop) {
   keyboardShortcuts.addShortcuts(TAB_SHORTCUTS);
 }
 
-const loadCalendarComponent = () => import('./svelte/Calendar.svelte');
-const loadContactsComponent = () => import('./svelte/Contacts.svelte');
-const loadComposeComponent = () => import('./svelte/Compose.svelte');
+// Calendar, Contacts, and Compose are statically imported (see top of file)
+// to prevent Svelte 5 runtime state fragmentation.  Dynamic imports combined
+// with Vite's manualChunks caused each chunk to receive its own copy of
+// Svelte's internal init_operations() state, leaving next_sibling_getter
+// uninitialised and crashing bits-ui floating-layer components.
+// See: https://github.com/sveltejs/svelte/issues/15960
+//      https://github.com/huntabyte/bits-ui/issues/1465
+//      https://github.com/huntabyte/shadcn-svelte/issues/1961
 
 function detectRoute() {
   const params = new URLSearchParams(window.location.search);
@@ -429,41 +437,29 @@ let _bootstrapComplete = false;
 // mailbox route to avoid errors on the login page, but must only start once.
 let _backgroundServicesStarted = false;
 
-// Defer Calendar mounting until after bootstrap.
-// Mounting complex Svelte 5 components (tooltips, dropdowns) into hidden
-// containers on the login page causes next_sibling_getter runtime crashes.
-let _calendarMountAttempts = 0;
+// Calendar is now statically imported — mount synchronously.
 function mountCalendar() {
-  if (_calendarApp || !calendarRoot || _calendarMountAttempts >= 3) return;
-  _calendarMountAttempts++;
-  loadCalendarComponent()
-    .then(({ default: Calendar }) => {
-      _calendarApp = mount(Calendar, {
-        target: calendarRoot,
-        props: {
-          navigate: (path: string) => viewModel.navigate?.(path),
-          toasts,
-          active: calendarActive,
-          registerApi: (api: typeof calendarApi) => {
-            if (api) {
-              calendarApi = api;
-              if (currentRoute() === 'calendar') {
-                calendarApi.reload?.();
-              }
+  if (_calendarApp || !calendarRoot) return;
+  try {
+    _calendarApp = mount(Calendar, {
+      target: calendarRoot,
+      props: {
+        navigate: (path: string) => viewModel.navigate?.(path),
+        toasts,
+        active: calendarActive,
+        registerApi: (api: typeof calendarApi) => {
+          if (api) {
+            calendarApi = api;
+            if (currentRoute() === 'calendar') {
+              calendarApi.reload?.();
             }
-          },
+          }
         },
-      });
-    })
-    .catch((err) => {
-      console.error('Failed to load calendar component', err);
-      // Retry after a delay — Vite dev server may be re-optimizing deps
-      // which temporarily invalidates chunk URLs.  A short wait lets the
-      // new chunks become available before retrying the dynamic import.
-      if (_calendarMountAttempts < 3) {
-        setTimeout(() => mountCalendar(), 2000);
-      }
+      },
     });
+  } catch (err) {
+    console.error('Failed to mount calendar component', err);
+  }
 }
 
 viewModel.calendarView = {
@@ -476,41 +472,31 @@ let contactsApi = {
   reload: () => {},
 };
 
-// Defer Contacts mounting until the user is authenticated.
-// Same rationale as Calendar — Svelte 5 dropdown/floating-layer
-// components crash with next_sibling_getter errors in hidden containers.
-let _contactsMountAttempts = 0;
+// Contacts is now statically imported — mount synchronously.
 function mountContacts() {
-  if (!contactsRoot || _contactsMountAttempts >= 3) return;
+  if (!contactsRoot) return;
   // Guard: only mount once (successful mount sets dataset.mounted)
   if (contactsRoot.dataset.mounted) return;
-  _contactsMountAttempts++;
-  loadContactsComponent()
-    .then(({ default: Contacts }) => {
-      contactsRoot.dataset.mounted = '1';
-      mount(Contacts, {
-        target: contactsRoot,
-        props: {
-          navigate: (path: string) => viewModel.navigate?.(path),
-          toasts,
-          registerApi: (api: typeof contactsApi) => {
-            if (api) {
-              contactsApi = api;
-              if (currentRoute() === 'contacts') {
-                contactsApi.reload?.();
-              }
+  try {
+    contactsRoot.dataset.mounted = '1';
+    mount(Contacts, {
+      target: contactsRoot,
+      props: {
+        navigate: (path: string) => viewModel.navigate?.(path),
+        toasts,
+        registerApi: (api: typeof contactsApi) => {
+          if (api) {
+            contactsApi = api;
+            if (currentRoute() === 'contacts') {
+              contactsApi.reload?.();
             }
-          },
+          }
         },
-      });
-    })
-    .catch((err) => {
-      console.error('Failed to load contacts component', err);
-      // Retry after a delay — same rationale as mountCalendar.
-      if (_contactsMountAttempts < 3) {
-        setTimeout(() => mountContacts(), 2000);
-      }
+      },
     });
+  } catch (err) {
+    console.error('Failed to mount contacts component', err);
+  }
 }
 
 // Wire WebSocket CustomEvents to Calendar and Contacts APIs.
@@ -582,71 +568,70 @@ let _mailboxApp = null;
 let mailboxApi = null;
 
 const composeMailboxView = writable(null);
+// Compose is now statically imported — mount synchronously.
 if (composeRoot) {
-  loadComposeComponent()
-    .then(({ default: Compose }) => {
-      _composeApp = mount(Compose, {
-        target: composeRoot,
-        props: {
-          toasts,
-          mailboxView: composeMailboxView,
-          onSent: (result?: { archive?: boolean; queued?: boolean }) => {
-            if (result?.archive) {
-              const msg = get(selectedMessage);
-              if (msg) {
-                mailboxActions.archiveMessage(msg).catch((err) => {
-                  console.error('[Compose] Failed to archive after send:', err);
-                });
-              }
+  try {
+    _composeApp = mount(Compose, {
+      target: composeRoot,
+      props: {
+        toasts,
+        mailboxView: composeMailboxView,
+        onSent: (result?: { archive?: boolean; queued?: boolean }) => {
+          if (result?.archive) {
+            const msg = get(selectedMessage);
+            if (msg) {
+              mailboxActions.archiveMessage(msg).catch((err) => {
+                console.error('[Compose] Failed to archive after send:', err);
+              });
             }
-          },
-          registerApi: (api: typeof composeApi) => {
-            if (api) {
-              composeApi = api;
-              if (unsubscribeComposeVisibility) {
-                unsubscribeComposeVisibility();
-                unsubscribeComposeVisibility = null;
-              }
-              if (api.visibility?.subscribe) {
-                unsubscribeComposeVisibility = api.visibility.subscribe((isVisible: boolean) => {
-                  composeVisible = Boolean(isVisible);
-                  if (!composeVisible) {
-                    composeMinimized = false;
-                  }
-                  updateShortcutState();
-                });
-              }
-              if (unsubscribeComposeMinimized) {
-                unsubscribeComposeMinimized();
-                unsubscribeComposeMinimized = null;
-              }
-              if (api.minimized?.subscribe) {
-                unsubscribeComposeMinimized = api.minimized.subscribe((isMinimized: boolean) => {
-                  composeMinimized = Boolean(isMinimized);
-                  updateShortcutState();
-                });
-              } else if (api.isMinimized) {
-                composeMinimized = Boolean(api.isMinimized());
-                updateShortcutState();
-              }
-              if (unsubscribeComposeCompact) {
-                unsubscribeComposeCompact();
-                unsubscribeComposeCompact = null;
-              }
-              if (api.compact?.subscribe) {
-                unsubscribeComposeCompact = api.compact.subscribe((isCompact: boolean) => {
-                  composeCompact = Boolean(isCompact);
-                  updateShortcutState();
-                });
-              }
-            }
-          },
+          }
         },
-      });
-    })
-    .catch((err) => {
-      console.error('Failed to load compose component', err);
+        registerApi: (api: typeof composeApi) => {
+          if (api) {
+            composeApi = api;
+            if (unsubscribeComposeVisibility) {
+              unsubscribeComposeVisibility();
+              unsubscribeComposeVisibility = null;
+            }
+            if (api.visibility?.subscribe) {
+              unsubscribeComposeVisibility = api.visibility.subscribe((isVisible: boolean) => {
+                composeVisible = Boolean(isVisible);
+                if (!composeVisible) {
+                  composeMinimized = false;
+                }
+                updateShortcutState();
+              });
+            }
+            if (unsubscribeComposeMinimized) {
+              unsubscribeComposeMinimized();
+              unsubscribeComposeMinimized = null;
+            }
+            if (api.minimized?.subscribe) {
+              unsubscribeComposeMinimized = api.minimized.subscribe((isMinimized: boolean) => {
+                composeMinimized = Boolean(isMinimized);
+                updateShortcutState();
+              });
+            } else if (api.isMinimized) {
+              composeMinimized = Boolean(api.isMinimized());
+              updateShortcutState();
+            }
+            if (unsubscribeComposeCompact) {
+              unsubscribeComposeCompact();
+              unsubscribeComposeCompact = null;
+            }
+            if (api.compact?.subscribe) {
+              unsubscribeComposeCompact = api.compact.subscribe((isCompact: boolean) => {
+                composeCompact = Boolean(isCompact);
+                updateShortcutState();
+              });
+            }
+          }
+        },
+      },
     });
+  } catch (err) {
+    console.error('Failed to mount compose component', err);
+  }
 }
 
 if (passphraseRoot) {

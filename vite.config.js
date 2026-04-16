@@ -108,6 +108,11 @@ export default defineConfig({
       $lib: path.resolve('./src/lib'),
       $types: path.resolve('./src/types'),
     },
+    // Ensure a single copy of the Svelte runtime across all chunks.
+    // Without this, manualChunks can cause duplicate Svelte internal
+    // state (init_operations / next_sibling_getter) leading to crashes
+    // in bits-ui floating-layer components.
+    dedupe: ['svelte', 'svelte/internal', 'svelte/internal/client'],
   },
   // Exclude libsodium-wrappers from esbuild dep pre-bundling.
   // Its ESM entry uses a relative import ("./libsodium.mjs") that breaks
@@ -115,10 +120,11 @@ export default defineConfig({
   // production build; for the dev server we simply skip pre-bundling so
   // Vite serves the files directly and our resolveId hook can intercept.
   optimizeDeps: {
-    // Pre-bundle deps that live behind dynamic imports (Calendar.svelte,
-    // Compose.svelte) so Vite discovers them at startup instead of mid-session.
-    // Late discovery triggers dep re-optimization which regenerates ALL chunk
-    // hashes and 404s every chunk URL the browser already loaded.
+    // Pre-bundle heavy deps so Vite discovers them at startup instead of
+    // mid-session.  Late discovery triggers dep re-optimization which
+    // regenerates ALL chunk hashes and 404s every chunk URL the browser
+    // already loaded.  Calendar/Contacts/Compose are now statically
+    // imported but their transitive deps still benefit from pre-bundling.
     include: [
       // Calendar.svelte deps
       '@schedule-x/calendar',
