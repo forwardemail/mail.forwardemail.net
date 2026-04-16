@@ -46,8 +46,11 @@ if (typeof globalThis.structuredClone === 'undefined') {
 }
 
 if (typeof window !== 'undefined' && typeof window.matchMedia === 'undefined') {
+  // `writable: true` + `configurable: true` so tests can replace matchMedia
+  // with their own mock (e.g. system-theme-listener.test.js assigns directly).
   Object.defineProperty(window, 'matchMedia', {
     configurable: true,
+    writable: true,
     value: vi.fn().mockImplementation((query: string) => ({
       matches: false,
       media: query,
