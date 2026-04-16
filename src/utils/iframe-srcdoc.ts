@@ -68,6 +68,9 @@ function getResetStyles(): string {
     .fe-email-content {
       padding: 0;
       min-height: 1px;
+      max-width: 100%;
+      word-wrap: break-word;
+      overflow-wrap: break-word;
       /* Ensure content is measured correctly */
       display: flow-root;
     }
@@ -81,6 +84,8 @@ function getResetStyles(): string {
     a {
       color: #3b82f6;
       text-decoration: underline;
+      word-break: break-word;
+      overflow-wrap: anywhere;
     }
 
     a:hover {
@@ -88,14 +93,21 @@ function getResetStyles(): string {
     }
 
     pre, code {
-      overflow-x: auto;
+      max-width: 100%;
       white-space: pre-wrap;
       word-wrap: break-word;
+      overflow-wrap: anywhere;
     }
 
     table {
-      max-width: 100%;
+      max-width: 100% !important;
       border-collapse: collapse;
+    }
+
+    td, th {
+      max-width: 100%;
+      word-wrap: break-word;
+      overflow-wrap: break-word;
     }
 
     blockquote {
@@ -103,6 +115,9 @@ function getResetStyles(): string {
       padding-left: 1em;
       border-left: 3px solid #d1d5db;
       color: #6b7280;
+      max-width: 100%;
+      word-wrap: break-word;
+      overflow-wrap: break-word;
     }
 
     /* Remove .fe-message-canvas wrapper styling since we handle it in the iframe */

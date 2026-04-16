@@ -101,6 +101,7 @@ export async function openComposeWindow(options?: ComposeWindowOptions): Promise
       minHeight: 400,
       center: true,
       resizable: true,
+      dragDropEnabled: false,
       url: 'compose.html',
     });
 

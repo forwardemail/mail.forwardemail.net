@@ -2548,6 +2548,7 @@
       replyToMessageFolder = resolvedPrefill.replyToMessageFolder as string;
     }
     if (resolvedPrefill.subject) subject = resolvedPrefill.subject as string;
+    if (resolvedPrefill.from) fromAddress = resolvedPrefill.from as string;
     if (isPlainText && resolvedPrefill.text) {
       body = resolvedPrefill.text as string;
     } else if (resolvedPrefill.body) {

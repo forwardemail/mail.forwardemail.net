@@ -188,11 +188,16 @@
 
   // ─── Actions ────────────────────────────────────────────────────────
 
+  function getDeliveredToAddress(): string {
+    if (!message) return '';
+    const raw = (message as { envelope_to?: unknown }).envelope_to || message.to || '';
+    return normalizeEmail(raw as Parameters<typeof normalizeEmail>[0]);
+  }
+
   function handleReply(replyAll = false) {
     if (!message) return;
-    const from = message.from || '';
-    const to = replyAll ? message.to || '' : '';
-    const cc = replyAll ? message.cc || '' : '';
+    const sender = message.from || '';
+    const deliveredTo = getDeliveredToAddress();
     // Strip quote-collapse viewing markup before encoding for reply
     const cleanBody = stripQuoteCollapseMarkup(body);
     const quotedBody = buildReplyQuotedBody(message, cleanBody);
@@ -200,9 +205,9 @@
       action: 'reply',
       prefill: {
         subject: addReplyPrefix(message.subject),
-        from,
-        to: replyAll ? to : from,
-        cc: replyAll ? cc : undefined,
+        from: deliveredTo,
+        to: replyAll ? message.to || '' : sender,
+        cc: replyAll ? message.cc || '' : undefined,
         date: message.date || message.created_at,
         html: quotedBody,
         inReplyTo: message.header_message_id || message.msgid || message.id,
@@ -214,6 +219,7 @@
 
   function handleForward() {
     if (!message) return;
+    const deliveredTo = getDeliveredToAddress();
     // Strip quote-collapse viewing markup before encoding for forward
     const cleanBody = stripQuoteCollapseMarkup(body);
     const quotedBody = buildForwardQuotedBody(message, cleanBody);
@@ -221,6 +227,7 @@
       action: 'forward',
       prefill: {
         subject: addForwardPrefix(message.subject),
+        from: deliveredTo,
         html: quotedBody,
       },
     });
