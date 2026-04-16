@@ -1215,6 +1215,13 @@
   const closeNativeWindow = async () => {
     try {
       const { getCurrentWindow } = await import('@tauri-apps/api/window');
+      // Defer the close off the current AppKit event tick.
+      // macOS 26+ WebKit crashes inside
+      // WebPageProxy::dispatchSetObscuredContentInsets when a webview
+      // is destroyed synchronously during a JS callback (e.g. after
+      // send completes).  Yielding to the next tick lets the
+      // originating event finish dispatching first.
+      await new Promise((resolve) => setTimeout(resolve, 0));
       getCurrentWindow().close();
     } catch {
       window.close();

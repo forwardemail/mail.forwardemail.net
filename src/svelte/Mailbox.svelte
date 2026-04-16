@@ -689,6 +689,7 @@
   let draggedItem = $state<unknown>(null);
   let dragOverFolder = $state<string | null>(null);
   let dragExpandTimeout: ReturnType<typeof setTimeout> | null = null;
+  let dragEnterCounter = 0;
 
   async function loadOutboxItems() {
     try {
@@ -2601,6 +2602,7 @@
   const handleDragEnd = (e) => {
     draggedItem = null;
     dragOverFolder = null;
+    dragEnterCounter = 0;
     if (dragExpandTimeout) {
       clearTimeout(dragExpandTimeout);
       dragExpandTimeout = null;
@@ -2614,6 +2616,12 @@
 
     // Don't highlight if dragging to the same folder
     if (draggedItem.folder === folder.path) return;
+
+    // Track nested enter/leave pairs (child elements fire extra events)
+    if (dragOverFolder !== folder.path) {
+      dragEnterCounter = 0;
+    }
+    dragEnterCounter++;
 
     dragOverFolder = folder.path;
 
@@ -2636,14 +2644,31 @@
     }
 
     e.dataTransfer.dropEffect = 'move';
+
+    // Re-assert dragOverFolder on every dragover tick.
+    // In WKWebView (macOS Tauri), relatedTarget on dragleave is often
+    // null, which causes handleFolderDragLeave to clear the highlight
+    // even when the cursor is still inside the folder element. dragover
+    // fires continuously while hovering, so this recovers the state.
+    if (dragOverFolder !== folder.path) {
+      dragOverFolder = folder.path;
+    }
   };
 
   const handleFolderDragLeave = (e, folder) => {
     if (!draggedItem) return;
 
-    // Only clear if actually leaving the folder element
+    // Decrement the enter/leave counter to handle child-element bubbling.
+    // Only clear the highlight when the counter reaches zero (truly left).
+    dragEnterCounter--;
+
+    // Also check relatedTarget as a secondary signal
     const relatedTarget = e.relatedTarget;
-    if (!relatedTarget || !e.currentTarget.contains(relatedTarget)) {
+    const trulyLeft =
+      dragEnterCounter <= 0 || (relatedTarget && !e.currentTarget.contains(relatedTarget));
+
+    if (trulyLeft) {
+      dragEnterCounter = 0;
       if (dragOverFolder === folder.path) {
         dragOverFolder = null;
       }
