@@ -192,8 +192,7 @@ jobs:
           rm -f /tmp/keystore.jks
 
   ios:
-    if: false # Disabled until iOS signing is set up
-    runs-on: macos-latest
+    runs-on: macos-14
     name: Release iOS (signed IPA)
     # Use the 'release' environment for scoped secrets
     environment: release
@@ -202,61 +201,195 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Skip gracefully (exit 0) when required iOS secrets aren't configured,
+      # so a missing secret never blocks the desktop/android release pipeline.
+      # Primary distribution is TestFlight via App Store Connect API, so all
+      # three ASC secrets are required alongside the signing cert + profile.
+      # Reuses APPLE_CERTIFICATE if no IOS_CERTIFICATE_BASE64 override is
+      # provided (works when the .p12 bundle contains an Apple Distribution
+      # cert alongside the Developer ID macOS cert).
+      - name: Check iOS release secrets
+        id: check
+        shell: bash
+        env:
+          APPLE_CERT: ${{ secrets.APPLE_CERTIFICATE }}
+          IOS_CERT: ${{ secrets.IOS_CERTIFICATE_BASE64 }}
+          PROFILE: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+          TEAM: ${{ secrets.APPLE_TEAM_ID }}
+          ASC_KEY: ${{ secrets.APP_STORE_CONNECT_API_KEY }}
+          ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          ASC_ISSUER: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+        run: |
+          missing=""
+          if [ -z "$IOS_CERT" ] && [ -z "$APPLE_CERT" ]; then
+            missing="$missing IOS_CERTIFICATE_BASE64_or_APPLE_CERTIFICATE"
+          fi
+          [ -z "$PROFILE" ]    && missing="$missing IOS_PROVISIONING_PROFILE_BASE64"
+          [ -z "$TEAM" ]       && missing="$missing APPLE_TEAM_ID"
+          [ -z "$ASC_KEY" ]    && missing="$missing APP_STORE_CONNECT_API_KEY"
+          [ -z "$ASC_KEY_ID" ] && missing="$missing APP_STORE_CONNECT_KEY_ID"
+          [ -z "$ASC_ISSUER" ] && missing="$missing APP_STORE_CONNECT_ISSUER_ID"
+          if [ -n "$missing" ]; then
+            echo "::warning::Skipping iOS TestFlight release — missing secrets:$missing"
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Install Rust stable
+        if: steps.check.outputs.enabled == 'true'
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
+          targets: aarch64-apple-ios
 
       - name: Rust cache
+        if: steps.check.outputs.enabled == 'true'
         uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri -> target
 
       - name: Setup Node.js
+        if: steps.check.outputs.enabled == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Setup pnpm
+        if: steps.check.outputs.enabled == 'true'
         uses: pnpm/action-setup@v4
-        with:
-          version: ${{ env.PNPM_VERSION }}
 
       - name: Install dependencies
+        if: steps.check.outputs.enabled == 'true'
         run: pnpm install --frozen-lockfile
 
-      - name: Import Apple certificates
+      - name: Import iOS distribution certificate
+        if: steps.check.outputs.enabled == 'true'
         uses: apple-actions/import-codesign-certs@v3
         with:
-          p12-file-base64: ${{ secrets.IOS_CERTIFICATE_BASE64 }}
-          p12-password: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+          p12-file-base64: ${{ secrets.IOS_CERTIFICATE_BASE64 || secrets.APPLE_CERTIFICATE }}
+          p12-password: ${{ secrets.IOS_CERTIFICATE_PASSWORD || secrets.APPLE_CERTIFICATE_PASSWORD }}
 
       - name: Install provisioning profile
+        if: steps.check.outputs.enabled == 'true'
+        env:
+          PROFILE_B64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
         run: |
-          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
-          echo "${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}" | \
-            base64 -d > ~/Library/MobileDevice/Provisioning\ Profiles/profile.mobileprovision
+          set -euo pipefail
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          echo "$PROFILE_B64" | base64 --decode > /tmp/profile.mobileprovision
+          if [ ! -s /tmp/profile.mobileprovision ]; then
+            echo "::error::Provisioning profile failed to decode"
+            exit 1
+          fi
+          # Xcode looks up profiles by UUID filename, so copy with the
+          # embedded UUID. Name is needed for ExportOptions.plist's
+          # provisioningProfiles map and PROVISIONING_PROFILE_SPECIFIER.
+          UUID=$(security cms -D -i /tmp/profile.mobileprovision | plutil -extract UUID raw -)
+          NAME=$(security cms -D -i /tmp/profile.mobileprovision | plutil -extract Name raw -)
+          cp /tmp/profile.mobileprovision \
+            "$HOME/Library/MobileDevice/Provisioning Profiles/${UUID}.mobileprovision"
+          echo "IOS_PROFILE_UUID=$UUID" >> "$GITHUB_ENV"
+          echo "IOS_PROFILE_NAME=$NAME" >> "$GITHUB_ENV"
+          echo "Installed provisioning profile: $NAME ($UUID)"
 
       - name: Initialize iOS project
-        run: pnpm tauri ios init
+        if: steps.check.outputs.enabled == 'true'
+        run: pnpm tauri ios init --ci
 
-      - name: Build iOS (release)
+      - name: Sync version + inject iOS signing
+        if: steps.check.outputs.enabled == 'true'
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          IOS_EXPORT_METHOD: app-store-connect
+          IOS_SIGNING_IDENTITY: ${{ vars.IOS_SIGNING_IDENTITY || 'Apple Distribution' }}
+        run: |
+          node scripts/sync-version.cjs
+          node scripts/inject-ios-signing.cjs
+
+      - name: Build iOS (release, signed)
+        if: steps.check.outputs.enabled == 'true'
         env:
           APPLE_DEVELOPMENT_TEAM: ${{ secrets.APPLE_TEAM_ID }}
-        run: pnpm tauri ios build
+        run: pnpm tauri ios build --ci --target aarch64 --export-method app-store-connect
 
-      - name: Upload iOS IPA to release
-        uses: softprops/action-gh-release@v2
-        if: success()
-        with:
-          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
-          files: |
-            src-tauri/gen/apple/build/**/*.ipa
-          draft: true
+      - name: Rename IPA with version
+        if: steps.check.outputs.enabled == 'true'
+        run: |
+          set -euo pipefail
+          VERSION="${{ inputs.version || inputs.tag || github.ref_name }}"
+          VERSION="${VERSION#v}"
+          IPA=$(find src-tauri/gen/apple/build -name '*.ipa' -type f | head -n 1)
+          if [ -z "$IPA" ]; then
+            echo "::error::No IPA produced under src-tauri/gen/apple/build"
+            find src-tauri/gen/apple/build -maxdepth 5 -type f | head -50
+            exit 1
+          fi
+          NEW="$(dirname "$IPA")/forwardemail-mail_${VERSION}_ios.ipa"
+          mv "$IPA" "$NEW"
+          echo "IPA_PATH=$NEW" >> "$GITHUB_ENV"
+          echo "Produced: $NEW"
+
+      - name: Upload to TestFlight (App Store Connect)
+        if: steps.check.outputs.enabled == 'true'
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ASC_KEY: ${{ secrets.APP_STORE_CONNECT_API_KEY }}
+          ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          ASC_ISSUER: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          # altool auto-discovers keys in ~/.appstoreconnect/private_keys/
+          # by filename convention AuthKey_<KEY_ID>.p8
+          KEY_DIR="$HOME/.appstoreconnect/private_keys"
+          mkdir -p "$KEY_DIR"
+          echo "$ASC_KEY" > "$KEY_DIR/AuthKey_${ASC_KEY_ID}.p8"
+          chmod 600 "$KEY_DIR/AuthKey_${ASC_KEY_ID}.p8"
+          xcrun altool --upload-app \
+            --type ios \
+            --file "$IPA_PATH" \
+            --apiKey "$ASC_KEY_ID" \
+            --apiIssuer "$ASC_ISSUER"
+          rm -f "$KEY_DIR/AuthKey_${ASC_KEY_ID}.p8"
 
-      - name: Clean up provisioning profile
+      - name: Upload signed IPA to release
+        if: steps.check.outputs.enabled == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_ID: ${{ inputs.release_id }}
+        run: |
+          set -euo pipefail
+          TAG="v${{ inputs.version || inputs.tag || github.ref_name }}"
+          if [ -z "${IPA_PATH:-}" ] || [ ! -f "$IPA_PATH" ]; then
+            echo "::error::IPA_PATH not set or file missing"
+            exit 1
+          fi
+          # `gh release upload TAG` uses /releases/tags/{tag} which does NOT
+          # find draft releases. Resolve the release id directly.
+          if [ -z "${RELEASE_ID:-}" ]; then
+            RELEASE_ID=$(gh api "repos/${GH_REPO}/releases" \
+              --jq ".[] | select(.tag_name==\"$TAG\") | .id" | head -n 1)
+          fi
+          if [ -z "$RELEASE_ID" ]; then
+            echo "::error::Could not find release for tag $TAG"
+            exit 1
+          fi
+          name=$(basename "$IPA_PATH")
+          echo "Uploading $name to release id=$RELEASE_ID (tag=$TAG)"
+          existing_id=$(gh api "repos/${GH_REPO}/releases/${RELEASE_ID}/assets" \
+            --jq ".[] | select(.name==\"$name\") | .id" | head -n 1)
+          if [ -n "$existing_id" ]; then
+            gh api -X DELETE "repos/${GH_REPO}/releases/assets/${existing_id}" || true
+          fi
+          gh api \
+            --method POST \
+            -H "Content-Type: application/octet-stream" \
+            "https://uploads.github.com/repos/${GH_REPO}/releases/${RELEASE_ID}/assets?name=${name}" \
+            --input "$IPA_PATH"
+
+      - name: Clean up signing artifacts
         if: always()
         run: |
-          rm -f ~/Library/MobileDevice/Provisioning\ Profiles/profile.mobileprovision
+          rm -f /tmp/profile.mobileprovision
+          rm -f "$HOME/Library/MobileDevice/Provisioning Profiles"/*.mobileprovision || true
+          rm -rf "$HOME/.appstoreconnect/private_keys" || true
+          security delete-keychain signing_temp.keychain-db 2>/dev/null || true

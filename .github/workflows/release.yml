@@ -130,8 +130,11 @@ jobs:
       release_id: ${{ needs.create-release.outputs.release_id }}
     secrets: inherit
 
-  # ── 2b. Build Android APK ──────────────────────────────────────────────
-  build-android:
+  # ── 2b. Build Mobile (Android APK/AAB + iOS IPA) ───────────────────────
+  # Reusable workflow runs android + ios as sibling jobs. iOS is secret-gated
+  # and skips gracefully when signing secrets aren't configured, so this
+  # never blocks the release when provisioning isn't ready.
+  build-mobile:
     needs: create-release
     uses: ./.github/workflows/release-mobile.yml
     with:
@@ -141,7 +144,7 @@ jobs:
 
   # ── 3. Generate checksums (best-effort) ────────────────────────────────
   checksums:
-    needs: [create-release, build-desktop, build-android]
+    needs: [create-release, build-desktop, build-mobile]
     if: always() && needs.build-desktop.result == 'success'
     runs-on: ubuntu-latest
     steps:
@@ -221,7 +224,7 @@ jobs:
   # Publish as long as the desktop build succeeded — checksums are best-effort
   # and shouldn't block publishing the actual binaries.
   publish:
-    needs: [create-release, build-desktop, build-android, checksums]
+    needs: [create-release, build-desktop, build-mobile, checksums]
     if: always() && needs.build-desktop.result == 'success'
     runs-on: ubuntu-latest
     steps:
