@@ -12,11 +12,11 @@ Triggers [`release.yml`](../.github/workflows/release.yml), which orchestrates:
 
 1. Creates a **draft** GitHub Release
 2. Builds desktop binaries for macOS (arm64 + x64), Windows (x64), Linux (x64)
-3. Builds Android APK + AAB (signed, runs in parallel with desktop)
+3. Builds mobile: Android APK + AAB (signed) and iOS IPA (signed + uploaded to TestFlight), in parallel with desktop
 4. Generates `SHA256SUMS.txt` for all artifacts (desktop + mobile)
 5. **Publishing** the draft triggers [`deploy.yml`](../.github/workflows/deploy.yml) → deploys webmail to Cloudflare R2
 
-Android build failures do not block the desktop release or publishing.
+Mobile build failures do not block the desktop release or publishing. The iOS job additionally skips gracefully when TestFlight secrets aren't configured — see [SECRETS.md](./SECRETS.md#ios).
 
 ```bash
 pnpm release          # np bumps version across all files, creates v* tag, pushes
@@ -88,23 +88,26 @@ Trigger any workflow manually via GitHub Actions:
 
 Built by [`release-mobile.yml`](../.github/workflows/release-mobile.yml). Requires Android signing secrets in the `release` environment (see [SECRETS.md](./SECRETS.md#generating-the-android-keystore)).
 
-### iOS (Future)
+### iOS
 
-| File   | Description      |
-| ------ | ---------------- |
-| `.ipa` | App Store upload |
+| File                                  | Description                                                      |
+| ------------------------------------- | ---------------------------------------------------------------- |
+| `forwardemail-mail_<version>_ios.ipa` | Signed IPA (archival — primary distribution is TestFlight below) |
+
+The same IPA is uploaded to **App Store Connect → TestFlight** via `xcrun altool` using the App Store Connect API key. Testers install through the TestFlight app rather than downloading from the GitHub Release. See [ios-setup.md](./ios-setup.md#testflight-lifecycle-post-release) for the post-release flow (processing wait, inviting testers, beta review).
 
 ## Code Signing
 
 Signing is automatic when secrets are configured. Without secrets, builds are unsigned but still functional.
 
-| Platform     | Signing                           | Notes                                     |
-| ------------ | --------------------------------- | ----------------------------------------- |
-| macOS        | Apple Developer ID + notarization | Users won't see Gatekeeper warnings       |
-| Windows      | EV certificate (optional)         | Avoids SmartScreen warnings               |
-| Linux        | None needed                       | AppImage/deb work unsigned                |
-| Android      | Self-managed keystore (`.jks`)    | Required for Play Store; optional for APK |
-| Auto-updater | Ed25519 key                       | Required for `.sig` files                 |
+| Platform     | Signing                           | Notes                                                                  |
+| ------------ | --------------------------------- | ---------------------------------------------------------------------- |
+| macOS        | Apple Developer ID + notarization | Users won't see Gatekeeper warnings                                    |
+| Windows      | EV certificate (optional)         | Avoids SmartScreen warnings                                            |
+| Linux        | None needed                       | AppImage/deb work unsigned                                             |
+| Android      | Self-managed keystore (`.jks`)    | Required for Play Store; optional for APK                              |
+| iOS          | Apple Distribution + ASC API key  | Required for TestFlight — job skips gracefully when secrets aren't set |
+| Auto-updater | Ed25519 key                       | Required for `.sig` files                                              |
 
 See [SECRETS.md](./SECRETS.md) for the full list of required secrets and [desktop-ci-secrets.md](./desktop-ci-secrets.md) for detailed setup.
 

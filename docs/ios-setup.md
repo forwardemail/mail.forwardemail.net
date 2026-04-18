@@ -113,19 +113,92 @@ Requires a paid [Apple Developer Program](https://developer.apple.com/programs/)
    ```
 4. The resulting `.ipa` is at `src-tauri/gen/apple/build/arm64/<scheme>.ipa`.
 
-### CI signed builds (GitHub Actions)
+### CI signed builds → TestFlight (GitHub Actions)
 
-`release-mobile.yml` has an iOS job gated by `if: false` (line 195) awaiting signing secrets. To enable:
+The iOS job in [`release-mobile.yml`](../.github/workflows/release-mobile.yml) produces a signed IPA, uploads it to App Store Connect for TestFlight distribution, and also attaches the IPA to the GitHub Release for archival. It runs on every `v*` tag as part of the [unified release](./RELEASES.md#unified-release-v-tag). When required secrets are missing the job logs a warning and exits 0 — it never blocks the desktop/Android release.
 
-1. Export your Distribution certificate from Keychain as a password-protected `.p12`.
-2. Download the provisioning profile (`.mobileprovision`) from developer.apple.com.
-3. Store as repo secrets:
-   - `IOS_CERTIFICATE_BASE64` — `base64 -i Certificate.p12`
-   - `IOS_CERTIFICATE_PASSWORD` — the export password
-   - `IOS_PROVISIONING_PROFILE_BASE64` — `base64 -i profile.mobileprovision`
-   - `IOS_TEAM_ID` — 10-char team ID
-4. Flip `if: false` → `if: true` in `.github/workflows/release-mobile.yml`.
-5. See `docs/desktop-ci-secrets.md` for the equivalent macOS desktop flow — iOS follows the same pattern.
+#### One-time setup
+
+On [developer.apple.com](https://developer.apple.com):
+
+1. **Certificates → +** → **Apple Distribution** (the unified modern cert — works for both iOS App Store and macOS App Store). Upload a CSR you generate in Keychain Access (**Certificate Assistant → Request a Certificate from a Certificate Authority → Saved to disk**). Download `.cer`, double-click to install, then export from Keychain as a password-protected `.p12`.
+2. **Identifiers** → verify App ID `net.forwardemail.mail` exists.
+3. **Profiles → + → Distribution → App Store** → pick the App ID and the Apple Distribution cert → download the `.mobileprovision`.
+
+On [appstoreconnect.apple.com](https://appstoreconnect.apple.com):
+
+4. **My Apps → + → New App** → iOS, bundle ID `net.forwardemail.mail`, pick a SKU like `forwardemail-mail-ios`. Minimum metadata is fine to start — full screenshots/description only required before public App Store submission.
+5. **Users and Access → Integrations → App Store Connect API → Generate API Key** with **App Manager** role. Download the `.p8` (downloadable only once). Note the **Key ID** (10 chars) and **Issuer ID** (UUID at the top of the page).
+
+Store the six secrets in the `release` environment — see [SECRETS.md → iOS](./SECRETS.md#ios) for the full list and encoding commands.
+
+#### What happens on a tagged release
+
+Triggered by `pnpm release` (or manual `v*` tag push):
+
+1. `create-release` cuts a draft GitHub Release.
+2. `build-mobile` calls [`release-mobile.yml`](../.github/workflows/release-mobile.yml) which runs `android` and `ios` as sibling jobs.
+3. The iOS job:
+   - Imports the Apple Distribution cert into a temporary keychain.
+   - Installs the `.mobileprovision` into `~/Library/MobileDevice/Provisioning Profiles/` by its embedded UUID.
+   - Runs `tauri ios init --ci` to regenerate `src-tauri/gen/apple/`.
+   - Runs [`scripts/sync-version.cjs`](../scripts/sync-version.cjs) + [`scripts/inject-ios-signing.cjs`](../scripts/inject-ios-signing.cjs), which inject `CODE_SIGN_STYLE=Manual` + team + identity + profile specifier into `project.yml`, regenerate the xcodeproj via `xcodegen`, write `ExportOptions.plist`, and set `CFBundleVersion` to a monotonically-increasing integer derived from semver (`major*10000 + minor*100 + patch`).
+   - Runs `tauri ios build --ci --target aarch64 --export-method app-store-connect` which archives and exports the signed IPA.
+   - Uploads the IPA to App Store Connect via `xcrun altool --upload-app` using the API key.
+   - Uploads the IPA to the draft GitHub Release as archival.
+4. `publish` flips the Release from draft to published.
+
+#### TestFlight lifecycle (post-release)
+
+Find the build at [appstoreconnect.apple.com](https://appstoreconnect.apple.com) → **My Apps** → **Forward Email** → **TestFlight** tab.
+
+| Stage               | Location                                   | Typical duration     | What to do                                                                                       |
+| ------------------- | ------------------------------------------ | -------------------- | ------------------------------------------------------------------------------------------------ |
+| Upload received     | Activity → iOS Builds → "Processing"       | 5–15 min             | Wait. You'll get an email when processing finishes (or fails).                                   |
+| Processing complete | TestFlight → iOS tab, listed under version | —                    | Build is ready for internal testers immediately.                                                 |
+| Missing Compliance  | Yellow banner on the build row             | one-time per version | Click the build → answer the encryption question (see below).                                    |
+| Internal testing    | TestFlight → Internal Testing → Groups     | instant after adding | Add up to 25 testers (must be users on your team). They get an email + TF push.                  |
+| External testing    | TestFlight → External Testing → Groups     | <24h beta review     | Add testers by email (no Apple Developer seat needed). First build per version is beta-reviewed. |
+| Build expiry        | —                                          | 90 days from upload  | Upload a new build before expiry to keep testing continuous.                                     |
+
+**Testers install the [TestFlight app](https://apps.apple.com/app/testflight/id899247664) from the App Store once**, tap the invite link or redeem the code you send them, then install. Updates are automatic.
+
+#### Export compliance (one-time, per app)
+
+Forward Email uses TLS for network transport and user-held PGP keys for email content — both typically qualify as **exempt** encryption under US EAR (§740.17(b)(1) / 5D992.c).
+
+Two ways to handle the compliance question:
+
+- **Answer once in ASC**: when the first build hits "Missing Compliance", click it → "Yes, my app uses encryption" → "Yes, the app qualifies for the exemptions" → submit. ASC remembers for future builds in the same major version.
+- **Set once in Info.plist** to skip the prompt permanently: add `<key>ITSAppUsesNonExemptEncryption</key><false/>` to `src-tauri/gen/apple/forwardemail-desktop_iOS/Info.plist`. (Not currently injected by our CI — would need to add to [`inject-ios-signing.cjs`](../scripts/inject-ios-signing.cjs).)
+
+Consult a lawyer if the app later ships non-standard crypto (custom ciphers, ECC on-device key gen without TLS context, etc).
+
+#### Inviting testers
+
+From **TestFlight → Internal Testing → +** or **External Testing → +**:
+
+- **Internal Testing** — up to 25 team members who have an App Store Connect role. Builds appear instantly after processing, no beta review. Best for developers + QA.
+- **External Testing** — up to 10,000 testers by email (no Apple Developer Program seat needed on their end). First build per version number goes through a same-day beta review. Subsequent builds with the same major version auto-skip review.
+
+Each tester receives an email invite with a public TestFlight link. They can also be added to a Public Link that you share anywhere — useful for "apply to beta" pages.
+
+#### Manual signed build (local)
+
+For rare cases where you want to produce a signed IPA outside CI (e.g., debugging a signing issue):
+
+1. Follow the one-time setup above so the Apple Distribution cert is in your login Keychain and the `.mobileprovision` is installed in `~/Library/MobileDevice/Provisioning Profiles/`.
+2. Set `developmentTeam` in `src-tauri/tauri.conf.json` to your 10-char team ID (already set).
+3. Build:
+   ```bash
+   APPLE_TEAM_ID=FH83QMJS7P \
+   IOS_EXPORT_METHOD=app-store-connect \
+   IOS_PROFILE_NAME="Forward Email Mail App Store" \
+     node scripts/inject-ios-signing.cjs
+   pnpm tauri ios build --target aarch64 --export-method app-store-connect
+   ```
+4. Find the IPA at `src-tauri/gen/apple/build/arm64/*.ipa`.
+5. Upload to TestFlight via Transporter.app (Mac App Store) or `xcrun altool --upload-app`.
 
 ## Troubleshooting
 

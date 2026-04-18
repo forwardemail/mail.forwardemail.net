@@ -42,11 +42,24 @@ This document lists all GitHub Secrets required for the CI/CD workflows to build
 
 ### iOS
 
-| Secret                            | Description                                        |
-| --------------------------------- | -------------------------------------------------- |
-| `IOS_CERTIFICATE_BASE64`          | Base64-encoded `.p12` iOS Distribution certificate |
-| `IOS_CERTIFICATE_PASSWORD`        | Password for the iOS `.p12` certificate            |
-| `IOS_PROVISIONING_PROFILE_BASE64` | Base64-encoded `.mobileprovision` file             |
+Distribution target is **TestFlight** (App Store Connect). `APPLE_TEAM_ID` is shared with the macOS desktop flow. The iOS job in [`release-mobile.yml`](../.github/workflows/release-mobile.yml) is secret-gated — when any of these are missing the job skips with a warning and does not block the desktop/Android release.
+
+| Secret                            | Description                                                                                     |
+| --------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `IOS_CERTIFICATE_BASE64`          | Base64-encoded `.p12` **Apple Distribution** certificate (not Developer ID — that's macOS-only) |
+| `IOS_CERTIFICATE_PASSWORD`        | Password for the iOS `.p12` certificate                                                         |
+| `IOS_PROVISIONING_PROFILE_BASE64` | Base64-encoded `.mobileprovision` (type: **App Store** distribution)                            |
+| `APP_STORE_CONNECT_API_KEY`       | Full contents of the `AuthKey_XXXXXXXXXX.p8` file including BEGIN/END lines                     |
+| `APP_STORE_CONNECT_KEY_ID`        | 10-character Key ID from App Store Connect → Users and Access → Integrations                    |
+| `APP_STORE_CONNECT_ISSUER_ID`     | Issuer UUID shown above the API keys table (same for every key in your account)                 |
+
+**Optional variables** (repo-level under Settings → Variables, not Secrets):
+
+| Variable               | Default              | Description                                                                                           |
+| ---------------------- | -------------------- | ----------------------------------------------------------------------------------------------------- |
+| `IOS_SIGNING_IDENTITY` | `Apple Distribution` | Override the `CODE_SIGN_IDENTITY` / `signingCertificate` — rarely needed unless you use a legacy cert |
+
+If your existing `APPLE_CERTIFICATE` p12 already contains an Apple Distribution cert alongside Developer ID, you can omit `IOS_CERTIFICATE_*` — the iOS job falls back to `APPLE_CERTIFICATE` + `APPLE_CERTIFICATE_PASSWORD`.
 
 ## Deployment Secrets (Cloudflare / R2)
 
