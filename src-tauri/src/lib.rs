@@ -545,6 +545,16 @@ pub fn run() {
                 ])
                 .max_file_size(1_000_000)
                 .rotation_strategy(RotationStrategy::KeepSome(5))
+                // Verbose in debug builds, Info in release. The updater plugin
+                // emits its HTTP activity at Debug — keep it visible in both
+                // builds so "no visible update" tickets can be diagnosed from
+                // the rotating log files.
+                .level(if cfg!(debug_assertions) {
+                    log::LevelFilter::Debug
+                } else {
+                    log::LevelFilter::Info
+                })
+                .level_for("tauri_plugin_updater", log::LevelFilter::Debug)
                 .format(move |out, message, record| {
                     let redacted = redaction::redact(&message.to_string());
                     let ts = time::OffsetDateTime::now_utc()

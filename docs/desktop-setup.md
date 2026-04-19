@@ -88,6 +88,73 @@ Output paths (relative to project root):
 
 No `.env` file is required. The API base URL is set in `src/config.js` and defaults to `https://api.forwardemail.net`. To override for local development, edit `src/config.js` directly.
 
+## Diagnosing the Auto-Updater
+
+Tauri's auto-updater runs from the Rust backend, so **its HTTP requests will not appear in the webview devtools Network tab**. Use one of these three paths to observe updater behavior.
+
+### 1. JavaScript-side logs (recommended starting point)
+
+All JS code paths in `src/utils/updater-bridge.js` log at every decision point with the `[updater]` prefix:
+
+```
+[updater] checkForUpdates() called
+[updater] calling mod.check() — this issues an HTTP GET from the Rust backend
+[updater] mod.check() returned { isNull: false, available: true, version: '0.9.21', currentVersion: '0.9.20', date: '2026-04-18' }
+[updater] doCheck: update available → v0.9.21 (current v0.9.20)
+[updater] no onUpdateAvailable callback — will auto-install silently
+[updater] downloadAndInstall() starting for version 0.9.21
+[updater] download started: 8421734 bytes
+[updater] download progress: 10%
+[updater] download progress: 20%
+...
+[updater] download finished — install + relaunch starting
+```
+
+These lines appear in:
+
+- The **webview devtools Console** (⌥⌘I in dev builds — enabled by the `devtools` Tauri feature in debug builds only).
+- The **rotating log files** on disk, via `tauri-plugin-log`'s `Webview` target. Up to 5 × 1 MB files. Locations:
+  - macOS: `~/Library/Logs/net.forwardemail.mail/`
+  - Linux: `~/.local/share/net.forwardemail.mail/logs/`
+  - Windows: `%LOCALAPPDATA%\net.forwardemail.mail\logs\`
+- The **app's own diagnostics UI** (Settings → Diagnostics → "View Recent Logs"), which tails those same files.
+
+### 2. Rust-side updater plugin logs
+
+The `tauri_plugin_updater` module is pinned to `Debug` level in `src-tauri/src/lib.rs`. Its log lines flow through the same `tauri-plugin-log` pipeline as JS logs, so they land in the same rotating files with the `tauri_plugin_updater` target:
+
+```
+2026-04-18T05:12:03Z [DEBUG][tauri_plugin_updater] checking for update from https://github.com/.../latest.json
+2026-04-18T05:12:03Z [DEBUG][tauri_plugin_updater] latest version: 0.9.21, current: 0.9.20
+```
+
+In debug builds (`pnpm tauri:dev`), the overall log level is `Debug` so you'll see network retries, body parsing, and signature verification from the plugin as well.
+
+### 3. OS-level network inspection
+
+When you need to confirm an HTTP request actually left the machine (e.g., suspecting a firewall or DNS issue):
+
+```bash
+# macOS — watch connections from the app process while triggering a check
+lsof -iTCP -sTCP:ESTABLISHED -P -c 'Forward Email' -r 1
+
+# Cross-platform — use Little Snitch (macOS), Proxyman, or mitmproxy to
+# capture the actual request. Requires configuring the OS/proxy trust
+# chain since update downloads are HTTPS.
+```
+
+GitHub Releases assets use `objects.githubusercontent.com` / `release-assets.githubusercontent.com` for the actual `.tar.gz` download and `github.com` for the `latest.json` redirect.
+
+### Common observations
+
+| What you see                                 | What it means                                                                                                                |
+| -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `rate-limited: last check was Xs ago`        | The 5-minute minimum between checks is holding. Triggering again immediately is a no-op.                                     |
+| `mod.check() returned { isNull: true, ... }` | Tauri believes there is no newer version. You may already be on `latest`, or `latest.json` may be absent from the release.   |
+| `mod.check() threw: signature mismatch`      | The pubkey in `tauri.conf.json` doesn't match the private key that signed the `.sig` file.                                   |
+| `downloadAndInstall failed: Failed to move…` | macOS install-location issue. Move the app into `/Applications` and re-launch.                                               |
+| No `[updater]` log lines at all              | `isTauriDesktop` returned false (wrong platform), or the module never ran. Check the Rust log for the plugin's own activity. |
+
 ## Troubleshooting
 
 ### macOS

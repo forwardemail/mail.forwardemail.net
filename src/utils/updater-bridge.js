@@ -30,11 +30,19 @@ let _autoCheckInterval = null;
 let _loggedLocationIssue = false;
 const MIN_CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
+// Phase 1 diagnostics: every decision point logs. tauri-plugin-log's Webview
+// target forwards console.* into the rotating log files, so these lines land
+// in the diagnostics logs that ship with support tickets.
+const log = (...args) => console.log('[updater]', ...args);
+const warn = (...args) => console.warn('[updater]', ...args);
+
 async function ensureUpdater() {
   if (_updater !== undefined) return _updater;
   try {
     _updater = await import('@tauri-apps/plugin-updater');
-  } catch {
+    log('plugin module loaded');
+  } catch (err) {
+    warn('plugin module failed to load:', err);
     _updater = null;
   }
   return _updater;
@@ -67,28 +75,53 @@ async function getArchInfo() {
  * Rate-limited to one check per 5 minutes.
  */
 export async function checkForUpdates() {
-  if (!isTauriDesktop) return null;
+  log('checkForUpdates() called');
+
+  if (!isTauriDesktop) {
+    log('skipped: not a Tauri desktop build');
+    return null;
+  }
 
   const now = Date.now();
-  if (now - _lastCheckTime < MIN_CHECK_INTERVAL_MS) {
-    return null; // Rate-limited
+  const sinceLast = now - _lastCheckTime;
+  if (sinceLast < MIN_CHECK_INTERVAL_MS) {
+    log(
+      `rate-limited: last check was ${Math.round(sinceLast / 1000)}s ago ` +
+        `(min interval ${MIN_CHECK_INTERVAL_MS / 1000}s)`,
+    );
+    return null;
   }
   _lastCheckTime = now;
 
   const mod = await ensureUpdater();
-  if (!mod) return null;
+  if (!mod) {
+    log('skipped: plugin-updater module unavailable');
+    return null;
+  }
 
   try {
+    log('calling mod.check() — this issues an HTTP GET from the Rust backend');
     const update = await mod.check();
-    if (!update) return null;
+    log('mod.check() returned', {
+      isNull: update == null,
+      available: update?.available,
+      version: update?.version,
+      currentVersion: update?.currentVersion,
+      date: update?.date,
+    });
 
-    // Validate the version string from the server
+    if (!update) {
+      log('no update returned (server said up-to-date or returned nothing)');
+      return null;
+    }
+
     if (update.version && !isValidVersion(update.version)) {
-      console.warn('[updater-bridge] Invalid version string from server:', update.version);
+      warn('invalid version string from server:', update.version);
       return null;
     }
 
     const archInfo = await getArchInfo();
+    log('arch/platform detected:', archInfo);
 
     return {
       available: update.available,
@@ -101,7 +134,7 @@ export async function checkForUpdates() {
       _update: update, // Internal handle, not serialisable
     };
   } catch (err) {
-    console.warn('[updater-bridge] check failed:', err);
+    warn('mod.check() threw:', err?.message || err);
     return null;
   }
 }
@@ -164,17 +197,28 @@ export async function downloadAndInstall(updateInfo, onProgress) {
   try {
     let downloaded = 0;
     let contentLength = 0;
+    let lastLoggedPct = -10;
+
+    log('downloadAndInstall() starting for version', updateInfo.version);
 
     await updateInfo._update.downloadAndInstall((event) => {
       if (event.event === 'Started') {
         contentLength = event.data.contentLength || 0;
-        // Sanity check: reject absurdly large updates (> 500 MB)
+        log(`download started: ${contentLength} bytes`);
         if (contentLength > 500 * 1024 * 1024) {
-          console.warn('[updater-bridge] Update too large:', contentLength);
+          warn('update too large — aborting:', contentLength);
           return;
         }
       } else if (event.event === 'Progress') {
         downloaded += event.data.chunkLength || 0;
+        // Throttle progress logs to every ~10% so logs stay readable.
+        if (contentLength) {
+          const pct = Math.floor((downloaded / contentLength) * 100);
+          if (pct - lastLoggedPct >= 10) {
+            log(`download progress: ${pct}%`);
+            lastLoggedPct = pct;
+          }
+        }
         if (onProgress && typeof onProgress === 'function') {
           onProgress({
             downloaded: Math.min(downloaded, contentLength || downloaded),
@@ -182,6 +226,7 @@ export async function downloadAndInstall(updateInfo, onProgress) {
           });
         }
       } else if (event.event === 'Finished') {
+        log('download finished — install + relaunch starting');
         if (onProgress && typeof onProgress === 'function') {
           onProgress({ downloaded: contentLength, contentLength });
         }
@@ -197,10 +242,10 @@ export async function downloadAndInstall(updateInfo, onProgress) {
           'Could not install the update because the app location is not writable. Try reinstalling the app or running with administrator permissions.',
       );
       friendly.code = 'BAD_INSTALL_LOCATION';
-      console.error('[updater-bridge] install failed (bad location):', err);
+      warn('install failed (bad location):', err);
       throw friendly;
     }
-    console.error('[updater-bridge] download/install failed:', err);
+    warn('downloadAndInstall failed:', err);
     throw err;
   }
 }
@@ -264,32 +309,50 @@ let _autoCheckCallback = null;
  * @param {object} [options.wsClient] - WebSocket client to subscribe to newRelease events
  */
 export async function initAutoUpdater(options = {}) {
-  if (!isTauriDesktop) return;
+  if (!isTauriDesktop) {
+    log('initAutoUpdater: not a Tauri desktop build, no-op');
+    return;
+  }
 
   const { onUpdateAvailable, onProgress, intervalMs = 60 * 60 * 1000, wsClient } = options;
 
-  // Enforce minimum interval of 5 minutes
   const safeInterval = Math.max(intervalMs, MIN_CHECK_INTERVAL_MS);
+  log('initAutoUpdater: starting', {
+    intervalMs: safeInterval,
+    hasOnUpdateAvailable: typeof onUpdateAvailable === 'function',
+    hasOnProgress: typeof onProgress === 'function',
+    hasOnError: typeof options.onError === 'function',
+    hasWsClient: !!wsClient,
+  });
 
   async function doCheck() {
     try {
       const info = await checkForUpdates();
-      if (!info?.available) return;
+      if (!info?.available) {
+        log('doCheck: no update available');
+        return;
+      }
+
+      log(`doCheck: update available → v${info.version} (current v${info.currentVersion})`);
 
       let shouldInstall = true;
       if (onUpdateAvailable && typeof onUpdateAvailable === 'function') {
         shouldInstall = await onUpdateAvailable(info);
+        log('onUpdateAvailable callback returned', shouldInstall);
+      } else {
+        log('no onUpdateAvailable callback — will auto-install silently');
       }
 
       if (shouldInstall) {
         await downloadAndInstall(info, onProgress);
+      } else {
+        log('install declined by caller');
       }
     } catch (err) {
-      // Suppress repeated install-location warnings — only log once per session
       if (err?.code === 'BAD_INSTALL_LOCATION') {
         if (!_loggedLocationIssue) {
           _loggedLocationIssue = true;
-          console.warn('[updater-bridge]', err.message);
+          warn(err.message);
           if (typeof options.onError === 'function') {
             try {
               options.onError(err);
@@ -300,7 +363,7 @@ export async function initAutoUpdater(options = {}) {
         }
         return;
       }
-      console.warn('[updater-bridge] Auto-update check failed:', err);
+      warn('auto-update check failed:', err);
     }
   }
 
