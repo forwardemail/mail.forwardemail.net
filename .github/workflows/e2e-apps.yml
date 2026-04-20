@@ -1,22 +1,6 @@
 name: E2E Tests (Apps)
 
 on:
-  # Disabled automatic triggers until Tauri E2E tests are ready.
-  # Re-enable push/pull_request triggers when desktop/mobile E2E is set up.
-  # push:
-  #   branches: [main, develop]
-  #   paths:
-  #     - 'src-tauri/**'
-  #     - 'src/**'
-  #     - 'tests/e2e/**'
-  #     - 'package.json'
-  # pull_request:
-  #   branches: [main]
-  #   paths:
-  #     - 'src-tauri/**'
-  #     - 'src/**'
-  #     - 'tests/e2e/**'
-  #     - 'package.json'
   workflow_dispatch:
 
 # Minimal permissions for E2E tests
@@ -68,7 +52,7 @@ jobs:
       - name: Install Linux dependencies
         if: matrix.platform == 'ubuntu-22.04'
         run: |
-          sudo apt-get update
+          for i in 1 2 3; do sudo apt-get update && break || sleep $((i*5)); done
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev \
             libappindicator3-dev \

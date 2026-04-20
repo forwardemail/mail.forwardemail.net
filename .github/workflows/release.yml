@@ -250,7 +250,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    environment: production
+    environment: release
     env:
       R2_BUCKET: ${{ vars.R2_BUCKET }}
     steps:

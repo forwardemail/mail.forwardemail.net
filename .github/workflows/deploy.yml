@@ -20,7 +20,7 @@ jobs:
     permissions:
       contents: read
     # Use a deployment environment for secret isolation
-    environment: production
+    environment: release
 
     steps:
       - name: Checkout

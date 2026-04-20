@@ -63,7 +63,7 @@ jobs:
       - name: Install Linux dependencies
         if: matrix.platform == 'ubuntu-22.04'
         run: |
-          sudo apt-get update
+          for i in 1 2 3; do sudo apt-get update && break || sleep $((i*5)); done
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev \
             librsvg2-dev \

@@ -58,7 +58,7 @@ jobs:
 
       - name: Install Linux dependencies
         run: |
-          sudo apt-get update
+          for i in 1 2 3; do sudo apt-get update && break || sleep $((i*5)); done
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev \
             libappindicator3-dev \
@@ -192,7 +192,7 @@ jobs:
           rm -f /tmp/keystore.jks
 
   ios:
-    runs-on: macos-14
+    runs-on: macos-15
     name: Release iOS (signed IPA)
     # Use the 'release' environment for scoped secrets
     environment: release
