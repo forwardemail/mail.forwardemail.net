@@ -94,7 +94,8 @@ jobs:
             libssl-dev \
             libgtk-3-dev \
             libayatana-appindicator3-dev \
-            libfuse2
+            libfuse2 \
+            xdg-utils
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
