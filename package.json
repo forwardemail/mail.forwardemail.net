@@ -125,7 +125,7 @@
     "autoprefixer": "^10.4.23",
     "emoji-picker-element-data": "^1",
     "eslint": "^9.10.0",
-    "eslint-config-prettier": "^9.1.0",
+    "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-svelte": "^2.46.0",
     "fake-indexeddb": "6.2.5",
     "globals": "^14.0.0",
