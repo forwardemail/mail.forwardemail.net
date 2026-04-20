@@ -1114,6 +1114,20 @@
       return;
     }
 
+    const checkResult = await unlockPgpKey({
+      keyName: name,
+      keyValue: value,
+      checkOnly: true,
+    });
+    if (!checkResult?.success && checkResult?.needsPassphrase === false) {
+      setError(
+        /no secret key packet found/i.test(checkResult?.error || '')
+          ? 'Please provide a PGP private key, not a public key.'
+          : checkResult?.error || 'Please provide a valid PGP private key.',
+      );
+      return;
+    }
+
     if (passphrase) {
       const unlockResult = await unlockPgpKey({
         keyName: name,

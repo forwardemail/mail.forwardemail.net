@@ -1802,6 +1802,8 @@ async function tryDecrypt(
     return { success: false };
   }
 
+  let lastUnlockError: string | undefined;
+
   for (const key of keys) {
     let passphrase = passphraseCache.get(key.name);
     if (!passphrase) {
@@ -1820,8 +1822,6 @@ async function tryDecrypt(
           keyValue: key.value,
           checkOnly: true,
         });
-        needsPassphrase = checkResult.needsPassphrase !== false;
-        keyNeedsPassphraseCache.set(key.name, needsPassphrase);
 
         if (checkResult.success && checkResult.alreadyUnlocked) {
           debugLog(`[PGP] Key "${key.name}" is unprotected, unlocked without passphrase`);
@@ -1830,6 +1830,18 @@ async function tryDecrypt(
             keyValue: key.value,
             checkOnly: false,
           });
+          continue;
+        }
+
+        needsPassphrase = checkResult?.needsPassphrase !== false;
+        keyNeedsPassphraseCache.set(key.name, needsPassphrase);
+
+        if (!needsPassphrase && checkResult?.success === false) {
+          clearSavedPassphrase(key.name);
+          lastUnlockError =
+            checkResult?.error ||
+            `Stored PGP key "${key.name}" is not a usable private key. Replace it in Settings.`;
+          debugWarn(`[PGP] Key "${key.name}" is not a usable private key:`, lastUnlockError);
           continue;
         }
       } catch {
@@ -1878,6 +1890,9 @@ async function tryDecrypt(
         }
       }
 
+      let retryableFailure = false;
+      let unlockError = '';
+
       try {
         const result = await unlockPgpKey({
           keyName: key.name,
@@ -1894,20 +1909,34 @@ async function tryDecrypt(
           break;
         }
 
-        debugWarn(`[PGP] [WORKER] Unlock rejected for key "${key.name}"`);
+        unlockError =
+          result?.error ||
+          `PGP key "${key.name}" could not be unlocked with the provided passphrase.`;
+        retryableFailure = result?.retryable !== false && result?.needsPassphrase !== false;
+        if (!retryableFailure) {
+          keyNeedsPassphraseCache.set(key.name, false);
+        }
+        debugWarn(`[PGP] [WORKER] Unlock rejected for key "${key.name}":`, unlockError);
       } catch (err) {
+        unlockError = err instanceof Error ? err.message : 'Failed to unlock key';
+        retryableFailure = false;
         debugWarn(`[PGP] [WORKER] Failed to unlock key "${key.name}" in worker:`, err);
       }
 
       clearSavedPassphrase(key.name);
       passphrase = undefined;
+      lastUnlockError = unlockError || lastUnlockError;
 
-      if (!allowPrompt || !passphraseModalRef?.open) {
+      if (!retryableFailure) {
         break;
       }
 
-      if (!promptedThisAttempt) {
-        continue;
+      if (promptedThisAttempt) {
+        break;
+      }
+
+      if (!allowPrompt || !passphraseModalRef?.open) {
+        break;
       }
     }
   }
@@ -1930,15 +1959,19 @@ async function tryDecrypt(
         attachments: result.attachments,
       };
     } else {
-      debugWarn('[PGP] [WORKER] Decryption failed:', result.reason, result.message);
+      const failureMessage =
+        lastUnlockError && /no unlocked keys available/i.test(result?.message || '')
+          ? lastUnlockError
+          : result.message;
+      debugWarn('[PGP] [WORKER] Decryption failed:', result.reason, failureMessage);
       return {
         success: false,
         reason: result.reason,
-        message: result.message,
+        message: failureMessage,
         keyCount: result.keyCount,
       };
     }
   } catch {
-    return { success: false };
+    return { success: false, message: lastUnlockError };
   }
 }

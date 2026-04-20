@@ -1119,6 +1119,10 @@ describe('PGP desktop and settings regressions', () => {
     path.resolve(__dirname, '../../src/stores/mailService.ts'),
     'utf8',
   );
+  const syncWorkerSrc = fs.readFileSync(
+    path.resolve(__dirname, '../../src/workers/sync.worker.ts'),
+    'utf8',
+  );
 
   it('should keep Add PGP Key navigation inside the desktop app', () => {
     expect(mailboxSrc).toContain("onclick={() => navigate('/mailbox/settings#accounts')}");
@@ -1127,6 +1131,8 @@ describe('PGP desktop and settings regressions', () => {
 
   it('should let settings capture an optional private-key passphrase at save time', () => {
     expect(settingsSrc).toContain('Private key passphrase (optional)');
+    expect(settingsSrc).toContain('checkOnly: true');
+    expect(settingsSrc).toContain('Please provide a PGP private key, not a public key.');
     expect(settingsSrc).toContain('unlockPgpKey({');
     expect(settingsSrc).toContain('Encryption key saved and unlocked locally.');
   });
@@ -1149,5 +1155,14 @@ describe('PGP desktop and settings regressions', () => {
     expect(mailServiceSrc).toContain('while (needsPassphrase)');
     expect(mailServiceSrc).toContain('rememberPassphrase = res?.remember !== false;');
     expect(mailServiceSrc).toContain('if (passphrase && rememberPassphrase) {');
+    expect(mailServiceSrc).toContain('if (promptedThisAttempt) {');
+    expect(mailServiceSrc).toContain('lastUnlockError && /no unlocked keys available/i.test');
+  });
+
+  it('should skip invalid stored keys instead of treating them like retryable passphrase failures', () => {
+    expect(syncWorkerSrc).toContain('Skipping invalid PGP private key');
+    expect(syncWorkerSrc).toContain('function isRetryablePgpUnlockError');
+    expect(syncWorkerSrc).toContain('invalidKey: true');
+    expect(syncWorkerSrc).toContain('needsPassphrase: retryable');
   });
 });

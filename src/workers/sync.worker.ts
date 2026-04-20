@@ -1329,7 +1329,18 @@ async function updatePgpKeys(keys = [], passphrases = {}) {
   const unlocked = [];
   for (const key of keys) {
     if (!key?.value) continue;
-    const privateKey = await openpgp.readPrivateKey({ armoredKey: key.value });
+
+    let privateKey;
+    try {
+      privateKey = await openpgp.readPrivateKey({ armoredKey: key.value });
+    } catch (err) {
+      console.warn('[sync.worker] Skipping invalid PGP private key', key?.name, err?.message);
+      if (key?.name) {
+        delete pgpPassphrases[key.name];
+      }
+      continue;
+    }
+
     if (!privateKey.isDecrypted()) {
       const passphrase = pgpPassphrases[key.name];
       if (passphrase) {
@@ -1351,6 +1362,12 @@ async function updatePgpKeys(keys = [], passphrases = {}) {
   unlockedPgpKeys = unlocked;
 }
 
+function isRetryablePgpUnlockError(errorMessage = '') {
+  return /passphrase|password|session key decryption failed|checksum/i.test(
+    String(errorMessage || ''),
+  );
+}
+
 /**
  * Unlock a specific PGP key with a passphrase from the main thread
  * This is called when the user provides a passphrase via the modal
@@ -1363,16 +1380,30 @@ async function unlockPgpKeyWithPassphrase({
   remember = false,
   checkOnly = false,
 }) {
+  if (!keyValue) {
+    return {
+      success: false,
+      needsPassphrase: false,
+      retryable: false,
+      invalidKey: true,
+      error: 'Missing key value',
+    };
+  }
+
+  let privateKey;
   try {
-    if (!keyValue) {
-      return {
-        success: false,
-        error: 'Missing key value',
-      };
-    }
+    privateKey = await openpgp.readPrivateKey({ armoredKey: keyValue });
+  } catch (error) {
+    return {
+      success: false,
+      needsPassphrase: false,
+      retryable: false,
+      invalidKey: true,
+      error: error?.message || 'That is not a valid PGP private key.',
+    };
+  }
 
-    const privateKey = await openpgp.readPrivateKey({ armoredKey: keyValue });
-
+  try {
     if (privateKey.isDecrypted()) {
       // Key is already unlocked (unprotected key) - no passphrase needed
       if (!checkOnly) {
@@ -1389,13 +1420,15 @@ async function unlockPgpKeyWithPassphrase({
     // Key is encrypted and needs a passphrase
     if (checkOnly) {
       // Just checking status, don't try to decrypt
-      return { success: false, needsPassphrase: true };
+      return { success: false, needsPassphrase: true, retryable: true, invalidKey: false };
     }
 
     if (!passphrase) {
       return {
         success: false,
         needsPassphrase: true,
+        retryable: true,
+        invalidKey: false,
         error: 'Key requires passphrase',
       };
     }
@@ -1427,10 +1460,14 @@ async function unlockPgpKeyWithPassphrase({
       needsPassphrase: false,
     };
   } catch (error) {
+    const errorMessage = error?.message || 'Failed to unlock key';
+    const retryable = isRetryablePgpUnlockError(errorMessage);
     return {
       success: false,
-      needsPassphrase: true,
-      error: error?.message || 'Failed to unlock key',
+      needsPassphrase: retryable,
+      retryable,
+      invalidKey: !retryable,
+      error: errorMessage,
     };
   }
 }
