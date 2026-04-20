@@ -93,7 +93,7 @@
     "hotkeys-js": "4.0.0-beta.7",
     "ky": "^1.14.1",
     "libsodium-wrappers": "^0.7.16",
-    "lucide-svelte": "^0.562.0",
+    "lucide-svelte": "^1.0.1",
     "marked": "^12.0.2",
     "msgpackr": "^1.11.0",
     "openpgp": "^6.2.2",
