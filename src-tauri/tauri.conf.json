@@ -27,7 +27,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self' tauri: asset:; script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self' tauri: ipc: http://ipc.localhost https://ipc.localhost http://tauri.localhost https://tauri.localhost https://api.forwardemail.net wss://api.forwardemail.net https://api.github.com; img-src 'self' data: blob: https: http: tauri: asset:; font-src 'self' data: tauri: asset:; worker-src 'self' blob:; object-src 'none'; frame-src 'self' blob: data: tauri:",
+      "csp": "default-src 'self' tauri: asset:; script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self' tauri: ipc: http://ipc.localhost https://ipc.localhost http://tauri.localhost https://tauri.localhost https://api.forwardemail.net wss://api.forwardemail.net https://api.github.com https://api.anthropic.com; img-src 'self' data: blob: https: http: tauri: asset:; font-src 'self' data: tauri: asset:; worker-src 'self' blob:; object-src 'none'; frame-src 'self' blob: data: tauri:",
       "freezePrototype": false
     }
   },

@@ -62,6 +62,7 @@
   import { getSyncSettings } from '../utils/sync-settings.js';
   import { parseMailto, mailtoToPrefill } from '../utils/mailto';
   import MailtoPrompt from './components/MailtoPrompt.svelte';
+  import AskAIPanel from './components/ai/AskAIPanel.svelte';
   import { isTauriMobile } from '../utils/platform.js';
   import { openExternalUrl } from '../utils/external-links.js';
   import { onBackButton, triggerHaptic } from '../utils/tauri-bridge.js';
@@ -8738,6 +8739,9 @@
 {#if $selectedFolder === 'INBOX'}
   <MailtoPrompt account={$currentAccount || ''} />
 {/if}
+
+<!-- Ask AI floating panel (Phase 1 smoke test) -->
+<AskAIPanel {mailboxView} />
 
 <style>
   /* Shared list layout tokens */

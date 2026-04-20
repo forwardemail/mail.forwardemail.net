@@ -8,6 +8,7 @@
   import { unregisterServiceWorker } from '../utils/sw-cache.js';
   import AppLockSettings from './AppLockSettings.svelte';
   import MailtoSettings from './components/MailtoSettings.svelte';
+  import AISettings from './components/ai/AISettings.svelte';
   import { forceDeleteAllDatabases } from '../utils/db-recovery.js';
   import { closeDatabase, terminateDbWorker } from '../utils/db-worker-client.js';
   import { deactivateDemoMode } from '../utils/demo-mode.js';
@@ -1433,6 +1434,7 @@
     { id: 'folders', label: 'Folders & Labels' },
     { id: 'calendar', label: 'Calendar' },
     { id: 'search', label: 'Search' },
+    { id: 'ai', label: 'AI (preview)' },
     { id: 'advanced', label: 'Advanced' },
     { id: 'shortcuts', label: 'Keyboard Shortcuts' },
     { id: 'help', label: 'About & Help' },
@@ -2272,6 +2274,10 @@
             </Card.Content>
           {/if}
         </Card.Root>
+      {/if}
+
+      {#if section === 'ai'}
+        <AISettings />
       {/if}
 
       {#if section === 'advanced'}

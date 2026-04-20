@@ -189,3 +189,158 @@ describe('SCHEMA_VERSION consistency (tripwire)', () => {
     expect(swVersion).toBe(constants.SCHEMA_VERSION);
   });
 });
+
+// Piggybacks on the existing TestDatabase (meta is already declared). These
+// cases lock down the design decisions captured in docs/ai-implementation-plan.md:
+//   - Risk #1: AI state piggybacks on the meta table via ai:* key prefixes.
+//     Prefix scans must return only the AI rows and must not disturb the hot
+//     paths (mutation-queue, contact-cache, attachment-cache) that share meta.
+//   - Spike (risk #4): Phase 1 DSL fields compile to the existing query plan
+//     (compound-index candidate fetch + post-filter). These cases prove the
+//     assumed Dexie behavior (e.g. that `labels` is NOT a multi-entry index)
+//     so the plan won't silently break if schema or Dexie semantics change.
+describe('AI meta-table key-prefix isolation (risk #1 tripwire)', () => {
+  const AUDIT_KEY = (day: string) => `ai:audit:${day}`;
+  const PROVIDER_KEY = (id: string) => `ai:provider:${id}`;
+
+  it('ai:audit prefix scan returns only AI audit rows', async () => {
+    // Seed a mix that mirrors production: mutation queue, contact cache,
+    // attachment cache manifest, saved searches, and AI audit/provider rows.
+    await db.meta.bulkPut([
+      { key: 'mutation_queue_user@example.com', value: [] },
+      { key: 'contacts_user@example.com', value: { contacts: [] } },
+      { key: 'att_cache_manifest', value: { totalBytes: 0, entries: [] } },
+      { key: 'saved_search_user@example.com_unread', value: { name: 'unread' } },
+      { key: PROVIDER_KEY('anthropic'), value: { id: 'anthropic' } },
+      { key: PROVIDER_KEY('ollama'), value: { id: 'ollama' } },
+      { key: AUDIT_KEY('2026-04-17'), value: [{ feature: 'smart_search' }] },
+      { key: AUDIT_KEY('2026-04-18'), value: [{ feature: 'summarize' }] },
+      { key: AUDIT_KEY('2026-04-19'), value: [{ feature: 'smart_search' }] },
+    ]);
+
+    const auditRows = await db.meta.where('key').startsWith('ai:audit:').toArray();
+    expect(auditRows.map((r) => r.key).sort()).toEqual([
+      AUDIT_KEY('2026-04-17'),
+      AUDIT_KEY('2026-04-18'),
+      AUDIT_KEY('2026-04-19'),
+    ]);
+
+    const providerRows = await db.meta.where('key').startsWith('ai:provider:').toArray();
+    expect(providerRows.map((r) => r.key).sort()).toEqual([
+      PROVIDER_KEY('anthropic'),
+      PROVIDER_KEY('ollama'),
+    ]);
+
+    // Umbrella prefix catches everything AI-scoped (useful for wipe-on-logout).
+    const allAi = await db.meta.where('key').startsWith('ai:').toArray();
+    expect(allAi).toHaveLength(5);
+  });
+
+  it('does not disturb unrelated hot-path keys (mutation-queue, contact-cache)', async () => {
+    const hotPaths = [
+      { key: 'mutation_queue_user@example.com', value: [{ op: 'toggleStar' }] },
+      { key: 'contacts_user@example.com', value: { contacts: ['a'] } },
+      { key: 'att_cache_manifest', value: { totalBytes: 100, entries: [] } },
+    ];
+    await db.meta.bulkPut(hotPaths);
+
+    // Heavy AI write activity.
+    for (let day = 1; day <= 30; day += 1) {
+      const iso = `2026-03-${String(day).padStart(2, '0')}`;
+      await db.meta.put({ key: AUDIT_KEY(iso), value: Array.from({ length: 50 }) });
+    }
+
+    for (const row of hotPaths) {
+      const after = await db.meta.get(row.key);
+      expect(after?.value).toEqual(row.value);
+    }
+  });
+
+  it('delete via prefix scan cleans up AI rows only (wipe-on-logout contract)', async () => {
+    await db.meta.bulkPut([
+      { key: 'mutation_queue_user@example.com', value: [] },
+      { key: PROVIDER_KEY('anthropic'), value: {} },
+      { key: AUDIT_KEY('2026-04-19'), value: [] },
+    ]);
+
+    const aiKeys = (await db.meta.where('key').startsWith('ai:').toArray()).map((r) => r.key);
+    await db.meta.bulkDelete(aiKeys);
+
+    expect(await db.meta.get('mutation_queue_user@example.com')).toBeDefined();
+    expect(await db.meta.get(PROVIDER_KEY('anthropic'))).toBeUndefined();
+    expect(await db.meta.get(AUDIT_KEY('2026-04-19'))).toBeUndefined();
+  });
+});
+
+describe('DSL → Dexie query plan (risk #4 spike lock-down)', () => {
+  // These tests encode the assumptions in docs/ai-implementation-plan.md
+  // Appendix A. If Dexie semantics change, compile-flexsearch / search.worker
+  // assumptions break silently — this suite catches that.
+
+  it('candidate fetch via [account+folder+date] range works as documented', async () => {
+    await db.messages.bulkPut([
+      { account: 'a', id: '1', folder: 'INBOX', date: 1000 },
+      { account: 'a', id: '2', folder: 'INBOX', date: 2000 },
+      { account: 'a', id: '3', folder: 'INBOX', date: 3000 },
+      { account: 'a', id: '4', folder: 'Archive', date: 2500 },
+    ]);
+
+    const after = 1500;
+    const before = 2500;
+    const results = await db.messages
+      .where('[account+folder+date]')
+      .between(['a', 'INBOX', after], ['a', 'INBOX', before], true, true)
+      .toArray();
+
+    expect(results.map((m) => m.id).sort()).toEqual(['2']);
+  });
+
+  it('labels index is NOT multi-entry — confirms the post-filter path', async () => {
+    // The schema declares `labels` without the `*` prefix, so Dexie indexes
+    // the whole array as the key, not each element. This test documents that
+    // behavior: querying `labels = 'Work'` does NOT find messages whose
+    // `labels` array contains 'Work'. compile-flexsearch routes labels_any
+    // through post-filter for exactly this reason.
+    //
+    // Mirrors the relevant subset of the production schema.
+    interface LabelMessage {
+      account: string;
+      id: string;
+      folder?: string;
+      labels?: string[];
+    }
+    class LabelDb extends Dexie {
+      msgs!: Table<LabelMessage>;
+      constructor(name: string) {
+        super(name);
+        this.version(1).stores({ msgs: '[account+id],id,account,folder,labels' });
+      }
+    }
+
+    const labelDb = new LabelDb(`label-test-${Math.random().toString(36).slice(2)}`);
+    await labelDb.open();
+
+    try {
+      await labelDb.msgs.bulkPut([
+        { account: 'a', id: '1', folder: 'INBOX', labels: ['Work', 'Urgent'] },
+        { account: 'a', id: '2', folder: 'INBOX', labels: ['Work'] },
+        { account: 'a', id: '3', folder: 'INBOX', labels: [] },
+      ]);
+
+      // Direct index query does not find 'Work' inside the arrays.
+      const byIndex = await labelDb.msgs.where('labels').equals('Work').toArray();
+      expect(byIndex).toHaveLength(0);
+
+      // Post-filter is the correct path.
+      const candidates = await labelDb.msgs
+        .where('[account+id]')
+        .between(['a', Dexie.minKey], ['a', Dexie.maxKey])
+        .toArray();
+      const matching = candidates.filter((m) => (m.labels ?? []).includes('Work'));
+      expect(matching.map((m) => m.id).sort()).toEqual(['1', '2']);
+    } finally {
+      labelDb.close();
+      await Dexie.delete(labelDb.name);
+    }
+  });
+});

@@ -96,6 +96,9 @@ const isSensitiveLocalKey = (key) => {
   if (SENSITIVE_LOCAL_KEYS.has(key)) return true;
   if (key.startsWith('pgp_keys_')) return true;
   if (key.startsWith('pgp_passphrases_')) return true;
+  // AI provider API keys (one per configured provider). Auto-encrypted when
+  // app-lock is enabled, same policy as api_key / alias_auth.
+  if (key.startsWith('ai_provider_key_')) return true;
   return false;
 };
 
