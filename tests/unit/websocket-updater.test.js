@@ -18,9 +18,17 @@ vi.mock('../../src/utils/sync-controller', () => ({
 }));
 
 // Mock notification-manager
+const mockConnectNotifications = vi.fn(() => vi.fn());
+const mockRequestNotificationPermission = vi.fn();
 vi.mock('../../src/utils/notification-manager', () => ({
-  connectNotifications: vi.fn(() => vi.fn()),
-  requestNotificationPermission: vi.fn(),
+  connectNotifications: (...args) => mockConnectNotifications(...args),
+  requestNotificationPermission: (...args) => mockRequestNotificationPermission(...args),
+}));
+
+// Mock demo-mode helper
+const mockIsDemoMode = vi.fn(() => false);
+vi.mock('../../src/utils/demo-mode.js', () => ({
+  isDemoMode: (...args) => mockIsDemoMode(...args),
 }));
 
 // Mock settingsStore
@@ -147,6 +155,13 @@ describe('createInboxUpdater', () => {
     mockUpdateFolderUnreadCounts.mockReset();
     mockWsOn.mockClear();
     mockWsConnect.mockClear();
+    mockReleaseOn.mockClear();
+    mockReleaseConnect.mockClear();
+    mockReleaseDestroy.mockClear();
+    mockConnectNotifications.mockClear();
+    mockRequestNotificationPermission.mockClear();
+    mockIsDemoMode.mockReset();
+    mockIsDemoMode.mockReturnValue(false);
     vi.mocked(Local.get).mockReset();
     selectedFolderStore.set('INBOX');
     // Ensure document is visible and online
@@ -192,11 +207,23 @@ describe('createInboxUpdater', () => {
     updater.destroy();
   });
 
-  it('always starts the release watcher', () => {
+  it('always starts the release watcher outside demo mode', () => {
     vi.mocked(Local.get).mockReturnValue(null);
     const updater = createInboxUpdater();
     updater.start();
     expect(mockReleaseConnect).toHaveBeenCalled();
+    updater.destroy();
+  });
+
+  it('skips websocket, release watcher, and notification permission setup in demo mode', () => {
+    setupCredentials();
+    mockIsDemoMode.mockReturnValue(true);
+    const updater = createInboxUpdater();
+    updater.start();
+    expect(mockWsConnect).not.toHaveBeenCalled();
+    expect(mockReleaseConnect).not.toHaveBeenCalled();
+    expect(mockConnectNotifications).not.toHaveBeenCalled();
+    expect(mockRequestNotificationPermission).not.toHaveBeenCalled();
     updater.destroy();
   });
 
@@ -263,6 +290,13 @@ describe('refreshFolder (core sync bug fix)', () => {
     mockInvalidateFolderInMemCache.mockReset();
     mockUpdateFolderUnreadCounts.mockReset();
     mockWsOn.mockClear();
+    mockReleaseOn.mockClear();
+    mockReleaseConnect.mockClear();
+    mockReleaseDestroy.mockClear();
+    mockConnectNotifications.mockClear();
+    mockRequestNotificationPermission.mockClear();
+    mockIsDemoMode.mockReset();
+    mockIsDemoMode.mockReturnValue(false);
     vi.mocked(Local.get).mockReset();
     selectedFolderStore.set('INBOX');
     Object.defineProperty(document, 'visibilityState', {

@@ -123,14 +123,15 @@ const normalizeCharset = (value = '') => {
 const decodeBytes = (bytes, charset) => {
   if (!bytes || !bytes.length) return '';
   const normalized = normalizeCharset(charset);
+  const view = bytes instanceof Uint8Array ? bytes : Uint8Array.from(bytes);
   if (typeof TextDecoder === 'function') {
     try {
-      return new TextDecoder(normalized).decode(bytes);
+      return new TextDecoder(normalized).decode(view);
     } catch {
       // fallback below
     }
   }
-  return String.fromCharCode(...bytes);
+  return String.fromCharCode(...view);
 };
 
 const decodeQEncoded = (input, charset) => {

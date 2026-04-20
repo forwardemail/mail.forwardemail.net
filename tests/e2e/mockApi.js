@@ -99,8 +99,56 @@ export async function mockApi(page, overrides = {}) {
   });
 
   await page.route('**/v1/calendars**', (route) => {
+    const method = route.request().method();
     const url = new URL(route.request().url());
-    return jsonResponse(route, { Result: paginateItems(calendars, url, calendars.length || 50) });
+    const parts = url.pathname.split('/').filter(Boolean);
+    const calendarId = parts[parts.length - 1];
+    const isDetail = parts.length > 2;
+
+    if (method === 'GET' && isDetail && calendarId !== 'calendars') {
+      const calendar = calendars.find((c) => c.id === calendarId);
+      if (!calendar) return jsonResponse(route, { error: 'Calendar not found' }, 404);
+      return jsonResponse(route, { Result: calendar });
+    }
+
+    if (method === 'GET') {
+      return jsonResponse(route, { Result: paginateItems(calendars, url, calendars.length || 50) });
+    }
+
+    if (method === 'POST') {
+      const postData = route.request().postDataJSON();
+      const newCalendar = {
+        id: postData.calendar_id || `calendar-${Date.now()}`,
+        name: postData.name || 'New Calendar',
+        color: postData.color || '#1c7ed6',
+        description: postData.description || '',
+        timezone: postData.timezone || 'UTC',
+        ...postData,
+      };
+      calendars.push(newCalendar);
+      return jsonResponse(route, { Result: newCalendar }, 201);
+    }
+
+    if (method === 'PUT' && isDetail && calendarId !== 'calendars') {
+      const updateData = route.request().postDataJSON();
+      const index = calendars.findIndex((c) => c.id === calendarId);
+      if (index >= 0) {
+        calendars[index] = { ...calendars[index], ...updateData };
+        return jsonResponse(route, { Result: calendars[index] });
+      }
+      return jsonResponse(route, { error: 'Calendar not found' }, 404);
+    }
+
+    if (method === 'DELETE' && isDetail && calendarId !== 'calendars') {
+      const index = calendars.findIndex((c) => c.id === calendarId);
+      if (index >= 0) {
+        calendars.splice(index, 1);
+        return jsonResponse(route, { Result: { success: true } });
+      }
+      return jsonResponse(route, { error: 'Calendar not found' }, 404);
+    }
+
+    return jsonResponse(route, { Result: { success: true } });
   });
   await page.route('**/v1/calendar-events**', (route) => {
     const method = route.request().method();

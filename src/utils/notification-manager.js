@@ -22,8 +22,10 @@ import { WS_EVENTS } from './websocket-client';
 import { isTauri } from './platform.js';
 import { notify, requestPermission } from './notification-bridge.js';
 import { setBadgeCount as tauriBadge } from './tauri-bridge.js';
+import { isDemoMode } from './demo-mode.js';
 import { updateFaviconBadge } from './favicon-badge.js';
 import { Remote } from './remote.js';
+import { decodeMimeHeader } from './mime-utils.js';
 import { extractFromField } from './sync-helpers.ts';
 
 // ── In-app toast reference ─────────────────────────────────────────────────
@@ -78,7 +80,7 @@ function sanitizePlain(value, maxLen) {
  */
 function extractDisplayName(fromStr) {
   if (typeof fromStr !== 'string') return '';
-  const trimmed = fromStr.trim();
+  const trimmed = decodeMimeHeader(fromStr).trim();
   const angleBracket = trimmed.indexOf('<');
   if (angleBracket > 0) {
     const name = trimmed
@@ -108,7 +110,7 @@ function parseEmlHeaders(eml) {
     const match = line.match(/^(From|Subject):\s*(.+)/i);
     if (match) {
       const key = match[1].toLowerCase();
-      if (!result[key]) result[key] = match[2].trim();
+      if (!result[key]) result[key] = decodeMimeHeader(match[2]).trim();
     }
   }
   return result;
@@ -177,6 +179,11 @@ function isDuplicate(tag) {
 let permissionGranted = false;
 
 export async function requestNotificationPermission() {
+  if (isDemoMode()) {
+    permissionGranted = false;
+    return false;
+  }
+
   const result = await requestPermission();
   permissionGranted = result === 'granted';
   return permissionGranted;

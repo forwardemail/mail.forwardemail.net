@@ -886,6 +886,9 @@ if (isTauriDesktop) {
             sentCopyPayload?: Record<string, unknown>;
           }
         | undefined;
+      const preservedSelection = get(selectedMessage);
+      const preservedSelectionId = preservedSelection?.id || null;
+      const preservedFolder = preservedSelection?.folder || get(mailboxStore.state.selectedFolder);
 
       // Clean up local draft record (IDB)
       if (result?.draftId) {
@@ -980,13 +983,31 @@ if (isTauriDesktop) {
             console.warn('[main] Failed to set \\Answered flag:', err);
           }
         }
+
+        try {
+          await mailboxStore.actions.refreshReplyTargets?.({ force: true });
+        } catch (err) {
+          console.warn('[main] Failed to refresh reply targets after send:', err);
+        }
       }
 
       if (result?.archive) {
         const msg = get(selectedMessage);
-        if (msg) mailboxActions.archiveMessage(msg).catch(() => {});
+        if (msg) {
+          await mailboxActions.archiveMessage(msg).catch(() => {});
+        }
+        return;
       }
-      mailboxStore.actions.loadMessages?.();
+
+      await mailboxStore.actions.loadMessages?.();
+      if (preservedSelectionId && get(mailboxStore.state.selectedFolder) === preservedFolder) {
+        const refreshedSelection = get(mailboxStore.state.messages).find(
+          (message) => message?.id === preservedSelectionId,
+        );
+        if (refreshedSelection) {
+          mailboxStore.actions.selectMessage?.(refreshedSelection);
+        }
+      }
     });
   });
 } else {
@@ -1010,6 +1031,7 @@ if (isTauriDesktop) {
         body: prefill?.body || get(messageBody),
         bodyLoading: prefill?.bodyLoading,
         inReplyTo: prefill?.inReplyTo,
+        references: prefill?.references,
       }),
     updateReplyBody: (body, options) => composeApi.updateReplyBody?.(body, options),
     toList: (list) => composeApi.setToList(list),

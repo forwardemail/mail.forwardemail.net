@@ -1,6 +1,13 @@
-/**
+/*
  * Email address parsing and formatting utilities
  */
+
+import { decodeMimeHeader } from './mime-utils.js';
+
+const decodeDisplayText = (value: unknown): string => {
+  if (typeof value !== 'string') return '';
+  return decodeMimeHeader(value).trim();
+};
 
 export interface AddressObject {
   name?: string;
@@ -243,7 +250,7 @@ export const getReplyToList = (
 
 export const toDisplayAddress = (addr: AddressInput): string => {
   if (!addr) return '';
-  if (typeof addr === 'string') return addr;
+  if (typeof addr === 'string') return decodeDisplayText(addr);
   if (Array.isArray(addr)) {
     if (addr[0]) return toDisplayAddress(addr[0]);
     return '';
@@ -251,16 +258,16 @@ export const toDisplayAddress = (addr: AddressInput): string => {
   const obj = addr as AddressObject;
   if (Array.isArray(obj.value) && obj.value[0])
     return toDisplayAddress(obj.value[0] as AddressObject);
-  const name = obj.name || obj.Name || obj.display || obj.Display || '';
+  const name = decodeDisplayText(obj.name || obj.Name || obj.display || obj.Display || '');
   const address = obj.address || obj.Address || obj.email || obj.Email || '';
   if (name && address) {
     return `${name} <${address}>`;
   }
   if (name) return name;
   if (address) return address;
-  if (typeof obj.value === 'string') return obj.value;
-  return (
-    obj.address || obj.email || (typeof obj.value === 'string' ? obj.value : '') || obj.text || ''
+  if (typeof obj.value === 'string') return decodeDisplayText(obj.value);
+  return decodeDisplayText(
+    obj.address || obj.email || (typeof obj.value === 'string' ? obj.value : '') || obj.text || '',
   );
 };
 
@@ -332,7 +339,7 @@ export const dedupeAddresses = (list: (string | AddressObject)[] = []): string[]
 export const extractDisplayName = (from: AddressInput): string => {
   const normalizeFrom = (value: unknown): string => {
     if (!value) return '';
-    if (typeof value === 'string') return value;
+    if (typeof value === 'string') return decodeDisplayText(value);
     if (Array.isArray(value)) {
       for (const item of value) {
         const candidate = normalizeFrom(item);
@@ -343,27 +350,28 @@ export const extractDisplayName = (from: AddressInput): string => {
     if (typeof value === 'object' && value !== null) {
       const obj = value as AddressObject;
       if (obj.Display) {
-        return obj.Email ? `${obj.Display} <${obj.Email}>` : obj.Display;
+        const display = decodeDisplayText(obj.Display);
+        return obj.Email ? `${display} <${obj.Email}>` : display;
       }
       if (obj.Name || obj.Address || obj.Email) {
-        const name = obj.Name || '';
+        const name = decodeDisplayText(obj.Name || '');
         const address = obj.Address || obj.Email || '';
         if (name && address) return `${name} <${address}>`;
         return name || address || '';
       }
-      if (obj.text) return obj.text;
+      if (obj.text) return decodeDisplayText(obj.text);
       if (Array.isArray(obj.value) && obj.value[0]) {
         return normalizeFrom(obj.value[0]);
       }
       if (obj.name || obj.address || obj.email || obj.Name || obj.Address || obj.Email) {
-        const name = obj.name || obj.Name || '';
+        const name = decodeDisplayText(obj.name || obj.Name || '');
         const address = obj.address || obj.Address || obj.email || obj.Email || '';
         if (name && address) {
           return `${name} <${address}>`;
         }
         return name || address || '';
       }
-      if (typeof obj.value === 'string') return obj.value;
+      if (typeof obj.value === 'string') return decodeDisplayText(obj.value);
     }
     return '';
   };

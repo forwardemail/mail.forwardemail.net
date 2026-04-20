@@ -24,6 +24,7 @@
   let loginLockoutUntil = 0;
   const MAX_LOGIN_ATTEMPTS = 5;
   const LOGIN_LOCKOUT_MS = 30_000; // 30 seconds
+  const LOGIN_FOLDERS_TIMEOUT_MS = 120_000;
 
   // Check if we're in "add account" mode via URL parameter
   const getIsAddingAccount = () =>
@@ -223,7 +224,12 @@
       const result = await Remote.request(
         'Folders',
         {},
-        { method: 'GET', skipAuth: true, headers: { Authorization: authHeader } },
+        {
+          method: 'GET',
+          skipAuth: true,
+          headers: { Authorization: authHeader },
+          timeout: LOGIN_FOLDERS_TIMEOUT_MS,
+        },
       );
 
       if (!result) {
@@ -262,7 +268,12 @@
         loginAttempts = 0;
         submitError = `Too many failed attempts. Please try again in ${LOGIN_LOCKOUT_MS / 1000} seconds.`;
       } else {
-        submitError = (error as Error)?.message || 'Login failed. Please try again.';
+        if ((error as { status?: number })?.status === 408) {
+          submitError =
+            'Sign in timed out while loading folders for this mailbox. Please try again.';
+        } else {
+          submitError = (error as Error)?.message || 'Login failed. Please try again.';
+        }
         if ((error as { description?: string })?.description) {
           submitErrorAdditional = (error as { description: string }).description;
         }

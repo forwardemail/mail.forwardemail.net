@@ -116,7 +116,7 @@ export const Remote = {
       method,
       headers,
       signal,
-      timeout: TIMEOUT_BY_ACTION[action] || TIMEOUT_BY_ACTION.default,
+      timeout: options.timeout ?? TIMEOUT_BY_ACTION[action] ?? TIMEOUT_BY_ACTION.default,
       hooks: {
         afterResponse: [
           async (request, options, response) => {
@@ -271,8 +271,10 @@ export const Remote = {
       ContactsUpdate: { path: '/v1/contacts', method: 'PUT' },
       ContactsDelete: { path: '/v1/contacts', method: 'DELETE' },
       Calendars: { path: '/v1/calendars', method: 'GET' },
-      Calendar: { path: '/v1/calendars', method: 'GET' },
-      CalendarUpdate: { path: '/v1/calendars', method: 'PUT' },
+      Calendar: { path: '/v1/calendars/:id', method: 'GET' },
+      CalendarCreate: { path: '/v1/calendars', method: 'POST' },
+      CalendarUpdate: { path: '/v1/calendars/:id', method: 'PUT' },
+      CalendarDelete: { path: '/v1/calendars/:id', method: 'DELETE' },
       CalendarEvents: { path: '/v1/calendar-events', method: 'GET' },
       CalendarEventCreate: { path: '/v1/calendar-events', method: 'POST' },
       CalendarEventUpdate: { path: '/v1/calendar-events', method: 'PUT' },

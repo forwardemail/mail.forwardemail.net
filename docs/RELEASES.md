@@ -6,25 +6,20 @@ This document outlines the process for creating releases for the web, desktop, a
 
 All platforms share a single version. Running `pnpm release` bumps `package.json`, `tauri.conf.json`, and `Cargo.toml` together via the `version` lifecycle hook.
 
-### Unified Release: `v*` tag
+### Desktop Release: `desktop-v*` tag
 
-Triggers [`release.yml`](../.github/workflows/release.yml), which orchestrates:
+The desktop release workflow is [`release-desktop.yml`](../.github/workflows/release-desktop.yml). It creates or updates a **draft** GitHub Release and uploads the Tauri desktop artifacts for the full desktop matrix.
 
-1. Creates a **draft** GitHub Release
-2. Builds desktop binaries for macOS (arm64 + x64), Windows (x64), Linux (x64)
-3. Builds mobile: Android APK + AAB (signed) and iOS IPA (signed + uploaded to TestFlight), in parallel with desktop
-4. Generates `SHA256SUMS.txt` for all artifacts (desktop + mobile)
-5. **Publishing** the draft triggers [`deploy.yml`](../.github/workflows/deploy.yml) → deploys webmail to Cloudflare R2
+| Platform | Architecture | Artifacts                                                |
+| -------- | ------------ | -------------------------------------------------------- |
+| macOS    | arm64        | `.dmg`, updater archive + signature                      |
+| macOS    | x64          | `.dmg`, updater archive + signature                      |
+| Windows  | x64          | `.msi`, `-setup.exe`, updater archive + signature        |
+| Windows  | arm64        | `-setup.exe`, updater archive + signature                |
+| Linux    | x64          | `.AppImage`, `.deb`, `.rpm`, updater archive + signature |
+| Linux    | arm64        | `.AppImage`, `.deb`, `.rpm`, updater archive + signature |
 
-Mobile build failures do not block the desktop release or publishing. The iOS job additionally skips gracefully when TestFlight secrets aren't configured — see [SECRETS.md](./SECRETS.md#ios).
-
-```bash
-pnpm release          # np bumps version across all files, creates v* tag, pushes
-```
-
-### Desktop-Only Hotfix: `desktop-v*` tag (optional)
-
-For hotfixes that only affect the desktop app without a webmail deploy:
+The workflow uses native GitHub-hosted runners for `macos-15`, `macos-15-intel`, `ubuntu-22.04`, `ubuntu-22.04-arm`, `windows-latest`, and `windows-11-arm`. Windows arm64 currently publishes the NSIS setup executable rather than MSI so the arm64 path stays aligned with the documented Windows installer support in Tauri.
 
 ```bash
 pnpm release:desktop patch
@@ -63,21 +58,24 @@ The Android `versionCode` is derived as `major * 10000 + minor * 100 + patch` (e
 
 ## Manual Release
 
-Trigger any workflow manually via GitHub Actions:
+Trigger the desktop workflow manually via GitHub Actions:
 
-1. **Full release**: Actions → Release → Run workflow → enter version (e.g., `0.7.0`)
-2. **Desktop only**: Actions → Release Desktop → Run workflow → enter tag (e.g., `desktop-v0.7.0`)
+1. Open **Actions** → **Release Desktop (Tauri)**
+2. Choose **Run workflow**
+3. Enter a tag such as `desktop-v0.7.0`
 
 ## Artifacts
 
 ### Desktop
 
-| Platform | Architecture          | Files                                    |
-| -------- | --------------------- | ---------------------------------------- |
-| macOS    | Apple Silicon (arm64) | `.dmg`, `.app.tar.gz`, `.app.tar.gz.sig` |
-| macOS    | Intel (x64)           | `.dmg`, `.app.tar.gz`, `.app.tar.gz.sig` |
-| Windows  | x64                   | `.msi`, `.nsis.zip`, `.nsis.zip.sig`     |
-| Linux    | x64                   | `.AppImage`, `.deb`                      |
+| Platform | Architecture          | Files                                                                |
+| -------- | --------------------- | -------------------------------------------------------------------- |
+| macOS    | Apple Silicon (arm64) | `.dmg`, `.app.tar.gz`, `.app.tar.gz.sig`                             |
+| macOS    | Intel (x64)           | `.dmg`, `.app.tar.gz`, `.app.tar.gz.sig`                             |
+| Windows  | x64                   | `.msi`, `.msi.sig`, `-setup.exe`, `-setup.exe.sig`                   |
+| Windows  | arm64                 | `-setup.exe`, `-setup.exe.sig`                                       |
+| Linux    | x64                   | `.AppImage`, `.AppImage.sig`, `.deb`, `.deb.sig`, `.rpm`, `.rpm.sig` |
+| Linux    | arm64                 | `.AppImage`, `.AppImage.sig`, `.deb`, `.deb.sig`, `.rpm`, `.rpm.sig` |
 
 ### Android
 
@@ -104,7 +102,7 @@ Signing is automatic when secrets are configured. Without secrets, builds are un
 | ------------ | --------------------------------- | ---------------------------------------------------------------------- |
 | macOS        | Apple Developer ID + notarization | Users won't see Gatekeeper warnings                                    |
 | Windows      | EV certificate (optional)         | Avoids SmartScreen warnings                                            |
-| Linux        | None needed                       | AppImage/deb work unsigned                                             |
+| Linux        | None needed                       | AppImage/deb/rpm work unsigned                                         |
 | Android      | Self-managed keystore (`.jks`)    | Required for Play Store; optional for APK                              |
 | iOS          | Apple Distribution + ASC API key  | Required for TestFlight — job skips gracefully when secrets aren't set |
 | Auto-updater | Ed25519 key                       | Required for `.sig` files                                              |

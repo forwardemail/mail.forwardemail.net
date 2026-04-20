@@ -817,8 +817,28 @@ export const forwardMessage = async (msg) => {
   const bodyToUse = messageBodyValue || msg?.snippet || msg?.textContent || '';
   const quotedBody = buildForwardQuotedBody(msg, bodyToUse);
 
+  // Determine which of the user's own accounts received this message.
+  // Same logic as replyTo — the `from` field must be the user's address
+  // that appeared in To/CC of the original message, not the sender's address.
+  const selfEmails = getUserEmails();
+  const toList = extractAddressList(msg, 'to');
+  const ccList = extractAddressList(msg, 'cc');
+  const allRecipients = [...toList, ...ccList];
+  let forwardFromAddress = '';
+  for (const addr of allRecipients) {
+    const email = normalizeEmail(addr);
+    if (email && selfEmails.has(email)) {
+      forwardFromAddress = email;
+      break;
+    }
+  }
+  if (!forwardFromAddress) {
+    forwardFromAddress = get(currentAccount) || Local.get('email') || '';
+  }
+
   composeModalRef.forward?.({
     subject: addForwardPrefix(msg?.subject),
+    from: forwardFromAddress,
     html: quotedBody,
   });
 };

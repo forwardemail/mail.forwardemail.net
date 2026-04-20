@@ -15,6 +15,7 @@ export const buildSentCopyPayload = (emailPayload, account = null, folderList = 
     bcc: emailPayload.bcc || [],
     replyTo: emailPayload.replyTo,
     inReplyTo: emailPayload.inReplyTo,
+    references: emailPayload.references || '',
     subject: emailPayload.subject || '',
     html: emailPayload.html,
     text: emailPayload.text,

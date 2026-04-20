@@ -91,7 +91,13 @@ export const resolveDeleteTargets = (items = []) =>
   );
 
 /**
- * Returns the next candidate message/conversation for selection
+ * Returns the next candidate message/conversation for selection.
+ *
+ * Apple Mail-style smart direction: after deleting a message, if the item
+ * below is read and the item above is unread, move UP instead of down.
+ * This supports users who work from the bottom of their unread list upward
+ * in chronological order.
+ *
  * @param {Object} options - Options object
  * @param {Array} options.list - List of conversations or messages
  * @param {boolean} options.threadingEnabled - Whether threading is enabled
@@ -109,5 +115,20 @@ export const nextCandidate = ({
   const currentId = threadingEnabled ? selectedConversation?.id : selectedMessage?.id;
   const idx = list.findIndex((item) => item.id === currentId);
   if (idx === -1) return list[0] || null;
-  return list[idx + 1] || list[idx - 1] || null;
+
+  const below = list[idx + 1] || null;
+  const above = list[idx - 1] || null;
+
+  // If there's nothing below, go above (or null)
+  if (!below) return above;
+  // If there's nothing above, go below
+  if (!above) return below;
+
+  // Smart direction: if below is read and above is unread, prefer above
+  const belowIsUnread = below.hasUnread || below.is_unread;
+  const aboveIsUnread = above.hasUnread || above.is_unread;
+  if (!belowIsUnread && aboveIsUnread) return above;
+
+  // Default: go below (standard behavior)
+  return below;
 };

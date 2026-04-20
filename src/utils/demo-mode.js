@@ -64,7 +64,9 @@ const WRITE_ACTIONS = new Set([
   'ContactsCreate',
   'ContactsUpdate',
   'ContactsDelete',
+  'CalendarCreate',
   'CalendarUpdate',
+  'CalendarDelete',
   'CalendarEventCreate',
   'CalendarEventUpdate',
   'CalendarEventDelete',
@@ -312,7 +314,9 @@ function getDemoData(action, params) {
     case 'Calendars':
     case 'Calendar':
       return [
-        { id: 'demo-calendar', name: 'Personal', color: '#3b82f6', description: 'Demo calendar' },
+        { id: 'demo-calendar', name: 'Calendar', color: '#3b82f6', description: 'Main calendar' },
+        { id: 'demo-tasks', name: 'Tasks', color: '#3b82f6', description: 'Task list' },
+        { id: 'demo-reminders', name: 'Reminders', color: '#3b82f6', description: 'Reminders' },
       ];
 
     case 'CalendarEvents':
@@ -367,7 +371,9 @@ function getFriendlyActionName(action) {
     ContactsCreate: 'Create contact',
     ContactsUpdate: 'Update contact',
     ContactsDelete: 'Delete contact',
+    CalendarCreate: 'Create calendar',
     CalendarUpdate: 'Update calendar',
+    CalendarDelete: 'Delete calendar',
     CalendarEventCreate: 'Create event',
     CalendarEventUpdate: 'Update event',
     CalendarEventDelete: 'Delete event',

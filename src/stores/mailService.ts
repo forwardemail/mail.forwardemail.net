@@ -19,7 +19,7 @@ import {
   extractTextContent,
 } from '../utils/mime-utils.js';
 import { getCachedAttachmentBlob, cacheAttachmentBlob } from '../utils/attachment-cache.js';
-import { isTauri } from '../utils/platform.js';
+import { isTauriDesktop } from '../utils/platform.js';
 import type { Message, Attachment, PerfTracer, PgpKey } from '../types';
 import { warn } from '../utils/logger.ts';
 
@@ -116,9 +116,10 @@ function isPgpEncrypted(raw: string): boolean {
   return false;
 }
 
-// Trigger file download — uses native save dialog on Tauri, anchor trick on web
+// Trigger file download — uses Tauri's native save dialog on desktop
+// and the standard anchor download behavior on the web.
 function triggerDownload(href: string, filename: string): void {
-  if (isTauri) {
+  if (isTauriDesktop) {
     triggerDownloadTauri(href, filename).catch((err) => {
       console.warn('[mailService] Tauri save failed:', err);
     });
@@ -133,39 +134,141 @@ function triggerDownload(href: string, filename: string): void {
   document.body.removeChild(a);
 }
 
-// IPC payloads above this size have been observed to crash macOS WKWebView
-// when passed to writeFile in a single call. Chunked append keeps each
-// round-trip small.
+// IPC payloads above this size have been observed to destabilize macOS
+// WebKit when passed to writeFile in a single call. Chunked append keeps
+// each round-trip small even when the destination is a user-chosen file path.
 const TAURI_WRITE_CHUNK_SIZE = 512 * 1024;
+const WINDOWS_RESERVED_FILENAMES = new Set([
+  'CON',
+  'PRN',
+  'AUX',
+  'NUL',
+  'COM1',
+  'COM2',
+  'COM3',
+  'COM4',
+  'COM5',
+  'COM6',
+  'COM7',
+  'COM8',
+  'COM9',
+  'LPT1',
+  'LPT2',
+  'LPT3',
+  'LPT4',
+  'LPT5',
+  'LPT6',
+  'LPT7',
+  'LPT8',
+  'LPT9',
+]);
+
+function sanitizeDownloadFilename(filename: string): string {
+  const withoutControlChars = Array.from(String(filename || 'attachment'))
+    .map((char) => {
+      const code = char.charCodeAt(0);
+      return (code >= 0 && code <= 31) || code === 127 ? '_' : char;
+    })
+    .join('');
+
+  const sanitized = withoutControlChars
+    .replace(/[\\/:*?"<>|]/g, '_')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/[. ]+$/g, '');
+
+  if (!sanitized || sanitized === '.' || sanitized === '..') {
+    return 'attachment';
+  }
+
+  const lastDot = sanitized.lastIndexOf('.');
+  const hasExtension = lastDot > 0 && lastDot < sanitized.length - 1;
+  const baseName = (hasExtension ? sanitized.slice(0, lastDot) : sanitized)
+    .replace(/[. ]+$/g, '')
+    .trim();
+  const extension = hasExtension ? sanitized.slice(lastDot) : '';
+
+  const normalizedBaseName = baseName || 'attachment';
+  const safeBaseName = WINDOWS_RESERVED_FILENAMES.has(normalizedBaseName.toUpperCase())
+    ? `${normalizedBaseName}_`
+    : normalizedBaseName;
+
+  return `${safeBaseName}${extension}`;
+}
+
+function buildSaveDialogFilters(filename: string): { name: string; extensions: string[] }[] {
+  const extension = filename.split('.').pop()?.toLowerCase();
+  if (!extension || extension === filename.toLowerCase()) {
+    return [];
+  }
+
+  return [
+    {
+      name: `${extension.toUpperCase()} file`,
+      extensions: [extension],
+    },
+  ];
+}
 
 async function triggerDownloadTauri(href: string, filename: string): Promise<void> {
-  // Defer dialog to next tick — opening NSSavePanel from inside the
-  // originating click handler can crash the webview process on macOS.
-  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  const { save, message } = await import('@tauri-apps/plugin-dialog');
+  const { remove, writeFile } = await import('@tauri-apps/plugin-fs');
 
-  const { save } = await import('@tauri-apps/plugin-dialog');
-  const { writeFile } = await import('@tauri-apps/plugin-fs');
+  const safeFilename = sanitizeDownloadFilename(filename);
+  const outputPath = await save({
+    defaultPath: safeFilename,
+    filters: buildSaveDialogFilters(safeFilename),
+  });
 
-  const filePath = await save({ defaultPath: filename });
-  if (!filePath) return;
-
-  // Use native Blob APIs instead of an atob loop — avoids allocating a
-  // JS string the size of the payload.
-  const response = await fetch(href);
-  const buffer = await response.arrayBuffer();
-  const bytes = new Uint8Array(buffer);
-
-  if (bytes.byteLength <= TAURI_WRITE_CHUNK_SIZE) {
-    await writeFile(filePath, bytes);
+  if (!outputPath) {
     return;
   }
 
-  for (let offset = 0; offset < bytes.byteLength; offset += TAURI_WRITE_CHUNK_SIZE) {
-    const chunk = bytes.subarray(
-      offset,
-      Math.min(offset + TAURI_WRITE_CHUNK_SIZE, bytes.byteLength),
+  let startedWriting = false;
+
+  try {
+    // Use native Blob APIs instead of an atob loop — avoids allocating a
+    // JS string the size of the payload.
+    const response = await fetch(href);
+    if (!response.ok) {
+      throw new Error(`Attachment download failed with HTTP ${response.status}`);
+    }
+    const buffer = await response.arrayBuffer();
+    const bytes = new Uint8Array(buffer);
+
+    if (bytes.byteLength <= TAURI_WRITE_CHUNK_SIZE) {
+      startedWriting = true;
+      await writeFile(outputPath, bytes);
+      return;
+    }
+
+    for (let offset = 0; offset < bytes.byteLength; offset += TAURI_WRITE_CHUNK_SIZE) {
+      const chunk = bytes.subarray(
+        offset,
+        Math.min(offset + TAURI_WRITE_CHUNK_SIZE, bytes.byteLength),
+      );
+      startedWriting = true;
+      await writeFile(outputPath, chunk, {
+        append: offset > 0,
+      });
+    }
+  } catch (err) {
+    if (startedWriting) {
+      try {
+        await remove(outputPath);
+      } catch (cleanupErr) {
+        console.warn('[mailService] Failed to remove partial attachment:', cleanupErr);
+      }
+    }
+
+    await message(
+      `Could not save "${safeFilename}" to the selected location. Please choose another folder, retry the download, or allow access if your operating system blocked the write.`,
+      {
+        title: 'Attachment save failed',
+        kind: 'error',
+      },
     );
-    await writeFile(filePath, chunk, { append: offset > 0 });
+    throw err;
   }
 }
 

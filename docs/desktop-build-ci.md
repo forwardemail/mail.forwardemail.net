@@ -1,39 +1,36 @@
-# Desktop Build CI — Contributor Guide
-
 ## How the Build Runs
 
-Every pull request to `main` that touches these paths triggers the desktop build:
+The desktop release workflow builds the Tauri app across the supported desktop matrix whenever `release-desktop.yml` is triggered by a `desktop-v*` tag or a manual dispatch from the Actions tab.
 
-- `src-tauri/**` — Rust code
-- `src/**` — Frontend code
-- `package.json` or `pnpm-lock.yaml` — Dependencies
+The build matrix now compiles for **6 desktop targets in parallel**:
 
-The build matrix compiles for **4 platforms in parallel**:
+| Platform        | Binary                      |
+| --------------- | --------------------------- |
+| macOS (arm64)   | `.dmg`                      |
+| macOS (x64)     | `.dmg`                      |
+| Linux (x64)     | `.AppImage`, `.deb`, `.rpm` |
+| Linux (arm64)   | `.AppImage`, `.deb`, `.rpm` |
+| Windows (x64)   | `.msi`, `-setup.exe`        |
+| Windows (arm64) | `-setup.exe`                |
 
-| Platform      | Binary              |
-| ------------- | ------------------- |
-| macOS (arm64) | `.dmg`              |
-| macOS (x64)   | `.dmg`              |
-| Linux (x64)   | `.AppImage`, `.deb` |
-| Windows (x64) | `.msi`, `.exe`      |
+The workflow uses native GitHub-hosted runners for each architecture, including `ubuntu-22.04-arm` for Linux arm64 and `windows-11-arm` for Windows arm64. The Windows arm64 lane currently publishes the NSIS setup executable rather than MSI so the ARM release path stays aligned with the documented Tauri installer guidance.
 
 ## Build Pipeline
 
-1. **Build** — Compiles for all platforms (unsigned CI binaries)
-2. **Upload** — Artifacts available for 7 days in the PR's artifacts section
+1. **Build** — Compiles and bundles the Tauri desktop app for each target in the matrix.
+2. **Sign** — Produces updater signatures when the release signing key is configured, and performs platform signing where the required secrets are present.
+3. **Upload** — Pushes the generated artifacts into the draft GitHub Release associated with the desktop tag.
 
 Dependency vulnerabilities are surfaced by GitHub's Dependabot alerts on the repository rather than as an in-workflow gate.
 
 ## Download and Test
 
-After the build completes:
+After the workflow completes:
 
-1. Go to the PR → **Details** tab → **Artifacts** section
-2. Download the binary for your platform (e.g. `desktop-macOS-arm64`)
-3. Extract and run the `.dmg` or equivalent
+1. Open the draft release in GitHub Releases.
+2. Download the artifact for your target architecture.
+3. Install the `.dmg`, `.exe`, `.msi`, `.deb`, `.rpm`, or run the matching `.AppImage`.
 
-## Skipping the Build
+## Manual Runs
 
-If your PR only modifies files outside the paths above (e.g. docs, CI config, web-only code), the build won't trigger.
-
-To force a build, use the **Actions** tab → **Run workflow** button to manually trigger `Build Desktop (Tauri)`.
+To trigger the workflow manually, use the **Actions** tab, choose **Release Desktop (Tauri)**, and provide a tag such as `desktop-v0.7.0`.

@@ -4,17 +4,43 @@ This is the official, open-source, and end-to-end encrypted webmail client for [
 
 ## Downloads & Releases
 
-When the release pipelines are enabled, all official builds will be produced automatically via secure, tamper-proof [GitHub Actions workflows](https://github.com/forwardemail/mail.forwardemail.net/actions), ensuring a transparent and auditable trail from source code to the final compiled binary. Binaries for all platforms will be cryptographically signed and, where applicable, notarized to ensure their authenticity and integrity. Releases will be published on the [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases) page.
+Official desktop and Android artifacts are published on the [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases) page. Desktop builds are produced by the public [GitHub Actions](https://github.com/forwardemail/mail.forwardemail.net/actions) release workflows, and the desktop release matrix now targets **macOS arm64/x64**, **Windows x64/arm64**, and **Linux x64/arm64**.
 
-| Platform    | Architecture          | Download                                               | Store                     |
-| :---------- | :-------------------- | :----------------------------------------------------- | :------------------------ |
-| **Web**     | —                     | [mail.forwardemail.net](https://mail.forwardemail.net) | —                         |
-| **Windows** | x64                   | `.msi` (Coming Soon)                                   |                           |
-| **macOS**   | Apple Silicon & Intel | `.dmg` (Coming Soon)                                   | App Store (Coming Soon)   |
-| **Linux**   | x64                   | `.deb` / `.AppImage` (Coming Soon)                     |                           |
-| **Android** | Universal             | `.apk` (Coming Soon)                                   | Google Play (Coming Soon) |
-|             |                       |                                                        | F-Droid (Coming Soon)     |
-| **iOS**     | arm64                 | Coming Soon                                            | App Store (Coming Soon)   |
+| Platform    | Architecture          | Download                                                                                                           | Store                     |
+| :---------- | :-------------------- | :----------------------------------------------------------------------------------------------------------------- | :------------------------ |
+| **Web**     | —                     | [mail.forwardemail.net](https://mail.forwardemail.net)                                                             | —                         |
+| **Windows** | x64                   | `.msi` / `.exe` on [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases)               | —                         |
+| **Windows** | arm64                 | `-setup.exe` on [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases)                  | —                         |
+| **macOS**   | Apple Silicon & Intel | `.dmg` on [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases)                        | App Store (Coming Soon)   |
+| **Linux**   | x64                   | `.deb` / `.AppImage` / `.rpm` on [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases) | —                         |
+| **Linux**   | arm64                 | `.deb` / `.AppImage` / `.rpm` on [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases) | —                         |
+| **Android** | Universal             | `.apk` / `.aab` on [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases)               | Google Play (Coming Soon) |
+| **iOS**     | arm64                 | TestFlight / App Store distribution                                                                                | App Store (Coming Soon)   |
+
+### Ubuntu / Debian installation
+
+For **Ubuntu x64 / amd64**, download the current `.deb` asset from [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases), then install it with:
+
+```bash
+sudo apt update
+sudo apt install ./Forward.Email_<version>_amd64.deb
+```
+
+For **Ubuntu arm64 / aarch64**, install the matching arm64 `.deb` the same way:
+
+```bash
+sudo apt update
+sudo apt install ./Forward.Email_<version>_arm64.deb
+```
+
+If you prefer a portable binary, download the matching `.AppImage` for your architecture from [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases), make it executable, and run it directly:
+
+```bash
+chmod +x Forward.Email_<version>_<arch>.AppImage
+./Forward.Email_<version>_<arch>.AppImage
+```
+
+Replace `<arch>` with `amd64` or `arm64` to match the asset you downloaded. If you are building your own custom Linux binary instead of installing a published release, use the desktop development guide in [`docs/desktop-setup.md`](./docs/desktop-setup.md).
 
 > **Note for macOS users:** If you download the `.dmg` from GitHub Releases, you may need to run the following command if you see a "damaged" or unverified app error:
 >
@@ -274,7 +300,7 @@ BREAKING CHANGE: settings store schema changed, requires cache clear
 
 ### Releasing
 
-Releases are managed locally using [np](https://github.com/sindresorhus/np). The web application is deployed automatically via GitHub Actions when a GitHub Release is published. Desktop and mobile release pipelines are currently being finalized (tag triggers are disabled; see workflow files for current status).
+Releases are managed locally using [np](https://github.com/sindresorhus/np). Version bumps still flow through `pnpm release`, and desktop artifact publishing is handled by the Tauri desktop release workflow plus the `pnpm release:desktop` helper for desktop-only hotfixes.
 
 ```bash
 pnpm release            # interactive version prompt, runs checks, pushes, publishes GitHub Release
@@ -288,7 +314,7 @@ This command will:
 4. Push the commit and tag to GitHub
 5. Publish a GitHub Release
 
-Once the release pipeline is enabled, pushing the tag will trigger the **Release** workflow (`.github/workflows/release.yml`), which creates a draft GitHub Release and orchestrates desktop and mobile builds. In the meantime, releases can be triggered manually via `workflow_dispatch` on the release workflows. Once a release is published, the **Deploy** workflow (`.github/workflows/deploy.yml`) automatically deploys the web application to Cloudflare.
+For desktop releases, pushing a desktop tag or running the workflow manually triggers **Release Desktop (Tauri)** (`.github/workflows/release-desktop.yml`), which creates or updates a draft GitHub Release and uploads the macOS x64/arm64, Windows x64/arm64, and Linux x64/arm64 desktop artifacts.
 
 ## Configuration
 
@@ -332,32 +358,18 @@ graph TB
 
 ### CI/CD Pipeline
 
-CI and deployment are handled by separate GitHub Actions workflows for web, desktop, and mobile:
+The desktop workflow currently documented in this repository is **Release Desktop (Tauri)** (`.github/workflows/release-desktop.yml`). It builds and uploads the desktop release matrix across macOS x64/arm64, Windows x64/arm64, and Linux x64/arm64. See [Desktop Build CI guide](docs/desktop-build-ci.md) for the platform matrix, runner details, and artifact expectations.
 
-**Desktop Build** (`.github/workflows/build-desktop.yml`) — runs on pull requests to `main` (when `src-tauri/`, `src/`, `package.json`, or `pnpm-lock.yaml` change) and via `workflow_dispatch`. See [Desktop Build CI guide](docs/desktop-build-ci.md) for contributor details.
-
-**Mobile Build** (`.github/workflows/build-mobile.yml`) — currently disabled for automatic triggers (push/PR triggers are commented out until mobile CI is ready). Can be triggered manually via `workflow_dispatch`.
-
-**E2E Tests (Apps)** (`.github/workflows/e2e-apps.yml`) — currently disabled for automatic triggers (push/PR triggers are commented out until Tauri E2E tests are ready). Can be triggered manually via `workflow_dispatch`.
-
-**Web CI** (`.github/workflows/ci.yml`) — runs on every push to `main` and on pull requests:
+Local validation for release work should still cover the standard web checks before tagging a desktop release:
 
 1. **Install** — `pnpm install --frozen-lockfile`
 2. **Lint** — `pnpm lint`
 3. **Format** — `pnpm format`
 4. **Unit tests** — `pnpm test -- --run`
-5. **Build** — `pnpm build` (Vite + Workbox service worker)
-6. **E2E tests** — Playwright (pull requests only)
-7. **Deploy** — On release commits (`chore(release):`) to `main`, deploys to Cloudflare R2 + Worker + cache purge
+5. **Build** — `pnpm build`
+6. **Desktop build smoke test** — `pnpm tauri:build` for the target platform you are validating
 
-**Deploy** (`.github/workflows/deploy.yml`) — runs when a GitHub Release is published:
-
-1. **Build** — Full production build
-2. **Deploy to R2** — Sync `dist/` to Cloudflare R2 bucket
-3. **Deploy Worker** — Deploy CDN worker for SPA routing + cache headers
-4. **Purge Cache** — Clear Cloudflare edge cache
-
-**Release** (`.github/workflows/release.yml`) — currently disabled for automatic tag triggers (will be enabled when desktop/mobile release pipelines are ready). Can be triggered manually via `workflow_dispatch`. Once enabled, it will orchestrate GitHub Release creation, desktop builds, mobile builds, and checksum generation.
+If additional web, deploy, or mobile workflows are introduced later, their README references should be added alongside the corresponding workflow files so the documentation stays aligned with the repository.
 
 ### Required Secrets & Variables
 

@@ -134,6 +134,12 @@ describe('toDisplayAddress', () => {
     expect(toDisplayAddress('alice@example.com')).toBe('alice@example.com');
   });
 
+  it('decodes MIME-encoded display names in string headers', () => {
+    expect(toDisplayAddress('=?UTF-8?Q?Foobar_H=C3=A4gerstr=C3=B6m?= <foobar@foo.se>')).toBe(
+      'Foobar Hägerström <foobar@foo.se>',
+    );
+  });
+
   it('formats name + address object', () => {
     expect(toDisplayAddress({ name: 'Alice', address: 'alice@x.com' })).toBe('Alice <alice@x.com>');
   });
@@ -148,6 +154,15 @@ describe('toDisplayAddress', () => {
 
   it('handles Display/Email capitalization', () => {
     expect(toDisplayAddress({ Display: 'Bob', Email: 'bob@x.com' })).toBe('Bob <bob@x.com>');
+  });
+
+  it('decodes MIME-encoded object display names', () => {
+    expect(
+      toDisplayAddress({
+        Display: '=?UTF-8?Q?Foobar_H=C3=A4gerstr=C3=B6m?=',
+        Email: 'foobar@foo.se',
+      }),
+    ).toBe('Foobar Hägerström <foobar@foo.se>');
   });
 
   it('unwraps first element of array', () => {
@@ -264,6 +279,12 @@ describe('extractDisplayName', () => {
 
   it('handles AddressObject with Display/Email', () => {
     expect(extractDisplayName({ Display: 'Carol', Email: 'carol@x.com' })).toBe('Carol');
+  });
+
+  it('decodes MIME-encoded display names', () => {
+    expect(extractDisplayName('=?UTF-8?Q?Foobar_H=C3=A4gerstr=C3=B6m?= <foobar@foo.se>')).toBe(
+      'Foobar Hägerström',
+    );
   });
 
   it('handles AddressObject with name/address', () => {

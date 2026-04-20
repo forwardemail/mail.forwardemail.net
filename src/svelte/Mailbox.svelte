@@ -146,6 +146,7 @@
   import Archive from '@lucide/svelte/icons/archive';
   import FolderIcon from '@lucide/svelte/icons/folder';
   import FolderOpen from '@lucide/svelte/icons/folder-open';
+  import FolderPlus from '@lucide/svelte/icons/folder-plus';
   import Reply from '@lucide/svelte/icons/reply';
   import ReplyAll from '@lucide/svelte/icons/reply-all';
   import Forward from '@lucide/svelte/icons/forward';
@@ -183,6 +184,8 @@
   import EyeOff from '@lucide/svelte/icons/eye-off';
   import StarOff from '@lucide/svelte/icons/star-off';
   import EllipsisVertical from '@lucide/svelte/icons/ellipsis-vertical';
+  import LayoutList from '@lucide/svelte/icons/layout-list';
+  import Rows3 from '@lucide/svelte/icons/rows-3';
   import EmailIframe from './components/EmailIframe.svelte';
   import AboutDialog from './AboutDialog.svelte';
   import TabBar from './components/TabBar.svelte';
@@ -448,6 +451,65 @@
     true,
   );
   let messagesStore = storeToWritableStore(source.state?.messages, []);
+
+  // ── Sidebar resize state ──────────────────────────────────────────
+  const SIDEBAR_MIN = 160;
+  const SIDEBAR_MAX = 480;
+  const SIDEBAR_DEFAULT = 240;
+  let sidebarWidth = $state(
+    Math.max(
+      SIDEBAR_MIN,
+      Math.min(SIDEBAR_MAX, Number(localStorage.getItem('fe:sidebar-width')) || SIDEBAR_DEFAULT),
+    ),
+  );
+  let sidebarBottomCollapsed = $state(
+    localStorage.getItem('fe:sidebar-bottom-collapsed') === 'true',
+  );
+  let isSidebarResizing = $state(false);
+  let sidebarRef: HTMLElement | null = null;
+
+  function startSidebarResize(e: MouseEvent) {
+    e.preventDefault();
+    isSidebarResizing = true;
+    const startX = e.clientX;
+    const startWidth = sidebarWidth;
+    function onMove(ev: MouseEvent) {
+      const delta = ev.clientX - startX;
+      sidebarWidth = Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, startWidth + delta));
+    }
+    function onUp() {
+      isSidebarResizing = false;
+      localStorage.setItem('fe:sidebar-width', String(sidebarWidth));
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    }
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }
+
+  function handleSidebarResizerKeydown(e: KeyboardEvent) {
+    if (e.key === 'ArrowLeft') {
+      sidebarWidth = Math.max(SIDEBAR_MIN, sidebarWidth - 20);
+      localStorage.setItem('fe:sidebar-width', String(sidebarWidth));
+    } else if (e.key === 'ArrowRight') {
+      sidebarWidth = Math.min(SIDEBAR_MAX, sidebarWidth + 20);
+      localStorage.setItem('fe:sidebar-width', String(sidebarWidth));
+    }
+  }
+
+  function toggleSidebarBottom() {
+    sidebarBottomCollapsed = !sidebarBottomCollapsed;
+    localStorage.setItem('fe:sidebar-bottom-collapsed', String(sidebarBottomCollapsed));
+  }
+
+  // Card view vs classic row layout toggle
+  let cardView = $state(
+    localStorage.getItem('fe:card-view') !== 'false', // default to card view (true)
+  );
+  function toggleCardView() {
+    cardView = !cardView;
+    localStorage.setItem('fe:card-view', String(cardView));
+  }
   let searchActiveStore = storeToStore(source.state?.searchActive, false);
   let searchingStore = storeToStore(source.state?.searching, false);
   let filteredConversations = storeToStore(source.state?.filteredConversations, []);
@@ -590,11 +652,16 @@
 
   // Classic layout mode (vertical split) on desktop - switches to fullscreen at 900px
   const isVerticalDesktop = $derived(!isProductivityLayout && !isClassicMobileViewport());
-  const verticalSplitStyle = $derived(
-    isVerticalDesktop
-      ? `--fe-message-fr: ${verticalSplit.toFixed(3)}fr; --fe-reader-fr: ${(1 - verticalSplit).toFixed(3)}fr;`
-      : '',
-  );
+  const shellStyle = $derived.by(() => {
+    const styles = [`--fe-sidebar-width: ${sidebarWidth}px`];
+    if (isVerticalDesktop) {
+      styles.push(
+        `--fe-message-fr: ${verticalSplit.toFixed(3)}fr`,
+        `--fe-reader-fr: ${(1 - verticalSplit).toFixed(3)}fr`,
+      );
+    }
+    return styles.join('; ');
+  });
 
   const startVerticalResize = (event) => {
     if (!isVerticalDesktop) return;
@@ -1399,6 +1466,12 @@
   const handleSelectFolder = (path) => {
     outboxSelected = false;
     selectedOutboxItem = null;
+    // Reset selection tracking so the auto-selected first message in the new
+    // folder is not mistaken for a stale re-click (fixes folder-switch desync
+    // where highlight stayed on the old message and clicking the first message
+    // in the new folder appeared to do nothing).
+    lastSelectedMessageId = null;
+    updateSelectedConversation(null);
     collapseSidebarForMobile();
     if (isProductivityLayout) {
       closeReaderFullscreen({ updateUrl: false }); // URL updated by folder subscription
@@ -3271,20 +3344,13 @@
     if (!targets.length) return;
 
     // Remove from UI optimistically.
-    // Wrap in requestAnimationFrame so the current event-loop tick
-    // completes before we mutate the store.  On macOS 26+ WebKit,
-    // synchronous store updates that trigger webview layout changes
-    // can race with pending dispatchSetObscuredContentInsets calls,
-    // causing a use-after-free crash (EXC_BAD_ACCESS).
+    // The messages store uses deferredWritable which automatically defers
+    // .set() calls that shrink the array through requestAnimationFrame,
+    // preventing the macOS 26+ WebKit use-after-free crash.  See deferred-store.ts.
     const idsToRemove = new Set(targets.map((m) => m.id));
-    await new Promise<void>((resolve) => {
-      requestAnimationFrame(() => {
-        const currentMessages = get(messagesStore);
-        messagesStore.set(currentMessages.filter((m) => !idsToRemove.has(m.id)));
-        clearSelection();
-        resolve();
-      });
-    });
+    const currentMessages = get(messagesStore);
+    messagesStore.set(currentMessages.filter((m) => !idsToRemove.has(m.id)));
+    clearSelection();
 
     try {
       if (mailboxStore?.actions?.bulkDeleteMessages) {
@@ -5375,9 +5441,14 @@
           class:mobile-reader={$mobileReader}
           class:fe-layout-productivity={isProductivityLayout}
           class:fe-vertical-resizable={isVerticalDesktop}
-          style={verticalSplitStyle || undefined}
+          style={shellStyle}
         >
-          <aside class="fe-folders" class:fe-folders-open={$sidebarOpen}>
+          <aside
+            class="fe-folders"
+            class:fe-folders-open={$sidebarOpen}
+            bind:this={sidebarRef}
+            style={$sidebarOpen ? `width:${sidebarWidth}px;min-width:${sidebarWidth}px` : ''}
+          >
             <div>
               <Button class="w-full gap-2" onclick={() => mailboxView?.composeModal?.open?.()}>
                 <Pencil class="h-4 w-4" />
@@ -5547,54 +5618,47 @@
               </ul>
             </div>
 
-            <!-- Add folder button at bottom -->
+            <!-- Collapsible sidebar bottom -->
             <div class="mt-auto p-3 border-t border-border">
               <button
                 type="button"
-                class="flex items-center gap-2 w-full px-3 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-                onclick={handleCreateRootFolder}
-                title="Create new folder"
+                class="flex items-center justify-between gap-2 w-full px-3 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                onclick={toggleSidebarBottom}
+                title={sidebarBottomCollapsed ? 'Expand sidebar tools' : 'Collapse sidebar tools'}
+                aria-expanded={!sidebarBottomCollapsed}
               >
-                <Plus class="h-4 w-4" />
-                <span>New Folder</span>
+                <span class="flex items-center gap-2">
+                  <Plus class="h-4 w-4" />
+                  <span>New Folder</span>
+                </span>
+                <ChevronDown
+                  class={`h-3 w-3 transition-transform ${sidebarBottomCollapsed ? '-rotate-90' : ''}`}
+                />
               </button>
-              <div class="flex flex-col gap-1 mt-2">
-                <button
-                  type="button"
-                  class="flex items-center gap-2 px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-                  onclick={() => navigate('/contacts')}
-                >
-                  <BookUser class="h-4 w-4" />
-                  <span>Contacts</span>
-                </button>
-                <button
-                  type="button"
-                  class="flex items-center gap-2 px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-                  onclick={() => navigate('/calendar')}
-                >
-                  <CalendarIcon class="h-4 w-4" />
-                  <span>Calendar</span>
-                </button>
-                <button
-                  type="button"
-                  class="flex items-center gap-2 px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-                  onclick={() => navigate('/mailbox/settings')}
-                >
-                  <SettingsIcon class="h-4 w-4" />
-                  <span>Settings</span>
-                </button>
-                {#if isLockEnabled() && isVaultConfigured()}
+              {#if !sidebarBottomCollapsed}
+                <div class="flex flex-col gap-1 mt-2">
                   <button
                     type="button"
                     class="flex items-center gap-2 px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-                    aria-label="Lock app"
-                    onclick={() => window.dispatchEvent(new CustomEvent('fe:lock-app'))}
+                    onclick={handleCreateRootFolder}
+                    title="Create new folder"
                   >
-                    <Lock class="h-4 w-4" />
-                    <span>Lock</span>
+                    <FolderPlus class="h-4 w-4" />
+                    <span>Create Folder</span>
                   </button>
-                {/if}
-              </div>
+                  {#if isLockEnabled() && isVaultConfigured()}
+                    <button
+                      type="button"
+                      class="flex items-center gap-2 px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                      aria-label="Lock app"
+                      onclick={() => window.dispatchEvent(new CustomEvent('fe:lock-app'))}
+                    >
+                      <Lock class="h-4 w-4" />
+                      <span>Lock</span>
+                    </button>
+                  {/if}
+                </div>
+              {/if}
             </div>
 
             {#if $storageTotal > 0}
@@ -5620,6 +5684,17 @@
                 </small>
               </a>
             {/if}
+            <!-- Sidebar resize handle (inside aside to avoid grid layout issues) -->
+            <button
+              type="button"
+              class="fe-sidebar-resizer"
+              class:fe-sidebar-resizer-active={isSidebarResizing}
+              onmousedown={startSidebarResize}
+              onkeydown={handleSidebarResizerKeydown}
+              aria-label="Resize sidebar"
+              title="Drag to resize sidebar"
+              tabindex="0"
+            ></button>
           </aside>
 
           <section
@@ -5668,6 +5743,22 @@
                   >
                     <RefreshCw class={`h-5 w-5 ${refreshAnimating ? 'animate-spin' : ''}`} />
                   </button>
+                  {#if !isMobile}
+                    <button
+                      class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground hidden sm:inline-flex"
+                      type="button"
+                      data-tooltip={cardView ? 'Switch to classic view' : 'Switch to card view'}
+                      data-tooltip-position="bottom"
+                      aria-label={cardView ? 'Switch to classic view' : 'Switch to card view'}
+                      onclick={toggleCardView}
+                    >
+                      {#if cardView}
+                        <LayoutList class="h-5 w-5" />
+                      {:else}
+                        <Rows3 class="h-5 w-5" />
+                      {/if}
+                    </button>
+                  {/if}
                   <div class="relative" data-sort-toggle>
                     <button
                       class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
@@ -5917,6 +6008,26 @@
                     onclick={bulkDelete}
                   >
                     <Trash2 class="h-5 w-5" />
+                  </button>
+                  <button
+                    class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                    type="button"
+                    aria-label="Mark selected as read"
+                    data-tooltip="Mark selected as read"
+                    data-tooltip-position="bottom"
+                    onclick={bulkMarkAsRead}
+                  >
+                    <MailOpen class="h-5 w-5" />
+                  </button>
+                  <button
+                    class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                    type="button"
+                    aria-label="Mark selected as unread"
+                    data-tooltip="Mark selected as unread"
+                    data-tooltip-position="bottom"
+                    onclick={bulkMarkAsUnread}
+                  >
+                    <MailIcon class="h-5 w-5" />
                   </button>
                   <div class="relative" data-bulk-move>
                     <button
@@ -6300,7 +6411,7 @@
                                 </div>
                               </div>
                             {:else}
-                              <!-- Desktop: checkbox + single-line layout -->
+                              <!-- Desktop: checkbox + card/classic layout toggle -->
                               <button
                                 class={`relative w-8 h-8 rounded flex items-center justify-center shrink-0 transition-colors ${($selectedConversationIds || []).includes(conv.id) ? 'text-primary' : 'text-muted-foreground hover:text-foreground'}`}
                                 type="button"
@@ -6318,120 +6429,238 @@
                                   <Square class="h-5 w-5" />
                                 {/if}
                               </button>
-                              <div class="flex-1 min-w-0 flex flex-col gap-0.5 text-[13px]">
-                                <!-- Row 1: From | Subject | Date -->
-                                <div class="flex items-center gap-3">
-                                  <div
-                                    class="w-[30%] min-w-[140px] max-w-[280px] shrink-0 flex items-center gap-1"
-                                  >
-                                    {#if conv.hasUnread || conv.is_unread}
-                                      <span class="w-1.5 h-1.5 rounded-full bg-primary shrink-0"
-                                      ></span>
-                                    {/if}
-                                    <span
-                                      class={`truncate ${conv.hasUnread || conv.is_unread ? 'font-semibold' : ''}`}
-                                      >{listIsSentFolder
-                                        ? `To: ${getConversationToName(conv) || getConversationFromName(conv)}`
-                                        : getConversationFromName(conv)}</span
-                                    >
-                                    {#if conv.messageCount > 1}
-                                      <span class="text-[11px] text-muted-foreground shrink-0"
-                                        >({conv.messageCount})</span
-                                      >
-                                    {/if}
-                                  </div>
-                                  <div
-                                    class="flex-1 min-w-0 flex items-baseline gap-1 overflow-hidden"
-                                  >
-                                    <span
-                                      class={`truncate ${conv.hasUnread || conv.is_unread ? 'font-medium' : ''}`}
-                                      >{conv.displaySubject || conv.subject}</span
-                                    >
-                                    {#if truncatePreview(mailboxView?.getConversationPreview?.(conv) || conv.snippet || '', 80)}
+                              {#if cardView}
+                                <div class="flex-1 min-w-0 flex flex-col gap-0.5">
+                                  <!-- Line 1: Sender (bold, slightly bigger) + icons + Date (right, muted) -->
+                                  <div class="flex items-center justify-between gap-2">
+                                    <div class="flex items-center gap-1.5 min-w-0 flex-1">
+                                      {#if conv.hasUnread || conv.is_unread}
+                                        <span class="w-1.5 h-1.5 rounded-full bg-primary shrink-0"
+                                        ></span>
+                                      {/if}
                                       <span
-                                        class="text-muted-foreground font-normal text-xs truncate"
+                                        class={`truncate text-[14px] ${conv.hasUnread || conv.is_unread ? 'font-bold' : 'font-semibold'}`}
+                                        >{listIsSentFolder
+                                          ? `To: ${getConversationToName(conv) || getConversationFromName(conv)}`
+                                          : getConversationFromName(conv)}</span
                                       >
-                                        &mdash; {truncatePreview(
-                                          mailboxView?.getConversationPreview?.(conv) ||
-                                            conv.snippet ||
-                                            '',
-                                          80,
-                                        )}
-                                      </span>
-                                    {/if}
-                                  </div>
-                                  <div
-                                    class="flex items-center gap-1.5 shrink-0 text-muted-foreground"
-                                  >
-                                    {#if hasUserReplied(conv)}
-                                      <svg viewBox="0 0 24 24" class="h-3 w-3" aria-hidden="true">
-                                        <path
-                                          d="M9 17l-5-5 5-5"
-                                          fill="none"
-                                          stroke="currentColor"
-                                          stroke-width="2"
-                                          stroke-linecap="round"
-                                          stroke-linejoin="round"
-                                        ></path>
-                                        <path
-                                          d="M20 18v-2a4 4 0 0 0-4-4H4"
-                                          fill="none"
-                                          stroke="currentColor"
-                                          stroke-width="2"
-                                          stroke-linecap="round"
-                                          stroke-linejoin="round"
-                                        ></path>
-                                      </svg>
-                                    {/if}
-                                    {#if hasAttachments(conv)}
-                                      <svg viewBox="0 0 24 24" class="h-3 w-3" aria-hidden="true">
-                                        <path
-                                          d="M21.44 11.05l-8.49 8.49a5 5 0 0 1-7.07-7.07l9.19-9.19a3 3 0 1 1 4.24 4.24l-9.19 9.19a1 1 0 1 1-1.41-1.41l8.49-8.49"
-                                          fill="none"
-                                          stroke="currentColor"
-                                          stroke-width="2"
-                                          stroke-linecap="round"
-                                          stroke-linejoin="round"
-                                        ></path>
-                                      </svg>
-                                    {/if}
-                                    <span class="text-[11px] whitespace-nowrap">
-                                      {#if conv.latestDate}
-                                        {formatCompactDate(conv.latestDate)}
-                                      {:else}
-                                        {formatCompactDate(conv.date)}
+                                      {#if conv.messageCount > 1}
+                                        <span class="text-[11px] text-muted-foreground shrink-0"
+                                          >({conv.messageCount})</span
+                                        >
                                       {/if}
-                                    </span>
-                                  </div>
-                                </div>
-                                {#if Array.isArray(conv.labels) && conv.labels.length > 0}
-                                  <!-- Labels row -->
-                                  <div class="flex items-center gap-1">
-                                    {#each conv.labels.slice(0, 3) as lbl}
-                                      {#if typeof lbl === 'string' && lbl && lbl !== '[]'}
-                                        {#if labelMap.get(lbl)}
-                                          <span
-                                            class="inline-flex items-center px-1.5 py-0.5 text-[10px] truncate max-w-[80px]"
-                                            style={labelMap.get(lbl).color
-                                              ? `background:${labelMap.get(lbl).color}; color:#fff;`
-                                              : ''}
-                                          >
-                                            {labelMap.get(lbl).name ||
-                                              labelMap.get(lbl).label ||
-                                              labelMap.get(lbl).value ||
-                                              lbl}
-                                          </span>
+                                    </div>
+                                    <div
+                                      class="flex items-center gap-1.5 shrink-0 text-muted-foreground"
+                                    >
+                                      {#if hasUserReplied(conv)}
+                                        <svg viewBox="0 0 24 24" class="h-3 w-3" aria-hidden="true">
+                                          <path
+                                            d="M9 17l-5-5 5-5"
+                                            fill="none"
+                                            stroke="currentColor"
+                                            stroke-width="2"
+                                            stroke-linecap="round"
+                                            stroke-linejoin="round"
+                                          ></path>
+                                          <path
+                                            d="M20 18v-2a4 4 0 0 0-4-4H4"
+                                            fill="none"
+                                            stroke="currentColor"
+                                            stroke-width="2"
+                                            stroke-linecap="round"
+                                            stroke-linejoin="round"
+                                          ></path>
+                                        </svg>
+                                      {/if}
+                                      {#if hasAttachments(conv)}
+                                        <svg viewBox="0 0 24 24" class="h-3 w-3" aria-hidden="true">
+                                          <path
+                                            d="M21.44 11.05l-8.49 8.49a5 5 0 0 1-7.07-7.07l9.19-9.19a3 3 0 1 1 4.24 4.24l-9.19 9.19a1 1 0 1 1-1.41-1.41l8.49-8.49"
+                                            fill="none"
+                                            stroke="currentColor"
+                                            stroke-width="2"
+                                            stroke-linecap="round"
+                                            stroke-linejoin="round"
+                                          ></path>
+                                        </svg>
+                                      {/if}
+                                      {#if conv.starred}
+                                        <Star class="h-3 w-3 fill-yellow-400 text-yellow-400" />
+                                      {/if}
+                                      <span class="text-[11px] whitespace-nowrap">
+                                        {#if conv.latestDate}
+                                          {formatCompactDate(conv.latestDate)}
+                                        {:else}
+                                          {formatCompactDate(conv.date)}
                                         {/if}
-                                      {/if}
-                                    {/each}
-                                    {#if conv.labels.length > 3}
-                                      <span class="text-[10px] text-muted-foreground"
-                                        >+{conv.labels.length - 3}</span
-                                      >
-                                    {/if}
+                                      </span>
+                                    </div>
                                   </div>
-                                {/if}
-                              </div>
+                                  <!-- Line 2: Subject -->
+                                  <div
+                                    class="truncate text-[13px] {conv.hasUnread || conv.is_unread
+                                      ? 'font-medium text-foreground'
+                                      : 'text-foreground'}"
+                                  >
+                                    {conv.displaySubject || conv.subject || '(No Subject)'}
+                                  </div>
+                                  <!-- Line 3: Preview (muted, smaller) -->
+                                  {#if truncatePreview(mailboxView?.getConversationPreview?.(conv) || conv.snippet || '', 120)}
+                                    <div class="truncate text-[12px] text-muted-foreground">
+                                      {truncatePreview(
+                                        mailboxView?.getConversationPreview?.(conv) ||
+                                          conv.snippet ||
+                                          '',
+                                        120,
+                                      )}
+                                    </div>
+                                  {/if}
+                                  {#if Array.isArray(conv.labels) && conv.labels.length > 0}
+                                    <!-- Labels row -->
+                                    <div class="flex items-center gap-1 mt-0.5">
+                                      {#each conv.labels.slice(0, 3) as lbl}
+                                        {#if typeof lbl === 'string' && lbl && lbl !== '[]'}
+                                          {#if labelMap.get(lbl)}
+                                            <span
+                                              class="inline-flex items-center px-1.5 py-0.5 text-[10px] truncate max-w-[80px]"
+                                              style={labelMap.get(lbl).color
+                                                ? `background:${labelMap.get(lbl).color}; color:#fff;`
+                                                : ''}
+                                            >
+                                              {labelMap.get(lbl).name ||
+                                                labelMap.get(lbl).label ||
+                                                labelMap.get(lbl).value ||
+                                                lbl}
+                                            </span>
+                                          {/if}
+                                        {/if}
+                                      {/each}
+                                      {#if conv.labels.length > 3}
+                                        <span class="text-[10px] text-muted-foreground"
+                                          >+{conv.labels.length - 3}</span
+                                        >
+                                      {/if}
+                                    </div>
+                                  {/if}
+                                </div>
+                              {:else}
+                                <!-- Classic single-row layout -->
+                                <div class="flex-1 min-w-0 flex flex-col gap-0.5 text-[13px]">
+                                  <!-- Row 1: From | Subject | Date -->
+                                  <div class="flex items-center gap-3">
+                                    <div
+                                      class="w-[30%] min-w-[140px] max-w-[280px] shrink-0 flex items-center gap-1"
+                                    >
+                                      {#if conv.hasUnread || conv.is_unread}
+                                        <span class="w-1.5 h-1.5 rounded-full bg-primary shrink-0"
+                                        ></span>
+                                      {/if}
+                                      <span
+                                        class={`truncate ${conv.hasUnread || conv.is_unread ? 'font-semibold' : ''}`}
+                                        >{listIsSentFolder
+                                          ? `To: ${getConversationToName(conv) || getConversationFromName(conv)}`
+                                          : getConversationFromName(conv)}</span
+                                      >
+                                      {#if conv.messageCount > 1}
+                                        <span class="text-[11px] text-muted-foreground shrink-0"
+                                          >({conv.messageCount})</span
+                                        >
+                                      {/if}
+                                    </div>
+                                    <div
+                                      class="flex-1 min-w-0 flex items-baseline gap-1 overflow-hidden"
+                                    >
+                                      <span
+                                        class={`truncate ${conv.hasUnread || conv.is_unread ? 'font-medium' : ''}`}
+                                        >{conv.displaySubject || conv.subject}</span
+                                      >
+                                      {#if truncatePreview(mailboxView?.getConversationPreview?.(conv) || conv.snippet || '', 80)}
+                                        <span
+                                          class="text-muted-foreground font-normal text-xs truncate"
+                                        >
+                                          &mdash; {truncatePreview(
+                                            mailboxView?.getConversationPreview?.(conv) ||
+                                              conv.snippet ||
+                                              '',
+                                            80,
+                                          )}
+                                        </span>
+                                      {/if}
+                                    </div>
+                                    <div
+                                      class="flex items-center gap-1.5 shrink-0 text-muted-foreground"
+                                    >
+                                      {#if hasUserReplied(conv)}
+                                        <svg viewBox="0 0 24 24" class="h-3 w-3" aria-hidden="true">
+                                          <path
+                                            d="M9 17l-5-5 5-5"
+                                            fill="none"
+                                            stroke="currentColor"
+                                            stroke-width="2"
+                                            stroke-linecap="round"
+                                            stroke-linejoin="round"
+                                          ></path>
+                                          <path
+                                            d="M20 18v-2a4 4 0 0 0-4-4H4"
+                                            fill="none"
+                                            stroke="currentColor"
+                                            stroke-width="2"
+                                            stroke-linecap="round"
+                                            stroke-linejoin="round"
+                                          ></path>
+                                        </svg>
+                                      {/if}
+                                      {#if hasAttachments(conv)}
+                                        <svg viewBox="0 0 24 24" class="h-3 w-3" aria-hidden="true">
+                                          <path
+                                            d="M21.44 11.05l-8.49 8.49a5 5 0 0 1-7.07-7.07l9.19-9.19a3 3 0 1 1 4.24 4.24l-9.19 9.19a1 1 0 1 1-1.41-1.41l8.49-8.49"
+                                            fill="none"
+                                            stroke="currentColor"
+                                            stroke-width="2"
+                                            stroke-linecap="round"
+                                            stroke-linejoin="round"
+                                          ></path>
+                                        </svg>
+                                      {/if}
+                                      <span class="text-[11px] whitespace-nowrap">
+                                        {#if conv.latestDate}
+                                          {formatCompactDate(conv.latestDate)}
+                                        {:else}
+                                          {formatCompactDate(conv.date)}
+                                        {/if}
+                                      </span>
+                                    </div>
+                                  </div>
+                                  {#if Array.isArray(conv.labels) && conv.labels.length > 0}
+                                    <!-- Labels row -->
+                                    <div class="flex items-center gap-1">
+                                      {#each conv.labels.slice(0, 3) as lbl}
+                                        {#if typeof lbl === 'string' && lbl && lbl !== '[]'}
+                                          {#if labelMap.get(lbl)}
+                                            <span
+                                              class="inline-flex items-center px-1.5 py-0.5 text-[10px] truncate max-w-[80px]"
+                                              style={labelMap.get(lbl).color
+                                                ? `background:${labelMap.get(lbl).color}; color:#fff;`
+                                                : ''}
+                                            >
+                                              {labelMap.get(lbl).name ||
+                                                labelMap.get(lbl).label ||
+                                                labelMap.get(lbl).value ||
+                                                lbl}
+                                            </span>
+                                          {/if}
+                                        {/if}
+                                      {/each}
+                                      {#if conv.labels.length > 3}
+                                        <span class="text-[10px] text-muted-foreground"
+                                          >+{conv.labels.length - 3}</span
+                                        >
+                                      {/if}
+                                    </div>
+                                  {/if}
+                                </div>
+                              {/if}
                             {/if}
                           </div>
                         </li>
@@ -6475,8 +6704,9 @@
                           ondragstart={(e) => handleDragStart(e, msg)}
                           ondragend={handleDragEnd}
                         >
+                          <!-- Desktop: checkbox + card/classic layout toggle -->
                           <button
-                            class={`relative w-10 h-10 rounded flex items-center justify-center shrink-0 transition-colors ${($selectedConversationIds || []).includes(msg.id) ? 'text-primary' : 'text-muted-foreground hover:text-foreground'}`}
+                            class={`relative w-8 h-8 rounded flex items-center justify-center shrink-0 transition-colors ${($selectedConversationIds || []).includes(msg.id) ? 'text-primary' : 'text-muted-foreground hover:text-foreground'}`}
                             type="button"
                             aria-label={($selectedConversationIds || []).includes(msg.id)
                               ? 'Deselect'
@@ -6492,77 +6722,168 @@
                               <Square class="h-5 w-5" />
                             {/if}
                           </button>
-                          <div class="flex-1 min-w-0 flex flex-col gap-0.5 text-[13px]">
-                            <!-- Row 1: From | Subject - Preview | Date -->
-                            <div class="flex items-center gap-3">
-                              <div
-                                class="w-[30%] min-w-[140px] max-w-[280px] shrink-0 flex items-center gap-1"
-                              >
-                                {#if msg.is_unread}
-                                  <span class="w-1.5 h-1.5 rounded-full bg-primary shrink-0"></span>
-                                {/if}
-                                <span class={`truncate ${msg.is_unread ? 'font-semibold' : ''}`}
-                                  >{listIsSentFolder
-                                    ? `To: ${getMessageToName(msg) || getMessageFromName(msg)}`
-                                    : getMessageFromName(msg)}</span
-                                >
-                              </div>
-                              <div class="flex-1 min-w-0 flex items-baseline gap-1 overflow-hidden">
-                                <span class={`truncate ${msg.is_unread ? 'font-medium' : ''}`}
-                                  >{msg.subject}</span
-                                >
-                                {#if truncatePreview(msg.snippet || '', 80)}
-                                  <span class="text-muted-foreground font-normal text-xs truncate">
-                                    &mdash; {truncatePreview(msg.snippet || '', 80)}
-                                  </span>
-                                {/if}
-                              </div>
-                              <div class="flex items-center gap-1.5 shrink-0 text-muted-foreground">
-                                {#if hasAttachments(msg)}
-                                  <svg viewBox="0 0 24 24" class="h-3 w-3" aria-hidden="true">
-                                    <path
-                                      d="M21.44 11.05l-8.49 8.49a5 5 0 0 1-7.07-7.07l9.19-9.19a3 3 0 1 1 4.24 4.24l-9.19 9.19a1 1 0 1 1-1.41-1.41l8.49-8.49"
-                                      fill="none"
-                                      stroke="currentColor"
-                                      stroke-width="2"
-                                      stroke-linecap="round"
-                                      stroke-linejoin="round"
-                                    ></path>
-                                  </svg>
-                                {/if}
-                                <span class="text-[11px] whitespace-nowrap">
-                                  {formatCompactDate(msg.date)}
-                                </span>
-                              </div>
-                            </div>
-                            {#if Array.isArray(msg.labels) && msg.labels.length}
-                              <!-- Row 2: Labels -->
-                              <div class="flex items-center gap-1">
-                                {#each msg.labels.slice(0, 4) as lbl}
-                                  {#if typeof lbl === 'string' && lbl && lbl !== '[]'}
-                                    {#if labelMap.get(lbl)}
-                                      <span
-                                        class="inline-flex items-center px-1.5 py-0.5 text-[10px] truncate max-w-[80px]"
-                                        style={labelMap.get(lbl).color
-                                          ? `background:${labelMap.get(lbl).color}; color:#fff;`
-                                          : ''}
-                                      >
-                                        {labelMap.get(lbl).name ||
-                                          labelMap.get(lbl).label ||
-                                          labelMap.get(lbl).value ||
-                                          lbl}
-                                      </span>
-                                    {:else}
-                                      <span
-                                        class="inline-flex items-center px-1.5 py-0.5 text-[10px] bg-secondary text-secondary-foreground truncate max-w-[80px]"
-                                        >{lbl}</span
-                                      >
-                                    {/if}
+                          {#if cardView}
+                            <div class="flex-1 min-w-0 flex flex-col gap-0.5">
+                              <!-- Line 1: Sender (bold, slightly bigger) + icons + Date (right, muted) -->
+                              <div class="flex items-center justify-between gap-2">
+                                <div class="flex items-center gap-1.5 min-w-0 flex-1">
+                                  {#if msg.is_unread}
+                                    <span class="w-1.5 h-1.5 rounded-full bg-primary shrink-0"
+                                    ></span>
                                   {/if}
-                                {/each}
+                                  <span
+                                    class={`truncate text-[14px] ${msg.is_unread ? 'font-bold' : 'font-semibold'}`}
+                                    >{listIsSentFolder
+                                      ? `To: ${getMessageToName(msg) || getMessageFromName(msg)}`
+                                      : getMessageFromName(msg)}</span
+                                  >
+                                </div>
+                                <div
+                                  class="flex items-center gap-1.5 shrink-0 text-muted-foreground"
+                                >
+                                  {#if hasAttachments(msg)}
+                                    <svg viewBox="0 0 24 24" class="h-3 w-3" aria-hidden="true">
+                                      <path
+                                        d="M21.44 11.05l-8.49 8.49a5 5 0 0 1-7.07-7.07l9.19-9.19a3 3 0 1 1 4.24 4.24l-9.19 9.19a1 1 0 1 1-1.41-1.41l8.49-8.49"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        stroke-width="2"
+                                        stroke-linecap="round"
+                                        stroke-linejoin="round"
+                                      ></path>
+                                    </svg>
+                                  {/if}
+                                  {#if msg.starred}
+                                    <Star class="h-3 w-3 fill-yellow-400 text-yellow-400" />
+                                  {/if}
+                                  <span class="text-[11px] whitespace-nowrap">
+                                    {formatCompactDate(msg.date)}
+                                  </span>
+                                </div>
                               </div>
-                            {/if}
-                          </div>
+                              <!-- Line 2: Subject -->
+                              <div
+                                class="truncate text-[13px] {msg.is_unread
+                                  ? 'font-medium text-foreground'
+                                  : 'text-foreground'}"
+                              >
+                                {msg.subject || '(No Subject)'}
+                              </div>
+                              <!-- Line 3: Preview (muted, smaller) -->
+                              {#if truncatePreview(msg.snippet || '', 120)}
+                                <div class="truncate text-[12px] text-muted-foreground">
+                                  {truncatePreview(msg.snippet || '', 120)}
+                                </div>
+                              {/if}
+                              {#if Array.isArray(msg.labels) && msg.labels.length}
+                                <!-- Labels row -->
+                                <div class="flex items-center gap-1 mt-0.5">
+                                  {#each msg.labels.slice(0, 4) as lbl}
+                                    {#if typeof lbl === 'string' && lbl && lbl !== '[]'}
+                                      {#if labelMap.get(lbl)}
+                                        <span
+                                          class="inline-flex items-center px-1.5 py-0.5 text-[10px] truncate max-w-[80px]"
+                                          style={labelMap.get(lbl).color
+                                            ? `background:${labelMap.get(lbl).color}; color:#fff;`
+                                            : ''}
+                                        >
+                                          {labelMap.get(lbl).name ||
+                                            labelMap.get(lbl).label ||
+                                            labelMap.get(lbl).value ||
+                                            lbl}
+                                        </span>
+                                      {:else}
+                                        <span
+                                          class="inline-flex items-center px-1.5 py-0.5 text-[10px] bg-secondary text-secondary-foreground truncate max-w-[80px]"
+                                          >{lbl}</span
+                                        >
+                                      {/if}
+                                    {/if}
+                                  {/each}
+                                </div>
+                              {/if}
+                            </div>
+                          {:else}
+                            <!-- Classic single-row layout -->
+                            <div class="flex-1 min-w-0 flex flex-col gap-0.5 text-[13px]">
+                              <!-- Row 1: From | Subject - Preview | Date -->
+                              <div class="flex items-center gap-3">
+                                <div
+                                  class="w-[30%] min-w-[140px] max-w-[280px] shrink-0 flex items-center gap-1"
+                                >
+                                  {#if msg.is_unread}
+                                    <span class="w-1.5 h-1.5 rounded-full bg-primary shrink-0"
+                                    ></span>
+                                  {/if}
+                                  <span class={`truncate ${msg.is_unread ? 'font-semibold' : ''}`}
+                                    >{listIsSentFolder
+                                      ? `To: ${getMessageToName(msg) || getMessageFromName(msg)}`
+                                      : getMessageFromName(msg)}</span
+                                  >
+                                </div>
+                                <div
+                                  class="flex-1 min-w-0 flex items-baseline gap-1 overflow-hidden"
+                                >
+                                  <span class={`truncate ${msg.is_unread ? 'font-medium' : ''}`}
+                                    >{msg.subject}</span
+                                  >
+                                  {#if truncatePreview(msg.snippet || '', 80)}
+                                    <span
+                                      class="text-muted-foreground font-normal text-xs truncate"
+                                    >
+                                      &mdash; {truncatePreview(msg.snippet || '', 80)}
+                                    </span>
+                                  {/if}
+                                </div>
+                                <div
+                                  class="flex items-center gap-1.5 shrink-0 text-muted-foreground"
+                                >
+                                  {#if hasAttachments(msg)}
+                                    <svg viewBox="0 0 24 24" class="h-3 w-3" aria-hidden="true">
+                                      <path
+                                        d="M21.44 11.05l-8.49 8.49a5 5 0 0 1-7.07-7.07l9.19-9.19a3 3 0 1 1 4.24 4.24l-9.19 9.19a1 1 0 1 1-1.41-1.41l8.49-8.49"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        stroke-width="2"
+                                        stroke-linecap="round"
+                                        stroke-linejoin="round"
+                                      ></path>
+                                    </svg>
+                                  {/if}
+                                  <span class="text-[11px] whitespace-nowrap">
+                                    {formatCompactDate(msg.date)}
+                                  </span>
+                                </div>
+                              </div>
+                              {#if Array.isArray(msg.labels) && msg.labels.length}
+                                <!-- Row 2: Labels -->
+                                <div class="flex items-center gap-1">
+                                  {#each msg.labels.slice(0, 4) as lbl}
+                                    {#if typeof lbl === 'string' && lbl && lbl !== '[]'}
+                                      {#if labelMap.get(lbl)}
+                                        <span
+                                          class="inline-flex items-center px-1.5 py-0.5 text-[10px] truncate max-w-[80px]"
+                                          style={labelMap.get(lbl).color
+                                            ? `background:${labelMap.get(lbl).color}; color:#fff;`
+                                            : ''}
+                                        >
+                                          {labelMap.get(lbl).name ||
+                                            labelMap.get(lbl).label ||
+                                            labelMap.get(lbl).value ||
+                                            lbl}
+                                        </span>
+                                      {:else}
+                                        <span
+                                          class="inline-flex items-center px-1.5 py-0.5 text-[10px] bg-secondary text-secondary-foreground truncate max-w-[80px]"
+                                          >{lbl}</span
+                                        >
+                                      {/if}
+                                    {/if}
+                                  {/each}
+                                </div>
+                              {/if}
+                            </div>
+                          {/if}
                         </div>
                       </article>
                     {/each}
@@ -6904,6 +7225,7 @@
             <button
               type="button"
               class="fe-vertical-resizer"
+              class:fe-vertical-resizer-active={resizingVertical}
               aria-label="Resize message and reader panes"
               onmousedown={startVerticalResize}
               onkeydown={(e) => {
@@ -8412,8 +8734,9 @@
 
   /* Folders sidebar */
   :global(.fe-mailbox-shell.fe-layout-productivity .fe-folders) {
-    width: 280px;
+    width: var(--fe-sidebar-width, 280px);
     flex-shrink: 0;
+    position: relative;
   }
 
   /* Messages list panel */
@@ -8459,7 +8782,7 @@
   :global(.fe-mailbox-shell.fe-vertical-resizable) {
     display: grid !important;
     grid-template-columns:
-      240px
+      var(--fe-sidebar-width, 240px)
       var(--fe-message-fr, 1fr)
       var(--fe-resizer-width, 10px)
       var(--fe-reader-fr, 1.2fr) !important;
@@ -8481,9 +8804,28 @@
   :global(.fe-mailbox-shell.fe-vertical-resizable > .fe-reader) {
     min-width: 0;
     width: 100%;
+    max-width: 100%;
   }
 
-  .fe-vertical-resizer {
+  :global(.fe-mailbox-shell.fe-vertical-resizable > .fe-folders) {
+    border-right: none;
+  }
+
+  :global(.fe-mailbox-shell.fe-vertical-resizable > .fe-messages) {
+    overflow: hidden;
+    border-left: none;
+    border-right: none;
+  }
+
+  :global(.fe-mailbox-shell.fe-vertical-resizable > .fe-reader) {
+    min-height: 0;
+    overflow-x: auto;
+    overflow-y: auto;
+    border-left: none;
+  }
+
+  .fe-vertical-resizer,
+  .fe-sidebar-resizer {
     display: none;
     border: none;
     background: transparent;
@@ -8491,28 +8833,109 @@
     min-width: var(--fe-resizer-width, 10px);
     max-width: var(--fe-resizer-width, 10px);
     cursor: col-resize;
-    align-self: stretch;
     position: relative;
     padding: 0;
     margin: 0;
+    touch-action: none;
+    outline: none;
   }
 
-  .fe-vertical-resizer::before {
+  .fe-vertical-resizer {
+    align-self: stretch;
+    justify-self: stretch;
+    z-index: 6;
+  }
+
+  .fe-sidebar-resizer {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    right: calc(var(--fe-resizer-width, 10px) / -2);
+    z-index: 20;
+  }
+
+  .fe-vertical-resizer::before,
+  .fe-sidebar-resizer::before {
     content: '';
     position: absolute;
-    top: 18px;
-    bottom: 18px;
+    top: 0;
+    bottom: 0;
     left: 50%;
-    width: 3px;
+    width: 1px;
     transform: translateX(-50%);
-    background: var(--color-border, #e5e7eb);
-    border-radius: 999px;
-    opacity: 0.7;
+    background: color-mix(in srgb, var(--color-border, #e5e7eb) 82%, transparent);
+    transition:
+      background 0.15s ease,
+      box-shadow 0.15s ease;
   }
 
-  .fe-vertical-resizer:hover::before {
-    background: var(--color-accent, #00aff8);
+  .fe-vertical-resizer::after,
+  .fe-sidebar-resizer::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 10px;
+    height: 28px;
+    transform: translate(-50%, -50%);
+    border-radius: 999px;
+    background:
+      repeating-linear-gradient(
+          to bottom,
+          color-mix(in srgb, var(--color-muted-foreground, #94a3b8) 96%, white 4%) 0 2px,
+          transparent 2px 5px
+        )
+        center / 2px 14px no-repeat,
+      color-mix(in srgb, var(--color-panel) 94%, var(--color-muted, #0f172a) 6%);
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--color-border, #e5e7eb) 72%, transparent),
+      0 1px 3px rgba(15, 23, 42, 0.18);
+    opacity: 0.98;
+    transition:
+      background 0.15s ease,
+      box-shadow 0.15s ease,
+      opacity 0.15s ease;
+    pointer-events: none;
+  }
+
+  .fe-vertical-resizer:hover::before,
+  .fe-vertical-resizer.fe-vertical-resizer-active::before,
+  .fe-vertical-resizer:focus-visible::before,
+  .fe-sidebar-resizer:hover::before,
+  .fe-sidebar-resizer.fe-sidebar-resizer-active::before,
+  .fe-sidebar-resizer:focus-visible::before {
+    background: color-mix(in srgb, var(--color-accent, #00aff8) 78%, white 22%);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-accent, #00aff8) 18%, transparent);
+  }
+
+  .fe-vertical-resizer:hover::after,
+  .fe-vertical-resizer.fe-vertical-resizer-active::after,
+  .fe-vertical-resizer:focus-visible::after,
+  .fe-sidebar-resizer:hover::after,
+  .fe-sidebar-resizer.fe-sidebar-resizer-active::after,
+  .fe-sidebar-resizer:focus-visible::after {
+    background:
+      repeating-linear-gradient(
+          to bottom,
+          color-mix(in srgb, var(--color-accent, #00aff8) 82%, white 18%) 0 2px,
+          transparent 2px 5px
+        )
+        center / 2px 14px no-repeat,
+      color-mix(in srgb, var(--color-panel) 88%, var(--color-accent, #00aff8) 12%);
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--color-accent, #00aff8) 20%, transparent),
+      0 2px 7px rgba(15, 23, 42, 0.22);
     opacity: 1;
+  }
+
+  .fe-vertical-resizer:focus-visible,
+  .fe-sidebar-resizer:focus-visible {
+    outline: none;
+  }
+
+  .fe-sidebar-resizer-active,
+  .fe-vertical-resizer-active {
+    background: transparent;
   }
 
   @media (min-width: 901px) {
@@ -8556,6 +8979,7 @@
       flex-direction: column;
       height: calc(100dvh - 60px);
       padding: 12px 12px 10px;
+      position: relative;
     }
   }
 
@@ -8610,5 +9034,31 @@
 
   :global(body.light-mode) .msg-active {
     background: rgba(0, 175, 248, 0.08);
+  }
+
+  /* ============================================
+     SIDEBAR RESIZER
+     ============================================ */
+
+  @media (min-width: 821px) {
+    .fe-sidebar-resizer {
+      display: block;
+    }
+  }
+
+  /* ============================================
+     COLLAPSIBLE SIDEBAR BOTTOM
+     ============================================ */
+  .fe-sidebar-bottom-toggle {
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .fe-sidebar-bottom-toggle .fe-chevron {
+    transition: transform 0.2s ease;
+  }
+
+  .fe-sidebar-bottom-toggle .fe-chevron.fe-collapsed {
+    transform: rotate(-90deg);
   }
 </style>

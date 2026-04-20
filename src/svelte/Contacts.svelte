@@ -1205,350 +1205,359 @@
   });
 </script>
 
-<div
-  class="flex h-14 items-center justify-between border-b border-border bg-background px-4"
-  style="padding-top: env(safe-area-inset-top, 0px); box-sizing: content-box;"
->
-  <div class="flex items-center gap-3">
-    <Button variant="ghost" size="icon" onclick={() => navigate?.('/mailbox')} aria-label="Back">
-      <ChevronLeft class="h-5 w-5" />
-    </Button>
-    <div class="flex flex-col">
-      <h1 class="text-lg font-semibold" data-testid="contacts-header">Contacts</h1>
-      <span class="text-xs text-muted-foreground">{activeEmail}</span>
-      <span class="text-xs text-muted-foreground" data-testid="contacts-count"
-        >{totalContactsLabel}</span
-      >
-    </div>
-  </div>
-  <div class="flex items-center gap-2">
-    <DropdownMenu.Root bind:open={importMenuOpen}>
-      <DropdownMenu.Trigger>
-        {#snippet child({ props })}
-          <Button variant="ghost" size="icon" {...props} aria-label="Import vCard">
-            <Upload class="h-4 w-4" />
-          </Button>
-        {/snippet}
-      </DropdownMenu.Trigger>
-      <DropdownMenu.Content align="end">
-        <DropdownMenu.Item
-          class="cursor-pointer p-0"
-          onclick={async (e) => {
-            if (!isTauriDesktop) return;
-            e.preventDefault();
-            const files = await pickFiles({ accept: '.vcf,text/vcard' });
-            if (files) importVCard(files);
-          }}
+<div class="flex flex-col h-full" style="min-height: 0; overflow: hidden;">
+  <div
+    class="flex h-14 items-center justify-between border-b border-border bg-background px-4 shrink-0"
+    style="padding-top: env(safe-area-inset-top, 0px); box-sizing: content-box;"
+  >
+    <div class="flex items-center gap-3">
+      <Button variant="ghost" size="icon" onclick={() => navigate?.('/mailbox')} aria-label="Back">
+        <ChevronLeft class="h-5 w-5" />
+      </Button>
+      <div class="flex flex-col">
+        <h1 class="text-lg font-semibold" data-testid="contacts-header">Contacts</h1>
+        <span class="text-xs text-muted-foreground">{activeEmail}</span>
+        <span class="text-xs text-muted-foreground" data-testid="contacts-count"
+          >{totalContactsLabel}</span
         >
-          <label class="flex w-full cursor-pointer items-center gap-2 px-2 py-1.5">
-            <input type="file" accept=".vcf,text/vcard" onchange={importVCard} class="hidden" />
-            <span>Import vCard</span>
-          </label>
-        </DropdownMenu.Item>
-      </DropdownMenu.Content>
-    </DropdownMenu.Root>
-    <Button onclick={startNew}>
-      <Plus class="mr-2 h-4 w-4" />
-      New Contact
-    </Button>
-  </div>
-</div>
-
-{#if error}
-  <Alert.Root variant="destructive" class="mx-4 mt-4">
-    <AlertCircle class="h-4 w-4" />
-    <Alert.Description>{error}</Alert.Description>
-  </Alert.Root>
-{/if}
-
-<div class="grid h-[calc(100vh-3.5rem)] grid-cols-1 md:grid-cols-[320px_1fr]">
-  <!-- Contact List -->
-  <div class="flex flex-col border-r border-border {selectedContact ? 'hidden md:flex' : 'flex'}">
-    <div class="space-y-2 p-3">
-      <div class="flex items-center justify-between gap-2 px-1">
-        <span class="text-xs text-muted-foreground">{visibleContactsLabel}</span>
-      </div>
-      <div class="relative">
-        <Search class="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-        <Input
-          type="search"
-          placeholder="Search contacts"
-          bind:value={query}
-          oninput={applyFilter}
-          class="pl-9"
-        />
       </div>
     </div>
-    <ul
-      class="flex-1 overflow-y-auto"
-      data-testid="contact-list"
-      data-loading={loading ? 'true' : 'false'}
-      data-count={filtered.length}
-    >
-      {#if loading}
-        <li class="p-4 text-center text-sm text-muted-foreground">Loading contacts...</li>
-      {:else if filtered.length === 0}
-        <li class="p-4 text-center text-sm text-muted-foreground">No contacts found.</li>
-      {:else}
-        {#each filtered as contact (contact.id)}
-          <li>
-            <button
-              type="button"
-              data-testid="contact-item"
-              data-contact-id={contact.id}
-              data-contact-name={contact.name || ''}
-              data-contact-email={contact.email || ''}
-              class="flex w-full items-center gap-3 border-l-[3px] px-3 py-2.5 text-left hover:bg-accent/50 {selectedContact?.id ===
-              contact.id
-                ? 'border-l-primary bg-primary/10'
-                : 'border-l-transparent'}"
-              onclick={() => selectContact(contact)}
-            >
-              <Avatar.Root
-                class="h-8 w-8 shrink-0"
-                style="background-color: {getAvatarColor(contact)}"
-              >
-                {#if contact.photo}
-                  <Avatar.Image src={contact.photo} alt={contact.name || 'Contact'} />
-                {:else}
-                  <Avatar.Fallback
-                    class="text-white text-xs font-semibold"
-                    style="background-color: {getAvatarColor(contact)}"
-                  >
-                    {getInitials(contact)}
-                  </Avatar.Fallback>
-                {/if}
-              </Avatar.Root>
-              <div class="min-w-0 flex-1">
-                <div class="truncate font-medium">{contact.name || contact.email || 'Contact'}</div>
-                {#if contact.email || contact.phone || contact.company}
-                  <div class="truncate text-xs text-muted-foreground">
-                    {contact.email || contact.phone || contact.company}
-                  </div>
-                {/if}
-              </div>
-            </button>
-          </li>
-        {/each}
-      {/if}
-    </ul>
-  </div>
-
-  <!-- Contact Detail -->
-  <div class="overflow-y-auto p-4 md:p-6 {selectedContact ? 'block' : 'hidden md:block'}">
-    {#if selectedContact && draft}
-      <div class="mx-auto max-w-2xl">
-        <!-- Header with avatar and actions -->
-        <div class="mb-6 flex items-center gap-4">
-          <Button
-            variant="ghost"
-            size="icon"
-            class="md:hidden"
-            onclick={() => selectContact(null)}
-            aria-label="Back to contacts"
-          >
-            <ChevronLeft class="h-5 w-5" />
-          </Button>
-          <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-          <label
-            for="contact-photo-upload"
-            class="group relative h-14 w-14 shrink-0 cursor-pointer overflow-hidden rounded-full"
-            style="background-color: {getAvatarColor(draft)}"
+    <div class="flex items-center gap-2">
+      <DropdownMenu.Root bind:open={importMenuOpen}>
+        <DropdownMenu.Trigger>
+          {#snippet child({ props })}
+            <Button variant="ghost" size="icon" {...props} aria-label="Import vCard">
+              <Upload class="h-4 w-4" />
+            </Button>
+          {/snippet}
+        </DropdownMenu.Trigger>
+        <DropdownMenu.Content align="end">
+          <DropdownMenu.Item
+            class="cursor-pointer p-0"
             onclick={async (e) => {
               if (!isTauriDesktop) return;
               e.preventDefault();
-              const files = await pickFiles({ accept: 'image/*' });
-              if (files) handlePhotoSelect(files);
+              const files = await pickFiles({ accept: '.vcf,text/vcard' });
+              if (files) importVCard(files);
             }}
           >
-            {#if draft.photo}
-              <img
-                src={draft.photo}
-                alt={draft.name || 'Contact'}
-                class="h-full w-full object-cover"
-              />
-            {:else}
-              <span
-                class="flex h-full w-full items-center justify-center text-xl font-bold text-white"
-              >
-                {getInitials(draft)}
-              </span>
-            {/if}
-            <span
-              class="absolute inset-0 flex items-center justify-center bg-black/50 text-white opacity-0 transition-opacity group-hover:opacity-100"
-            >
-              <Camera class="h-6 w-6" />
-            </span>
-          </label>
-          <div class="min-w-0 flex-1">
-            <div class="text-lg font-semibold">
-              {draft.name || selectedContact.name || selectedContact.email || 'Contact'}
-            </div>
-            {#if selectedContact.email}
-              <div class="text-sm text-muted-foreground">{selectedContact.email}</div>
-            {/if}
-          </div>
+            <label class="flex w-full cursor-pointer items-center gap-2 px-2 py-1.5">
+              <input type="file" accept=".vcf,text/vcard" onchange={importVCard} class="hidden" />
+              <span>Import vCard</span>
+            </label>
+          </DropdownMenu.Item>
+        </DropdownMenu.Content>
+      </DropdownMenu.Root>
+      <Button onclick={startNew}>
+        <Plus class="mr-2 h-4 w-4" />
+        New Contact
+      </Button>
+    </div>
+  </div>
 
-          <DropdownMenu.Root>
-            <DropdownMenu.Trigger>
-              {#snippet child({ props })}
-                <Button variant="outline" size="icon" {...props}>
-                  <MoreHorizontal class="h-4 w-4" />
-                </Button>
-              {/snippet}
-            </DropdownMenu.Trigger>
-            <DropdownMenu.Content align="end" class="w-48">
-              <DropdownMenu.Item
-                onclick={() => startMail(selectedContact)}
-                disabled={!selectedContact?.email}
-              >
-                <Mail class="mr-2 h-4 w-4" />
-                Email
-              </DropdownMenu.Item>
-              <DropdownMenu.Item onclick={() => addEvent(selectedContact)}>
-                <CalendarPlus class="mr-2 h-4 w-4" />
-                Add event
-              </DropdownMenu.Item>
-              <DropdownMenu.Item
-                onclick={() => viewEmails(selectedContact)}
-                disabled={!selectedContact?.email}
-              >
-                <Search class="mr-2 h-4 w-4" />
-                View emails
-              </DropdownMenu.Item>
-              <DropdownMenu.Item onclick={() => exportVCard(selectedContact)}>
-                <Download class="mr-2 h-4 w-4" />
-                Export vCard
-              </DropdownMenu.Item>
-              <DropdownMenu.Separator />
-              <DropdownMenu.Item
-                class="text-destructive"
-                onclick={() => openDeleteConfirm(selectedContact)}
-              >
-                <Trash2 class="mr-2 h-4 w-4" />
-                Delete
-              </DropdownMenu.Item>
-            </DropdownMenu.Content>
-          </DropdownMenu.Root>
+  {#if error}
+    <Alert.Root variant="destructive" class="mx-4 mt-4">
+      <AlertCircle class="h-4 w-4" />
+      <Alert.Description>{error}</Alert.Description>
+    </Alert.Root>
+  {/if}
+
+  <div class="grid flex-1 min-h-0 grid-cols-1 md:grid-cols-[320px_1fr] overflow-hidden">
+    <!-- Contact List -->
+    <div
+      class="flex flex-col min-h-0 border-r border-border {selectedContact
+        ? 'hidden md:flex'
+        : 'flex'}"
+    >
+      <div class="space-y-2 p-3">
+        <div class="flex items-center justify-between gap-2 px-1">
+          <span class="text-xs text-muted-foreground">{visibleContactsLabel}</span>
         </div>
-
-        <!-- Contact Form -->
-        <Card.Root>
-          <Card.Content class="space-y-4 pt-6">
-            <div class="space-y-2">
-              <Label for="contact-name">Name</Label>
-              <Input id="contact-name" type="text" bind:value={draft.name} />
-            </div>
-            <div class="space-y-2">
-              <Label for="contact-email">Email</Label>
-              <Input id="contact-email" type="email" bind:value={draft.email} />
-            </div>
-            <div class="space-y-2">
-              <Label for="contact-phone">Phone</Label>
-              <Input id="contact-phone" type="tel" bind:value={draft.phone} />
-            </div>
-            <div class="space-y-2">
-              <Label for="contact-notes">Notes</Label>
-              <Textarea id="contact-notes" rows={4} bind:value={draft.notes} />
-            </div>
-
-            {#if draft.photo}
-              <Button variant="ghost" size="sm" onclick={removePhoto}>Remove photo</Button>
-            {/if}
-
-            <input
-              id="contact-photo-upload"
-              type="file"
-              accept="image/*"
-              onchange={handlePhotoSelect}
-              class="hidden"
-            />
-
-            <!-- Optional Fields -->
-            <div class="border-t border-border pt-4">
+        <div class="relative">
+          <Search class="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            type="search"
+            placeholder="Search contacts"
+            bind:value={query}
+            oninput={applyFilter}
+            class="pl-9"
+          />
+        </div>
+      </div>
+      <ul
+        class="flex-1 overflow-y-auto"
+        data-testid="contact-list"
+        data-loading={loading ? 'true' : 'false'}
+        data-count={filtered.length}
+      >
+        {#if loading}
+          <li class="p-4 text-center text-sm text-muted-foreground">Loading contacts...</li>
+        {:else if filtered.length === 0}
+          <li class="p-4 text-center text-sm text-muted-foreground">No contacts found.</li>
+        {:else}
+          {#each filtered as contact (contact.id)}
+            <li>
               <button
                 type="button"
-                class="flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground"
-                onclick={() => (optionalFieldsExpanded = !optionalFieldsExpanded)}
+                data-testid="contact-item"
+                data-contact-id={contact.id}
+                data-contact-name={contact.name || ''}
+                data-contact-email={contact.email || ''}
+                class="flex w-full items-center gap-3 border-l-[3px] px-3 py-2.5 text-left hover:bg-accent/50 {selectedContact?.id ===
+                contact.id
+                  ? 'border-l-primary bg-primary/10'
+                  : 'border-l-transparent'}"
+                onclick={() => selectContact(contact)}
               >
-                {#if optionalFieldsExpanded}
-                  <ChevronDown class="h-4 w-4" />
-                {:else}
-                  <ChevronRight class="h-4 w-4" />
-                {/if}
-                <span>Additional info</span>
-                {#if !optionalFieldsExpanded && (draft.company || draft.jobTitle || draft.timezone || draft.website || draft.birthday || draft.address)}
-                  <span class="text-primary">*</span>
-                {/if}
-              </button>
-
-              {#if optionalFieldsExpanded}
-                <div class="mt-4 space-y-4">
-                  <div class="space-y-2">
-                    <Label for="contact-company">Company</Label>
-                    <Input id="contact-company" type="text" bind:value={draft.company} />
+                <Avatar.Root
+                  class="h-8 w-8 shrink-0"
+                  style="background-color: {getAvatarColor(contact)}"
+                >
+                  {#if contact.photo}
+                    <Avatar.Image src={contact.photo} alt={contact.name || 'Contact'} />
+                  {:else}
+                    <Avatar.Fallback
+                      class="text-white text-xs font-semibold"
+                      style="background-color: {getAvatarColor(contact)}"
+                    >
+                      {getInitials(contact)}
+                    </Avatar.Fallback>
+                  {/if}
+                </Avatar.Root>
+                <div class="min-w-0 flex-1">
+                  <div class="truncate font-medium">
+                    {contact.name || contact.email || 'Contact'}
                   </div>
-                  <div class="space-y-2">
-                    <Label for="contact-job">Job Title</Label>
-                    <Input id="contact-job" type="text" bind:value={draft.jobTitle} />
-                  </div>
-                  <div class="space-y-2">
-                    <Label for="contact-timezone">Time Zone</Label>
-                    <Input
-                      id="contact-timezone"
-                      type="text"
-                      placeholder="e.g., America/Chicago"
-                      bind:value={draft.timezone}
-                    />
-                  </div>
-                  <div class="space-y-2">
-                    <Label for="contact-website">Website</Label>
-                    <Input
-                      id="contact-website"
-                      type="url"
-                      placeholder="https://"
-                      bind:value={draft.website}
-                    />
-                  </div>
-                  <div class="space-y-2">
-                    <Label for="contact-birthday">Birthday</Label>
-                    <Input id="contact-birthday" type="date" bind:value={draft.birthday} />
-                  </div>
-                  <div class="space-y-2">
-                    <Label for="contact-address">Address</Label>
-                    <Input
-                      id="contact-address"
-                      type="text"
-                      placeholder="Street, City, State, ZIP"
-                      bind:value={draft.address}
-                    />
-                  </div>
+                  {#if contact.email || contact.phone || contact.company}
+                    <div class="truncate text-xs text-muted-foreground">
+                      {contact.email || contact.phone || contact.company}
+                    </div>
+                  {/if}
                 </div>
+              </button>
+            </li>
+          {/each}
+        {/if}
+      </ul>
+    </div>
+
+    <!-- Contact Detail -->
+    <div class="overflow-y-auto min-h-0 p-4 md:p-6 {selectedContact ? 'block' : 'hidden md:block'}">
+      {#if selectedContact && draft}
+        <div class="mx-auto max-w-2xl">
+          <!-- Header with avatar and actions -->
+          <div class="mb-6 flex items-center gap-4">
+            <Button
+              variant="ghost"
+              size="icon"
+              class="md:hidden"
+              onclick={() => selectContact(null)}
+              aria-label="Back to contacts"
+            >
+              <ChevronLeft class="h-5 w-5" />
+            </Button>
+            <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+            <label
+              for="contact-photo-upload"
+              class="group relative h-14 w-14 shrink-0 cursor-pointer overflow-hidden rounded-full"
+              style="background-color: {getAvatarColor(draft)}"
+              onclick={async (e) => {
+                if (!isTauriDesktop) return;
+                e.preventDefault();
+                const files = await pickFiles({ accept: 'image/*' });
+                if (files) handlePhotoSelect(files);
+              }}
+            >
+              {#if draft.photo}
+                <img
+                  src={draft.photo}
+                  alt={draft.name || 'Contact'}
+                  class="h-full w-full object-cover"
+                />
+              {:else}
+                <span
+                  class="flex h-full w-full items-center justify-center text-xl font-bold text-white"
+                >
+                  {getInitials(draft)}
+                </span>
+              {/if}
+              <span
+                class="absolute inset-0 flex items-center justify-center bg-black/50 text-white opacity-0 transition-opacity group-hover:opacity-100"
+              >
+                <Camera class="h-6 w-6" />
+              </span>
+            </label>
+            <div class="min-w-0 flex-1">
+              <div class="text-lg font-semibold">
+                {draft.name || selectedContact.name || selectedContact.email || 'Contact'}
+              </div>
+              {#if selectedContact.email}
+                <div class="text-sm text-muted-foreground">{selectedContact.email}</div>
               {/if}
             </div>
-          </Card.Content>
-          {#if hasChanges}
-            <Card.Footer class="flex justify-end gap-2">
-              <Button variant="ghost" onclick={cancelEditInline}>Cancel</Button>
-              <Button onclick={saveInline}>Save</Button>
-            </Card.Footer>
-          {/if}
-        </Card.Root>
 
-        <!-- Privacy Message -->
-        <div class="mt-6 flex items-center gap-2 bg-muted/50 p-3 text-xs text-muted-foreground">
-          <Info class="h-4 w-4 shrink-0" />
-          <span>Privacy: Contacts are stored privately in your account and are never shared.</span>
+            <DropdownMenu.Root>
+              <DropdownMenu.Trigger>
+                {#snippet child({ props })}
+                  <Button variant="outline" size="icon" {...props}>
+                    <MoreHorizontal class="h-4 w-4" />
+                  </Button>
+                {/snippet}
+              </DropdownMenu.Trigger>
+              <DropdownMenu.Content align="end" class="w-48">
+                <DropdownMenu.Item
+                  onclick={() => startMail(selectedContact)}
+                  disabled={!selectedContact?.email}
+                >
+                  <Mail class="mr-2 h-4 w-4" />
+                  Email
+                </DropdownMenu.Item>
+                <DropdownMenu.Item onclick={() => addEvent(selectedContact)}>
+                  <CalendarPlus class="mr-2 h-4 w-4" />
+                  Add event
+                </DropdownMenu.Item>
+                <DropdownMenu.Item
+                  onclick={() => viewEmails(selectedContact)}
+                  disabled={!selectedContact?.email}
+                >
+                  <Search class="mr-2 h-4 w-4" />
+                  View emails
+                </DropdownMenu.Item>
+                <DropdownMenu.Item onclick={() => exportVCard(selectedContact)}>
+                  <Download class="mr-2 h-4 w-4" />
+                  Export vCard
+                </DropdownMenu.Item>
+                <DropdownMenu.Separator />
+                <DropdownMenu.Item
+                  class="text-destructive"
+                  onclick={() => openDeleteConfirm(selectedContact)}
+                >
+                  <Trash2 class="mr-2 h-4 w-4" />
+                  Delete
+                </DropdownMenu.Item>
+              </DropdownMenu.Content>
+            </DropdownMenu.Root>
+          </div>
+
+          <!-- Contact Form -->
+          <Card.Root>
+            <Card.Content class="space-y-4 pt-6">
+              <div class="space-y-2">
+                <Label for="contact-name">Name</Label>
+                <Input id="contact-name" type="text" bind:value={draft.name} />
+              </div>
+              <div class="space-y-2">
+                <Label for="contact-email">Email</Label>
+                <Input id="contact-email" type="email" bind:value={draft.email} />
+              </div>
+              <div class="space-y-2">
+                <Label for="contact-phone">Phone</Label>
+                <Input id="contact-phone" type="tel" bind:value={draft.phone} />
+              </div>
+              <div class="space-y-2">
+                <Label for="contact-notes">Notes</Label>
+                <Textarea id="contact-notes" rows={4} bind:value={draft.notes} />
+              </div>
+
+              {#if draft.photo}
+                <Button variant="ghost" size="sm" onclick={removePhoto}>Remove photo</Button>
+              {/if}
+
+              <input
+                id="contact-photo-upload"
+                type="file"
+                accept="image/*"
+                onchange={handlePhotoSelect}
+                class="hidden"
+              />
+
+              <!-- Optional Fields -->
+              <div class="border-t border-border pt-4">
+                <button
+                  type="button"
+                  class="flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground"
+                  onclick={() => (optionalFieldsExpanded = !optionalFieldsExpanded)}
+                >
+                  {#if optionalFieldsExpanded}
+                    <ChevronDown class="h-4 w-4" />
+                  {:else}
+                    <ChevronRight class="h-4 w-4" />
+                  {/if}
+                  <span>Additional info</span>
+                  {#if !optionalFieldsExpanded && (draft.company || draft.jobTitle || draft.timezone || draft.website || draft.birthday || draft.address)}
+                    <span class="text-primary">*</span>
+                  {/if}
+                </button>
+
+                {#if optionalFieldsExpanded}
+                  <div class="mt-4 space-y-4">
+                    <div class="space-y-2">
+                      <Label for="contact-company">Company</Label>
+                      <Input id="contact-company" type="text" bind:value={draft.company} />
+                    </div>
+                    <div class="space-y-2">
+                      <Label for="contact-job">Job Title</Label>
+                      <Input id="contact-job" type="text" bind:value={draft.jobTitle} />
+                    </div>
+                    <div class="space-y-2">
+                      <Label for="contact-timezone">Time Zone</Label>
+                      <Input
+                        id="contact-timezone"
+                        type="text"
+                        placeholder="e.g., America/Chicago"
+                        bind:value={draft.timezone}
+                      />
+                    </div>
+                    <div class="space-y-2">
+                      <Label for="contact-website">Website</Label>
+                      <Input
+                        id="contact-website"
+                        type="url"
+                        placeholder="https://"
+                        bind:value={draft.website}
+                      />
+                    </div>
+                    <div class="space-y-2">
+                      <Label for="contact-birthday">Birthday</Label>
+                      <Input id="contact-birthday" type="date" bind:value={draft.birthday} />
+                    </div>
+                    <div class="space-y-2">
+                      <Label for="contact-address">Address</Label>
+                      <Input
+                        id="contact-address"
+                        type="text"
+                        placeholder="Street, City, State, ZIP"
+                        bind:value={draft.address}
+                      />
+                    </div>
+                  </div>
+                {/if}
+              </div>
+            </Card.Content>
+            {#if hasChanges}
+              <Card.Footer class="flex justify-end gap-2">
+                <Button variant="ghost" onclick={cancelEditInline}>Cancel</Button>
+                <Button onclick={saveInline}>Save</Button>
+              </Card.Footer>
+            {/if}
+          </Card.Root>
         </div>
-      </div>
-    {:else}
-      <div class="flex h-full items-center justify-center text-muted-foreground">
-        <div class="text-center">
-          <User class="mx-auto h-12 w-12 opacity-50" />
-          <p class="mt-2">Select a contact to view details.</p>
+      {:else}
+        <div class="flex h-full items-center justify-center text-muted-foreground">
+          <div class="text-center">
+            <User class="mx-auto h-12 w-12 opacity-50" />
+            <p class="mt-2">Select a contact to view details.</p>
+          </div>
         </div>
-      </div>
-    {/if}
+      {/if}
+    </div>
+  </div>
+  <!-- Privacy Message (always visible at bottom, matching Calendar page) -->
+  <div
+    class="flex items-center gap-2 border-t border-border bg-muted/50 px-4 py-2 text-xs text-muted-foreground shrink-0"
+  >
+    <Info class="h-3.5 w-3.5 shrink-0" />
+    <span>Privacy: Your contact data is stored privately and never shared.</span>
   </div>
 </div>
 

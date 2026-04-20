@@ -676,7 +676,7 @@ const createMailboxStore = () => {
           const res = await Remote.request(
             'Folders',
             {},
-            { method: 'GET', pathOverride: '/v1/folders?limit=100' },
+            { method: 'GET', pathOverride: '/v1/folders?limit=100', timeout: 120_000 },
           );
           const raw = res?.Result || res || [];
           list = Array.isArray(raw) ? raw : raw.Items || raw.items || [];
@@ -989,7 +989,9 @@ const createMailboxStore = () => {
         const res = await Remote.request('MessageList', params, {
           method: 'GET',
           pathOverride: '/v1/messages',
+          timeout: 60_000,
         });
+
         return { source: 'main', res };
       }
     };
@@ -1716,10 +1718,15 @@ const createMailboxStore = () => {
 
     // Optimistic update
     if (stayInFolder) {
-      messages.set(originalList.filter((m) => m.id !== msg.id));
+      const nextList = originalList.filter((m) => m.id !== msg.id);
+      messages.set(nextList);
       addPendingDeletes([msg.id]);
       if (originalSelected?.id === msg.id) {
-        selectedMessage.set(null);
+        const removedIndex = originalList.findIndex((m) => m.id === msg.id);
+        const fallbackIndex = removedIndex >= 0 ? Math.min(removedIndex, nextList.length - 1) : 0;
+        const nextSelected = fallbackIndex >= 0 ? nextList[fallbackIndex] || null : null;
+        selectedConversationIds.set([]);
+        selectedMessage.set(nextSelected);
       }
     } else {
       selectedFolder.set(target);
@@ -2408,6 +2415,7 @@ const createMailboxStore = () => {
     actions: {
       loadFolders,
       loadMessages,
+      refreshReplyTargets,
       searchMessages,
       selectFolder,
       selectMessage,

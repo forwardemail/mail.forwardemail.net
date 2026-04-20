@@ -258,7 +258,7 @@ const ASSET_PRIORITY = {
       /aarch64.*\.deb$/i,
       /arm64.*\.deb$/i,
       /aarch64.*\.rpm$/i,
-      /\.AppImage$/i,
+      /arm64.*\.rpm$/i,
     ],
   },
 };

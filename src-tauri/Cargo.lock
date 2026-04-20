@@ -1223,7 +1223,7 @@ dependencies = [
 
 [[package]]
 name = "forwardemail-desktop"
-version = "0.9.14"
+version = "0.9.20"
 dependencies = [
  "core-foundation",
  "log",

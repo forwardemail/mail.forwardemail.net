@@ -100,7 +100,7 @@ export function extractRecipientsField(raw: RawMessage, field: string = 'to'): s
   }
 
   if (typeof fieldVal === 'string') {
-    return fieldVal;
+    return toDisplayAddress(fieldVal);
   }
 
   if (Array.isArray(fieldVal)) {
@@ -109,7 +109,7 @@ export function extractRecipientsField(raw: RawMessage, field: string = 'to'): s
 
   if (typeof fieldVal === 'object') {
     if ((fieldVal as { text?: string }).text) {
-      return (fieldVal as { text: string }).text;
+      return toDisplayAddress((fieldVal as { text: string }).text);
     }
     if (Array.isArray((fieldVal as { value?: unknown[] }).value)) {
       return displayAddresses((fieldVal as { value: AddressObject[] }).value).join(', ');

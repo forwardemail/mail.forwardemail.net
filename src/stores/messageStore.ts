@@ -1,5 +1,6 @@
 import { writable, derived } from 'svelte/store';
 import type { Writable, Readable } from 'svelte/store';
+import { deferredWritable } from '../utils/deferred-store';
 import { shallowArrayEqual } from '../utils/store-utils.ts';
 import { sortMessages } from '../utils/message-sort.ts';
 import { selectedFolder } from './folderStore';
@@ -13,7 +14,12 @@ import {
 } from './viewStore';
 import type { Message, Attachment } from '../types';
 
-export const messages: Writable<Message[]> = writable([]);
+// Use deferredWritable so that any .set() call that shrinks the array
+// (i.e. removes messages from the list) is automatically routed through
+// requestAnimationFrame.  This prevents a WebKit use-after-free crash on
+// macOS 26+ where synchronous DOM node removal races with the webview
+// compositor's dispatchSetObscuredContentInsets.  See deferred-store.ts.
+export const messages = deferredWritable<Message[]>([]);
 export const selectedMessage: Writable<Message | null> = writable(null);
 export const searchResults: Writable<Message[]> = writable([]);
 export const searchActive: Writable<boolean> = writable(false);

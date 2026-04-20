@@ -2,6 +2,8 @@
 
 ## Prerequisites
 
+This guide is for **building the desktop app from source**. If you only want to install a published desktop binary, use the instructions in the repository [README](../README.md#ubuntu--debian-installation). Official Linux release artifacts are now published for **x64 and arm64**.
+
 | Tool                        | Version                                  | Notes                                                                                                                  |
 | --------------------------- | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
 | **Rust**                    | stable (via [rustup](https://rustup.rs)) | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh`                                                      |
@@ -36,10 +38,26 @@ pnpm install
 rustup target add aarch64-apple-darwin
 # macOS Intel:
 rustup target add x86_64-apple-darwin
-# Linux:
+# Linux x64:
 rustup target add x86_64-unknown-linux-gnu
-# Windows:
+# Linux arm64:
+rustup target add aarch64-unknown-linux-gnu
+# Windows x64:
 rustup target add x86_64-pc-windows-msvc
+# Windows arm64:
+rustup target add aarch64-pc-windows-msvc
+```
+
+If you are developing on **Linux arm64**, you can install the published release artifacts directly from GitHub Releases or build from source on your target machine for local development and custom packaging. The corresponding Rust target remains:
+
+```bash
+rustup target add aarch64-unknown-linux-gnu
+```
+
+If you are developing on **Windows arm64**, install the ARM64 MSVC toolchain support in Visual Studio Build Tools before building the Tauri app locally, then add the matching Rust target:
+
+```bash
+rustup target add aarch64-pc-windows-msvc
 ```
 
 ## Running in Dev Mode
@@ -60,11 +78,11 @@ pnpm tauri:build
 
 Output paths (relative to project root):
 
-| Platform | Output                                                                                             |
-| -------- | -------------------------------------------------------------------------------------------------- |
-| macOS    | `src-tauri/target/release/bundle/dmg/*.dmg`                                                        |
-| Windows  | `src-tauri/target/release/bundle/msi/*.msi`, `src-tauri/target/release/bundle/nsis/*.exe`          |
-| Linux    | `src-tauri/target/release/bundle/appimage/*.AppImage`, `src-tauri/target/release/bundle/deb/*.deb` |
+| Platform | Output                                                                                                                                          |
+| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| macOS    | `src-tauri/target/release/bundle/dmg/*.dmg`                                                                                                     |
+| Windows  | `src-tauri/target/release/bundle/msi/*.msi`, `src-tauri/target/release/bundle/nsis/*.exe`                                                       |
+| Linux    | `src-tauri/target/release/bundle/appimage/*.AppImage`, `src-tauri/target/release/bundle/deb/*.deb`, `src-tauri/target/release/bundle/rpm/*.rpm` |
 
 ## Configuration
 
@@ -87,6 +105,7 @@ No `.env` file is required. The API base URL is set in `src/config.js` and defau
 
 - **"WebView2 runtime not found"** — Download and install from [Microsoft](https://developer.microsoft.com/en-us/microsoft-edge/webview2/).
 - **Build fails with MSVC errors** — Install Visual Studio Build Tools with the "Desktop development with C++" workload.
+- **Windows arm64 build fails at link time** — Ensure the Visual Studio ARM64 C++ build tools are installed before targeting `aarch64-pc-windows-msvc`.
 
 ### General
 

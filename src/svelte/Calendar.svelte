@@ -36,6 +36,7 @@
   import Info from '@lucide/svelte/icons/info';
   import AlertTriangle from '@lucide/svelte/icons/alert-triangle';
   import CalendarIcon from '@lucide/svelte/icons/calendar';
+  import Plus from '@lucide/svelte/icons/plus';
 
   interface ToastApi {
     show?: (message: string, type?: string) => void;
@@ -262,6 +263,15 @@
   let showEditEndPicker = $state(false);
   let optionalFieldsExpanded = $state(false);
   let filterMenuOpen = $state(false);
+  let newCalendarModal = $state(false);
+  let newCalendarName = $state('');
+  let newCalendarColor = $state('#1c7ed6');
+  let savingCalendar = $state(false);
+  let deleteCalendarModal = $state(false);
+  let deleteCalendarId = $state('');
+  let deleteCalendarLabel = $state('');
+  let deleteCalendarConfirmName = $state('');
+  let deletingCalendar = $state(false);
   let modalDirty = $state(false);
   let savingEvent = $state(false);
   let descriptionRef = $state<HTMLTextAreaElement | null>(null);
@@ -1068,6 +1078,23 @@
     if (msg) toasts?.show?.(msg, 'success');
   };
 
+  const getNoCalendarMessage = () =>
+    calendars.length > 0
+      ? 'Select a calendar before adding an event.'
+      : 'Create a calendar before adding an event.';
+
+  const ensureEventCalendarSelected = () => {
+    const calendar = activeCalendar();
+    if (calendar) return calendar;
+    const message = getNoCalendarMessage();
+    newEventModal = false;
+    modalDirty = false;
+    titleError = '';
+    setError(message);
+    toasts?.show?.(message, 'error');
+    return null;
+  };
+
   const resetCalendarState = () => {
     loadRequestId += 1;
     calendars = [];
@@ -1077,6 +1104,9 @@
     allEvents = [];
     eventsScope = 'none';
     eventsScopeCalendarId = '';
+    calendarInstance = null;
+    lastEventCount = -1;
+    calendarCreated = false;
     calendarsLoaded = false;
     loading = false;
     error = '';
@@ -1442,6 +1472,101 @@
     applySelectedEvents();
   };
 
+  const openDeleteCalendarModal = () => {
+    const calendar = activeCalendar();
+    const calendarId = resolveActiveCalendarId();
+    if (!calendar || !calendarId) {
+      toasts?.show?.('Select a calendar to delete.', 'error');
+      return;
+    }
+
+    deleteCalendarId = calendarId;
+    deleteCalendarLabel = getCalendarLabel(calendar) || 'Calendar';
+    deleteCalendarConfirmName = '';
+    filterMenuOpen = false;
+    deleteCalendarModal = true;
+  };
+
+  const createNewCalendar = async () => {
+    const name = newCalendarName.trim();
+    if (!name) return;
+    savingCalendar = true;
+    try {
+      const createdResponse = await Remote.request('CalendarCreate', {
+        name,
+        color: newCalendarColor,
+      });
+      const createdCalendar =
+        ((createdResponse as { Result?: unknown })?.Result as Record<string, unknown>) ||
+        (createdResponse as Record<string, unknown>);
+      const createdCalendarId = getCalendarId(createdCalendar);
+      toasts?.show?.('Calendar created', 'success');
+      newCalendarModal = false;
+      newCalendarName = '';
+      newCalendarColor = '#1c7ed6';
+      try {
+        await fetchCalendars();
+        if (createdCalendarId) {
+          selectedCalendarIds = uniqueIds([...selectedCalendarIds, createdCalendarId]);
+          activeCalendarId = createdCalendarId;
+          await persistCalendarPrefs(getAccountKey(), selectedCalendarIds);
+          await loadEventsForSelection(true);
+        }
+      } catch {
+        // Refresh failed but calendar was created — user can reload
+      }
+    } catch (err: unknown) {
+      if ((err as { isDemo?: boolean })?.isDemo) {
+        newCalendarModal = false;
+        return;
+      }
+      toasts?.show?.((err as Error)?.message || 'Failed to create calendar', 'error');
+    } finally {
+      savingCalendar = false;
+    }
+  };
+
+  const deleteCalendar = async () => {
+    if (!deleteCalendarId) return;
+    if (deleteCalendarConfirmName.trim() !== deleteCalendarLabel.trim()) {
+      toasts?.show?.('Type the full calendar name to confirm deletion.', 'error');
+      return;
+    }
+
+    deletingCalendar = true;
+    const removedCalendarId = deleteCalendarId;
+    try {
+      await Remote.request(
+        'CalendarDelete',
+        {},
+        {
+          method: 'DELETE',
+          pathOverride: `/v1/calendars/${encodeURIComponent(removedCalendarId)}`,
+        },
+      );
+
+      selectedCalendarIds = selectedCalendarIds.filter((id) => id !== removedCalendarId);
+      if (activeCalendarId === removedCalendarId) activeCalendarId = '';
+
+      deleteCalendarModal = false;
+      deleteCalendarId = '';
+      deleteCalendarLabel = '';
+      deleteCalendarConfirmName = '';
+
+      await fetchCalendars();
+      await loadEventsForSelection(true);
+      toasts?.show?.('Calendar deleted', 'success');
+    } catch (err: unknown) {
+      if ((err as { isDemo?: boolean })?.isDemo) {
+        deleteCalendarModal = false;
+        return;
+      }
+      toasts?.show?.((err as Error)?.message || 'Failed to delete calendar', 'error');
+    } finally {
+      deletingCalendar = false;
+    }
+  };
+
   const fetchCalendars = async (attempt = 1): Promise<void> => {
     const requestId = loadRequestId;
     const accountKey = getAccountKey();
@@ -1478,10 +1603,19 @@
       await db.meta.put({ key: calendarsCacheKey, value: finalList, updatedAt: Date.now() });
       if (requestId !== loadRequestId) return;
       if (!finalList.length) {
-        // No calendars exist on the server — show empty state, don't fetch events
-        // for a non-existent 'default' calendar (which causes 400 errors).
+        // No calendars exist on the server — clear any stale selection and mounted
+        // calendar instance so the empty state renders immediately without a refresh.
+        selectedCalendarIds = [];
+        activeCalendarId = '';
         events = [];
         allEvents = [];
+        eventsScope = 'none';
+        eventsScopeCalendarId = '';
+        calendarInstance = null;
+        lastEventCount = -1;
+        calendarCreated = false;
+        filterMenuOpen = false;
+        await persistCalendarPrefs(accountKey, []);
         return;
       }
       const prefsSnapshot = selectedCalendarIds.length
@@ -1714,6 +1848,9 @@
   };
 
   const openNewEvent = (dateInput: unknown) => {
+    const calendar = ensureEventCalendarSelected();
+    if (!calendar) return;
+
     const dateObj = toDate(dateInput) || new Date();
     const roundedStart = roundTime(dateObj, 30);
     const startLocal = formatDateTimeLocal(roundedStart);
@@ -1726,7 +1863,7 @@
     const endSplit = to12Hour(endTimePart);
 
     newEvent = {
-      calendarId: resolveActiveCalendarId(),
+      calendarId: getCalendarId(calendar),
       title: '',
       date: datePart,
       startTime: startSplit.time,
@@ -1822,6 +1959,9 @@
   };
 
   const prefillQuickEvent = (email?: string) => {
+    const calendar = ensureEventCalendarSelected();
+    if (!calendar) return;
+
     const startDate = new Date(Date.now() + 10 * 60 * 1000);
     const startLocal = formatDateTimeLocal(startDate);
     const datePart = startLocal.split('T')[0];
@@ -1831,7 +1971,7 @@
     const startSplit = to12Hour(timePart);
     const endSplit = to12Hour(endTimePart);
     newEvent = {
-      calendarId: resolveActiveCalendarId(),
+      calendarId: getCalendarId(calendar),
       title: email ? `Meeting with ${email}` : 'New event',
       date: datePart,
       startTime: startSplit.time,
@@ -1862,7 +2002,11 @@
     const calendarId = newEvent.calendarId || resolveActiveCalendarId();
     const calendar = getCalendarById(calendarId);
     if (!calendarId || !calendar) {
-      setError('No calendar selected.');
+      const message = getNoCalendarMessage();
+      newEventModal = false;
+      modalDirty = false;
+      setError(message);
+      toasts?.show?.(message, 'error');
       return;
     }
 
@@ -2364,7 +2508,7 @@
         </div>
       </div>
       <div class="flex items-center gap-2">
-        {#if !isMobile && calendars.length > 1}
+        {#if !isMobile && calendars.length > 0}
           <DropdownMenu.Root bind:open={filterMenuOpen}>
             <DropdownMenu.Trigger>
               {#snippet child({ props })}
@@ -2390,9 +2534,31 @@
                   </DropdownMenu.CheckboxItem>
                 {/if}
               {/each}
+              {#if activeCalendar()}
+                <DropdownMenu.Separator />
+                <DropdownMenu.Item
+                  class="cursor-pointer text-destructive focus:text-destructive"
+                  onclick={openDeleteCalendarModal}
+                >
+                  <Trash2 class="mr-2 h-4 w-4" />
+                  <span>Delete {getCalendarLabel(activeCalendar())}</span>
+                </DropdownMenu.Item>
+              {/if}
             </DropdownMenu.Content>
           </DropdownMenu.Root>
         {/if}
+        <Button
+          variant="outline"
+          class="calendar-create-button gap-2"
+          aria-label="Create calendar"
+          onclick={() => {
+            filterMenuOpen = false;
+            newCalendarModal = true;
+          }}
+        >
+          <Plus class="h-4 w-4" />
+          <span class="hidden sm:inline">Create Calendar</span>
+        </Button>
         <Tooltip.Root>
           <Tooltip.Trigger>
             <Button
@@ -2423,7 +2589,9 @@
           onchange={importICS}
           class="hidden"
         />
-        <Button onclick={() => openNewEvent(new Date())}>+ New Event</Button>
+        <Button onclick={() => openNewEvent(new Date())} disabled={!activeCalendar()}>
+          + New Event
+        </Button>
       </div>
     </div>
 
@@ -2434,33 +2602,31 @@
       </Alert.Root>
     {/if}
 
-    <div class="calendar-content flex-1 flex flex-col overflow-hidden p-4 min-h-0">
+    <div class="calendar-content flex-1 flex flex-col p-4 min-h-0">
       {#if loading}
         <div class="flex items-center justify-center h-64 text-muted-foreground">
           Loading calendar...
         </div>
       {:else if calendarInstance}
-        <div
-          class="sx-wrapper border border-border"
-          class:is-dark={calendarIsDark}
-          data-testid="calendar-ready"
-        >
+        <div class="sx-wrapper" class:is-dark={calendarIsDark} data-testid="calendar-ready">
           <ScheduleXCalendar calendarApp={calendarInstance} />
-        </div>
-        <div
-          class="mt-4 flex items-center gap-2 bg-muted/50 p-3 text-xs text-muted-foreground shrink-0"
-        >
-          <Info class="h-3.5 w-3.5 shrink-0" />
-          <span>Privacy: Your calendar data is stored privately and never shared.</span>
         </div>
       {:else if calendarsLoaded && !calendars.length}
         <div class="flex flex-col items-center justify-center h-64 text-muted-foreground gap-3">
           <CalendarIcon class="h-10 w-10 opacity-50" />
           <p class="text-sm">No calendars found for this account.</p>
           <p class="text-xs">
-            Create a calendar using a CalDAV client (e.g. Thunderbird, Apple Calendar) to get
-            started.
+            Create a calendar to get started, or import one using a CalDAV client.
           </p>
+          <Button
+            variant="outline"
+            onclick={() => {
+              newCalendarModal = true;
+            }}
+          >
+            <Plus class="mr-2 h-4 w-4" />
+            Create Calendar
+          </Button>
         </div>
       {:else}
         <div class="flex items-center justify-center h-64 text-muted-foreground">
@@ -2468,8 +2634,13 @@
         </div>
       {/if}
     </div>
+    <div
+      class="flex items-center gap-2 border-t border-border bg-muted/50 px-4 py-2 text-xs text-muted-foreground shrink-0"
+    >
+      <Info class="h-3.5 w-3.5 shrink-0" />
+      <span>Privacy: Your calendar data is stored privately and never shared.</span>
+    </div>
   </div>
-
   <Dialog.Root bind:open={newEventModal}>
     <Dialog.Content class="sm:max-w-[520px]" onkeydown={handleModalKeydown}>
       <div class="sr-only" aria-live="polite" aria-atomic="true">{modalAnnouncement}</div>
@@ -3060,6 +3231,114 @@
       </Dialog.Footer>
     </Dialog.Content>
   </Dialog.Root>
+
+  <Dialog.Root bind:open={deleteCalendarModal}>
+    <Dialog.Content class="sm:max-w-[420px]">
+      <Dialog.Header>
+        <Dialog.Title class="text-destructive">Delete calendar?</Dialog.Title>
+      </Dialog.Header>
+      <div class="space-y-4 py-2">
+        <p class="text-sm text-muted-foreground">
+          Are you sure you want to delete
+          <span class="font-medium text-foreground">{deleteCalendarLabel}</span>? This permanently
+          deletes the calendar and all of its events. This can't be undone. To confirm, type the
+          full calendar name below.
+        </p>
+        <div class="space-y-2">
+          <Label for="delete-calendar-confirm-name">Calendar name</Label>
+          <Input
+            id="delete-calendar-confirm-name"
+            bind:value={deleteCalendarConfirmName}
+            placeholder={deleteCalendarLabel || 'Calendar name'}
+            autocapitalize="off"
+            autocomplete="off"
+            autocorrect="off"
+            spellcheck={false}
+          />
+        </div>
+      </div>
+      <Dialog.Footer>
+        <Button
+          variant="ghost"
+          onclick={() => {
+            deleteCalendarModal = false;
+            deleteCalendarId = '';
+            deleteCalendarLabel = '';
+            deleteCalendarConfirmName = '';
+          }}
+        >
+          Cancel
+        </Button>
+        <Button
+          variant="destructive"
+          disabled={deleteCalendarConfirmName.trim() !== deleteCalendarLabel.trim() ||
+            deletingCalendar}
+          onclick={deleteCalendar}
+        >
+          {deletingCalendar ? 'Deleting...' : 'Delete Calendar'}
+        </Button>
+      </Dialog.Footer>
+    </Dialog.Content>
+  </Dialog.Root>
+
+  <!-- New Calendar Modal -->
+  <Dialog.Root bind:open={newCalendarModal}>
+    <Dialog.Content class="sm:max-w-[400px]">
+      <Dialog.Header>
+        <Dialog.Title>Create Calendar</Dialog.Title>
+      </Dialog.Header>
+      <div class="space-y-4 py-4">
+        <div class="space-y-2">
+          <Label for="new-cal-name">Name</Label>
+          <Input
+            id="new-cal-name"
+            placeholder="My Calendar"
+            bind:value={newCalendarName}
+            onkeydown={(e: KeyboardEvent) => {
+              if (e.key === 'Enter' && newCalendarName.trim()) createNewCalendar();
+            }}
+          />
+        </div>
+        <div class="space-y-2">
+          <Label for="new-cal-color">Color</Label>
+          <div class="flex items-center gap-3">
+            <input
+              id="new-cal-color"
+              type="color"
+              bind:value={newCalendarColor}
+              class="h-9 w-9 cursor-pointer rounded border border-border bg-transparent p-0.5"
+            />
+            <div class="flex gap-1.5">
+              {#each calendarColorPalette as color}
+                <button
+                  type="button"
+                  class="h-6 w-6 rounded-full border-2 transition-all {newCalendarColor === color
+                    ? 'border-foreground scale-110'
+                    : 'border-transparent hover:border-muted-foreground/50'}"
+                  style="background: {color}"
+                  onclick={() => {
+                    newCalendarColor = color;
+                  }}
+                  aria-label="Select color {color}"
+                ></button>
+              {/each}
+            </div>
+          </div>
+        </div>
+      </div>
+      <Dialog.Footer>
+        <Button
+          variant="ghost"
+          onclick={() => {
+            newCalendarModal = false;
+          }}>Cancel</Button
+        >
+        <Button disabled={!newCalendarName.trim() || savingCalendar} onclick={createNewCalendar}>
+          {savingCalendar ? 'Creating...' : 'Create Calendar'}
+        </Button>
+      </Dialog.Footer>
+    </Dialog.Content>
+  </Dialog.Root>
 </Tooltip.Provider>
 
 <style>
@@ -3082,7 +3361,7 @@
     height: calc(100vh - 150px);
     height: calc(100dvh - 150px);
     min-height: 400px;
-    overflow: hidden; /* Only hide overflow at this level, scrolling happens inside */
+    overflow: visible; /* Allow dropdown menus to overlay outside the wrapper */
   }
 
   /* The ScheduleXCalendar component adds an extra div wrapper */
@@ -3093,20 +3372,26 @@
   /* Make all schedule-x containers fill available height */
   .sx-wrapper :global(.sx-svelte-calendar-wrapper) {
     height: 100% !important;
+    overflow: visible !important;
   }
 
   .sx-wrapper :global(.sx__calendar-wrapper) {
     height: 100% !important;
+    overflow: visible !important;
   }
 
   .sx-wrapper :global(.sx__calendar) {
     height: 100% !important;
     display: flex;
     flex-direction: column;
+    overflow: visible !important;
   }
 
   .sx-wrapper :global(.sx__calendar-header) {
     flex-shrink: 0;
+    position: relative;
+    z-index: 20;
+    overflow: visible;
   }
 
   .sx-wrapper :global(.sx__view-container) {
@@ -3300,8 +3585,20 @@
   }
 
   /* Fix view selector dropdown z-index - needs to be above sticky headers */
-  .sx-wrapper :global(.sx__view-selection),
-  .sx-wrapper :global(.sx__view-selection__item),
+  .sx-wrapper :global(.sx__view-selection) {
+    z-index: 100 !important;
+    position: relative;
+  }
+
+  .sx-wrapper :global(.sx__view-selection-items) {
+    z-index: 200 !important;
+    position: absolute !important;
+    top: 100% !important;
+    right: 0;
+    border-radius: 0.375rem;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  }
+
   .sx-wrapper :global(.sx__range-heading),
   .sx-wrapper :global([class*='view-selection']) {
     z-index: 100 !important;
@@ -3311,5 +3608,35 @@
   .sx-wrapper :global(.sx__calendar-header) {
     z-index: 50 !important;
     position: relative;
+    overflow: visible !important;
+  }
+
+  /* Date picker popup fixes — remove extra padding, fix overflow scrollbar, dark mode border */
+  .sx-wrapper :global(.sx__date-picker-popup) {
+    overflow: hidden !important;
+    border-radius: 0.5rem;
+    border: 1px solid var(--sx-color-outline-variant, #c4c7c5);
+    padding: 12px !important;
+    width: auto !important;
+    min-width: 18rem;
+    max-width: 22rem;
+  }
+  .sx-wrapper.is-dark :global(.sx__date-picker-popup) {
+    border-color: #334155 !important;
+    background-color: oklch(0.178 0.042 265.755) !important;
+  }
+  /* Improve today circle contrast in dark mode */
+  .sx-wrapper.is-dark :global(.sx__date-picker__day.sx__date-picker__day--today) {
+    background-color: #7c3aed !important;
+    color: #fff !important;
+  }
+  /* Improve today circle in light mode */
+  .sx-wrapper :global(.sx__date-picker__day.sx__date-picker__day--today) {
+    background-color: #6d28d9 !important;
+    color: #fff !important;
+  }
+  /* Remove bottom margin on last week row to prevent extra space */
+  .sx-wrapper :global(.sx__date-picker__week:last-child) {
+    margin-bottom: 0 !important;
   }
 </style>

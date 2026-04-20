@@ -26,6 +26,7 @@ import { Local } from './storage';
 import { startInitialSync } from './sync-controller';
 import { createWebSocketClient, createReleaseWatcher, WS_EVENTS } from './websocket-client';
 import { connectNotifications, requestNotificationPermission } from './notification-manager';
+import { isDemoMode } from './demo-mode.js';
 import { fetchLabels } from '../stores/settingsStore';
 
 // ── Constants ──────────────────────────────────────────────────────────────
@@ -204,18 +205,24 @@ function createWebSocketUpdater() {
       const aliasAuth = Local.get('alias_auth') || '';
       const colonIdx = aliasAuth.indexOf(':');
       const password = colonIdx !== -1 ? aliasAuth.slice(colonIdx + 1) : '';
+      const demoMode = isDemoMode();
 
-      // Always start the release watcher (no auth needed)
-      releaseWatcher = createReleaseWatcher();
-      releaseWatcher.on(WS_EVENTS.NEW_RELEASE, (data) => {
-        if (data && typeof data === 'object') {
-          dispatchFrozen('fe:new-release', data);
-        }
-      });
-      releaseWatcher.connect();
+      // Demo mode is intentionally offline and backed by local fake data.
+      // Skip realtime sockets and notification permission requests there so
+      // local browser QA stays quiet and the app does not try to reach the
+      // production websocket endpoint with demo credentials.
+      if (!demoMode) {
+        releaseWatcher = createReleaseWatcher();
+        releaseWatcher.on(WS_EVENTS.NEW_RELEASE, (data) => {
+          if (data && typeof data === 'object') {
+            dispatchFrozen('fe:new-release', data);
+          }
+        });
+        releaseWatcher.connect();
+      }
 
       // If we have credentials, start the authenticated WebSocket
-      if (isNonEmptyString(email) && isNonEmptyString(password)) {
+      if (!demoMode && isNonEmptyString(email) && isNonEmptyString(password)) {
         wsClient = createWebSocketClient({ email, password });
 
         // Wire up IMAP events to store refreshes
@@ -376,7 +383,7 @@ function createWebSocketUpdater() {
 
       // Start fallback polling whenever we have credentials,
       // even if the WebSocket connection fails to establish.
-      if (isNonEmptyString(email) && isNonEmptyString(password)) {
+      if (!demoMode && isNonEmptyString(email) && isNonEmptyString(password)) {
         startFallbackPoll();
       }
     },

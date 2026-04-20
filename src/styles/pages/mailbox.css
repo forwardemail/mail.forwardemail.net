@@ -180,8 +180,8 @@
 
 .fe-mailbox-shell {
   display: grid;
-  grid-template-columns: 240px 1fr 1.2fr;
-  grid-template-rows: 1fr;
+  grid-template-columns: var(--fe-sidebar-width, 240px) minmax(0, 1fr) minmax(0, 1.2fr);
+  grid-template-rows: minmax(0, 1fr);
   gap: 14px;
   min-height: 0;
   flex: 1;
@@ -189,7 +189,7 @@
 }
 
 .fe-mailbox-shell.fe-shell-collapsed {
-  grid-template-columns: 1fr 1.2fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
 }
 
 .fe-folders {
@@ -262,7 +262,7 @@
 }
 
 .fe-messages {
-  overflow: visible;
+  overflow: hidden;
   position: relative;
   z-index: 2;
 }
