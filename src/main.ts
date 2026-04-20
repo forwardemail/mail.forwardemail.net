@@ -688,17 +688,34 @@ if (mailboxRoot) {
     document.addEventListener(
       'click',
       (e: MouseEvent) => {
-        const link = (e.target as HTMLElement)?.closest?.('a');
-        if (!link) return;
-        const href = link.href;
-        if (!href) return;
-        if (href.startsWith('http://') || href.startsWith('https://')) {
+        const link = (e.target as HTMLElement)?.closest?.('a') as HTMLAnchorElement | null;
+        if (!link || e.defaultPrevented || link.hasAttribute('download')) return;
+
+        let url: URL;
+        try {
+          url = new URL(link.href, window.location.href);
+        } catch {
+          return;
+        }
+
+        const isHttp = url.protocol === 'http:' || url.protocol === 'https:';
+        if (!isHttp) return;
+
+        const nextPath = `${url.pathname}${url.search}${url.hash}`;
+        const currentPath = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+
+        if (url.origin === window.location.origin) {
           e.preventDefault();
           e.stopPropagation();
-          import('@tauri-apps/plugin-opener')
-            .then(({ openUrl }) => openUrl(href))
-            .catch((err) => console.warn('[main] Failed to open URL:', err));
+          if (nextPath !== currentPath) viewModel.navigate(nextPath);
+          return;
         }
+
+        e.preventDefault();
+        e.stopPropagation();
+        import('@tauri-apps/plugin-opener')
+          .then(({ openUrl }) => openUrl(url.toString()))
+          .catch((err) => console.warn('[main] Failed to open URL:', err));
       },
       true,
     );

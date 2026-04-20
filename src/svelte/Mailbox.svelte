@@ -6273,6 +6273,7 @@
                           <div
                             class={`flex items-center gap-3 cursor-pointer ${isMobile ? 'px-4 py-3' : 'px-3 py-1.5'} ${swiping && swipeItemId === conv.id ? 'user-select-none' : ''} ${window.innerWidth > 640 ? 'cursor-grab active:cursor-grabbing' : ''}`}
                             data-conversation-row
+                            data-unread={conv.hasUnread || conv.is_unread ? 'true' : 'false'}
                             role="button"
                             tabindex="0"
                             draggable={window.innerWidth > 640}
@@ -8219,12 +8220,13 @@
                                     Retry Decryption
                                   </button>
                                 {:else}
-                                  <a
-                                    href="/mailbox/settings#accounts"
+                                  <button
+                                    type="button"
                                     class="inline-flex items-center justify-center px-3 py-1.5 text-sm bg-blue-500/20 hover:bg-blue-500/30 text-blue-600 dark:text-blue-400"
+                                    onclick={() => navigate('/mailbox/settings#accounts')}
                                   >
                                     Add PGP Key
-                                  </a>
+                                  </button>
                                 {/if}
                               </div>
                             {/if}
@@ -8450,12 +8452,13 @@
                             Retry Decryption
                           </button>
                         {:else}
-                          <a
-                            href="/mailbox/settings#accounts"
+                          <button
+                            type="button"
                             class="inline-flex items-center justify-center px-3 py-1.5 text-sm bg-blue-500/20 hover:bg-blue-500/30 text-blue-600 dark:text-blue-400"
+                            onclick={() => navigate('/mailbox/settings#accounts')}
                           >
                             Add PGP Key
-                          </a>
+                          </button>
                         {/if}
                       </div>
                     {/if}

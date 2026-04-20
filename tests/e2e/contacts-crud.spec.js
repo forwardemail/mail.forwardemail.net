@@ -62,17 +62,11 @@ test.describe('Contact Creation - Modal', () => {
   test('should create contact without an email address', async ({ page }) => {
     await expect(page.getByText('4 contacts', { exact: true }).first()).toBeVisible();
 
-    const modal = await openNewContactModal(page);
-
-    await fillContactForm(modal, {
+    await createContact(page, {
       name: 'No Email User',
       email: '',
       phone: '555-2020',
     });
-
-    await modal.locator('button:has-text("Save")').click();
-    await page.waitForSelector('div[role="dialog"]', { state: 'hidden', timeout: 5000 });
-    await waitForSuccessToast(page, '');
 
     await verifyContactInList(page, { name: 'No Email User' });
     await expect(page.getByText('5 contacts', { exact: true }).first()).toBeVisible();

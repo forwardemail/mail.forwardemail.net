@@ -1702,19 +1702,45 @@ function loadStoredPassphrases(): Record<string, string> {
   }
 }
 
+function persistStoredPassphrases(passphrases: Record<string, string>): void {
+  const currentAcct = Local.get('email') || 'default';
+  const accountKey = `pgp_passphrases_${currentAcct}`;
+  const filtered = Object.fromEntries(
+    Object.entries(passphrases || {}).filter(
+      ([name, value]) => Boolean(name) && typeof value === 'string' && value.trim().length > 0,
+    ),
+  );
+  if (Object.keys(filtered).length > 0) {
+    Local.set(accountKey, JSON.stringify(filtered));
+  } else {
+    Local.remove(accountKey);
+  }
+  refreshSyncWorkerPgpKeys();
+}
+
 function savePassphrase(keyName: string, passphrase: string): boolean {
   try {
     passphraseCache.set(keyName, passphrase);
     const stored = loadStoredPassphrases();
     stored[keyName] = passphrase;
-    const currentAcct = Local.get('email') || 'default';
-    const accountKey = `pgp_passphrases_${currentAcct}`;
-    Local.set(accountKey, JSON.stringify(stored));
-    refreshSyncWorkerPgpKeys();
+    persistStoredPassphrases(stored);
     debugLog('[PGP] Saved passphrase for key:', keyName);
     return true;
   } catch {
     return false;
+  }
+}
+
+function clearSavedPassphrase(keyName: string): void {
+  passphraseCache.delete(keyName);
+  try {
+    const stored = loadStoredPassphrases();
+    if (stored[keyName]) {
+      delete stored[keyName];
+      persistStoredPassphrases(stored);
+    }
+  } catch {
+    // Ignore storage cleanup failures; retry flow will still re-prompt from memory state.
   }
 }
 
@@ -1788,7 +1814,6 @@ async function tryDecrypt(
     // Check if this key needs a passphrase (some PGP keys are unprotected)
     let needsPassphrase = keyNeedsPassphraseCache.get(key.name);
     if (needsPassphrase === undefined) {
-      // First time seeing this key - check if it needs a passphrase
       try {
         const checkResult = await unlockPgpKey({
           keyName: key.name,
@@ -1798,10 +1823,8 @@ async function tryDecrypt(
         needsPassphrase = checkResult.needsPassphrase !== false;
         keyNeedsPassphraseCache.set(key.name, needsPassphrase);
 
-        // If key is already unlocked (unprotected), add it without passphrase
         if (checkResult.success && checkResult.alreadyUnlocked) {
           debugLog(`[PGP] Key "${key.name}" is unprotected, unlocked without passphrase`);
-          // Re-call without checkOnly to actually add to worker's unlocked keys
           await unlockPgpKey({
             keyName: key.name,
             keyValue: key.value,
@@ -1810,39 +1833,51 @@ async function tryDecrypt(
           continue;
         }
       } catch {
-        // Assume needs passphrase if check fails
         needsPassphrase = true;
         keyNeedsPassphraseCache.set(key.name, true);
       }
     }
 
-    // Only prompt for passphrase if the key actually needs one
-    if (!passphrase && needsPassphrase && allowPrompt && !passphraseModalRef?.open) {
+    if (!needsPassphrase) {
+      continue;
+    }
+
+    if (!passphrase && allowPrompt && !passphraseModalRef?.open) {
       warn('[PGP] Passphrase modal ref not available — cannot prompt for passphrase');
     }
-    if (!passphrase && needsPassphrase && allowPrompt && passphraseModalRef?.open) {
-      debugLog(`[PGP] [WORKER] Prompting user for passphrase for key "${key.name}"`);
-      try {
-        const res = await withTimeout(
-          passphraseModalRef.open(key.name || 'PGP key'),
-          PASSPHRASE_MODAL_TIMEOUT,
-          'Passphrase modal',
-        );
-        passphrase = res?.passphrase;
 
-        if (passphrase) {
-          debugLog(`[PGP] [WORKER] User provided passphrase for key "${key.name}"`);
-          savePassphrase(key.name, passphrase);
+    while (needsPassphrase) {
+      let rememberPassphrase = false;
+      let promptedThisAttempt = false;
+
+      if (!passphrase) {
+        if (!allowPrompt || !passphraseModalRef?.open) {
+          break;
         }
-      } catch (err: unknown) {
-        const isTimeout = (err as Error)?.message?.includes('timed out');
-        debugLog(
-          `[PGP] [WORKER] ${isTimeout ? 'Passphrase modal timed out' : 'User cancelled'} for key "${key.name}"`,
-        );
-      }
-    }
 
-    if (passphrase) {
+        debugLog(`[PGP] [WORKER] Prompting user for passphrase for key "${key.name}"`);
+        try {
+          const res = await withTimeout(
+            passphraseModalRef.open(key.name || 'PGP key'),
+            PASSPHRASE_MODAL_TIMEOUT,
+            'Passphrase modal',
+          );
+          passphrase = res?.passphrase?.trim();
+          rememberPassphrase = res?.remember !== false;
+          promptedThisAttempt = true;
+
+          if (!passphrase) {
+            break;
+          }
+        } catch (err: unknown) {
+          const isTimeout = (err as Error)?.message?.includes('timed out');
+          debugLog(
+            `[PGP] [WORKER] ${isTimeout ? 'Passphrase modal timed out' : 'User cancelled'} for key "${key.name}"`,
+          );
+          break;
+        }
+      }
+
       try {
         const result = await unlockPgpKey({
           keyName: key.name,
@@ -1853,9 +1888,26 @@ async function tryDecrypt(
 
         if (result.success) {
           debugLog(`[PGP] [WORKER] Successfully unlocked key "${key.name}" in worker`);
+          if (passphrase && rememberPassphrase) {
+            savePassphrase(key.name, passphrase);
+          }
+          break;
         }
+
+        debugWarn(`[PGP] [WORKER] Unlock rejected for key "${key.name}"`);
       } catch (err) {
         debugWarn(`[PGP] [WORKER] Failed to unlock key "${key.name}" in worker:`, err);
+      }
+
+      clearSavedPassphrase(key.name);
+      passphrase = undefined;
+
+      if (!allowPrompt || !passphraseModalRef?.open) {
+        break;
+      }
+
+      if (!promptedThisAttempt) {
+        continue;
       }
     }
   }

@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-This guide is for **building the desktop app from source**. If you only want to install a published desktop binary, use the instructions in the repository [README](../README.md#ubuntu--debian-installation). Official Linux release artifacts are now published for **x64 and arm64**.
+This guide is for **building the desktop app from source**. If you only want to install a published desktop binary, use the instructions in the repository [README](../README.md#ubuntu--debian-installation). Official Linux release artifacts are now published for **x64 and arm64**, with Linux arm64 shipping `.deb` and `.rpm` bundles.
 
 | Tool                        | Version                                  | Notes                                                                                                                  |
 | --------------------------- | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
@@ -83,6 +83,8 @@ Output paths (relative to project root):
 | macOS    | `src-tauri/target/release/bundle/dmg/*.dmg`                                                                                                     |
 | Windows  | `src-tauri/target/release/bundle/msi/*.msi`, `src-tauri/target/release/bundle/nsis/*.exe`                                                       |
 | Linux    | `src-tauri/target/release/bundle/appimage/*.AppImage`, `src-tauri/target/release/bundle/deb/*.deb`, `src-tauri/target/release/bundle/rpm/*.rpm` |
+
+Linux arm64 release automation currently publishes the `.deb` and `.rpm` outputs. The `.AppImage` path remains relevant for local x64 builds, but it is not part of the ARM64 release lane.
 
 ## Configuration
 
@@ -173,6 +175,8 @@ GitHub Releases assets use `objects.githubusercontent.com` / `release-assets.git
 - **"WebView2 runtime not found"** — Download and install from [Microsoft](https://developer.microsoft.com/en-us/microsoft-edge/webview2/).
 - **Build fails with MSVC errors** — Install Visual Studio Build Tools with the "Desktop development with C++" workload.
 - **Windows arm64 build fails at link time** — Ensure the Visual Studio ARM64 C++ build tools are installed before targeting `aarch64-pc-windows-msvc`.
+- **"Set as default" only opens Settings** — This is expected on modern Windows. The app can hand off to the system Default apps experience for `mailto`, but it cannot silently claim the handler itself.
+- **SmartScreen or Defender warns on install** — Signing materially helps, but reputation still depends on the certificate and download history. Workflow changes alone do not eliminate those warnings for a new installer.
 
 ### General
 

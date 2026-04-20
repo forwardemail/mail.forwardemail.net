@@ -32,6 +32,7 @@ env:
   CARGO_INCREMENTAL: 0
   RUST_BACKTRACE: short
   NODE_VERSION: '22'
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
 jobs:
   build-and-release:
@@ -56,7 +57,7 @@ jobs:
           - platform: ubuntu-22.04-arm
             target: aarch64-unknown-linux-gnu
             label: Linux-arm64
-            args: --target aarch64-unknown-linux-gnu
+            args: --target aarch64-unknown-linux-gnu --bundles deb,rpm
           - platform: windows-latest
             target: x86_64-pc-windows-msvc
             label: Windows-x64
@@ -126,6 +127,31 @@ jobs:
           fi
           echo "Uploading artifacts to release ID: ${{ inputs.release_id }}"
 
+      - name: Resolve release metadata
+        id: release_meta
+        shell: bash
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then
+            TAG_NAME="v${{ inputs.version }}"
+            RELEASE_NAME="Forward Email v${{ inputs.version }}"
+          else
+            RAW_TAG="${{ github.event.inputs.tag || github.ref_name }}"
+            if [[ "$RAW_TAG" == desktop-v* ]]; then
+              DISPLAY_VERSION="${RAW_TAG#desktop-v}"
+              TAG_NAME="$RAW_TAG"
+              RELEASE_NAME="Forward Email Desktop v${DISPLAY_VERSION}"
+            elif [[ "$RAW_TAG" == v* ]]; then
+              DISPLAY_VERSION="${RAW_TAG#v}"
+              TAG_NAME="$RAW_TAG"
+              RELEASE_NAME="Forward Email v${DISPLAY_VERSION}"
+            else
+              TAG_NAME="v$RAW_TAG"
+              RELEASE_NAME="Forward Email v${RAW_TAG}"
+            fi
+          fi
+          echo "tag_name=$TAG_NAME" >> "$GITHUB_OUTPUT"
+          echo "release_name=$RELEASE_NAME" >> "$GITHUB_OUTPUT"
+
       - name: Enable updater artifacts
         if: env.TAURI_SIGNING_PRIVATE_KEY != ''
         env:
@@ -156,8 +182,8 @@ jobs:
           WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
           WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
         with:
-          tagName: v${{ inputs.version || github.event.inputs.tag || github.ref_name }}
-          releaseName: 'Forward Email v${{ inputs.version || github.event.inputs.tag || github.ref_name }}'
+          tagName: ${{ steps.release_meta.outputs.tag_name }}
+          releaseName: ${{ steps.release_meta.outputs.release_name }}
           releaseId: ${{ inputs.release_id || '' }}
           releaseDraft: true
           prerelease: false

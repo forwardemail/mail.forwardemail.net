@@ -11,7 +11,7 @@
   import { forceDeleteAllDatabases } from '../utils/db-recovery.js';
   import { closeDatabase, terminateDbWorker } from '../utils/db-worker-client.js';
   import { deactivateDemoMode } from '../utils/demo-mode.js';
-  import { refreshSyncWorkerPgpKeys } from '../utils/sync-worker-client.js';
+  import { refreshSyncWorkerPgpKeys, unlockPgpKey } from '../utils/sync-worker-client.js';
   import { initPerfObservers } from '../utils/perf-logger.ts';
   import { mailService, clearPgpKeyCache, invalidatePgpCachedBodies } from '../stores/mailService';
   import { searchStore } from '../stores/searchStore';
@@ -181,6 +181,7 @@
   let keyFormVisible = $state(false);
   let editingKeyName = $state('');
   let editingKeyValue = $state('');
+  let editingKeyPassphrase = $state('');
   let blockRemoteImages = $state(false);
   let blockTrackingPixels = $state(true);
   let fontChoice = $state('system');
@@ -1039,6 +1040,7 @@
     editingIndex = -1;
     editingKeyName = '';
     editingKeyValue = '';
+    editingKeyPassphrase = '';
   };
 
   const editKey = (key: { name: string; value: string }) => {
@@ -1048,15 +1050,51 @@
     editingIndex = idx;
     editingKeyName = key.name || '';
     editingKeyValue = key.value || '';
+    editingKeyPassphrase = '';
   };
 
-  const removeKey = (key: { name: string; value: string }) => {
-    pgpKeys = pgpKeys.filter((k) => k !== key);
+  const loadStoredPgpPassphrases = (): Record<string, string> => {
+    try {
+      const currentAcct = activeEmail || getAliasEmail() || Local.get('email') || '';
+      const raw = Local.get(`pgp_passphrases_${currentAcct}`);
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch {
+      return {};
+    }
+  };
+
+  const persistStoredPgpPassphrases = (passphrases: Record<string, string>) => {
     const currentAcct = activeEmail || getAliasEmail() || Local.get('email') || '';
+    const storageKey = `pgp_passphrases_${currentAcct}`;
+    const filtered = Object.fromEntries(
+      Object.entries(passphrases || {}).filter(
+        ([name, value]) => Boolean(name) && typeof value === 'string' && value.trim().length > 0,
+      ),
+    );
+    if (Object.keys(filtered).length > 0) {
+      Local.set(storageKey, JSON.stringify(filtered));
+    } else {
+      Local.remove(storageKey);
+    }
+  };
+
+  const removeKey = async (key: { name: string; value: string }) => {
+    const currentAcct = activeEmail || getAliasEmail() || Local.get('email') || '';
+    pgpKeys = pgpKeys.filter((k) => k !== key);
     Local.set(`pgp_keys_${currentAcct}`, JSON.stringify(pgpKeys));
+
+    const storedPassphrases = loadStoredPgpPassphrases();
+    if (key?.name) {
+      delete storedPassphrases[key.name];
+      persistStoredPgpPassphrases(storedPassphrases);
+    }
+
     refreshSyncWorkerPgpKeys();
     clearPgpKeyCache();
-    invalidatePgpCachedBodies(currentAcct);
+    await invalidatePgpCachedBodies(currentAcct);
+    setSuccess('Encryption key removed.');
   };
 
   const cancelKeyForm = () => {
@@ -1064,15 +1102,32 @@
     editingIndex = -1;
     editingKeyName = '';
     editingKeyValue = '';
+    editingKeyPassphrase = '';
   };
 
-  const saveKey = () => {
+  const saveKey = async () => {
     const name = (editingKeyName || '').trim();
     const value = (editingKeyValue || '').trim();
+    const passphrase = (editingKeyPassphrase || '').trim();
     if (!name || !value) {
       setError('Please provide a name and key.');
       return;
     }
+
+    if (passphrase) {
+      const unlockResult = await unlockPgpKey({
+        keyName: name,
+        passphrase,
+        keyValue: value,
+        remember: false,
+      });
+      if (!unlockResult?.success) {
+        setError(unlockResult?.error || 'That passphrase could not unlock this private key.');
+        return;
+      }
+    }
+
+    const previousKey = editingIndex >= 0 ? pgpKeys[editingIndex] : null;
     const keys = [...pgpKeys];
     if (editingIndex >= 0) {
       keys[editingIndex] = { name, value };
@@ -1082,11 +1137,27 @@
     pgpKeys = keys;
     const currentAcct = activeEmail || getAliasEmail() || Local.get('email') || '';
     Local.set(`pgp_keys_${currentAcct}`, JSON.stringify(pgpKeys));
+
+    const storedPassphrases = loadStoredPgpPassphrases();
+    if (previousKey?.name && previousKey.name !== name) {
+      delete storedPassphrases[previousKey.name];
+    }
+    if (passphrase) {
+      storedPassphrases[name] = passphrase;
+    } else {
+      delete storedPassphrases[name];
+    }
+    persistStoredPgpPassphrases(storedPassphrases);
+
     refreshSyncWorkerPgpKeys();
     clearPgpKeyCache();
-    invalidatePgpCachedBodies(currentAcct);
+    await invalidatePgpCachedBodies(currentAcct);
     cancelKeyForm();
-    setSuccess('Encryption key saved locally.');
+    setSuccess(
+      passphrase
+        ? 'Encryption key saved and unlocked locally.'
+        : 'Encryption key saved locally. If it is passphrase-protected, you will be prompted when opening an encrypted message.',
+    );
   };
 
   const clearData = () => {
@@ -1730,12 +1801,19 @@
                   placeholder="PGP private key (ASCII armor)"
                   bind:value={editingKeyValue}
                 />
+                <Input
+                  type="password"
+                  placeholder="Private key passphrase (optional)"
+                  bind:value={editingKeyPassphrase}
+                />
                 <div class="flex gap-2">
                   <Button variant="ghost" onclick={cancelKeyForm}>Cancel</Button>
                   <Button onclick={saveKey}>Save key</Button>
                 </div>
                 <p class="text-xs text-muted-foreground">
-                  Stored locally only. Used to decrypt PGP-encrypted messages.
+                  Stored locally only. If your private key is passphrase-protected, enter that
+                  passphrase here so encrypted messages can be unlocked immediately after you save
+                  the key.
                 </p>
               </div>
             {/if}

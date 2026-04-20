@@ -17,9 +17,9 @@ The desktop release workflow is [`release-desktop.yml`](../.github/workflows/rel
 | Windows  | x64          | `.msi`, `-setup.exe`, updater archive + signature        |
 | Windows  | arm64        | `-setup.exe`, updater archive + signature                |
 | Linux    | x64          | `.AppImage`, `.deb`, `.rpm`, updater archive + signature |
-| Linux    | arm64        | `.AppImage`, `.deb`, `.rpm`, updater archive + signature |
+| Linux    | arm64        | `.deb`, `.rpm`, updater archive + signature              |
 
-The workflow uses native GitHub-hosted runners for `macos-15`, `macos-15-intel`, `ubuntu-22.04`, `ubuntu-22.04-arm`, `windows-latest`, and `windows-11-arm`. Windows arm64 currently publishes the NSIS setup executable rather than MSI so the arm64 path stays aligned with the documented Windows installer support in Tauri.
+The workflow uses native GitHub-hosted runners for `macos-15`, `macos-15-intel`, `ubuntu-22.04`, `ubuntu-22.04-arm`, `windows-latest`, and `windows-11-arm`. Linux arm64 intentionally publishes Debian and RPM bundles only, because the broader Linux bundle set is not reliable on that ARM runner. Windows arm64 currently publishes the NSIS setup executable rather than MSI so the arm64 path stays aligned with the documented Windows installer support in Tauri.
 
 ```bash
 pnpm release:desktop patch
@@ -75,7 +75,7 @@ Trigger the desktop workflow manually via GitHub Actions:
 | Windows  | x64                   | `.msi`, `.msi.sig`, `-setup.exe`, `-setup.exe.sig`                   |
 | Windows  | arm64                 | `-setup.exe`, `-setup.exe.sig`                                       |
 | Linux    | x64                   | `.AppImage`, `.AppImage.sig`, `.deb`, `.deb.sig`, `.rpm`, `.rpm.sig` |
-| Linux    | arm64                 | `.AppImage`, `.AppImage.sig`, `.deb`, `.deb.sig`, `.rpm`, `.rpm.sig` |
+| Linux    | arm64                 | `.deb`, `.deb.sig`, `.rpm`, `.rpm.sig`                               |
 
 ### Android
 
@@ -98,14 +98,14 @@ The same IPA is uploaded to **App Store Connect → TestFlight** via `xcrun alto
 
 Signing is automatic when secrets are configured. Without secrets, builds are unsigned but still functional.
 
-| Platform     | Signing                           | Notes                                                                  |
-| ------------ | --------------------------------- | ---------------------------------------------------------------------- |
-| macOS        | Apple Developer ID + notarization | Users won't see Gatekeeper warnings                                    |
-| Windows      | EV certificate (optional)         | Avoids SmartScreen warnings                                            |
-| Linux        | None needed                       | AppImage/deb/rpm work unsigned                                         |
-| Android      | Self-managed keystore (`.jks`)    | Required for Play Store; optional for APK                              |
-| iOS          | Apple Distribution + ASC API key  | Required for TestFlight — job skips gracefully when secrets aren't set |
-| Auto-updater | Ed25519 key                       | Required for `.sig` files                                              |
+| Platform     | Signing                           | Notes                                                                                    |
+| ------------ | --------------------------------- | ---------------------------------------------------------------------------------------- |
+| macOS        | Apple Developer ID + notarization | Users won't see Gatekeeper warnings                                                      |
+| Windows      | Authenticode certificate          | Improves Microsoft Defender and SmartScreen trust, but reputation still builds over time |
+| Linux        | None needed                       | `.deb` and `.rpm` work unsigned; trust is handled by the host package flow               |
+| Android      | Self-managed keystore (`.jks`)    | Required for Play Store; optional for APK                                                |
+| iOS          | Apple Distribution + ASC API key  | Required for TestFlight — job skips gracefully when secrets aren't set                   |
+| Auto-updater | Ed25519 key                       | Required for `.sig` files                                                                |
 
 See [SECRETS.md](./SECRETS.md) for the full list of required secrets and [desktop-ci-secrets.md](./desktop-ci-secrets.md) for detailed setup.
 

@@ -23,6 +23,7 @@
   let visible = $state(false);
   let keyName = $state('');
   let passphrase = $state('');
+  let remember = $state(true);
   let resolver: ((value: PassphraseResult) => void) | null = $state(null);
   let rejecter: ((reason: Error) => void) | null = $state(null);
   let inputEl: HTMLInputElement | null = $state(null);
@@ -30,6 +31,7 @@
   const reset = () => {
     keyName = '';
     passphrase = '';
+    remember = true;
     resolver = null;
     rejecter = null;
   };
@@ -42,6 +44,7 @@
   const open = (name: string = ''): Promise<PassphraseResult> => {
     keyName = name;
     passphrase = '';
+    remember = true;
     visible = true;
     setTimeout(() => {
       if (inputEl) inputEl.focus();
@@ -53,7 +56,7 @@
   };
 
   const submit = () => {
-    if (resolver) resolver({ passphrase, remember: true });
+    if (resolver) resolver({ passphrase, remember });
     close();
   };
 
@@ -87,6 +90,9 @@
           Key: <strong>{keyName}</strong>
         </Dialog.Description>
       {/if}
+      <Dialog.Description>
+        This passphrase unlocks your private key. It is separate from pasting the key itself.
+      </Dialog.Description>
     </Dialog.Header>
 
     <div class="grid gap-4 py-4">
@@ -106,6 +112,10 @@
           }}
         />
       </div>
+      <label class="flex items-center gap-2 text-sm text-muted-foreground">
+        <input type="checkbox" bind:checked={remember} />
+        Remember this passphrase on this device
+      </label>
     </div>
 
     <Dialog.Footer>

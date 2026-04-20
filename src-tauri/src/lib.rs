@@ -196,7 +196,35 @@ async fn is_default_mailto_handler_impl(
     }
 }
 
-#[cfg(all(desktop, any(target_os = "windows", target_os = "linux")))]
+#[cfg(all(desktop, target_os = "windows"))]
+async fn is_default_mailto_handler_impl(
+    app: &tauri::AppHandle,
+) -> Result<MailtoStatus, String> {
+    use tauri_plugin_deep_link::DeepLinkExt;
+
+    match app.deep_link().is_registered("mailto") {
+        Ok(true) => Ok(MailtoStatus {
+            // Windows does not allow silently changing the default mail app.
+            // `register()` makes the app eligible in Settings, but it does not
+            // prove that MAILTO is currently assigned to this app.
+            status: "unknown".to_string(),
+            current_handler: String::new(),
+        }),
+        Ok(false) => Ok(MailtoStatus {
+            status: "not_default".to_string(),
+            current_handler: String::new(),
+        }),
+        Err(e) => {
+            log::warn!("deep-link is_registered check failed: {}", e);
+            Ok(MailtoStatus {
+                status: "unknown".to_string(),
+                current_handler: String::new(),
+            })
+        }
+    }
+}
+
+#[cfg(all(desktop, target_os = "linux"))]
 async fn is_default_mailto_handler_impl(
     app: &tauri::AppHandle,
 ) -> Result<MailtoStatus, String> {
@@ -291,7 +319,42 @@ async fn set_default_mailto_handler_impl(
     }
 }
 
-#[cfg(all(desktop, any(target_os = "windows", target_os = "linux")))]
+#[cfg(all(desktop, target_os = "windows"))]
+async fn set_default_mailto_handler_impl(
+    app: &tauri::AppHandle,
+) -> Result<SetMailtoResult, String> {
+    use tauri_plugin_deep_link::DeepLinkExt;
+
+    if let Err(e) = app.deep_link().register("mailto") {
+        log::error!("deep-link register failed: {}", e);
+        return Ok(SetMailtoResult {
+            method: "error".to_string(),
+            message: format!("Failed to register Forward Email with Windows: {}", e),
+        });
+    }
+
+    match app
+        .opener()
+        .open_url("ms-settings:defaultapps", None::<&str>)
+    {
+        Ok(_) => Ok(SetMailtoResult {
+            method: "open_mail_settings".to_string(),
+            message: "Windows Settings has been opened. Under Default apps, set Forward Email as the MAILTO handler or choose Forward Email as the default email app.".to_string(),
+        }),
+        Err(e) => {
+            log::warn!("failed to open Windows Default apps settings: {}", e);
+            Ok(SetMailtoResult {
+                method: "open_mail_settings".to_string(),
+                message: format!(
+                    "Forward Email has been registered with Windows, but Settings could not be opened automatically. Open Windows Settings > Apps > Default apps and set Forward Email as the MAILTO handler. ({})",
+                    e
+                ),
+            })
+        }
+    }
+}
+
+#[cfg(all(desktop, target_os = "linux"))]
 async fn set_default_mailto_handler_impl(
     app: &tauri::AppHandle,
 ) -> Result<SetMailtoResult, String> {

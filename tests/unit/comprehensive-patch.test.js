@@ -1098,3 +1098,56 @@ describe('Large mailbox bootstrap timeout regressions', () => {
     );
   });
 });
+
+// ============================================================
+// 10. PGP save, retry, and in-app settings navigation regressions
+// ============================================================
+describe('PGP desktop and settings regressions', () => {
+  const mailboxSrc = fs.readFileSync(
+    path.resolve(__dirname, '../../src/svelte/Mailbox.svelte'),
+    'utf8',
+  );
+  const settingsSrc = fs.readFileSync(
+    path.resolve(__dirname, '../../src/svelte/Settings.svelte'),
+    'utf8',
+  );
+  const passphraseModalSrc = fs.readFileSync(
+    path.resolve(__dirname, '../../src/svelte/PassphraseModal.svelte'),
+    'utf8',
+  );
+  const mailServiceSrc = fs.readFileSync(
+    path.resolve(__dirname, '../../src/stores/mailService.ts'),
+    'utf8',
+  );
+
+  it('should keep Add PGP Key navigation inside the desktop app', () => {
+    expect(mailboxSrc).toContain("onclick={() => navigate('/mailbox/settings#accounts')}");
+    expect(mailboxSrc).not.toContain('href="/mailbox/settings#accounts"');
+  });
+
+  it('should let settings capture an optional private-key passphrase at save time', () => {
+    expect(settingsSrc).toContain('Private key passphrase (optional)');
+    expect(settingsSrc).toContain('unlockPgpKey({');
+    expect(settingsSrc).toContain('Encryption key saved and unlocked locally.');
+  });
+
+  it('should await encrypted-body invalidation after key saves and removals', () => {
+    expect(settingsSrc).toContain('await invalidatePgpCachedBodies(currentAcct);');
+    expect(settingsSrc).toContain("setSuccess('Encryption key removed.')");
+  });
+
+  it('should explain that the runtime passphrase unlock is separate from pasting the key', () => {
+    expect(passphraseModalSrc).toContain(
+      'This passphrase unlocks your private key. It is separate from pasting the key itself.',
+    );
+    expect(passphraseModalSrc).toContain('Remember this passphrase on this device');
+  });
+
+  it('should clear invalid stored passphrases and retry prompting after unlock failures', () => {
+    expect(mailServiceSrc).toContain('function clearSavedPassphrase');
+    expect(mailServiceSrc).toContain('clearSavedPassphrase(key.name);');
+    expect(mailServiceSrc).toContain('while (needsPassphrase)');
+    expect(mailServiceSrc).toContain('rememberPassphrase = res?.remember !== false;');
+    expect(mailServiceSrc).toContain('if (passphrase && rememberPassphrase) {');
+  });
+});

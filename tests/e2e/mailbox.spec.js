@@ -35,8 +35,7 @@ test.describe('Mailbox — message list', () => {
   test('shows unread indicator on unread messages', async ({ page }) => {
     const unreadRow = page.locator('[data-conversation-row]', { hasText: 'Welcome to Webmail' });
     await expect(unreadRow).toBeVisible();
-    const fromText = unreadRow.locator('.font-semibold').first();
-    await expect(fromText).toBeVisible();
+    await expect(unreadRow).toHaveAttribute('data-unread', 'true');
   });
 
   test('shows attachment indicator', async ({ page }) => {

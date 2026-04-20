@@ -285,13 +285,15 @@
 </script>
 
 <div class="flex w-full flex-col items-center gap-3">
-  {#if hasActiveSession() && isAddingAccount}
+  {#if hasActiveSession()}
     <Card.Root class="w-[92%] max-w-[480px] py-0">
       <Card.Content class="flex items-center gap-2 p-3">
         <Button variant="ghost" size="icon" onclick={goToMailbox} aria-label="Back to Mailbox">
           <ChevronLeft class="h-5 w-5" />
         </Button>
-        <span class="text-sm font-semibold">Back to Mailbox</span>
+        <span class="text-sm font-semibold">
+          {isAddingAccount ? 'Back to Mailbox' : 'Return to Mailbox'}
+        </span>
       </Card.Content>
     </Card.Root>
   {/if}
