@@ -29,6 +29,7 @@ jobs:
       release_id: ${{ steps.resolve.outputs.release_id }}
       upload_url: ${{ steps.resolve.outputs.upload_url }}
       version: ${{ steps.version.outputs.version }}
+      release_draft: ${{ steps.resolve.outputs.release_draft }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -84,16 +85,12 @@ jobs:
               gh api -X DELETE "repos/${GH_REPO}/releases/${did}" || true
             done
 
-            # Convert to draft so tauri-action can upload assets to it
-            # (tauri-action expects releaseDraft: true).
-            gh api --method PATCH "repos/${GH_REPO}/releases/${published_id}" \
-              -f draft=true
-
             upload_url=$(gh api "repos/${GH_REPO}/releases/${published_id}" \
               --jq '.upload_url')
 
             echo "release_id=$published_id" >> "$GITHUB_OUTPUT"
             echo "upload_url=$upload_url" >> "$GITHUB_OUTPUT"
+            echo "release_draft=false" >> "$GITHUB_OUTPUT"
           else
             echo "No published release found for $TAG"
 
@@ -119,6 +116,7 @@ jobs:
 
             echo "release_id=$release_id" >> "$GITHUB_OUTPUT"
             echo "upload_url=$upload_url" >> "$GITHUB_OUTPUT"
+            echo "release_draft=true" >> "$GITHUB_OUTPUT"
           fi
 
   # ── 2. Build Desktop (Tauri) ────────────────────────────────────────────
@@ -128,6 +126,7 @@ jobs:
     with:
       version: ${{ needs.create-release.outputs.version }}
       release_id: ${{ needs.create-release.outputs.release_id }}
+      release_draft: ${{ needs.create-release.outputs.release_draft }}
     secrets: inherit
 
   # ── 2b. Build Mobile (Android APK/AAB + iOS IPA) ───────────────────────
@@ -225,7 +224,7 @@ jobs:
   # and shouldn't block publishing the actual binaries.
   publish:
     needs: [create-release, build-desktop, build-mobile, checksums]
-    if: always() && needs.build-desktop.result == 'success'
+    if: always() && needs.build-desktop.result == 'success' && needs.create-release.outputs.release_draft == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Publish release (remove draft status)
@@ -234,11 +233,9 @@ jobs:
           GH_REPO: ${{ github.repository }}
           RELEASE_ID: ${{ needs.create-release.outputs.release_id }}
         run: |
-          # Use release_id via gh api — `gh release edit TAG` uses
-          # /releases/tags/{tag} which does NOT find draft releases.
+          # Only releases created as drafts by this workflow need publishing.
           gh api --method PATCH "repos/${GH_REPO}/releases/${RELEASE_ID}" \
-            -f draft=false \
-            -F make_latest=true
+            -f draft=false
 
   # ── 5. Deploy web app ─────────────────────────────────────────────────
   # Inline deploy because GITHUB_TOKEN events don't trigger other workflows,
@@ -246,7 +243,7 @@ jobs:
   # deploy.yml is kept for manual re-deploys via workflow_dispatch.
   deploy:
     needs: [create-release, publish]
-    if: needs.publish.result == 'success'
+    if: always() && (needs.publish.result == 'success' || needs.publish.result == 'skipped')
     runs-on: ubuntu-latest
     permissions:
       contents: read

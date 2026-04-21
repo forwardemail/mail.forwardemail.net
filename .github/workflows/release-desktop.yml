@@ -13,6 +13,10 @@ on:
         required: false
         type: string
         description: 'Existing GitHub Release ID to upload artifacts to (skips creating a new release)'
+      release_draft:
+        required: false
+        type: string
+        description: 'Whether the target GitHub release is currently a draft'
   workflow_dispatch:
     inputs:
       tag:
@@ -185,6 +189,6 @@ jobs:
           tagName: ${{ steps.release_meta.outputs.tag_name }}
           releaseName: ${{ steps.release_meta.outputs.release_name }}
           releaseId: ${{ inputs.release_id || '' }}
-          releaseDraft: true
+          releaseDraft: ${{ inputs.release_draft || 'false' }}
           prerelease: false
           args: ${{ matrix.args }}
