@@ -73,6 +73,11 @@
       });
     }
 
+    const handleHashChange = () => {
+      applyCalendarHashSelection();
+    };
+    window.addEventListener('hashchange', handleHashChange);
+
     // Account change subscription (replaced $effect to avoid loops)
     accountUnsub = currentAccount.subscribe((acct) => {
       if (acct !== lastAccount) {
@@ -83,6 +88,10 @@
         }
       }
     });
+
+    return () => {
+      window.removeEventListener('hashchange', handleHashChange);
+    };
   });
 
   onDestroy(() => {
@@ -314,6 +323,10 @@
     timezone: '',
     attendees: '',
     notify: 0,
+    componentType: 'VEVENT',
+    status: '',
+    completedAt: '',
+    percentComplete: 0,
     _editingRawDescription: false,
   });
 
@@ -334,6 +347,66 @@
     const hour = pad(date.getHours());
     const minute = pad(date.getMinutes());
     return `${year}-${month}-${day}T${hour}:${minute}`;
+  };
+
+  const firstNonEmptyString = (...values: unknown[]) => {
+    for (const value of values) {
+      if (typeof value === 'string' && value.trim()) return value.trim();
+      if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+    }
+    return '';
+  };
+
+  const getCalendarHashTarget = () => {
+    if (typeof window === 'undefined') return null;
+    const hash = window.location.hash || '';
+    const match = hash.match(/^#(event|task)=([^&]+)/i);
+    if (!match) return null;
+    try {
+      return {
+        kind: match[1].toLowerCase(),
+        id: decodeURIComponent(match[2]),
+      };
+    } catch {
+      return {
+        kind: match[1].toLowerCase(),
+        id: match[2],
+      };
+    }
+  };
+
+  const isTaskEvent = (event: Record<string, unknown> | undefined) =>
+    firstNonEmptyString(
+      event?.componentType,
+      (event?.raw as Record<string, unknown> | undefined)?.componentType,
+      (event?.raw as Record<string, unknown> | undefined)?.component_type,
+    ).toUpperCase() === 'VTODO';
+
+  const isCompletedTask = (event: Record<string, unknown> | undefined) => {
+    if (!event || !isTaskEvent(event)) return false;
+    const status = firstNonEmptyString(event.status).toUpperCase();
+    const percentComplete = Number(event.percentComplete || 0);
+    return status === 'COMPLETED' || percentComplete >= 100 || Boolean(event.completedAt);
+  };
+
+  const findCalendarItemById = (id: string) => {
+    const targetId = String(id || '').trim();
+    if (!targetId) return undefined;
+    return allEvents.find(
+      (ev) =>
+        String((ev as Record<string, unknown>).id || (ev as Record<string, unknown>).uid || '') ===
+        targetId,
+    ) as Record<string, unknown> | undefined;
+  };
+
+  const applyCalendarHashSelection = () => {
+    const target = getCalendarHashTarget();
+    if (!target?.id) return false;
+    const match = findCalendarItemById(target.id);
+    if (!match) return false;
+    if (editEventModal && editEvent.id === String(match.id || '')) return true;
+    openEditEvent({ id: match.id || match.uid || target.id });
+    return true;
   };
 
   const to12Hour = (hhmm: string) => {
@@ -800,23 +873,110 @@
     return lines.join('\r\n');
   };
 
+  const generateICalTodo = (
+    task: {
+      summary?: string;
+      description?: string;
+      location?: string;
+      start?: string;
+      due?: string;
+      uid?: string;
+      url?: string;
+      timezone?: string;
+      status?: string;
+      completedAt?: string;
+      percentComplete?: number;
+    },
+    options: { method?: string } = {},
+  ) => {
+    const {
+      summary,
+      description,
+      location,
+      start,
+      due,
+      uid,
+      url,
+      timezone,
+      status,
+      completedAt,
+      percentComplete,
+    } = task;
+    const { method = 'PUBLISH' } = options;
+    const formatICalDate = (d: string | undefined) => {
+      if (!d) return '';
+      const date = new Date(d);
+      return Number.isFinite(date.getTime())
+        ? date.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z'
+        : '';
+    };
+    const escape = (val: string) =>
+      (val || '')
+        .replace(/\\/g, '\\\\')
+        .replace(/;/g, '\\;')
+        .replace(/,/g, '\\,')
+        .replace(/\n/g, '\\n');
+    const todoUid = uid || `${Date.now()}@forwardemail.net`;
+    const lines = [
+      'BEGIN:VCALENDAR',
+      'VERSION:2.0',
+      'PRODID:-//Forward Email//Webmail//EN',
+      'CALSCALE:GREGORIAN',
+      `METHOD:${method}`,
+      'BEGIN:VTODO',
+      `UID:${todoUid}`,
+      `DTSTAMP:${formatICalDate(new Date().toISOString())}`,
+      `SUMMARY:${escape(summary || 'Untitled Task')}`,
+    ];
+    const dtstart = formatICalDate(start);
+    const dueDate = formatICalDate(due);
+    const completed = formatICalDate(completedAt);
+    if (dtstart) lines.push(`DTSTART:${dtstart}`);
+    if (dueDate) lines.push(`DUE:${dueDate}`);
+    if (description) lines.push(`DESCRIPTION:${escape(description)}`);
+    if (location) lines.push(`LOCATION:${escape(location)}`);
+    if (url) lines.push(`URL:${escape(url)}`);
+    if (timezone) lines.push(`TZID:${escape(timezone)}`);
+    if (status) lines.push(`STATUS:${escape(status.toUpperCase())}`);
+    if (typeof percentComplete === 'number' && Number.isFinite(percentComplete)) {
+      lines.push(`PERCENT-COMPLETE:${Math.max(0, Math.min(100, Math.round(percentComplete)))}`);
+    }
+    if (completed) lines.push(`COMPLETED:${completed}`);
+    lines.push('END:VTODO', 'END:VCALENDAR');
+    return lines.join('\r\n');
+  };
+
   const exportEventAsICS = (event: Record<string, unknown> | undefined) => {
     if (!event) return;
-    const icalContent = generateICalEvent({
-      summary: event.title as string,
-      description: (event.description as string) || '',
-      location: (event.location as string) || '',
-      url: (event.url as string) || '',
-      timezone: (event.timezone as string) || '',
-      attendees: (event.attendees as string) || '',
-      start: event.start as string,
-      end: event.end as string,
-      uid: event.id as string,
-      reminder: Number(event.notify) || 0,
-    });
+    const icalContent = isTaskEvent(event)
+      ? generateICalTodo({
+          summary: event.title as string,
+          description: (event.description as string) || '',
+          location: (event.location as string) || '',
+          url: (event.url as string) || '',
+          timezone: (event.timezone as string) || '',
+          start: event.start as string,
+          due: (event.end as string) || (event.start as string),
+          uid: event.id as string,
+          status: (event.status as string) || '',
+          completedAt: (event.completedAt as string) || '',
+          percentComplete: Number(event.percentComplete) || 0,
+        })
+      : generateICalEvent({
+          summary: event.title as string,
+          description: (event.description as string) || '',
+          location: (event.location as string) || '',
+          url: (event.url as string) || '',
+          timezone: (event.timezone as string) || '',
+          attendees: (event.attendees as string) || '',
+          start: event.start as string,
+          end: event.end as string,
+          uid: event.id as string,
+          reminder: Number(event.notify) || 0,
+        });
     const filename = ((event.title as string) || 'event').replace(/[^a-z0-9]/gi, '_');
     downloadFile(icalContent, `${filename}.ics`, 'text/calendar;charset=utf-8');
-    toasts?.show?.('Event exported', 'success');
+    toasts?.show?.(isTaskEvent(event) ? 'Task exported' : 'Event exported', 'success');
   };
 
   const queueEventInvites = async ({
@@ -1336,11 +1496,36 @@
   const mapCalendarEvents = (list: unknown[], defaultCalendarId = '') =>
     (list || []).map((ev) => {
       const e = ev as Record<string, unknown>;
+      const componentType = firstNonEmptyString(
+        e.componentType,
+        e.component_type,
+        'VEVENT',
+      ).toUpperCase();
+      const start = normalizeEventTime(
+        e.start ||
+          e.start_date ||
+          e.dtstart ||
+          e.start_time ||
+          e.due ||
+          e.end ||
+          e.dtend ||
+          e.end_time,
+      );
+      const end = normalizeEventTime(
+        e.end ||
+          e.end_date ||
+          e.dtend ||
+          e.end_time ||
+          e.due ||
+          e.start ||
+          e.dtstart ||
+          e.start_time,
+      );
       return {
         id: e.id || e.uid || e.event_id,
-        title: e.summary || e.title || e.name || 'Event',
-        start: normalizeEventTime(e.start || e.start_date || e.dtstart || e.start_time),
-        end: normalizeEventTime(e.end || e.end_date || e.dtend || e.end_time),
+        title: e.summary || e.title || e.name || (componentType === 'VTODO' ? 'Task' : 'Event'),
+        start,
+        end,
         calendarId: e.calendar_id || e.calendarId || defaultCalendarId,
         description: e.description || e.notes || '',
         location: e.location || '',
@@ -1348,6 +1533,10 @@
         timezone: e.timezone || '',
         attendees: e.attendees || '',
         notify: e.notify || e.reminder || 0,
+        componentType,
+        status: firstNonEmptyString(e.status, e.task_status),
+        completedAt: firstNonEmptyString(e.completed, e.completed_at, e.completedAt),
+        percentComplete: Number(e.percent_complete || e.percentComplete || 0),
         raw: ev,
       };
     });
@@ -1445,8 +1634,17 @@
     const requestId = loadRequestId;
     const accountKey = getAccountKey();
     const selectedIds = uniqueIds(selectedCalendarIds);
+    const hashTarget = getCalendarHashTarget();
     if (!selectedIds.length) {
       events = [];
+      return;
+    }
+
+    if (hashTarget?.id) {
+      await fetchAllEvents(requestId, accountKey);
+      if (requestId !== loadRequestId) return;
+      applySelectedEvents();
+      applyCalendarHashSelection();
       return;
     }
 
@@ -1459,17 +1657,20 @@
       await fetchAllEvents(requestId, accountKey);
       if (requestId !== loadRequestId) return;
       applySelectedEvents();
+      applyCalendarHashSelection();
       return;
     }
 
     const calendarId = selectedIds[0];
     if (!force && eventsScope === 'calendar' && eventsScopeCalendarId === calendarId) {
       applySelectedEvents();
+      applyCalendarHashSelection();
       return;
     }
     await fetchEventsForCalendar(requestId, accountKey, calendarId);
     if (requestId !== loadRequestId) return;
     applySelectedEvents();
+    applyCalendarHashSelection();
   };
 
   const openDeleteCalendarModal = () => {
@@ -2149,10 +2350,7 @@
 
   const openEditEvent = (calendarEvent: unknown) => {
     const eventId = (calendarEvent as Record<string, unknown>)?.id;
-    const fullEvent = events.find(
-      (ev) =>
-        ((ev as Record<string, unknown>).id || (ev as Record<string, unknown>).uid) === eventId,
-    ) as Record<string, unknown> | undefined;
+    const fullEvent = findCalendarItemById(String(eventId || ''));
     if (!fullEvent) return;
     const startDate = new Date(fullEvent.start as string);
     const endDate = new Date(fullEvent.end as string);
@@ -2179,6 +2377,10 @@
       timezone: (fullEvent.timezone as string) || '',
       attendees: (fullEvent.attendees as string) || '',
       notify: (fullEvent.notify as number) || 0,
+      componentType: firstNonEmptyString(fullEvent.componentType, 'VEVENT').toUpperCase(),
+      status: firstNonEmptyString(fullEvent.status),
+      completedAt: firstNonEmptyString(fullEvent.completedAt),
+      percentComplete: Number(fullEvent.percentComplete || 0),
       _editingRawDescription: false,
     };
     optionalFieldsExpanded = !!(
@@ -2194,6 +2396,10 @@
   };
 
   const updateEvent = async () => {
+    if (editEvent.componentType === 'VTODO') {
+      setError('Task editing is limited to marking the task complete.');
+      return;
+    }
     const {
       id,
       calendarId,
@@ -2309,6 +2515,86 @@
       }
     } catch (err) {
       setError((err as Error)?.message || 'Unable to update event.');
+    }
+  };
+
+  const completeTask = async () => {
+    const task = findCalendarItemById(editEvent.id);
+    if (!task || !isTaskEvent(task)) {
+      setError('No task selected.');
+      return;
+    }
+    if (isCompletedTask(task)) {
+      toasts?.show?.('Task is already completed', 'info');
+      return;
+    }
+    const calendarId = (task.calendarId ||
+      task.calendar_id ||
+      editEvent.calendarId ||
+      resolveActiveCalendarId()) as string;
+    const completedAt = new Date().toISOString();
+    try {
+      const icalData = generateICalTodo({
+        summary: (task.title as string) || 'Task',
+        description: (task.description as string) || '',
+        location: (task.location as string) || '',
+        url: (task.url as string) || '',
+        timezone: (task.timezone as string) || '',
+        start: (task.start as string) || '',
+        due: (task.end as string) || (task.start as string) || '',
+        uid: (task.id as string) || editEvent.id,
+        status: 'COMPLETED',
+        completedAt,
+        percentComplete: 100,
+      });
+      await Remote.request(
+        'CalendarEventUpdate',
+        { id: task.id, calendar_id: calendarId, ical: icalData },
+        { method: 'PUT', pathOverride: `/v1/calendar-events/${task.id}` },
+      );
+      allEvents = allEvents.map((ev) =>
+        (ev as Record<string, unknown>).id === task.id
+          ? {
+              ...ev,
+              status: 'COMPLETED',
+              completedAt,
+              percentComplete: 100,
+            }
+          : ev,
+      );
+      applySelectedEvents();
+      editEvent = {
+        ...editEvent,
+        status: 'COMPLETED',
+        completedAt,
+        percentComplete: 100,
+      };
+      db.meta
+        .put({
+          key: getEventsCacheKey(getAccountKey(), calendarId),
+          value: sanitizeForWorker(
+            allEvents.filter(
+              (ev) =>
+                ((ev as Record<string, unknown>).calendarId ||
+                  (ev as Record<string, unknown>).calendar_id) === calendarId,
+            ),
+          ),
+          updatedAt: Date.now(),
+        })
+        .catch((e) => console.warn('[Calendar] Failed to cache task update:', e));
+      if (eventsScope === 'all') {
+        db.meta
+          .put({
+            key: getAllEventsCacheKey(getAccountKey()),
+            value: sanitizeForWorker(allEvents),
+            updatedAt: Date.now(),
+          })
+          .catch((e) => console.warn('[Calendar] Failed to cache all events:', e));
+      }
+      setError('');
+      toasts?.show?.('Task completed', 'success');
+    } catch (err) {
+      setError((err as Error)?.message || 'Unable to complete task.');
     }
   };
 
@@ -2947,8 +3233,11 @@
   <Dialog.Root bind:open={editEventModal}>
     <Dialog.Content class="sm:max-w-[520px]" onfocusin={closeTimePickers}>
       <Dialog.Header>
-        <Dialog.Title>Edit event</Dialog.Title>
+        <Dialog.Title
+          >{editEvent.componentType === 'VTODO' ? 'Edit task' : 'Edit event'}</Dialog.Title
+        >
       </Dialog.Header>
+
       <div class="space-y-4 py-4">
         {#if calendars.length > 1}
           <div class="space-y-2">
@@ -3211,7 +3500,15 @@
         </div>
         <div class="flex gap-2">
           <Button variant="ghost" onclick={() => closeModals()}>Cancel</Button>
-          <Button onclick={updateEvent}>Update</Button>
+          {#if editEvent.componentType === 'VTODO'}
+            {#if editEvent.status?.toUpperCase?.() === 'COMPLETED' || editEvent.completedAt || Number(editEvent.percentComplete || 0) >= 100}
+              <Button disabled>Completed</Button>
+            {:else}
+              <Button onclick={completeTask}>Complete task</Button>
+            {/if}
+          {:else}
+            <Button onclick={updateEvent}>Update</Button>
+          {/if}
         </div>
       </Dialog.Footer>
     </Dialog.Content>

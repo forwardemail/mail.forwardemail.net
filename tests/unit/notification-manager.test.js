@@ -232,6 +232,44 @@ describe('notification-manager calendar labels', () => {
     expect(call.title).toBe('Calendar Task Updated');
     expect(call.body).toContain('Task updated');
   });
+
+  it('extracts calendar summaries from nested ICS payloads and builds a task deep link', async () => {
+    wsClient.emit('calendarEventCreated', {
+      id: 'todo-ics',
+      componentType: 'VTODO',
+      event: {
+        ical: 'BEGIN:VCALENDAR\r\nBEGIN:VTODO\r\nSUMMARY:Finish taxes\r\nEND:VTODO\r\nEND:VCALENDAR',
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(notify).toHaveBeenCalled();
+    });
+
+    const call = vi.mocked(notify).mock.calls[0][0];
+    expect(call.body).toContain('Finish taxes');
+    expect(call.data.path).toBe('#calendar');
+    expect(call.data.url).toBe('forwardemail://calendar#task=todo-ics');
+  });
+
+  it('routes updated contacts to the contacts screen with an item-specific deep link', async () => {
+    wsClient.emit('contactUpdated', {
+      contact: {
+        id: 'contact-123',
+        fn: 'Alice Example',
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(notify).toHaveBeenCalled();
+    });
+
+    const call = vi.mocked(notify).mock.calls[0][0];
+    expect(call.title).toBe('Contact Updated');
+    expect(call.body).toContain('Alice Example');
+    expect(call.data.path).toBe('#contacts');
+    expect(call.data.url).toBe('forwardemail://contacts#contact=contact-123');
+  });
 });
 
 describe('notification-manager new message routing payloads', () => {
@@ -248,8 +286,8 @@ describe('notification-manager new message routing payloads', () => {
     wsClient.emit('newMessage', {
       mailbox: 'INBOX',
       message: {
-        id: 42,
-        uid: 42,
+        id: 4242,
+        uid: 4242,
         subject: 'Quarterly update',
         from: {
           text: 'Alice Example <alice@example.com>',
@@ -262,8 +300,8 @@ describe('notification-manager new message routing payloads', () => {
     });
 
     const call = vi.mocked(notify).mock.calls[0][0];
-    expect(call.data.path).toBe('#inbox/42');
-    expect(call.data.url).toBe('forwardemail://mailbox#inbox/42');
+    expect(call.data.path).toBe('#inbox/4242');
+    expect(call.data.url).toBe('forwardemail://mailbox#inbox/4242');
     expect(call.title).toContain('Alice Example');
   });
 });

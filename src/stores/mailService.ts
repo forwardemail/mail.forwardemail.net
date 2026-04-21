@@ -211,8 +211,54 @@ function buildSaveDialogFilters(filename: string): { name: string; extensions: s
   ];
 }
 
+function decodeBase64ToBytes(value: string): Uint8Array {
+  const decoder =
+    typeof atob === 'function'
+      ? atob
+      : (encoded: string) => Buffer.from(encoded, 'base64').toString('binary');
+  const binary = decoder(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
+}
+
+function bytesFromDataUrl(href: string): Uint8Array | null {
+  if (typeof href !== 'string' || !href.startsWith('data:')) return null;
+  const commaIndex = href.indexOf(',');
+  if (commaIndex === -1) {
+    throw new Error('Attachment data URL is malformed');
+  }
+
+  const metadata = href.slice(5, commaIndex);
+  const payload = href.slice(commaIndex + 1);
+  if (/;base64(?:;|$)/i.test(metadata)) {
+    return decodeBase64ToBytes(payload.trim());
+  }
+
+  return new TextEncoder().encode(decodeURIComponent(payload));
+}
+
+async function readDownloadBytes(href: string): Promise<Uint8Array> {
+  const dataBytes = bytesFromDataUrl(href);
+  if (dataBytes) return dataBytes;
+
+  const response = await fetch(href);
+  if (!response.ok) {
+    throw new Error(`Attachment download failed with HTTP ${response.status}`);
+  }
+
+  return new Uint8Array(await response.arrayBuffer());
+}
+
+function dispatchMailServiceToast(message: string, type = 'error'): void {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new CustomEvent('fe:mail-service-toast', { detail: { message, type } }));
+}
+
 async function triggerDownloadTauri(href: string, filename: string): Promise<void> {
-  const { save, message } = await import('@tauri-apps/plugin-dialog');
+  const { save } = await import('@tauri-apps/plugin-dialog');
   const { remove, writeFile } = await import('@tauri-apps/plugin-fs');
 
   const safeFilename = sanitizeDownloadFilename(filename);
@@ -228,14 +274,7 @@ async function triggerDownloadTauri(href: string, filename: string): Promise<voi
   let startedWriting = false;
 
   try {
-    // Use native Blob APIs instead of an atob loop — avoids allocating a
-    // JS string the size of the payload.
-    const response = await fetch(href);
-    if (!response.ok) {
-      throw new Error(`Attachment download failed with HTTP ${response.status}`);
-    }
-    const buffer = await response.arrayBuffer();
-    const bytes = new Uint8Array(buffer);
+    const bytes = await readDownloadBytes(href);
 
     if (bytes.byteLength <= TAURI_WRITE_CHUNK_SIZE) {
       startedWriting = true;
@@ -262,12 +301,9 @@ async function triggerDownloadTauri(href: string, filename: string): Promise<voi
       }
     }
 
-    await message(
+    dispatchMailServiceToast(
       `Could not save "${safeFilename}" to the selected location. Please choose another folder, retry the download, or allow access if your operating system blocked the write.`,
-      {
-        title: 'Attachment save failed',
-        kind: 'error',
-      },
+      'error',
     );
     throw err;
   }

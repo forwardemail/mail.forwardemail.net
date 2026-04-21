@@ -17,6 +17,7 @@ import {
   loadProfileName,
   loadProfileImage,
   settingsLabels,
+  fetchLabels,
   fetchAccountData,
   effectiveLayoutMode,
   setSettingValue,
@@ -1154,7 +1155,8 @@ export const loadLabels = async (options = {}) => {
   }
 
   try {
-    const settingsLabelsList = get(settingsLabels) || [];
+    const settingsLabelsList =
+      (await fetchLabels(true, { force: true }).catch(() => get(settingsLabels) || [])) || [];
     if ((Local.get('email') || 'default') !== initialAccount) return;
     (settingsLabelsList || []).forEach((lbl) => {
       const id = lbl.keyword || lbl.id || lbl.name;

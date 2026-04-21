@@ -737,6 +737,26 @@
     }
   };
 
+  const getContactHashTarget = () => {
+    if (typeof window === 'undefined') return '';
+    const match = (window.location.hash || '').match(/^#contact=([^&]+)/i);
+    if (!match) return '';
+    try {
+      return decodeURIComponent(match[1]);
+    } catch {
+      return match[1];
+    }
+  };
+
+  const applyContactHashSelection = (list: Contact[] = contacts) => {
+    const targetId = getContactHashTarget();
+    if (!targetId) return false;
+    const match = (list || []).find((contact) => String(contact.id || '') === targetId) || null;
+    if (!match) return false;
+    selectContact(match);
+    return true;
+  };
+
   const startNew = () => {
     modalMode = 'create';
     modalContact = emptyContact();
@@ -832,6 +852,10 @@
       });
       contacts = mapped;
       applyFilter();
+
+      if (applyContactHashSelection(mapped)) {
+        return;
+      }
 
       const nextSelectedContact = previousSelectedId
         ? mapped.find((contact) => contact.id === previousSelectedId) || null
@@ -1151,6 +1175,9 @@
 
   onMount(() => {
     const mediaQuery = window.matchMedia ? window.matchMedia('(max-width: 720px)') : null;
+    const handleHashChange = () => {
+      applyContactHashSelection();
+    };
     const handleViewportChange = (event: MediaQueryListEvent | MediaQueryList | null) => {
       const isMobile = event?.matches ?? isMobileViewport();
       if (isMobile && selectedContact) {
@@ -1177,6 +1204,7 @@
 
     window.addEventListener('fe:contacts-changed', handleContactsChanged);
     window.addEventListener('fe:contact-changed', handleContactsChanged);
+    window.addEventListener('hashchange', handleHashChange);
 
     load();
     handleViewportChange(mediaQuery);
@@ -1192,6 +1220,7 @@
     return () => {
       window.removeEventListener('fe:contacts-changed', handleContactsChanged);
       window.removeEventListener('fe:contact-changed', handleContactsChanged);
+      window.removeEventListener('hashchange', handleHashChange);
       if (mediaQuery) {
         if (mediaQuery.removeEventListener) {
           mediaQuery.removeEventListener('change', handleViewportChange);

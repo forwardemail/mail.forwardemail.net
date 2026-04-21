@@ -46,7 +46,18 @@ function stripHtmlToPlaintext(html: string, maxLen = 160): string {
 export const accountKey = (account?: string | null): string =>
   account || Local.get('email') || 'default';
 
-const LABEL_FIELD_KEYS = ['labels', 'label_ids', 'labelIds', 'Labels', 'tags', 'Tags', 'LabelIds'];
+const LABEL_FIELD_KEYS = [
+  'labels',
+  'label_ids',
+  'labelIds',
+  'Labels',
+  'tags',
+  'Tags',
+  'LabelIds',
+  'keywords',
+  'Keywords',
+  'keyword',
+];
 
 export function hasLabelData(raw: Record<string, unknown> = {}): boolean {
   if (!raw || typeof raw !== 'object') return false;
@@ -184,6 +195,9 @@ export function normalizeMessageForCache(
     (raw.tags as unknown[]) ||
     (raw.Tags as unknown[]) ||
     (raw.LabelIds as unknown[]) ||
+    (raw.keywords as unknown) ||
+    (raw.Keywords as unknown) ||
+    (raw.keyword as unknown) ||
     [];
 
   const normalizeLabel = (label: unknown): string => {
@@ -211,7 +225,12 @@ export function normalizeMessageForCache(
           .split(',')
           .map((l: string) => normalizeLabel(l))
           .filter(Boolean)
-      : [];
+      : rawLabels && typeof rawLabels === 'object'
+        ? Object.entries(rawLabels as Record<string, unknown>)
+            .filter(([, enabled]) => enabled !== false && enabled !== null && enabled !== undefined)
+            .map(([label]) => normalizeLabel(label))
+            .filter(Boolean)
+        : [];
 
   const isUnreadRaw =
     Array.isArray(flags) && flags.length

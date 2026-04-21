@@ -116,8 +116,133 @@ function parseEmlHeaders(eml) {
   return result;
 }
 
+function firstNonEmpty(...values) {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value.trim();
+    if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  }
+  return '';
+}
+
+function decodeICalText(value) {
+  if (typeof value !== 'string') return '';
+  return value.replace(/\\n/gi, '\n').replace(/\\,/g, ',').replace(/\\;/g, ';').trim();
+}
+
+function extractIcalSummary(ical) {
+  if (typeof ical !== 'string' || !ical.trim()) return '';
+  const match = ical.match(/^SUMMARY(?:;[^:\r\n]+)*:(.+)$/im);
+  return match ? decodeICalText(match[1]) : '';
+}
+
+function extractCalendarItemId(data) {
+  if (!data || typeof data !== 'object') return '';
+  return firstNonEmpty(
+    data.id,
+    data.uid,
+    data.event_id,
+    data.eventId,
+    data.event?.id,
+    data.event?.uid,
+    data.event?.event_id,
+    data.calendarEvent?.id,
+    data.calendarEvent?.uid,
+    data.resource?.id,
+    data.resource?.uid,
+  );
+}
+
+function extractCalendarComponentType(data) {
+  if (!data || typeof data !== 'object') return '';
+  return firstNonEmpty(
+    data.componentType,
+    data.component_type,
+    data.event?.componentType,
+    data.event?.component_type,
+    data.calendarEvent?.componentType,
+    data.calendarEvent?.component_type,
+    data.resource?.componentType,
+    data.resource?.component_type,
+  ).toUpperCase();
+}
+
+function extractCalendarSummary(data) {
+  if (!data || typeof data !== 'object') return '';
+  return firstNonEmpty(
+    data.summary,
+    data.title,
+    data.name,
+    data.event?.summary,
+    data.event?.title,
+    data.event?.name,
+    data.calendarEvent?.summary,
+    data.calendarEvent?.title,
+    data.calendarEvent?.name,
+    data.resource?.summary,
+    data.resource?.title,
+    extractIcalSummary(data.ical),
+    extractIcalSummary(data.event?.ical),
+    extractIcalSummary(data.calendarEvent?.ical),
+    extractIcalSummary(data.resource?.ical),
+  );
+}
+
+function buildCalendarNotificationData(data, isTask = false) {
+  const id = extractCalendarItemId(data);
+  const hash = id ? `${isTask ? '#task=' : '#event='}${encodeURIComponent(String(id))}` : '';
+  const payload = { path: '#calendar' };
+  const url = buildDeepLink(`/calendar${hash}`);
+  if (url) payload.url = url;
+  if (id) payload.itemId = String(id);
+  return payload;
+}
+
+function extractContactId(data) {
+  if (!data || typeof data !== 'object') return '';
+  return firstNonEmpty(
+    data.id,
+    data.uid,
+    data.contact_id,
+    data.contactId,
+    data.contact?.id,
+    data.contact?.uid,
+    data.contact?.contact_id,
+  );
+}
+
+function extractContactName(data) {
+  if (!data || typeof data !== 'object') return '';
+  return firstNonEmpty(
+    data.name,
+    data.full_name,
+    data.contact?.fn,
+    data.contact?.name,
+    data.contact?.full_name,
+    data.contact?.email,
+    data.email,
+  );
+}
+
+function buildContactNotificationData(data) {
+  const id = extractContactId(data);
+  const hash = id ? `#contact=${encodeURIComponent(String(id))}` : '';
+  const payload = { path: '#contacts' };
+  const url = buildDeepLink(`/contacts${hash}`);
+  if (url) payload.url = url;
+  if (id) payload.itemId = String(id);
+  return payload;
+}
+
 // Allowed prefixes for notification data.path
-const ALLOWED_PATH_PREFIXES = ['#inbox', '#folders', '#calendar', '#contacts', '#settings'];
+const ALLOWED_PATH_PREFIXES = [
+  '#inbox',
+  '#folders',
+  '#calendar',
+  '#contacts',
+  '#settings',
+  '#notes',
+];
+const ALLOWED_APP_PATH_PREFIXES = ['/calendar', '/contacts', '/mailbox/settings'];
 
 function sanitizePath(path) {
   if (typeof path !== 'string') return '#inbox';
@@ -126,6 +251,21 @@ function sanitizePath(path) {
     return cleaned;
   }
   return '#inbox'; // Default to inbox for unknown paths
+}
+
+function sanitizeAppPath(path) {
+  if (typeof path !== 'string') return '';
+  const cleaned = sanitizePlain(path, MAX_PATH_LEN);
+  if (ALLOWED_APP_PATH_PREFIXES.some((prefix) => cleaned.startsWith(prefix))) {
+    return cleaned;
+  }
+  return '';
+}
+
+function buildDeepLink(path) {
+  const cleaned = sanitizeAppPath(path);
+  if (!cleaned) return '';
+  return `forwardemail://${cleaned.replace(/^\//, '')}`;
 }
 
 function sanitizeUrl(url) {
@@ -421,41 +561,56 @@ function handleMailboxRenamed(data) {
 
 function handleCalendarEventCreated(data) {
   if (!data || typeof data !== 'object') return;
-  const isTask = data.componentType === 'VTODO';
+  const isTask = extractCalendarComponentType(data) === 'VTODO';
   const label = isTask ? 'Task' : 'Event';
   const summary = sanitize(
-    data.summary || data.event?.summary || `New ${label.toLowerCase()}`,
+    extractCalendarSummary(data) || `New ${label.toLowerCase()}`,
     MAX_BODY_LEN,
   );
+  const itemId = extractCalendarItemId(data);
   showNotification({
     title: `Calendar ${label} Created`,
     body: summary,
-    tag: sanitize(`cal-event-${data.id || Date.now()}`, MAX_TAG_LEN),
-    data: { path: '#calendar' },
+    tag: sanitize(`cal-event-${itemId || Date.now()}`, MAX_TAG_LEN),
+    data: buildCalendarNotificationData(data, isTask),
   });
 }
 
 function handleCalendarEventUpdated(data) {
   if (!data || typeof data !== 'object') return;
-  const isTask = data.componentType === 'VTODO';
+  const isTask = extractCalendarComponentType(data) === 'VTODO';
   const label = isTask ? 'Task' : 'Event';
-  const summary = sanitize(data.summary || data.event?.summary || `${label} updated`, MAX_BODY_LEN);
+  const summary = sanitize(extractCalendarSummary(data) || `${label} updated`, MAX_BODY_LEN);
+  const itemId = extractCalendarItemId(data);
   showNotification({
     title: `Calendar ${label} Updated`,
     body: summary,
-    tag: sanitize(`cal-event-update-${data.id || Date.now()}`, MAX_TAG_LEN),
-    data: { path: '#calendar' },
+    tag: sanitize(`cal-event-update-${itemId || Date.now()}`, MAX_TAG_LEN),
+    data: buildCalendarNotificationData(data, isTask),
   });
 }
 
 function handleContactCreated(data) {
   if (!data || typeof data !== 'object') return;
-  const name = sanitize(data.name || data.contact?.fn || 'New contact', MAX_BODY_LEN);
+  const name = sanitize(extractContactName(data) || 'New contact', MAX_BODY_LEN);
+  const contactId = extractContactId(data);
   showNotification({
     title: 'Contact Added',
     body: name,
-    tag: sanitize(`contact-${data.id || Date.now()}`, MAX_TAG_LEN),
-    data: { path: '#contacts' },
+    tag: sanitize(`contact-${contactId || Date.now()}`, MAX_TAG_LEN),
+    data: buildContactNotificationData(data),
+  });
+}
+
+function handleContactUpdated(data) {
+  if (!data || typeof data !== 'object') return;
+  const name = sanitize(extractContactName(data) || 'Contact updated', MAX_BODY_LEN);
+  const contactId = extractContactId(data);
+  showNotification({
+    title: 'Contact Updated',
+    body: name,
+    tag: sanitize(`contact-update-${contactId || Date.now()}`, MAX_TAG_LEN),
+    data: buildContactNotificationData(data),
   });
 }
 
@@ -503,6 +658,9 @@ export function connectNotifications(wsClient) {
   unsubs.push(wsClient.on(WS_EVENTS.CALENDAR_EVENT_CREATED, handleCalendarEventCreated));
   unsubs.push(wsClient.on(WS_EVENTS.CALENDAR_EVENT_UPDATED, handleCalendarEventUpdated));
   unsubs.push(wsClient.on(WS_EVENTS.CONTACT_CREATED, handleContactCreated));
+  if (WS_EVENTS.CONTACT_UPDATED) {
+    unsubs.push(wsClient.on(WS_EVENTS.CONTACT_UPDATED, handleContactUpdated));
+  }
   unsubs.push(wsClient.on(WS_EVENTS.NEW_RELEASE, handleNewRelease));
 
   return () => {

@@ -29,6 +29,25 @@ describe('sync helpers', () => {
     expect(normalized.labels).toEqual(['work', 'urgent']);
   });
 
+  it('normalizes keyword maps from the server into labels', () => {
+    const raw = {
+      id: 'msg-kw',
+      uid: 456,
+      folder: 'INBOX',
+      Subject: 'Keyword label message',
+      From: { Display: 'Sender', Email: 'sender@example.com' },
+      keywords: {
+        work: true,
+        urgent: 1,
+        ignored: false,
+      },
+    };
+
+    const normalized = normalizeMessageForCache(raw, 'INBOX', 'acct');
+
+    expect(normalized.labels).toEqual(['work', 'urgent']);
+  });
+
   it('detects metadata changes for flags and unread state', () => {
     const existing = {
       id: 1,

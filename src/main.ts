@@ -572,6 +572,15 @@ const _feContactChanged = () => {
   contactsApi.reload?.();
 };
 
+const _feMailServiceToast = (event: Event) => {
+  const detail = (event as CustomEvent<{ message?: string; type?: string }>).detail;
+  const message = typeof detail?.message === 'string' ? detail.message : '';
+  const type = typeof detail?.type === 'string' ? detail.type : 'error';
+  if (message) {
+    toasts?.show?.(message, type);
+  }
+};
+
 // Wire the `fe:new-release` CustomEvent (dispatched by websocket-updater's
 // releaseWatcher) to the updater modules.  This follows the same pattern
 // used for CalDAV/CardDAV events above — websocket-updater dispatches,
@@ -583,12 +592,14 @@ globalThis.addEventListener('fe:calendar-changed', _feCalendarChanged);
 globalThis.addEventListener('fe:calendar-event-changed', _feCalendarEventChanged);
 globalThis.addEventListener('fe:contacts-changed', _feContactsChanged);
 globalThis.addEventListener('fe:contact-changed', _feContactChanged);
+globalThis.addEventListener('fe:mail-service-toast', _feMailServiceToast);
 
 export function cleanupCustomEventListeners() {
   globalThis.removeEventListener('fe:calendar-changed', _feCalendarChanged);
   globalThis.removeEventListener('fe:calendar-event-changed', _feCalendarEventChanged);
   globalThis.removeEventListener('fe:contacts-changed', _feContactsChanged);
   globalThis.removeEventListener('fe:contact-changed', _feContactChanged);
+  globalThis.removeEventListener('fe:mail-service-toast', _feMailServiceToast);
   if (_handleNewReleaseTauri) {
     globalThis.removeEventListener('fe:new-release', _handleNewReleaseTauri);
     _handleNewReleaseTauri = null;

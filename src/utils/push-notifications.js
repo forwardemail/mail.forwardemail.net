@@ -269,26 +269,47 @@ async function setupTokenRefreshListener() {
 export function handlePushPayload(payload) {
   if (!payload || typeof payload !== 'object') return null;
 
-  // Validate payload structure
-  const type = payload.type || payload.data?.type;
+  const data = payload.data && typeof payload.data === 'object' ? payload.data : {};
+  const type = payload.type || data.type;
   if (typeof type !== 'string') return null;
+
+  const firstNonEmpty = (...values) => {
+    for (const value of values) {
+      if (typeof value === 'string' && value.trim()) return value.trim();
+      if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+    }
+    return '';
+  };
 
   switch (type) {
     case 'new-message': {
-      const uid = payload.uid || payload.data?.uid;
-      const mailbox = payload.mailbox || payload.data?.mailbox || 'INBOX';
+      const uid = payload.uid || data.uid;
+      const mailbox = payload.mailbox || data.mailbox || 'INBOX';
       if (uid) {
         return { action: 'navigate', path: `#${mailbox}/${uid}` };
       }
       return { action: 'navigate', path: '#INBOX' };
     }
 
-    case 'calendar-event': {
-      return { action: 'navigate', path: '#calendar' };
+    case 'calendar-event':
+    case 'calendar-task': {
+      const itemId = firstNonEmpty(payload.id, payload.uid, data.id, data.uid, data.event_id);
+      const hash = itemId
+        ? `${type === 'calendar-task' ? '#task=' : '#event='}${encodeURIComponent(itemId)}`
+        : '';
+      return { action: 'navigate', path: `/calendar${hash}` };
     }
 
-    case 'contact-update': {
-      return { action: 'navigate', path: '#contacts' };
+    case 'contact-update':
+    case 'contact-created': {
+      const contactId = firstNonEmpty(payload.id, payload.uid, data.id, data.uid, data.contact_id);
+      const hash = contactId ? `#contact=${encodeURIComponent(contactId)}` : '';
+      return { action: 'navigate', path: `/contacts${hash}` };
+    }
+
+    case 'note-update':
+    case 'note-created': {
+      return { action: 'navigate', path: '#notes' };
     }
 
     default:

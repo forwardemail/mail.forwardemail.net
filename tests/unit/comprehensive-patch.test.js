@@ -1069,9 +1069,9 @@ describe('Large mailbox bootstrap timeout regressions', () => {
     );
     expect(mailServiceSrc).toContain('sanitizeDownloadFilename');
     expect(mailServiceSrc).toContain('buildSaveDialogFilters');
-    expect(mailServiceSrc).toContain(
-      "const { save, message } = await import('@tauri-apps/plugin-dialog')",
-    );
+    expect(mailServiceSrc).toContain("const { save } = await import('@tauri-apps/plugin-dialog')");
+    expect(mailServiceSrc).toContain('const bytes = await readDownloadBytes(href)');
+    expect(mailServiceSrc).toContain("new CustomEvent('fe:mail-service-toast'");
     expect(mailServiceSrc).toContain('defaultPath: safeFilename');
     expect(mailServiceSrc).toContain('await writeFile(outputPath, bytes)');
     expect(mailServiceSrc).toContain('allow access if your operating system blocked the write');
