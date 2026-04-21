@@ -14,7 +14,7 @@
   } from '../../utils/mailto-handler.js';
 
   let supported = $state(false);
-  /** @type {'default' | 'not_default' | 'declined' | 'unknown'} */
+  /** @type {'default' | 'registered' | 'not_default' | 'declined' | 'unknown'} */
   let status = $state('unknown');
   let registering = $state(false);
   /** @type {string | null} */
@@ -36,9 +36,10 @@
       const result = await registerAsMailtoHandler();
 
       if (result.method === 'open_mail_settings') {
-        // macOS sandbox: show the instructions from the Rust backend
+        // Native settings flow: show the instructions and refresh status immediately.
         instructionMessage = result.message || null;
-        // Re-check status after a delay (user may have changed it in Mail.app)
+        status = await getRegistrationStatus();
+        // Re-check again after a delay in case the user changes the OS setting.
         setTimeout(async () => {
           status = await getRegistrationStatus();
         }, 5000);
@@ -82,6 +83,12 @@
           <span class="text-green-600 dark:text-green-400">
             Forward Email is set as your default email app.
           </span>
+        {:else if status === 'registered'}
+          <HelpCircle class="h-4 w-4 text-blue-600 dark:text-blue-400" />
+          <span class="text-blue-600 dark:text-blue-400">
+            Forward Email is registered with Windows, but Windows still needs you to choose it for
+            the MAILTO link type in Default apps.
+          </span>
         {:else if status === 'declined'}
           <AlertCircle class="h-4 w-4 text-orange-500" />
           <span class="text-orange-500">
@@ -119,6 +126,8 @@
           Registering...
         {:else if status === 'default'}
           Re-register as default
+        {:else if status === 'registered'}
+          Open Windows mail settings again
         {:else}
           Set as default email app
         {/if}
@@ -126,7 +135,8 @@
 
       <p class="text-xs text-muted-foreground">
         When registered, clicking mailto: links on any website will open Forward Email to compose a
-        new message.
+        new message. On Windows, if Forward Email does not appear under the application search, use
+        the MAILTO link-type search instead and choose Forward Email from that handler list.
       </p>
     </Card.Content>
   </Card.Root>

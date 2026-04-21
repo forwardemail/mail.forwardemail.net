@@ -356,7 +356,11 @@ async function handleNewMessage(data) {
     body: safeSubject,
     tag: safeTag,
     channelId: 'new-mail',
-    data: { path: sanitizePath(`#inbox/${uid}`), uid },
+    data: {
+      path: sanitizePath(`#inbox/${uid}`),
+      url: `forwardemail://mailbox#inbox/${encodeURIComponent(String(uid))}`,
+      uid,
+    },
   });
 
   // In-app toast (visible when the app window is focused)

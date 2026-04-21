@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
   import { getBuildInfo } from '../utils/tauri-bridge';
   import { checkForUpdates } from '../utils/updater-bridge';
   import { isTauri } from '../utils/platform.js';
@@ -12,11 +11,12 @@
       try {
         const { openUrl } = await import('@tauri-apps/plugin-opener');
         await openUrl(url);
-      } catch (err) {
-        console.warn('[AboutDialog] opener failed:', err);
+      } catch {
+        // Ignore opener failures to avoid noisy console warnings from unsupported environments.
       }
       return;
     }
+
     window.open(url, '_blank', 'noopener,noreferrer');
   };
 
@@ -27,13 +27,18 @@
 
   let { open = $bindable(false), onClose }: Props = $props();
 
-  let version = $state('');
+  const fallbackVersion =
+    import.meta.env.VITE_PKG_VERSION || import.meta.env.VITE_APP_VERSION || '';
+
+  let version = $state(fallbackVersion);
   let buildDate = $state('');
   let arch = $state('');
   let os = $state('');
-  let license = $state('');
-  let updateStatus = $state('Checking...');
+  let license = $state('BUSL-1.1');
+  let updateStatus = $state('');
   let loaded = $state(false);
+  let loading = $state(false);
+  let loadSequence = 0;
 
   const archLabels: Record<string, string> = {
     aarch64: 'Apple Silicon',
@@ -47,31 +52,56 @@
     linux: 'Linux',
   };
 
-  onMount(async () => {
-    try {
-      const info = await getBuildInfo();
-      if (info) {
-        version = info.version || '';
-        buildDate = info.buildDate || '';
-        arch = info.arch || '';
-        os = info.os || '';
-        license = info.license || '';
+  const loadAboutInfo = async (): Promise<void> => {
+    const sequence = ++loadSequence;
+    loading = true;
+    loaded = false;
+    updateStatus = isTauri ? 'Checking...' : version ? `Web build (v${version})` : 'Web build';
+
+    if (isTauri) {
+      try {
+        const info = await getBuildInfo();
+        if (sequence !== loadSequence) return;
+        if (info) {
+          version = info.version || version || fallbackVersion;
+          buildDate = info.buildDate || '';
+          arch = info.arch || '';
+          os = info.os || '';
+          license = info.license || 'BUSL-1.1';
+        }
+      } catch {
+        version = version || fallbackVersion;
       }
-      loaded = true;
-    } catch {
-      loaded = true;
+
+      try {
+        const update = await checkForUpdates({ force: true });
+        if (sequence !== loadSequence) return;
+        if (update?.available) {
+          updateStatus = `Update available: v${update.version}`;
+        } else {
+          updateStatus = version ? `Up to date (v${version})` : 'Up to date';
+        }
+      } catch {
+        if (sequence !== loadSequence) return;
+        updateStatus = 'Unable to check';
+      }
+    } else {
+      version = version || fallbackVersion;
+      buildDate = '';
+      arch = '';
+      os = '';
+      license = 'BUSL-1.1';
     }
 
-    try {
-      const update = await checkForUpdates();
-      if (update?.available) {
-        updateStatus = `Update available: v${update.version}`;
-      } else {
-        updateStatus = 'Up to date';
-      }
-    } catch {
-      updateStatus = 'Unable to check';
+    if (sequence === loadSequence) {
+      loading = false;
+      loaded = true;
     }
+  };
+
+  $effect(() => {
+    if (!open) return;
+    void loadAboutInfo();
   });
 
   const close = () => {
@@ -110,7 +140,7 @@
         </button>
       </div>
 
-      {#if loaded}
+      {#if loaded && !loading}
         <div class="space-y-3 p-5">
           <dl class="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-sm">
             <dt class="text-muted-foreground">Version</dt>
@@ -121,8 +151,10 @@
               <dd>{buildDate}</dd>
             {/if}
 
-            <dt class="text-muted-foreground">Platform</dt>
-            <dd>{osLabels[os] || os} ({archLabels[arch] || arch})</dd>
+            {#if os || arch}
+              <dt class="text-muted-foreground">Platform</dt>
+              <dd>{osLabels[os] || os} ({archLabels[arch] || arch})</dd>
+            {/if}
 
             <dt class="text-muted-foreground">Update</dt>
             <dd>{updateStatus}</dd>

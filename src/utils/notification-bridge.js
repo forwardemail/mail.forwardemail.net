@@ -67,9 +67,28 @@ function trackNotification(data) {
 }
 
 function navigateToNotification(data) {
+  const url = data?.url;
+  if (typeof url === 'string' && url.toLowerCase().startsWith('forwardemail://')) {
+    window.dispatchEvent(new CustomEvent('app:deep-link', { detail: { url } }));
+    return;
+  }
+
   const path = data?.path;
   if (path && typeof path === 'string') {
-    window.location.hash = path.startsWith('#') ? path.slice(1) : path;
+    const normalizedHash = path.startsWith('#') ? path : `#${path}`;
+    const previousHref = window.location.href;
+    const nextHash = normalizedHash.slice(1);
+    if (window.location.hash === normalizedHash) {
+      window.dispatchEvent(
+        new HashChangeEvent('hashchange', {
+          oldURL: previousHref,
+          newURL: previousHref,
+        }),
+      );
+      return;
+    }
+
+    window.location.hash = nextHash;
   }
 }
 

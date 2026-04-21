@@ -334,12 +334,12 @@ describe('getRegistrationStatus – Tauri', () => {
     expect(status).toBe('unknown');
   });
 
-  it('falls back to localStorage when IPC fails', async () => {
+  it('falls back to a registered state when IPC fails but Tauri was previously registered', async () => {
     mockIsDefaultMailtoHandler.mockRejectedValue(new Error('IPC error'));
     localStorage.setItem('fe:mailto-registered', 'registered');
 
     const status = await getRegistrationStatus();
-    expect(status).toBe('default');
+    expect(status).toBe('registered');
   });
 
   it('returns unknown when IPC fails and no localStorage', async () => {
@@ -354,16 +354,22 @@ describe('getRegistrationStatus – Tauri', () => {
 
     const status = await getRegistrationStatus();
     // Should fall through to localStorage / unknown
-    expect(['default', 'unknown']).toContain(status);
+    expect(['registered', 'unknown']).toContain(status);
   });
 });
 
 // ── Synchronous status check ────────────────────────────────────────────────
 
 describe('getRegistrationStatusSync', () => {
-  it('returns default when localStorage has registered', () => {
+  it('returns default on web when localStorage has registered', () => {
     localStorage.setItem('fe:mailto-registered', 'registered');
     expect(getRegistrationStatusSync()).toBe('default');
+  });
+
+  it('returns registered on Tauri desktop when localStorage has registered', () => {
+    mockIsTauriDesktop = true;
+    localStorage.setItem('fe:mailto-registered', 'registered');
+    expect(getRegistrationStatusSync()).toBe('registered');
   });
 
   it('returns unknown when localStorage is empty', () => {

@@ -137,7 +137,7 @@ export async function registerAsMailtoHandler() {
 /**
  * Check if we are currently registered as the mailto: handler.
  *
- * @returns {Promise<'default' | 'not_default' | 'declined' | 'unknown'>}
+ * @returns {Promise<'default' | 'registered' | 'not_default' | 'declined' | 'unknown'>}
  */
 export async function getRegistrationStatus() {
   // ── Tauri desktop path ──
@@ -147,7 +147,7 @@ export async function getRegistrationStatus() {
       const result = await isDefaultMailtoHandler();
 
       if (result && typeof result === 'object' && typeof result.status === 'string') {
-        return result.status; // 'default' | 'not_default' | 'unknown'
+        return result.status; // 'default' | 'registered' | 'not_default' | 'unknown'
       }
     } catch (err) {
       console.warn('[mailto-handler] Tauri status check failed:', err);
@@ -156,7 +156,7 @@ export async function getRegistrationStatus() {
     // Fall back to optimistic localStorage
     try {
       if (localStorage.getItem(REGISTRATION_STATUS_KEY) === 'registered') {
-        return 'default';
+        return 'registered';
       }
     } catch {
       // ignore
@@ -197,12 +197,12 @@ export async function getRegistrationStatus() {
  * Synchronous variant for quick checks (uses localStorage only).
  * For accurate status, prefer the async getRegistrationStatus().
  *
- * @returns {'default' | 'not_default' | 'unknown'}
+ * @returns {'default' | 'registered' | 'not_default' | 'unknown'}
  */
 export function getRegistrationStatusSync() {
   try {
     if (localStorage.getItem(REGISTRATION_STATUS_KEY) === 'registered') {
-      return 'default';
+      return isTauriDesktop ? 'registered' : 'default';
     }
   } catch {
     // ignore

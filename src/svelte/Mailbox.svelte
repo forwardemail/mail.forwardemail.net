@@ -5,7 +5,7 @@
 
   // Store subscriptions managed in onMount/onDestroy to avoid $effect loops
   let mailboxSubscriptions: Unsubscriber[] = [];
-  import { mailService, getPgpKeysVersion } from '../stores/mailService';
+  import { mailService, getPgpKeysVersion, pgpKeysVersion } from '../stores/mailService';
   import { isTauri } from '../utils/platform.js';
   import { searchStore } from '../stores/searchStore';
   import { Remote } from '../utils/remote';
@@ -2070,7 +2070,7 @@
     };
 
     // Handle browser back/forward navigation
-    const handlePopState = (event: PopStateEvent) => {
+    const handleLocationChange = () => {
       const parsed = parseHashUrl();
       // Prevent URL update during popstate handling
       skipFolderUrlUpdate = true;
@@ -2089,7 +2089,8 @@
       }
     };
 
-    window.addEventListener('popstate', handlePopState);
+    window.addEventListener('popstate', handleLocationChange);
+    window.addEventListener('hashchange', handleLocationChange);
 
     // Handle initial hash URL on page load
     const initialHash = parseHashUrl();
@@ -2355,7 +2356,8 @@
       window.removeEventListener('resize', handleResize);
       window.removeEventListener('resize', handleTooltipScrollResize);
       window.removeEventListener('scroll', handleTooltipScrollResize, true);
-      window.removeEventListener('popstate', handlePopState);
+      window.removeEventListener('popstate', handleLocationChange);
+      window.removeEventListener('hashchange', handleLocationChange);
       document.removeEventListener('click', handleClickOutside);
       document.removeEventListener('focusin', handleFocusIn);
       document.removeEventListener('focusout', handleFocusOut);
@@ -4637,7 +4639,7 @@
 
   // Re-load selected message after PGP keys change (e.g., returning from Settings)
   $effect(() => {
-    if (pgpReloadPending) {
+    if (pgpReloadPending && isActive) {
       pgpReloadPending = false;
       const msg = source.state?.selectedMessage ? get(selectedMessage) : null;
       if (msg) {
@@ -4964,6 +4966,17 @@
           loadProfileName(acct);
           loadProfileImage(acct);
         }
+      }),
+    );
+
+    mailboxSubscriptions.push(
+      pgpKeysVersion.subscribe((version) => {
+        if (version === lastPgpKeysVersion) return;
+        lastPgpKeysVersion = version;
+        if (!source.state?.selectedMessage) return;
+        const msg = get(selectedMessage);
+        if (!msg) return;
+        pgpReloadPending = true;
       }),
     );
 
@@ -8332,7 +8345,9 @@
                     return acc;
                   }, [])}
                   {#if allThreadAttachments.length}
-                    <div class="border-t border-border p-4">
+                    <div
+                      class="sticky bottom-0 z-10 mt-4 border-t border-border bg-[var(--color-panel)]/95 p-4 backdrop-blur supports-[backdrop-filter]:bg-[var(--color-panel)]/85"
+                    >
                       <div class="flex items-center gap-2 mb-3 text-sm text-muted-foreground">
                         <Paperclip class="h-4 w-4" />
                         <span
@@ -8514,7 +8529,9 @@
                       onSwipe={handleIframeSwipe}
                     />
                     {#if filterDownloadableAttachments($attachments).length}
-                      <div class="flex flex-wrap gap-2 mt-4 pt-4 border-t border-border">
+                      <div
+                        class="sticky bottom-0 z-10 mt-4 flex flex-wrap gap-2 border-t border-border bg-[var(--color-panel)]/95 pt-4 pb-3 backdrop-blur supports-[backdrop-filter]:bg-[var(--color-panel)]/85"
+                      >
                         {#each filterDownloadableAttachments($attachments) as att}
                           {#if isPreviewableImage(att) && att.href}
                             <div class="flex flex-col gap-1 max-w-[120px]">

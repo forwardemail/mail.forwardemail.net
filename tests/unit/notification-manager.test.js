@@ -233,3 +233,37 @@ describe('notification-manager calendar labels', () => {
     expect(call.body).toContain('Task updated');
   });
 });
+
+describe('notification-manager new message routing payloads', () => {
+  let wsClient;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    await requestNotificationPermission();
+    wsClient = createMockWsClient();
+    connectNotifications(wsClient);
+  });
+
+  it('includes both a mailbox hash path and a Forward Email deep-link URL', async () => {
+    wsClient.emit('newMessage', {
+      mailbox: 'INBOX',
+      message: {
+        id: 42,
+        uid: 42,
+        subject: 'Quarterly update',
+        from: {
+          text: 'Alice Example <alice@example.com>',
+        },
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(notify).toHaveBeenCalled();
+    });
+
+    const call = vi.mocked(notify).mock.calls[0][0];
+    expect(call.data.path).toBe('#inbox/42');
+    expect(call.data.url).toBe('forwardemail://mailbox#inbox/42');
+    expect(call.title).toContain('Alice Example');
+  });
+});

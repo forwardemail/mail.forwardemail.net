@@ -1115,8 +1115,20 @@ describe('PGP desktop and settings regressions', () => {
     path.resolve(__dirname, '../../src/svelte/PassphraseModal.svelte'),
     'utf8',
   );
+  const aboutDialogSrc = fs.readFileSync(
+    path.resolve(__dirname, '../../src/svelte/AboutDialog.svelte'),
+    'utf8',
+  );
   const mailServiceSrc = fs.readFileSync(
     path.resolve(__dirname, '../../src/stores/mailService.ts'),
+    'utf8',
+  );
+  const updaterBridgeSrc = fs.readFileSync(
+    path.resolve(__dirname, '../../src/utils/updater-bridge.js'),
+    'utf8',
+  );
+  const composeSrc = fs.readFileSync(
+    path.resolve(__dirname, '../../src/svelte/Compose.svelte'),
     'utf8',
   );
   const syncWorkerSrc = fs.readFileSync(
@@ -1157,6 +1169,43 @@ describe('PGP desktop and settings regressions', () => {
     expect(mailServiceSrc).toContain('if (passphrase && rememberPassphrase) {');
     expect(mailServiceSrc).toContain('if (promptedThisAttempt) {');
     expect(mailServiceSrc).toContain('lastUnlockError && /no unlocked keys available/i.test');
+  });
+
+  it('should subscribe to live PGP key version changes and re-attempt decryption when the mailbox is active', () => {
+    expect(mailServiceSrc).toContain('export const pgpKeysVersion = writable(_pgpKeysVersion);');
+    expect(mailboxSrc).toContain('pgpKeysVersion.subscribe((version) => {');
+    expect(mailboxSrc).toContain('if (pgpReloadPending && isActive) {');
+  });
+
+  it('should force fresh desktop update checks in Settings and About dialog', () => {
+    expect(settingsSrc).toContain('checkForUpdates({ force: true })');
+    expect(aboutDialogSrc).toContain('checkForUpdates({ force: true })');
+    expect(updaterBridgeSrc).toContain('const force = options?.force === true;');
+    expect(updaterBridgeSrc).toContain('if (!force && sinceLast < MIN_CHECK_INTERVAL_MS) {');
+  });
+
+  it('should only load About dialog metadata when the dialog is opened', () => {
+    expect(aboutDialogSrc).toContain('const loadAboutInfo = async (): Promise<void> => {');
+    expect(aboutDialogSrc).toContain('if (!open) return;');
+    expect(aboutDialogSrc).toContain('void loadAboutInfo();');
+  });
+
+  it('should default recipient autocomplete to the top suggestion and let Enter accept it across compose recipient fields', () => {
+    expect(composeSrc).toContain('const suggestionsChanged =');
+    expect(composeSrc).toContain('recipientSuggestionIndex = 0;');
+    expect(composeSrc).toContain(
+      'const selectedIndex = recipientSuggestionIndex >= 0 ? recipientSuggestionIndex : 0;',
+    );
+    expect(composeSrc).toContain("onkeydown={(e) => handleRecipientKeydown('to', e)}");
+    expect(composeSrc).toContain("onkeydown={(e) => handleRecipientKeydown('cc', e)}");
+    expect(composeSrc).toContain("onkeydown={(e) => handleRecipientKeydown('bcc', e)}");
+  });
+
+  it('should keep attachment trays sticky at the bottom of the reader pane', () => {
+    expect(mailboxSrc).toContain('sticky bottom-0 z-10 mt-4 border-t border-border');
+    expect(mailboxSrc).toContain(
+      'sticky bottom-0 z-10 mt-4 flex flex-wrap gap-2 border-t border-border',
+    );
   });
 
   it('should skip invalid stored keys instead of treating them like retryable passphrase failures', () => {

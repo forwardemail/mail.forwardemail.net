@@ -72,9 +72,10 @@ async function getArchInfo() {
 /**
  * Check for available updates.
  * Returns { available, version, body, arch, platform } or null.
- * Rate-limited to one check per 5 minutes.
+ * Rate-limited to one check per 5 minutes unless force=true is provided.
  */
-export async function checkForUpdates() {
+export async function checkForUpdates(options = {}) {
+  const force = options?.force === true;
   log('checkForUpdates() called');
 
   if (!isTauriDesktop) {
@@ -84,7 +85,7 @@ export async function checkForUpdates() {
 
   const now = Date.now();
   const sinceLast = now - _lastCheckTime;
-  if (sinceLast < MIN_CHECK_INTERVAL_MS) {
+  if (!force && sinceLast < MIN_CHECK_INTERVAL_MS) {
     log(
       `rate-limited: last check was ${Math.round(sinceLast / 1000)}s ago ` +
         `(min interval ${MIN_CHECK_INTERVAL_MS / 1000}s)`,

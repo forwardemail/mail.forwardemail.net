@@ -21,6 +21,7 @@ import {
 import { getCachedAttachmentBlob, cacheAttachmentBlob } from '../utils/attachment-cache.js';
 import { isTauriDesktop } from '../utils/platform.js';
 import type { Message, Attachment, PerfTracer, PgpKey } from '../types';
+import { writable } from 'svelte/store';
 import { warn } from '../utils/logger.ts';
 
 export interface MessageDetailCallbacks {
@@ -280,6 +281,7 @@ function isCachedBodyComplete(cached: CachedBody | undefined): boolean {
 }
 
 let passphraseModalRef: PassphraseModalRef | null = null;
+const pendingPassphraseModalWaiters = new Set<(modal: PassphraseModalRef | null) => void>();
 const passphraseCache = new Map<string, string>();
 const missingKeyModalShownByAccount = new Set<string>();
 
@@ -370,8 +372,48 @@ function setDismissedPgpModal(value: boolean, account: string): void {
   }
 }
 
+function waitForPassphraseModal(timeoutMs = 1500): Promise<PassphraseModalRef | null> {
+  if (passphraseModalRef?.open) {
+    return Promise.resolve(passphraseModalRef);
+  }
+
+  return new Promise((resolve) => {
+    const resolveModal = (modal: PassphraseModalRef | null): void => {
+      clearTimeout(timeoutId);
+      pendingPassphraseModalWaiters.delete(resolveModal);
+      resolve(modal?.open ? modal : null);
+    };
+
+    const timeoutId = setTimeout(() => {
+      pendingPassphraseModalWaiters.delete(resolveModal);
+      resolve(null);
+    }, timeoutMs);
+
+    pendingPassphraseModalWaiters.add(resolveModal);
+  });
+}
+
+async function getPassphraseModalIfAvailable(
+  allowPrompt: boolean,
+): Promise<PassphraseModalRef | null> {
+  if (!allowPrompt) return null;
+  if (passphraseModalRef?.open) return passphraseModalRef;
+
+  const modal = await waitForPassphraseModal();
+  if (!modal?.open) {
+    warn('[PGP] Passphrase modal ref not available — cannot prompt for passphrase');
+    return null;
+  }
+
+  passphraseModalRef = modal;
+  return modal;
+}
+
 export const setPassphraseModal = (modal: PassphraseModalRef): void => {
   passphraseModalRef = modal;
+  for (const resolveModal of [...pendingPassphraseModalWaiters]) {
+    resolveModal(passphraseModalRef);
+  }
 };
 
 /**
@@ -379,7 +421,13 @@ export const setPassphraseModal = (modal: PassphraseModalRef): void => {
  * Mailbox watches this to re-load the selected message after returning from Settings.
  */
 let _pgpKeysVersion = 0;
+export const pgpKeysVersion = writable(_pgpKeysVersion);
 export const getPgpKeysVersion = (): number => _pgpKeysVersion;
+
+function bumpPgpKeysVersion(): void {
+  _pgpKeysVersion++;
+  pgpKeysVersion.set(_pgpKeysVersion);
+}
 
 /**
  * Clear PGP key caches when keys are updated in settings
@@ -390,7 +438,7 @@ export const clearPgpKeyCache = (): void => {
   keyNeedsPassphraseCache.clear();
   missingKeyModalShownByAccount.clear();
   recentCacheHits.clear(); // Allow immediate re-evaluation after key changes
-  _pgpKeysVersion++;
+  bumpPgpKeysVersion();
 };
 
 /**
@@ -1823,8 +1871,13 @@ async function tryDecrypt(
           checkOnly: true,
         });
 
-        if (checkResult.success && checkResult.alreadyUnlocked) {
+        if (
+          checkResult.success &&
+          checkResult.alreadyUnlocked &&
+          checkResult?.needsPassphrase === false
+        ) {
           debugLog(`[PGP] Key "${key.name}" is unprotected, unlocked without passphrase`);
+          keyNeedsPassphraseCache.delete(key.name);
           await unlockPgpKey({
             keyName: key.name,
             keyValue: key.value,
@@ -1834,7 +1887,11 @@ async function tryDecrypt(
         }
 
         needsPassphrase = checkResult?.needsPassphrase !== false;
-        keyNeedsPassphraseCache.set(key.name, needsPassphrase);
+        if (needsPassphrase) {
+          keyNeedsPassphraseCache.set(key.name, true);
+        } else {
+          keyNeedsPassphraseCache.delete(key.name);
+        }
 
         if (!needsPassphrase && checkResult?.success === false) {
           clearSavedPassphrase(key.name);
@@ -1851,11 +1908,16 @@ async function tryDecrypt(
     }
 
     if (!needsPassphrase) {
+      try {
+        await unlockPgpKey({
+          keyName: key.name,
+          keyValue: key.value,
+          checkOnly: false,
+        });
+      } catch {
+        // Ignore and allow the final decrypt attempt to surface the worker error.
+      }
       continue;
-    }
-
-    if (!passphrase && allowPrompt && !passphraseModalRef?.open) {
-      warn('[PGP] Passphrase modal ref not available — cannot prompt for passphrase');
     }
 
     while (needsPassphrase) {
@@ -1863,14 +1925,15 @@ async function tryDecrypt(
       let promptedThisAttempt = false;
 
       if (!passphrase) {
-        if (!allowPrompt || !passphraseModalRef?.open) {
+        const modal = await getPassphraseModalIfAvailable(allowPrompt);
+        if (!modal?.open) {
           break;
         }
 
         debugLog(`[PGP] [WORKER] Prompting user for passphrase for key "${key.name}"`);
         try {
           const res = await withTimeout(
-            passphraseModalRef.open(key.name || 'PGP key'),
+            modal.open(key.name || 'PGP key'),
             PASSPHRASE_MODAL_TIMEOUT,
             'Passphrase modal',
           );
@@ -1914,7 +1977,7 @@ async function tryDecrypt(
           `PGP key "${key.name}" could not be unlocked with the provided passphrase.`;
         retryableFailure = result?.retryable !== false && result?.needsPassphrase !== false;
         if (!retryableFailure) {
-          keyNeedsPassphraseCache.set(key.name, false);
+          keyNeedsPassphraseCache.delete(key.name);
         }
         debugWarn(`[PGP] [WORKER] Unlock rejected for key "${key.name}":`, unlockError);
       } catch (err) {
@@ -1935,7 +1998,7 @@ async function tryDecrypt(
         break;
       }
 
-      if (!allowPrompt || !passphraseModalRef?.open) {
+      if (!allowPrompt) {
         break;
       }
     }

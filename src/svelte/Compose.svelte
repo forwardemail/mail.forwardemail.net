@@ -920,8 +920,14 @@
         return true;
       })
       .slice(0, 8);
-    if (recipientSuggestionField !== field || recipientSuggestionQuery !== query) {
+    const suggestionsChanged =
+      recipientSuggestionField !== field || recipientSuggestionQuery !== query;
+    if (!recipientSuggestions.length) {
       recipientSuggestionIndex = -1;
+    } else if (suggestionsChanged || recipientSuggestionIndex < 0) {
+      recipientSuggestionIndex = 0;
+    } else if (recipientSuggestionIndex > recipientSuggestions.length - 1) {
+      recipientSuggestionIndex = recipientSuggestions.length - 1;
     }
     recipientSuggestionField = field;
     recipientSuggestionQuery = query;
@@ -948,10 +954,14 @@
         recipientSuggestionIndex > 0 ? recipientSuggestionIndex - 1 : lastIndex;
       return false;
     }
-    if (event.key === 'Enter' && recipientSuggestionIndex >= 0) {
-      event.preventDefault();
-      applyRecipientSuggestion(field, recipientSuggestions[recipientSuggestionIndex]);
-      return false;
+    if (event.key === 'Enter') {
+      const selectedIndex = recipientSuggestionIndex >= 0 ? recipientSuggestionIndex : 0;
+      const selectedSuggestion = recipientSuggestions[selectedIndex];
+      if (selectedSuggestion) {
+        event.preventDefault();
+        applyRecipientSuggestion(field, selectedSuggestion);
+        return false;
+      }
     }
     if (event.key === 'Escape') {
       event.preventDefault();

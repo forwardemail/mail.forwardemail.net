@@ -429,6 +429,9 @@
   async function handleCheckForUpdates() {
     checkingForUpdates = true;
     updateCheckResult = '';
+    const installedVersion =
+      import.meta.env.VITE_PKG_VERSION || import.meta.env.VITE_APP_VERSION || '';
+
     try {
       // Use the globally exposed checkNow from web-updater (web)
       if (typeof window.__checkForWebUpdates === 'function') {
@@ -441,8 +444,12 @@
         // Tauri: use the updater-bridge
         try {
           const { checkForUpdates } = await import('../utils/updater-bridge.js');
-          const result = await checkForUpdates();
-          if (!result) {
+          const result = await checkForUpdates({ force: true });
+          if (result?.available) {
+            updateCheckResult = `Update available: v${result.version}`;
+          } else if (installedVersion) {
+            updateCheckResult = `You're on the latest version (v${installedVersion})`;
+          } else {
             updateCheckResult = "You're on the latest version";
           }
           // If an update is found, updater-bridge handles the download/install flow
@@ -450,9 +457,8 @@
           updateCheckResult = 'Could not check for updates';
         }
       }
-    } catch (err) {
+    } catch {
       updateCheckResult = 'Could not check for updates';
-      console.warn('[Settings] Update check failed:', err);
     } finally {
       checkingForUpdates = false;
     }
