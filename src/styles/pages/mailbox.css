@@ -283,8 +283,8 @@
 
 .fe-reader {
   overflow-y: auto;
-  overflow-x: auto;
-  padding: 10px 20px;
+  overflow-x: hidden;
+  padding: calc(var(--spacing, 0.25rem) * 2.5) calc(var(--spacing, 0.25rem) * 5);
 }
 
 .fe-messages .fe-section-header,

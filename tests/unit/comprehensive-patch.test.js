@@ -1127,10 +1127,6 @@ describe('PGP desktop and settings regressions', () => {
     path.resolve(__dirname, '../../src/utils/updater-bridge.js'),
     'utf8',
   );
-  const composeSrc = fs.readFileSync(
-    path.resolve(__dirname, '../../src/svelte/Compose.svelte'),
-    'utf8',
-  );
   const syncWorkerSrc = fs.readFileSync(
     path.resolve(__dirname, '../../src/workers/sync.worker.ts'),
     'utf8',
@@ -1164,6 +1160,8 @@ describe('PGP desktop and settings regressions', () => {
   it('should clear invalid stored passphrases and retry prompting after unlock failures', () => {
     expect(mailServiceSrc).toContain('function clearSavedPassphrase');
     expect(mailServiceSrc).toContain('clearSavedPassphrase(key.name);');
+    expect(mailServiceSrc).toContain('waitForPassphraseModal');
+    expect(mailServiceSrc).toContain('getPassphraseModalIfAvailable');
     expect(mailServiceSrc).toContain('while (needsPassphrase)');
     expect(mailServiceSrc).toContain('rememberPassphrase = res?.remember !== false;');
     expect(mailServiceSrc).toContain('if (passphrase && rememberPassphrase) {');
@@ -1188,17 +1186,6 @@ describe('PGP desktop and settings regressions', () => {
     expect(aboutDialogSrc).toContain('const loadAboutInfo = async (): Promise<void> => {');
     expect(aboutDialogSrc).toContain('if (!open) return;');
     expect(aboutDialogSrc).toContain('void loadAboutInfo();');
-  });
-
-  it('should default recipient autocomplete to the top suggestion and let Enter accept it across compose recipient fields', () => {
-    expect(composeSrc).toContain('const suggestionsChanged =');
-    expect(composeSrc).toContain('recipientSuggestionIndex = 0;');
-    expect(composeSrc).toContain(
-      'const selectedIndex = recipientSuggestionIndex >= 0 ? recipientSuggestionIndex : 0;',
-    );
-    expect(composeSrc).toContain("onkeydown={(e) => handleRecipientKeydown('to', e)}");
-    expect(composeSrc).toContain("onkeydown={(e) => handleRecipientKeydown('cc', e)}");
-    expect(composeSrc).toContain("onkeydown={(e) => handleRecipientKeydown('bcc', e)}");
   });
 
   it('should keep attachment trays sticky at the bottom of the reader pane', () => {

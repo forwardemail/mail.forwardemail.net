@@ -9,7 +9,7 @@
 .fe-email-iframe-container {
   width: 100%;
   min-height: 100px;
-  padding: 20px;
+  padding: calc(var(--spacing, 0.25rem) * 5);
   flex-shrink: 0;
 }
 

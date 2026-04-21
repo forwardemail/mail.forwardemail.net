@@ -43,19 +43,16 @@
   import ChevronDown from '@lucide/svelte/icons/chevron-down';
   import ExternalLink from '@lucide/svelte/icons/external-link';
   import { isTauri, isTauriDesktop } from '../utils/platform.js';
+  import { openExternalUrl, supportsExternalBrowserOverride } from '../utils/external-links.js';
 
   const openExternal = async (url: string) => {
-    if (isTauri) {
-      try {
-        const { openUrl } = await import('@tauri-apps/plugin-opener');
-        await openUrl(url);
-        return;
-      } catch (err) {
-        console.warn('[Settings] opener failed:', err);
-        return;
-      }
+    try {
+      await openExternalUrl(url, {
+        log: (...args: unknown[]) => console.warn('[Settings]', ...args),
+      });
+    } catch (err) {
+      console.warn('[Settings] opener failed:', err);
     }
-    window.open(url, '_blank', 'noopener,noreferrer');
   };
   import {
     getLatestDesktopRelease,
@@ -188,6 +185,8 @@
   let fontLoading = $state(false);
   let availableFonts = $state<{ key: string; name: string; family: string }[]>([]);
   let currentFontFamily = $state('system-ui, -apple-system, sans-serif');
+  let externalBrowserOverride = $state('');
+  const supportsBrowserOverrideSetting = supportsExternalBrowserOverride();
   let editingIndex = $state(-1);
   let error = $state('');
   let success = $state('');
@@ -631,6 +630,9 @@
     fontChoice = getEffectiveSettingValue('font', { account: currentAcct }) || 'system';
     currentFontFamily = getFontFamily(fontChoice);
     availableFonts = getFonts();
+    externalBrowserOverride = (
+      getEffectiveSettingValue('external_browser_override', { account: currentAcct }) || ''
+    ).trim();
 
     if (fontChoice !== 'system') {
       fontLoading = true;
@@ -913,6 +915,29 @@
     } finally {
       fontLoading = false;
     }
+  };
+
+  const saveExternalBrowserOverride = async () => {
+    const trimmed = externalBrowserOverride.trim();
+    try {
+      await setSettingValue('external_browser_override', trimmed, {
+        account: getAccountId(),
+      });
+      externalBrowserOverride = trimmed;
+      toasts?.show?.(
+        trimmed
+          ? 'External browser override saved'
+          : 'External links will use the system default browser',
+        'success',
+      );
+    } catch (err) {
+      toasts?.show?.((err as Error)?.message || 'Failed to save browser override', 'error');
+    }
+  };
+
+  const clearExternalBrowserOverride = async () => {
+    externalBrowserOverride = '';
+    await saveExternalBrowserOverride();
   };
 
   const saveComposePlainDefault = async () => {
@@ -1762,6 +1787,47 @@
             {/if}
           </Card.Content>
         </Card.Root>
+
+        {#if supportsBrowserOverrideSetting}
+          <Card.Root>
+            <Card.Header>
+              <Card.Title>External Links</Card.Title>
+              <Card.Description>
+                On Windows, you can choose a browser command for web links opened from the desktop
+                app. Leave this blank to use the Windows default browser.
+              </Card.Description>
+            </Card.Header>
+            <Card.Content class="space-y-4">
+              <div class="space-y-2">
+                <Label for="external-browser-override">Preferred browser command</Label>
+                <Input
+                  id="external-browser-override"
+                  bind:value={externalBrowserOverride}
+                  placeholder="Examples: firefox, chrome, msedge, or C:\\Program Files\\Mozilla Firefox\\firefox.exe"
+                  autocomplete="off"
+                  autocapitalize="off"
+                  spellcheck={false}
+                  onblur={() => saveExternalBrowserOverride()}
+                />
+              </div>
+              <p class="text-sm text-muted-foreground">
+                If the chosen browser cannot be launched, Forward Email falls back to the system
+                default browser so links still open.
+              </p>
+              <div class="flex flex-wrap gap-2">
+                <Button type="button" onclick={() => saveExternalBrowserOverride()}>Save</Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onclick={() => clearExternalBrowserOverride()}
+                  disabled={!externalBrowserOverride.trim()}
+                >
+                  Clear override
+                </Button>
+              </div>
+            </Card.Content>
+          </Card.Root>
+        {/if}
       {/if}
 
       {#if section === 'privacy'}

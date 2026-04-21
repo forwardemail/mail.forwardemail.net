@@ -1,23 +1,19 @@
 <script lang="ts">
   import { getBuildInfo } from '../utils/tauri-bridge';
   import { checkForUpdates } from '../utils/updater-bridge';
-  import { isTauri } from '../utils/platform.js';
+  import { openExternalUrl } from '../utils/external-links.js';
   import { Button } from '$lib/components/ui/button';
   import X from '@lucide/svelte/icons/x';
   import ExternalLink from '@lucide/svelte/icons/external-link';
 
   const openExternal = async (url: string) => {
-    if (isTauri) {
-      try {
-        const { openUrl } = await import('@tauri-apps/plugin-opener');
-        await openUrl(url);
-      } catch {
-        // Ignore opener failures to avoid noisy console warnings from unsupported environments.
-      }
-      return;
+    try {
+      await openExternalUrl(url, {
+        log: () => {},
+      });
+    } catch {
+      // Ignore opener failures to avoid noisy console warnings from unsupported environments.
     }
-
-    window.open(url, '_blank', 'noopener,noreferrer');
   };
 
   interface Props {

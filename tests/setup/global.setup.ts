@@ -63,7 +63,3 @@ if (typeof window !== 'undefined' && typeof window.matchMedia === 'undefined') {
     })),
   });
 }
-
-if (typeof process !== 'undefined') {
-  process.on('unhandledRejection', () => {});
-}

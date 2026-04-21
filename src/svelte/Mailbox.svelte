@@ -63,6 +63,7 @@
   import { parseMailto, mailtoToPrefill } from '../utils/mailto';
   import MailtoPrompt from './components/MailtoPrompt.svelte';
   import { isTauriMobile } from '../utils/platform.js';
+  import { openExternalUrl } from '../utils/external-links.js';
   import { onBackButton, triggerHaptic } from '../utils/tauri-bridge.js';
   import {
     outboxCount,
@@ -4738,17 +4739,17 @@
     if (isMailto) {
       const parsed = parseMailto(url);
       mailboxView?.composeModal?.open?.(mailtoToPrefill(parsed));
-    } else if (isTauri) {
-      // `window.open` in WKWebView creates a child frame blocked by our
-      // CSP frame-src. Never fall back to it on Tauri — surface the error.
-      try {
-        const { openUrl } = await import('@tauri-apps/plugin-opener');
-        await openUrl(url);
-      } catch (err) {
-        console.warn('[Mailbox] Failed to open URL via Tauri opener:', err);
-      }
     } else {
-      window.open(url, '_blank', 'noopener,noreferrer');
+      // `window.open` in WKWebView creates a child frame blocked by our
+      // CSP frame-src. Route desktop and mobile Tauri links through the
+      // shared helper so Windows browser overrides and safe fallbacks apply.
+      try {
+        await openExternalUrl(url, {
+          log: (...args: unknown[]) => console.warn('[Mailbox]', ...args),
+        });
+      } catch (err) {
+        console.warn('[Mailbox] Failed to open URL via helper:', err);
+      }
     }
   };
 
@@ -4785,13 +4786,9 @@
       }
       if (link && link.href) {
         e.preventDefault();
-        if (isTauri) {
-          import('@tauri-apps/plugin-opener')
-            .then(({ openUrl }) => openUrl(link.href))
-            .catch((err) => console.warn('[Mailbox] opener failed:', err));
-        } else {
-          window.open(link.href, '_blank', 'noopener,noreferrer');
-        }
+        openExternalUrl(link.href, {
+          log: (...args: unknown[]) => console.warn('[Mailbox]', ...args),
+        }).catch((err) => console.warn('[Mailbox] opener failed:', err));
       }
     };
 

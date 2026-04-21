@@ -129,3 +129,5 @@ For a comprehensive testing guide, see [TAURI_TESTING.md](./TAURI_TESTING.md).
 - [TAURI_TESTING.md](./TAURI_TESTING.md) — Comprehensive Tauri testing guide
 - [Desktop Contributing](./desktop-contributing.md) — Desktop architecture and IPC patterns
 - [Desktop Setup](./desktop-setup.md) — Desktop environment setup
+- [iOS Setup](./ios-setup.md) — iOS simulator, signing, CI, and TestFlight setup
+- [Desktop CI Secrets](./desktop-ci-secrets.md) — Desktop signing-specific secret setup

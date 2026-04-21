@@ -107,7 +107,7 @@ Signing is automatic when secrets are configured. Without secrets, builds are un
 | iOS          | Apple Distribution + ASC API key  | Required for TestFlight — job skips gracefully when secrets aren't set                   |
 | Auto-updater | Ed25519 key                       | Required for `.sig` files                                                                |
 
-See [SECRETS.md](./SECRETS.md) for the full list of required secrets and [desktop-ci-secrets.md](./desktop-ci-secrets.md) for detailed setup.
+See [SECRETS.md](./SECRETS.md) for the full list of required secrets, [desktop-ci-secrets.md](./desktop-ci-secrets.md) for desktop signing setup, and [ios-setup.md](./ios-setup.md) for the iOS signing and TestFlight flow.
 
 ## Related Documentation
 
@@ -115,3 +115,4 @@ See [SECRETS.md](./SECRETS.md) for the full list of required secrets and [deskto
 - [SECURITY.md](./SECURITY.md) — Code signing verification and supply chain protections
 - [DEVELOPMENT.md](./DEVELOPMENT.md) — Building for production locally
 - [Desktop CI Secrets](./desktop-ci-secrets.md) — Detailed desktop signing setup
+- [iOS Setup](./ios-setup.md) — Local iOS setup, CI signing, and TestFlight workflow

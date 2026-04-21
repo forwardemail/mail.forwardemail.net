@@ -71,6 +71,23 @@ test.describe('Mailbox — message reader', () => {
     await waitForReaderToOpen(page, testInfo);
     await expect(page.locator('.fe-reader').getByText('Welcome to Webmail')).toBeVisible();
   });
+
+  test('reader does not expose a bottom horizontal scrollbar for normal message content', async ({
+    page,
+  }, testInfo) => {
+    test.skip(isMobileProject(testInfo), 'Desktop only');
+
+    await selectMessageBySubject(page, 'Welcome to Webmail');
+    await waitForReaderToOpen(page, testInfo);
+
+    const metrics = await page.locator('.fe-reader').evaluate((element) => ({
+      overflowX: window.getComputedStyle(element).overflowX,
+      overflowY: window.getComputedStyle(element).overflowY,
+    }));
+
+    expect(metrics.overflowX).toBe('hidden');
+    expect(metrics.overflowY).toBe('auto');
+  });
 });
 
 // ── Desktop-Only Layout ──────────────────────────────────────────────────────

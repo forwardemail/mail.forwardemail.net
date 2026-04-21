@@ -164,6 +164,7 @@ Detailed architecture documentation is available in the `docs/` directory:
 - [Desktop Contributing](docs/desktop-contributing.md) — Desktop architecture and IPC patterns
 - [Desktop Setup](docs/desktop-setup.md) — Developer environment setup for desktop
 - [Desktop & Mobile Development](./docs/DEVELOPMENT.md) — Platform-specific development guide
+- [iOS Setup](./docs/ios-setup.md) — Local signing, CI, and TestFlight workflow
 - [Release Process](./docs/RELEASES.md) — How releases are managed
 - [Security Hardening](./docs/SECURITY.md) — Security practices and hardening
 - [App Lock Architecture](docs/app-lock-architecture.md) — Client-side encryption and App Lock design
@@ -358,9 +359,12 @@ graph TB
 
 ### CI/CD Pipeline
 
-The desktop workflow currently documented in this repository is **Release Desktop (Tauri)** (`.github/workflows/release-desktop.yml`). It builds and uploads the desktop release matrix across macOS x64/arm64, Windows x64/arm64, and Linux x64/arm64. See [Desktop Build CI guide](docs/desktop-build-ci.md) for the platform matrix, runner details, and artifact expectations.
+This repository currently documents two primary release workflows:
 
-Local validation for release work should still cover the standard web checks before tagging a desktop release:
+1. **Release Desktop (Tauri)** (`.github/workflows/release-desktop.yml`) for macOS x64/arm64, Windows x64/arm64, and Linux x64/arm64 desktop artifacts. See [Desktop Build CI guide](docs/desktop-build-ci.md) for the platform matrix, runner details, and artifact expectations.
+2. **Release Mobile** (`.github/workflows/release-mobile.yml`) for signed Android APK/AAB output and signed iOS IPA upload to TestFlight. See [Release Process](docs/RELEASES.md), [iOS Setup](docs/ios-setup.md), and [Secrets](docs/SECRETS.md) for the exact signing inputs and release flow.
+
+Local validation for release work should still cover the standard web checks before tagging a release:
 
 1. **Install** — `pnpm install --frozen-lockfile`
 2. **Lint** — `pnpm lint`
@@ -369,44 +373,48 @@ Local validation for release work should still cover the standard web checks bef
 5. **Build** — `pnpm build`
 6. **Desktop build smoke test** — `pnpm tauri:build` for the target platform you are validating
 
-If additional web, deploy, or mobile workflows are introduced later, their README references should be added alongside the corresponding workflow files so the documentation stays aligned with the repository.
+For exact secret generation, GitHub environment setup, and platform-specific signing steps, use [docs/SECRETS.md](./docs/SECRETS.md) as the canonical guide, with [docs/desktop-ci-secrets.md](./docs/desktop-ci-secrets.md) and [docs/ios-setup.md](./docs/ios-setup.md) as platform-specific companions.
 
 ### Required Secrets & Variables
 
 **GitHub Secrets:**
 
-| Secret                               | Description                                     |
-| ------------------------------------ | ----------------------------------------------- |
-| `R2_ACCOUNT_ID`                      | Cloudflare account ID (also used for Workers)   |
-| `R2_ACCESS_KEY_ID`                   | R2 API access key                               |
-| `R2_SECRET_ACCESS_KEY`               | R2 API secret key                               |
-| `CLOUDFLARE_ZONE_ID`                 | Zone ID for cache purge                         |
-| `CLOUDFLARE_API_TOKEN`               | API token with R2 + Workers + Cache permissions |
-| `TAURI_SIGNING_PRIVATE_KEY`          | Tauri updater Ed25519 signing key               |
-| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Password for the Tauri signing key              |
-| `APPLE_CERTIFICATE`                  | macOS code signing certificate (base64)         |
-| `APPLE_CERTIFICATE_PASSWORD`         | Password for the Apple certificate              |
-| `APPLE_SIGNING_IDENTITY`             | Apple Developer ID signing identity             |
-| `APPLE_ID`                           | Apple ID for notarization                       |
-| `APPLE_PASSWORD`                     | App-specific password for notarization          |
-| `APPLE_TEAM_ID`                      | Apple Developer Team ID                         |
-| `WINDOWS_CERTIFICATE`                | Windows EV code signing certificate (base64)    |
-| `WINDOWS_CERTIFICATE_PASSWORD`       | Password for the Windows certificate            |
-| `ANDROID_KEYSTORE_BASE64`            | Android signing keystore (base64)               |
-| `ANDROID_KEYSTORE_PASSWORD`          | Password for the Android keystore               |
-| `ANDROID_KEY_ALIAS`                  | Android signing key alias                       |
-| `ANDROID_KEY_PASSWORD`               | Password for the Android signing key            |
-| `IOS_CERTIFICATE_BASE64`             | iOS distribution certificate (base64)           |
-| `IOS_CERTIFICATE_PASSWORD`           | Password for the iOS certificate                |
-| `IOS_PROVISIONING_PROFILE_BASE64`    | iOS provisioning profile (base64)               |
+| Secret                               | Description                                                       |
+| ------------------------------------ | ----------------------------------------------------------------- |
+| `R2_ACCOUNT_ID`                      | Cloudflare account ID (also used for Workers)                     |
+| `R2_ACCESS_KEY_ID`                   | R2 API access key                                                 |
+| `R2_SECRET_ACCESS_KEY`               | R2 API secret key                                                 |
+| `CLOUDFLARE_ZONE_ID`                 | Zone ID for cache purge                                           |
+| `CLOUDFLARE_API_TOKEN`               | API token with R2 + Workers + cache-purge permissions             |
+| `TAURI_SIGNING_PRIVATE_KEY`          | Tauri updater Ed25519 signing key                                 |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Password for the Tauri signing key                                |
+| `APPLE_CERTIFICATE`                  | Base64-encoded macOS `.p12` signing certificate                   |
+| `APPLE_CERTIFICATE_PASSWORD`         | Password used to export the macOS `.p12`                          |
+| `APPLE_SIGNING_IDENTITY`             | Apple Developer ID signing identity                               |
+| `APPLE_ID`                           | Apple ID for notarization                                         |
+| `APPLE_PASSWORD`                     | App-specific password for notarization                            |
+| `APPLE_TEAM_ID`                      | Apple Developer Team ID                                           |
+| `WINDOWS_CERTIFICATE`                | Base64-encoded exportable Windows `.pfx` code-signing certificate |
+| `WINDOWS_CERTIFICATE_PASSWORD`       | Password used to export the Windows `.pfx`                        |
+| `ANDROID_KEYSTORE_BASE64`            | Android signing keystore (base64)                                 |
+| `ANDROID_KEYSTORE_PASSWORD`          | Password for the Android keystore                                 |
+| `ANDROID_KEY_ALIAS`                  | Android signing key alias                                         |
+| `ANDROID_KEY_PASSWORD`               | Password for the Android signing key                              |
+| `IOS_CERTIFICATE_BASE64`             | Base64-encoded iOS Apple Distribution `.p12`                      |
+| `IOS_CERTIFICATE_PASSWORD`           | Password used to export the iOS `.p12`                            |
+| `IOS_PROVISIONING_PROFILE_BASE64`    | Base64-encoded App Store provisioning profile                     |
+| `APP_STORE_CONNECT_API_KEY`          | Full contents of the downloaded App Store Connect `.p8` key       |
+| `APP_STORE_CONNECT_KEY_ID`           | App Store Connect API key ID                                      |
+| `APP_STORE_CONNECT_ISSUER_ID`        | App Store Connect issuer ID                                       |
 
 **GitHub Variables:**
 
-| Variable    | Description                      |
-| ----------- | -------------------------------- |
-| `R2_BUCKET` | R2 bucket name for static assets |
+| Variable               | Description                                                              |
+| ---------------------- | ------------------------------------------------------------------------ |
+| `R2_BUCKET`            | R2 bucket name for static assets                                         |
+| `IOS_SIGNING_IDENTITY` | Optional iOS signing identity override; defaults to `Apple Distribution` |
 
-For a detailed guide on secrets management, see [docs/SECRETS.md](./docs/SECRETS.md).
+For generation steps and exact setup instructions, see [docs/SECRETS.md](./docs/SECRETS.md).
 
 ### Cloudflare API Token Setup
 

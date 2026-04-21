@@ -7,7 +7,7 @@ export const SETTING_SCOPES = {
 export type SettingScope = (typeof SETTING_SCOPES)[keyof typeof SETTING_SCOPES];
 export type ValueType = 'string' | 'boolean' | 'number' | 'json';
 
-export interface SettingDefinition {
+export type SettingDefinition = {
   id: string;
   label: string;
   scope: SettingScope;
@@ -22,47 +22,83 @@ export interface SettingDefinition {
   overrideKey?: string;
   defaultOverride?: boolean;
   localParse?: (raw: unknown) => unknown;
-  localSerialize?: (value: unknown) => string | null;
+  localSerialize?: (value: unknown) => string | undefined;
   normalizeRemote?: (value: unknown) => unknown;
   serializeRemote?: (value: unknown) => unknown;
-}
+};
 
 const toLower = (value: unknown): string => (value == null ? '' : String(value).toLowerCase());
 
 export const normalizeLayoutMode = (value: unknown): string => {
   const mode = toLower(value);
-  if (!mode) return 'full';
-  if (mode === 'personal') return 'classic';
+  if (!mode) {
+    return 'full';
+  }
+
+  if (mode === 'personal') {
+    return 'classic';
+  }
+
   // Normalize horizontal to full (horizontal view removed)
-  if (mode === 'compact' || mode === 'productivity' || mode === 'horizontal') return 'full';
-  if (mode === 'classic' || mode === 'full') return mode;
+  if (mode === 'compact' || mode === 'productivity' || mode === 'horizontal') {
+    return 'full';
+  }
+
+  if (mode === 'classic' || mode === 'full') {
+    return mode;
+  }
+
   return 'full';
 };
 
 export const serializeLayoutMode = (value: unknown): string => {
   const mode = toLower(value);
-  if (!mode || mode === 'classic') return 'personal';
-  if (mode === 'full') return 'compact';
+  if (!mode || mode === 'classic') {
+    return 'personal';
+  }
+
+  if (mode === 'full') {
+    return 'compact';
+  }
+
   return mode;
 };
 
 const parseBoolean = (raw: unknown, fallback = false): boolean => {
-  if (raw === null || raw === undefined) return fallback;
-  if (typeof raw === 'boolean') return raw;
+  if (raw === null || raw === undefined) {
+    return fallback;
+  }
+
+  if (typeof raw === 'boolean') {
+    return raw;
+  }
+
   const normalized = String(raw).toLowerCase();
-  if (normalized === 'true' || normalized === '1') return true;
-  if (normalized === 'false' || normalized === '0') return false;
+  if (normalized === 'true' || normalized === '1') {
+    return true;
+  }
+
+  if (normalized === 'false' || normalized === '0') {
+    return false;
+  }
+
   return fallback;
 };
 
 const parseNumber = (raw: unknown, fallback = 0): number => {
-  if (raw === null || raw === undefined) return fallback;
+  if (raw === null || raw === undefined) {
+    return fallback;
+  }
+
   const parsed = Number.parseInt(String(raw), 10);
   return Number.isFinite(parsed) ? parsed : fallback;
 };
 
 const parseJson = <T>(raw: unknown, fallback: T): T => {
-  if (raw === null || raw === undefined) return fallback;
+  if (raw === null || raw === undefined) {
+    return fallback;
+  }
+
   try {
     const parsed = JSON.parse(String(raw));
     return parsed === undefined ? fallback : parsed;
@@ -195,6 +231,16 @@ export const SETTINGS_REGISTRY: Record<string, SettingDefinition> = {
     valueType: 'string',
     defaultValue: 'system',
     accountScoped: true,
+  },
+  external_browser_override: {
+    id: 'external_browser_override',
+    label: 'External Browser Override',
+    scope: SETTING_SCOPES.DEVICE,
+    localKey: 'external_browser_override',
+    valueType: 'string',
+    defaultValue: '',
+    localParse: (raw) => (raw == null ? '' : String(raw).trim()),
+    localSerialize: (value) => String(value ?? '').trim(),
   },
   block_remote_images: {
     id: 'block_remote_images',
@@ -336,58 +382,122 @@ export const SETTINGS_REGISTRY: Record<string, SettingDefinition> = {
   },
 };
 
-export const getSettingDefinition = (id: string): SettingDefinition | null =>
+export const getSettingDefinition = (id: string): SettingDefinition | undefined =>
   SETTINGS_REGISTRY[id] || null;
 
-export const resolveLocalKey = (def: SettingDefinition | null, account?: string): string | null => {
-  if (!def?.localKey) return null;
+export const resolveLocalKey = (
+  def: SettingDefinition | undefined,
+  account?: string,
+): string | undefined => {
+  if (!def?.localKey) {
+    return null;
+  }
+
   if (typeof def.localKey === 'function') {
     return def.localKey(account || 'default');
   }
+
   return def.localKey;
 };
 
 export const resolveOverrideKey = (
-  def: SettingDefinition | null,
+  def: SettingDefinition | undefined,
   account?: string,
-): string | null => {
-  if (!def || def.scope !== SETTING_SCOPES.HYBRID) return null;
+): string | undefined => {
+  if (def?.scope !== SETTING_SCOPES.HYBRID) {
+    return null;
+  }
+
   const suffix = def.accountScoped ? `_${account || 'default'}` : '';
   return def.overrideKey || `setting_override_${def.id}${suffix}`;
 };
 
-export const parseLocalValue = (def: SettingDefinition | null, raw: unknown): unknown => {
-  if (!def) return raw;
-  if (def.localParse) return def.localParse(raw);
+export const parseLocalValue = (def: SettingDefinition | undefined, raw: unknown): unknown => {
+  if (!def) {
+    return raw;
+  }
+
+  if (def.localParse) {
+    return def.localParse(raw);
+  }
+
   const fallback = def.defaultValue;
-  if (def.valueType === 'boolean') return parseBoolean(raw, fallback as boolean);
-  if (def.valueType === 'number') return parseNumber(raw, fallback as number);
-  if (def.valueType === 'json') return parseJson(raw, fallback);
-  if (raw === null || raw === undefined) return fallback;
+  if (def.valueType === 'boolean') {
+    return parseBoolean(raw, fallback as boolean);
+  }
+
+  if (def.valueType === 'number') {
+    return parseNumber(raw, fallback as number);
+  }
+
+  if (def.valueType === 'json') {
+    return parseJson(raw, fallback);
+  }
+
+  if (raw === null || raw === undefined) {
+    return fallback;
+  }
+
   return raw;
 };
 
 export const serializeLocalValue = (
-  def: SettingDefinition | null,
+  def: SettingDefinition | undefined,
   value: unknown,
-): string | null => {
-  if (!def) return value == null ? null : String(value);
-  if (def.localSerialize) return def.localSerialize(value);
-  if (def.valueType === 'boolean') return serializeBoolean(Boolean(value));
-  if (def.valueType === 'number') return value == null ? null : String(value);
-  if (def.valueType === 'json') return serializeJson(value);
-  if (value === null || value === undefined) return null;
+): string | undefined => {
+  if (!def) {
+    return value == null ? null : String(value);
+  }
+
+  if (def.localSerialize) {
+    return def.localSerialize(value);
+  }
+
+  if (def.valueType === 'boolean') {
+    return serializeBoolean(Boolean(value));
+  }
+
+  if (def.valueType === 'number') {
+    return value == null ? null : String(value);
+  }
+
+  if (def.valueType === 'json') {
+    return serializeJson(value);
+  }
+
+  if (value === null || value === undefined) {
+    return null;
+  }
+
   return String(value);
 };
 
-export const normalizeRemoteValue = (def: SettingDefinition | null, value: unknown): unknown => {
-  if (!def) return value;
-  if (def.normalizeRemote) return def.normalizeRemote(value);
+export const normalizeRemoteValue = (
+  def: SettingDefinition | undefined,
+  value: unknown,
+): unknown => {
+  if (!def) {
+    return value;
+  }
+
+  if (def.normalizeRemote) {
+    return def.normalizeRemote(value);
+  }
+
   return value ?? def.defaultValue;
 };
 
-export const serializeRemoteValue = (def: SettingDefinition | null, value: unknown): unknown => {
-  if (!def) return value;
-  if (def.serializeRemote) return def.serializeRemote(value);
+export const serializeRemoteValue = (
+  def: SettingDefinition | undefined,
+  value: unknown,
+): unknown => {
+  if (!def) {
+    return value;
+  }
+
+  if (def.serializeRemote) {
+    return def.serializeRemote(value);
+  }
+
   return value;
 };

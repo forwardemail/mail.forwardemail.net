@@ -115,7 +115,7 @@ Requires a paid [Apple Developer Program](https://developer.apple.com/programs/)
 
 ### CI signed builds → TestFlight (GitHub Actions)
 
-The iOS job in [`release-mobile.yml`](../.github/workflows/release-mobile.yml) produces a signed IPA, uploads it to App Store Connect for TestFlight distribution, and also attaches the IPA to the GitHub Release for archival. It runs on every `v*` tag as part of the [unified release](./RELEASES.md#unified-release-v-tag). When required secrets are missing the job logs a warning and exits 0 — it never blocks the desktop/Android release.
+The iOS job in [`release-mobile.yml`](../.github/workflows/release-mobile.yml) produces a signed IPA, uploads it to App Store Connect for TestFlight distribution, and also attaches the IPA to the GitHub Release for archival. It runs on every `v*` tag as part of the [unified release](./RELEASES.md#unified-release-v-tag). The workflow now runs on `macos-26` and explicitly selects the latest stable Xcode toolchain before building so the active iPhoneOS SDK satisfies Apple’s current submission requirement. When required secrets are missing the job logs a warning and exits 0 — it never blocks the desktop/Android release.
 
 #### One-time setup
 
@@ -130,7 +130,7 @@ On [appstoreconnect.apple.com](https://appstoreconnect.apple.com):
 4. **My Apps → + → New App** → iOS, bundle ID `net.forwardemail.mail`, pick a SKU like `forwardemail-mail-ios`. Minimum metadata is fine to start — full screenshots/description only required before public App Store submission.
 5. **Users and Access → Integrations → App Store Connect API → Generate API Key** with **App Manager** role. Download the `.p8` (downloadable only once). Note the **Key ID** (10 chars) and **Issuer ID** (UUID at the top of the page).
 
-Store the six secrets in the `release` environment — see [SECRETS.md → iOS](./SECRETS.md#ios) for the full list and encoding commands.
+Store the six iOS and App Store Connect secrets in the `release` environment — see [SECRETS.md](./SECRETS.md) for the full list, Windows/macOS/Android values, and exact encoding commands.
 
 #### What happens on a tagged release
 
