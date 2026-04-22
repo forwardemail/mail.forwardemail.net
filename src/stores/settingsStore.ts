@@ -332,6 +332,10 @@ export const attachmentReminder: Readable<boolean> = derived(
   [remoteSettings, localSettingsVersion],
   ([$remote]) => Boolean(getEffectiveSettingValue('attachment_reminder', { remote: $remote })),
 );
+export const hideCompletedTodos: Readable<boolean> = derived(
+  [remoteSettings, localSettingsVersion],
+  ([$remote]) => Boolean(getEffectiveSettingValue('hide_completed_todos', { remote: $remote })),
+);
 
 const getAccountKey = (account?: string): string => account || Local.get('email') || 'default';
 

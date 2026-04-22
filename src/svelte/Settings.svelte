@@ -181,6 +181,7 @@
   let editingKeyPassphrase = $state('');
   let blockRemoteImages = $state(false);
   let blockTrackingPixels = $state(true);
+  let hideCompletedTodosValue = $state(false);
   let fontChoice = $state('system');
   let fontLoading = $state(false);
   let availableFonts = $state<{ key: string; name: string; family: string }[]>([]);
@@ -626,6 +627,9 @@
     blockTrackingPixels = Boolean(
       getEffectiveSettingValue('block_tracking_pixels', { account: currentAcct }),
     );
+    hideCompletedTodosValue = Boolean(
+      getEffectiveSettingValue('hide_completed_todos', { account: currentAcct }),
+    );
 
     fontChoice = getEffectiveSettingValue('font', { account: currentAcct }) || 'system';
     currentFontFamily = getFontFamily(fontChoice);
@@ -1022,6 +1026,25 @@
     }
   };
 
+  const toggleHideCompletedTodos = () => {
+    try {
+      setSettingValue('hide_completed_todos', hideCompletedTodosValue, {
+        account: getAccountId(),
+      });
+      toasts?.show?.(
+        hideCompletedTodosValue
+          ? 'Completed todos will be hidden in the calendar'
+          : 'Completed todos will be shown in the calendar',
+        'success',
+      );
+    } catch (err) {
+      toasts?.show?.(
+        (err as Error)?.message || 'Failed to update completed todos setting',
+        'error',
+      );
+    }
+  };
+
   const saveMessagesPerPage = async () => {
     try {
       await setSettingValue('messages_per_page', messagesPerPage, {
@@ -1408,6 +1431,7 @@
     { id: 'appearance', label: 'Appearance' },
     { id: 'privacy', label: 'Privacy & Security' },
     { id: 'folders', label: 'Folders & Labels' },
+    { id: 'calendar', label: 'Calendar' },
     { id: 'search', label: 'Search' },
     { id: 'advanced', label: 'Advanced' },
     { id: 'shortcuts', label: 'Keyboard Shortcuts' },
@@ -2057,6 +2081,28 @@
                 <p class="text-sm text-muted-foreground">No labels yet.</p>
               {/if}
             </div>
+          </Card.Content>
+        </Card.Root>
+      {/if}
+
+      {#if section === 'calendar'}
+        <Card.Root>
+          <Card.Header>
+            <Card.Title>Tasks</Card.Title>
+            <Card.Description>Control how tasks appear in your calendar.</Card.Description>
+          </Card.Header>
+          <Card.Content class="space-y-4">
+            <label class="flex items-center gap-3">
+              <Checkbox
+                bind:checked={hideCompletedTodosValue}
+                onCheckedChange={toggleHideCompletedTodos}
+              />
+              <span>Hide completed todos</span>
+            </label>
+            <p class="text-sm text-muted-foreground">
+              Completed tasks will be hidden from the calendar view. You can still find them via the
+              calendar event details.
+            </p>
           </Card.Content>
         </Card.Root>
       {/if}

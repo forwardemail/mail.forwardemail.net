@@ -5638,8 +5638,8 @@
                 aria-expanded={!sidebarBottomCollapsed}
               >
                 <span class="flex items-center gap-2">
-                  <Plus class="h-4 w-4" />
-                  <span>New Folder</span>
+                  <MoreHorizontal class="h-4 w-4" />
+                  <span>More</span>
                 </span>
                 <ChevronDown
                   class={`h-3 w-3 transition-transform ${sidebarBottomCollapsed ? '-rotate-90' : ''}`}
@@ -5654,7 +5654,31 @@
                     title="Create new folder"
                   >
                     <FolderPlus class="h-4 w-4" />
-                    <span>Create Folder</span>
+                    <span>New Folder</span>
+                  </button>
+                  <button
+                    type="button"
+                    class="flex items-center gap-2 px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                    onclick={() => navigate('/contacts')}
+                  >
+                    <BookUser class="h-4 w-4" />
+                    <span>Contacts</span>
+                  </button>
+                  <button
+                    type="button"
+                    class="flex items-center gap-2 px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                    onclick={() => navigate('/calendar')}
+                  >
+                    <CalendarIcon class="h-4 w-4" />
+                    <span>Calendar</span>
+                  </button>
+                  <button
+                    type="button"
+                    class="flex items-center gap-2 px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                    onclick={() => navigate('/mailbox/settings')}
+                  >
+                    <SettingsIcon class="h-4 w-4" />
+                    <span>Settings</span>
                   </button>
                   {#if isLockEnabled() && isVaultConfigured()}
                     <button

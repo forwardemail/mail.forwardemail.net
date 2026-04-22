@@ -36,16 +36,26 @@
   let loading = $state(false);
   let loadSequence = 0;
 
-  const archLabels: Record<string, string> = {
-    aarch64: 'Apple Silicon',
-    x86_64: 'Intel (x64)',
-    x86: 'x86',
-  };
-
   const osLabels: Record<string, string> = {
     macos: 'macOS',
     windows: 'Windows',
     linux: 'Linux',
+  };
+
+  // "Apple Silicon" / "Intel (x64)" only make sense on macOS; Snapdragon
+  // Windows laptops also report `aarch64`, and x64 Windows/Linux boxes aren't
+  // always Intel.
+  const archLabel = (osName: string, archName: string): string => {
+    const a = (archName || '').toLowerCase();
+    const o = (osName || '').toLowerCase();
+    if (a === 'aarch64' || a === 'arm64') {
+      return o === 'macos' ? 'Apple Silicon' : 'ARM64';
+    }
+    if (a === 'x86_64' || a === 'x64') {
+      return o === 'macos' ? 'Intel (x64)' : 'x64';
+    }
+    if (a === 'x86') return 'x86';
+    return archName;
   };
 
   const loadAboutInfo = async (): Promise<void> => {
@@ -149,7 +159,7 @@
 
             {#if os || arch}
               <dt class="text-muted-foreground">Platform</dt>
-              <dd>{osLabels[os] || os} ({archLabels[arch] || arch})</dd>
+              <dd>{osLabels[os] || os} ({archLabel(os, arch)})</dd>
             {/if}
 
             <dt class="text-muted-foreground">Update</dt>

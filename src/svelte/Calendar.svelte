@@ -13,7 +13,7 @@
   import { db } from '../utils/db';
   import { normalizeEmail } from '../utils/address';
   import { queueEmail } from '../utils/outbox-service';
-  import { effectiveTheme } from '../stores/settingsStore';
+  import { effectiveTheme, hideCompletedTodos } from '../stores/settingsStore';
   import { currentAccount } from '../stores/mailboxActions';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
@@ -1949,14 +1949,20 @@
     return entries;
   };
 
+  const visibleEvents = $derived(
+    $hideCompletedTodos
+      ? events.filter((ev) => !isCompletedTask(ev as Record<string, unknown>))
+      : events,
+  );
+
   let lastEventCount = -1;
   let calendarCreated = false;
   $effect(() => {
-    if (isActive && events && calendars.length) {
-      const eventCount = events?.length || 0;
+    if (isActive && visibleEvents && calendars.length) {
+      const eventCount = visibleEvents?.length || 0;
       if (eventCount === lastEventCount && calendarCreated) return;
       lastEventCount = eventCount;
-      const mapped = events
+      const mapped = visibleEvents
         .map((ev) => {
           const e = ev as Record<string, unknown>;
           return {

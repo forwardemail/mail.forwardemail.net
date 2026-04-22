@@ -380,6 +380,16 @@ export const SETTINGS_REGISTRY: Record<string, SettingDefinition> = {
     localParse: (raw) => parseJson(raw, {}),
     localSerialize: (value) => serializeJson(value || {}),
   },
+  hide_completed_todos: {
+    id: 'hide_completed_todos',
+    label: 'Hide Completed Todos',
+    scope: SETTING_SCOPES.DEVICE,
+    localKey: 'hide_completed_todos',
+    valueType: 'boolean',
+    defaultValue: false,
+    localParse: (raw) => parseBoolean(raw, false),
+    localSerialize: (value) => serializeBoolean(Boolean(value)),
+  },
 };
 
 export const getSettingDefinition = (id: string): SettingDefinition | undefined =>
