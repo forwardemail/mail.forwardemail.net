@@ -5346,9 +5346,18 @@
             {/if}
             {#if smartSearchError}
               <div
-                class="absolute top-full left-0 right-0 mt-1 z-50 rounded-md border border-destructive/50 bg-destructive/10 p-2 text-xs text-destructive"
+                class="absolute top-full left-0 right-0 mt-1 z-50 flex items-start gap-2 rounded-md border border-destructive/50 bg-destructive/10 p-2 text-xs text-destructive"
+                role="alert"
               >
-                {smartSearchError}
+                <span class="flex-1">{smartSearchError}</span>
+                <button
+                  type="button"
+                  class="flex h-4 w-4 flex-none items-center justify-center rounded hover:bg-destructive/20"
+                  aria-label="Dismiss error"
+                  onclick={() => (smartSearchError = null)}
+                >
+                  <X class="h-3 w-3" />
+                </button>
               </div>
             {/if}
             {#if searchSuggestionsVisible && filteredSuggestions.length}

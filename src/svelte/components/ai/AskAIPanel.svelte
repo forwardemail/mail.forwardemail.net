@@ -672,7 +672,10 @@
     mailboxView.composeModal.open({
       to: prefill.to,
       subject: prefill.subject,
-      body: prefill.body,
+      // Rich HTML for the TipTap editor; `text` is the plain-text fallback
+      // for composers that are in plain-text mode.
+      html: prefill.html,
+      text: prefill.body,
       inReplyTo: prefill.inReplyTo,
       aiDraft: true,
     });

@@ -11,6 +11,7 @@
  */
 
 import { wrapEmailContent, type AIFeature } from '../prompts/system';
+import { renderMarkdownSafe } from '../markdown';
 
 export interface ThreadContextMessage {
   id?: string | null;
@@ -282,8 +283,41 @@ export interface ReplyPrefill {
   subject: string;
   inReplyTo?: string;
   references?: string;
+  /** Cleaned markdown draft — fine for plain-text composers. */
   body: string;
+  /** Rendered HTML for TipTap so lists, bold, etc. survive the handoff. */
+  html: string;
 }
+
+// "Here is/Here's [a|the|my|...] draft/reply/suggested/proposed …:"
+const DRAFT_PREAMBLE_RE =
+  /^\s*here(?:['’]s|\s+is)\s+(?:a|an|the|my|your)?\s*(?:draft|reply|suggested|proposed)\b[^:\n]*:\s*/i;
+// Markdown horizontal rule at start/end. Requires whitespace (or EOS) after
+// the rule so `___emphasis` and similar tokens at the start of real content
+// aren't accidentally treated as a rule.
+const LEADING_HR_RE = /^\s*(?:[-*_][ \t]*){3,}(?:\s+|$)/;
+const TRAILING_HR_RE = /(?:^|\s)(?:[-*_][ \t]*){3,}\s*$/;
+
+/**
+ * Strip meta-commentary Claude sometimes prepends to draft output despite the
+ * system prompt asking for the body alone — e.g. "Here is a draft reply body:"
+ * followed by a `---` separator. Without this the preamble ends up in the
+ * user's actual email when they hit "Open as draft".
+ */
+export const cleanDraftOutput = (raw: string): string => {
+  if (!raw) return '';
+  let out = raw.trim();
+  // Apply repeatedly — occasionally Claude stacks "Here's a draft reply:\n---\n"
+  // and the HR is exposed only after the preamble is removed.
+  for (let i = 0; i < 3; i++) {
+    const before = out;
+    out = out.replace(DRAFT_PREAMBLE_RE, '').trim();
+    out = out.replace(LEADING_HR_RE, '').trim();
+    out = out.replace(TRAILING_HR_RE, '').trim();
+    if (out === before) break;
+  }
+  return out;
+};
 
 /**
  * Build a Compose prefill from the selected message and an AI-drafted body.
@@ -298,10 +332,12 @@ export const buildReplyPrefill = (
   const prefixed = /^re:/i.test(subject) ? subject : subject ? `Re: ${subject}` : 'Re:';
   const to = message?.from ? [String(message.from)] : [];
   const inReplyTo = (message as { message_id?: string } | null)?.message_id;
+  const cleaned = cleanDraftOutput(draft);
   return {
     to,
     subject: prefixed,
     inReplyTo,
-    body: draft,
+    body: cleaned,
+    html: renderMarkdownSafe(cleaned),
   };
 };
