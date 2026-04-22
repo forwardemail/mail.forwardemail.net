@@ -31,6 +31,7 @@ import { normalizeEmail, dedupeAddresses, extractAddressList } from '../utils/ad
 import { validateLabelName } from '../utils/label-validation.ts';
 import { resolveSearchBodyIndexing } from '../utils/search-body-indexing.js';
 import { LABEL_PALETTE } from '../utils/labels.js';
+import { isHiddenLabel } from '../utils/label-filters';
 import { queueMutation } from '../utils/mutation-queue';
 import { config } from '../config';
 import { createInboxUpdater } from '../utils/websocket-updater';
@@ -1070,49 +1071,6 @@ export const loadLabels = async (options = {}) => {
   const account = Local.get('email') || 'default';
   const initialAccount = account;
   const labelMap = new Map();
-  const reservedFlags = new Set(
-    [
-      'NonJunk',
-      'Junk',
-      'NotJunk',
-      '$NotJunk',
-      '$MDNSent',
-      '\\Seen',
-      '\\Flagged',
-      '\\Answered',
-      '\\Draft',
-      '\\Drafts',
-      '\\Trash',
-      '\\Junk',
-      '\\Sent',
-      '\\Inbox',
-      '\\Archive',
-      '$Forwarded',
-    ].map((f) => f.toLowerCase()),
-  );
-  const hiddenPatterns = [
-    /^\$label\d+$/i,
-    /^\$maillabel\d+$/i,
-    /^\$mailflagbit\d+$/i,
-    /^\d+$/i,
-    /^calendar$/i,
-    /^purge_issue$/i,
-    /^purge-issue$/i,
-    /^purge issue$/i,
-    /^enterprise$/i,
-    /^webmail$/i,
-    /^notjunk$/i,
-    /^\$notjunk$/i,
-  ];
-  const isHiddenFlag = (flag = '') => {
-    const key = String(flag || '').trim();
-    if (!key) return true;
-    if (/^\[\s*\]$/.test(key)) return true;
-    const lower = key.toLowerCase();
-    if (reservedFlags.has(lower)) return true;
-    if (key.startsWith('\\') || key.startsWith('$')) return true;
-    return hiddenPatterns.some((re) => re.test(key));
-  };
   const palette = LABEL_PALETTE;
   const colorFor = (name = '') => {
     let hash = 0;
@@ -1125,7 +1083,7 @@ export const loadLabels = async (options = {}) => {
   };
   const normalizeLabel = (flag = '', folderPath = '') => {
     const id = String(flag || '').trim();
-    if (isHiddenFlag(id)) return null;
+    if (isHiddenLabel(id)) return null;
     const normalized = id.replace(/^\$?label/i, '').replace(/^[\s-_]+/, '');
     const readable = normalized || id.replace(/^[\\$]+/, '');
     const name = readable.replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim() || id;
@@ -1147,7 +1105,7 @@ export const loadLabels = async (options = {}) => {
       .toArray()
       .catch(() => []);
     (cached || []).forEach((l) => {
-      if (!l?.id || isHiddenFlag(l.id)) return;
+      if (!l?.id || isHiddenLabel(l.id)) return;
       labelMap.set(l.id, l);
     });
   } catch (err) {
@@ -1160,7 +1118,7 @@ export const loadLabels = async (options = {}) => {
     if ((Local.get('email') || 'default') !== initialAccount) return;
     (settingsLabelsList || []).forEach((lbl) => {
       const id = lbl.keyword || lbl.id || lbl.name;
-      if (!id || isHiddenFlag(id)) return;
+      if (!id || isHiddenLabel(id)) return;
       const existing = labelMap.get(id);
       labelMap.set(id, {
         ...existing,
@@ -1190,7 +1148,7 @@ export const loadLabels = async (options = {}) => {
         if ((Local.get('email') || 'default') !== initialAccount) break;
         for (const lbl of msg.labels || []) {
           const key = String(lbl);
-          if (!labelMap.has(key) && !isHiddenFlag(key)) {
+          if (!labelMap.has(key) && !isHiddenLabel(key)) {
             labelMap.set(key, {
               id: key,
               name: key,
@@ -1242,7 +1200,7 @@ export const loadLabels = async (options = {}) => {
   if ((Local.get('email') || 'default') !== initialAccount) return;
 
   const normalized = Array.from(labelMap.values()).filter(
-    (l) => l.id && l.name && !isHiddenFlag(l.id),
+    (l) => l.id && l.name && !isHiddenLabel(l.id),
   );
   availableLabels.set(normalized);
   try {
@@ -1287,7 +1245,7 @@ export const mergeNewLabels = async (messages, account) => {
     for (const lbl of msg.labels || []) {
       const key = String(lbl);
       if (!key || existingIds.has(key)) continue;
-      if (key.startsWith('\\') || key.startsWith('$')) continue;
+      if (isHiddenLabel(key)) continue;
       existingIds.add(key);
       newLabels.push({
         id: key,

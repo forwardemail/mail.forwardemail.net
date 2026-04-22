@@ -6,6 +6,7 @@ import {
   type AddressObject,
 } from './address.js';
 import { decodeMimeHeader } from './mime-utils.js';
+import { isHiddenLabel } from './label-filters';
 import type { Message, MessageBody } from '$types';
 
 type RawMessage = Record<string, unknown> & {
@@ -206,7 +207,7 @@ export function normalizeMessageForCache(
     return normalized;
   };
 
-  const labels = Array.isArray(rawLabels)
+  const extractedLabels = Array.isArray(rawLabels)
     ? rawLabels
         .map((l) => {
           if (typeof l === 'string') return normalizeLabel(l);
@@ -231,6 +232,7 @@ export function normalizeMessageForCache(
             .map(([label]) => normalizeLabel(label))
             .filter(Boolean)
         : [];
+  const labels = extractedLabels.filter((l) => !isHiddenLabel(l));
 
   const isUnreadRaw =
     Array.isArray(flags) && flags.length

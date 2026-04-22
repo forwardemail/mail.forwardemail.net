@@ -48,6 +48,43 @@ describe('sync helpers', () => {
     expect(normalized.labels).toEqual(['work', 'urgent']);
   });
 
+  it('filters out structural keyword keys and system flags from labels', () => {
+    const raw = {
+      id: 'msg-sys',
+      uid: 789,
+      folder: 'INBOX',
+      Subject: 'System keywords',
+      From: { Display: 'Sender', Email: 'sender@example.com' },
+      keywords: {
+        data: true,
+        type: true,
+        content: true,
+        work: true,
+        '\\Seen': true,
+        $Forwarded: true,
+      },
+    };
+
+    const normalized = normalizeMessageForCache(raw, 'INBOX', 'acct');
+
+    expect(normalized.labels).toEqual(['work']);
+  });
+
+  it('filters system labels when provided as an array', () => {
+    const raw = {
+      id: 'msg-arr',
+      uid: 321,
+      folder: 'INBOX',
+      Subject: 'Mixed labels',
+      From: { Display: 'Sender', Email: 'sender@example.com' },
+      labels: ['data', 'type', 'project-x', '\\Inbox'],
+    };
+
+    const normalized = normalizeMessageForCache(raw, 'INBOX', 'acct');
+
+    expect(normalized.labels).toEqual(['project-x']);
+  });
+
   it('detects metadata changes for flags and unread state', () => {
     const existing = {
       id: 1,
