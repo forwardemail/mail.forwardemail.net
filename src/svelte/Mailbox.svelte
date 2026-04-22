@@ -63,6 +63,44 @@
   import { parseMailto, mailtoToPrefill } from '../utils/mailto';
   import MailtoPrompt from './components/MailtoPrompt.svelte';
   import AskAIPanel from './components/ai/AskAIPanel.svelte';
+  import Sparkles from '@lucide/svelte/icons/sparkles';
+  import { openAIPanel } from '../stores/aiPanelStore';
+  import { aiEnabled } from '../stores/aiEnabledStore';
+  import { hasProvider } from '../stores/aiProviderStore';
+  import { derived } from 'svelte/store';
+  import { translateSmartSearch, SmartSearchError } from '../ai/smart-search';
+  const aiReady = derived(
+    [aiEnabled, hasProvider],
+    ([$enabled, $hasProvider]) => $enabled && $hasProvider,
+  );
+
+  let smartSearchBusy = $state(false);
+  let smartSearchError = $state<string | null>(null);
+
+  const runSmartSearch = async () => {
+    if (smartSearchBusy) return;
+    const nl = (searchInputEl?.value ?? '').trim();
+    if (!nl) {
+      smartSearchError = 'Type a question first, e.g. "unread from acme last week".';
+      return;
+    }
+    smartSearchBusy = true;
+    smartSearchError = null;
+    try {
+      const result = await translateSmartSearch(nl);
+      if (searchInputEl) searchInputEl.value = result.queryString;
+      onSearch(result.queryString);
+    } catch (err) {
+      smartSearchError =
+        err instanceof SmartSearchError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : String(err);
+    } finally {
+      smartSearchBusy = false;
+    }
+  };
   import { isTauriMobile } from '../utils/platform.js';
   import { openExternalUrl } from '../utils/external-links.js';
   import { onBackButton, triggerHaptic } from '../utils/tauri-bridge.js';
@@ -5269,8 +5307,10 @@
             />
             <Input
               type="search"
-              class="pl-9 pr-8 h-9 bg-background"
-              placeholder="Search mail"
+              class="pl-9 {$aiReady ? 'pr-16' : 'pr-8'} h-9 bg-background"
+              placeholder={$aiReady
+                ? 'Search mail (or ask: "unread from acme last week")'
+                : 'Search mail'}
               title="Search mail (Ctrl+K)"
               value={$query}
               bind:this={searchInputEl}
@@ -5278,6 +5318,7 @@
               onblur={hideSuggestions}
               oninput={(e) => {
                 showSuggestions();
+                smartSearchError = null;
                 onSearch((e.target as HTMLInputElement).value);
               }}
             />
@@ -5285,6 +5326,30 @@
               <span
                 class="absolute right-2.5 top-1/2 -translate-y-1/2 h-3 w-3 animate-spin rounded-full border-2 border-border border-t-primary"
               ></span>
+            {:else if $aiReady}
+              <button
+                type="button"
+                class="absolute right-2 top-1/2 -translate-y-1/2 flex h-6 w-6 items-center justify-center rounded text-primary hover:bg-primary/10 disabled:opacity-50"
+                title="Translate with AI — type natural language, click to convert to search operators"
+                aria-label="Translate search with AI"
+                disabled={smartSearchBusy}
+                onclick={runSmartSearch}
+              >
+                {#if smartSearchBusy}
+                  <span
+                    class="h-3 w-3 animate-spin rounded-full border-2 border-border border-t-primary"
+                  ></span>
+                {:else}
+                  <Sparkles class="h-3.5 w-3.5" />
+                {/if}
+              </button>
+            {/if}
+            {#if smartSearchError}
+              <div
+                class="absolute top-full left-0 right-0 mt-1 z-50 rounded-md border border-destructive/50 bg-destructive/10 p-2 text-xs text-destructive"
+              >
+                {smartSearchError}
+              </div>
             {/if}
             {#if searchSuggestionsVisible && filteredSuggestions.length}
               <div
@@ -7573,6 +7638,18 @@
                           ? $selectedFolder || $selectedMessage.folder
                           : $selectedMessage.folder || $selectedFolder}
                       </div>
+                      {#if $aiReady}
+                        <button
+                          class="inline-flex items-center justify-center h-9 w-9 hover:bg-accent hover:text-accent-foreground"
+                          type="button"
+                          aria-label="Ask AI about this message"
+                          data-tooltip="Ask AI (preview)"
+                          data-tooltip-position="bottom"
+                          onclick={() => openAIPanel()}
+                        >
+                          <Sparkles class="h-4 w-4" />
+                        </button>
+                      {/if}
                       {#if canReply}
                         <button
                           class="inline-flex items-center justify-center h-9 w-9 hover:bg-accent hover:text-accent-foreground"
@@ -7630,6 +7707,42 @@
                               if (e.key === 'Escape') actionMenuOpen = false;
                             }}
                           >
+                            {#if $aiReady}
+                              <button
+                                type="button"
+                                class="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground cursor-pointer active:bg-accent"
+                                onclick={() => {
+                                  actionMenuOpen = false;
+                                  openAIPanel('summarize');
+                                }}
+                              >
+                                <Sparkles class="h-4 w-4" />
+                                <span>Summarize with AI</span>
+                              </button>
+                              <button
+                                type="button"
+                                class="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground cursor-pointer active:bg-accent"
+                                onclick={() => {
+                                  actionMenuOpen = false;
+                                  openAIPanel('draft_reply');
+                                }}
+                              >
+                                <Sparkles class="h-4 w-4" />
+                                <span>Draft reply with AI</span>
+                              </button>
+                              <button
+                                type="button"
+                                class="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground cursor-pointer active:bg-accent"
+                                onclick={() => {
+                                  actionMenuOpen = false;
+                                  openAIPanel('draft_with_code');
+                                }}
+                              >
+                                <Sparkles class="h-4 w-4" />
+                                <span>Draft w/ code context</span>
+                              </button>
+                              <div class="my-1 border-t"></div>
+                            {/if}
                             {#if canReply}
                               <button
                                 type="button"
@@ -8740,8 +8853,10 @@
   <MailtoPrompt account={$currentAccount || ''} />
 {/if}
 
-<!-- Ask AI floating panel (Phase 1 smoke test) -->
-<AskAIPanel {mailboxView} />
+<!-- Ask AI floating panel — only mounted when the user has opted in in Settings -->
+{#if $aiReady}
+  <AskAIPanel {mailboxView} />
+{/if}
 
 <style>
   /* Shared list layout tokens */

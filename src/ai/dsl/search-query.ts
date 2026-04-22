@@ -208,3 +208,48 @@ export const parseSearchQueryJSON = (raw: string): SearchQuery => {
   const parsed = JSON.parse(raw);
   return validateSearchQuery(parsed);
 };
+
+/**
+ * Convert a validated `SearchQuery` into the existing webmail operator
+ * syntax (`from:alice after:2026-01-01 is:unread "subject phrase"`). This
+ * is what the mailbox search bar already parses, so the smart-search flow
+ * becomes: NL → DSL → operator-string → existing search pipeline. Users
+ * see the translation in the search box — it's a teaching moment for the
+ * operator syntax and a trust signal that the AI did what they asked.
+ */
+export const dslToQueryString = (query: SearchQuery): string => {
+  const parts: string[] = [];
+  const f = query.filters ?? {};
+
+  for (const addr of f.from ?? []) parts.push(`from:${quoteIfNeeded(addr)}`);
+  for (const addr of f.to ?? []) parts.push(`to:${quoteIfNeeded(addr)}`);
+  for (const addr of f.cc ?? []) parts.push(`cc:${quoteIfNeeded(addr)}`);
+  for (const s of f.subject_contains ?? []) parts.push(`subject:${quoteIfNeeded(s)}`);
+  for (const l of f.labels_any ?? []) parts.push(`label:${quoteIfNeeded(l)}`);
+  if (f.folder) parts.push(`in:${quoteIfNeeded(f.folder)}`);
+  if (f.is_unread === true) parts.push('is:unread');
+  if (f.is_unread === false) parts.push('is:read');
+  if (f.is_flagged === true) parts.push('is:starred');
+  if (f.has_attachment === true) parts.push('has:attachment');
+  if (f.after) parts.push(`after:${toYmd(f.after)}`);
+  if (f.before) parts.push(`before:${toYmd(f.before)}`);
+  if (query.text_query) parts.push(quoteIfNeeded(query.text_query));
+
+  return parts.join(' ').trim();
+};
+
+const quoteIfNeeded = (v: string): string => {
+  const trimmed = v.trim();
+  if (!trimmed) return '';
+  return /[\s"']/.test(trimmed) ? `"${trimmed.replace(/"/g, '\\"')}"` : trimmed;
+};
+
+const toYmd = (iso: string): string => {
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return iso;
+  const d = new Date(ms);
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(d.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+};

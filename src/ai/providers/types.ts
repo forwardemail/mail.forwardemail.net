@@ -89,6 +89,14 @@ export type StreamEvent =
       /** Partial JSON arguments, concatenated by the consumer in emission order. */
       arguments_delta: string;
     }
+  /** Worker-emitted: a tool is about to execute. Not produced by providers. */
+  | { type: 'tool_start'; id: string; name: string; args: unknown }
+  /**
+   * Worker-emitted: a tool finished. Carries a short user-facing summary
+   * ("3 messages from @acmecorp.com"); full data goes back to the model in
+   * the next turn, not to the UI.
+   */
+  | { type: 'tool_result'; id: string; name: string; ok: boolean; summary: string }
   | { type: 'done'; finish_reason: FinishReason }
   | { type: 'error'; code: string; message: string; retryable: boolean };
 

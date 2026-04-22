@@ -46,7 +46,19 @@
     "fs:allow-read-file",
     "fs:allow-write-file",
     "fs:allow-remove",
-    "opener:allow-open-path"
+    "opener:allow-open-path",
+
+    "fs:read-all",
+    {
+      "identifier": "fs:scope",
+      "allow": [{ "path": "$HOME" }, { "path": "$HOME/**" }],
+      "deny": [
+        { "path": "$HOME/.ssh/**" },
+        { "path": "$HOME/.aws/**" },
+        { "path": "$HOME/.gnupg/**" },
+        { "path": "$HOME/.config/gh/**" }
+      ]
+    }
   ],
   "platforms": ["linux", "macOS", "windows", "android", "iOS"]
 }

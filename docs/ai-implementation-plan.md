@@ -14,15 +14,17 @@ These sit above every phase and are non-negotiable without an explicit spec revi
 3. **Sources are first-class.** Every AI output that touches external context (email threads, repositories, knowledge bases) surfaces the files/messages it pulled from, clickable to preview.
 4. **Model-agnostic UX.** Claude, OpenAI-compatible, local Gemma — same surface, different price/privacy profile. Features gracefully degrade when a provider lacks a capability (tool use, long context).
 5. **Privacy boundaries are declared, not inferred.** The egress preview tells the user what is about to leave the device. Local-only mode makes egress impossible.
+6. **Context is always scoped, never implicit.** Every AI request declares which messages, files, or other sources the model may reference. The default is the most restrictive scope that can answer the question (single thread for drafting and summarizing). Expanding scope is a per-session, deliberate user action — never sticky across sessions, never implied. Tools enforce scope at the boundary, not on trust. See `src/ai/context/scope.ts`.
 
 ## Locked Design Decisions
 
-Four decisions that diverge from or clarify the spec. These apply throughout the phases below.
+Five decisions that diverge from or clarify the spec. These apply throughout the phases below.
 
 1. **AI keys reuse `crypto-store.js` DEK** (not a session-JWT-derived key). The existing envelope encryption (DEK wrapped by PIN/passkey-derived KEK) already protects `api_key` / `alias_auth`. AI provider keys go into the same sensitive-localStorage bucket via `encryptValue` / `decryptValue`, so there is no second key hierarchy and unlock UX stays unified. Consequence: users without app-lock enabled get whatever protection `api_key` has today.
 2. **CSP diverges web vs. desktop.** Web uses a static provider-host allowlist in `src/ai/providers/allowlist.ts` folded into the existing meta-tag CSP. Desktop keeps the webview CSP locked and proxies all AI HTTPS egress through Rust `reqwest`, so provider hosts never appear in `connect-src`.
 3. **Phase 1 desktop keeps tool execution in JS.** The Rust AI module owns provider I/O, keyring, and egress guard only. The `ai.worker` tool registry (search, thread fetch, etc.) runs in the webview and talks to Dexie via the existing db.worker on both platforms. Rust tool execution against SQLite FTS5 lands in Phase 2.
 4. **No Dexie schema bump.** `DB_NAME` embeds `SCHEMA_VERSION`, so bumping the version would orphan every user's mailbox cache and force a full re-sync. AI state instead piggybacks on the existing `meta` key-value table (the same idiom used by mutation-queue, contact-cache, and attachment-cache): `ai:provider:{id}` rows for provider metadata, `ai:audit:{YYYY-MM-DD}` rows bucketed per day for audit events, `ai:settings` for a singleton config row. API keys live in localStorage under `ai_provider_key_{providerId}`, auto-encrypted by the existing sensitive-localStorage path. `size_min_bytes` / `size_max_bytes` stay dropped from the Phase 1 DSL since no index backs them.
+5. **Scoped context primitive.** Three scopes: `thread` (safest default; messages sharing a thread id), `participants` (messages with the same from/to set), `mailbox` (full access — requires explicit per-session confirmation, never sticky). `thread` scope pre-loads the full thread into the prompt so drafting sees the conversation history, not just the one selected message. Broader scopes use tool calls (landing in Sub-milestone F) that enforce the scope at the boundary — `search_messages` cannot return results outside what was authorized. Critical for shared support inboxes where one mailbox serves many unrelated customers.
 
 ## Phase 1 — Foundation (6–8 weeks)
 

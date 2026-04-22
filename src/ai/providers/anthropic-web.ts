@@ -43,10 +43,17 @@ interface AnthropicRequestBody {
   model: string;
   max_tokens: number;
   messages: AnthropicMessage[];
-  system?: string;
+  /** Array form enables per-block cache_control. */
+  system?: string | AnthropicSystemBlock[];
   tools?: AnthropicTool[];
   stream: true;
   temperature?: number;
+}
+
+interface AnthropicSystemBlock {
+  type: 'text';
+  text: string;
+  cache_control?: { type: 'ephemeral' };
 }
 
 interface AnthropicMessage {
@@ -64,6 +71,7 @@ interface AnthropicTool {
   name: string;
   description: string;
   input_schema: unknown;
+  cache_control?: { type: 'ephemeral' };
 }
 
 export class AnthropicWebProvider implements Provider {
@@ -163,9 +171,27 @@ export class AnthropicWebProvider implements Provider {
       stream: true,
     };
 
-    if (system) body.system = system;
+    // Prompt caching — mark system prompt and the tool list as ephemeral-
+    // cacheable so subsequent requests with the same system+tools hit the
+    // cache. Anthropic's cache minimum is 1024 tokens for Sonnet/Haiku,
+    // 2048 for Opus; smaller requests are silently uncached, which is
+    // fine — we pay nothing extra for trying.
+    if (system) {
+      body.system = [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }];
+    }
     if (typeof options.temperature === 'number') body.temperature = options.temperature;
-    if (options.tools && options.tools.length > 0) body.tools = options.tools.map(toAnthropicTool);
+    if (options.tools && options.tools.length > 0) {
+      const tools = options.tools.map(toAnthropicTool);
+      // Cache breakpoint on the last tool — that marks the whole tools
+      // array as a cacheable prefix.
+      if (tools.length > 0) {
+        tools[tools.length - 1] = {
+          ...tools[tools.length - 1],
+          cache_control: { type: 'ephemeral' },
+        };
+      }
+      body.tools = tools;
+    }
 
     return body;
   }

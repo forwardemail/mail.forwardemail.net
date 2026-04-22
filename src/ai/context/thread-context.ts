@@ -66,13 +66,43 @@ const htmlToPlainText = (html: string): string =>
 
 const looksLikeHtml = (s: string): boolean => /<\/?[a-z][^>]*>/i.test(s);
 
-const asArray = (v: string | string[] | null | undefined): string[] => {
-  if (!v) return [];
-  if (Array.isArray(v)) return v;
-  return String(v)
-    .split(/[,;]/)
-    .map((s) => s.trim())
-    .filter(Boolean);
+/**
+ * Coerce a message address field into an array of strings. The upstream
+ * loader may deliver any of:
+ *   - `"alice@x.com, bob@x.com"`
+ *   - `["alice@x.com", "bob@x.com"]`
+ *   - `[{ name: "Alice", address: "alice@x.com" }]`  (object form from parsers)
+ *   - `{ name: "Alice", address: "alice@x.com" }`    (single-object form)
+ * All branches end up as `string[]` so `extractName` etc. don't explode.
+ */
+const asArray = (v: unknown): string[] => {
+  if (v === null || v === undefined || v === '') return [];
+  if (Array.isArray(v)) return v.map(toAddressString).filter(Boolean);
+  if (typeof v === 'string') {
+    return v
+      .split(/[,;]/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+  const single = toAddressString(v);
+  return single ? [single] : [];
+};
+
+const toAddressString = (v: unknown): string => {
+  if (typeof v === 'string') return v.trim();
+  if (v && typeof v === 'object') {
+    const obj = v as { name?: unknown; address?: unknown; email?: unknown };
+    const addr =
+      typeof obj.address === 'string'
+        ? obj.address
+        : typeof obj.email === 'string'
+          ? obj.email
+          : '';
+    const name = typeof obj.name === 'string' ? obj.name : '';
+    if (name && addr) return `${name} <${addr}>`;
+    return (addr || name).trim();
+  }
+  return '';
 };
 
 const formatDate = (d: number | string | null | undefined): string => {
@@ -82,9 +112,11 @@ const formatDate = (d: number | string | null | undefined): string => {
   return new Date(ms).toISOString();
 };
 
-const extractName = (address: string): string => {
-  const m = address.match(/^"?([^"<]+?)"?\s*<[^>]+>$/);
-  return (m?.[1] ?? address).trim();
+const extractName = (address: unknown): string => {
+  const str = toAddressString(address);
+  if (!str) return 'unknown';
+  const m = str.match(/^"?([^"<]+?)"?\s*<[^>]+>$/);
+  return (m?.[1] ?? str).trim();
 };
 
 export const buildThreadContext = (
@@ -159,6 +191,90 @@ const formatRelative = (ms: number): string => {
   const days = Math.round(hours / 24);
   if (days < 30) return `${days}d ago`;
   return new Date(ms).toLocaleDateString();
+};
+
+export interface FullThreadInput {
+  messages: Array<{ message: ThreadContextMessage; body?: string | null }>;
+  truncated?: boolean;
+  totalAvailable?: number;
+}
+
+/**
+ * Format an entire thread (multiple messages) into a single prompt block. Each
+ * message is wrapped in its own `<email>` delimiter so the model knows where
+ * one ends and the next begins; all are wrapped in an outer `<thread>` block
+ * so the model can reason about conversation order.
+ *
+ * When `truncated` is true, a marker is prepended telling the model earlier
+ * messages exist but were dropped to fit the context budget. The chip
+ * summarizes "N messages · oldest to newest".
+ */
+export const buildFullThreadContext = (
+  feature: AIFeature,
+  input: FullThreadInput,
+): ThreadContextOutput => {
+  if (!input.messages.length) {
+    return { promptText: '', chip: '', hasContext: false, approximateBytes: 0 };
+  }
+
+  const blocks: string[] = [];
+  if (input.truncated) {
+    const dropped = (input.totalAvailable ?? 0) - input.messages.length;
+    blocks.push(
+      `[…${dropped > 0 ? `${dropped} older messages` : 'older messages'} omitted to fit context budget. Use search tools to retrieve them if needed.]`,
+    );
+  }
+
+  input.messages.forEach(({ message, body }, index) => {
+    const header: string[] = [];
+    header.push(`Subject: ${(message.subject || '(no subject)').trim()}`);
+    header.push(`From: ${message.from ?? 'unknown'}`);
+    const toArr = asArray(message.to);
+    if (toArr.length) header.push(`To: ${toArr.join(', ')}`);
+    const ccArr = asArray(message.cc);
+    if (ccArr.length) header.push(`Cc: ${ccArr.join(', ')}`);
+    const date = formatDate(message.date);
+    if (date) header.push(`Date: ${date}`);
+
+    let plain = '';
+    if (body && body.length > 0) {
+      plain = looksLikeHtml(body) ? htmlToPlainText(body) : body.trim();
+    } else if (message.snippet) {
+      plain = message.snippet.trim();
+    }
+    let truncated = false;
+    if (plain.length > MAX_BODY_CHARS) {
+      plain = plain.slice(0, MAX_BODY_CHARS);
+      truncated = true;
+    }
+
+    const msgContent =
+      header.join('\n') +
+      (plain
+        ? `\n\n${plain}${truncated ? '\n\n[…message truncated…]' : ''}`
+        : '\n\n(no body available)');
+
+    blocks.push(
+      `Message ${index + 1} of ${input.messages.length}:\n${wrapEmailContent(feature, msgContent)}`,
+    );
+  });
+
+  const content = blocks.join('\n\n');
+  const promptText = `<thread>\n${content}\n</thread>`;
+
+  const firstFrom = input.messages[0]?.message.from
+    ? extractName(String(input.messages[0].message.from))
+    : 'unknown';
+  const latest = input.messages[input.messages.length - 1]?.message;
+  const relative = latest?.date ? formatRelative(Date.parse(formatDate(latest.date))) : '';
+  const chipSuffix = input.truncated
+    ? ` (${input.messages.length} of ${input.totalAvailable ?? '?'})`
+    : ` (${input.messages.length})`;
+  const chip = [firstFrom, '→ thread', chipSuffix.trim(), relative && `· ${relative}`]
+    .filter(Boolean)
+    .join(' ');
+
+  return { promptText, chip, hasContext: true, approximateBytes: promptText.length };
 };
 
 export interface ReplyPrefill {

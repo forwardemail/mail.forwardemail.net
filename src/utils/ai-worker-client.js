@@ -10,7 +10,8 @@
  * them when the request terminates.
  */
 
-import AIWorker from '../workers/ai.worker.ts?worker&inline';
+import AIWorker from '../workers/ai.worker.ts?worker';
+import { getDbWorker, initializeDatabase } from './db.js';
 
 export class AIWorkerClient {
   constructor() {
@@ -18,6 +19,8 @@ export class AIWorkerClient {
     this.counter = 0;
     // id → { kind: 'chat' | 'oneshot', ... }
     this.pending = new Map();
+    this.dbConnected = false;
+    this.dbConnectionPromise = null;
 
     this.worker.onmessage = (event) => this.handleMessage(event.data || {});
     this.worker.onerror = (event) => {
@@ -33,6 +36,31 @@ export class AIWorkerClient {
       }
       this.pending.clear();
     };
+
+    // Kick off db.worker connection immediately; tools can't run without it.
+    this.dbConnectionPromise = this.connectToDbWorker().catch((err) => {
+      console.warn('[AIWorkerClient] db connection failed (tools disabled):', err);
+    });
+  }
+
+  async connectToDbWorker() {
+    let dbWorker = getDbWorker();
+    if (!dbWorker) {
+      await initializeDatabase();
+      dbWorker = getDbWorker();
+    }
+    if (!dbWorker) {
+      throw new Error('db.worker not available after initialization');
+    }
+    const channel = new MessageChannel();
+    dbWorker.postMessage({ type: 'connectPort', workerId: 'ai' }, [channel.port1]);
+    await this.sendOneShot('connectDbPort', {}, [channel.port2]);
+    this.dbConnected = true;
+  }
+
+  async ensureDbConnected() {
+    if (this.dbConnected) return;
+    if (this.dbConnectionPromise) await this.dbConnectionPromise;
   }
 
   handleMessage(msg) {
@@ -48,6 +76,8 @@ export class AIWorkerClient {
         if (event.type === 'token') entry.onToken?.(event.text);
         else if (event.type === 'tool_call') entry.onToolCall?.(event);
         else if (event.type === 'tool_call_delta') entry.onToolCallDelta?.(event);
+        else if (event.type === 'tool_start') entry.onToolStart?.(event);
+        else if (event.type === 'tool_result') entry.onToolResult?.(event);
         else if (event.type === 'done') entry.onDone?.({ finish_reason: event.finish_reason });
         else if (event.type === 'error') entry.onError?.(event);
       } else if (msg.done) {
@@ -61,7 +91,7 @@ export class AIWorkerClient {
       return;
     }
 
-    // Single-response action (cancel, validate).
+    // Single-response action (cancel, validate, connectDbPort).
     this.pending.delete(id);
     if (msg.ok) entry.resolve(msg.result);
     else entry.reject(msg.error || { code: 'unknown', message: 'Unknown error' });
@@ -82,7 +112,7 @@ export class AIWorkerClient {
    * @param {(err: object) => void} [callbacks.onError]
    * @returns {{ requestId: number, finished: Promise<void>, cancel: () => Promise<void> }}
    */
-  chat({ providerConfig, apiKey, options }, callbacks = {}) {
+  chat({ providerConfig, apiKey, options, context }, callbacks = {}) {
     const id = ++this.counter;
     const finished = new Promise((resolve) => {
       this.pending.set(id, {
@@ -91,15 +121,25 @@ export class AIWorkerClient {
         onToken: callbacks.onToken,
         onToolCall: callbacks.onToolCall,
         onToolCallDelta: callbacks.onToolCallDelta,
+        onToolStart: callbacks.onToolStart,
+        onToolResult: callbacks.onToolResult,
         onDone: callbacks.onDone,
         onError: callbacks.onError,
       });
     });
-    this.worker.postMessage({
-      id,
-      action: 'chat',
-      payload: { providerConfig, apiKey, options },
-    });
+    // Ensure db is connected before sending the chat so tool calls land after
+    // the handshake. ensureDbConnected resolves instantly once connected.
+    this.ensureDbConnected()
+      .catch(() => {
+        /* tools will degrade; chat still works for non-tool turns */
+      })
+      .finally(() => {
+        this.worker.postMessage({
+          id,
+          action: 'chat',
+          payload: { providerConfig, apiKey, options, context },
+        });
+      });
     return { requestId: id, finished, cancel: () => this.cancel(id) };
   }
 
@@ -111,12 +151,12 @@ export class AIWorkerClient {
     return this.sendOneShot('validate', { providerConfig, apiKey });
   }
 
-  sendOneShot(action, payload) {
+  sendOneShot(action, payload, transfer = []) {
     const id = ++this.counter;
     const promise = new Promise((resolve, reject) => {
       this.pending.set(id, { kind: 'oneshot', resolve, reject });
     });
-    this.worker.postMessage({ id, action, payload });
+    this.worker.postMessage({ id, action, payload }, transfer);
     return promise;
   }
 
