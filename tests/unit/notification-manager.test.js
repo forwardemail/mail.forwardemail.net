@@ -32,6 +32,16 @@ vi.mock('../../src/utils/sync-helpers.ts', () => ({
   extractFromField: vi.fn(() => ''),
 }));
 
+// handleNewMessage does a dynamic import of mailboxStore; mock it so the
+// 2.4k-line module doesn't get loaded (and race vi.waitFor) in parallel runs.
+vi.mock('../../src/stores/mailboxStore', () => ({
+  mailboxStore: {
+    state: {
+      folders: { subscribe: (fn) => (fn([]), () => {}) },
+    },
+  },
+}));
+
 vi.mock('../../src/utils/websocket-client', () => ({
   WS_EVENTS: {
     NEW_MESSAGE: 'newMessage',
