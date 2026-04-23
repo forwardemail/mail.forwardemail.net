@@ -322,6 +322,13 @@ jobs:
         if: steps.check.outputs.enabled == 'true'
         env:
           APPLE_DEVELOPMENT_TEAM: ${{ secrets.APPLE_TEAM_ID }}
+          # Propagate the deployment target into cargo -> swift-rs -> swiftc
+          # so the .swift.o files inside libapp.a aren't compiled against an
+          # iOS < 15 target. Without this, swiftc emits auto-link references
+          # to libswiftCompatibility56.a / libswiftCompatibilityConcurrency.a
+          # which Xcode 26's iOS 26.4 SDK no longer ships, and the final ld
+          # step fails even though the xcodeproj itself targets iOS 15.
+          IPHONEOS_DEPLOYMENT_TARGET: '15.0'
         run: pnpm tauri ios build --ci --target aarch64 --export-method app-store-connect
 
       - name: Rename IPA with version

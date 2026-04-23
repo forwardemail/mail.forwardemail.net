@@ -304,3 +304,46 @@ jobs:
             -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
             -H "Content-Type: application/json" \
             --data '{"purge_everything":true}'
+
+  # ── 6. Notify Matrix (final step — runs only on full success) ──────────
+  # Standalone matrix workflow has `release:` disabled so this is the single
+  # source of release notifications. Uses a direct curl to the Client-Server
+  # API to sidestep lkiesow/matrix-notification@v1 and surface 4xx/5xx bodies
+  # directly in the CI log for debuggability.
+  notify-matrix:
+    needs: [create-release, deploy]
+    if: always() && needs.deploy.result == 'success'
+    runs-on: ubuntu-latest
+    env:
+      MATRIX_TOKEN: ${{ secrets.MATRIX_TOKEN }}
+    steps:
+      - name: Send Matrix notification
+        if: env.MATRIX_TOKEN != ''
+        continue-on-error: true
+        env:
+          RELEASE_TAG: v${{ needs.create-release.outputs.version }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          ROOM_ENCODED='%21azsMvrsrqEENIcSLOe%3Amatrix.org'
+          TXN="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-release"
+          RELEASE_URL="https://github.com/${REPO}/releases/tag/${RELEASE_TAG}"
+          BODY_TEXT="🚀 Release ${RELEASE_TAG} deployed — ${RELEASE_URL}"
+          BODY_HTML="🚀 <b>Release ${RELEASE_TAG} deployed</b><br><b>Repository:</b> ${REPO}<br><b>Link:</b> <a href=\"${RELEASE_URL}\">${RELEASE_URL}</a>"
+          payload=$(jq -n \
+            --arg body "$BODY_TEXT" \
+            --arg html "$BODY_HTML" \
+            '{msgtype:"m.text", body:$body, format:"org.matrix.custom.html", formatted_body:$html}')
+          http_code=$(curl -sS -o /tmp/matrix-response.json -w '%{http_code}' \
+            -X PUT \
+            -H "Authorization: Bearer ${MATRIX_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "$payload" \
+            "https://matrix.org/_matrix/client/v3/rooms/${ROOM_ENCODED}/send/m.room.message/${TXN}")
+          if [ "$http_code" != "200" ]; then
+            echo "::warning::Matrix notification failed (HTTP ${http_code})"
+            cat /tmp/matrix-response.json || true
+            echo
+            exit 0
+          fi
+          echo "Matrix notification sent (HTTP ${http_code})"

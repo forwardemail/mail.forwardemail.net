@@ -29,8 +29,11 @@ on:
   #  tags: ['**']
 
   # Releases
-  release:
-    types: [published] #, unpublished, created, edited, deleted, prereleased, released]
+  # Disabled — the release.yml workflow owns this notification and only fires
+  # it after the final deploy job succeeds, so the user sees one notification
+  # after everything is done rather than the moment the draft is unhidden.
+  #release:
+  #  types: [published]
 
   # Stars
   #watch:
