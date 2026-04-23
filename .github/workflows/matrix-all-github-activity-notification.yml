@@ -63,10 +63,11 @@ on:
   #delete:
 
   # Deployment
-  # NOTE: deployment is commented out to avoid duplicate notifications.
-  # The deployment_status event already covers deployments and includes the final state.
+  # Both deployment and deployment_status are disabled — they fire multiple
+  # times per release (pending/in_progress/success per environment) and
+  # duplicate the `release: [published]` notification we already get.
   #deployment:
-  deployment_status:
+  #deployment_status:
 
   # Pages
   # page_build:
@@ -90,8 +91,10 @@ on:
   #  types: [created, edited, deleted]
 
   # Registry packages
-  registry_package:
-    types: [published, updated]
+  # Disabled — fires on every package publish/update and overlaps with the
+  # `release: [published]` notification during a release cycle.
+  #registry_package:
+  #  types: [published, updated]
 
   # Status (commit status)
   # status:
@@ -101,10 +104,11 @@ permissions: {}
 
 jobs:
   notify-matrix:
-    # Skip deployment_status events unless the state is 'success' to avoid
-    # duplicate notifications (pending, in_progress, success all fire separately).
-    if: github.event_name != 'deployment_status' || github.event.deployment_status.state == 'success'
     runs-on: ubuntu-latest
+    # Job-level env so the gate in the Matrix send step below can reliably
+    # read env.MATRIX_TOKEN in its `if:` expression.
+    env:
+      MATRIX_TOKEN: ${{ secrets.MATRIX_TOKEN }}
     steps:
       - name: Determine activity type and format message
         id: format
@@ -353,10 +357,12 @@ jobs:
           } >> $GITHUB_OUTPUT
 
       - name: Send Matrix notification
-        # Skip if MATRIX_TOKEN is not available (e.g. dependabot PRs)
+        # Skip if MATRIX_TOKEN is not available (e.g. dependabot PRs) and
+        # don't fail the workflow when Matrix is unreachable (rate limit,
+        # outage, token rotation) — a missed notification should never turn
+        # the CI badge red.
         if: env.MATRIX_TOKEN != ''
-        env:
-          MATRIX_TOKEN: ${{ secrets.MATRIX_TOKEN }}
+        continue-on-error: true
         uses: lkiesow/matrix-notification@v1
         with:
           server: matrix.org

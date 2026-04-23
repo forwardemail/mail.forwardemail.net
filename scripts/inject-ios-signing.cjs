@@ -32,9 +32,22 @@ if (!fs.existsSync(appleDir)) {
   process.exit(1);
 }
 
-// ── 1. Inject signing settings into project.yml ──────────────────────────
+// ── 1. Patch project.yml (deployment target + signing settings) ─────────
 const projectYmlPath = path.join(appleDir, 'project.yml');
 let projYml = fs.readFileSync(projectYmlPath, 'utf8');
+let modified = false;
+
+// Xcode 26's iOS SDK no longer ships the swiftCompatibility56 /
+// swiftCompatibilityConcurrency back-deploy libs the Swift compiler
+// auto-links when targeting iOS < 15, which breaks the final ld step.
+const bumpedYml = projYml.replace(/(\n {2}deploymentTarget:\n {4}iOS: )[\d.]+/, '$115.0');
+if (bumpedYml !== projYml) {
+  projYml = bumpedYml;
+  modified = true;
+  console.log('Bumped iOS deployment target to 15.0 in project.yml');
+} else if (!/deploymentTarget:\n {4}iOS: 15\.0/.test(projYml)) {
+  console.warn('Could not find options.deploymentTarget.iOS in project.yml');
+}
 
 if (!projYml.includes('CODE_SIGN_STYLE')) {
   const signingLines = [
@@ -57,17 +70,20 @@ if (!projYml.includes('CODE_SIGN_STYLE')) {
     process.exit(1);
   }
   projYml = replaced;
-  fs.writeFileSync(projectYmlPath, projYml);
+  modified = true;
   console.log('Injected signing settings into project.yml');
+} else {
+  console.log('Signing settings already present in project.yml — skipping');
+}
 
+if (modified) {
+  fs.writeFileSync(projectYmlPath, projYml);
   // Re-run xcodegen so the generated .xcodeproj picks up the new settings.
   try {
     execSync('xcodegen generate', { cwd: appleDir, stdio: 'inherit' });
   } catch {
     console.warn('xcodegen not available — tauri will regenerate xcodeproj on build');
   }
-} else {
-  console.log('Signing settings already present in project.yml — skipping');
 }
 
 // ── 2. Write ExportOptions.plist ─────────────────────────────────────────

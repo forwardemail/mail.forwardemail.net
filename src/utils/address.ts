@@ -187,6 +187,12 @@ export const extractAddressList = (
     ) {
       return [(nmVal as { text: string }).text];
     }
+    // nmVal is a plain AddressObject ({ name, address } / { Name, Address } /
+    // { email } / etc.) — no value[] or text string. Normalize it directly
+    // instead of falling through to header lookup, which can fail on messages
+    // whose structured headers weren't populated server-side.
+    const normalized = normalizeHeaderValue(nmVal);
+    if (normalized.length) return normalized;
   }
 
   const headerField = field === 'replyTo' || field === 'reply_to' ? 'reply-to' : field;

@@ -62,6 +62,22 @@ async function readQueue(account) {
 }
 
 /**
+ * Return the set of message IDs with pending/in-flight mutations for an
+ * account. Callers use this to avoid clobbering an optimistic change
+ * whose server round-trip hasn't completed (e.g., during sync reconciliation).
+ */
+export async function getQueuedMessageIds(account) {
+  const queue = await readQueue(account);
+  const ids = new Set();
+  for (const m of queue) {
+    if (m.status === 'completed') continue;
+    const id = m.payload?.messageId;
+    if (id) ids.add(id);
+  }
+  return ids;
+}
+
+/**
  * Write the mutation queue for the current account to IndexedDB.
  */
 async function writeQueue(account, queue) {

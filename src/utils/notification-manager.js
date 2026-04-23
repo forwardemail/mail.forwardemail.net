@@ -27,6 +27,8 @@ import { updateFaviconBadge } from './favicon-badge.js';
 import { Remote } from './remote.js';
 import { decodeMimeHeader } from './mime-utils.js';
 import { extractFromField } from './sync-helpers.ts';
+import { extractEmail } from './address.ts';
+import { Local } from './storage.js';
 
 // ── In-app toast reference ─────────────────────────────────────────────────
 // Set from main.ts via setNotificationToasts() — same pattern as
@@ -408,20 +410,27 @@ export async function initBadgeFromStore() {
 
 // ── Event -> Notification Mapping ───────────────────────────────────────────
 
-// Folder names that should never trigger new-message notifications or badge
-// increments.  Drafts is the primary case: saving a draft creates a server-side
-// message which fires a newMessage WS event, but the user should not be notified
-// about their own draft.
-const SILENT_FOLDERS = new Set(['DRAFTS', 'DRAFT']);
+// Last-resort name-based fallback for folders that should never trigger
+// new-message notifications. Primary detection uses the IMAP specialUse flag
+// and the mailbox store's resolved Sent/Drafts paths (see handleNewMessage).
+const SILENT_FOLDERS = new Set([
+  'DRAFTS',
+  'DRAFT',
+  'SENT',
+  'SENT MAIL',
+  'SENT MESSAGES',
+  'SENT ITEMS',
+]);
 
 /**
- * Resolve the mailbox identifier from a newMessage WS payload to a
- * human-readable folder path.  The server may send a MongoDB ObjectId
- * or a path string (e.g. "INBOX", "Drafts").  We try the folder store
- * first (by id / _id / path) and fall back to the raw value.
+ * Resolve the mailbox identifier from a newMessage WS payload to the matching
+ * folder record.  The server may send a MongoDB ObjectId or a path string
+ * (e.g. "INBOX", "Drafts").  Returns `{ path, specialUse }` — specialUse is
+ * the IMAP attribute ('\\Sent', '\\Drafts', etc.) when the folder is labelled,
+ * null otherwise.
  */
-async function resolveMailboxPath(identifier) {
-  if (!identifier) return 'INBOX';
+async function resolveMailbox(identifier) {
+  if (!identifier) return { path: 'INBOX', specialUse: null };
   try {
     const { get } = await import('svelte/store');
     const { mailboxStore } = await import('../stores/mailboxStore');
@@ -430,11 +439,11 @@ async function resolveMailboxPath(identifier) {
       folders.find((f) => String(f.id) === identifier) ||
       folders.find((f) => String(f._id) === identifier) ||
       folders.find((f) => f.path?.toUpperCase?.() === identifier.toUpperCase());
-    if (match) return match.path || identifier;
+    if (match) return { path: match.path || identifier, specialUse: match.specialUse || null };
   } catch {
     // Store may not be ready — fall through to raw value
   }
-  return identifier;
+  return { path: identifier, specialUse: null };
 }
 
 async function handleNewMessage(data) {
@@ -445,12 +454,33 @@ async function handleNewMessage(data) {
   // The mailbox identifier lives at the top level of the WS payload
   // (data.mailbox), NOT inside data.message.
   const rawMailbox = data.mailbox || msg.mailbox || 'INBOX';
-  const mailbox = await resolveMailboxPath(rawMailbox);
+  const { path: mailbox, specialUse } = await resolveMailbox(rawMailbox);
 
-  // Skip notifications for folders the user doesn't need alerts about
-  // (e.g. Drafts — saving a draft fires a newMessage event on the server).
+  // Skip notifications for self-originated messages (sent copies, drafts).
+  // Four signals from strongest to weakest, because server payloads and
+  // folder metadata are inconsistent across providers / cold-start timing:
+  //   1. IMAP specialUse flag on the folder (server-authoritative).
+  //   2. Path equality against the account's configured Sent/Drafts folder.
+  //   3. Uppercase path match against the SILENT_FOLDERS name list.
+  //   4. From-address equal to the active account email (catches Cc-to-self
+  //      and any case where folder classification failed).
+  if (specialUse === '\\Sent' || specialUse === '\\Drafts') return;
+
+  try {
+    const { mailboxStore } = await import('../stores/mailboxStore');
+    const sentPath = mailboxStore.actions?.getSentFolderPath?.();
+    const draftsPath = mailboxStore.actions?.getDraftsFolderPath?.();
+    if (mailbox && (mailbox === sentPath || mailbox === draftsPath)) return;
+  } catch {
+    // Store not ready — fall through to name-based filter
+  }
+
   const upperPath = (mailbox || '').toUpperCase();
   if (SILENT_FOLDERS.has(upperPath)) return;
+
+  const fromAddr = (extractEmail(msg.from) || msg.from?.address || '').toLowerCase();
+  const accountEmail = (Local.get('email') || '').toLowerCase();
+  if (accountEmail && fromAddr && fromAddr === accountEmail) return;
 
   incrementBadge(1);
 

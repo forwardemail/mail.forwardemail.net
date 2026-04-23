@@ -16,7 +16,7 @@ import { getEffectiveSettingValue } from './settingsStore';
 import { sortMessages, normalizeSortDate, getMessageUidValue } from '../utils/message-sort.ts';
 import { decodeMimeHeader } from '../utils/mime-utils.js';
 import { validateFolderName } from '../utils/folder-validation.ts';
-import { queueMutation } from '../utils/mutation-queue';
+import { queueMutation, getQueuedMessageIds } from '../utils/mutation-queue';
 import {
   folders,
   selectedFolder,
@@ -1180,9 +1180,12 @@ const createMailboxStore = () => {
         return;
       }
 
-      // Always prune stale cache entries on page 1 when we have fresh server data
-      // This ensures deleted/moved messages don't reappear from cache
-      const shouldPrune = !shouldAppend && currentPage === 1 && cachedPage.length && merged.length;
+      // Prune stale cache entries on any non-append replace-load so messages
+      // deleted or moved via the API (or another client) don't linger after a
+      // refresh. Restricted to non-empty server responses — the transient-empty
+      // branch above already short-circuits that case to guard against a flaky
+      // API returning [] for a non-empty folder.
+      const shouldPrune = !shouldAppend && cachedPage.length && merged.length;
 
       if (!isStaleRequest) {
         const nextMessages = shouldAppend ? mergeMessagePages(get(messages), merged) : merged;
@@ -1208,8 +1211,21 @@ const createMailboxStore = () => {
       confirmDeletes(new Set(merged.map((m) => m.id)));
       confirmFlagMutations(merged);
 
+      let prunedIds: string[] = [];
       if (merged.length || shouldPrune) {
-        await db.transaction('rw', db.messages, async () => {
+        // Resolve in-flight mutation IDs before opening the tx so we don't
+        // clobber an optimistic move/label whose server round-trip hasn't
+        // completed yet. If the queue read fails, skip pruning this pass.
+        let queuedIds: Set<string> = new Set();
+        let queueReadFailed = false;
+        if (shouldPrune) {
+          try {
+            queuedIds = await getQueuedMessageIds(account);
+          } catch {
+            queueReadFailed = true;
+          }
+        }
+        await db.transaction('rw', db.messages, db.messageBodies, async () => {
           if (merged.length) {
             await db.messages.bulkPut(
               merged.map((msg) => ({
@@ -1219,18 +1235,32 @@ const createMailboxStore = () => {
               })),
             );
           }
-          if (shouldPrune) {
+          if (shouldPrune && !queueReadFailed) {
             tracer.stage('cache_prune_start');
             const serverIds = new Set(merged.map((msg) => msg.id).filter(Boolean));
-            const staleKeys = cachedPage
-              .filter((msg) => msg?.id && !serverIds.has(msg.id))
-              .map((msg) => [account, msg.id]);
-            if (staleKeys.length) {
-              await db.messages.bulkDelete(staleKeys);
+            const pendingIds = new Set(getPendingDeleteIds());
+            prunedIds = cachedPage
+              .filter(
+                (msg) =>
+                  msg?.id &&
+                  !serverIds.has(msg.id) &&
+                  !pendingIds.has(msg.id) &&
+                  !queuedIds.has(msg.id),
+              )
+              .map((msg) => msg.id);
+            if (prunedIds.length) {
+              const pairs = prunedIds.map((id) => [account, id]);
+              await db.messages.bulkDelete(pairs);
+              await db.messageBodies.bulkDelete(pairs);
             }
-            tracer.stage('cache_prune_end', { count: staleKeys.length });
+            tracer.stage('cache_prune_end', { count: prunedIds.length });
           }
         });
+        if (prunedIds.length) {
+          // Search index removal lives outside the Dexie tx — awaiting a
+          // non-Dexie promise inside a tx aborts it.
+          searchStore.actions.removeFromIndex(prunedIds).catch(() => {});
+        }
       }
 
       // Update in-memory cache with fresh network data

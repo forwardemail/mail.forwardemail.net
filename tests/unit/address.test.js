@@ -105,6 +105,15 @@ describe('extractAddressList', () => {
     };
     expect(extractAddressList(msg, 'from')).toEqual(['headerline@x.com']);
   });
+
+  it('recognizes nodemailer.from as a plain AddressObject (no value/text)', () => {
+    const lower = { nodemailer: { from: { name: 'Alice', address: 'alice@x.com' } } };
+    const upper = { nodemailer: { from: { Name: 'Bob', Address: 'bob@x.com' } } };
+    const email = { nodemailer: { from: { email: 'carol@x.com' } } };
+    expect(extractAddressList(lower, 'from')).toEqual([{ name: 'Alice', address: 'alice@x.com' }]);
+    expect(extractAddressList(upper, 'from')).toEqual([{ Name: 'Bob', Address: 'bob@x.com' }]);
+    expect(extractAddressList(email, 'from')).toEqual([{ email: 'carol@x.com' }]);
+  });
 });
 
 describe('getReplyToList', () => {
