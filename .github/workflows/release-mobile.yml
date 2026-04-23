@@ -137,31 +137,26 @@ jobs:
             mv "$f" "$dir/forwardemail-mail_${VERSION}_android.aab"
           done
 
+      - name: Resolve release ID (prefer published over draft)
+        id: resolve_release
+        uses: ./.github/actions/resolve-release
+        with:
+          tag: v${{ inputs.version || inputs.tag || github.ref_name }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Upload signed APK/AAB to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
-          RELEASE_ID: ${{ inputs.release_id }}
+          RELEASE_ID: ${{ steps.resolve_release.outputs.release_id }}
+          TAG: ${{ steps.resolve_release.outputs.tag }}
         run: |
-          TAG="v${{ inputs.version || inputs.tag || github.ref_name }}"
-          # Collect built artifacts
+          set -euo pipefail
           FILES=()
           while IFS= read -r f; do FILES+=("$f"); done < <(find src-tauri/gen/android/app/build/outputs/apk -name '*.apk' -type f)
           while IFS= read -r f; do FILES+=("$f"); done < <(find src-tauri/gen/android/app/build/outputs/bundle -name '*.aab' -type f)
           if [ ${#FILES[@]} -eq 0 ]; then
             echo "::error::No APK/AAB files found to upload"
-            exit 1
-          fi
-
-          # `gh release upload TAG` uses the /releases/tags/{tag} API which
-          # does NOT find draft releases. Use the release_id directly via
-          # the GitHub API to upload to the existing draft.
-          if [ -z "$RELEASE_ID" ]; then
-            # Fallback: look up the release ID (includes drafts) by tag
-            RELEASE_ID=$(gh api "repos/${GH_REPO}/releases" --jq ".[] | select(.tag_name==\"$TAG\") | .id" | head -n 1)
-          fi
-          if [ -z "$RELEASE_ID" ]; then
-            echo "::error::Could not find release for tag $TAG"
             exit 1
           fi
           echo "Uploading ${#FILES[@]} file(s) to release id=$RELEASE_ID (tag=$TAG)"
@@ -404,27 +399,25 @@ jobs:
             --apiIssuer "$ASC_ISSUER"
           rm -f "$KEY_DIR/AuthKey_${ASC_KEY_ID}.p8"
 
+      - name: Resolve release ID (prefer published over draft)
+        if: steps.check.outputs.enabled == 'true'
+        id: resolve_release
+        uses: ./.github/actions/resolve-release
+        with:
+          tag: v${{ inputs.version || inputs.tag || github.ref_name }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Upload signed IPA to release
         if: steps.check.outputs.enabled == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
-          RELEASE_ID: ${{ inputs.release_id }}
+          RELEASE_ID: ${{ steps.resolve_release.outputs.release_id }}
+          TAG: ${{ steps.resolve_release.outputs.tag }}
         run: |
           set -euo pipefail
-          TAG="v${{ inputs.version || inputs.tag || github.ref_name }}"
           if [ -z "${IPA_PATH:-}" ] || [ ! -f "$IPA_PATH" ]; then
             echo "::error::IPA_PATH not set or file missing"
-            exit 1
-          fi
-          # `gh release upload TAG` uses /releases/tags/{tag} which does NOT
-          # find draft releases. Resolve the release id directly.
-          if [ -z "${RELEASE_ID:-}" ]; then
-            RELEASE_ID=$(gh api "repos/${GH_REPO}/releases" \
-              --jq ".[] | select(.tag_name==\"$TAG\") | .id" | head -n 1)
-          fi
-          if [ -z "$RELEASE_ID" ]; then
-            echo "::error::Could not find release for tag $TAG"
             exit 1
           fi
           name=$(basename "$IPA_PATH")

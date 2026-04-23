@@ -120,17 +120,6 @@ jobs:
         shell: bash
         run: node scripts/sync-version.cjs
 
-      - name: Verify release_id is set when called via workflow_call
-        if: github.event_name == 'workflow_call' || inputs.release_id != null
-        shell: bash
-        run: |
-          if [ -z "${{ inputs.release_id }}" ]; then
-            echo "::error::release_id input is required to prevent duplicate releases."
-            echo "::error::This workflow should be called from release.yml orchestrator, not directly."
-            exit 1
-          fi
-          echo "Uploading artifacts to release ID: ${{ inputs.release_id }}"
-
       - name: Resolve release metadata
         id: release_meta
         shell: bash
@@ -155,6 +144,13 @@ jobs:
           fi
           echo "tag_name=$TAG_NAME" >> "$GITHUB_OUTPUT"
           echo "release_name=$RELEASE_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve release ID (prefer published over draft)
+        id: resolve_release
+        uses: ./.github/actions/resolve-release
+        with:
+          tag: ${{ steps.release_meta.outputs.tag_name }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Enable updater artifacts
         if: env.TAURI_SIGNING_PRIVATE_KEY != ''
@@ -188,7 +184,7 @@ jobs:
         with:
           tagName: ${{ steps.release_meta.outputs.tag_name }}
           releaseName: ${{ steps.release_meta.outputs.release_name }}
-          releaseId: ${{ inputs.release_id || '' }}
-          releaseDraft: ${{ inputs.release_draft || 'false' }}
+          releaseId: ${{ steps.resolve_release.outputs.release_id }}
+          releaseDraft: ${{ steps.resolve_release.outputs.release_draft }}
           prerelease: false
           args: ${{ matrix.args }}

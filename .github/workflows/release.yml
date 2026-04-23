@@ -142,16 +142,44 @@ jobs:
     secrets: inherit
 
   # ── 3. Generate checksums (best-effort) ────────────────────────────────
+  # Resolves the target release fresh here — build-desktop/build-mobile
+  # resolve at upload time with the same "prefer published over draft" logic,
+  # so assets land on whichever release won the race with np.
   checksums:
     needs: [create-release, build-desktop, build-mobile]
     if: always() && needs.build-desktop.result == 'success'
     runs-on: ubuntu-latest
     steps:
+      - name: Resolve release ID (prefer published over draft)
+        id: resolve_release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: v${{ needs.create-release.outputs.version }}
+        run: |
+          set -euo pipefail
+          published_id=$(gh api "repos/${GH_REPO}/releases" --paginate \
+            --jq "[.[] | select(.tag_name==\"$TAG\" and .draft==false)] | first // empty | .id")
+          if [ -n "$published_id" ]; then
+            echo "Resolved to published release id=$published_id for $TAG"
+            echo "release_id=$published_id" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          draft_id=$(gh api "repos/${GH_REPO}/releases" --paginate \
+            --jq "[.[] | select(.tag_name==\"$TAG\")] | sort_by(.created_at) | last // empty | .id")
+          if [ -n "$draft_id" ]; then
+            echo "Resolved to draft release id=$draft_id for $TAG"
+            echo "release_id=$draft_id" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "::error::No release found for tag $TAG"
+          exit 1
+
       - name: List existing release assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
-          RELEASE_ID: ${{ needs.create-release.outputs.release_id }}
+          RELEASE_ID: ${{ steps.resolve_release.outputs.release_id }}
         run: |
           echo "=== Release id=${RELEASE_ID} assets ==="
           gh api "repos/${GH_REPO}/releases/${RELEASE_ID}/assets" \
@@ -161,10 +189,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
-          RELEASE_ID: ${{ needs.create-release.outputs.release_id }}
+          RELEASE_ID: ${{ steps.resolve_release.outputs.release_id }}
         run: |
-          # Use release_id via gh api — `gh release download TAG` uses
-          # /releases/tags/{tag} which doesn't find draft releases.
           mkdir -p artifacts
           cd artifacts
           patterns='\.(dmg|app\.tar\.gz|app\.tar\.gz\.sig|msi|msi\.zip|msi\.zip\.sig|nsis\.zip|nsis\.zip\.sig|exe|deb|rpm|AppImage|AppImage\.tar\.gz|AppImage\.tar\.gz\.sig|apk|aab|ipa)$'
@@ -201,11 +227,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
-          RELEASE_ID: ${{ needs.create-release.outputs.release_id }}
+          RELEASE_ID: ${{ steps.resolve_release.outputs.release_id }}
         run: |
-          # Use release_id via gh api instead of softprops/action-gh-release,
-          # which uses the /releases/tags/{tag} endpoint that does NOT find
-          # draft releases and would create a duplicate non-draft release.
           cd artifacts
           name="SHA256SUMS.txt"
           existing_id=$(gh api "repos/${GH_REPO}/releases/${RELEASE_ID}/assets" \
@@ -220,22 +243,53 @@ jobs:
             --input "$name"
 
   # ── 4. Publish the release ─────────────────────────────────────────────
-  # Publish as long as the desktop build succeeded — checksums are best-effort
-  # and shouldn't block publishing the actual binaries.
+  # Since build-* resolve-at-upload-time prefers published over draft, assets
+  # land on the pre-existing published release (np's) if one exists — our
+  # draft ends up empty. Consolidate here: if another published release with
+  # our tag exists, migrate any stray draft assets onto it and delete our
+  # draft; else PATCH our draft to published (normal path).
   publish:
     needs: [create-release, build-desktop, build-mobile, checksums]
     if: always() && needs.build-desktop.result == 'success' && needs.create-release.outputs.release_draft == 'true'
     runs-on: ubuntu-latest
     steps:
-      - name: Publish release (remove draft status)
+      - name: Publish release (consolidate onto pre-existing published if needed)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
           RELEASE_ID: ${{ needs.create-release.outputs.release_id }}
+          TAG: v${{ needs.create-release.outputs.version }}
         run: |
-          # Only releases created as drafts by this workflow need publishing.
-          gh api --method PATCH "repos/${GH_REPO}/releases/${RELEASE_ID}" \
-            -f draft=false
+          set -euo pipefail
+          OTHER_PUBLISHED=$(gh api "repos/${GH_REPO}/releases" --paginate \
+            --jq "[.[] | select(.tag_name==\"$TAG\" and .draft==false and .id != ${RELEASE_ID})] | first // empty | .id")
+
+          if [ -n "$OTHER_PUBLISHED" ]; then
+            echo "Published release id=$OTHER_PUBLISHED already exists for $TAG; consolidating"
+            draft_assets=$(gh api "repos/${GH_REPO}/releases/${RELEASE_ID}/assets" \
+              --jq '.[] | [.id, .name] | @tsv' || true)
+            if [ -n "$draft_assets" ]; then
+              echo "Migrating stray draft assets onto the published release"
+              while IFS=$'\t' read -r aid aname; do
+                [ -z "$aid" ] && continue
+                echo "  → $aname"
+                existing=$(gh api "repos/${GH_REPO}/releases/${OTHER_PUBLISHED}/assets" \
+                  --jq ".[] | select(.name==\"$aname\") | .id" | head -n 1)
+                [ -n "$existing" ] && gh api -X DELETE "repos/${GH_REPO}/releases/assets/${existing}" || true
+                gh api -H "Accept: application/octet-stream" \
+                  "repos/${GH_REPO}/releases/assets/${aid}" > "/tmp/${aname}"
+                gh api --method POST -H "Content-Type: application/octet-stream" \
+                  "https://uploads.github.com/repos/${GH_REPO}/releases/${OTHER_PUBLISHED}/assets?name=${aname}" \
+                  --input "/tmp/${aname}"
+                rm -f "/tmp/${aname}"
+              done <<< "$draft_assets"
+            fi
+            gh api -X DELETE "repos/${GH_REPO}/releases/${RELEASE_ID}"
+            echo "Consolidated — pre-existing published release is now canonical"
+          else
+            echo "No conflicting published release; promoting our draft to published"
+            gh api --method PATCH "repos/${GH_REPO}/releases/${RELEASE_ID}" -f draft=false
+          fi
 
   # ── 5. Deploy web app ─────────────────────────────────────────────────
   # Inline deploy because GITHUB_TOKEN events don't trigger other workflows,

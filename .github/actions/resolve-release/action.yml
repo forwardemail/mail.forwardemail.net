@@ -1,0 +1,62 @@
+name: 'Resolve GitHub Release by Tag'
+description: >-
+  Resolves the release ID for a tag at the moment of call, preferring a
+  published release over any draft. Sidesteps the race between `np`
+  (or any external release creator) and release.yml's create-release
+  job — which can otherwise leave one release published (np's, with
+  author notes) and one draft (ours, where builds upload) with the
+  same tag, causing the publish step to fail with a tag_name conflict.
+
+inputs:
+  tag:
+    description: 'Tag name (with or without leading v)'
+    required: true
+  github-token:
+    description: 'Token with repo read permissions'
+    required: true
+
+outputs:
+  release_id:
+    description: 'Resolved release ID (published preferred over draft)'
+    value: ${{ steps.resolve.outputs.release_id }}
+  release_draft:
+    description: 'true if the resolved release is a draft, false if published'
+    value: ${{ steps.resolve.outputs.release_draft }}
+  tag:
+    description: 'Normalized tag (always prefixed with v)'
+    value: ${{ steps.resolve.outputs.tag }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Resolve
+      id: resolve
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        GH_REPO: ${{ github.repository }}
+        TAG_IN: ${{ inputs.tag }}
+      run: |
+        set -euo pipefail
+        TAG="${TAG_IN#v}"
+        TAG="v${TAG}"
+        published_id=$(gh api "repos/${GH_REPO}/releases" --paginate \
+          --jq "[.[] | select(.tag_name==\"$TAG\" and .draft==false)] | first // empty | .id")
+        if [ -n "$published_id" ]; then
+          echo "Resolved to published release id=$published_id for tag $TAG"
+          echo "release_id=$published_id" >> "$GITHUB_OUTPUT"
+          echo "release_draft=false" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        draft_id=$(gh api "repos/${GH_REPO}/releases" --paginate \
+          --jq "[.[] | select(.tag_name==\"$TAG\")] | sort_by(.created_at) | last // empty | .id")
+        if [ -n "$draft_id" ]; then
+          echo "Resolved to draft release id=$draft_id for tag $TAG"
+          echo "release_id=$draft_id" >> "$GITHUB_OUTPUT"
+          echo "release_draft=true" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        echo "::error::No release found for tag $TAG"
+        exit 1
