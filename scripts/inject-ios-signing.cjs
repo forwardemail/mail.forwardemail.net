@@ -37,15 +37,16 @@ const projectYmlPath = path.join(appleDir, 'project.yml');
 let projYml = fs.readFileSync(projectYmlPath, 'utf8');
 let modified = false;
 
-// Xcode 26's iOS SDK no longer ships the swiftCompatibility56 /
-// swiftCompatibilityConcurrency back-deploy libs the Swift compiler
-// auto-links when targeting iOS < 15, which breaks the final ld step.
-const bumpedYml = projYml.replace(/(\n {2}deploymentTarget:\n {4}iOS: )[\d.]+/, '$115.0');
+// Xcode 26's iOS 26.4 SDK no longer ships libswiftCompatibility56.a
+// (the Swift 5.6 back-deploy shim auto-linked when the deployment
+// target is < iOS 15.4, where Swift 5.6 first shipped in the OS).
+// 16.0 gives a clean margin above that threshold.
+const bumpedYml = projYml.replace(/(\n {2}deploymentTarget:\n {4}iOS: )[\d.]+/, '$116.0');
 if (bumpedYml !== projYml) {
   projYml = bumpedYml;
   modified = true;
-  console.log('Bumped iOS deployment target to 15.0 in project.yml');
-} else if (!/deploymentTarget:\n {4}iOS: 15\.0/.test(projYml)) {
+  console.log('Bumped iOS deployment target to 16.0 in project.yml');
+} else if (!/deploymentTarget:\n {4}iOS: 16\.0/.test(projYml)) {
   console.warn('Could not find options.deploymentTarget.iOS in project.yml');
 }
 

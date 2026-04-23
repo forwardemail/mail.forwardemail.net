@@ -264,7 +264,7 @@ jobs:
           # IPHONEOS_DEPLOYMENT_TARGET, so cargo will happily re-use cached
           # .swift.o files compiled against the old target, and the final
           # `ld` step will fail against the current iOS SDK (see ios15 fix).
-          prefix-key: v1-ios15
+          prefix-key: v2-ios16
 
       - name: Setup Node.js
         if: steps.check.outputs.enabled == 'true'
@@ -327,7 +327,7 @@ jobs:
       - name: Dump iOS build environment (diagnostic)
         if: steps.check.outputs.enabled == 'true'
         env:
-          IPHONEOS_DEPLOYMENT_TARGET: '15.0'
+          IPHONEOS_DEPLOYMENT_TARGET: '16.0'
         run: |
           echo "── Shell env ──"
           echo "IPHONEOS_DEPLOYMENT_TARGET=${IPHONEOS_DEPLOYMENT_TARGET:-<unset>}"
@@ -355,13 +355,15 @@ jobs:
         if: steps.check.outputs.enabled == 'true'
         env:
           APPLE_DEVELOPMENT_TEAM: ${{ secrets.APPLE_TEAM_ID }}
-          # Propagate the deployment target into cargo -> swift-rs -> swiftc
-          # so the .swift.o files inside libapp.a aren't compiled against an
-          # iOS < 15 target. Without this, swiftc emits auto-link references
-          # to libswiftCompatibility56.a / libswiftCompatibilityConcurrency.a
-          # which Xcode 26's iOS 26.4 SDK no longer ships, and the final ld
-          # step fails even though the xcodeproj itself targets iOS 15.
-          IPHONEOS_DEPLOYMENT_TARGET: '15.0'
+          # Propagate the deployment target into cargo -> tauri-utils ->
+          # swift-rs -> swiftc so the .swift.o files inside libapp.a aren't
+          # compiled against a target that still needs the Swift 5.6
+          # back-compat shim (libswiftCompatibility56.a). That shim is
+          # auto-linked when the deployment target is < iOS 15.4 — the
+          # version where Swift 5.6 first shipped in the OS — and Xcode 26's
+          # iOS 26.4 SDK no longer ships the library. Must be ≥ 15.4;
+          # 16.0 gives a clean margin.
+          IPHONEOS_DEPLOYMENT_TARGET: '16.0'
         run: pnpm tauri ios build --ci --verbose --target aarch64 --export-method app-store-connect
 
       - name: Rename IPA with version
