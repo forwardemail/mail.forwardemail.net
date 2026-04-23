@@ -2980,8 +2980,9 @@
                 {#each recipientSuggestions as contact, idx}
                   <button
                     type="button"
-                    class="w-full px-3 py-2 text-left text-sm hover:bg-accent flex flex-col"
+                    class="w-full px-3 py-2 text-left text-sm flex flex-col"
                     class:bg-accent={recipientSuggestionIndex === idx}
+                    onmouseenter={() => (recipientSuggestionIndex = idx)}
                     onclick={() => applyRecipientSuggestion('to', contact)}
                   >
                     <span
@@ -3042,8 +3043,9 @@
                   {#each recipientSuggestions as contact, idx}
                     <button
                       type="button"
-                      class="w-full px-3 py-2 text-left text-sm hover:bg-accent flex flex-col"
+                      class="w-full px-3 py-2 text-left text-sm flex flex-col"
                       class:bg-accent={recipientSuggestionIndex === idx}
+                      onmouseenter={() => (recipientSuggestionIndex = idx)}
                       onclick={() => applyRecipientSuggestion('cc', contact)}
                     >
                       <span
@@ -3105,8 +3107,9 @@
                   {#each recipientSuggestions as contact, idx}
                     <button
                       type="button"
-                      class="w-full px-3 py-2 text-left text-sm hover:bg-accent flex flex-col"
+                      class="w-full px-3 py-2 text-left text-sm flex flex-col"
                       class:bg-accent={recipientSuggestionIndex === idx}
+                      onmouseenter={() => (recipientSuggestionIndex = idx)}
                       onclick={() => applyRecipientSuggestion('bcc', contact)}
                     >
                       <span
