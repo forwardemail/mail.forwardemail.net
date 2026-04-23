@@ -324,6 +324,33 @@ jobs:
           node scripts/sync-version.cjs
           node scripts/inject-ios-signing.cjs
 
+      - name: Dump iOS build environment (diagnostic)
+        if: steps.check.outputs.enabled == 'true'
+        env:
+          IPHONEOS_DEPLOYMENT_TARGET: '15.0'
+        run: |
+          echo "── Shell env ──"
+          echo "IPHONEOS_DEPLOYMENT_TARGET=${IPHONEOS_DEPLOYMENT_TARGET:-<unset>}"
+          echo "MACOSX_DEPLOYMENT_TARGET=${MACOSX_DEPLOYMENT_TARGET:-<unset>}"
+          echo "SDKROOT=${SDKROOT:-<unset>}"
+          echo "── Xcode + SDK ──"
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          xcrun --sdk iphoneos --show-sdk-path
+          echo "── Generated project.yml deployment target ──"
+          grep -A2 'deploymentTarget' src-tauri/gen/apple/project.yml || true
+          echo "── Generated pbxproj IPHONEOS_DEPLOYMENT_TARGET ──"
+          grep -E 'IPHONEOS_DEPLOYMENT_TARGET|SDKROOT' \
+            src-tauri/gen/apple/forwardemail-desktop.xcodeproj/project.pbxproj | sort -u || true
+          echo "── Rust target cache state ──"
+          if [ -d src-tauri/target/aarch64-apple-ios ]; then
+            du -sh src-tauri/target/aarch64-apple-ios || true
+            echo "Existing libapp.a timestamps:"
+            find src-tauri/target/aarch64-apple-ios -name 'libapp.a' -exec ls -la {} \; 2>/dev/null || true
+          else
+            echo "(fresh — no src-tauri/target/aarch64-apple-ios yet)"
+          fi
+
       - name: Build iOS (release, signed)
         if: steps.check.outputs.enabled == 'true'
         env:
@@ -335,7 +362,7 @@ jobs:
           # which Xcode 26's iOS 26.4 SDK no longer ships, and the final ld
           # step fails even though the xcodeproj itself targets iOS 15.
           IPHONEOS_DEPLOYMENT_TARGET: '15.0'
-        run: pnpm tauri ios build --ci --target aarch64 --export-method app-store-connect
+        run: pnpm tauri ios build --ci --verbose --target aarch64 --export-method app-store-connect
 
       - name: Rename IPA with version
         if: steps.check.outputs.enabled == 'true'
