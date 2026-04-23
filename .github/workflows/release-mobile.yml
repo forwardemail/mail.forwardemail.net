@@ -259,6 +259,12 @@ jobs:
         uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri -> target
+          # Bump this prefix whenever IPHONEOS_DEPLOYMENT_TARGET changes.
+          # tauri-utils's build.rs doesn't emit `rerun-if-env-changed` for
+          # IPHONEOS_DEPLOYMENT_TARGET, so cargo will happily re-use cached
+          # .swift.o files compiled against the old target, and the final
+          # `ld` step will fail against the current iOS SDK (see ios15 fix).
+          prefix-key: v1-ios15
 
       - name: Setup Node.js
         if: steps.check.outputs.enabled == 'true'
