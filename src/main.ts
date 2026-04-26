@@ -1781,11 +1781,20 @@ async function bootstrap() {
       onRecoveryFailed(error) {
         console.error('[DB] Database recovery failed:', error?.message);
         toasts?.dismiss?.();
-        toasts?.show?.(
-          'Database update failed. You may need to clear browser data in Settings.',
-          'error',
-          10_000,
-        );
+        toasts?.show?.('Local database is stuck. Click to reset and reload.', 'error', 0, {
+          label: 'Reset and reload',
+          callback: async () => {
+            try {
+              const regs = await navigator.serviceWorker?.getRegistrations?.();
+              if (Array.isArray(regs)) {
+                await Promise.all(regs.map((r) => r.unregister().catch(() => false)));
+              }
+            } catch {
+              /* best-effort — proceed to reload regardless */
+            }
+            window.location.reload();
+          },
+        });
       },
     });
 

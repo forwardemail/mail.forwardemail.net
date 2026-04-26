@@ -17,6 +17,13 @@
   const state = new Map(); // folderKey -> { cancelled, running }
   const LOG = false;
 
+  // Track every successful IDBDatabase handle so a `close-idb` message
+  // from the main app (during recovery) can force all of them closed —
+  // otherwise `indexedDB.deleteDatabase()` on the main thread stays
+  // blocked waiting for the SW's handles to release.
+  const openDbHandles = new Set();
+  let allowOpen = true;
+
   const DEFAULT_PAGE_SIZE = 100;
 
   const postToClients = async (payload) => {
@@ -32,6 +39,10 @@
    */
   const openDb = () =>
     new Promise((resolve, reject) => {
+      if (!allowOpen) {
+        reject(new Error('SW IDB closed for recovery — try again after reopen'));
+        return;
+      }
       let retryCount = 0;
       const maxRetries = 3;
       const retryDelay = 500;
@@ -56,11 +67,13 @@
 
         req.onsuccess = () => {
           const db = req.result;
+          openDbHandles.add(db);
 
           // Handle version change events (another tab upgrading the database)
           db.onversionchange = () => {
             LOG && console.log('[SW sync] Database version change detected, closing connection');
             db.close();
+            openDbHandles.delete(db);
           };
 
           // If manifest store is missing (older DB), upgrade by bumping version by 1.
@@ -86,10 +99,12 @@
 
             upgradeReq.onsuccess = () => {
               const udb = upgradeReq.result;
+              openDbHandles.add(udb);
               udb.onversionchange = () => {
                 LOG &&
                   console.log('[SW sync] Database version change detected, closing connection');
                 udb.close();
+                openDbHandles.delete(udb);
               };
               resolve(udb);
             };
@@ -101,7 +116,17 @@
               if (error?.name === 'VersionError') {
                 LOG && console.log('[SW sync] Retrying open without version requirement');
                 const retryReq = indexedDB.open(DB_NAME);
-                retryReq.onsuccess = () => resolve(retryReq.result);
+                retryReq.onsuccess = () => {
+                  const rdb = retryReq.result;
+                  openDbHandles.add(rdb);
+                  rdb.onversionchange = () => {
+                    LOG &&
+                      console.log('[SW sync] Database version change detected, closing connection');
+                    rdb.close();
+                    openDbHandles.delete(rdb);
+                  };
+                  resolve(rdb);
+                };
                 retryReq.onerror = () => reject(retryReq.error);
               } else {
                 reject(error || new Error('IndexedDB upgrade failed'));
@@ -752,6 +777,23 @@
           lastSyncAt: manifest?.lastSyncAt || null,
         });
       });
+    } else if (data.type === 'close-idb') {
+      // Main app is about to call indexedDB.deleteDatabase() for recovery.
+      // Close every tracked handle so the delete isn't blocked by us.
+      // allowOpen=false refuses any in-flight openDb() calls until reopened.
+      allowOpen = false;
+      openDbHandles.forEach((db) => {
+        try {
+          db.close();
+        } catch {
+          /* ignore — browser will close on worker teardown */
+        }
+      });
+      openDbHandles.clear();
+      event.ports?.[0]?.postMessage?.({ ok: true });
+    } else if (data.type === 'reopen-idb') {
+      allowOpen = true;
+      event.ports?.[0]?.postMessage?.({ ok: true });
     }
   });
 })();

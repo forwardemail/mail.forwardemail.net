@@ -71,6 +71,34 @@ async function terminateWorkers() {
   }
 }
 
+/**
+ * Ask the service worker (if any) to close every IndexedDB handle it holds.
+ * The SW's own `versionchange` handler is not reliable when a transaction is
+ * in flight, so we close explicitly and await an ack before calling
+ * indexedDB.deleteDatabase() — otherwise the SW can keep the handle open
+ * long enough to block the delete and trigger our 4s deletion timeout.
+ * Silent no-op when no SW is registered or no ack arrives within `timeoutMs`.
+ */
+async function closeServiceWorkerDb(timeoutMs = 1500) {
+  try {
+    const sw = typeof navigator !== 'undefined' ? navigator.serviceWorker : null;
+    const target = sw?.controller;
+    if (!target) return;
+    const channel = new MessageChannel();
+    const ack = new Promise((resolve) => {
+      const timer = setTimeout(() => resolve(false), timeoutMs);
+      channel.port1.onmessage = () => {
+        clearTimeout(timer);
+        resolve(true);
+      };
+    });
+    target.postMessage({ type: 'close-idb' }, [channel.port2]);
+    await ack;
+  } catch (err) {
+    warn('[DB Recovery] Could not signal SW to close IDB:', err);
+  }
+}
+
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -120,6 +148,7 @@ async function deleteDatabaseByName(name, options = {}) {
  */
 export async function deleteDatabase() {
   await terminateWorkers();
+  await closeServiceWorkerDb();
   await delay(100);
   const result = await deleteDatabaseByName(DB_NAME);
   if (!result.deleted) {

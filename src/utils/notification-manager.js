@@ -456,9 +456,10 @@ async function handleNewMessage(data) {
   const rawMailbox = data.mailbox || msg.mailbox || 'INBOX';
   const { path: mailbox, specialUse } = await resolveMailbox(rawMailbox);
 
-  // Skip notifications for self-originated messages (sent copies, drafts).
-  // Four signals from strongest to weakest, because server payloads and
-  // folder metadata are inconsistent across providers / cold-start timing:
+  // Skip notifications for self-originated messages (sent copies, drafts,
+  // replies that the server echoes back). Four signals from strongest to
+  // weakest, because server payloads and folder metadata are inconsistent
+  // across providers / cold-start timing:
   //   1. IMAP specialUse flag on the folder (server-authoritative).
   //   2. Path equality against the account's configured Sent/Drafts folder.
   //   3. Uppercase path match against the SILENT_FOLDERS name list.
