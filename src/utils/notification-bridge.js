@@ -15,7 +15,16 @@
  *   - Notification channel IDs are validated against an allowlist.
  */
 
-import { isTauri } from './platform.js';
+import { isTauri, isTauriMobile } from './platform.js';
+
+// Android-specific detection. tauri-plugin-notification @ 2.3.x has known
+// breakage on Android (tauri-apps/plugins-workspace#2341): cancelAll throws,
+// pending/active return empty or wrong types, channels() reports
+// permission-denied even when granted, scheduling fails in builds. We avoid
+// every one of those APIs here. createChannel itself is wrapped in try/catch
+// and logs explicitly on Android so a silent failure is at least debuggable.
+const isAndroid =
+  isTauriMobile && typeof navigator !== 'undefined' && /android/i.test(navigator.userAgent);
 
 let _tauriNotification;
 
@@ -169,8 +178,17 @@ export async function initNotificationChannels() {
       visibility: 0,
       vibration: false,
     });
-  } catch {
-    // Channels may already exist.
+  } catch (err) {
+    if (isAndroid) {
+      // On Android the plugin's channel surface is the most fragile piece —
+      // failing here usually means notifications won't display at all on
+      // Android 8+. Log loudly so it shows up in support reports.
+      console.warn(
+        '[notification-bridge] Android channel creation failed (likely plugins-workspace#2341):',
+        err,
+      );
+    }
+    // Otherwise: channels already exist or the plugin is unavailable; proceed.
   }
 }
 

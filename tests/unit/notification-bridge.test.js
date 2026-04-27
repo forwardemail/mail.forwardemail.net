@@ -5,6 +5,7 @@ let actionHandler;
 
 vi.mock('../../src/utils/platform.js', () => ({
   isTauri: true,
+  isTauriMobile: false,
 }));
 
 vi.mock('@tauri-apps/plugin-notification', () => ({
