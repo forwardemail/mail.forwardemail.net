@@ -14,6 +14,7 @@ import Settings from './svelte/Settings.svelte';
 import Passphrase from './svelte/PassphraseModal.svelte';
 import Mailbox from './svelte/Mailbox.svelte';
 import Profile from './svelte/Profile.svelte';
+import Diagnostics from './svelte/Diagnostics.svelte';
 import Calendar from './svelte/Calendar.svelte';
 import Contacts from './svelte/Contacts.svelte';
 import Compose from './svelte/Compose.svelte';
@@ -182,6 +183,12 @@ function detectRoute() {
 
   if (globalThis.location.pathname.startsWith('/mailbox/settings')) {
     return 'settings';
+  }
+
+  // Hidden diagnostics page — auth-independent so users locked out at login
+  // can still produce a support report. Not linked from the main UI.
+  if (globalThis.location.pathname.startsWith('/mailbox/diagnostics')) {
+    return 'diagnostics';
   }
 
   if (globalThis.location.pathname.startsWith('/mailbox')) {
@@ -444,6 +451,15 @@ if (settingsRoot) {
       applyFont,
     },
   });
+}
+
+// Diagnostics page — mounted lazily on first navigation. Auth-independent
+// so it works when login or sync is broken (the times we most need it).
+const diagnosticsRoot = document.querySelector('#diagnostics-root') as HTMLElement | null;
+let _diagnosticsApp: ReturnType<typeof mount> | null = null;
+function mountDiagnostics() {
+  if (_diagnosticsApp || !diagnosticsRoot) return;
+  _diagnosticsApp = mount(Diagnostics, { target: diagnosticsRoot });
 }
 
 let _profileApp = null;
@@ -795,6 +811,10 @@ const updateRouteVisibility = (route) => {
 
   if (profileRoot) {
     profileRoot.style.display = route === 'profile' ? 'block' : 'none';
+  }
+
+  if (diagnosticsRoot) {
+    diagnosticsRoot.style.display = route === 'diagnostics' ? 'block' : 'none';
   }
 };
 
@@ -1216,6 +1236,10 @@ routeStore.subscribe((route) => {
 
   if (route === 'settings') {
     viewModel.settingsModal.open();
+  }
+
+  if (route === 'diagnostics') {
+    mountDiagnostics();
   }
 
   if (route === 'calendar') {
