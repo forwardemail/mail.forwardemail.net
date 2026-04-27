@@ -277,7 +277,7 @@ jobs:
 
       - name: Import iOS distribution certificate
         if: steps.check.outputs.enabled == 'true'
-        uses: apple-actions/import-codesign-certs@v3
+        uses: apple-actions/import-codesign-certs@v7
         with:
           p12-file-base64: ${{ secrets.IOS_CERTIFICATE_BASE64 || secrets.APPLE_CERTIFICATE }}
           p12-password: ${{ secrets.IOS_CERTIFICATE_PASSWORD || secrets.APPLE_CERTIFICATE_PASSWORD }}
