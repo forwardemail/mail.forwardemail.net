@@ -235,6 +235,11 @@
   const handleDraftMessageDeleted = (event: CustomEvent<{ messageId: string }>) => {
     const { messageId } = event.detail;
     if (!messageId) return;
+    // Tombstone the id BEFORE any refetch so a server-side propagation lag
+    // can't re-add it to the list when loadMessages runs below.
+    (
+      mailboxStore as { actions: { addPendingDeletes?: (ids: string[]) => void } }
+    )?.actions?.addPendingDeletes?.([messageId]);
     // Remove the message from the current message list in the store
     const currentMessages = get(messagesStore);
     const filtered = currentMessages.filter((m) => m.id !== messageId);

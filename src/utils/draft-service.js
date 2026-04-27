@@ -264,9 +264,13 @@ export function createAutosaveTimer(getDraftData, handlers = {}) {
   let lastSaveHash = '';
   let dirty = false;
   let stopped = false;
+  // Serialize saves so concurrent debounce + interval ticks don't both POST
+  // before the first response sets serverId, creating duplicate server drafts.
+  let inFlight = null;
+  let pendingSave = false;
   const { onSave, onError, onStart } = handlers;
 
-  const checkAndSave = async () => {
+  const runSave = async () => {
     try {
       const data = getDraftData();
       const hash = computeHash(data);
@@ -284,6 +288,29 @@ export function createAutosaveTimer(getDraftData, handlers = {}) {
       onError?.(err);
     }
     return null;
+  };
+
+  const checkAndSave = async () => {
+    if (inFlight) {
+      pendingSave = true;
+      return inFlight;
+    }
+    inFlight = (async () => {
+      try {
+        const result = await runSave();
+        // If another save was requested while in-flight, run once more so
+        // the latest content is persisted. By now serverId is set, so the
+        // follow-up becomes a PUT instead of a duplicate POST.
+        if (pendingSave) {
+          pendingSave = false;
+          return await runSave();
+        }
+        return result;
+      } finally {
+        inFlight = null;
+      }
+    })();
+    return inFlight;
   };
 
   return {
@@ -310,6 +337,21 @@ export function createAutosaveTimer(getDraftData, handlers = {}) {
       dirty = true;
       if (debounceTimer) clearTimeout(debounceTimer);
       debounceTimer = setTimeout(checkAndSave, AUTOSAVE_DEBOUNCE);
+    },
+    // Lock the current content as the no-save baseline. Called after
+    // programmatic prefill (reply/forward quoted body) so an untouched compose
+    // doesn't autosave a draft just because recipients/subject/quote are set.
+    markBaseline() {
+      try {
+        lastSaveHash = computeHash(getDraftData());
+      } catch {
+        // ignore baseline errors
+      }
+      dirty = false;
+      if (debounceTimer) {
+        clearTimeout(debounceTimer);
+        debounceTimer = null;
+      }
     },
     resetHash() {
       lastSaveHash = '';

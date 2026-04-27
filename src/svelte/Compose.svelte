@@ -458,6 +458,7 @@
     stop: () => void;
     saveNow: () => Promise<unknown>;
     markDirty: () => void;
+    markBaseline: () => void;
     resetHash: () => void;
   } | null = null;
   let composeOpenedAt = 0;
@@ -1469,7 +1470,9 @@
   };
 
   const closeComposer = async () => {
-    if (hasUnsavedContent()) {
+    // Only save on close if the user actually edited something. Prefilled
+    // recipients/subject/quoted body alone shouldn't create a draft.
+    if (draftDirty) {
       try {
         await saveCurrentDraft();
       } catch {
@@ -2611,9 +2614,15 @@
 
   const updateReplyBody = (newBody?: string, options?: { focusTop?: boolean }) => {
     if (!newBody) return;
-    // Set the HTML content in the editor
+    // Set the HTML content in the editor. emitUpdate=false so tiptap doesn't
+    // fire onUpdate → markDraftDirty for programmatic prefill — otherwise an
+    // untouched reply would autosave a draft 3s after opening.
     if (editorView) {
-      editorView.commands.setContent(newBody);
+      editorView.commands.setContent(newBody, false);
+      body = newBody;
+      // Lock in the prefilled content as the no-save baseline so the autosave
+      // timer doesn't fire until the user actually changes something.
+      autosaveTimer?.markBaseline?.();
       // Focus at the beginning if requested
       if (options?.focusTop) {
         tick().then(() => {
@@ -2623,6 +2632,7 @@
     } else {
       // If editor not ready, set body and it will be loaded when editor initializes
       body = newBody;
+      autosaveTimer?.markBaseline?.();
     }
   };
 

@@ -13,6 +13,7 @@ export interface Message {
   to?: string;
   cc?: string;
   bcc?: string;
+  reply_to?: string | null;
   subject: string;
   snippet: string;
   flags: string[];

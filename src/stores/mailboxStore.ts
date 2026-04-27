@@ -2489,6 +2489,7 @@ const createMailboxStore = () => {
       clearFolderMessageCache: () => folderMessageCache.clear(),
       invalidateFolderInMemCache,
       addPendingFlagMutation,
+      addPendingDeletes,
     },
   };
 };

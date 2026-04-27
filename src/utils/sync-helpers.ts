@@ -246,6 +246,7 @@ export function normalizeMessageForCache(
   const toField = extractRecipientsField(raw, 'to');
   const ccField = extractRecipientsField(raw, 'cc');
   const bccField = extractRecipientsField(raw, 'bcc');
+  const replyToField = extractRecipientsField(raw, 'replyTo');
 
   return {
     id: apiId || (uid != null ? String(uid) : null) || headerMessageId,
@@ -260,6 +261,7 @@ export function normalizeMessageForCache(
     to: toField || undefined,
     cc: ccField || undefined,
     bcc: bccField || undefined,
+    reply_to: replyToField || null,
     subject,
     snippet: (() => {
       // Prefer pre-computed plaintext sources first
@@ -355,6 +357,13 @@ export function mergeFlagsAndMetadata(
   const existingFrom = typeof existing.from === 'string' ? existing.from.trim() : '';
   if (incomingFrom && incomingFrom !== existingFrom) {
     next.from = incoming.from;
+    changed = true;
+  }
+
+  const incomingReplyTo = typeof incoming.reply_to === 'string' ? incoming.reply_to.trim() : '';
+  const existingReplyTo = typeof existing.reply_to === 'string' ? existing.reply_to.trim() : '';
+  if (incomingReplyTo && incomingReplyTo !== existingReplyTo) {
+    next.reply_to = incoming.reply_to;
     changed = true;
   }
 

@@ -176,6 +176,16 @@
                 onclick={() => openExternal('https://forwardemail.net/about')}>Forward Email</button
               > team. Open-source, privacy-first, no tracking.
             </p>
+            <p class="mt-2">
+              <button
+                class="hover:underline inline cursor-pointer"
+                onclick={() => {
+                  close();
+                  globalThis.history.pushState({}, '', '/mailbox/diagnostics');
+                  globalThis.dispatchEvent(new PopStateEvent('popstate'));
+                }}>Run diagnostics</button
+              >
+            </p>
           </div>
 
           <div class="flex items-center gap-2 pt-1">
