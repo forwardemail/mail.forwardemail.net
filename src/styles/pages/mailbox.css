@@ -913,11 +913,13 @@ body.light-mode .fe-message-from {
   .fe-folders {
     display: none;
     position: fixed;
-    top: 72px;
+    top: calc(72px + var(--sai-top, env(safe-area-inset-top, 0px)));
     left: 0;
+    bottom: 0;
     width: 80%;
     max-width: 320px;
-    height: calc(100vh - 80px);
+    height: auto;
+    padding-bottom: var(--sai-bottom, env(safe-area-inset-bottom, 0px));
     z-index: var(--z-modal); /* 60 - above reader when sidebar is open */
     box-shadow: 0 20px 50px rgba(0, 0, 0, 0.35);
   }
@@ -1124,8 +1126,10 @@ body.light-mode .fe-message-from {
 
   /* Reduce sidebar height */
   .fe-folders {
-    top: 56px;
-    height: calc(100vh - 56px);
+    top: calc(56px + var(--sai-top, env(safe-area-inset-top, 0px)));
+    bottom: 0;
+    height: auto;
+    padding-bottom: var(--sai-bottom, env(safe-area-inset-bottom, 0px));
   }
 }
 

@@ -37,6 +37,7 @@
   import AlertTriangle from '@lucide/svelte/icons/alert-triangle';
   import CalendarIcon from '@lucide/svelte/icons/calendar';
   import Plus from '@lucide/svelte/icons/plus';
+  import MoreVertical from '@lucide/svelte/icons/more-vertical';
 
   interface ToastApi {
     show?: (message: string, type?: string) => void;
@@ -1633,7 +1634,7 @@
   const loadEventsForSelection = async (force = false) => {
     const requestId = loadRequestId;
     const accountKey = getAccountKey();
-    const selectedIds = uniqueIds(selectedCalendarIds);
+    const selectedIds = uniqueIds(effectiveSelectedCalendarIds);
     const hashTarget = getCalendarHashTarget();
     if (!selectedIds.length) {
       events = [];
@@ -2839,41 +2840,87 @@
             </DropdownMenu.Content>
           </DropdownMenu.Root>
         {/if}
-        <Button
-          variant="outline"
-          class="calendar-create-button gap-2"
-          aria-label="Create calendar"
-          onclick={() => {
-            filterMenuOpen = false;
-            newCalendarModal = true;
-          }}
-        >
-          <Plus class="h-4 w-4" />
-          <span class="hidden sm:inline">Create Calendar</span>
-        </Button>
-        <Tooltip.Root>
-          <Tooltip.Trigger>
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label="Import calendar"
-              class="import-menu"
-              onclick={async () => {
-                const files = await pickFiles({ accept: '.ics,text/calendar' });
-                if (files) {
-                  importICS(files);
-                  return;
-                }
-                document.getElementById('import-ics-input')?.click();
-              }}
-            >
-              <Import class="h-4 w-4" />
-            </Button>
-          </Tooltip.Trigger>
-          <Tooltip.Content>
-            <p>Import calendar (.ics)</p>
-          </Tooltip.Content>
-        </Tooltip.Root>
+        {#if !isMobile}
+          <Button
+            variant="outline"
+            class="calendar-create-button gap-2"
+            aria-label="Create calendar"
+            onclick={() => {
+              filterMenuOpen = false;
+              newCalendarModal = true;
+            }}
+          >
+            <Plus class="h-4 w-4" />
+            <span class="hidden sm:inline">Create Calendar</span>
+          </Button>
+          <Tooltip.Root>
+            <Tooltip.Trigger>
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label="Import calendar"
+                class="import-menu"
+                onclick={async () => {
+                  const files = await pickFiles({ accept: '.ics,text/calendar' });
+                  if (files) {
+                    importICS(files);
+                    return;
+                  }
+                  document.getElementById('import-ics-input')?.click();
+                }}
+              >
+                <Import class="h-4 w-4" />
+              </Button>
+            </Tooltip.Trigger>
+            <Tooltip.Content>
+              <p>Import calendar (.ics)</p>
+            </Tooltip.Content>
+          </Tooltip.Root>
+          <Button onclick={() => openNewEvent(new Date())} disabled={!activeCalendar()}>
+            + New Event
+          </Button>
+        {:else}
+          <DropdownMenu.Root>
+            <DropdownMenu.Trigger>
+              {#snippet child({ props })}
+                <Button variant="ghost" size="icon" aria-label="Calendar menu" {...props}>
+                  <MoreVertical class="h-5 w-5" />
+                </Button>
+              {/snippet}
+            </DropdownMenu.Trigger>
+            <DropdownMenu.Content align="end" class="min-w-[200px]">
+              <DropdownMenu.Item
+                disabled={!activeCalendar()}
+                onclick={() => openNewEvent(new Date())}
+              >
+                <Plus class="mr-2 h-4 w-4" />
+                <span>New Event</span>
+              </DropdownMenu.Item>
+              <DropdownMenu.Item
+                onclick={() => {
+                  filterMenuOpen = false;
+                  newCalendarModal = true;
+                }}
+              >
+                <CalendarIcon class="mr-2 h-4 w-4" />
+                <span>Create Calendar</span>
+              </DropdownMenu.Item>
+              <DropdownMenu.Item
+                onclick={async () => {
+                  const files = await pickFiles({ accept: '.ics,text/calendar' });
+                  if (files) {
+                    importICS(files);
+                    return;
+                  }
+                  document.getElementById('import-ics-input')?.click();
+                }}
+              >
+                <Import class="mr-2 h-4 w-4" />
+                <span>Import Calendar</span>
+              </DropdownMenu.Item>
+            </DropdownMenu.Content>
+          </DropdownMenu.Root>
+        {/if}
         <input
           id="import-ics-input"
           type="file"
@@ -2881,9 +2928,6 @@
           onchange={importICS}
           class="hidden"
         />
-        <Button onclick={() => openNewEvent(new Date())} disabled={!activeCalendar()}>
-          + New Event
-        </Button>
       </div>
     </div>
 
@@ -2945,15 +2989,12 @@
             <Label>Calendar</Label>
             <Select.Root
               type="single"
-              value={{
-                value: newEvent.calendarId,
-                label: getCalendarLabel(getCalendarById(newEvent.calendarId)) as string,
-              }}
+              value={newEvent.calendarId}
               onValueChange={(v) => {
                 if (v) {
-                  newEvent.calendarId = v.value;
+                  newEvent.calendarId = v;
                   modalDirty = true;
-                  setActiveCalendarId(v.value);
+                  setActiveCalendarId(v);
                 }
               }}
             >
@@ -3250,15 +3291,12 @@
             <Label>Calendar</Label>
             <Select.Root
               type="single"
-              value={{
-                value: editEvent.calendarId,
-                label: getCalendarLabel(getCalendarById(editEvent.calendarId)) as string,
-              }}
+              value={editEvent.calendarId}
               onValueChange={(v) => {
                 if (v) {
-                  editEvent.calendarId = v.value;
+                  editEvent.calendarId = v;
                   modalDirty = true;
-                  setActiveCalendarId(v.value);
+                  setActiveCalendarId(v);
                 }
               }}
             >

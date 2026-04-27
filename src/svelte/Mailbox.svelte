@@ -8778,11 +8778,13 @@
     height: 100%;
   }
 
-  /* Folders sidebar */
-  :global(.fe-mailbox-shell.fe-layout-productivity .fe-folders) {
-    width: var(--fe-sidebar-width, 280px);
-    flex-shrink: 0;
-    position: relative;
+  /* Folders sidebar (desktop productivity layout only — mobile uses fixed drawer in mailbox.css) */
+  @media (min-width: 821px) {
+    :global(.fe-mailbox-shell.fe-layout-productivity .fe-folders) {
+      width: var(--fe-sidebar-width, 280px);
+      flex-shrink: 0;
+      position: relative;
+    }
   }
 
   /* Messages list panel */
