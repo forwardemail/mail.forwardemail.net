@@ -109,6 +109,121 @@ Signing is automatic when secrets are configured. Without secrets, builds are un
 
 See [SECRETS.md](./SECRETS.md) for the full list of required secrets, [desktop-ci-secrets.md](./desktop-ci-secrets.md) for desktop signing setup, and [ios-setup.md](./ios-setup.md) for the iOS signing and TestFlight flow.
 
+## Tauri Pre-Release Checks
+
+Tauri v2 has a handful of platform-specific bugs that are easy to ship past in
+`tauri dev` and only show up in signed/notarized production builds. Run through
+this list before promoting a draft GitHub release.
+
+### macOS — App Sandbox + updater smoke test
+
+The macOS bundle has `com.apple.security.app-sandbox = true` with
+`com.apple.security.network.client = true` granted (`src-tauri/Entitlements.plist`).
+Without that network entitlement, the App Sandbox blocks every outbound
+request in production builds — including the updater check — even though
+everything works in `tauri dev` (tauri-apps/tauri#13878).
+
+Smoke test, on a notarized signed build (not `tauri dev`):
+
+1. Install the signed `.dmg` from the draft release.
+2. Open Console.app → filter for "Forward Email".
+3. Launch the app. Confirm:
+   - The updater check fires and either reports "up to date" or surfaces a new
+     version prompt — not a network error.
+   - The login flow reaches `api.forwardemail.net` (sign in with a test
+     account).
+4. If outbound traffic is silently failing, re-check `Entitlements.plist`
+   ships in the bundle (`codesign -d --entitlements - /Applications/Forward\ Email.app`).
+
+### Windows — `mailto:` handler smoke test
+
+Windows ships both NSIS (`-setup.exe`) and MSI installers. The deep-link
+plugin's compile-time scheme registration only works with MSI on Windows
+(tauri-apps/plugins-workspace#10095) — so we register `mailto:` at runtime via
+direct registry mutation in `set_default_mailto_handler` (`src-tauri/src/lib.rs`).
+
+Smoke test, on a fresh Windows 11 VM (don't reuse a dev machine — stale
+registry entries from prior installs hide the bug):
+
+1. Install via `-setup.exe` (NSIS).
+2. Launch the app, sign in.
+3. Settings → make Forward Email the default mail handler. Accept the
+   Windows Settings prompt that pops.
+4. Open `cmd` and run `start mailto:test@example.com`. Confirm:
+   - Forward Email comes to the foreground.
+   - The compose window opens pre-populated with `test@example.com` in the
+     To field.
+5. Repeat with a single-instance test: with the app already open, run the
+   `start mailto:` command again. Confirm a new compose window opens in the
+   existing instance, not a second app process.
+
+If step 4 silently does nothing, the runtime registry write isn't taking — fall
+back to MSI (`.msi`) and reproduce there before shipping.
+
+### Updater endpoint resilience
+
+The updater pulls its manifest from a single GitHub URL
+(`tauri.conf.json` → `plugins.updater.endpoints`):
+
+```
+https://github.com/forwardemail/mail.forwardemail.net/releases/latest/download/latest.json
+```
+
+GitHub's redirect chain has historically returned 401s/403s for some
+clients (tauri-apps/tauri#2579 lineage). To add resilience, host a mirror of
+`latest.json` at a stable URL on `forwardemail.net` infra (e.g. a Cloudflare
+Worker or static R2/S3 object) and add it as a second entry in `endpoints`:
+
+```json
+"endpoints": [
+  "https://releases.forwardemail.net/latest.json",
+  "https://github.com/forwardemail/mail.forwardemail.net/releases/latest/download/latest.json"
+]
+```
+
+Tauri tries each endpoint in order and falls through on network or non-200
+errors — so the self-hosted mirror becomes primary, the GitHub URL is the
+backstop.
+
+The mirror needs to publish the same manifest JSON the desktop release
+workflow already produces; the simplest path is a CI job that re-uploads
+`latest.json` to the mirror after the GitHub release is published.
+
+### Antivirus reputation (Windows)
+
+Authenticode signing alone doesn't suppress every Windows Defender / third-party
+AV false-positive against WebView2 binaries (tauri-apps/wry#2486). On each
+release, proactively submit the new `-setup.exe` and `.msi` to:
+
+- Microsoft Defender — https://www.microsoft.com/wdsi/filesubmission (mark as
+  "incorrectly detected as malware").
+- Major third-party AV vendors that have one-shot false-positive forms
+  (Avast/AVG, Bitdefender, Kaspersky, ESET).
+
+Reputation builds over weeks, so submitting on each release is more useful
+than batching after user reports.
+
+### Linux — webkit2gtk version
+
+`tauri.conf.json` declares `libwebkit2gtk-4.1-0` as the deb dependency. Don't
+drop back to `4.0` — it's no longer in Ubuntu 24 / Debian 13 repos
+(tauri-apps/wry#9662). When testing the AppImage, use a fresh Ubuntu 24 VM
+(not Ubuntu 22) so we catch any 4.1 incompatibilities before users do.
+
+### Known limitations (document, don't fix)
+
+- **ChromeOS Android intent filter** (tauri-apps/plugins-workspace#3207): deep
+  links don't fire for ChromeOS users running our Android build. Niche; no
+  upstream fix yet.
+- **Notification plugin on Android** (tauri-apps/plugins-workspace#2341): the
+  `cancelAll`, `pending`, `active`, and `channels` APIs are broken. Don't add
+  call sites for any of them — `notification-bridge.js` already avoids them
+  and logs explicitly when channel creation fails on Android.
+- **macOS WKWebView pinned to OS version**: users on old macOS get old WebKit.
+  We currently set `bundle.macOS.minimumSystemVersion = "10.15"`. Bumping to
+  `11.0` would drop Catalina users in exchange for fewer JS-feature edge
+  cases — defer until telemetry shows Catalina usage is negligible.
+
 ## Related Documentation
 
 - [SECRETS.md](./SECRETS.md) — Required secrets for CI/CD and release signing
