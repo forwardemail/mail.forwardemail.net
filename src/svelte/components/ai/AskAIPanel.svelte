@@ -70,6 +70,21 @@
   let activeFeature = $state<AIFeature>('summarize');
   let includeContext = $state(true);
 
+  // Mobile bottom-sheet support. We track the layout viewport (resize) and the
+  // visual viewport (keyboard) separately — `visualViewport.height` shrinks
+  // when the on-screen keyboard opens, which we use to pin the panel above it
+  // instead of letting `max-h-[85vh]` (layout-viewport-relative) hide the
+  // output area behind the keys.
+  const MOBILE_BREAKPOINT = 640;
+  let viewportWidth = $state(typeof window !== 'undefined' ? window.innerWidth : 1200);
+  let visualViewportHeight = $state(
+    typeof window !== 'undefined' ? (window.visualViewport?.height ?? window.innerHeight) : 800,
+  );
+  const isMobile = $derived(viewportWidth <= MOBILE_BREAKPOINT);
+  // Chips/scope/repos are noisy on a phone — collapse by default and let the
+  // user reveal them. Desktop keeps the expanded form so nothing changes.
+  let chipsCollapsed = $state(true);
+
   let currentMessage = $state<Message | null>(null);
   let currentBody = $state<string>('');
   let currentAttachments = $state<unknown[]>([]);
@@ -114,6 +129,23 @@
     unsubBody();
     unsubAtts();
     unsubIntent();
+  });
+
+  // Track viewport changes only while the panel is open. The visualViewport
+  // listener is what keeps the panel above the on-screen keyboard on mobile.
+  $effect(() => {
+    if (!open || typeof window === 'undefined') return;
+    const onResize = () => {
+      viewportWidth = window.innerWidth;
+      visualViewportHeight = window.visualViewport?.height ?? window.innerHeight;
+    };
+    onResize();
+    window.addEventListener('resize', onResize);
+    window.visualViewport?.addEventListener('resize', onResize);
+    return () => {
+      window.removeEventListener('resize', onResize);
+      window.visualViewport?.removeEventListener('resize', onResize);
+    };
   });
 
   const applyPresetById = (id: AIPanelPreset) => {
@@ -728,7 +760,7 @@
 <button
   type="button"
   onclick={toggle}
-  class="fixed bottom-4 right-4 z-[120] flex h-12 w-12 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-lg transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+  class="ai-fab fixed right-4 z-[120] flex h-12 w-12 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-lg transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
   aria-label={open ? 'Close Ask AI' : 'Open Ask AI'}
   title="Ask AI (preview)"
 >
@@ -740,14 +772,18 @@
 </button>
 
 {#if open}
-  <!-- Dim the rest of the screen so the panel is unmistakable when it opens -->
+  <!-- Dim the rest of the screen so the panel is unmistakable when it opens.
+       Heavier dim on mobile because the sheet is a true modal there. -->
   <div
-    class="fixed inset-0 z-[110] bg-black/10"
+    class="fixed inset-0 z-[110] {isMobile ? 'bg-black/40' : 'bg-black/10'}"
     onclick={() => (open = false)}
     role="presentation"
   ></div>
   <div
-    class="ai-panel-enter fixed bottom-[4.5rem] right-4 z-[120] flex max-h-[min(85vh,48rem)] w-[min(32rem,calc(100vw-2rem))] flex-col overflow-hidden rounded-lg border-2 border-primary/40 bg-background shadow-2xl"
+    class="ai-panel-enter fixed z-[120] flex flex-col overflow-hidden border-primary/40 bg-background shadow-2xl {isMobile
+      ? 'inset-x-0 bottom-0 rounded-t-xl border-t-2 ai-sheet-mobile'
+      : 'bottom-[4.5rem] right-4 max-h-[min(85vh,48rem)] w-[min(32rem,calc(100vw-2rem))] rounded-lg border-2'}"
+    style={isMobile ? `max-height: ${Math.min(visualViewportHeight - 16, 720)}px` : undefined}
   >
     <div class="flex items-center justify-between border-b px-4 py-2">
       <div class="flex items-center gap-2 text-sm font-medium">
@@ -767,14 +803,21 @@
       </button>
     </div>
 
-    <!-- Preset row -->
-    <div class="flex flex-wrap gap-1 border-b px-3 py-2">
+    <!-- Preset row. On mobile we scroll horizontally so all presets stay on
+         one line; on desktop we keep the wrap so nothing is hidden. -->
+    <div
+      class="border-b px-3 py-2 {isMobile
+        ? 'flex flex-nowrap gap-1.5 overflow-x-auto'
+        : 'flex flex-wrap gap-1'}"
+    >
       {#each PRESETS as preset (preset.label)}
         {@const Icon = preset.icon}
         <button
           type="button"
           onclick={() => applyPreset(preset)}
-          class="flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs hover:bg-muted"
+          class="flex flex-none items-center gap-1 rounded-full border text-xs hover:bg-muted {isMobile
+            ? 'px-3 py-2'
+            : 'px-2.5 py-1'}"
         >
           <Icon class="h-3 w-3" />
           {preset.label}
@@ -782,8 +825,39 @@
       {/each}
     </div>
 
-    <!-- Scope + context chip -->
-    <div class="space-y-1 border-b bg-muted/30 px-3 py-1.5 text-xs">
+    <!-- Scope + context chip. On mobile this whole block collapses behind a
+         single-line summary so the user can see the output without scrolling
+         past four rows of chips first. -->
+    {#if isMobile}
+      <button
+        type="button"
+        onclick={() => (chipsCollapsed = !chipsCollapsed)}
+        class="flex w-full items-center justify-between border-b bg-muted/30 px-3 py-2 text-xs"
+        aria-expanded={!chipsCollapsed}
+      >
+        <span class="flex items-center gap-2 truncate">
+          <span class="rounded bg-primary/10 px-1.5 py-0.5 font-medium text-primary">
+            {scope.kind === 'thread'
+              ? 'Thread'
+              : scope.kind === 'mailbox'
+                ? 'Mailbox'
+                : 'Participants'}
+          </span>
+          {#if context.hasContext && includeContext}
+            <span class="truncate text-muted-foreground">{context.chip}</span>
+          {/if}
+          {#if attachedRepos.length > 0}
+            <span class="text-muted-foreground">· {attachedRepos.length} repo</span>
+          {/if}
+        </span>
+        <span class="text-muted-foreground">{chipsCollapsed ? 'Options ▾' : 'Hide ▴'}</span>
+      </button>
+    {/if}
+    <div
+      class="space-y-1 border-b bg-muted/30 px-3 py-1.5 text-xs {isMobile && chipsCollapsed
+        ? 'hidden'
+        : ''}"
+    >
       <div class="flex flex-wrap items-center gap-2">
         <span
           class="rounded bg-primary/10 px-1.5 py-0.5 font-medium text-primary"
@@ -1132,6 +1206,34 @@
     to {
       transform: translateY(0) scale(1);
       opacity: 1;
+    }
+  }
+  /* FAB sits inside the safe-area inset on devices with home indicators
+     (iOS, Android gesture nav) so it isn't half-hidden behind it. */
+  .ai-fab {
+    bottom: calc(1rem + env(safe-area-inset-bottom, 0px));
+  }
+  /* Bottom sheet on mobile: slide-up animation, safe-area padding, and a
+     drag-handle visual so it reads as a sheet, not a floating card. */
+  .ai-sheet-mobile {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    animation: aiSheetEnter 200ms ease-out;
+  }
+  .ai-sheet-mobile::before {
+    content: '';
+    display: block;
+    width: 40px;
+    height: 4px;
+    border-radius: 2px;
+    background: hsl(var(--muted-foreground, 0 0% 60%) / 0.4);
+    margin: 8px auto 4px;
+  }
+  @keyframes aiSheetEnter {
+    from {
+      transform: translateY(100%);
+    }
+    to {
+      transform: translateY(0);
     }
   }
 </style>
