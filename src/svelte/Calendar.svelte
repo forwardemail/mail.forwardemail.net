@@ -26,6 +26,7 @@
   import * as Select from '$lib/components/ui/select';
   import * as Tooltip from '$lib/components/ui/tooltip';
   import { Separator } from '$lib/components/ui/separator';
+  import TasksList from './components/TasksList.svelte';
   import ChevronLeft from '@lucide/svelte/icons/chevron-left';
   import ChevronDown from '@lucide/svelte/icons/chevron-down';
   import ChevronRight from '@lucide/svelte/icons/chevron-right';
@@ -38,6 +39,8 @@
   import CalendarIcon from '@lucide/svelte/icons/calendar';
   import Plus from '@lucide/svelte/icons/plus';
   import MoreVertical from '@lucide/svelte/icons/more-vertical';
+  import Check from '@lucide/svelte/icons/check';
+  import X from '@lucide/svelte/icons/x';
 
   interface ToastApi {
     show?: (message: string, type?: string) => void;
@@ -273,6 +276,7 @@
   let showEditEndPicker = $state(false);
   let optionalFieldsExpanded = $state(false);
   let filterMenuOpen = $state(false);
+  let calendarsModalOpen = $state(false);
   let newCalendarModal = $state(false);
   let newCalendarName = $state('');
   let newCalendarColor = $state('#1c7ed6');
@@ -305,6 +309,9 @@
     timezone: '',
     attendees: '',
     notify: 0,
+    componentType: 'VEVENT' as 'VEVENT' | 'VTODO',
+    hasDate: true,
+    hasTime: true,
     _editingRawDescription: false,
   });
 
@@ -328,6 +335,8 @@
     status: '',
     completedAt: '',
     percentComplete: 0,
+    hasDate: true,
+    hasTime: true,
     _editingRawDescription: false,
   });
 
@@ -1098,6 +1107,9 @@
       timezone,
       attendees,
       notify,
+      componentType: 'VEVENT',
+      hasDate: true,
+      hasTime: true,
       _editingRawDescription: false,
     };
     editEventModal = false;
@@ -1674,9 +1686,9 @@
     applyCalendarHashSelection();
   };
 
-  const openDeleteCalendarModal = () => {
-    const calendar = activeCalendar();
-    const calendarId = resolveActiveCalendarId();
+  const openDeleteCalendarModal = (calendarIdParam?: string) => {
+    const calendarId = calendarIdParam || resolveActiveCalendarId();
+    const calendar = calendarIdParam ? getCalendarById(calendarIdParam) : activeCalendar();
     if (!calendar || !calendarId) {
       toasts?.show?.('Select a calendar to delete.', 'error');
       return;
@@ -1956,6 +1968,37 @@
       : events,
   );
 
+  let currentSection = $state<'calendar' | 'tasks'>('calendar');
+
+  const tasksList = $derived.by(() => {
+    const list = events.filter((ev) => {
+      const task = ev as Record<string, unknown>;
+      if (!isTaskEvent(task)) return false;
+      if ($hideCompletedTodos && isCompletedTask(task)) return false;
+      return true;
+    });
+    return list.slice().sort((a, b) => {
+      const ar = a as Record<string, unknown>;
+      const br = b as Record<string, unknown>;
+      const aDone = isCompletedTask(ar) ? 1 : 0;
+      const bDone = isCompletedTask(br) ? 1 : 0;
+      if (aDone !== bDone) return aDone - bDone;
+      const aDue = (ar.end || ar.start) as string | undefined;
+      const bDue = (br.end || br.start) as string | undefined;
+      if (!aDue && !bDue) return 0;
+      if (!aDue) return 1;
+      if (!bDue) return -1;
+      return new Date(aDue).getTime() - new Date(bDue).getTime();
+    });
+  });
+
+  const resolveTaskColor = (task: Record<string, unknown>) => {
+    const calId = String(task.calendarId || task.calendar_id || '');
+    const idx = calendars.findIndex((c) => getCalendarId(c) === calId);
+    if (idx === -1) return calendarColorPalette[0];
+    return resolveCalendarColor(calendars[idx], idx);
+  };
+
   let lastEventCount = -1;
   let calendarCreated = false;
   $effect(() => {
@@ -2055,7 +2098,7 @@
     return { start, end };
   };
 
-  const openNewEvent = (dateInput: unknown) => {
+  const openNewEvent = (dateInput: unknown, opts: { componentType?: 'VEVENT' | 'VTODO' } = {}) => {
     const calendar = ensureEventCalendarSelected();
     if (!calendar) return;
 
@@ -2069,6 +2112,7 @@
     const endTimePart = formatDateTimeLocal(endDate).split('T')[1];
     const startSplit = to12Hour(timePart);
     const endSplit = to12Hour(endTimePart);
+    const componentType = opts.componentType || 'VEVENT';
 
     newEvent = {
       calendarId: getCalendarId(calendar),
@@ -2085,6 +2129,9 @@
       timezone: '',
       attendees: '',
       notify: 0,
+      componentType,
+      hasDate: componentType !== 'VTODO',
+      hasTime: componentType !== 'VTODO',
       _editingRawDescription: false,
     };
     optionalFieldsExpanded = false;
@@ -2097,9 +2144,11 @@
     modalDirty = false;
     lastDurationMinutes = 60;
     titleError = '';
-    announceModal('New event dialog opened');
+    announceModal(componentType === 'VTODO' ? 'New task dialog opened' : 'New event dialog opened');
     focusTitleInput();
   };
+
+  const openNewTask = (dateInput: unknown) => openNewEvent(dateInput, { componentType: 'VTODO' });
 
   const handleTitleBlur = () => {
     applyParsedTitle();
@@ -2149,6 +2198,7 @@
 
   const isNewEventValid = $derived.by(() => {
     const hasTitle = !!newEvent.title?.trim();
+    if (newEvent.componentType === 'VTODO') return hasTitle;
     const hasDate = !!newEvent.date;
     const hasTimes = newEvent.allDay || (!!newEvent.startTime && !!newEvent.endTime);
     return hasTitle && hasDate && hasTimes;
@@ -2193,6 +2243,9 @@
       timezone: '',
       attendees: '',
       notify: 0,
+      componentType: 'VEVENT',
+      hasDate: true,
+      hasTime: true,
       _editingRawDescription: false,
     };
     newEventModal = true;
@@ -2205,7 +2258,8 @@
   };
 
   const saveNewEvent = async () => {
-    const title = newEvent.title?.trim() || 'Event';
+    const isTodo = newEvent.componentType === 'VTODO';
+    const title = newEvent.title?.trim() || (isTodo ? 'Task' : 'Event');
 
     const calendarId = newEvent.calendarId || resolveActiveCalendarId();
     const calendar = getCalendarById(calendarId);
@@ -2218,7 +2272,7 @@
       return;
     }
 
-    if (!newEvent.date) {
+    if (!isTodo && !newEvent.date) {
       setError('Date is required.');
       return;
     }
@@ -2227,9 +2281,20 @@
     const resolvedCalendarId = getCalendarId(calendar);
 
     try {
-      let range;
+      let range: { start: Date; end: Date } | null = null;
 
-      if (newEvent.allDay) {
+      if (isTodo) {
+        if (newEvent.hasDate && newEvent.date) {
+          if (newEvent.hasTime && newEvent.startTime && newEvent.startMeridiem) {
+            const start24 = to24Hour(newEvent.startTime, newEvent.startMeridiem);
+            const dt = new Date(`${newEvent.date}T${start24}:00`);
+            range = { start: dt, end: dt };
+          } else {
+            const dt = new Date(`${newEvent.date}T00:00:00`);
+            range = { start: dt, end: dt };
+          }
+        }
+      } else if (newEvent.allDay) {
         const startDate = new Date(newEvent.date);
         startDate.setHours(0, 0, 0, 0);
         const endDate = new Date(newEvent.date);
@@ -2251,18 +2316,31 @@
       }
 
       const { description, location, url, timezone, attendees, notify, allDay } = newEvent;
+      const startISO = range ? range.start.toISOString() : '';
+      const endISO = range ? range.end.toISOString() : '';
 
-      const icalData = generateICalEvent({
-        summary: title,
-        description: description || '',
-        location: location || '',
-        url: url || '',
-        timezone: timezone || '',
-        attendees: attendees || '',
-        start: range.start.toISOString(),
-        end: range.end.toISOString(),
-        reminder: Number(notify) || 0,
-      });
+      const icalData = isTodo
+        ? generateICalTodo({
+            summary: title,
+            description: description || '',
+            location: location || '',
+            url: url || '',
+            timezone: timezone || '',
+            start: startISO,
+            due: endISO,
+            status: 'NEEDS-ACTION',
+          })
+        : generateICalEvent({
+            summary: title,
+            description: description || '',
+            location: location || '',
+            url: url || '',
+            timezone: timezone || '',
+            attendees: attendees || '',
+            start: startISO,
+            end: endISO,
+            reminder: Number(notify) || 0,
+          });
 
       const payload = { calendar_id: resolvedCalendarId, ical: icalData };
       const created = (await Remote.request('CalendarEventCreate', payload, {
@@ -2271,8 +2349,8 @@
       const createdEvent = {
         id: created?.id || created?.uid || created?.event_id || `${Date.now()}`,
         title,
-        start: range.start.toISOString(),
-        end: range.end.toISOString(),
+        start: startISO,
+        end: endISO,
         calendarId: resolvedCalendarId,
         description,
         location,
@@ -2280,6 +2358,8 @@
         timezone,
         attendees,
         notify: Number(notify) || 0,
+        componentType: newEvent.componentType,
+        ...(isTodo ? { status: 'NEEDS-ACTION', percentComplete: 0, completedAt: '' } : {}),
         raw: created ? JSON.parse(JSON.stringify(created)) : null,
       };
       allEvents = [...allEvents, createdEvent];
@@ -2289,7 +2369,7 @@
       newEventModal = false;
       modalDirty = false;
       setError('');
-      setSuccess('Event created successfully');
+      setSuccess(isTodo ? 'Task created successfully' : 'Event created successfully');
 
       // Cache in background (don't block on this) - sanitize to avoid postMessage clone errors
       const eventsToCache = sanitizeForWorker(
@@ -2317,8 +2397,8 @@
           .catch((e) => console.warn('[Calendar] Failed to cache all events:', e));
       }
 
-      // Queue invites in background
-      if (attendees && attendees.trim()) {
+      // Queue invites in background (events only — tasks have no attendees and may have no range)
+      if (range && attendees && attendees.trim()) {
         queueEventInvites({
           title,
           start: range.start,
@@ -2366,6 +2446,12 @@
     const datePart = startLocal.split('T')[0];
     const startSplit = to12Hour(startLocal.split('T')[1]);
     const endSplit = to12Hour(endLocal.split('T')[1]);
+    const componentType = firstNonEmptyString(fullEvent.componentType, 'VEVENT').toUpperCase();
+    const isTodo = componentType === 'VTODO';
+    const hasValidDate = !!datePart && !Number.isNaN(startDate.getTime());
+    const editHasDate = isTodo ? hasValidDate : true;
+    const startHHMM = startLocal.split('T')[1] || '';
+    const editHasTime = isTodo ? hasValidDate && startHHMM !== '00:00' : true;
     editEvent = {
       id: fullEvent.id as string,
       calendarId: (fullEvent.calendarId ||
@@ -2384,10 +2470,12 @@
       timezone: (fullEvent.timezone as string) || '',
       attendees: (fullEvent.attendees as string) || '',
       notify: (fullEvent.notify as number) || 0,
-      componentType: firstNonEmptyString(fullEvent.componentType, 'VEVENT').toUpperCase(),
+      componentType,
       status: firstNonEmptyString(fullEvent.status),
       completedAt: firstNonEmptyString(fullEvent.completedAt),
       percentComplete: Number(fullEvent.percentComplete || 0),
+      hasDate: editHasDate,
+      hasTime: editHasTime,
       _editingRawDescription: false,
     };
     optionalFieldsExpanded = !!(
@@ -2403,10 +2491,7 @@
   };
 
   const updateEvent = async () => {
-    if (editEvent.componentType === 'VTODO') {
-      setError('Task editing is limited to marking the task complete.');
-      return;
-    }
+    const isTodo = editEvent.componentType === 'VTODO';
     const {
       id,
       calendarId,
@@ -2422,15 +2507,36 @@
       timezone,
       attendees,
       notify,
+      status,
+      completedAt,
+      percentComplete,
     } = editEvent;
-    if (!title || !date || !startTime || !endTime || !startMeridiem || !endMeridiem) {
-      setError('Title, date, and times are required.');
+    if (!title) {
+      setError(isTodo ? 'Title is required.' : 'Title, date, and times are required.');
       return;
     }
-    const range = ensureEndAfterStart(date, startTime, startMeridiem, endTime, endMeridiem);
-    if (!range) {
-      setError('End time must be after start time.');
-      return;
+    let range: { start: Date; end: Date } | null = null;
+    if (isTodo) {
+      if (editEvent.hasDate && date) {
+        if (editEvent.hasTime && startTime && startMeridiem) {
+          const start24 = to24Hour(startTime, startMeridiem);
+          const dt = new Date(`${date}T${start24}:00`);
+          range = { start: dt, end: dt };
+        } else {
+          const dt = new Date(`${date}T00:00:00`);
+          range = { start: dt, end: dt };
+        }
+      }
+    } else {
+      if (!date || !startTime || !endTime || !startMeridiem || !endMeridiem) {
+        setError('Title, date, and times are required.');
+        return;
+      }
+      range = ensureEndAfterStart(date, startTime, startMeridiem, endTime, endMeridiem);
+      if (!range) {
+        setError('End time must be after start time.');
+        return;
+      }
     }
     try {
       const previousCalendarId =
@@ -2440,18 +2546,34 @@
               ((ev as Record<string, unknown>).id || (ev as Record<string, unknown>).uid) === id,
           ) as Record<string, unknown> | undefined
         )?.calendarId || '';
-      const icalData = generateICalEvent({
-        summary: title,
-        description: description || '',
-        location: location || '',
-        url: url || '',
-        timezone: timezone || '',
-        attendees: attendees || '',
-        start: range.start.toISOString(),
-        end: range.end.toISOString(),
-        uid: id,
-        reminder: Number(notify) || 0,
-      });
+      const startISO = range ? range.start.toISOString() : '';
+      const endISO = range ? range.end.toISOString() : '';
+      const icalData = isTodo
+        ? generateICalTodo({
+            summary: title,
+            description: description || '',
+            location: location || '',
+            url: url || '',
+            timezone: timezone || '',
+            start: startISO,
+            due: endISO,
+            uid: id,
+            status: status || 'NEEDS-ACTION',
+            completedAt: completedAt || '',
+            percentComplete: Number(percentComplete) || 0,
+          })
+        : generateICalEvent({
+            summary: title,
+            description: description || '',
+            location: location || '',
+            url: url || '',
+            timezone: timezone || '',
+            attendees: attendees || '',
+            start: startISO,
+            end: endISO,
+            uid: id,
+            reminder: Number(notify) || 0,
+          });
       const payload = { id, calendar_id: calendarId, ical: icalData };
       await Remote.request('CalendarEventUpdate', payload, {
         method: 'PUT',
@@ -2462,8 +2584,8 @@
           ? {
               ...ev,
               title,
-              start: range.start.toISOString(),
-              end: range.end.toISOString(),
+              start: startISO,
+              end: endISO,
               calendarId,
               description,
               location,
@@ -2471,6 +2593,13 @@
               timezone,
               attendees,
               notify: Number(notify) || 0,
+              ...(isTodo
+                ? {
+                    status: status || 'NEEDS-ACTION',
+                    completedAt: completedAt || '',
+                    percentComplete: Number(percentComplete) || 0,
+                  }
+                : {}),
             }
           : ev,
       );
@@ -2478,7 +2607,7 @@
 
       // Close modal immediately after successful API call
       setError('');
-      setSuccess('Event updated successfully');
+      setSuccess(isTodo ? 'Task updated successfully' : 'Event updated successfully');
       editEventModal = false;
 
       // Cache in background (don't block on this) - sanitize to avoid postMessage clone errors
@@ -2525,21 +2654,25 @@
     }
   };
 
-  const completeTask = async () => {
-    const task = findCalendarItemById(editEvent.id);
+  const setTaskCompletion = async (
+    taskOverride: Record<string, unknown> | undefined,
+    completed: boolean,
+  ) => {
+    const task = taskOverride || findCalendarItemById(editEvent.id);
     if (!task || !isTaskEvent(task)) {
       setError('No task selected.');
       return;
     }
-    if (isCompletedTask(task)) {
-      toasts?.show?.('Task is already completed', 'info');
-      return;
-    }
+    const alreadyDone = isCompletedTask(task);
+    if (completed && alreadyDone) return;
+    if (!completed && !alreadyDone) return;
     const calendarId = (task.calendarId ||
       task.calendar_id ||
-      editEvent.calendarId ||
+      (taskOverride ? '' : editEvent.calendarId) ||
       resolveActiveCalendarId()) as string;
-    const completedAt = new Date().toISOString();
+    const completedAt = completed ? new Date().toISOString() : '';
+    const status = completed ? 'COMPLETED' : 'NEEDS-ACTION';
+    const percentComplete = completed ? 100 : 0;
     try {
       const icalData = generateICalTodo({
         summary: (task.title as string) || 'Task',
@@ -2550,9 +2683,9 @@
         start: (task.start as string) || '',
         due: (task.end as string) || (task.start as string) || '',
         uid: (task.id as string) || editEvent.id,
-        status: 'COMPLETED',
+        status,
         completedAt,
-        percentComplete: 100,
+        percentComplete,
       });
       await Remote.request(
         'CalendarEventUpdate',
@@ -2561,21 +2694,13 @@
       );
       allEvents = allEvents.map((ev) =>
         (ev as Record<string, unknown>).id === task.id
-          ? {
-              ...ev,
-              status: 'COMPLETED',
-              completedAt,
-              percentComplete: 100,
-            }
+          ? { ...ev, status, completedAt, percentComplete }
           : ev,
       );
       applySelectedEvents();
-      editEvent = {
-        ...editEvent,
-        status: 'COMPLETED',
-        completedAt,
-        percentComplete: 100,
-      };
+      if (editEvent.id === (task.id as string)) {
+        editEvent = { ...editEvent, status, completedAt, percentComplete };
+      }
       db.meta
         .put({
           key: getEventsCacheKey(getAccountKey(), calendarId),
@@ -2599,11 +2724,19 @@
           .catch((e) => console.warn('[Calendar] Failed to cache all events:', e));
       }
       setError('');
-      toasts?.show?.('Task completed', 'success');
+      toasts?.show?.(completed ? 'Task completed' : 'Task reopened', 'success');
     } catch (err) {
-      setError((err as Error)?.message || 'Unable to complete task.');
+      setError(
+        (err as Error)?.message ||
+          (completed ? 'Unable to complete task.' : 'Unable to reopen task.'),
+      );
     }
   };
+
+  const completeTask = (taskOverride?: Record<string, unknown>) =>
+    setTaskCompletion(taskOverride, true);
+  const uncompleteTask = (taskOverride?: Record<string, unknown>) =>
+    setTaskCompletion(taskOverride, false);
 
   const deleteEvent = async () => {
     const { id, calendarId } = editEvent;
@@ -2715,6 +2848,96 @@
     editEvent = { ...editEvent, [field]: value };
   };
 
+  const getCurrentScheduleXView = (): string => {
+    const app = (calendarInstance as unknown as { $app?: Record<string, unknown> })?.$app;
+    const calendarState = app?.calendarState as { view?: { value?: string } } | undefined;
+    return calendarState?.view?.value || '';
+  };
+
+  const getCurrentScheduleXRangeStart = (): Date | null => {
+    const app = (calendarInstance as unknown as { $app?: Record<string, unknown> })?.$app;
+    const calendarState = app?.calendarState as
+      | { range?: { value?: { start?: string } } }
+      | undefined;
+    const start = calendarState?.range?.value?.start;
+    if (!start) return null;
+    const datePart = String(start).split(' ')[0];
+    const [y, m, d] = datePart.split('-').map(Number);
+    if (!y || !m || !d) return null;
+    return new Date(y, m - 1, d);
+  };
+
+  const navigateSchedulePeriod = (direction: 'prev' | 'next') => {
+    const app = (calendarInstance as unknown as { $app?: Record<string, unknown> })?.$app;
+    const calendarState = app?.calendarState as { setRange?: (date: string) => void } | undefined;
+    if (!calendarState?.setRange) return;
+    const view = getCurrentScheduleXView();
+    const anchor = getCurrentScheduleXRangeStart();
+    if (!anchor) return;
+    const sign = direction === 'next' ? 1 : -1;
+    const target = new Date(anchor);
+    if (view === 'day') {
+      target.setDate(target.getDate() + sign);
+    } else if (view === 'month-grid') {
+      target.setMonth(target.getMonth() + sign);
+    } else {
+      target.setDate(target.getDate() + 7 * sign);
+    }
+    const y = target.getFullYear();
+    const m = String(target.getMonth() + 1).padStart(2, '0');
+    const d = String(target.getDate()).padStart(2, '0');
+    calendarState.setRange(`${y}-${m}-${d}`);
+  };
+
+  let swipeStartX = 0;
+  let swipeStartY = 0;
+  let swipeActive = false;
+  const SWIPE_THRESHOLD_PX = 60;
+  const SWIPE_HORIZONTAL_DEADZONE =
+    '.sx__time-grid-event, .sx__month-grid-event, .sx__date-grid-event, ' +
+    '.time-dropdown, [role="dialog"], [data-dropdown], input, select, button';
+
+  const isCalendarModalOpen = () =>
+    newEventModal || editEventModal || showDeleteConfirm || newCalendarModal || deleteCalendarModal;
+
+  const onCalendarTouchStart = (e: TouchEvent) => {
+    if (isCalendarModalOpen()) return;
+    if (!e.touches || e.touches.length !== 1) return;
+    const target = e.target as HTMLElement | null;
+    if (target?.closest?.(SWIPE_HORIZONTAL_DEADZONE)) return;
+    swipeStartX = e.touches[0].clientX;
+    swipeStartY = e.touches[0].clientY;
+    swipeActive = false;
+  };
+
+  const onCalendarTouchMove = (e: TouchEvent) => {
+    if (!e.touches || e.touches.length !== 1 || !swipeStartX) return;
+    const dx = e.touches[0].clientX - swipeStartX;
+    const dy = e.touches[0].clientY - swipeStartY;
+    if (!swipeActive && Math.abs(dx) > 15 && Math.abs(dx) > Math.abs(dy) * 2) {
+      swipeActive = true;
+    }
+  };
+
+  const onCalendarTouchEnd = (e: TouchEvent) => {
+    if (!swipeActive || !swipeStartX) {
+      swipeStartX = 0;
+      swipeStartY = 0;
+      swipeActive = false;
+      return;
+    }
+    const touch = e.changedTouches?.[0];
+    if (touch) {
+      const dx = touch.clientX - swipeStartX;
+      if (Math.abs(dx) > SWIPE_THRESHOLD_PX) {
+        navigateSchedulePeriod(dx > 0 ? 'prev' : 'next');
+      }
+    }
+    swipeStartX = 0;
+    swipeStartY = 0;
+    swipeActive = false;
+  };
+
   onMount(() => {
     hasMounted = true;
 
@@ -2811,116 +3034,86 @@
                 </Button>
               {/snippet}
             </DropdownMenu.Trigger>
-            <DropdownMenu.Content align="end" class="min-w-[220px] max-h-[280px] overflow-y-auto">
+            <DropdownMenu.Content align="end" class="min-w-[260px] max-h-[320px] overflow-y-auto">
               {#each calendars as cal, index}
                 {@const calId = getCalendarId(cal)}
                 {#if calId}
                   <DropdownMenu.CheckboxItem
                     checked={selectedCalendarIds.includes(calId as string)}
                     onCheckedChange={() => toggleCalendarSelection(calId as string)}
+                    closeOnSelect={false}
+                    class="pe-1"
                   >
                     <span
                       class="mr-2 h-2.5 w-2.5 shrink-0 rounded-full"
                       style="background: {resolveCalendarColor(cal, index)}"
                     ></span>
-                    <span class="truncate">{getCalendarLabel(cal)}</span>
+                    <span class="truncate flex-1">{getCalendarLabel(cal)}</span>
+                    <button
+                      type="button"
+                      class="ml-2 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                      aria-label="Delete {getCalendarLabel(cal)}"
+                      onpointerdown={(e) => e.stopPropagation()}
+                      onclick={(e) => {
+                        e.stopPropagation();
+                        e.preventDefault();
+                        openDeleteCalendarModal(calId as string);
+                      }}
+                    >
+                      <Trash2 class="h-3.5 w-3.5" />
+                    </button>
                   </DropdownMenu.CheckboxItem>
                 {/if}
               {/each}
-              {#if activeCalendar()}
-                <DropdownMenu.Separator />
-                <DropdownMenu.Item
-                  class="cursor-pointer text-destructive focus:text-destructive"
-                  onclick={openDeleteCalendarModal}
-                >
-                  <Trash2 class="mr-2 h-4 w-4" />
-                  <span>Delete {getCalendarLabel(activeCalendar())}</span>
-                </DropdownMenu.Item>
-              {/if}
             </DropdownMenu.Content>
           </DropdownMenu.Root>
         {/if}
-        {#if !isMobile}
-          <Button
-            variant="outline"
-            class="calendar-create-button gap-2"
-            aria-label="Create calendar"
-            onclick={() => {
-              filterMenuOpen = false;
-              newCalendarModal = true;
-            }}
-          >
-            <Plus class="h-4 w-4" />
-            <span class="hidden sm:inline">Create Calendar</span>
-          </Button>
-          <Tooltip.Root>
-            <Tooltip.Trigger>
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label="Import calendar"
-                class="import-menu"
-                onclick={async () => {
-                  const files = await pickFiles({ accept: '.ics,text/calendar' });
-                  if (files) {
-                    importICS(files);
-                    return;
-                  }
-                  document.getElementById('import-ics-input')?.click();
-                }}
-              >
-                <Import class="h-4 w-4" />
+        <DropdownMenu.Root>
+          <DropdownMenu.Trigger>
+            {#snippet child({ props })}
+              <Button variant="ghost" size="icon" aria-label="Calendar menu" {...props}>
+                <MoreVertical class="h-5 w-5" />
               </Button>
-            </Tooltip.Trigger>
-            <Tooltip.Content>
-              <p>Import calendar (.ics)</p>
-            </Tooltip.Content>
-          </Tooltip.Root>
-          <Button onclick={() => openNewEvent(new Date())} disabled={!activeCalendar()}>
-            + New Event
-          </Button>
-        {:else}
-          <DropdownMenu.Root>
-            <DropdownMenu.Trigger>
-              {#snippet child({ props })}
-                <Button variant="ghost" size="icon" aria-label="Calendar menu" {...props}>
-                  <MoreVertical class="h-5 w-5" />
-                </Button>
-              {/snippet}
-            </DropdownMenu.Trigger>
-            <DropdownMenu.Content align="end" class="min-w-[200px]">
-              <DropdownMenu.Item
-                disabled={!activeCalendar()}
-                onclick={() => openNewEvent(new Date())}
-              >
-                <Plus class="mr-2 h-4 w-4" />
-                <span>New Event</span>
-              </DropdownMenu.Item>
-              <DropdownMenu.Item
-                onclick={() => {
-                  filterMenuOpen = false;
-                  newCalendarModal = true;
-                }}
-              >
+            {/snippet}
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Content align="end" class="min-w-[200px]">
+            <DropdownMenu.Item
+              disabled={!activeCalendar()}
+              onclick={() => openNewEvent(new Date())}
+            >
+              <Plus class="mr-2 h-4 w-4" />
+              <span>New Event</span>
+            </DropdownMenu.Item>
+            {#if isMobile && calendars.length > 0}
+              <DropdownMenu.Item onclick={() => (calendarsModalOpen = true)}>
                 <CalendarIcon class="mr-2 h-4 w-4" />
-                <span>Create Calendar</span>
+                <span>Calendars</span>
               </DropdownMenu.Item>
-              <DropdownMenu.Item
-                onclick={async () => {
-                  const files = await pickFiles({ accept: '.ics,text/calendar' });
-                  if (files) {
-                    importICS(files);
-                    return;
-                  }
-                  document.getElementById('import-ics-input')?.click();
-                }}
-              >
-                <Import class="mr-2 h-4 w-4" />
-                <span>Import Calendar</span>
-              </DropdownMenu.Item>
-            </DropdownMenu.Content>
-          </DropdownMenu.Root>
-        {/if}
+            {/if}
+            <DropdownMenu.Item
+              onclick={() => {
+                filterMenuOpen = false;
+                newCalendarModal = true;
+              }}
+            >
+              <CalendarIcon class="mr-2 h-4 w-4" />
+              <span>Create Calendar</span>
+            </DropdownMenu.Item>
+            <DropdownMenu.Item
+              onclick={async () => {
+                const files = await pickFiles({ accept: '.ics,text/calendar' });
+                if (files) {
+                  importICS(files);
+                  return;
+                }
+                document.getElementById('import-ics-input')?.click();
+              }}
+            >
+              <Import class="mr-2 h-4 w-4" />
+              <span>Import Calendar</span>
+            </DropdownMenu.Item>
+          </DropdownMenu.Content>
+        </DropdownMenu.Root>
         <input
           id="import-ics-input"
           type="file"
@@ -2938,13 +3131,65 @@
       </Alert.Root>
     {/if}
 
+    <div class="flex items-center gap-1 border-b border-border px-4 pt-1 shrink-0">
+      <button
+        type="button"
+        class="px-3 py-2 text-sm font-medium border-b-2 transition-colors
+          {currentSection === 'calendar'
+          ? 'border-primary text-foreground'
+          : 'border-transparent text-muted-foreground hover:text-foreground'}"
+        onclick={() => (currentSection = 'calendar')}
+      >
+        Calendar
+      </button>
+      <button
+        type="button"
+        class="px-3 py-2 text-sm font-medium border-b-2 transition-colors
+          {currentSection === 'tasks'
+          ? 'border-primary text-foreground'
+          : 'border-transparent text-muted-foreground hover:text-foreground'}"
+        onclick={() => (currentSection = 'tasks')}
+      >
+        Tasks
+      </button>
+    </div>
+
     <div class="calendar-content flex-1 flex flex-col p-4 min-h-0">
       {#if loading}
         <div class="flex items-center justify-center h-64 text-muted-foreground">
           Loading calendar...
         </div>
+      {:else if currentSection === 'tasks'}
+        <div class="flex items-center justify-end pb-3 shrink-0">
+          <Button
+            size="sm"
+            variant="outline"
+            onclick={() => openNewTask(new Date())}
+            disabled={!activeCalendar()}
+          >
+            <Plus class="h-4 w-4 mr-1" />
+            New Task
+          </Button>
+        </div>
+        <div class="flex-1 overflow-y-auto" data-testid="tasks-list">
+          <TasksList
+            tasks={tasksList as Record[]}
+            onSelect={(task) => openEditEvent(task)}
+            onToggleComplete={(task) => setTaskCompletion(task, !isCompletedTask(task))}
+            {resolveTaskColor}
+            isCompleted={(task) => isCompletedTask(task)}
+          />
+        </div>
       {:else if calendarInstance}
-        <div class="sx-wrapper" class:is-dark={calendarIsDark} data-testid="calendar-ready">
+        <div
+          class="sx-wrapper"
+          class:is-dark={calendarIsDark}
+          data-testid="calendar-ready"
+          ontouchstart={onCalendarTouchStart}
+          ontouchmove={onCalendarTouchMove}
+          ontouchend={onCalendarTouchEnd}
+          ontouchcancel={onCalendarTouchEnd}
+        >
           <ScheduleXCalendar calendarApp={calendarInstance} />
         </div>
       {:else if calendarsLoaded && !calendars.length}
@@ -2981,7 +3226,7 @@
     <Dialog.Content class="sm:max-w-[520px]" onkeydown={handleModalKeydown}>
       <div class="sr-only" aria-live="polite" aria-atomic="true">{modalAnnouncement}</div>
       <Dialog.Header>
-        <Dialog.Title>New event</Dialog.Title>
+        <Dialog.Title>{newEvent.componentType === 'VTODO' ? 'New task' : 'New event'}</Dialog.Title>
       </Dialog.Header>
       <div class="space-y-4 py-4" bind:this={newEventModalRef} onfocusin={closeTimePickers}>
         {#if calendars.length > 1}
@@ -3031,34 +3276,98 @@
             <p class="text-xs text-destructive">{titleError}</p>
           {/if}
         </div>
-        <div class="grid grid-cols-2 gap-4">
-          <div class="space-y-2">
-            <Label for="event-date">Date</Label>
-            <Input
-              id="event-date"
-              type="date"
-              bind:value={newEvent.date}
-              onchange={() => (modalDirty = true)}
-            />
-          </div>
-          <div class="flex items-end pb-2">
-            <label class="flex items-center gap-2 cursor-pointer text-sm">
-              <Checkbox
-                checked={newEvent.allDay}
-                onCheckedChange={(v) => {
-                  newEvent.allDay = !!v;
+        {#if newEvent.componentType === 'VTODO'}
+          {#if !newEvent.hasDate}
+            <button
+              type="button"
+              class="text-sm font-medium text-muted-foreground hover:text-foreground"
+              onclick={() => {
+                newEvent.hasDate = true;
+                modalDirty = true;
+              }}
+            >
+              + Add due date
+            </button>
+          {:else}
+            <div class="space-y-2">
+              <Label for="event-date">Due date</Label>
+              <div class="flex items-center gap-2">
+                <Input
+                  id="event-date"
+                  type="date"
+                  class="flex-1"
+                  bind:value={newEvent.date}
+                  onchange={() => (modalDirty = true)}
+                />
+                <button
+                  type="button"
+                  class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
+                  aria-label="Remove due date"
+                  onclick={() => {
+                    newEvent.hasDate = false;
+                    newEvent.hasTime = false;
+                    modalDirty = true;
+                  }}
+                >
+                  <X class="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+            {#if !newEvent.hasTime}
+              <button
+                type="button"
+                class="text-sm font-medium text-muted-foreground hover:text-foreground"
+                onclick={() => {
+                  newEvent.hasTime = true;
                   modalDirty = true;
                 }}
-              />
-              <span>All-day</span>
-            </label>
-          </div>
-        </div>
-        {#if !newEvent.allDay}
-          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              >
+                + Add time
+              </button>
+            {/if}
+          {/if}
+        {:else}
+          <div class="grid grid-cols-2 gap-4">
             <div class="space-y-2">
-              <Label>Start time</Label>
-              <div class="flex gap-2">
+              <Label for="event-date">Date</Label>
+              <Input
+                id="event-date"
+                type="date"
+                bind:value={newEvent.date}
+                onchange={() => (modalDirty = true)}
+              />
+            </div>
+            <div class="flex items-end pb-2">
+              <label class="flex items-center gap-2 cursor-pointer text-sm">
+                <Checkbox
+                  checked={newEvent.allDay}
+                  onCheckedChange={(v) => {
+                    newEvent.allDay = !!v;
+                    modalDirty = true;
+                  }}
+                />
+                <span>All-day</span>
+              </label>
+            </div>
+          </div>
+        {/if}
+        {#if newEvent.componentType === 'VTODO' && newEvent.hasDate && newEvent.hasTime}
+          <div class="space-y-2">
+            <Label>Time</Label>
+            <div class="flex items-center gap-2">
+              {#if isMobile}
+                <Input
+                  type="time"
+                  class="flex-1"
+                  value={to24Hour(newEvent.startTime, newEvent.startMeridiem)}
+                  oninput={(e) => {
+                    const v = (e.target as HTMLInputElement).value;
+                    const { time, meridiem } = to12Hour(v);
+                    newEvent = { ...newEvent, startTime: time, startMeridiem: meridiem };
+                    modalDirty = true;
+                  }}
+                />
+              {:else}
                 <div class="relative flex-1">
                   <Input
                     type="text"
@@ -3077,7 +3386,6 @@
                       setTimeout(() => {
                         showNewStartPicker = false;
                       }, 150);
-                      handleStartTimeChange();
                     }}
                   />
                   {#if showNewStartPicker}
@@ -3091,7 +3399,6 @@
                           onmousedown={(e) => {
                             e.preventDefault();
                             setNewEventTime('startTime', opt.value);
-                            handleStartTimeChange();
                             showNewStartPicker = false;
                           }}
                         >
@@ -3101,11 +3408,7 @@
                     </div>
                   {/if}
                 </div>
-                <Select.Root
-                  type="single"
-                  bind:value={newEvent.startMeridiem}
-                  onValueChange={() => handleStartTimeChange()}
-                >
+                <Select.Root type="single" bind:value={newEvent.startMeridiem}>
                   <Select.Trigger size="default" class="h-9 w-[70px]">
                     {newEvent.startMeridiem || 'AM'}
                   </Select.Trigger>
@@ -3114,67 +3417,170 @@
                     <Select.Item value="PM">PM</Select.Item>
                   </Select.Content>
                 </Select.Root>
-              </div>
+              {/if}
+              <button
+                type="button"
+                class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
+                aria-label="Remove time"
+                onclick={() => {
+                  newEvent.hasTime = false;
+                  modalDirty = true;
+                }}
+              >
+                <X class="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+        {/if}
+        {#if newEvent.componentType !== 'VTODO' && !newEvent.allDay}
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div class="space-y-2">
+              <Label>Start time</Label>
+              {#if isMobile}
+                <Input
+                  type="time"
+                  value={to24Hour(newEvent.startTime, newEvent.startMeridiem)}
+                  oninput={(e) => {
+                    const v = (e.target as HTMLInputElement).value;
+                    const { time, meridiem } = to12Hour(v);
+                    newEvent = { ...newEvent, startTime: time, startMeridiem: meridiem };
+                    modalDirty = true;
+                    handleStartTimeChange();
+                  }}
+                />
+              {:else}
+                <div class="flex gap-2">
+                  <div class="relative flex-1">
+                    <Input
+                      type="text"
+                      placeholder="12:00"
+                      value={newEvent.startTime}
+                      onfocus={() => {
+                        showNewStartPicker = true;
+                        showNewEndPicker = false;
+                      }}
+                      oninput={(e) => {
+                        const val = (e.target as HTMLInputElement).value;
+                        setNewEventTime('startTime', val);
+                        modalDirty = true;
+                      }}
+                      onblur={() => {
+                        setTimeout(() => {
+                          showNewStartPicker = false;
+                        }, 150);
+                        handleStartTimeChange();
+                      }}
+                    />
+                    {#if showNewStartPicker}
+                      <div
+                        class="time-dropdown absolute top-full left-0 right-0 mt-1 max-h-[220px] overflow-y-auto border border-border bg-popover shadow-lg z-20"
+                      >
+                        {#each timeOptions as opt}
+                          <button
+                            type="button"
+                            class="w-full px-3 py-2 text-left text-sm hover:bg-accent"
+                            onmousedown={(e) => {
+                              e.preventDefault();
+                              setNewEventTime('startTime', opt.value);
+                              handleStartTimeChange();
+                              showNewStartPicker = false;
+                            }}
+                          >
+                            {opt.display}
+                          </button>
+                        {/each}
+                      </div>
+                    {/if}
+                  </div>
+                  <Select.Root
+                    type="single"
+                    bind:value={newEvent.startMeridiem}
+                    onValueChange={() => handleStartTimeChange()}
+                  >
+                    <Select.Trigger size="default" class="h-9 w-[70px]">
+                      {newEvent.startMeridiem || 'AM'}
+                    </Select.Trigger>
+                    <Select.Content>
+                      <Select.Item value="AM">AM</Select.Item>
+                      <Select.Item value="PM">PM</Select.Item>
+                    </Select.Content>
+                  </Select.Root>
+                </div>
+              {/if}
             </div>
             <div class="space-y-2">
               <Label>End time</Label>
-              <div class="flex gap-2">
-                <div class="relative flex-1">
-                  <Input
-                    type="text"
-                    placeholder="1:00"
-                    value={newEvent.endTime}
-                    onfocus={() => {
-                      showNewEndPicker = true;
-                      showNewStartPicker = false;
-                    }}
-                    oninput={(e) => {
-                      const val = (e.target as HTMLInputElement).value;
-                      setNewEventTime('endTime', val);
-                      modalDirty = true;
-                    }}
-                    onblur={() => {
-                      setTimeout(() => {
-                        showNewEndPicker = false;
-                      }, 150);
-                      handleEndTimeChange();
-                    }}
-                  />
-                  {#if showNewEndPicker}
-                    <div
-                      class="time-dropdown absolute top-full left-0 right-0 mt-1 max-h-[220px] overflow-y-auto border border-border bg-popover shadow-lg z-20"
-                    >
-                      {#each timeOptions as opt}
-                        <button
-                          type="button"
-                          class="w-full px-3 py-2 text-left text-sm hover:bg-accent"
-                          onmousedown={(e) => {
-                            e.preventDefault();
-                            setNewEventTime('endTime', opt.value);
-                            showNewEndPicker = false;
-                            handleEndTimeChange();
-                          }}
-                        >
-                          {opt.display}
-                        </button>
-                      {/each}
-                    </div>
-                  {/if}
+              {#if isMobile}
+                <Input
+                  type="time"
+                  value={to24Hour(newEvent.endTime, newEvent.endMeridiem)}
+                  oninput={(e) => {
+                    const v = (e.target as HTMLInputElement).value;
+                    const { time, meridiem } = to12Hour(v);
+                    newEvent = { ...newEvent, endTime: time, endMeridiem: meridiem };
+                    modalDirty = true;
+                    handleEndTimeChange();
+                  }}
+                />
+              {:else}
+                <div class="flex gap-2">
+                  <div class="relative flex-1">
+                    <Input
+                      type="text"
+                      placeholder="1:00"
+                      value={newEvent.endTime}
+                      onfocus={() => {
+                        showNewEndPicker = true;
+                        showNewStartPicker = false;
+                      }}
+                      oninput={(e) => {
+                        const val = (e.target as HTMLInputElement).value;
+                        setNewEventTime('endTime', val);
+                        modalDirty = true;
+                      }}
+                      onblur={() => {
+                        setTimeout(() => {
+                          showNewEndPicker = false;
+                        }, 150);
+                        handleEndTimeChange();
+                      }}
+                    />
+                    {#if showNewEndPicker}
+                      <div
+                        class="time-dropdown absolute top-full left-0 right-0 mt-1 max-h-[220px] overflow-y-auto border border-border bg-popover shadow-lg z-20"
+                      >
+                        {#each timeOptions as opt}
+                          <button
+                            type="button"
+                            class="w-full px-3 py-2 text-left text-sm hover:bg-accent"
+                            onmousedown={(e) => {
+                              e.preventDefault();
+                              setNewEventTime('endTime', opt.value);
+                              showNewEndPicker = false;
+                              handleEndTimeChange();
+                            }}
+                          >
+                            {opt.display}
+                          </button>
+                        {/each}
+                      </div>
+                    {/if}
+                  </div>
+                  <Select.Root
+                    type="single"
+                    bind:value={newEvent.endMeridiem}
+                    onValueChange={() => handleEndTimeChange()}
+                  >
+                    <Select.Trigger size="default" class="h-9 w-[70px]">
+                      {newEvent.endMeridiem || 'AM'}
+                    </Select.Trigger>
+                    <Select.Content>
+                      <Select.Item value="AM">AM</Select.Item>
+                      <Select.Item value="PM">PM</Select.Item>
+                    </Select.Content>
+                  </Select.Root>
                 </div>
-                <Select.Root
-                  type="single"
-                  bind:value={newEvent.endMeridiem}
-                  onValueChange={() => handleEndTimeChange()}
-                >
-                  <Select.Trigger size="default" class="h-9 w-[70px]">
-                    {newEvent.endMeridiem || 'AM'}
-                  </Select.Trigger>
-                  <Select.Content>
-                    <Select.Item value="AM">AM</Select.Item>
-                    <Select.Item value="PM">PM</Select.Item>
-                  </Select.Content>
-                </Select.Root>
-              </div>
+              {/if}
             </div>
           </div>
         {/if}
@@ -3209,63 +3615,65 @@
           {/if}
         </div>
 
-        <Separator />
+        {#if newEvent.componentType !== 'VTODO'}
+          <Separator />
 
-        <button
-          type="button"
-          class="flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
-          onclick={() => (optionalFieldsExpanded = !optionalFieldsExpanded)}
-        >
+          <button
+            type="button"
+            class="flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
+            onclick={() => (optionalFieldsExpanded = !optionalFieldsExpanded)}
+          >
+            {#if optionalFieldsExpanded}
+              <ChevronDown class="h-4 w-4" />
+            {:else}
+              <ChevronRight class="h-4 w-4" />
+            {/if}
+            <span>More details</span>
+            {#if !optionalFieldsExpanded && (newEvent.location || newEvent.url || newEvent.timezone || newEvent.attendees)}
+              <span class="ml-1 text-primary">•</span>
+            {/if}
+          </button>
+
           {#if optionalFieldsExpanded}
-            <ChevronDown class="h-4 w-4" />
-          {:else}
-            <ChevronRight class="h-4 w-4" />
+            <div class="space-y-4 pl-6">
+              <div class="space-y-2">
+                <Label>Location</Label>
+                <Input
+                  type="text"
+                  placeholder="Add location"
+                  bind:value={newEvent.location}
+                  oninput={() => (modalDirty = true)}
+                />
+              </div>
+              <div class="space-y-2">
+                <Label>URL / Video link</Label>
+                <Input
+                  type="url"
+                  placeholder="https://"
+                  bind:value={newEvent.url}
+                  oninput={() => (modalDirty = true)}
+                />
+              </div>
+              <div class="space-y-2">
+                <Label>Time zone</Label>
+                <Input
+                  type="text"
+                  placeholder="e.g., America/Chicago"
+                  bind:value={newEvent.timezone}
+                  oninput={() => (modalDirty = true)}
+                />
+              </div>
+              <div class="space-y-2">
+                <Label>Attendees</Label>
+                <Input
+                  type="text"
+                  placeholder="Comma-separated emails"
+                  bind:value={newEvent.attendees}
+                  oninput={() => (modalDirty = true)}
+                />
+              </div>
+            </div>
           {/if}
-          <span>More details</span>
-          {#if !optionalFieldsExpanded && (newEvent.location || newEvent.url || newEvent.timezone || newEvent.attendees)}
-            <span class="ml-1 text-primary">•</span>
-          {/if}
-        </button>
-
-        {#if optionalFieldsExpanded}
-          <div class="space-y-4 pl-6">
-            <div class="space-y-2">
-              <Label>Location</Label>
-              <Input
-                type="text"
-                placeholder="Add location"
-                bind:value={newEvent.location}
-                oninput={() => (modalDirty = true)}
-              />
-            </div>
-            <div class="space-y-2">
-              <Label>URL / Video link</Label>
-              <Input
-                type="url"
-                placeholder="https://"
-                bind:value={newEvent.url}
-                oninput={() => (modalDirty = true)}
-              />
-            </div>
-            <div class="space-y-2">
-              <Label>Time zone</Label>
-              <Input
-                type="text"
-                placeholder="e.g., America/Chicago"
-                bind:value={newEvent.timezone}
-                oninput={() => (modalDirty = true)}
-              />
-            </div>
-            <div class="space-y-2">
-              <Label>Attendees</Label>
-              <Input
-                type="text"
-                placeholder="Comma-separated emails"
-                bind:value={newEvent.attendees}
-                oninput={() => (modalDirty = true)}
-              />
-            </div>
-          </div>
         {/if}
       </div>
       <Dialog.Footer>
@@ -3318,120 +3726,276 @@
           <Label>Title</Label>
           <Input type="text" bind:value={editEvent.title} />
         </div>
-        <div class="space-y-2">
-          <Label>Date</Label>
-          <Input type="date" bind:value={editEvent.date} />
-        </div>
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <div class="space-y-2">
-            <Label>Start time</Label>
-            <div class="flex gap-2">
-              <div class="relative flex-1">
-                <Input
-                  type="text"
-                  placeholder="12:00"
-                  value={editEvent.startTime}
-                  onfocus={() => {
-                    showEditStartPicker = true;
-                    showEditEndPicker = false;
-                  }}
-                  oninput={(e) => {
-                    const val = (e.target as HTMLInputElement).value;
-                    setEditEventTime('startTime', val);
+        {#if editEvent.componentType === 'VTODO'}
+          {#if !editEvent.hasDate}
+            <button
+              type="button"
+              class="text-sm font-medium text-muted-foreground hover:text-foreground"
+              onclick={() => {
+                editEvent.hasDate = true;
+                modalDirty = true;
+              }}
+            >
+              + Add due date
+            </button>
+          {:else}
+            <div class="space-y-2">
+              <Label>Due date</Label>
+              <div class="flex items-center gap-2">
+                <Input type="date" class="flex-1" bind:value={editEvent.date} />
+                <button
+                  type="button"
+                  class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
+                  aria-label="Remove due date"
+                  onclick={() => {
+                    editEvent.hasDate = false;
+                    editEvent.hasTime = false;
                     modalDirty = true;
                   }}
-                  onblur={() => {
-                    setTimeout(() => {
-                      showEditStartPicker = false;
-                    }, 150);
-                  }}
-                />
-                {#if showEditStartPicker}
-                  <div
-                    class="time-dropdown absolute top-full left-0 right-0 mt-1 max-h-[220px] overflow-y-auto border border-border bg-popover shadow-lg z-20"
-                  >
-                    {#each timeOptions as opt}
-                      <button
-                        type="button"
-                        class="w-full px-3 py-2 text-left text-sm hover:bg-accent"
-                        onmousedown={(e) => {
-                          e.preventDefault();
-                          setEditEventTime('startTime', opt.value);
-                          showEditStartPicker = false;
-                        }}
-                      >
-                        {opt.display}
-                      </button>
-                    {/each}
-                  </div>
-                {/if}
+                >
+                  <X class="h-4 w-4" />
+                </button>
               </div>
-              <Select.Root type="single" bind:value={editEvent.startMeridiem}>
-                <Select.Trigger size="default" class="h-9 w-[70px]">
-                  {editEvent.startMeridiem || 'AM'}
-                </Select.Trigger>
-                <Select.Content>
-                  <Select.Item value="AM">AM</Select.Item>
-                  <Select.Item value="PM">PM</Select.Item>
-                </Select.Content>
-              </Select.Root>
             </div>
-          </div>
-          <div class="space-y-2">
-            <Label>End time</Label>
-            <div class="flex gap-2">
-              <div class="relative flex-1">
-                <Input
-                  type="text"
-                  placeholder="1:00"
-                  value={editEvent.endTime}
-                  onfocus={() => {
-                    showEditEndPicker = true;
-                    showEditStartPicker = false;
-                  }}
-                  oninput={(e) => {
-                    const val = (e.target as HTMLInputElement).value;
-                    setEditEventTime('endTime', val);
-                    modalDirty = true;
-                  }}
-                  onblur={() => {
-                    setTimeout(() => {
-                      showEditEndPicker = false;
-                    }, 150);
-                  }}
-                />
-                {#if showEditEndPicker}
-                  <div
-                    class="time-dropdown absolute top-full left-0 right-0 mt-1 max-h-[220px] overflow-y-auto border border-border bg-popover shadow-lg z-20"
-                  >
-                    {#each timeOptions as opt}
-                      <button
-                        type="button"
-                        class="w-full px-3 py-2 text-left text-sm hover:bg-accent"
-                        onmousedown={(e) => {
-                          e.preventDefault();
-                          setEditEventTime('endTime', opt.value);
+            {#if !editEvent.hasTime}
+              <button
+                type="button"
+                class="text-sm font-medium text-muted-foreground hover:text-foreground"
+                onclick={() => {
+                  editEvent.hasTime = true;
+                  modalDirty = true;
+                }}
+              >
+                + Add time
+              </button>
+            {:else}
+              <div class="space-y-2">
+                <Label>Time</Label>
+                <div class="flex items-center gap-2">
+                  {#if isMobile}
+                    <Input
+                      type="time"
+                      class="flex-1"
+                      value={to24Hour(editEvent.startTime, editEvent.startMeridiem)}
+                      oninput={(e) => {
+                        const v = (e.target as HTMLInputElement).value;
+                        const { time, meridiem } = to12Hour(v);
+                        editEvent = {
+                          ...editEvent,
+                          startTime: time,
+                          startMeridiem: meridiem,
+                        };
+                        modalDirty = true;
+                      }}
+                    />
+                  {:else}
+                    <div class="relative flex-1">
+                      <Input
+                        type="text"
+                        placeholder="12:00"
+                        value={editEvent.startTime}
+                        onfocus={() => {
+                          showEditStartPicker = true;
                           showEditEndPicker = false;
                         }}
-                      >
-                        {opt.display}
-                      </button>
-                    {/each}
-                  </div>
-                {/if}
+                        oninput={(e) => {
+                          const val = (e.target as HTMLInputElement).value;
+                          setEditEventTime('startTime', val);
+                          modalDirty = true;
+                        }}
+                        onblur={() => {
+                          setTimeout(() => {
+                            showEditStartPicker = false;
+                          }, 150);
+                        }}
+                      />
+                      {#if showEditStartPicker}
+                        <div
+                          class="time-dropdown absolute top-full left-0 right-0 mt-1 max-h-[220px] overflow-y-auto border border-border bg-popover shadow-lg z-20"
+                        >
+                          {#each timeOptions as opt}
+                            <button
+                              type="button"
+                              class="w-full px-3 py-2 text-left text-sm hover:bg-accent"
+                              onmousedown={(e) => {
+                                e.preventDefault();
+                                setEditEventTime('startTime', opt.value);
+                                showEditStartPicker = false;
+                              }}
+                            >
+                              {opt.display}
+                            </button>
+                          {/each}
+                        </div>
+                      {/if}
+                    </div>
+                    <Select.Root type="single" bind:value={editEvent.startMeridiem}>
+                      <Select.Trigger size="default" class="h-9 w-[70px]">
+                        {editEvent.startMeridiem || 'AM'}
+                      </Select.Trigger>
+                      <Select.Content>
+                        <Select.Item value="AM">AM</Select.Item>
+                        <Select.Item value="PM">PM</Select.Item>
+                      </Select.Content>
+                    </Select.Root>
+                  {/if}
+                  <button
+                    type="button"
+                    class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
+                    aria-label="Remove time"
+                    onclick={() => {
+                      editEvent.hasTime = false;
+                      modalDirty = true;
+                    }}
+                  >
+                    <X class="h-4 w-4" />
+                  </button>
+                </div>
               </div>
-              <Select.Root type="single" bind:value={editEvent.endMeridiem}>
-                <Select.Trigger size="default" class="h-9 w-[70px]">
-                  {editEvent.endMeridiem || 'AM'}
-                </Select.Trigger>
-                <Select.Content>
-                  <Select.Item value="AM">AM</Select.Item>
-                  <Select.Item value="PM">PM</Select.Item>
-                </Select.Content>
-              </Select.Root>
+            {/if}
+          {/if}
+        {:else}
+          <div class="space-y-2">
+            <Label>Date</Label>
+            <Input type="date" bind:value={editEvent.date} />
+          </div>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div class="space-y-2">
+              <Label>Start time</Label>
+              {#if isMobile}
+                <Input
+                  type="time"
+                  value={to24Hour(editEvent.startTime, editEvent.startMeridiem)}
+                  oninput={(e) => {
+                    const v = (e.target as HTMLInputElement).value;
+                    const { time, meridiem } = to12Hour(v);
+                    editEvent = { ...editEvent, startTime: time, startMeridiem: meridiem };
+                    modalDirty = true;
+                  }}
+                />
+              {:else}
+                <div class="flex gap-2">
+                  <div class="relative flex-1">
+                    <Input
+                      type="text"
+                      placeholder="12:00"
+                      value={editEvent.startTime}
+                      onfocus={() => {
+                        showEditStartPicker = true;
+                        showEditEndPicker = false;
+                      }}
+                      oninput={(e) => {
+                        const val = (e.target as HTMLInputElement).value;
+                        setEditEventTime('startTime', val);
+                        modalDirty = true;
+                      }}
+                      onblur={() => {
+                        setTimeout(() => {
+                          showEditStartPicker = false;
+                        }, 150);
+                      }}
+                    />
+                    {#if showEditStartPicker}
+                      <div
+                        class="time-dropdown absolute top-full left-0 right-0 mt-1 max-h-[220px] overflow-y-auto border border-border bg-popover shadow-lg z-20"
+                      >
+                        {#each timeOptions as opt}
+                          <button
+                            type="button"
+                            class="w-full px-3 py-2 text-left text-sm hover:bg-accent"
+                            onmousedown={(e) => {
+                              e.preventDefault();
+                              setEditEventTime('startTime', opt.value);
+                              showEditStartPicker = false;
+                            }}
+                          >
+                            {opt.display}
+                          </button>
+                        {/each}
+                      </div>
+                    {/if}
+                  </div>
+                  <Select.Root type="single" bind:value={editEvent.startMeridiem}>
+                    <Select.Trigger size="default" class="h-9 w-[70px]">
+                      {editEvent.startMeridiem || 'AM'}
+                    </Select.Trigger>
+                    <Select.Content>
+                      <Select.Item value="AM">AM</Select.Item>
+                      <Select.Item value="PM">PM</Select.Item>
+                    </Select.Content>
+                  </Select.Root>
+                </div>
+              {/if}
+            </div>
+            <div class="space-y-2">
+              <Label>End time</Label>
+              {#if isMobile}
+                <Input
+                  type="time"
+                  value={to24Hour(editEvent.endTime, editEvent.endMeridiem)}
+                  oninput={(e) => {
+                    const v = (e.target as HTMLInputElement).value;
+                    const { time, meridiem } = to12Hour(v);
+                    editEvent = { ...editEvent, endTime: time, endMeridiem: meridiem };
+                    modalDirty = true;
+                  }}
+                />
+              {:else}
+                <div class="flex gap-2">
+                  <div class="relative flex-1">
+                    <Input
+                      type="text"
+                      placeholder="1:00"
+                      value={editEvent.endTime}
+                      onfocus={() => {
+                        showEditEndPicker = true;
+                        showEditStartPicker = false;
+                      }}
+                      oninput={(e) => {
+                        const val = (e.target as HTMLInputElement).value;
+                        setEditEventTime('endTime', val);
+                        modalDirty = true;
+                      }}
+                      onblur={() => {
+                        setTimeout(() => {
+                          showEditEndPicker = false;
+                        }, 150);
+                      }}
+                    />
+                    {#if showEditEndPicker}
+                      <div
+                        class="time-dropdown absolute top-full left-0 right-0 mt-1 max-h-[220px] overflow-y-auto border border-border bg-popover shadow-lg z-20"
+                      >
+                        {#each timeOptions as opt}
+                          <button
+                            type="button"
+                            class="w-full px-3 py-2 text-left text-sm hover:bg-accent"
+                            onmousedown={(e) => {
+                              e.preventDefault();
+                              setEditEventTime('endTime', opt.value);
+                              showEditEndPicker = false;
+                            }}
+                          >
+                            {opt.display}
+                          </button>
+                        {/each}
+                      </div>
+                    {/if}
+                  </div>
+                  <Select.Root type="single" bind:value={editEvent.endMeridiem}>
+                    <Select.Trigger size="default" class="h-9 w-[70px]">
+                      {editEvent.endMeridiem || 'AM'}
+                    </Select.Trigger>
+                    <Select.Content>
+                      <Select.Item value="AM">AM</Select.Item>
+                      <Select.Item value="PM">PM</Select.Item>
+                    </Select.Content>
+                  </Select.Root>
+                </div>
+              {/if}
             </div>
           </div>
-        </div>
+        {/if}
         <div class="space-y-2">
           <Label>Description</Label>
           {#if containsHtml(editEvent.description) && !editEvent._editingRawDescription}
@@ -3452,51 +4016,53 @@
           {/if}
         </div>
 
-        <Separator />
+        {#if editEvent.componentType !== 'VTODO'}
+          <Separator />
 
-        <button
-          type="button"
-          class="flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
-          onclick={() => (optionalFieldsExpanded = !optionalFieldsExpanded)}
-        >
+          <button
+            type="button"
+            class="flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
+            onclick={() => (optionalFieldsExpanded = !optionalFieldsExpanded)}
+          >
+            {#if optionalFieldsExpanded}
+              <ChevronDown class="h-4 w-4" />
+            {:else}
+              <ChevronRight class="h-4 w-4" />
+            {/if}
+            <span>More details</span>
+            {#if !optionalFieldsExpanded && (editEvent.location || editEvent.url || editEvent.timezone || editEvent.attendees)}
+              <span class="ml-1 text-primary">•</span>
+            {/if}
+          </button>
+
           {#if optionalFieldsExpanded}
-            <ChevronDown class="h-4 w-4" />
-          {:else}
-            <ChevronRight class="h-4 w-4" />
+            <div class="space-y-4 pl-6">
+              <div class="space-y-2">
+                <Label>Location</Label>
+                <Input type="text" placeholder="Add location" bind:value={editEvent.location} />
+              </div>
+              <div class="space-y-2">
+                <Label>URL / Video link</Label>
+                <Input type="url" placeholder="https://" bind:value={editEvent.url} />
+              </div>
+              <div class="space-y-2">
+                <Label>Time zone</Label>
+                <Input
+                  type="text"
+                  placeholder="e.g., America/Chicago"
+                  bind:value={editEvent.timezone}
+                />
+              </div>
+              <div class="space-y-2">
+                <Label>Attendees</Label>
+                <Input
+                  type="text"
+                  placeholder="Comma-separated emails"
+                  bind:value={editEvent.attendees}
+                />
+              </div>
+            </div>
           {/if}
-          <span>More details</span>
-          {#if !optionalFieldsExpanded && (editEvent.location || editEvent.url || editEvent.timezone || editEvent.attendees)}
-            <span class="ml-1 text-primary">•</span>
-          {/if}
-        </button>
-
-        {#if optionalFieldsExpanded}
-          <div class="space-y-4 pl-6">
-            <div class="space-y-2">
-              <Label>Location</Label>
-              <Input type="text" placeholder="Add location" bind:value={editEvent.location} />
-            </div>
-            <div class="space-y-2">
-              <Label>URL / Video link</Label>
-              <Input type="url" placeholder="https://" bind:value={editEvent.url} />
-            </div>
-            <div class="space-y-2">
-              <Label>Time zone</Label>
-              <Input
-                type="text"
-                placeholder="e.g., America/Chicago"
-                bind:value={editEvent.timezone}
-              />
-            </div>
-            <div class="space-y-2">
-              <Label>Attendees</Label>
-              <Input
-                type="text"
-                placeholder="Comma-separated emails"
-                bind:value={editEvent.attendees}
-              />
-            </div>
-          </div>
         {/if}
       </div>
       <Dialog.Footer class="flex-col sm:flex-row gap-2">
@@ -3511,21 +4077,25 @@
               <p>Duplicate</p>
             </Tooltip.Content>
           </Tooltip.Root>
-          <Tooltip.Root>
-            <Tooltip.Trigger>
-              <Button
-                variant="outline"
-                size="icon"
-                onclick={() =>
-                  exportEventAsICS(events.find((e) => (e as Record).id === editEvent.id) as Record)}
-              >
-                <Download class="h-4 w-4" />
-              </Button>
-            </Tooltip.Trigger>
-            <Tooltip.Content>
-              <p>Export as .ics</p>
-            </Tooltip.Content>
-          </Tooltip.Root>
+          {#if editEvent.componentType !== 'VTODO'}
+            <Tooltip.Root>
+              <Tooltip.Trigger>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  onclick={() =>
+                    exportEventAsICS(
+                      events.find((e) => (e as Record).id === editEvent.id) as Record,
+                    )}
+                >
+                  <Download class="h-4 w-4" />
+                </Button>
+              </Tooltip.Trigger>
+              <Tooltip.Content>
+                <p>Export as .ics</p>
+              </Tooltip.Content>
+            </Tooltip.Root>
+          {/if}
           <Tooltip.Root>
             <Tooltip.Trigger>
               <Button
@@ -3546,10 +4116,11 @@
           <Button variant="ghost" onclick={() => closeModals()}>Cancel</Button>
           {#if editEvent.componentType === 'VTODO'}
             {#if editEvent.status?.toUpperCase?.() === 'COMPLETED' || editEvent.completedAt || Number(editEvent.percentComplete || 0) >= 100}
-              <Button disabled>Completed</Button>
+              <Button variant="outline" onclick={() => uncompleteTask()}>Mark incomplete</Button>
             {:else}
-              <Button onclick={completeTask}>Complete task</Button>
+              <Button variant="outline" onclick={() => completeTask()}>Complete</Button>
             {/if}
+            <Button onclick={updateEvent}>Update</Button>
           {:else}
             <Button onclick={updateEvent}>Update</Button>
           {/if}
@@ -3618,6 +4189,63 @@
         >
           {deletingCalendar ? 'Deleting...' : 'Delete Calendar'}
         </Button>
+      </Dialog.Footer>
+    </Dialog.Content>
+  </Dialog.Root>
+
+  <!-- Calendars (mobile filter) -->
+  <Dialog.Root bind:open={calendarsModalOpen}>
+    <Dialog.Content class="sm:max-w-[420px]">
+      <Dialog.Header>
+        <Dialog.Title>Calendars</Dialog.Title>
+      </Dialog.Header>
+      <div class="space-y-1 py-2 max-h-[60vh] overflow-y-auto">
+        {#each calendars as cal, index}
+          {@const calId = getCalendarId(cal)}
+          {#if calId}
+            {@const checked = selectedCalendarIds.includes(calId as string)}
+            <div class="flex items-center gap-3 px-2 py-2 rounded-md hover:bg-accent/50">
+              <button
+                type="button"
+                class="flex flex-1 items-center gap-3 min-w-0 text-left"
+                aria-pressed={checked}
+                onclick={() => toggleCalendarSelection(calId as string)}
+              >
+                <span
+                  class="h-5 w-5 shrink-0 inline-flex items-center justify-center rounded-[4px] border-2 transition-colors
+                    {checked
+                    ? 'border-primary bg-primary text-primary-foreground'
+                    : 'border-muted-foreground/50 bg-transparent'}"
+                  aria-hidden="true"
+                >
+                  {#if checked}
+                    <Check class="size-3.5" strokeWidth={3} />
+                  {/if}
+                </span>
+                <span
+                  class="h-2.5 w-2.5 shrink-0 rounded-full"
+                  style="background: {resolveCalendarColor(cal, index)}"
+                  aria-hidden="true"
+                ></span>
+                <span class="truncate">{getCalendarLabel(cal)}</span>
+              </button>
+              <button
+                type="button"
+                class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                aria-label="Delete {getCalendarLabel(cal)}"
+                onclick={() => {
+                  calendarsModalOpen = false;
+                  openDeleteCalendarModal(calId as string);
+                }}
+              >
+                <Trash2 class="h-4 w-4" />
+              </button>
+            </div>
+          {/if}
+        {/each}
+      </div>
+      <Dialog.Footer>
+        <Button variant="ghost" onclick={() => (calendarsModalOpen = false)}>Done</Button>
       </Dialog.Footer>
     </Dialog.Content>
   </Dialog.Root>
@@ -3860,9 +4488,7 @@
 
   .sx-wrapper.is-dark :global(.sx__time-grid-event),
   .sx-wrapper.is-dark :global(.sx__month-grid-event) {
-    background: #1e40af !important;
     color: #e0f2fe !important;
-    border-left: 3px solid #60a5fa !important;
   }
 
   /* Calendar Grid Hover States */
@@ -3902,7 +4528,6 @@
 
   .sx-wrapper.is-dark :global(.sx__time-grid-event:hover),
   .sx-wrapper.is-dark :global(.sx__month-grid-event:hover) {
-    background: #2563eb !important;
     box-shadow: 0 4px 16px rgba(96, 165, 250, 0.25);
   }
 

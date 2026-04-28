@@ -913,10 +913,14 @@ describe('New Calendar creation feature', () => {
   it('should have Plus icon import', () => {
     expect(calendarSrc).toContain('Plus');
   });
-  it('should have a dedicated Create Calendar button in the header', () => {
-    expect(calendarSrc).toContain('class="calendar-create-button gap-2"');
-    expect(calendarSrc).toContain('aria-label="Create calendar"');
-    expect(calendarSrc).toContain('Create Calendar');
+  it('should expose Create Calendar as a kebab menu item in the header', () => {
+    // Calendar header collapsed into a kebab on both viewports (matches mobile pattern).
+    // Create Calendar lives inside the DropdownMenu.Content as an Item, not a standalone button.
+    expect(calendarSrc).toMatch(
+      /<DropdownMenu\.Item[^>]*\s*onclick=\{[^}]*newCalendarModal\s*=\s*true/,
+    );
+    expect(calendarSrc).toContain('<span>Create Calendar</span>');
+    expect(calendarSrc).toContain('aria-label="Calendar menu"');
   });
   it('should have color palette for calendar creation', () => {
     expect(calendarSrc).toContain('newCalendarColor');
@@ -1000,15 +1004,21 @@ describe('Large mailbox bootstrap timeout regressions', () => {
     expect(calendarSrc).not.toMatch(/\{#if !isMobile && calendars\.length > 1\}/);
   });
 
-  it('should keep the Create Calendar button visible independently of calendar count', () => {
+  it('should keep the Create Calendar action reachable independently of calendar count', () => {
     const calendarSrc = fs.readFileSync(
       path.resolve(__dirname, '../../src/svelte/Calendar.svelte'),
       'utf8',
     );
-    expect(calendarSrc).toContain('class="calendar-create-button gap-2"');
-    expect(calendarSrc).not.toContain(
-      '{#if !isMobile && calendars.length > 0}\n        <Button\n          variant="outline"\n          class="calendar-create-button gap-2"',
+    // The Create Calendar kebab item must not be gated behind any calendars.length check
+    // (only the calendars-filter dropdown is gated by calendars.length > 0).
+    const createCalendarSnippet = calendarSrc.slice(
+      0,
+      calendarSrc.indexOf('<span>Create Calendar</span>'),
     );
+    const lastIfBefore = createCalendarSnippet.lastIndexOf('{#if');
+    const lastEndifBefore = createCalendarSnippet.lastIndexOf('{/if}');
+    // The most recent {#if} before the Create Calendar item must already be closed.
+    expect(lastEndifBefore).toBeGreaterThan(lastIfBefore);
   });
 
   it('should block new-event creation when no calendar is selected', () => {
