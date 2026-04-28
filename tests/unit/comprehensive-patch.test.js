@@ -1083,7 +1083,9 @@ describe('Large mailbox bootstrap timeout regressions', () => {
     expect(mailServiceSrc).toContain('const bytes = await readDownloadBytes(href)');
     expect(mailServiceSrc).toContain("new CustomEvent('fe:mail-service-toast'");
     expect(mailServiceSrc).toContain('defaultPath: safeFilename');
-    expect(mailServiceSrc).toContain('await writeFile(outputPath, bytes)');
+    expect(mailServiceSrc).toContain('await writeChunked(outputPath, bytes)');
+    expect(mailServiceSrc).toContain('streamFetchToFile');
+    expect(mailServiceSrc).toContain('response.body');
     expect(mailServiceSrc).toContain('allow access if your operating system blocked the write');
     expect(mailServiceSrc).not.toContain('baseDir: BaseDirectory.Download');
   });

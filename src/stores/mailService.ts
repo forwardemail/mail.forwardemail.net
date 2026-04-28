@@ -136,9 +136,10 @@ function triggerDownload(href: string, filename: string): void {
 }
 
 // IPC payloads above this size have been observed to destabilize macOS
-// WebKit when passed to writeFile in a single call. Chunked append keeps
-// each round-trip small even when the destination is a user-chosen file path.
-const TAURI_WRITE_CHUNK_SIZE = 512 * 1024;
+// WebKit (especially x64) when passed to writeFile in a single call.
+// Chunked append keeps each round-trip small even when the destination is a
+// user-chosen file path.
+const TAURI_WRITE_CHUNK_SIZE = 256 * 1024;
 const WINDOWS_RESERVED_FILENAMES = new Set([
   'CON',
   'PRN',
@@ -252,6 +253,82 @@ async function readDownloadBytes(href: string): Promise<Uint8Array> {
   return new Uint8Array(await response.arrayBuffer());
 }
 
+type WriteFileFn = (
+  path: string,
+  data: Uint8Array,
+  options?: { append?: boolean },
+) => Promise<void>;
+
+// Stream a fetch response directly to disk in fixed-size chunks. Avoids
+// materializing the entire attachment in JS memory before writing — the
+// previous "buffer the whole file then chunk the IPC" approach was crashing
+// macOS x64 WebKit on large attachments.
+async function streamFetchToFile(
+  href: string,
+  outputPath: string,
+  writeFile: WriteFileFn,
+): Promise<boolean> {
+  const response = await fetch(href);
+  if (!response.ok) {
+    throw new Error(`Attachment download failed with HTTP ${response.status}`);
+  }
+  const body = response.body;
+  if (!body || typeof body.getReader !== 'function') {
+    return false;
+  }
+
+  const reader = body.getReader();
+  let pending: Uint8Array | null = null;
+  let totalWritten = 0;
+
+  const flush = async (chunk: Uint8Array, isFirst: boolean) => {
+    await writeFile(outputPath, chunk, { append: !isFirst });
+  };
+
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (!value || value.byteLength === 0) continue;
+
+      let buffer: Uint8Array = pending
+        ? (() => {
+            const merged = new Uint8Array(pending.byteLength + value.byteLength);
+            merged.set(pending, 0);
+            merged.set(value, pending.byteLength);
+            return merged;
+          })()
+        : value;
+      pending = null;
+
+      while (buffer.byteLength >= TAURI_WRITE_CHUNK_SIZE) {
+        const slice = buffer.subarray(0, TAURI_WRITE_CHUNK_SIZE);
+        await flush(slice, totalWritten === 0);
+        totalWritten += slice.byteLength;
+        buffer = buffer.subarray(TAURI_WRITE_CHUNK_SIZE);
+      }
+
+      pending = buffer.byteLength > 0 ? buffer : null;
+    }
+
+    if (pending && pending.byteLength > 0) {
+      await flush(pending, totalWritten === 0);
+      totalWritten += pending.byteLength;
+    } else if (totalWritten === 0) {
+      // Empty response — write a zero-byte file so callers see consistent state.
+      await flush(new Uint8Array(0), true);
+    }
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch {
+      // ignore
+    }
+  }
+
+  return true;
+}
+
 function dispatchMailServiceToast(message: string, type = 'error'): void {
   if (typeof window === 'undefined') return;
   window.dispatchEvent(new CustomEvent('fe:mail-service-toast', { detail: { message, type } }));
@@ -274,11 +351,25 @@ async function triggerDownloadTauri(href: string, filename: string): Promise<voi
   let startedWriting = false;
 
   try {
+    const writeChunked: WriteFileFn = async (path, chunk, opts) => {
+      startedWriting = true;
+      await writeFile(path, chunk, opts);
+    };
+
+    // Prefer streaming straight from fetch → disk. Avoids holding the whole
+    // attachment in memory, which has been crashing macOS x64 WebKit.
+    const isHttpHref = typeof href === 'string' && /^https?:/i.test(href);
+    if (isHttpHref) {
+      const streamed = await streamFetchToFile(href, outputPath, writeChunked);
+      if (streamed) return;
+    }
+
+    // Fallback: data URLs (and environments without ReadableStream) — decode
+    // once, then write in fixed-size chunks via the IPC bridge.
     const bytes = await readDownloadBytes(href);
 
     if (bytes.byteLength <= TAURI_WRITE_CHUNK_SIZE) {
-      startedWriting = true;
-      await writeFile(outputPath, bytes);
+      await writeChunked(outputPath, bytes);
       return;
     }
 
@@ -287,10 +378,7 @@ async function triggerDownloadTauri(href: string, filename: string): Promise<voi
         offset,
         Math.min(offset + TAURI_WRITE_CHUNK_SIZE, bytes.byteLength),
       );
-      startedWriting = true;
-      await writeFile(outputPath, chunk, {
-        append: offset > 0,
-      });
+      await writeChunked(outputPath, chunk, { append: offset > 0 });
     }
   } catch (err) {
     if (startedWriting) {

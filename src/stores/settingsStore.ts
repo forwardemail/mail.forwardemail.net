@@ -336,6 +336,16 @@ export const hideCompletedTodos: Readable<boolean> = derived(
   [remoteSettings, localSettingsVersion],
   ([$remote]) => Boolean(getEffectiveSettingValue('hide_completed_todos', { remote: $remote })),
 );
+export type TasksSortKey = 'due' | 'title' | 'created';
+const VALID_TASKS_SORT: TasksSortKey[] = ['due', 'title', 'created'];
+const normalizeTasksSort = (raw: unknown): TasksSortKey => {
+  const value = String(raw || '').toLowerCase() as TasksSortKey;
+  return VALID_TASKS_SORT.includes(value) ? value : 'due';
+};
+export const tasksSort: Readable<TasksSortKey> = derived(
+  [remoteSettings, localSettingsVersion],
+  ([$remote]) => normalizeTasksSort(getEffectiveSettingValue('tasks_sort', { remote: $remote })),
+);
 
 const getAccountKey = (account?: string): string => account || Local.get('email') || 'default';
 

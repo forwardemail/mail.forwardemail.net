@@ -13,7 +13,13 @@
   import { db } from '../utils/db';
   import { normalizeEmail } from '../utils/address';
   import { queueEmail } from '../utils/outbox-service';
-  import { effectiveTheme, hideCompletedTodos } from '../stores/settingsStore';
+  import {
+    effectiveTheme,
+    hideCompletedTodos,
+    tasksSort,
+    setSettingValue,
+    type TasksSortKey,
+  } from '../stores/settingsStore';
   import { currentAccount } from '../stores/mailboxActions';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
@@ -1970,6 +1976,14 @@
 
   let currentSection = $state<'calendar' | 'tasks'>('calendar');
 
+  const taskTitleOf = (t: Record<string, unknown>) =>
+    String(t.title || t.summary || t.name || '').toLowerCase();
+  const taskCreatedAt = (t: Record<string, unknown>) => {
+    const raw = (t.created || t.createdAt || t.dtstamp || t.start) as string | undefined;
+    const ms = raw ? new Date(raw).getTime() : 0;
+    return Number.isFinite(ms) ? ms : 0;
+  };
+
   const tasksList = $derived.by(() => {
     const list = events.filter((ev) => {
       const task = ev as Record<string, unknown>;
@@ -1977,12 +1991,20 @@
       if ($hideCompletedTodos && isCompletedTask(task)) return false;
       return true;
     });
+    const sortKey = $tasksSort;
     return list.slice().sort((a, b) => {
       const ar = a as Record<string, unknown>;
       const br = b as Record<string, unknown>;
       const aDone = isCompletedTask(ar) ? 1 : 0;
       const bDone = isCompletedTask(br) ? 1 : 0;
       if (aDone !== bDone) return aDone - bDone;
+      if (sortKey === 'title') {
+        return taskTitleOf(ar).localeCompare(taskTitleOf(br));
+      }
+      if (sortKey === 'created') {
+        // Newest first
+        return taskCreatedAt(br) - taskCreatedAt(ar);
+      }
       const aDue = (ar.end || ar.start) as string | undefined;
       const bDue = (br.end || br.start) as string | undefined;
       if (!aDue && !bDue) return 0;
@@ -1991,6 +2013,19 @@
       return new Date(aDue).getTime() - new Date(bDue).getTime();
     });
   });
+
+  const TASK_SORT_OPTIONS: { value: TasksSortKey; label: string }[] = [
+    { value: 'due', label: 'Due date' },
+    { value: 'title', label: 'Title' },
+    { value: 'created', label: 'Created (newest)' },
+  ];
+  const taskSortLabel = $derived(
+    TASK_SORT_OPTIONS.find((o) => o.value === $tasksSort)?.label || 'Due date',
+  );
+  const handleTaskSortChange = (value: string | undefined) => {
+    if (!value) return;
+    void setSettingValue('tasks_sort', value);
+  };
 
   const resolveTaskColor = (task: Record<string, unknown>) => {
     const calId = String(task.calendarId || task.calendar_id || '');
@@ -2870,6 +2905,9 @@
   const navigateSchedulePeriod = (direction: 'prev' | 'next') => {
     const app = (calendarInstance as unknown as { $app?: Record<string, unknown> })?.$app;
     const calendarState = app?.calendarState as { setRange?: (date: string) => void } | undefined;
+    const datePickerState = app?.datePickerState as
+      | { selectedDate?: { value: string } }
+      | undefined;
     if (!calendarState?.setRange) return;
     const view = getCurrentScheduleXView();
     const anchor = getCurrentScheduleXRangeStart();
@@ -2886,7 +2924,14 @@
     const y = target.getFullYear();
     const m = String(target.getMonth() + 1).padStart(2, '0');
     const d = String(target.getDate()).padStart(2, '0');
-    calendarState.setRange(`${y}-${m}-${d}`);
+    const next = `${y}-${m}-${d}`;
+    // Update the date picker's selectedDate so the header dropdown stays in sync;
+    // schedule-x's internal effect cascades this to calendarState.setRange.
+    if (datePickerState?.selectedDate) {
+      datePickerState.selectedDate.value = next;
+    } else {
+      calendarState.setRange(next);
+    }
   };
 
   let swipeStartX = 0;
@@ -3160,7 +3205,21 @@
           Loading calendar...
         </div>
       {:else if currentSection === 'tasks'}
-        <div class="flex items-center justify-end pb-3 shrink-0">
+        <div class="flex items-center justify-between gap-2 pb-3 shrink-0">
+          <Select.Root
+            type="single"
+            value={$tasksSort}
+            onValueChange={(v) => handleTaskSortChange(v)}
+          >
+            <Select.Trigger class="h-8 w-[180px] text-xs" aria-label="Sort tasks">
+              <span class="truncate">Sort: {taskSortLabel}</span>
+            </Select.Trigger>
+            <Select.Content>
+              {#each TASK_SORT_OPTIONS as opt}
+                <Select.Item value={opt.value}>{opt.label}</Select.Item>
+              {/each}
+            </Select.Content>
+          </Select.Root>
           <Button
             size="sm"
             variant="outline"

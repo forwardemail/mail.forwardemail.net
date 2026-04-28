@@ -14,12 +14,30 @@ interface ContextMenuActions {
   onDelete: () => void;
   onMoveTo: (path: string) => void;
   onToggleStar?: () => void;
+  onToggleLabel?: (id: string) => void;
+  onNewLabel?: () => void;
+}
+
+interface ContextMenuLabel {
+  id?: string;
+  keyword?: string;
+  value?: string;
+  name?: string;
+  label?: string;
 }
 
 interface ContextMenuOptions {
-  message: { is_unread?: boolean; is_starred?: boolean; flags?: string[] };
+  message: {
+    is_unread?: boolean;
+    is_starred?: boolean;
+    flags?: string[];
+    labels?: (string | { id?: string })[];
+    label_ids?: (string | { id?: string })[];
+    labelIds?: (string | { id?: string })[];
+  };
   actions: ContextMenuActions;
   folders: { path: string; name?: string }[];
+  labels?: ContextMenuLabel[];
   isArchiveFolder?: boolean;
   isDraftFolder?: boolean;
   isTrashFolder?: boolean;
@@ -28,8 +46,9 @@ interface ContextMenuOptions {
 
 export async function showNativeContextMenu(options: ContextMenuOptions): Promise<boolean> {
   try {
-    const { Menu, MenuItem, Submenu, PredefinedMenuItem } = await import('@tauri-apps/api/menu');
-    const { message, actions, folders } = options;
+    const { Menu, MenuItem, CheckMenuItem, Submenu, PredefinedMenuItem } =
+      await import('@tauri-apps/api/menu');
+    const { message, actions, folders, labels = [] } = options;
 
     const isUnread = Boolean(message.is_unread);
     const isStarred =
@@ -89,6 +108,59 @@ export async function showNativeContextMenu(options: ContextMenuOptions): Promis
       );
       const moveSubmenu = await Submenu.new({ text: 'Move to', items: moveItems });
       items.push(moveSubmenu);
+    }
+
+    // Label submenu
+    if (actions.onToggleLabel) {
+      const appliedIds = new Set<string>();
+      const collectIds = (list: unknown) => {
+        if (!Array.isArray(list)) return;
+        for (const entry of list) {
+          if (!entry) continue;
+          if (typeof entry === 'string') appliedIds.add(entry);
+          else if (typeof entry === 'object' && (entry as { id?: string }).id) {
+            appliedIds.add(String((entry as { id?: string }).id));
+          }
+        }
+      };
+      collectIds(message.labels);
+      collectIds(message.label_ids);
+      collectIds(message.labelIds);
+
+      const labelIdOf = (l: ContextMenuLabel) =>
+        String(l.id || l.keyword || l.value || l.name || '');
+
+      const labelItems = await Promise.all(
+        labels
+          .filter((l) => labelIdOf(l))
+          .slice(0, 50)
+          .map((l) => {
+            const id = labelIdOf(l);
+            const text = l.name || l.label || l.value || id;
+            return CheckMenuItem.new({
+              text,
+              checked: appliedIds.has(id),
+              action: () => actions.onToggleLabel?.(id),
+            });
+          }),
+      );
+
+      const labelSubItems: unknown[] = [...labelItems];
+      if (actions.onNewLabel) {
+        if (labelItems.length > 0) {
+          labelSubItems.push(await PredefinedMenuItem.new({ item: 'Separator' }));
+        }
+        labelSubItems.push(await MenuItem.new({ text: 'New label…', action: actions.onNewLabel }));
+      }
+
+      if (labelSubItems.length > 0) {
+        items.push(await PredefinedMenuItem.new({ item: 'Separator' }));
+        const labelSubmenu = await Submenu.new({
+          text: 'Label as…',
+          items: labelSubItems as Parameters<typeof Submenu.new>[0]['items'],
+        });
+        items.push(labelSubmenu);
+      }
     }
 
     const menu = await Menu.new({ items });

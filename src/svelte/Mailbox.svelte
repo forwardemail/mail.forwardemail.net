@@ -3801,10 +3801,22 @@
             toggleStarMessage(contextMenuMessage);
             closeContextMenu();
           },
+          onToggleLabel: (id) => contextLabel(id),
+          onNewLabel: () => {
+            closeContextMenu();
+            openLabelModal();
+          },
         },
         folders: (availableMoveTargetsFromStore.length
           ? availableMoveTargetsFromStore
           : get(availableMoveTargets)) as { path: string; name?: string }[],
+        labels: availableLabelsFromStore as {
+          id?: string;
+          keyword?: string;
+          value?: string;
+          name?: string;
+          label?: string;
+        }[],
         isArchiveFolder: matchesFolderKey($selectedFolder, ['ARCHIVE']),
         isDraftFolder: listIsDraftFolder,
         isTrashFolder: listIsTrashFolder,

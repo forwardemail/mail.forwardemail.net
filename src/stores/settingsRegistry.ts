@@ -390,6 +390,14 @@ export const SETTINGS_REGISTRY: Record<string, SettingDefinition> = {
     localParse: (raw) => parseBoolean(raw, false),
     localSerialize: (value) => serializeBoolean(Boolean(value)),
   },
+  tasks_sort: {
+    id: 'tasks_sort',
+    label: 'Tasks Sort Order',
+    scope: SETTING_SCOPES.DEVICE,
+    localKey: 'tasks_sort',
+    valueType: 'string',
+    defaultValue: 'due',
+  },
 };
 
 export const getSettingDefinition = (id: string): SettingDefinition | undefined =>
