@@ -346,6 +346,35 @@ jobs:
             echo "(fresh — no src-tauri/target/aarch64-apple-ios yet)"
           fi
 
+      - name: Override iOS CFBundleVersion (build number)
+        if: steps.check.outputs.enabled == 'true'
+        env:
+          # Tauri sets both CFBundleShortVersionString and CFBundleVersion
+          # from tauri.conf.json's single `version` field. Apple rejects an
+          # IPA whose CFBundleVersion matches a previously uploaded build
+          # for the same marketing version, so we override CFBundleVersion
+          # here to a value that strictly increases across:
+          #   - new workflow runs (github.run_number bumps)
+          #   - re-runs of the same failed run (github.run_attempt bumps;
+          #     run_number stays the same, so we *must* include attempt
+          #     for "Re-run failed jobs" to produce a fresh build number).
+          # Dotted CFBundleVersion is allowed — TestFlight orders them
+          # component-by-component (1234.2 > 1234.1 > 1234).
+          IOS_BUILD_NUMBER: ${{ github.run_number }}.${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          PLIST=src-tauri/gen/apple/forwardemail-desktop_iOS/Info.plist
+          if [ ! -f "$PLIST" ]; then
+            echo "::error::Info.plist not found at $PLIST"
+            find src-tauri/gen/apple -maxdepth 4 -name 'Info.plist' -type f | head -10
+            exit 1
+          fi
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $IOS_BUILD_NUMBER" "$PLIST" \
+            || /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $IOS_BUILD_NUMBER" "$PLIST"
+          echo "── Final plist version fields ──"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$PLIST"
+
       - name: Build iOS (release, signed)
         if: steps.check.outputs.enabled == 'true'
         env:
