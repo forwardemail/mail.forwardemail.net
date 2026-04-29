@@ -19,6 +19,29 @@ import type { Label, PgpKey } from '../types';
 import { warn } from '../utils/logger.ts';
 import { getAuthHeader } from '../utils/auth';
 
+// Surface a toast via the existing fe:mail-service-toast bridge wired
+// in main.ts. Used by label sync paths so failures aren't silently
+// swallowed (root cause of "labels disappear on rebuild" reports —
+// optimistic update succeeds locally, server save fails, and the user
+// has no signal that nothing was persisted).
+function dispatchLabelToast(message: string, type: 'error' | 'warning' | 'success' = 'error') {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new CustomEvent('fe:mail-service-toast', { detail: { message, type } }));
+}
+
+function describeLabelError(action: string, err: unknown): string {
+  const status =
+    (err as { status?: number; statusCode?: number })?.status ??
+    (err as { status?: number; statusCode?: number })?.statusCode;
+  const baseMsg = err instanceof Error ? err.message : 'Unknown error';
+  if (status === 401 || /authorization required/i.test(baseMsg)) {
+    return `Couldn't ${action}: sign in with your alias password to sync labels across devices.`;
+  }
+  if (status === 400) return `Couldn't ${action}: ${baseMsg}`;
+  if (status && status >= 500) return `Couldn't ${action}: server error (${status}). Try again.`;
+  return `Couldn't ${action}: ${baseMsg}`;
+}
+
 export interface RemoteSettings {
   mail: {
     archive_folder: string | null;
@@ -977,12 +1000,14 @@ export async function createLabel(label: LabelCreateInput): Promise<LabelResult>
     return { success: false, error: nameCheck.error, status: 400 };
   }
 
-  try {
-    // Get current labels and add the new one
-    const currentLabels = get(settingsLabels) || [];
+  // Snapshot pre-mutation state so we can revert deterministically on
+  // failure (don't depend on fetchLabels for revert — it may itself fail
+  // and leave the optimistic value visible).
+  const previousLabels = get(settingsLabels) || [];
 
+  try {
     // Check if label with same keyword already exists
-    if (currentLabels.some((l) => l.keyword === label.keyword)) {
+    if (previousLabels.some((l) => l.keyword === label.keyword)) {
       return {
         success: false,
         error: 'A label with this keyword already exists',
@@ -998,7 +1023,7 @@ export async function createLabel(label: LabelCreateInput): Promise<LabelResult>
       source: label.source || 'custom',
     };
 
-    const updatedLabels = [...currentLabels, newLabel];
+    const updatedLabels = [...previousLabels, newLabel];
 
     // Optimistic update
     settingsLabels.set(updatedLabels);
@@ -1019,10 +1044,11 @@ export async function createLabel(label: LabelCreateInput): Promise<LabelResult>
     return { success: true, label: newLabel };
   } catch (err: unknown) {
     warn('[settingsStore] Failed to create label:', err);
-    // Revert optimistic update
-    await fetchLabels();
-    const error = err instanceof Error ? err.message : 'Failed to create label';
+    // Revert optimistic update to pre-mutation state.
+    settingsLabels.set(previousLabels);
     const status = (err as { status?: number })?.status;
+    dispatchLabelToast(describeLabelError('create label', err));
+    const error = err instanceof Error ? err.message : 'Failed to create label';
     return {
       success: false,
       error,
@@ -1036,10 +1062,10 @@ export async function createLabel(label: LabelCreateInput): Promise<LabelResult>
  */
 export async function updateLabel(keyword: string, updates: Partial<Label>): Promise<LabelResult> {
   const account = Local.get('email') || 'default';
+  const previousLabels = get(settingsLabels) || [];
 
   try {
-    const currentLabels = get(settingsLabels) || [];
-    const labelIndex = currentLabels.findIndex((l) => l.keyword === keyword);
+    const labelIndex = previousLabels.findIndex((l) => l.keyword === keyword);
 
     if (labelIndex === -1) {
       return {
@@ -1050,7 +1076,7 @@ export async function updateLabel(keyword: string, updates: Partial<Label>): Pro
     }
 
     // Create updated labels array
-    const updatedLabels = currentLabels.map((l, i) =>
+    const updatedLabels = previousLabels.map((l, i) =>
       i === labelIndex ? { ...l, ...updates } : l,
     );
 
@@ -1072,10 +1098,11 @@ export async function updateLabel(keyword: string, updates: Partial<Label>): Pro
     return { success: true };
   } catch (err: unknown) {
     warn('[settingsStore] Failed to update label:', err);
-    // Revert optimistic update
-    await fetchLabels();
-    const error = err instanceof Error ? err.message : 'Failed to update label';
+    // Revert optimistic update.
+    settingsLabels.set(previousLabels);
     const status = (err as { status?: number })?.status;
+    dispatchLabelToast(describeLabelError('update label', err));
+    const error = err instanceof Error ? err.message : 'Failed to update label';
     return {
       success: false,
       error,
@@ -1123,8 +1150,9 @@ export async function deleteLabel(keyword: string): Promise<LabelResult> {
     warn('[settingsStore] Failed to delete label:', err);
     // Revert optimistic update
     settingsLabels.set(previousLabels);
-    const error = err instanceof Error ? err.message : 'Failed to delete label';
     const status = (err as { status?: number })?.status;
+    dispatchLabelToast(describeLabelError('delete label', err));
+    const error = err instanceof Error ? err.message : 'Failed to delete label';
     return {
       success: false,
       error,

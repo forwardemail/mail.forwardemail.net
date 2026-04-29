@@ -121,6 +121,29 @@
   }
 }
 
+/* Android WebView fallback: hex border colors when oklch() is unsupported.
+ * Without this, --input/--border resolve to invalid → no visible border on
+ * Checkbox (and other thin-bordered surfaces). Light values match the
+ * oklch tokens at L=0.929 / L=1@10%. */
+@supports not (color: oklch(0% 0 0)) {
+  :root {
+    --border: #e5e7eb;
+    --input: #e5e7eb;
+  }
+  .dark {
+    --border: rgba(255, 255, 255, 0.1);
+    --input: rgba(255, 255, 255, 0.15);
+  }
+}
+
+/* Touch devices: make checkbox borders thicker so they're reliably
+ * visible on Android WebView at varying DPIs. */
+@media (pointer: coarse) {
+  [data-slot='checkbox'] {
+    border-width: 1.5px;
+  }
+}
+
 /* Tooltip styling for data-tooltip attributes */
 [data-tooltip] {
   position: relative;

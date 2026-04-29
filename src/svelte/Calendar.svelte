@@ -13,6 +13,7 @@
   import { db } from '../utils/db';
   import { normalizeEmail } from '../utils/address';
   import { queueEmail } from '../utils/outbox-service';
+  import { refreshTaskReminders } from '../utils/task-reminders';
   import {
     effectiveTheme,
     hideCompletedTodos,
@@ -416,6 +417,15 @@
   };
 
   const applyCalendarHashSelection = () => {
+    // #tasks (or #section=tasks) deep-links to the Tasks tab without
+    // selecting a specific task — used by the new "Tasks" shortcut icon.
+    if (typeof window !== 'undefined') {
+      const hash = (window.location.hash || '').toLowerCase();
+      if (hash === '#tasks' || hash === '#section=tasks') {
+        currentSection = 'tasks';
+        return true;
+      }
+    }
     const target = getCalendarHashTarget();
     if (!target?.id) return false;
     const match = findCalendarItemById(target.id);
@@ -902,6 +912,7 @@
       status?: string;
       completedAt?: string;
       percentComplete?: number;
+      reminder?: number;
     },
     options: { method?: string } = {},
   ) => {
@@ -917,6 +928,7 @@
       status,
       completedAt,
       percentComplete,
+      reminder,
     } = task;
     const { method = 'PUBLISH' } = options;
     const formatICalDate = (d: string | undefined) => {
@@ -958,8 +970,46 @@
       lines.push(`PERCENT-COMPLETE:${Math.max(0, Math.min(100, Math.round(percentComplete)))}`);
     }
     if (completed) lines.push(`COMPLETED:${completed}`);
+    // VALARM for VTODO. Trigger is relative; backend's normalizeVAlarm
+    // keeps it that way so future DUE changes auto-shift the alarm.
+    // RELATED=END anchors the offset to DUE (vs DTSTART) per RFC 5545.
+    if (typeof reminder === 'number' && reminder > 0 && Number.isFinite(reminder)) {
+      const minutes = Math.max(1, Math.round(reminder));
+      lines.push(
+        'BEGIN:VALARM',
+        'ACTION:DISPLAY',
+        `DESCRIPTION:${escape(summary || 'Task reminder')}`,
+        dueDate ? `TRIGGER;RELATED=END:-PT${minutes}M` : `TRIGGER:-PT${minutes}M`,
+        'END:VALARM',
+      );
+    }
     lines.push('END:VTODO', 'END:VCALENDAR');
     return lines.join('\r\n');
+  };
+
+  // Parse the first VALARM TRIGGER from a VTODO/VEVENT ICS into
+  // minutes-before-anchor. Handles the durations we emit
+  // (-PT{N}M / -PT{N}H / -P{N}D / -P{N}DT{H}H{M}M). Backend normalizes
+  // absolute triggers to relative durations, so this round-trips losslessly.
+  const parseTaskReminderMinutes = (ical: unknown, kind: 'VTODO' | 'VEVENT' = 'VTODO'): number => {
+    if (typeof ical !== 'string' || !ical) return 0;
+    const re =
+      kind === 'VEVENT' ? /BEGIN:VEVENT[\s\S]*?END:VEVENT/ : /BEGIN:VTODO[\s\S]*?END:VTODO/;
+    const compMatch = ical.match(re);
+    if (!compMatch) return 0;
+    const triggerMatch = compMatch[0].match(/TRIGGER[^:\r\n]*:(-?P[^\r\n]+)/i);
+    if (!triggerMatch) return 0;
+    const dur = triggerMatch[1].toUpperCase();
+    const negative = dur.startsWith('-');
+    const body = dur.replace(/^[-+]?P/, '');
+    const dayMatch = body.match(/(\d+)D/);
+    const hourMatch = body.match(/(\d+)H/);
+    const minMatch = body.match(/(\d+)M/);
+    const total =
+      (dayMatch ? Number(dayMatch[1]) * 1440 : 0) +
+      (hourMatch ? Number(hourMatch[1]) * 60 : 0) +
+      (minMatch ? Number(minMatch[1]) : 0);
+    return negative ? total : 0;
   };
 
   const exportEventAsICS = (event: Record<string, unknown> | undefined) => {
@@ -2019,6 +2069,15 @@
     { value: 'title', label: 'Title' },
     { value: 'created', label: 'Created (newest)' },
   ];
+
+  // Minutes before due. 0 = no reminder (no VALARM emitted).
+  // Stored as VALARM TRIGGER;RELATED=END:-PT{N}M on the VTODO.
+  const REMINDER_OPTIONS: { value: number; label: string }[] = [
+    { value: 0, label: 'None' },
+    { value: 15, label: '15 min' },
+    { value: 60, label: '1 hour' },
+    { value: 1440, label: '1 day' },
+  ];
   const taskSortLabel = $derived(
     TASK_SORT_OPTIONS.find((o) => o.value === $tasksSort)?.label || 'Due date',
   );
@@ -2036,6 +2095,14 @@
 
   let lastEventCount = -1;
   let calendarCreated = false;
+  // Refresh local task reminders whenever the events list changes.
+  // Phase 1 (client-side): schedules setTimeout-driven notifications via
+  // notification-bridge for each upcoming task with a VALARM.
+  // Phase 2 (server-side push) will dedupe against this.
+  $effect(() => {
+    refreshTaskReminders(allEvents as Record<string, unknown>[]);
+  });
+
   $effect(() => {
     if (isActive && visibleEvents && calendars.length) {
       const eventCount = visibleEvents?.length || 0;
@@ -2364,6 +2431,7 @@
             start: startISO,
             due: endISO,
             status: 'NEEDS-ACTION',
+            reminder: Number(notify) || 0,
           })
         : generateICalEvent({
             summary: title,
@@ -2504,7 +2572,14 @@
       url: (fullEvent.url as string) || '',
       timezone: (fullEvent.timezone as string) || '',
       attendees: (fullEvent.attendees as string) || '',
-      notify: (fullEvent.notify as number) || 0,
+      notify:
+        (fullEvent.notify as number) ||
+        parseTaskReminderMinutes(
+          (fullEvent.raw as Record<string, unknown> | undefined)?.ical ||
+            (fullEvent as Record<string, unknown>).ical,
+          isTodo ? 'VTODO' : 'VEVENT',
+        ) ||
+        0,
       componentType,
       status: firstNonEmptyString(fullEvent.status),
       completedAt: firstNonEmptyString(fullEvent.completedAt),
@@ -2596,6 +2671,7 @@
             status: status || 'NEEDS-ACTION',
             completedAt: completedAt || '',
             percentComplete: Number(percentComplete) || 0,
+            reminder: Number(notify) || 0,
           })
         : generateICalEvent({
             summary: title,
@@ -3491,6 +3567,29 @@
             </div>
           </div>
         {/if}
+        {#if newEvent.componentType === 'VTODO' && newEvent.hasDate}
+          <div class="space-y-2">
+            <Label>Remind me</Label>
+            <div class="flex flex-wrap gap-1.5">
+              {#each REMINDER_OPTIONS as opt (opt.value)}
+                <button
+                  type="button"
+                  class={`inline-flex h-8 items-center px-3 text-xs rounded-full border transition-colors ${
+                    Number(newEvent.notify || 0) === opt.value
+                      ? 'bg-primary text-primary-foreground border-primary'
+                      : 'bg-background text-muted-foreground border-border hover:bg-accent hover:text-foreground'
+                  }`}
+                  onclick={() => {
+                    newEvent.notify = opt.value;
+                    modalDirty = true;
+                  }}
+                >
+                  {opt.label}
+                </button>
+              {/each}
+            </div>
+          </div>
+        {/if}
         {#if newEvent.componentType !== 'VTODO' && !newEvent.allDay}
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div class="space-y-2">
@@ -3640,6 +3739,29 @@
                   </Select.Root>
                 </div>
               {/if}
+            </div>
+          </div>
+        {/if}
+        {#if newEvent.componentType !== 'VTODO' && newEvent.date}
+          <div class="space-y-2">
+            <Label>Remind me</Label>
+            <div class="flex flex-wrap gap-1.5">
+              {#each REMINDER_OPTIONS as opt (opt.value)}
+                <button
+                  type="button"
+                  class={`inline-flex h-8 items-center px-3 text-xs rounded-full border transition-colors ${
+                    Number(newEvent.notify || 0) === opt.value
+                      ? 'bg-primary text-primary-foreground border-primary'
+                      : 'bg-background text-muted-foreground border-border hover:bg-accent hover:text-foreground'
+                  }`}
+                  onclick={() => {
+                    newEvent.notify = opt.value;
+                    modalDirty = true;
+                  }}
+                >
+                  {opt.label}
+                </button>
+              {/each}
             </div>
           </div>
         {/if}
@@ -3913,6 +4035,29 @@
               </div>
             {/if}
           {/if}
+          {#if editEvent.hasDate}
+            <div class="space-y-2">
+              <Label>Remind me</Label>
+              <div class="flex flex-wrap gap-1.5">
+                {#each REMINDER_OPTIONS as opt (opt.value)}
+                  <button
+                    type="button"
+                    class={`inline-flex h-8 items-center px-3 text-xs rounded-full border transition-colors ${
+                      Number(editEvent.notify || 0) === opt.value
+                        ? 'bg-primary text-primary-foreground border-primary'
+                        : 'bg-background text-muted-foreground border-border hover:bg-accent hover:text-foreground'
+                    }`}
+                    onclick={() => {
+                      editEvent.notify = opt.value;
+                      modalDirty = true;
+                    }}
+                  >
+                    {opt.label}
+                  </button>
+                {/each}
+              </div>
+            </div>
+          {/if}
         {:else}
           <div class="space-y-2">
             <Label>Date</Label>
@@ -4052,6 +4197,29 @@
                   </Select.Root>
                 </div>
               {/if}
+            </div>
+          </div>
+        {/if}
+        {#if editEvent.componentType !== 'VTODO' && editEvent.date}
+          <div class="space-y-2">
+            <Label>Remind me</Label>
+            <div class="flex flex-wrap gap-1.5">
+              {#each REMINDER_OPTIONS as opt (opt.value)}
+                <button
+                  type="button"
+                  class={`inline-flex h-8 items-center px-3 text-xs rounded-full border transition-colors ${
+                    Number(editEvent.notify || 0) === opt.value
+                      ? 'bg-primary text-primary-foreground border-primary'
+                      : 'bg-background text-muted-foreground border-border hover:bg-accent hover:text-foreground'
+                  }`}
+                  onclick={() => {
+                    editEvent.notify = opt.value;
+                    modalDirty = true;
+                  }}
+                >
+                  {opt.label}
+                </button>
+              {/each}
             </div>
           </div>
         {/if}

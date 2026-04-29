@@ -170,6 +170,7 @@
   import User from '@lucide/svelte/icons/user';
   import BookUser from '@lucide/svelte/icons/book-user';
   import CalendarIcon from '@lucide/svelte/icons/calendar';
+  import ListTodo from '@lucide/svelte/icons/list-todo';
   import SettingsIcon from '@lucide/svelte/icons/settings';
   import MailSearch from '@lucide/svelte/icons/mail-search';
   import ListFilter from '@lucide/svelte/icons/list-filter';
@@ -5375,6 +5376,16 @@
                 <button
                   class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
                   type="button"
+                  data-tooltip="Tasks"
+                  data-tooltip-position="bottom"
+                  aria-label="Tasks"
+                  onclick={() => navigate('/calendar#tasks')}
+                >
+                  <ListTodo class="h-4.5 w-4.5" />
+                </button>
+                <button
+                  class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                  type="button"
                   data-tooltip="Settings"
                   data-tooltip-position="bottom"
                   aria-label="Settings"
@@ -5688,6 +5699,14 @@
                   >
                     <CalendarIcon class="h-4 w-4" />
                     <span>Calendar</span>
+                  </button>
+                  <button
+                    type="button"
+                    class="flex items-center gap-2 px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                    onclick={() => navigate('/calendar#tasks')}
+                  >
+                    <ListTodo class="h-4 w-4" />
+                    <span>Tasks</span>
                   </button>
                   <button
                     type="button"
