@@ -4491,11 +4491,16 @@
   }
 
   /* Override schedule-x primary colors */
+  .sx-wrapper {
+    --sx-color-primary: #0066ff !important;
+    --sx-color-on-primary: #ffffff !important;
+  }
+
   .sx-wrapper :global(.sx__time-grid-event),
   .sx-wrapper :global(.sx__month-grid-event) {
-    --sx-color-primary: #1c7ed6 !important;
-    --sx-color-primary-container: #e7f5ff !important;
-    --sx-color-on-primary-container: #1864ab !important;
+    --sx-color-primary: #0066ff !important;
+    --sx-color-primary-container: #e6efff !important;
+    --sx-color-on-primary-container: #003bb3 !important;
   }
 
   /* Dark mode overrides - event labels with better visibility */

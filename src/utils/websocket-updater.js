@@ -32,6 +32,7 @@ import { fetchLabels } from '../stores/settingsStore';
 // ── Constants ──────────────────────────────────────────────────────────────
 const FALLBACK_POLL_INTERVAL_MS = 60_000; // 1 min fallback when WS disconnected
 const SETTINGS_SYNC_THROTTLE_MS = 30_000; // Throttle visibility-based settings sync
+const CALDAV_RESYNC_THROTTLE_MS = 30_000; // Throttle visibility-based calendar/contacts reload
 
 /**
  * @typedef {Object} InboxUpdater
@@ -80,6 +81,7 @@ function createWebSocketUpdater() {
   let started = false;
   let visibilityHandler = null;
   let lastSettingsSync = 0;
+  let lastCaldavResync = 0;
   const wsUnsubs = [];
 
   // Refresh the current folder — polls whatever the user is viewing, not just INBOX.
@@ -373,8 +375,18 @@ function createWebSocketUpdater() {
           wsClient.reconnect();
         }
 
-        // 3. Re-sync labels/settings (throttled to avoid hammering)
+        // 3. Reconcile calendar + contacts. Any CalDAV/CardDAV events that
+        // fired while the WS was paused (mobile background, desktop sleep)
+        // are lost — without this, calendar events/tasks created on another
+        // client only appear after a full app restart.
         const now = Date.now();
+        if (now - lastCaldavResync >= CALDAV_RESYNC_THROTTLE_MS) {
+          lastCaldavResync = now;
+          dispatchFrozen('fe:calendar-changed', { source: 'visibility' });
+          dispatchFrozen('fe:contacts-changed', { source: 'visibility' });
+        }
+
+        // 4. Re-sync labels/settings (throttled to avoid hammering)
         if (now - lastSettingsSync < SETTINGS_SYNC_THROTTLE_MS) return;
         lastSettingsSync = now;
         fetchLabels(true, { force: true }).catch(() => {});
