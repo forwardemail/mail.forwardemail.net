@@ -346,35 +346,6 @@ jobs:
             echo "(fresh — no src-tauri/target/aarch64-apple-ios yet)"
           fi
 
-      - name: Override iOS CFBundleVersion (build number)
-        if: steps.check.outputs.enabled == 'true'
-        env:
-          # Tauri sets both CFBundleShortVersionString and CFBundleVersion
-          # from tauri.conf.json's single `version` field. Apple rejects an
-          # IPA whose CFBundleVersion matches a previously uploaded build
-          # for the same marketing version, so we override CFBundleVersion
-          # here to a value that strictly increases across:
-          #   - new workflow runs (github.run_number bumps)
-          #   - re-runs of the same failed run (github.run_attempt bumps;
-          #     run_number stays the same, so we *must* include attempt
-          #     for "Re-run failed jobs" to produce a fresh build number).
-          # Dotted CFBundleVersion is allowed — TestFlight orders them
-          # component-by-component (1234.2 > 1234.1 > 1234).
-          IOS_BUILD_NUMBER: ${{ github.run_number }}.${{ github.run_attempt }}
-        run: |
-          set -euo pipefail
-          PLIST=src-tauri/gen/apple/forwardemail-desktop_iOS/Info.plist
-          if [ ! -f "$PLIST" ]; then
-            echo "::error::Info.plist not found at $PLIST"
-            find src-tauri/gen/apple -maxdepth 4 -name 'Info.plist' -type f | head -10
-            exit 1
-          fi
-          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $IOS_BUILD_NUMBER" "$PLIST" \
-            || /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $IOS_BUILD_NUMBER" "$PLIST"
-          echo "── Final plist version fields ──"
-          /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$PLIST"
-          /usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$PLIST"
-
       - name: Build iOS (release, signed)
         if: steps.check.outputs.enabled == 'true'
         env:
@@ -406,6 +377,88 @@ jobs:
           mv "$IPA" "$NEW"
           echo "IPA_PATH=$NEW" >> "$GITHUB_ENV"
           echo "Produced: $NEW"
+
+      - name: Repack IPA with unique CFBundleVersion (re-sign)
+        if: steps.check.outputs.enabled == 'true'
+        env:
+          # Tauri's `ios build` regenerates Info.plist from tauri.conf.json's
+          # single `version` field, mapping it to BOTH CFBundleShortVersionString
+          # and CFBundleVersion. Apple rejects re-uploads where CFBundleVersion
+          # matches any previously uploaded build for the same marketing
+          # version, so we override CFBundleVersion *after* the IPA is built:
+          # unzip → edit Info.plist → re-sign the .app → rezip.
+          #
+          # The build number must strictly increase across:
+          #   - new workflow runs (github.run_number bumps)
+          #   - re-runs of the same failed run ("Re-run failed jobs" keeps
+          #     run_number constant but bumps run_attempt — must include both).
+          # Dotted CFBundleVersion is allowed; TestFlight orders numerically
+          # component-by-component (1234.2 > 1234.1 > 1234).
+          IOS_BUILD_NUMBER: ${{ github.run_number }}.${{ github.run_attempt }}
+          IOS_SIGNING_IDENTITY: ${{ vars.IOS_SIGNING_IDENTITY || 'Apple Distribution' }}
+        run: |
+          set -euo pipefail
+          if [ -z "${IPA_PATH:-}" ] || [ ! -f "$IPA_PATH" ]; then
+            echo "::error::IPA_PATH not set or file missing"
+            exit 1
+          fi
+
+          WORK=$(mktemp -d)
+          trap 'rm -rf "$WORK"' EXIT
+          unzip -q "$IPA_PATH" -d "$WORK"
+
+          APP=$(find "$WORK/Payload" -maxdepth 1 -name '*.app' -type d | head -n 1)
+          if [ -z "$APP" ] || [ ! -d "$APP" ]; then
+            echo "::error::No .app bundle found inside Payload/"
+            find "$WORK" -maxdepth 3 -type d
+            exit 1
+          fi
+          PLIST="$APP/Info.plist"
+
+          echo "── Before override ──"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$PLIST"
+
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $IOS_BUILD_NUMBER" "$PLIST"
+
+          echo "── After override ──"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$PLIST"
+
+          # Preserve the original entitlements so re-signing keeps capabilities
+          # (push, app groups, associated domains, etc.) — losing these breaks
+          # TestFlight processing or the runtime app on device.
+          ENTITLEMENTS="$WORK/entitlements.plist"
+          codesign -d --entitlements - --xml "$APP" > "$ENTITLEMENTS" 2>/dev/null \
+            || codesign -d --entitlements :- "$APP" > "$ENTITLEMENTS"
+          if [ ! -s "$ENTITLEMENTS" ]; then
+            echo "::error::Failed to extract entitlements from $APP"
+            exit 1
+          fi
+
+          # Re-sign nested code (frameworks + dylibs) before the outer .app —
+          # codesign requires inner-first ordering. --force overwrites the
+          # existing signature; iOS distribution does not need --options runtime
+          # (that's macOS hardened-runtime only).
+          if [ -d "$APP/Frameworks" ]; then
+            find "$APP/Frameworks" -type d -name '*.framework' \
+              -exec codesign --force --sign "$IOS_SIGNING_IDENTITY" --timestamp {} \;
+            find "$APP/Frameworks" -type f -name '*.dylib' \
+              -exec codesign --force --sign "$IOS_SIGNING_IDENTITY" --timestamp {} \;
+          fi
+          codesign --force --sign "$IOS_SIGNING_IDENTITY" \
+            --entitlements "$ENTITLEMENTS" \
+            --timestamp \
+            "$APP"
+          codesign --verify --verbose=2 "$APP"
+
+          # Repackage. zip(1) with -X strips extra attributes that altool
+          # occasionally complains about; running from $WORK keeps the
+          # canonical Payload/<App>.app/ layout inside the IPA.
+          REPACK="$WORK/repacked.ipa"
+          (cd "$WORK" && zip -qry -X "$REPACK" Payload)
+          mv "$REPACK" "$IPA_PATH"
+          echo "Repacked IPA at: $IPA_PATH"
 
       - name: Upload to TestFlight (App Store Connect)
         if: steps.check.outputs.enabled == 'true'

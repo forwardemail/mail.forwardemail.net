@@ -866,10 +866,25 @@ viewModel.navigate = (path, options) => {
 
   const useReplace = options?.replace === true;
   const stateObject = { route: targetRoute };
+  const previousHash = window.location.hash;
+  const previousHref = window.location.href;
   if (useReplace) {
     history.replaceState(stateObject, '', path);
   } else {
     history.pushState(stateObject, '', path);
+  }
+
+  // history.{push,replace}State doesn't fire `hashchange` even when only
+  // the hash changes (per HTML spec). Components that listen for
+  // hashchange (e.g. Calendar's tab section) rely on it for in-page nav,
+  // so we synthesise the event here when the hash actually changed.
+  if (window.location.hash !== previousHash) {
+    window.dispatchEvent(
+      new HashChangeEvent('hashchange', {
+        oldURL: previousHref,
+        newURL: window.location.href,
+      }),
+    );
   }
 
   routeStore.set(detectRoute());

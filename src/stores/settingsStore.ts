@@ -961,8 +961,25 @@ export async function fetchLabels(includeHidden = false, { force = false } = {})
 
     // Fetch account data which includes settings.labels
     const response = await fetchAccountData({ force });
+    const responseObj = (response || {}) as AccountResponse;
 
-    const settingsData = extractSettingsFromAccount(response as AccountResponse);
+    // Discriminator for the auth path: alias-auth returns a serialized
+    // alias with `settings: { ... }`; user-auth (api_key) returns a User
+    // document that has no `settings` field. Without this guard, the
+    // user-auth response yields `labels = []`, which then both clears
+    // the in-memory store *and* overwrites the IndexedDB cache with
+    // empty — silently destroying labels that *were* persisted via a
+    // prior alias-auth session. This is the root cause of the
+    // "labels disappear after switching accounts" report.
+    const isAliasShape = responseObj.settings && typeof responseObj.settings === 'object';
+    if (!isAliasShape) {
+      warn(
+        '[settingsStore] Account response missing `settings` (likely api_key auth) — keeping cached labels intact.',
+      );
+      return get(settingsLabels);
+    }
+
+    const settingsData = extractSettingsFromAccount(responseObj);
     const labelArray = Array.isArray(settingsData.labels) ? settingsData.labels : [];
     let labels = labelArray;
     // Filter hidden labels client-side if requested

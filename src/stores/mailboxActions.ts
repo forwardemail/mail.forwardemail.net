@@ -1828,9 +1828,10 @@ const performAccountSwitch = async (email) => {
   if (cached.settings) {
     applySettings(cached.settings);
   }
-  if (cached.settingsLabels.length) {
-    settingsLabels.set(cached.settingsLabels);
-  }
+  // Always set settingsLabels (even if empty) to prevent the previous
+  // account's labels leaking into the new account's view. Without this,
+  // switching A → B (B has no labels) would keep showing A's labels.
+  settingsLabels.set(cached.settingsLabels);
 
   // Reset tabs for new account (desktop only)
   if (isTauriDesktop) {

@@ -417,13 +417,20 @@
   };
 
   const applyCalendarHashSelection = () => {
-    // #tasks (or #section=tasks) deep-links to the Tasks tab without
-    // selecting a specific task — used by the new "Tasks" shortcut icon.
+    // #tasks / #calendar deep-link to the corresponding tab. The Tasks
+    // and Calendar shortcut icons in Mailbox push these hashes; we
+    // listen on hashchange so in-page nav (calendar ↔ tasks) toggles
+    // the section without remount.
     if (typeof window !== 'undefined') {
       const hash = (window.location.hash || '').toLowerCase();
       if (hash === '#tasks' || hash === '#section=tasks') {
         currentSection = 'tasks';
         return true;
+      }
+      if (hash === '' || hash === '#' || hash === '#calendar' || hash === '#section=calendar') {
+        currentSection = 'calendar';
+        // Fall through so #event= / #task= targets still get picked up
+        // when they're present alongside the section hash.
       }
     }
     const target = getCalendarHashTarget();
