@@ -305,6 +305,9 @@
     calendarId: '',
     title: '',
     date: '',
+    // Multi-day support: endDate defaults to date for single-day events.
+    // Save flow uses (newEvent.endDate || newEvent.date) so empty == single-day.
+    endDate: '',
     startTime: '',
     startMeridiem: 'AM',
     endTime: '',
@@ -327,6 +330,7 @@
     calendarId: '',
     title: '',
     date: '',
+    endDate: '',
     startTime: '',
     startMeridiem: 'AM',
     endTime: '',
@@ -1159,6 +1163,7 @@
       calendarId: editEvent.calendarId || resolveActiveCalendarId(),
       title: `${title} (Copy)`,
       date,
+      endDate: editEvent.endDate || date,
       startTime,
       startMeridiem,
       endTime,
@@ -2188,9 +2193,14 @@
     startMeridiem: string,
     endTime: string,
     endMeridiem: string,
+    endDate?: string,
   ) => {
-    // Parse date components explicitly to avoid timezone parsing issues
-    const [year, month, day] = date.split('-').map(Number);
+    // Parse date components explicitly to avoid timezone parsing issues.
+    // Multi-day support: endDate may differ from start date. Falls back to
+    // the start date when omitted so single-day callers stay unchanged.
+    const [sYear, sMonth, sDay] = date.split('-').map(Number);
+    const finalEndDate = endDate && endDate.length ? endDate : date;
+    const [eYear, eMonth, eDay] = finalEndDate.split('-').map(Number);
     const startTime24 = to24Hour(startTime, startMeridiem);
     const endTime24 = to24Hour(endTime, endMeridiem);
     if (!startTime24 || !endTime24) return null;
@@ -2199,8 +2209,8 @@
     const [endHour, endMin] = endTime24.split(':').map(Number);
 
     // Create dates using local time components explicitly
-    const start = new Date(year, month - 1, day, startHour, startMin, 0, 0);
-    const end = new Date(year, month - 1, day, endHour, endMin, 0, 0);
+    const start = new Date(sYear, sMonth - 1, sDay, startHour, startMin, 0, 0);
+    const end = new Date(eYear, eMonth - 1, eDay, endHour, endMin, 0, 0);
 
     if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return null;
     if (end <= start) return null;
@@ -2227,6 +2237,7 @@
       calendarId: getCalendarId(calendar),
       title: '',
       date: datePart,
+      endDate: datePart,
       startTime: startSplit.time,
       startMeridiem: startSplit.meridiem,
       endTime: endSplit.time,
@@ -2341,6 +2352,7 @@
       calendarId: getCalendarId(calendar),
       title: email ? `Meeting with ${email}` : 'New event',
       date: datePart,
+      endDate: datePart,
       startTime: startSplit.time,
       startMeridiem: startSplit.meridiem,
       endTime: endSplit.time,
@@ -2404,21 +2416,35 @@
           }
         }
       } else if (newEvent.allDay) {
-        const startDate = new Date(newEvent.date);
-        startDate.setHours(0, 0, 0, 0);
-        const endDate = new Date(newEvent.date);
-        endDate.setHours(23, 59, 59, 999);
+        // Construct dates from local components to avoid `new Date('YYYY-MM-DD')`
+        // parsing as UTC midnight (which shifts a day in negative-offset zones).
+        const [sY, sM, sD] = newEvent.date.split('-').map(Number);
+        const [eY, eM, eD] = (newEvent.endDate || newEvent.date).split('-').map(Number);
+        const startDate = new Date(sY, sM - 1, sD, 0, 0, 0, 0);
+        const endDate = new Date(eY, eM - 1, eD, 23, 59, 59, 999);
+        if (endDate < startDate) {
+          setError('End date must be on or after start date.');
+          savingEvent = false;
+          return;
+        }
         range = { start: startDate, end: endDate };
       } else {
-        const { date, startTime, startMeridiem, endTime, endMeridiem } = newEvent;
+        const { date, endDate, startTime, startMeridiem, endTime, endMeridiem } = newEvent;
         if (!startTime || !endTime || !startMeridiem || !endMeridiem) {
           setError('Start and end times are required.');
           savingEvent = false;
           return;
         }
-        range = ensureEndAfterStart(date, startTime, startMeridiem, endTime, endMeridiem);
+        range = ensureEndAfterStart(
+          date,
+          startTime,
+          startMeridiem,
+          endTime,
+          endMeridiem,
+          endDate || date,
+        );
         if (!range) {
-          setError('End time must be after start time.');
+          setError('End must be after start.');
           savingEvent = false;
           return;
         }
@@ -2554,6 +2580,9 @@
     const startLocal = formatDateTimeLocal(startDate);
     const endLocal = formatDateTimeLocal(endDate);
     const datePart = startLocal.split('T')[0];
+    // Multi-day: capture the end's date separately. For single-day events
+    // endDatePart === datePart and the UI behaves as before.
+    const endDatePart = endLocal.split('T')[0] || datePart;
     const startSplit = to12Hour(startLocal.split('T')[1]);
     const endSplit = to12Hour(endLocal.split('T')[1]);
     const componentType = firstNonEmptyString(fullEvent.componentType, 'VEVENT').toUpperCase();
@@ -2569,6 +2598,7 @@
         resolveActiveCalendarId()) as string,
       title: (fullEvent.title as string) || '',
       date: datePart,
+      endDate: endDatePart,
       startTime: startSplit.time,
       startMeridiem: startSplit.meridiem,
       endTime: endSplit.time,
@@ -2614,6 +2644,7 @@
       calendarId,
       title,
       date,
+      endDate,
       startTime,
       startMeridiem,
       endTime,
@@ -2649,7 +2680,14 @@
         setError('Title, date, and times are required.');
         return;
       }
-      range = ensureEndAfterStart(date, startTime, startMeridiem, endTime, endMeridiem);
+      range = ensureEndAfterStart(
+        date,
+        startTime,
+        startMeridiem,
+        endTime,
+        endMeridiem,
+        endDate || date,
+      );
       if (!range) {
         setError('End time must be after start time.');
         return;
@@ -3471,27 +3509,42 @@
         {:else}
           <div class="grid grid-cols-2 gap-4">
             <div class="space-y-2">
-              <Label for="event-date">Date</Label>
+              <Label for="event-date">Start date</Label>
               <Input
                 id="event-date"
                 type="date"
                 bind:value={newEvent.date}
+                onchange={() => {
+                  modalDirty = true;
+                  // Keep end date >= start date when the user edits start.
+                  // Don't auto-advance end if user already set it later.
+                  if (!newEvent.endDate || newEvent.endDate < newEvent.date) {
+                    newEvent.endDate = newEvent.date;
+                  }
+                }}
+              />
+            </div>
+            <div class="space-y-2">
+              <Label for="event-end-date">End date</Label>
+              <Input
+                id="event-end-date"
+                type="date"
+                min={newEvent.date}
+                bind:value={newEvent.endDate}
                 onchange={() => (modalDirty = true)}
               />
             </div>
-            <div class="flex items-end pb-2">
-              <label class="flex items-center gap-2 cursor-pointer text-sm">
-                <Checkbox
-                  checked={newEvent.allDay}
-                  onCheckedChange={(v) => {
-                    newEvent.allDay = !!v;
-                    modalDirty = true;
-                  }}
-                />
-                <span>All-day</span>
-              </label>
-            </div>
           </div>
+          <label class="flex items-center gap-2 cursor-pointer text-sm">
+            <Checkbox
+              checked={newEvent.allDay}
+              onCheckedChange={(v) => {
+                newEvent.allDay = !!v;
+                modalDirty = true;
+              }}
+            />
+            <span>All-day</span>
+          </label>
         {/if}
         {#if newEvent.componentType === 'VTODO' && newEvent.hasDate && newEvent.hasTime}
           <div class="space-y-2">
@@ -4066,9 +4119,29 @@
             </div>
           {/if}
         {:else}
-          <div class="space-y-2">
-            <Label>Date</Label>
-            <Input type="date" bind:value={editEvent.date} />
+          <div class="grid grid-cols-2 gap-4">
+            <div class="space-y-2">
+              <Label>Start date</Label>
+              <Input
+                type="date"
+                bind:value={editEvent.date}
+                onchange={() => {
+                  modalDirty = true;
+                  if (!editEvent.endDate || editEvent.endDate < editEvent.date) {
+                    editEvent.endDate = editEvent.date;
+                  }
+                }}
+              />
+            </div>
+            <div class="space-y-2">
+              <Label>End date</Label>
+              <Input
+                type="date"
+                min={editEvent.date}
+                bind:value={editEvent.endDate}
+                onchange={() => (modalDirty = true)}
+              />
+            </div>
           </div>
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div class="space-y-2">
