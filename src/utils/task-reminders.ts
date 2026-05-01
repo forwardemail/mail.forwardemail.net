@@ -1,35 +1,31 @@
 /**
- * Forward Email — Task Reminders (Phase 1, client-side)
+ * Forward Email — Task Reminders
  *
  * Schedules local notifications (Tauri or Web) for VTODO tasks based on
  * VALARM blocks stored on each task's ICS.  Reads upcoming triggers, sets
  * a setTimeout per task, and fires `notify()` from notification-bridge
  * when due.
  *
- * Scope (Phase 1):
- *   - Only fires while the app is running. Web push and OS-level scheduled
- *     notifications are deferred to Phase 2.
+ * Scope:
+ *   - Client-only. Only fires while the app is running. Web push / OS-
+ *     level scheduled notifications would require server-side dispatch.
  *   - Browser caveat: Chromium throttles setTimeout in backgrounded tabs
  *     (clamped to ~1/min after 5 min hidden, suspended after longer). To
  *     compensate, we listen for `visibilitychange` and on visible we fire
  *     any reminders whose trigger time has passed since we went hidden.
- *     This means notifications may be delivered late (when you return to
- *     the tab) rather than not at all — but they still get delivered.
- *   - Single VALARM per task (the chip selector emits one).  The parser
+ *     Reminders may be delivered late (when you return to the tab)
+ *     rather than not at all.
+ *   - Single VALARM per task (the chip selector emits one). The parser
  *     here grabs the first VALARM TRIGGER it finds.
  *   - Skips completed tasks and tasks whose trigger time is more than
  *     1 hour in the past (avoids notification spam after a long sleep).
  *
- * TODO Phase 2 (server-side):
- *   - Backend extracts VALARM into a queryable `alarms[]` field on the
- *     CalendarEvents model (parked code at caldav-server.js:622+).
- *   - Bree job ticks every minute, finds alarms whose next_trigger_at
- *     falls in (last_tick, now], fans out to per-device push subscriptions
- *     (Web Push for browser/desktop, FCM/APNs for mobile, WS for live
- *     clients).
- *   - This client module then dedupes against server-delivered reminders
- *     (idempotency key = `task_uid + trigger_offset`) so the user sees one
- *     notification regardless of which transport won the race.
+ * Future server-side dispatch would extract VALARM into a queryable
+ * `alarms[]` field on the CalendarEvents model (parked code at
+ * caldav-server.js:622+) and run a Bree job that fans out to per-device
+ * push subscriptions (Web Push for browser/desktop, FCM/APNs for mobile,
+ * WS for live clients). This module would then dedupe against server-
+ * delivered reminders (idempotency key = `task_uid + trigger_offset`).
  */
 
 import { notify, requestPermission } from './notification-bridge.js';

@@ -15,6 +15,17 @@
   import { queueEmail } from '../utils/outbox-service';
   import { refreshTaskReminders } from '../utils/task-reminders';
   import {
+    expandRecurringEvents,
+    getRecurrenceText,
+    buildRrule,
+    parseRrule,
+    describeRecurrenceSpec,
+    addExdateToMaster,
+    addOverrideToMaster,
+    DEFAULT_RECURRENCE,
+    type RecurrenceSpec,
+  } from '../utils/recurrence';
+  import {
     effectiveTheme,
     hideCompletedTodos,
     tasksSort,
@@ -322,6 +333,8 @@
     componentType: 'VEVENT' as 'VEVENT' | 'VTODO',
     hasDate: true,
     hasTime: true,
+    // Recurrence spec (VEVENT only — VTODO recurrence not yet supported).
+    recurrence: { ...DEFAULT_RECURRENCE } as RecurrenceSpec,
     _editingRawDescription: false,
   });
 
@@ -348,6 +361,7 @@
     percentComplete: 0,
     hasDate: true,
     hasTime: true,
+    recurrence: { ...DEFAULT_RECURRENCE } as RecurrenceSpec,
     _editingRawDescription: false,
   });
 
@@ -413,10 +427,22 @@
   const findCalendarItemById = (id: string) => {
     const targetId = String(id || '').trim();
     if (!targetId) return undefined;
-    return allEvents.find(
+    // Expanded recurring instances have ids like `${masterUid}::${occISO}`.
+    // First try the exact id in the visible (post-expansion) list to keep
+    // the instance's start/end. Fall back to allEvents (which holds the
+    // master) so edits resolve correctly. The "this / all" prompt
+    // distinguishes per-instance vs whole-series edits at save time.
+    const fromExpanded = (events || []).find(
       (ev) =>
         String((ev as Record<string, unknown>).id || (ev as Record<string, unknown>).uid || '') ===
         targetId,
+    ) as Record<string, unknown> | undefined;
+    if (fromExpanded) return fromExpanded;
+    const masterId = targetId.includes('::') ? targetId.split('::')[0] : targetId;
+    return allEvents.find(
+      (ev) =>
+        String((ev as Record<string, unknown>).id || (ev as Record<string, unknown>).uid || '') ===
+        masterId,
     ) as Record<string, unknown> | undefined;
   };
 
@@ -834,6 +860,7 @@
       url?: string;
       attendees?: string;
       timezone?: string;
+      recurrence?: RecurrenceSpec;
     },
     options: {
       method?: string;
@@ -842,8 +869,19 @@
       rsvp?: boolean;
     } = {},
   ) => {
-    const { summary, description, location, start, end, uid, reminder, url, attendees, timezone } =
-      event;
+    const {
+      summary,
+      description,
+      location,
+      start,
+      end,
+      uid,
+      reminder,
+      url,
+      attendees,
+      timezone,
+      recurrence,
+    } = event;
     const {
       method = 'PUBLISH',
       organizer = '',
@@ -882,6 +920,13 @@
     if (location) lines.push(`LOCATION:${escape(location)}`);
     if (url) lines.push(`URL:${escape(url)}`);
     if (timezone) lines.push(`TZID:${escape(timezone)}`);
+    // Emit RRULE when the user picked a recurrence. buildRrule returns
+    // '' for mode==='none' and the rawRrule verbatim for mode==='custom'
+    // so unrecognized rules round-trip unchanged.
+    if (recurrence && recurrence.mode !== 'none') {
+      const rruleLine = buildRrule(recurrence, start ? new Date(start) : null);
+      if (rruleLine) lines.push(rruleLine);
+    }
     if (organizer) lines.push(`ORGANIZER;CN=${escape(organizer)}:mailto:${organizer}`);
     const attendeeList = attendeeEmails?.length
       ? attendeeEmails
@@ -1178,6 +1223,10 @@
       componentType: 'VEVENT',
       hasDate: true,
       hasTime: true,
+      // Don't carry recurrence forward on duplicate — copying a
+      // recurring event into a non-recurring one is the safer default;
+      // user can re-pick recurrence in the new event modal.
+      recurrence: { ...DEFAULT_RECURRENCE },
       _editingRawDescription: false,
     };
     editEventModal = false;
@@ -1510,13 +1559,28 @@
     return null;
   };
 
+  // Expansion window for recurring events. Scoped to a generous range
+  // around "now" so the user sees recurring instances when scrolling
+  // through the next year. View-aware re-expansion (hook into Schedule-X's
+  // range change) is a future improvement.
+  const RECURRENCE_WINDOW_DAYS_BEFORE = 90;
+  const RECURRENCE_WINDOW_DAYS_AFTER = 365;
+  const getRecurrenceWindow = () => {
+    const now = new Date();
+    const start = new Date(now);
+    start.setDate(start.getDate() - RECURRENCE_WINDOW_DAYS_BEFORE);
+    const end = new Date(now);
+    end.setDate(end.getDate() + RECURRENCE_WINDOW_DAYS_AFTER);
+    return { start, end };
+  };
+
   const applySelectedEvents = () => {
     const selectedSet = new Set(effectiveSelectedCalendarIds);
     if (!selectedSet.size) {
       events = [];
       return;
     }
-    events = (allEvents || []).filter((ev) => {
+    const filtered = (allEvents || []).filter((ev) => {
       const e = ev as Record<string, unknown>;
       return selectedSet.has(
         (e.calendarId ||
@@ -1524,6 +1588,10 @@
           (e.raw as Record<string, unknown>)?.calendar_id) as string,
       );
     });
+    // Expand recurring masters into concrete instances before handing
+    // them to Schedule-X. Non-recurring events pass through.
+    const { start: winStart, end: winEnd } = getRecurrenceWindow();
+    events = expandRecurringEvents(filtered as Record<string, unknown>[], winStart, winEnd);
   };
 
   const hydrateEventsFromCache = async (
@@ -2108,9 +2176,9 @@
   let lastEventCount = -1;
   let calendarCreated = false;
   // Refresh local task reminders whenever the events list changes.
-  // Phase 1 (client-side): schedules setTimeout-driven notifications via
-  // notification-bridge for each upcoming task with a VALARM.
-  // Phase 2 (server-side push) will dedupe against this.
+  // Schedules setTimeout-driven notifications via notification-bridge
+  // for each upcoming task with a VALARM. Future server-side push
+  // dispatch would dedupe against this.
   $effect(() => {
     refreshTaskReminders(allEvents as Record<string, unknown>[]);
   });
@@ -2252,6 +2320,7 @@
       componentType,
       hasDate: componentType !== 'VTODO',
       hasTime: componentType !== 'VTODO',
+      recurrence: { ...DEFAULT_RECURRENCE },
       _editingRawDescription: false,
     };
     optionalFieldsExpanded = false;
@@ -2324,6 +2393,113 @@
     return hasTitle && hasDate && hasTimes;
   });
 
+  // Editing a recurring instance routes through the "this / this and
+  // following / all events" prompt at save time (see promptRecurrenceEdit).
+  const isEditingRecurringEvent = $derived(
+    String(editEvent.id || '').includes('::') ||
+      Boolean((editEvent as Record<string, unknown>).recurrenceMasterId),
+  );
+  // "Custom" rules from other clients (BYSETPOS, ordinal weekdays, etc.)
+  // are read-only — the chip composer can't represent them, so we keep
+  // them disabled to avoid clobbering on save.
+  const isCustomRecurrence = $derived(editEvent.recurrence?.mode === 'custom');
+  const editRecurrenceText = $derived.by(() => {
+    if (!editEventModal || !isEditingRecurringEvent) return '';
+    const masterId = String(editEvent.id || '').split('::')[0];
+    const master = (allEvents || []).find(
+      (ev) =>
+        String((ev as Record<string, unknown>).id || (ev as Record<string, unknown>).uid || '') ===
+        masterId,
+    );
+    return master ? getRecurrenceText(master as Record<string, unknown>) : '';
+  });
+
+  // Live preview of the user's recurrence selection for the new-event
+  // modal. Editor variant uses the editEvent state.
+  const newRecurrenceDescription = $derived.by(() => {
+    if (!newEvent.recurrence || newEvent.recurrence.mode === 'none') return '';
+    const dt =
+      newEvent.date && newEvent.startTime
+        ? new Date(`${newEvent.date}T00:00:00`)
+        : newEvent.date
+          ? new Date(`${newEvent.date}T00:00:00`)
+          : null;
+    return describeRecurrenceSpec(newEvent.recurrence, dt);
+  });
+  const editRecurrenceDescription = $derived.by(() => {
+    if (!editEvent.recurrence || editEvent.recurrence.mode === 'none') return '';
+    const dt = editEvent.date ? new Date(`${editEvent.date}T00:00:00`) : null;
+    return describeRecurrenceSpec(editEvent.recurrence, dt);
+  });
+
+  // Chip set covering ~95% of real recurring events. A future "Custom…"
+  // dialog (BYDAY checkboxes, intervals, end conditions) would extend
+  // this without changing the existing options.
+  const RECURRENCE_OPTIONS: {
+    value: 'none' | 'daily' | 'weekly' | 'monthly' | 'yearly';
+    label: string;
+  }[] = [
+    { value: 'none', label: "Doesn't repeat" },
+    { value: 'daily', label: 'Daily' },
+    { value: 'weekly', label: 'Weekly' },
+    { value: 'monthly', label: 'Monthly' },
+    { value: 'yearly', label: 'Yearly' },
+  ];
+
+  // When the user clicks Save or Delete on an expanded recurring
+  // instance, surface the 3-button choice (this / this and following /
+  // all). "This and following" is wired but disabled — it requires two
+  // atomic PUTs (truncate master + create new series). See
+  // addExdateToMaster / addOverrideToMaster in utils/recurrence.ts for
+  // the supporting ICS mutation helpers.
+  let recurrenceEditPrompt = $state<{
+    open: boolean;
+    action: 'save' | 'delete' | null;
+  }>({ open: false, action: null });
+
+  const promptRecurrenceEdit = (action: 'save' | 'delete') => {
+    if (!isEditingRecurringEvent || isCustomRecurrence) {
+      // Non-recurring or custom rule — go straight through the normal
+      // direct save/delete path (custom rules are read-only via gating elsewhere).
+      if (action === 'save') updateEvent();
+      else showDeleteConfirm = true;
+      return;
+    }
+    recurrenceEditPrompt = { open: true, action };
+  };
+
+  // The End date input does double duty:
+  //   - recurrence.mode === 'none'   → event's own end date (multi-day span)
+  //   - recurrence.mode in {daily,…} → UNTIL anchor (recurrence stops here)
+  // This helper keeps the recurrence spec's `until/ends` fields in sync
+  // with whatever's typed into the End date input. Called from the chip
+  // click handlers and the End date input's onchange so the live preview
+  // and saved RRULE always agree.
+  const syncRecurrenceUntilFromEndDate = (target: {
+    date: string;
+    endDate: string;
+    recurrence: RecurrenceSpec;
+  }) => {
+    if (target.recurrence.mode === 'none' || target.recurrence.mode === 'custom') {
+      // Not recurring, or custom rule we're preserving verbatim — leave
+      // the spec's ends/until alone (custom rules round-trip rawRrule).
+      return;
+    }
+    if (target.endDate && target.endDate !== target.date) {
+      target.recurrence = {
+        ...target.recurrence,
+        ends: 'on',
+        until: target.endDate,
+      };
+    } else {
+      target.recurrence = {
+        ...target.recurrence,
+        ends: 'never',
+        until: '',
+      };
+    }
+  };
+
   const attemptSaveNewEvent = () => {
     titleError = '';
     if (!newEvent.title?.trim()) {
@@ -2367,6 +2543,7 @@
       componentType: 'VEVENT',
       hasDate: true,
       hasTime: true,
+      recurrence: { ...DEFAULT_RECURRENCE },
       _editingRawDescription: false,
     };
     newEventModal = true;
@@ -2435,13 +2612,17 @@
           savingEvent = false;
           return;
         }
+        // Belt and suspenders: each occurrence is single-day for simple
+        // recurring events even if the End date input was somehow set.
+        const recurringSingleDay =
+          newEvent.recurrence.mode !== 'none' && newEvent.recurrence.mode !== 'custom';
         range = ensureEndAfterStart(
           date,
           startTime,
           startMeridiem,
           endTime,
           endMeridiem,
-          endDate || date,
+          recurringSingleDay ? date : endDate || date,
         );
         if (!range) {
           setError('End must be after start.');
@@ -2476,6 +2657,7 @@
             start: startISO,
             end: endISO,
             reminder: Number(notify) || 0,
+            recurrence: newEvent.recurrence,
           });
 
       const payload = { calendar_id: resolvedCalendarId, ical: icalData };
@@ -2582,7 +2764,7 @@
     const datePart = startLocal.split('T')[0];
     // Multi-day: capture the end's date separately. For single-day events
     // endDatePart === datePart and the UI behaves as before.
-    const endDatePart = endLocal.split('T')[0] || datePart;
+    let endDatePart = endLocal.split('T')[0] || datePart;
     const startSplit = to12Hour(startLocal.split('T')[1]);
     const endSplit = to12Hour(endLocal.split('T')[1]);
     const componentType = firstNonEmptyString(fullEvent.componentType, 'VEVENT').toUpperCase();
@@ -2591,6 +2773,33 @@
     const editHasDate = isTodo ? hasValidDate : true;
     const startHHMM = startLocal.split('T')[1] || '';
     const editHasTime = isTodo ? hasValidDate && startHHMM !== '00:00' : true;
+    // Resolve recurrence from the master event (instances inherit RRULE
+    // from the master, not from themselves).
+    const masterId = String(fullEvent.id || '').includes('::')
+      ? String(fullEvent.id).split('::')[0]
+      : String(fullEvent.id || '');
+    const recurrenceMaster =
+      (allEvents || []).find(
+        (ev) =>
+          String(
+            (ev as Record<string, unknown>).id || (ev as Record<string, unknown>).uid || '',
+          ) === masterId,
+      ) || fullEvent;
+    const editRecurrenceSpec = parseRrule(recurrenceMaster as Record<string, unknown>);
+    // For recurring events, the End date input represents UNTIL (when
+    // the series stops), not the per-occurrence end date. Surface the
+    // spec's UNTIL so the user sees what they originally configured.
+    if (
+      editRecurrenceSpec.mode !== 'none' &&
+      editRecurrenceSpec.mode !== 'custom' &&
+      editRecurrenceSpec.ends === 'on' &&
+      editRecurrenceSpec.until
+    ) {
+      endDatePart = editRecurrenceSpec.until;
+    } else if (editRecurrenceSpec.mode !== 'none' && editRecurrenceSpec.mode !== 'custom') {
+      // Recurring forever — clear the End date input so user knows.
+      endDatePart = '';
+    }
     editEvent = {
       id: fullEvent.id as string,
       calendarId: (fullEvent.calendarId ||
@@ -2623,6 +2832,10 @@
       percentComplete: Number(fullEvent.percentComplete || 0),
       hasDate: editHasDate,
       hasTime: editHasTime,
+      // Read RRULE back from the ICS so the composer chips preselect
+      // correctly. Resolves through the master if this is an expanded
+      // instance (the master holds the RRULE, not the instance).
+      recurrence: editRecurrenceSpec,
       _editingRawDescription: false,
     };
     optionalFieldsExpanded = !!(
@@ -2680,13 +2893,15 @@
         setError('Title, date, and times are required.');
         return;
       }
+      const recurringSingleDay =
+        editEvent.recurrence.mode !== 'none' && editEvent.recurrence.mode !== 'custom';
       range = ensureEndAfterStart(
         date,
         startTime,
         startMeridiem,
         endTime,
         endMeridiem,
-        endDate || date,
+        recurringSingleDay ? date : endDate || date,
       );
       if (!range) {
         setError('End time must be after start time.');
@@ -2727,13 +2942,18 @@
             attendees: attendees || '',
             start: startISO,
             end: endISO,
-            uid: id,
+            // Saving an expanded instance ('master::occISO' synthetic id)
+            // updates the master — strip the occurrence suffix so the
+            // UID and PUT path target the actual stored event.
+            uid: id.includes('::') ? id.split('::')[0] : id,
             reminder: Number(notify) || 0,
+            recurrence: editEvent.recurrence,
           });
-      const payload = { id, calendar_id: calendarId, ical: icalData };
+      const persistId = id.includes('::') ? id.split('::')[0] : id;
+      const payload = { id: persistId, calendar_id: calendarId, ical: icalData };
       await Remote.request('CalendarEventUpdate', payload, {
         method: 'PUT',
-        pathOverride: `/v1/calendar-events/${id}`,
+        pathOverride: `/v1/calendar-events/${persistId}`,
       });
       allEvents = allEvents.map((ev) =>
         (ev as Record<string, unknown>).id === id
@@ -2900,13 +3120,17 @@
       setError('No event selected.');
       return;
     }
+    // The "all events" branch deletes the entire series. Strip the
+    // synthetic occurrence suffix so the DELETE targets the master.
+    // Per-instance deletes use deleteOccurrenceOnly (writes EXDATE).
+    const persistId = id.includes('::') ? id.split('::')[0] : id;
     try {
       await Remote.request(
         'CalendarEventDelete',
         { calendar_id: calendarId },
-        { method: 'DELETE', pathOverride: `/v1/calendar-events/${id}` },
+        { method: 'DELETE', pathOverride: `/v1/calendar-events/${persistId}` },
       );
-      allEvents = allEvents.filter((ev) => (ev as Record<string, unknown>).id !== id);
+      allEvents = allEvents.filter((ev) => (ev as Record<string, unknown>).id !== persistId);
       applySelectedEvents();
 
       // Close modals immediately after successful API call
@@ -2941,6 +3165,169 @@
       }
     } catch (err) {
       setError((err as Error)?.message || 'Unable to delete event.');
+    }
+  };
+
+  // ── Per-instance recurrence handlers ──────────────────────────────────────
+
+  // Resolve the master event + occurrence date from an editEvent that
+  // came from clicking an expanded instance. Returns null when the
+  // information isn't recoverable (defensive — shouldn't fire in practice
+  // because the prompt is gated on isEditingRecurringEvent).
+  const resolveRecurrenceContext = () => {
+    const id = String(editEvent.id || '');
+    if (!id.includes('::')) return null;
+    const [masterId, occISO] = id.split('::');
+    const master = (allEvents || []).find(
+      (ev) =>
+        String((ev as Record<string, unknown>).id || (ev as Record<string, unknown>).uid || '') ===
+        masterId,
+    ) as Record<string, unknown> | undefined;
+    if (!master) return null;
+    const occurrence = new Date(occISO);
+    if (Number.isNaN(occurrence.getTime())) return null;
+    const masterIcal =
+      (typeof (master.raw as Record<string, unknown> | undefined)?.ical === 'string' &&
+        ((master.raw as Record<string, unknown>).ical as string)) ||
+      (typeof master.ical === 'string' && (master.ical as string)) ||
+      '';
+    return masterIcal
+      ? { masterId, occurrence, master, masterIcal, calendarId: editEvent.calendarId }
+      : null;
+  };
+
+  // "Delete this event" — adds an EXDATE to the master so the occurrence
+  // is excluded from future expansions. Uses the same PUT path as
+  // updateEvent so the master document is rewritten in place.
+  const deleteOccurrenceOnly = async () => {
+    const ctx = resolveRecurrenceContext();
+    if (!ctx) {
+      setError('Could not resolve recurring event context.');
+      return;
+    }
+    try {
+      const newIcal = addExdateToMaster(ctx.masterIcal, ctx.occurrence);
+      await Remote.request(
+        'CalendarEventUpdate',
+        { id: ctx.masterId, calendar_id: ctx.calendarId, ical: newIcal },
+        { method: 'PUT', pathOverride: `/v1/calendar-events/${ctx.masterId}` },
+      );
+      // Replace the master in allEvents with the updated ICS so re-expansion
+      // sees the new EXDATE. Strip the deleted occurrence from the visible
+      // events list as an immediate optimistic update.
+      allEvents = (allEvents || []).map((ev) => {
+        const e = ev as Record<string, unknown>;
+        if (String(e.id || e.uid || '') !== ctx.masterId) return ev;
+        const raw = (e.raw as Record<string, unknown> | undefined) || {};
+        return { ...e, raw: { ...raw, ical: newIcal } };
+      });
+      applySelectedEvents();
+      setError('');
+      setSuccess('Occurrence deleted');
+      editEventModal = false;
+      showDeleteConfirm = false;
+      recurrenceEditPrompt = { open: false, action: null };
+    } catch (err) {
+      setError((err as Error)?.message || 'Unable to delete occurrence.');
+    }
+  };
+
+  // "Edit this event" — appends a RECURRENCE-ID override VEVENT to the
+  // master's VCALENDAR carrying the user's edits. The original master's
+  // RRULE/DTSTART are untouched, so siblings are unaffected.
+  const saveOccurrenceOverride = async () => {
+    const ctx = resolveRecurrenceContext();
+    if (!ctx) {
+      setError('Could not resolve recurring event context.');
+      return;
+    }
+    const isTodo = editEvent.componentType === 'VTODO';
+    if (isTodo) {
+      // VTODO recurrence overrides aren't yet supported.
+      setError('Per-instance edits for tasks coming soon.');
+      return;
+    }
+    if (!editEvent.title?.trim()) {
+      setError('Title is required.');
+      return;
+    }
+    if (
+      !editEvent.date ||
+      !editEvent.startTime ||
+      !editEvent.endTime ||
+      !editEvent.startMeridiem ||
+      !editEvent.endMeridiem
+    ) {
+      setError('Date and times are required.');
+      return;
+    }
+    const range = ensureEndAfterStart(
+      editEvent.date,
+      editEvent.startTime,
+      editEvent.startMeridiem,
+      editEvent.endTime,
+      editEvent.endMeridiem,
+      // Per-instance overrides are single-day; ignore the End date input
+      // (which represents UNTIL for the master, not this occurrence).
+      editEvent.date,
+    );
+    if (!range) {
+      setError('End time must be after start time.');
+      return;
+    }
+    try {
+      const newIcal = addOverrideToMaster(ctx.masterIcal, ctx.occurrence, {
+        summary: editEvent.title.trim(),
+        description: editEvent.description || '',
+        location: editEvent.location || '',
+        url: editEvent.url || '',
+        start: range.start,
+        end: range.end,
+        reminderMinutes: Number(editEvent.notify) || 0,
+      });
+      await Remote.request(
+        'CalendarEventUpdate',
+        { id: ctx.masterId, calendar_id: ctx.calendarId, ical: newIcal },
+        { method: 'PUT', pathOverride: `/v1/calendar-events/${ctx.masterId}` },
+      );
+      // Update the master's stored ICS so re-expansion picks up the
+      // override.
+      allEvents = (allEvents || []).map((ev) => {
+        const e = ev as Record<string, unknown>;
+        if (String(e.id || e.uid || '') !== ctx.masterId) return ev;
+        const raw = (e.raw as Record<string, unknown> | undefined) || {};
+        return { ...e, raw: { ...raw, ical: newIcal } };
+      });
+      applySelectedEvents();
+      setError('');
+      setSuccess('Occurrence updated');
+      editEventModal = false;
+      recurrenceEditPrompt = { open: false, action: null };
+    } catch (err) {
+      setError((err as Error)?.message || 'Unable to update occurrence.');
+    }
+  };
+
+  // Route the user's choice from the prompt to the correct handler.
+  const applyRecurrenceChoice = (choice: 'this' | 'following' | 'all') => {
+    const action = recurrenceEditPrompt.action;
+    if (choice === 'following') {
+      // "This and following" not yet implemented.
+      return;
+    }
+    if (action === 'save') {
+      if (choice === 'this') return saveOccurrenceOverride();
+      if (choice === 'all') {
+        recurrenceEditPrompt = { open: false, action: null };
+        return updateEvent();
+      }
+    } else if (action === 'delete') {
+      if (choice === 'this') return deleteOccurrenceOnly();
+      if (choice === 'all') {
+        recurrenceEditPrompt = { open: false, action: null };
+        showDeleteConfirm = true;
+        return;
+      }
     }
   };
 
@@ -3525,13 +3912,23 @@
               />
             </div>
             <div class="space-y-2">
-              <Label for="event-end-date">End date</Label>
+              <Label for="event-end-date">
+                {newEvent.recurrence.mode !== 'none' && newEvent.recurrence.mode !== 'custom'
+                  ? 'Repeat until (optional)'
+                  : 'End date'}
+              </Label>
               <Input
                 id="event-end-date"
                 type="date"
                 min={newEvent.date}
                 bind:value={newEvent.endDate}
-                onchange={() => (modalDirty = true)}
+                onchange={() => {
+                  modalDirty = true;
+                  // When recurring, the End date input means UNTIL (the
+                  // recurrence stops here). Sync the spec so buildRrule
+                  // emits UNTIL, and the live preview reflects it.
+                  syncRecurrenceUntilFromEndDate(newEvent);
+                }}
               />
             </div>
           </div>
@@ -3804,6 +4201,34 @@
         {/if}
         {#if newEvent.componentType !== 'VTODO' && newEvent.date}
           <div class="space-y-2">
+            <Label>Repeats</Label>
+            <div class="flex flex-wrap gap-1.5">
+              {#each RECURRENCE_OPTIONS as opt (opt.value)}
+                <button
+                  type="button"
+                  class={`inline-flex h-8 items-center px-3 text-xs rounded-full border transition-colors ${
+                    newEvent.recurrence.mode === opt.value
+                      ? 'bg-primary text-primary-foreground border-primary'
+                      : 'bg-background text-muted-foreground border-border hover:bg-accent hover:text-foreground'
+                  }`}
+                  onclick={() => {
+                    newEvent.recurrence = { ...newEvent.recurrence, mode: opt.value };
+                    // Re-interpret End date for the new mode: when
+                    // recurring, End date means UNTIL (the recurrence
+                    // stops here); when 'none' it's the event's span.
+                    syncRecurrenceUntilFromEndDate(newEvent);
+                    modalDirty = true;
+                  }}
+                >
+                  {opt.label}
+                </button>
+              {/each}
+            </div>
+            {#if newRecurrenceDescription}
+              <p class="text-xs text-muted-foreground">{newRecurrenceDescription}</p>
+            {/if}
+          </div>
+          <div class="space-y-2">
             <Label>Remind me</Label>
             <div class="flex flex-wrap gap-1.5">
               {#each REMINDER_OPTIONS as opt (opt.value)}
@@ -3935,6 +4360,23 @@
       </Dialog.Header>
 
       <div class="space-y-4 py-4">
+        {#if isEditingRecurringEvent}
+          <div
+            class="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground"
+          >
+            <div class="flex items-center gap-1.5 font-medium text-foreground">
+              <span aria-hidden="true">↻</span>
+              <span>Recurring event{editRecurrenceText ? ` · ${editRecurrenceText}` : ''}</span>
+            </div>
+            <div class="mt-1">
+              {#if isCustomRecurrence}
+                Custom recurrence (read-only) — saving from this view isn't supported yet.
+              {:else}
+                Saving asks whether to change just this occurrence or every event in the series.
+              {/if}
+            </div>
+          </div>
+        {/if}
         {#if calendars.length > 1}
           <div class="space-y-2">
             <Label>Calendar</Label>
@@ -4134,12 +4576,19 @@
               />
             </div>
             <div class="space-y-2">
-              <Label>End date</Label>
+              <Label>
+                {editEvent.recurrence.mode !== 'none' && editEvent.recurrence.mode !== 'custom'
+                  ? 'Repeat until (optional)'
+                  : 'End date'}
+              </Label>
               <Input
                 type="date"
                 min={editEvent.date}
                 bind:value={editEvent.endDate}
-                onchange={() => (modalDirty = true)}
+                onchange={() => {
+                  modalDirty = true;
+                  syncRecurrenceUntilFromEndDate(editEvent);
+                }}
               />
             </div>
           </div>
@@ -4282,6 +4731,39 @@
         {/if}
         {#if editEvent.componentType !== 'VTODO' && editEvent.date}
           <div class="space-y-2">
+            <Label>Repeats</Label>
+            <div class="flex flex-wrap gap-1.5">
+              {#each RECURRENCE_OPTIONS as opt (opt.value)}
+                <button
+                  type="button"
+                  disabled={isCustomRecurrence}
+                  class={`inline-flex h-8 items-center px-3 text-xs rounded-full border transition-colors ${
+                    editEvent.recurrence.mode === opt.value
+                      ? 'bg-primary text-primary-foreground border-primary'
+                      : 'bg-background text-muted-foreground border-border hover:bg-accent hover:text-foreground'
+                  } ${isCustomRecurrence ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  onclick={() => {
+                    editEvent.recurrence = { ...editEvent.recurrence, mode: opt.value };
+                    syncRecurrenceUntilFromEndDate(editEvent);
+                    modalDirty = true;
+                  }}
+                >
+                  {opt.label}
+                </button>
+              {/each}
+              {#if isCustomRecurrence}
+                <span
+                  class="inline-flex h-8 items-center px-3 text-xs rounded-full border border-border bg-muted text-muted-foreground"
+                >
+                  Custom (read-only)
+                </span>
+              {/if}
+            </div>
+            {#if editRecurrenceDescription}
+              <p class="text-xs text-muted-foreground">{editRecurrenceDescription}</p>
+            {/if}
+          </div>
+          <div class="space-y-2">
             <Label>Remind me</Label>
             <div class="flex flex-wrap gap-1.5">
               {#each REMINDER_OPTIONS as opt (opt.value)}
@@ -4409,13 +4891,20 @@
                 variant="outline"
                 size="icon"
                 class="text-destructive hover:text-destructive"
-                onclick={() => (showDeleteConfirm = true)}
+                disabled={isCustomRecurrence}
+                onclick={() => promptRecurrenceEdit('delete')}
               >
                 <Trash2 class="h-4 w-4" />
               </Button>
             </Tooltip.Trigger>
             <Tooltip.Content>
-              <p>Delete</p>
+              <p>
+                {isCustomRecurrence
+                  ? 'Custom recurrence — delete from another client'
+                  : isEditingRecurringEvent
+                    ? 'Delete (choose this / all)'
+                    : 'Delete'}
+              </p>
             </Tooltip.Content>
           </Tooltip.Root>
         </div>
@@ -4427,9 +4916,13 @@
             {:else}
               <Button variant="outline" onclick={() => completeTask()}>Complete</Button>
             {/if}
-            <Button onclick={updateEvent}>Update</Button>
+            <Button onclick={() => promptRecurrenceEdit('save')} disabled={isCustomRecurrence}
+              >Update</Button
+            >
           {:else}
-            <Button onclick={updateEvent}>Update</Button>
+            <Button onclick={() => promptRecurrenceEdit('save')} disabled={isCustomRecurrence}
+              >Update</Button
+            >
           {/if}
         </div>
       </Dialog.Footer>
@@ -4447,6 +4940,57 @@
       <Dialog.Footer>
         <Button variant="ghost" onclick={() => (showDeleteConfirm = false)}>Cancel</Button>
         <Button variant="destructive" onclick={deleteEvent}>Delete</Button>
+      </Dialog.Footer>
+    </Dialog.Content>
+  </Dialog.Root>
+
+  <!-- Per-instance edit/delete prompt for recurring events -->
+  <Dialog.Root
+    open={recurrenceEditPrompt.open}
+    onOpenChange={(open) => {
+      if (!open) recurrenceEditPrompt = { open: false, action: null };
+    }}
+  >
+    <Dialog.Content class="sm:max-w-[440px]">
+      <Dialog.Header>
+        <Dialog.Title>
+          {recurrenceEditPrompt.action === 'delete'
+            ? 'Delete recurring event'
+            : 'Edit recurring event'}
+        </Dialog.Title>
+      </Dialog.Header>
+      <p class="text-sm text-muted-foreground py-3">
+        This event is part of a recurring series. What do you want to {recurrenceEditPrompt.action ===
+        'delete'
+          ? 'delete'
+          : 'change'}?
+      </p>
+      <div class="flex flex-col gap-2 pb-2">
+        <Button variant="outline" onclick={() => applyRecurrenceChoice('this')}>
+          {recurrenceEditPrompt.action === 'delete' ? 'Only this event' : 'This event'}
+        </Button>
+        <Tooltip.Root>
+          <Tooltip.Trigger class="w-full">
+            <Button variant="outline" disabled class="w-full">This and following events</Button>
+          </Tooltip.Trigger>
+          <Tooltip.Content>
+            <p>Coming soon — splits the series at this occurrence.</p>
+          </Tooltip.Content>
+        </Tooltip.Root>
+        <Button
+          variant={recurrenceEditPrompt.action === 'delete' ? 'destructive' : 'default'}
+          onclick={() => applyRecurrenceChoice('all')}
+        >
+          All events in the series
+        </Button>
+      </div>
+      <Dialog.Footer>
+        <Button
+          variant="ghost"
+          onclick={() => (recurrenceEditPrompt = { open: false, action: null })}
+        >
+          Cancel
+        </Button>
       </Dialog.Footer>
     </Dialog.Content>
   </Dialog.Root>
