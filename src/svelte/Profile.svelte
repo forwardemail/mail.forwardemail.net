@@ -5,13 +5,13 @@
   import { Input } from '$lib/components/ui/input';
   import { Label } from '$lib/components/ui/label';
   import * as Card from '$lib/components/ui/card';
-  import * as Avatar from '$lib/components/ui/avatar';
   import ChevronLeft from '@lucide/svelte/icons/chevron-left';
   import User from '@lucide/svelte/icons/user';
   import Plus from '@lucide/svelte/icons/plus';
   import LogOut from '@lucide/svelte/icons/log-out';
   import BookUser from '@lucide/svelte/icons/book-user';
   import CalendarIcon from '@lucide/svelte/icons/calendar';
+  import ListTodo from '@lucide/svelte/icons/list-todo';
   import SettingsIcon from '@lucide/svelte/icons/settings';
   import Camera from '@lucide/svelte/icons/camera';
   import { pickFiles } from '../utils/file-picker';
@@ -191,165 +191,188 @@
 </script>
 
 {#if isActive}
-  <div class="mx-auto flex max-w-[700px] flex-col gap-5 px-4 pt-2 pb-8 md:px-6 md:pt-3">
-    <!-- Header -->
-    <header class="flex items-center gap-2">
-      <Button
-        variant="ghost"
-        size="icon"
-        onclick={() => navigate('/mailbox')}
-        aria-label="Back to mailbox"
-      >
-        <ChevronLeft class="h-5 w-5" />
-      </Button>
-      <h1 class="text-xl font-semibold">Profile</h1>
-    </header>
+  <!-- Header -->
+  <div
+    class="flex h-14 items-center gap-3 px-4"
+    style="padding-top: env(safe-area-inset-top, 0px); box-sizing: content-box;"
+  >
+    <Button
+      variant="ghost"
+      size="icon"
+      onclick={() => navigate('/mailbox')}
+      aria-label="Back to mailbox"
+    >
+      <ChevronLeft class="h-5 w-5" />
+    </Button>
+    <div class="flex flex-col">
+      <h1 class="text-lg font-semibold">Profile</h1>
+      {#if $currentAccount}
+        <span class="text-xs text-muted-foreground">{$currentAccount}</span>
+      {/if}
+    </div>
+  </div>
 
-    <!-- Profile Card -->
-    <Card.Root>
-      <Card.Content class="flex gap-4 p-4 max-sm:flex-col max-sm:items-start">
-        <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-        <label
-          for="profile-photo-upload"
-          class="group relative h-[72px] w-[72px] shrink-0 cursor-pointer overflow-hidden rounded-full border border-border bg-muted transition-colors hover:border-primary max-sm:h-16 max-sm:w-16"
-          onclick={async (e) => {
-            if (!isTauriDesktop) return;
-            e.preventDefault();
-            const files = await pickFiles({ accept: 'image/*' });
-            if (files) handlePhotoSelect(files);
-          }}
-        >
-          {#if photoValue}
-            <img src={photoValue} alt="Profile" class="h-full w-full object-cover" />
-          {:else if getInitials(nameValue)}
-            <span
-              class="flex h-full w-full items-center justify-center text-xl font-bold text-muted-foreground"
-            >
-              {getInitials(nameValue)}
-            </span>
-          {:else}
-            <span class="flex h-full w-full items-center justify-center text-muted-foreground">
-              <User class="h-8 w-8" />
-            </span>
-          {/if}
-          <span
-            class="absolute inset-0 flex items-center justify-center bg-black/50 text-white opacity-0 transition-opacity group-hover:opacity-100"
+  <!-- Content -->
+  <div class="p-4 md:p-6">
+    <div class="mx-auto max-w-4xl space-y-6">
+      <!-- Profile Card -->
+      <Card.Root>
+        <Card.Header>
+          <Card.Title>Profile</Card.Title>
+          <Card.Description>How your name and photo appear in this app.</Card.Description>
+        </Card.Header>
+        <Card.Content class="flex gap-4 max-sm:flex-col max-sm:items-start">
+          <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+          <label
+            for="profile-photo-upload"
+            class="group relative h-12 w-12 shrink-0 cursor-pointer overflow-hidden rounded-full border border-border bg-muted transition-colors hover:border-primary"
+            onclick={async (e) => {
+              if (!isTauriDesktop) return;
+              e.preventDefault();
+              const files = await pickFiles({ accept: 'image/*' });
+              if (files) handlePhotoSelect(files);
+            }}
           >
-            <Camera class="h-8 w-8" />
-          </span>
-        </label>
-
-        <div class="flex flex-1 flex-col gap-2">
-          <Label for="profile-name" class="text-xs uppercase tracking-wider text-muted-foreground">
-            Name
-          </Label>
-          <Input
-            id="profile-name"
-            type="text"
-            placeholder="Add your name"
-            bind:value={nameValue}
-            onfocus={handleNameFocus}
-            onblur={commitName}
-            onkeydown={handleNameKeydown}
-          />
-          {#if photoValue}
-            <div class="mt-1">
-              <Button variant="ghost" size="sm" onclick={removePhoto}>Remove photo</Button>
-            </div>
-          {/if}
-          {#if photoError}
-            <p class="text-xs text-destructive">{photoError}</p>
-          {/if}
-          <input
-            id="profile-photo-upload"
-            class="hidden"
-            type="file"
-            accept="image/*"
-            onchange={handlePhotoSelect}
-          />
-        </div>
-      </Card.Content>
-    </Card.Root>
-
-    <!-- Accounts Section -->
-    <section class="flex flex-col gap-3">
-      <h2 class="text-xs font-medium uppercase tracking-wider text-muted-foreground">Accounts</h2>
-      <div class="flex flex-col gap-2.5">
-        {#each $accounts as account}
-          <Card.Root>
-            <Card.Content
-              class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 p-3"
+            {#if photoValue}
+              <img src={photoValue} alt="Profile" class="h-full w-full object-cover" />
+            {:else if getInitials(nameValue)}
+              <span
+                class="flex h-full w-full items-center justify-center text-sm font-semibold text-muted-foreground"
+              >
+                {getInitials(nameValue)}
+              </span>
+            {:else}
+              <span class="flex h-full w-full items-center justify-center text-muted-foreground">
+                <User class="h-5 w-5" />
+              </span>
+            {/if}
+            <span
+              class="absolute inset-0 flex items-center justify-center bg-black/50 text-white opacity-0 transition-opacity group-hover:opacity-100"
             >
-              <div class="flex items-center gap-3 min-w-0">
-                <Avatar.Root class="h-9 w-9 shrink-0 border border-primary/20 bg-primary/10">
-                  <Avatar.Fallback class="text-primary">
-                    <User class="h-4 w-4" />
-                  </Avatar.Fallback>
-                </Avatar.Root>
+              <Camera class="h-5 w-5" />
+            </span>
+          </label>
+
+          <div class="flex flex-1 flex-col gap-2">
+            <Label
+              for="profile-name"
+              class="text-xs uppercase tracking-wider text-muted-foreground"
+            >
+              Name
+            </Label>
+            <Input
+              id="profile-name"
+              type="text"
+              placeholder="Add your name"
+              bind:value={nameValue}
+              onfocus={handleNameFocus}
+              onblur={commitName}
+              onkeydown={handleNameKeydown}
+            />
+            {#if photoValue}
+              <div class="mt-1">
+                <Button variant="ghost" size="sm" onclick={removePhoto}>Remove photo</Button>
+              </div>
+            {/if}
+            {#if photoError}
+              <p class="text-xs text-destructive">{photoError}</p>
+            {/if}
+            <input
+              id="profile-photo-upload"
+              class="hidden"
+              type="file"
+              accept="image/*"
+              onchange={handlePhotoSelect}
+            />
+          </div>
+        </Card.Content>
+      </Card.Root>
+
+      <!-- Accounts Card -->
+      <Card.Root>
+        <Card.Header>
+          <Card.Title>Accounts</Card.Title>
+          <Card.Description>Manage linked mailboxes on this device.</Card.Description>
+        </Card.Header>
+        <Card.Content class="space-y-3">
+          {#each $accounts as account}
+            <div
+              class="flex items-center justify-between border border-border p-3 {(
+                account as Account
+              ).email === $currentAccount
+                ? 'bg-primary/5'
+                : ''}"
+            >
+              <div class="flex min-w-0 items-center gap-3">
+                <User class="h-5 w-5 shrink-0 text-muted-foreground" />
                 <div class="min-w-0">
-                  <div class="font-semibold truncate">{(account as Account).email}</div>
+                  <div class="truncate font-medium">{(account as Account).email}</div>
                   <div class="text-xs text-muted-foreground">
-                    {(account as Account).email === $currentAccount ? 'Active' : 'Available'}
+                    {(account as Account).email === $currentAccount
+                      ? 'Active account'
+                      : 'Available'}
                   </div>
                 </div>
               </div>
-              <div class="flex items-center gap-2 sm:shrink-0">
-                {#if (account as Account).email === $currentAccount}
-                  <Button
-                    variant="destructive"
-                    size="sm"
-                    onclick={() => signOut()}
-                    class="flex-1 sm:flex-none"
-                  >
-                    <LogOut class="mr-2 h-4 w-4" />
-                    Sign out
-                  </Button>
-                {:else}
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onclick={() => switchAccount(account)}
-                    class="flex-1 sm:flex-none"
-                  >
-                    Switch
-                  </Button>
-                {/if}
-              </div>
-            </Card.Content>
-          </Card.Root>
-        {/each}
-      </div>
-      <div class="flex justify-end">
-        <Button variant="ghost" onclick={() => addAccount()}>
-          <Plus class="mr-2 h-4 w-4" />
-          Add account
-        </Button>
-      </div>
-    </section>
+              {#if (account as Account).email === $currentAccount}
+                <Button variant="destructive" size="sm" onclick={() => signOut()}>
+                  <LogOut class="mr-2 h-4 w-4" />
+                  Sign out
+                </Button>
+              {:else}
+                <Button variant="ghost" size="sm" onclick={() => switchAccount(account)}>
+                  Switch to
+                </Button>
+              {/if}
+            </div>
+          {/each}
+          <Button variant="outline" class="mt-4" onclick={() => addAccount()}>
+            <Plus class="mr-2 h-4 w-4" />
+            Add account
+          </Button>
+        </Card.Content>
+      </Card.Root>
 
-    <!-- Quick Links Section -->
-    <section class="flex flex-col gap-3">
-      <h2 class="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-        Quick links
-      </h2>
-      <div class="grid grid-cols-[repeat(auto-fit,minmax(140px,1fr))] gap-3">
-        <Button variant="outline" class="h-11 justify-start" onclick={() => navigate('/contacts')}>
-          <BookUser class="mr-2 h-4 w-4" />
-          Contacts
-        </Button>
-        <Button variant="outline" class="h-11 justify-start" onclick={() => navigate('/calendar')}>
-          <CalendarIcon class="mr-2 h-4 w-4" />
-          Calendar
-        </Button>
-        <Button
-          variant="outline"
-          class="h-11 justify-start"
-          onclick={() => navigate('/mailbox/settings')}
-        >
-          <SettingsIcon class="mr-2 h-4 w-4" />
-          Settings
-        </Button>
-      </div>
-    </section>
+      <!-- Quick Links Card -->
+      <Card.Root>
+        <Card.Header>
+          <Card.Title>Quick links</Card.Title>
+        </Card.Header>
+        <Card.Content class="flex flex-col gap-1">
+          <button
+            type="button"
+            class="flex w-full items-center gap-3 px-3 py-2 text-left text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            onclick={() => navigate('/contacts')}
+          >
+            <BookUser class="h-4 w-4" />
+            Contacts
+          </button>
+          <button
+            type="button"
+            class="flex w-full items-center gap-3 px-3 py-2 text-left text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            onclick={() => navigate('/calendar')}
+          >
+            <CalendarIcon class="h-4 w-4" />
+            Calendar
+          </button>
+          <button
+            type="button"
+            class="flex w-full items-center gap-3 px-3 py-2 text-left text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            onclick={() => navigate('/calendar#tasks')}
+          >
+            <ListTodo class="h-4 w-4" />
+            Tasks
+          </button>
+          <button
+            type="button"
+            class="flex w-full items-center gap-3 px-3 py-2 text-left text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            onclick={() => navigate('/mailbox/settings')}
+          >
+            <SettingsIcon class="h-4 w-4" />
+            Settings
+          </button>
+        </Card.Content>
+      </Card.Root>
+    </div>
   </div>
 {/if}
