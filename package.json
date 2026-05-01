@@ -81,7 +81,7 @@
     "@tiptap/extension-table-row": "^2.27.2",
     "@tiptap/extension-text-style": "^2.27.2",
     "@tiptap/extension-underline": "^2.27.2",
-    "@tiptap/starter-kit": "^2.27.2",
+    "@tiptap/starter-kit": "^3.22.5",
     "bits-ui": "^2.18.0",
     "clsx": "^2.1.1",
     "date-fns": "^3.6.0",
