@@ -12,7 +12,7 @@ name = "forwardemail_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-tauri-build = { version = "2.5.6", features = [] }
+tauri-build = { version = "2.6.0", features = [] }
 time = "0.3"
 
 [dependencies]
