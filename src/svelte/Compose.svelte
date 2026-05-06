@@ -2709,15 +2709,15 @@
       aria-modal={!compact && !nativeWindow}
     >
       <header
-        class="flex items-center justify-between gap-2 px-4 py-3 border-b border-border bg-muted/30"
-        style="padding-top: max(0.75rem, env(safe-area-inset-top, 0px))"
+        class="flex h-14 items-center justify-between gap-3 px-4 bg-muted/30"
+        style="padding-top: env(safe-area-inset-top, 0px); box-sizing: content-box;"
       >
         <Button variant="ghost" size="icon" class="md:hidden" onclick={() => closeComposer()}>
           <ChevronLeft class="h-5 w-5" />
         </Button>
 
         <div class="flex items-center gap-2 min-w-0 flex-1">
-          <span class="font-semibold truncate">New message</span>
+          <h1 class="text-lg font-semibold truncate">New message</h1>
           {#if draftStatusLabel}
             {#if draftStatusDetail}
               <Tooltip.Root>
@@ -3190,7 +3190,7 @@
       {#if attachments.length}
         <div class="flex flex-wrap gap-2 px-4 py-2 border-t border-border shrink-0">
           {#each attachmentCards as card}
-            <div class="flex items-center gap-2 px-3 py-2 bg-muted">
+            <div class="flex items-center gap-2 px-3 py-2 border border-border bg-muted">
               {#if card.isImage && card.previewUrl}
                 <img src={card.previewUrl} alt={card.name as string} class="h-8 w-8 object-cover" />
               {:else}

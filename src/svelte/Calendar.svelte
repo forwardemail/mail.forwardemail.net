@@ -59,6 +59,7 @@
   import MoreVertical from '@lucide/svelte/icons/more-vertical';
   import Check from '@lucide/svelte/icons/check';
   import X from '@lucide/svelte/icons/x';
+  import User from '@lucide/svelte/icons/user';
 
   interface ToastApi {
     show?: (message: string, type?: string) => void;
@@ -364,6 +365,50 @@
     recurrence: { ...DEFAULT_RECURRENCE } as RecurrenceSpec,
     _editingRawDescription: false,
   });
+
+  let newAttendeeDraft = $state('');
+  let editAttendeeDraft = $state('');
+
+  const parseAttendeeList = (s: string): string[] =>
+    (s || '')
+      .split(/[,;]/)
+      .map((e) => e.trim())
+      .filter(Boolean);
+
+  const addAttendeeToNewEvent = () => {
+    const trimmed = newAttendeeDraft.trim();
+    if (!trimmed) return;
+    const list = parseAttendeeList(newEvent.attendees);
+    if (!list.includes(trimmed)) {
+      list.push(trimmed);
+      newEvent.attendees = list.join(', ');
+      modalDirty = true;
+    }
+    newAttendeeDraft = '';
+  };
+
+  const removeAttendeeFromNewEvent = (email: string) => {
+    const list = parseAttendeeList(newEvent.attendees).filter((e) => e !== email);
+    newEvent.attendees = list.join(', ');
+    modalDirty = true;
+  };
+
+  const addAttendeeToEditEvent = () => {
+    const trimmed = editAttendeeDraft.trim();
+    if (!trimmed) return;
+    const list = parseAttendeeList(editEvent.attendees);
+    if (!list.includes(trimmed)) {
+      list.push(trimmed);
+      editEvent.attendees = list.join(', ');
+    }
+    editAttendeeDraft = '';
+  };
+
+  const removeAttendeeFromEditEvent = (email: string) => {
+    editEvent.attendees = parseAttendeeList(editEvent.attendees)
+      .filter((e) => e !== email)
+      .join(', ');
+  };
 
   const timeOptions = Array.from({ length: 12 * 4 }, (_, idx) => {
     const hour12 = Math.floor(idx / 4) + 1;
@@ -3499,6 +3544,12 @@
     };
     window.addEventListener('resize', handleResize);
 
+    const handleExternalChange = () => {
+      if (!hasMounted) return;
+      loadEventsForSelection(true).catch(() => {});
+    };
+    window.addEventListener('webmail:calendar-events-changed', handleExternalChange);
+
     const mediaQuery =
       typeof window !== 'undefined' && window.matchMedia
         ? window.matchMedia('(prefers-color-scheme: dark)')
@@ -3523,6 +3574,7 @@
 
     return () => {
       window.removeEventListener('resize', handleResize);
+      window.removeEventListener('webmail:calendar-events-changed', handleExternalChange);
       if (mediaQuery) {
         if (mediaQuery.removeEventListener) {
           mediaQuery.removeEventListener('change', handleThemePreference);
@@ -3554,8 +3606,8 @@
 <Tooltip.Provider>
   <div class="calendar-page flex flex-col h-full">
     <div
-      class="flex items-center justify-between gap-3 border-b border-border bg-background px-4 py-3 shrink-0"
-      style="padding-top: max(0.75rem, env(safe-area-inset-top, 0px))"
+      class="flex h-14 items-center justify-between gap-3 px-4 shrink-0"
+      style="padding-top: env(safe-area-inset-top, 0px); box-sizing: content-box;"
     >
       <div class="flex items-center gap-3 min-w-0">
         <Button
@@ -3790,7 +3842,10 @@
     </div>
   </div>
   <Dialog.Root bind:open={newEventModal}>
-    <Dialog.Content class="sm:max-w-[520px]" onkeydown={handleModalKeydown}>
+    <Dialog.Content
+      class="sm:max-w-[520px] overflow-x-hidden [&>*]:min-w-0"
+      onkeydown={handleModalKeydown}
+    >
       <div class="sr-only" aria-live="polite" aria-atomic="true">{modalAnnouncement}</div>
       <Dialog.Header>
         <Dialog.Title>{newEvent.componentType === 'VTODO' ? 'New task' : 'New event'}</Dialog.Title>
@@ -4254,7 +4309,7 @@
           <Label for="event-description">Description</Label>
           {#if containsHtml(newEvent.description) && !newEvent._editingRawDescription}
             <div
-              class="prose prose-sm dark:prose-invert max-w-none p-3 border border-border rounded-md bg-muted/30 max-h-[200px] overflow-y-auto"
+              class="prose prose-sm dark:prose-invert max-w-none min-w-0 p-3 border border-border rounded-md bg-muted/30 max-h-[200px] overflow-y-auto overflow-x-hidden break-words wrap-anywhere [overflow-wrap:anywhere] [&_pre]:whitespace-pre-wrap [&_pre]:break-all [&_img]:max-w-full [&_table]:block [&_table]:overflow-x-auto"
             >
               {@html sanitizeDescription(newEvent.description)}
             </div>
@@ -4330,13 +4385,47 @@
                 />
               </div>
               <div class="space-y-2">
-                <Label>Attendees</Label>
-                <Input
-                  type="text"
-                  placeholder="Comma-separated emails"
-                  bind:value={newEvent.attendees}
-                  oninput={() => (modalDirty = true)}
-                />
+                <Label for="new-event-attendee-input">Attendees</Label>
+                <div class="flex gap-2">
+                  <Input
+                    id="new-event-attendee-input"
+                    type="email"
+                    placeholder="email@example.com"
+                    bind:value={newAttendeeDraft}
+                    onkeydown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        addAttendeeToNewEvent();
+                      }
+                    }}
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={!newAttendeeDraft.trim()}
+                    onclick={addAttendeeToNewEvent}
+                  >
+                    <Plus class="h-4 w-4" />
+                  </Button>
+                </div>
+                {#each parseAttendeeList(newEvent.attendees) as email (email)}
+                  <div class="flex items-center justify-between border border-border p-2">
+                    <div class="flex min-w-0 items-center gap-2">
+                      <User class="h-4 w-4 shrink-0 text-muted-foreground" />
+                      <span class="truncate text-sm">{email}</span>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      onclick={() => removeAttendeeFromNewEvent(email)}
+                      aria-label="Remove {email}"
+                    >
+                      <X class="h-4 w-4" />
+                    </Button>
+                  </div>
+                {/each}
               </div>
             </div>
           {/if}
@@ -4352,7 +4441,10 @@
   </Dialog.Root>
 
   <Dialog.Root bind:open={editEventModal}>
-    <Dialog.Content class="sm:max-w-[520px]" onfocusin={closeTimePickers}>
+    <Dialog.Content
+      class="sm:max-w-[520px] overflow-x-hidden [&>*]:min-w-0"
+      onfocusin={closeTimePickers}
+    >
       <Dialog.Header>
         <Dialog.Title
           >{editEvent.componentType === 'VTODO' ? 'Edit task' : 'Edit event'}</Dialog.Title
@@ -4789,7 +4881,7 @@
           <Label>Description</Label>
           {#if containsHtml(editEvent.description) && !editEvent._editingRawDescription}
             <div
-              class="prose prose-sm dark:prose-invert max-w-none p-3 border border-border rounded-md bg-muted/30 max-h-[200px] overflow-y-auto"
+              class="prose prose-sm dark:prose-invert max-w-none min-w-0 p-3 border border-border rounded-md bg-muted/30 max-h-[200px] overflow-y-auto overflow-x-hidden break-words wrap-anywhere [overflow-wrap:anywhere] [&_pre]:whitespace-pre-wrap [&_pre]:break-all [&_img]:max-w-full [&_table]:block [&_table]:overflow-x-auto"
             >
               {@html sanitizeDescription(editEvent.description)}
             </div>
@@ -4843,12 +4935,47 @@
                 />
               </div>
               <div class="space-y-2">
-                <Label>Attendees</Label>
-                <Input
-                  type="text"
-                  placeholder="Comma-separated emails"
-                  bind:value={editEvent.attendees}
-                />
+                <Label for="edit-event-attendee-input">Attendees</Label>
+                <div class="flex gap-2">
+                  <Input
+                    id="edit-event-attendee-input"
+                    type="email"
+                    placeholder="email@example.com"
+                    bind:value={editAttendeeDraft}
+                    onkeydown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        addAttendeeToEditEvent();
+                      }
+                    }}
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={!editAttendeeDraft.trim()}
+                    onclick={addAttendeeToEditEvent}
+                  >
+                    <Plus class="h-4 w-4" />
+                  </Button>
+                </div>
+                {#each parseAttendeeList(editEvent.attendees) as email (email)}
+                  <div class="flex items-center justify-between border border-border p-2">
+                    <div class="flex min-w-0 items-center gap-2">
+                      <User class="h-4 w-4 shrink-0 text-muted-foreground" />
+                      <span class="truncate text-sm">{email}</span>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      onclick={() => removeAttendeeFromEditEvent(email)}
+                      aria-label="Remove {email}"
+                    >
+                      <X class="h-4 w-4" />
+                    </Button>
+                  </div>
+                {/each}
               </div>
             </div>
           {/if}

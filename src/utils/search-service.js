@@ -49,7 +49,7 @@ function createDocument(includeBody = false, fields = null) {
       depth: 3,
       bidirectional: true,
     },
-    encoder: 'balance',
+    encoder: FlexSearch.Charset.LatinBalance,
     resolution: 9,
   });
 }

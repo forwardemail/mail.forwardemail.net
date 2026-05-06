@@ -136,11 +136,27 @@
   }
 }
 
-/* Touch devices: make checkbox borders thicker so they're reliably
- * visible on Android WebView at varying DPIs. */
+/* Touch devices: make checkbox borders thicker AND high-contrast so they're
+ * reliably visible on Android WebView. The default --input token resolves to
+ * oklch(0.929), which can render at near-zero contrast against a white card on
+ * Android even when oklch() itself is supported. Hex values bypass that. */
 @media (pointer: coarse) {
   [data-slot='checkbox'] {
     border-width: 1.5px;
+    border-color: #94a3b8;
+  }
+  .dark [data-slot='checkbox'] {
+    border-color: rgba(255, 255, 255, 0.4);
+  }
+  [data-slot='checkbox'][data-state='checked'] {
+    background-color: #1e293b;
+    border-color: #1e293b;
+    color: #fafafa;
+  }
+  .dark [data-slot='checkbox'][data-state='checked'] {
+    background-color: #e2e8f0;
+    border-color: #e2e8f0;
+    color: #0f172a;
   }
 }
 

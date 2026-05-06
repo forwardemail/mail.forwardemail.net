@@ -192,6 +192,13 @@
   import AboutDialog from './AboutDialog.svelte';
   import TabBar from './components/TabBar.svelte';
   import MessageTab from './components/MessageTab.svelte';
+  import CalendarInviteCard from './components/CalendarInviteCard.svelte';
+  import {
+    isCalendarAttachment,
+    fetchAttachmentText,
+    parseIcs,
+    type ParsedInvite,
+  } from '../utils/ics-parser';
   import {
     updateMailboxTabFolder,
     activeTabId,
@@ -543,6 +550,32 @@
 
   let messageBody = chooseStore(source.state?.messageBody, mailboxView?.messageBody, '');
   let attachments = chooseStore(source.state?.attachments, mailboxView?.attachments, []);
+  let parsedInvite = $state<ParsedInvite | null>(null);
+  let inviteToken = 0;
+  $effect(() => {
+    const msgId = $selectedMessage?.id ?? null;
+    const atts = ($attachments as Array<Record<string, unknown>>) || [];
+    const ics = atts.find((a) => isCalendarAttachment(a));
+    inviteToken += 1;
+    const token = inviteToken;
+    if (!ics || !msgId) {
+      parsedInvite = null;
+      return;
+    }
+    const href = (ics.href as string) || '';
+    if (!href) {
+      parsedInvite = null;
+      return;
+    }
+    fetchAttachmentText(href)
+      .then((text) => {
+        if (token !== inviteToken) return;
+        parsedInvite = text ? parseIcs(text) : null;
+      })
+      .catch(() => {
+        if (token === inviteToken) parsedInvite = null;
+      });
+  });
   let hasBlockedImages = writable(false);
   let trackingPixelCount = writable(0);
   let blockedImageCount = writable(0);
@@ -7433,7 +7466,7 @@
                   </div>
                 {/if}
                 <div
-                  class="prose prose-sm dark:prose-invert max-w-none"
+                  class="prose prose-sm dark:prose-invert max-w-none min-w-0 break-words wrap-anywhere [overflow-wrap:anywhere] [&_pre]:whitespace-pre-wrap [&_pre]:break-all [&_img]:max-w-full"
                   bind:this={outboxMessageBodyContainer}
                 >
                   {@html sanitizeOutboxHtml(
@@ -8576,6 +8609,11 @@
                             </button>
                           {/if}
                         </div>
+                      </div>
+                    {/if}
+                    {#if parsedInvite}
+                      <div class="mb-4">
+                        <CalendarInviteCard invite={parsedInvite} />
                       </div>
                     {/if}
                     <EmailIframe
