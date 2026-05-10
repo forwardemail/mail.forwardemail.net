@@ -73,7 +73,7 @@ jobs:
 
       - name: Checkout
         if: steps.gate.outputs.skip != 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install Linux dependencies
         if: steps.gate.outputs.skip != 'true' && runner.os == 'Linux'
