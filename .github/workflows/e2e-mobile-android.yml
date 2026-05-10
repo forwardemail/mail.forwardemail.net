@@ -64,7 +64,7 @@ jobs:
           shared-key: e2e-android
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
 
       - name: Install Android NDK
         run: sdkmanager "ndk;27.0.12077973"
