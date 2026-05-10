@@ -76,7 +76,7 @@ jobs:
       - name: Setup pnpm
         # No `version:` — action-setup reads packageManager from package.json,
         # and specifying both causes ERR_PNPM_BAD_PM_VERSION.
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6.0.6
 
       - name: Install root dependencies
         run: pnpm install --frozen-lockfile
