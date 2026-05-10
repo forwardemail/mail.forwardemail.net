@@ -38,10 +38,13 @@ export async function navigateToCalendar(page) {
 }
 
 /**
- * Open new event modal
+ * Open new event modal. The header actions collapsed into a kebab menu in
+ * commit d1e7449 — "New Event" is now a DropdownMenu.Item under the
+ * "Calendar menu" trigger, not a top-level button.
  */
 export async function openNewEventModal(page) {
-  await page.getByRole('button', { name: '+ New Event' }).click();
+  await page.getByRole('button', { name: 'Calendar menu' }).click();
+  await page.getByRole('menuitem', { name: 'New Event' }).click();
   const modal = page.getByRole('dialog');
   await expect(modal).toBeVisible();
   return modal;

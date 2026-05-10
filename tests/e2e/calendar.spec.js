@@ -42,8 +42,10 @@ test.describe('Calendar Navigation', () => {
   test('should show calendar header with actions', async ({ page }) => {
     await page.goto('/calendar');
     await expect(page.getByTestId('calendar-header')).toBeVisible();
-    await expect(page.getByRole('button', { name: '+ New Event' })).toBeVisible();
-    await expect(page.getByLabel('Import calendar')).toBeVisible();
+    // Header actions live under the "Calendar menu" kebab as of d1e7449.
+    await page.getByRole('button', { name: 'Calendar menu' }).click();
+    await expect(page.getByRole('menuitem', { name: 'New Event' })).toBeVisible();
+    await expect(page.getByRole('menuitem', { name: 'Import Calendar' })).toBeVisible();
   });
 
   test('should display Schedule-X calendar component', async ({ page }) => {

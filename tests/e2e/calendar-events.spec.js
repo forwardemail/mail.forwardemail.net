@@ -1,6 +1,10 @@
 import { test, expect } from '@playwright/test';
 import { mockApi } from './mockApi.js';
-import { setupAuthenticatedSession, waitForSuccessToast } from '../fixtures/calendar-helpers.js';
+import {
+  setupAuthenticatedSession,
+  waitForSuccessToast,
+  openNewEventModal,
+} from '../fixtures/calendar-helpers.js';
 
 test.describe('Event Creation', () => {
   test.beforeEach(async ({ page }) => {
@@ -10,21 +14,17 @@ test.describe('Event Creation', () => {
     await page.waitForSelector('.sx-svelte-calendar-wrapper', { timeout: 10000 });
   });
 
-  test('should open new event modal when clicking "+ New Event" button', async ({ page }) => {
-    await page.click('button:has-text("+ New Event")');
-
-    const modal = page.getByRole('dialog');
+  test('should open new event modal from the Calendar menu', async ({ page }) => {
+    const modal = await openNewEventModal(page);
     await expect(modal).toBeVisible();
     await expect(modal.getByRole('heading', { name: 'New event' })).toBeVisible();
     await expect(modal.getByLabel('Title')).toBeFocused();
   });
 
   test('should create basic timed event', async ({ page }) => {
-    await page.click('button:has-text("+ New Event")');
-
-    const modal = page.getByRole('dialog');
+    const modal = await openNewEventModal(page);
     await modal.getByLabel('Title').fill('Project Kickoff');
-    await modal.getByLabel('Date').fill('2026-01-25');
+    await modal.getByLabel('Start date').fill('2026-01-25');
 
     // Verify Save button becomes enabled with valid input
     const saveButton = modal.locator('button:has-text("Save")');
@@ -32,11 +32,9 @@ test.describe('Event Creation', () => {
   });
 
   test('should create all-day event', async ({ page }) => {
-    await page.click('button:has-text("+ New Event")');
-
-    const modal = page.getByRole('dialog');
+    const modal = await openNewEventModal(page);
     await modal.getByLabel('Title').fill('Holiday');
-    await modal.getByLabel('Date').fill('2026-01-30');
+    await modal.getByLabel('Start date').fill('2026-01-30');
 
     // Click the All-day checkbox
     await modal.getByLabel('All-day').check();
@@ -51,11 +49,9 @@ test.describe('Event Creation', () => {
   });
 
   test('should create event with optional fields', async ({ page }) => {
-    await page.click('button:has-text("+ New Event")');
-
-    const modal = page.getByRole('dialog');
+    const modal = await openNewEventModal(page);
     await modal.getByLabel('Title').fill('Client Demo');
-    await modal.getByLabel('Date').fill('2026-01-26');
+    await modal.getByLabel('Start date').fill('2026-01-26');
     await modal.getByLabel('Description').fill('Demonstrate new features to client');
 
     // Expand optional fields
@@ -72,9 +68,7 @@ test.describe('Event Creation', () => {
   });
 
   test('should validate required title field', async ({ page }) => {
-    await page.click('button:has-text("+ New Event")');
-
-    const modal = page.getByRole('dialog');
+    const modal = await openNewEventModal(page);
 
     // Title starts empty, Save should be disabled
     const saveButton = modal.locator('button:has-text("Save")');
@@ -88,9 +82,7 @@ test.describe('Event Creation', () => {
   });
 
   test('should close modal on Cancel button', async ({ page }) => {
-    await page.click('button:has-text("+ New Event")');
-
-    const modal = page.getByRole('dialog');
+    const modal = await openNewEventModal(page);
     await modal.getByLabel('Title').fill('Test Event');
 
     // Accept the "Discard changes?" confirm dialog that appears when cancelling a dirty form
@@ -103,7 +95,7 @@ test.describe('Event Creation', () => {
   });
 
   test('should close modal on Escape key', async ({ page }) => {
-    await page.click('button:has-text("+ New Event")');
+    await openNewEventModal(page);
     await page.keyboard.press('Escape');
 
     const modal = page.getByRole('dialog');
