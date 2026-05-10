@@ -2,7 +2,7 @@ name: E2E Mobile (Android)
 
 on:
   schedule:
-    - cron: '0 6 * * *'   # 06:00 UTC nightly
+    - cron: '0 6 * * *' # 06:00 UTC nightly
   workflow_dispatch:
 
 permissions:
@@ -14,7 +14,6 @@ concurrency:
 
 env:
   NODE_VERSION: '22'
-  PNPM_VERSION: '9'
 
 jobs:
   android-e2e:
@@ -75,9 +74,9 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Setup pnpm
+        # No `version:` — action-setup reads packageManager from package.json,
+        # and specifying both causes ERR_PNPM_BAD_PM_VERSION.
         uses: pnpm/action-setup@v4
-        with:
-          version: ${{ env.PNPM_VERSION }}
 
       - name: Install root dependencies
         run: pnpm install --frozen-lockfile

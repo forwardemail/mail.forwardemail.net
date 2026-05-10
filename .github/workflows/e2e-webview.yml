@@ -23,7 +23,6 @@ concurrency:
 
 env:
   NODE_VERSION: '22'
-  PNPM_VERSION: '9'
 
 jobs:
   webview-e2e:
@@ -84,10 +83,8 @@ jobs:
           done
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev \
-            libappindicator3-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev \
-            patchelf \
             libssl-dev \
             libgtk-3-dev \
             webkit2gtk-driver \
@@ -114,9 +111,9 @@ jobs:
 
       - name: Setup pnpm
         if: steps.gate.outputs.skip != 'true'
+        # No `version:` — action-setup reads packageManager from package.json,
+        # and specifying both causes ERR_PNPM_BAD_PM_VERSION.
         uses: pnpm/action-setup@v4
-        with:
-          version: ${{ env.PNPM_VERSION }}
 
       - name: Install root dependencies
         if: steps.gate.outputs.skip != 'true'
