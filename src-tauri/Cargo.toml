@@ -19,7 +19,7 @@ default = []
 webdriver = ["dep:tauri-plugin-webdriver"]
 
 [build-dependencies]
-tauri-build = { version = "2.5.6", features = [] }
+tauri-build = { version = "2.6.1", features = [] }
 time = "0.3"
 
 [dependencies]
