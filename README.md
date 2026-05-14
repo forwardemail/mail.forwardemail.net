@@ -234,8 +234,8 @@ pnpm install
 ```bash
 pnpm dev              # Start web dev server (http://localhost:5174)
 pnpm tauri dev        # Start desktop dev mode
-pnpm tauri android dev  # Start Android dev mode
-pnpm tauri ios dev      # Start iOS dev mode
+pnpm tauri:android:dev  # Start Android dev mode (preflight checks + adb setup)
+pnpm tauri:ios:dev      # Start iOS dev mode (preflight checks + simulator boot)
 ```
 
 ### Build

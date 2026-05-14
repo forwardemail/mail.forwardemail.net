@@ -10,6 +10,11 @@ if [ -z "$XCODE_PATH" ] || [[ "$XCODE_PATH" == *CommandLineTools* ]]; then
   exit 1
 fi
 
+if ! command -v pod &>/dev/null; then
+  echo "❌ CocoaPods not found (install: brew install cocoapods)"
+  exit 1
+fi
+
 # If caller didn't pass --target, default to the host-arch simulator.
 TARGET_FLAG=""
 if [[ "$*" != *"--target"* ]]; then

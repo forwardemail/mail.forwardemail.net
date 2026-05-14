@@ -318,6 +318,14 @@ jobs:
           echo "IOS_PROFILE_NAME=$NAME" >> "$GITHUB_ENV"
           echo "Installed provisioning profile: $NAME ($UUID)"
 
+      - name: Install CocoaPods
+        if: steps.check.outputs.enabled == 'true'
+        run: |
+          if ! command -v pod &>/dev/null; then
+            brew install cocoapods
+          fi
+          pod --version
+
       - name: Initialize iOS project
         if: steps.check.outputs.enabled == 'true'
         run: pnpm tauri ios init --ci

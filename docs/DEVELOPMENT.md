@@ -5,7 +5,7 @@ This guide covers development for both desktop and mobile applications, which ar
 ## Prerequisites
 
 1.  **Install Rust**: Follow the instructions at [rustup.rs](https://rustup.rs/).
-2.  **Install Tauri Prerequisites**: Follow the official guide for your operating system at [tauri.app/v2/guides/getting-started/prerequisites](https://tauri.app/v2/guides/getting-started/prerequisites). This includes dependencies for both desktop and mobile development (e.g., Android Studio, Xcode).
+2.  **Install Tauri Prerequisites**: Follow the official guide for your operating system at [tauri.app/v2/guides/getting-started/prerequisites](https://tauri.app/v2/guides/getting-started/prerequisites). This includes dependencies for both desktop and mobile development (e.g., Android Studio, Xcode). For iOS, also install CocoaPods: `brew install cocoapods`.
 3.  **Install Node.js and pnpm**: We recommend using Node.js 20+ and pnpm 9+.
 
 ## Getting Started
@@ -30,16 +30,18 @@ This guide covers development for both desktop and mobile applications, which ar
       Connect an Android device or start an emulator, then run:
 
       ```bash
-      pnpm tauri android dev
+      pnpm tauri:android:dev
       ```
 
     - **Mobile (iOS)**:
 
-      Connect an iOS device or start a simulator, then run:
+      Ensure CocoaPods is installed (`brew install cocoapods`), then run:
 
       ```bash
-      pnpm tauri ios dev
+      pnpm tauri:ios:dev
       ```
+
+      The wrapper script verifies Xcode, CocoaPods, and Rust targets before launching.
 
 ## Project Structure
 
@@ -91,10 +93,10 @@ To build the application for production:
 pnpm tauri build
 
 # Mobile (Android)
-pnpm tauri android build
+pnpm tauri:android:build
 
 # Mobile (iOS)
-pnpm tauri ios build
+pnpm tauri:ios:build
 ```
 
 This will generate optimized, signed (if configured) binaries in `src-tauri/target/release/`.

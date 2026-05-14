@@ -4,14 +4,15 @@ Target for iOS is Tauri v2 mobile. This guide covers simulator-first development
 
 ## Prerequisites
 
-| Tool         | Version | Notes                                                                                                                        |
-| ------------ | ------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| **macOS**    | 13+     | iOS development is Mac-only                                                                                                  |
-| **Xcode**    | 15+     | Install from App Store or [developer.apple.com](https://developer.apple.com/xcode/) — **not** just Command Line Tools        |
-| **Rust**     | stable  | `rustup target add aarch64-apple-ios-sim x86_64-apple-ios` (device target `aarch64-apple-ios` only needed for signed builds) |
-| **Node.js**  | 20+     |                                                                                                                              |
-| **pnpm**     | 9+      | `corepack enable && corepack prepare pnpm@latest --activate`                                                                 |
-| **Apple ID** | any     | Free account is sufficient for simulator + 7-day personal-device sideload                                                    |
+| Tool          | Version | Notes                                                                                                                        |
+| ------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| **macOS**     | 13+     | iOS development is Mac-only                                                                                                  |
+| **Xcode**     | 15+     | Install from App Store or [developer.apple.com](https://developer.apple.com/xcode/) — **not** just Command Line Tools        |
+| **Rust**      | stable  | `rustup target add aarch64-apple-ios-sim x86_64-apple-ios` (device target `aarch64-apple-ios` only needed for signed builds) |
+| **Node.js**   | 20+     |                                                                                                                              |
+| **pnpm**      | 9+      | `corepack enable && corepack prepare pnpm@latest --activate`                                                                 |
+| **CocoaPods** | 1.15+   | `brew install cocoapods` — required by `tauri ios init` to run `pod install`                                                 |
+| **Apple ID**  | any     | Free account is sufficient for simulator + 7-day personal-device sideload                                                    |
 
 ## First-Time Setup
 
@@ -38,7 +39,16 @@ rustup target add aarch64-apple-ios-sim x86_64-apple-ios
 
 Add `aarch64-apple-ios` as well only when you intend to produce signed device builds.
 
-### 3. Initialize the Tauri iOS project
+### 3. Install CocoaPods
+
+Tauri's `ios init` command runs `pod install` internally to set up the Xcode workspace. If `pod` is not on your `PATH`, the command will fail with a `No such file or directory` error.
+
+```bash
+brew install cocoapods
+pod --version   # verify installation
+```
+
+### 4. Initialize the Tauri iOS project
 
 `src-tauri/gen/` is git-ignored, so the iOS Xcode project is generated on demand:
 
@@ -202,15 +212,16 @@ For rare cases where you want to produce a signed IPA outside CI (e.g., debuggin
 
 ## Troubleshooting
 
-| Symptom                                                | Fix                                                                                                                                                    |
-| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `xcrun: error: unable to find utility`                 | `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer`                                                                                      |
-| `No iOS Simulator runtime available`                   | Xcode → Settings → Platforms → install iOS SDK                                                                                                         |
-| `developmentTeam is required` during `ios init`        | Set `app.iOS.developmentTeam` in `src-tauri/tauri.conf.json`, even a dummy value for simulator builds                                                  |
-| Build succeeds but app doesn't launch in simulator     | `xcrun simctl shutdown all && xcrun simctl erase all` then retry                                                                                       |
-| Rust link errors about `aarch64-apple-ios` missing     | `rustup target add aarch64-apple-ios-sim` (sim target for simulator builds)                                                                            |
-| `pnpm tauri ios dev` hangs on "Waiting for connection" | Ensure simulator is booted first (`open -a Simulator`) before running the command                                                                      |
-| White-screen in simulator                              | `localhost:5174` not yet ready; wait for Vite to finish booting, then reload with ⌘R in Safari Web Inspector (Develop → Simulator → forwardemail_mail) |
+| Symptom                                                  | Fix                                                                                                                                                    |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `Failed to install cocoapods: No such file or directory` | Install CocoaPods before running `tauri ios init`: `brew install cocoapods`                                                                            |
+| `xcrun: error: unable to find utility`                   | `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer`                                                                                      |
+| `No iOS Simulator runtime available`                     | Xcode → Settings → Platforms → install iOS SDK                                                                                                         |
+| `developmentTeam is required` during `ios init`          | Set `app.iOS.developmentTeam` in `src-tauri/tauri.conf.json`, even a dummy value for simulator builds                                                  |
+| Build succeeds but app doesn't launch in simulator       | `xcrun simctl shutdown all && xcrun simctl erase all` then retry                                                                                       |
+| Rust link errors about `aarch64-apple-ios` missing       | `rustup target add aarch64-apple-ios-sim` (sim target for simulator builds)                                                                            |
+| `pnpm tauri ios dev` hangs on "Waiting for connection"   | Ensure simulator is booted first (`open -a Simulator`) before running the command                                                                      |
+| White-screen in simulator                                | `localhost:5174` not yet ready; wait for Vite to finish booting, then reload with ⌘R in Safari Web Inspector (Develop → Simulator → forwardemail_mail) |
 
 ## Related Docs
 

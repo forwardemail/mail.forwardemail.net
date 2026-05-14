@@ -27,6 +27,11 @@ if command -v xcrun &>/dev/null; then
   fi
 fi
 
+# CocoaPods (required by Tauri's `ios init` to run `pod install`)
+if ! command -v pod &>/dev/null; then
+  MISSING="$MISSING\n  - CocoaPods not found (install: brew install cocoapods)"
+fi
+
 # Rust iOS targets
 for t in aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios; do
   if ! rustup target list --installed 2>/dev/null | grep -q "^$t$"; then
