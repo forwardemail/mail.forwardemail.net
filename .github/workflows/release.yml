@@ -481,7 +481,6 @@ jobs:
               "create-release:$CREATE" \
               "e2e-webview:$E2E" \
               "build-desktop:$DESK" \
-              "publish:$PUB" \
               "deploy:$DEPLOY"; do
             name="${pair%%:*}"
             result="${pair#*:}"
@@ -498,6 +497,18 @@ jobs:
           # to tolerate (release ships without mobile if e2e blocked it).
           if [ "$MOBILE" != "success" ] && [ "$MOBILE" != "skipped" ]; then
             echo "::error::build-mobile result=$MOBILE (expected success or skipped)"
+            fail=1
+          fi
+
+          # publish: 'success' or 'skipped' is acceptable. By design, publish
+          # only runs when create-release built its own draft (release_draft
+          # == 'true'). When `np` already published the release upfront, the
+          # publish job is intentionally skipped — assets land directly on
+          # np's release via build-desktop's upload step. The only other way
+          # publish skips is if build-desktop failed, which is already caught
+          # by the hard-required check above.
+          if [ "$PUB" != "success" ] && [ "$PUB" != "skipped" ]; then
+            echo "::error::publish result=$PUB (expected success or skipped)"
             fail=1
           fi
 
