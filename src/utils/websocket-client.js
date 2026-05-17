@@ -85,6 +85,7 @@ export const WS_EVENTS = Object.freeze({
   MESSAGES_MOVED: 'messagesMoved',
   MESSAGES_COPIED: 'messagesCopied',
   FLAGS_UPDATED: 'flagsUpdated',
+  LABELS_UPDATED: 'labelsUpdated',
   MESSAGES_EXPUNGED: 'messagesExpunged',
   MAILBOX_CREATED: 'mailboxCreated',
   MAILBOX_DELETED: 'mailboxDeleted',

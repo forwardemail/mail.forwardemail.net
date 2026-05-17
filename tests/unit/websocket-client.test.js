@@ -4,7 +4,7 @@ import { WS_EVENTS } from '../../src/utils/websocket-client.js';
 /**
  * Tests for the WebSocket client event constants.
  *
- * The Forward Email WebSocket API defines 20 distinct event types.
+ * The Forward Email WebSocket API defines 21 distinct event types.
  * These tests ensure the client-side WS_EVENTS map stays in sync
  * with the server API specification.
  */
@@ -12,11 +12,12 @@ import { WS_EVENTS } from '../../src/utils/websocket-client.js';
 // The canonical list of all 21 events from the server API.
 // Source: https://forwardemail.net/en/email-api#tag/websockets
 const API_EVENTS = {
-  // IMAP (8)
+  // IMAP (9)
   newMessage: 'newMessage',
   messagesMoved: 'messagesMoved',
   messagesCopied: 'messagesCopied',
   flagsUpdated: 'flagsUpdated',
+  labelsUpdated: 'labelsUpdated',
   messagesExpunged: 'messagesExpunged',
   mailboxCreated: 'mailboxCreated',
   mailboxDeleted: 'mailboxDeleted',
@@ -43,15 +44,16 @@ describe('WS_EVENTS', () => {
     expect(Object.isFrozen(WS_EVENTS)).toBe(true);
   });
 
-  it('contains exactly 20 event types', () => {
-    expect(Object.keys(WS_EVENTS)).toHaveLength(20);
+  it('contains exactly 21 event types', () => {
+    expect(Object.keys(WS_EVENTS)).toHaveLength(21);
   });
 
-  it('includes all 8 IMAP events', () => {
+  it('includes all 9 IMAP events', () => {
     expect(WS_EVENTS.NEW_MESSAGE).toBe('newMessage');
     expect(WS_EVENTS.MESSAGES_MOVED).toBe('messagesMoved');
     expect(WS_EVENTS.MESSAGES_COPIED).toBe('messagesCopied');
     expect(WS_EVENTS.FLAGS_UPDATED).toBe('flagsUpdated');
+    expect(WS_EVENTS.LABELS_UPDATED).toBe('labelsUpdated');
     expect(WS_EVENTS.MESSAGES_EXPUNGED).toBe('messagesExpunged');
     expect(WS_EVENTS.MAILBOX_CREATED).toBe('mailboxCreated');
     expect(WS_EVENTS.MAILBOX_DELETED).toBe('mailboxDeleted');

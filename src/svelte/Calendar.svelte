@@ -45,6 +45,7 @@
   import * as Tooltip from '$lib/components/ui/tooltip';
   import { Separator } from '$lib/components/ui/separator';
   import TasksList from './components/TasksList.svelte';
+  import TimezoneCombobox from './components/TimezoneCombobox.svelte';
   import ChevronLeft from '@lucide/svelte/icons/chevron-left';
   import ChevronDown from '@lucide/svelte/icons/chevron-down';
   import ChevronRight from '@lucide/svelte/icons/chevron-right';
@@ -323,6 +324,107 @@
       return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
     } catch {
       return 'UTC';
+    }
+  };
+
+  // Surface a hint when an event's stored TZID differs from the viewer's
+  // local zone so users understand that the time fields shown are converted
+  // to their local clock (standard calendar behavior).
+  const viewerZone = getDefaultTimezone();
+  const isForeignZone = (eventZone: string | undefined | null) =>
+    !!eventZone && eventZone !== 'UTC' && eventZone !== viewerZone;
+
+  // Compute the UTC offset (minutes) a given IANA zone has at a given moment.
+  // Positive east of UTC. Used to synthesize VTIMEZONE blocks below.
+  const getZoneOffsetMinutes = (tzid: string, at: Date): number => {
+    const dtf = new Intl.DateTimeFormat('en-US', {
+      timeZone: tzid,
+      hourCycle: 'h23',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+    const parts = dtf.formatToParts(at);
+    const m: Record<string, string> = {};
+    for (const p of parts) m[p.type] = p.value;
+    const asUtc = Date.UTC(
+      Number(m.year),
+      Number(m.month) - 1,
+      Number(m.day),
+      Number(m.hour) === 24 ? 0 : Number(m.hour),
+      Number(m.minute),
+      Number(m.second),
+    );
+    return Math.round((asUtc - at.getTime()) / 60000);
+  };
+
+  // Short timezone name (e.g. "EST", "PDT") for a given IANA zone at a moment.
+  const getZoneAbbr = (tzid: string, at: Date): string => {
+    try {
+      const dtf = new Intl.DateTimeFormat('en-US', { timeZone: tzid, timeZoneName: 'short' });
+      const parts = dtf.formatToParts(at);
+      const tzn = parts.find((p) => p.type === 'timeZoneName');
+      return tzn?.value || '';
+    } catch {
+      return '';
+    }
+  };
+
+  // Synthesize a minimal RFC 5545 VTIMEZONE block for a given IANA zone using
+  // only Intl (no tzdata dependency). Emits a single STANDARD entry for fixed
+  // zones; for zones observing DST, emits STANDARD + DAYLIGHT with offsets
+  // computed for the current year. Lacks the precise DST RRULE that a full
+  // tzdata would provide, but is valid and resolves the right offset for any
+  // event near the current era — sufficient for CalDAV client interop.
+  const buildMinimalVTimezone = (tzid: string): string[] => {
+    if (!tzid || tzid === 'UTC') return [];
+    try {
+      const year = new Date().getUTCFullYear();
+      const winter = new Date(Date.UTC(year, 0, 15));
+      const summer = new Date(Date.UTC(year, 6, 15));
+      const winterOff = getZoneOffsetMinutes(tzid, winter);
+      const summerOff = getZoneOffsetMinutes(tzid, summer);
+      const fmtOff = (mins: number) => {
+        const sign = mins >= 0 ? '+' : '-';
+        const abs = Math.abs(mins);
+        const h = String(Math.floor(abs / 60)).padStart(2, '0');
+        const m = String(abs % 60).padStart(2, '0');
+        return `${sign}${h}${m}`;
+      };
+      const lines: string[] = ['BEGIN:VTIMEZONE', `TZID:${tzid}`];
+      if (winterOff === summerOff) {
+        lines.push(
+          'BEGIN:STANDARD',
+          'DTSTART:19700101T000000',
+          `TZOFFSETFROM:${fmtOff(winterOff)}`,
+          `TZOFFSETTO:${fmtOff(winterOff)}`,
+          `TZNAME:${getZoneAbbr(tzid, winter) || 'GMT'}`,
+          'END:STANDARD',
+        );
+      } else {
+        lines.push(
+          'BEGIN:STANDARD',
+          'DTSTART:19701101T020000',
+          `TZOFFSETFROM:${fmtOff(summerOff)}`,
+          `TZOFFSETTO:${fmtOff(winterOff)}`,
+          `TZNAME:${getZoneAbbr(tzid, winter) || 'STD'}`,
+          'END:STANDARD',
+          'BEGIN:DAYLIGHT',
+          'DTSTART:19700315T020000',
+          `TZOFFSETFROM:${fmtOff(winterOff)}`,
+          `TZOFFSETTO:${fmtOff(summerOff)}`,
+          `TZNAME:${getZoneAbbr(tzid, summer) || 'DST'}`,
+          'END:DAYLIGHT',
+        );
+      }
+
+      lines.push('END:VTIMEZONE');
+      return lines;
+    } catch {
+      return [];
     }
   };
 
@@ -999,13 +1101,20 @@
       'PRODID:-//Forward Email//Webmail//EN',
       'CALSCALE:GREGORIAN',
       `METHOD:${method}`,
+    ];
+    // RFC 5545 §3.6.5: any referenced TZID must be defined by a VTIMEZONE
+    // component in the same calendar. Without this, strict CalDAV clients
+    // (Apple, DAVx5) treat the TZID as opaque or fall back to UTC.
+    if (useTzid) lines.push(...buildMinimalVTimezone(timezone as string));
+
+    lines.push(
       'BEGIN:VEVENT',
       `UID:${eventUid}`,
       `DTSTAMP:${dtstamp}`,
       `DTSTART${tzParam}:${dtstart}`,
       `DTEND${tzParam}:${dtend}`,
       `SUMMARY:${escape(summary || 'Untitled Event')}`,
-    ];
+    );
     if (description) lines.push(`DESCRIPTION:${escape(description)}`);
     if (location) lines.push(`LOCATION:${escape(location)}`);
     if (url) lines.push(`URL:${escape(url)}`);
@@ -1090,20 +1199,24 @@
         .replace(/,/g, '\\,')
         .replace(/\n/g, '\\n');
     const todoUid = uid || `${Date.now()}@forwardemail.net`;
+    // See generateICalEvent for the TZID rationale — same wall-clock anchor
+    // applies to VTODO DTSTART/DUE.
+    const useTzid = Boolean(timezone) && timezone !== 'UTC';
     const lines = [
       'BEGIN:VCALENDAR',
       'VERSION:2.0',
       'PRODID:-//Forward Email//Webmail//EN',
       'CALSCALE:GREGORIAN',
       `METHOD:${method}`,
+    ];
+    if (useTzid) lines.push(...buildMinimalVTimezone(timezone as string));
+
+    lines.push(
       'BEGIN:VTODO',
       `UID:${todoUid}`,
       `DTSTAMP:${formatICalDate(new Date().toISOString())}`,
       `SUMMARY:${escape(summary || 'Untitled Task')}`,
-    ];
-    // See generateICalEvent for the TZID rationale — same wall-clock anchor
-    // applies to VTODO DTSTART/DUE.
-    const useTzid = Boolean(timezone) && timezone !== 'UTC';
+    );
     const tzParam = useTzid ? `;TZID=${escape(timezone as string)}` : '';
     const dtstart = useTzid ? formatICalLocal(start, timezone as string) : formatICalDate(start);
     const dueDate = useTzid ? formatICalLocal(due, timezone as string) : formatICalDate(due);
@@ -4061,6 +4174,14 @@
             {/if}
           {/if}
         {:else}
+          {#if isForeignZone(newEvent.timezone)}
+            <div
+              class="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-900 dark:text-amber-200"
+            >
+              Times shown in your local zone (<span class="font-mono">{viewerZone}</span>). Event
+              time zone: <span class="font-mono">{newEvent.timezone}</span>.
+            </div>
+          {/if}
           <div class="grid grid-cols-2 gap-4">
             <div class="space-y-2">
               <Label for="event-date">Start date</Label>
@@ -4488,12 +4609,11 @@
                 />
               </div>
               <div class="space-y-2">
-                <Label>Time zone</Label>
-                <Input
-                  type="text"
-                  placeholder="e.g., America/Chicago"
+                <Label for="new-event-timezone">Time zone</Label>
+                <TimezoneCombobox
+                  id="new-event-timezone"
                   bind:value={newEvent.timezone}
-                  oninput={() => (modalDirty = true)}
+                  onChange={() => (modalDirty = true)}
                 />
               </div>
               <div class="space-y-2">
@@ -4765,6 +4885,14 @@
             </div>
           {/if}
         {:else}
+          {#if isForeignZone(editEvent.timezone)}
+            <div
+              class="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-900 dark:text-amber-200"
+            >
+              Times shown in your local zone (<span class="font-mono">{viewerZone}</span>). Event
+              time zone: <span class="font-mono">{editEvent.timezone}</span>.
+            </div>
+          {/if}
           <div class="grid grid-cols-2 gap-4">
             <div class="space-y-2">
               <Label>Start date</Label>
@@ -5039,12 +5167,8 @@
                 <Input type="url" placeholder="https://" bind:value={editEvent.url} />
               </div>
               <div class="space-y-2">
-                <Label>Time zone</Label>
-                <Input
-                  type="text"
-                  placeholder="e.g., America/Chicago"
-                  bind:value={editEvent.timezone}
-                />
+                <Label for="edit-event-timezone">Time zone</Label>
+                <TimezoneCombobox id="edit-event-timezone" bind:value={editEvent.timezone} />
               </div>
               <div class="space-y-2">
                 <Label for="edit-event-attendee-input">Attendees</Label>

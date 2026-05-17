@@ -261,6 +261,14 @@ function createWebSocketUpdater() {
         );
 
         wsUnsubs.push(
+          wsClient.on(WS_EVENTS.LABELS_UPDATED, (data) => {
+            if (data && typeof data === 'object') {
+              refreshFolder(safeString(data.mailbox));
+            }
+          }),
+        );
+
+        wsUnsubs.push(
           wsClient.on(WS_EVENTS.MESSAGES_EXPUNGED, (data) => {
             if (data && typeof data === 'object') {
               refreshFolder(safeString(data.mailbox));

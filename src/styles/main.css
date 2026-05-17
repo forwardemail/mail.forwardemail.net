@@ -139,24 +139,26 @@
 /* Touch devices: make checkbox borders thicker AND high-contrast so they're
  * reliably visible on Android WebView. The default --input token resolves to
  * oklch(0.929), which can render at near-zero contrast against a white card on
- * Android even when oklch() itself is supported. Hex values bypass that. */
+ * Android even when oklch() itself is supported. Hex values bypass that.
+ * !important is required to beat the Tailwind utility specificity from
+ * data-[state=checked]:bg-primary in checkbox.svelte. */
 @media (pointer: coarse) {
   [data-slot='checkbox'] {
-    border-width: 1.5px;
-    border-color: #94a3b8;
+    border-width: 2px !important;
+    border-color: #475569 !important;
   }
   .dark [data-slot='checkbox'] {
-    border-color: rgba(255, 255, 255, 0.4);
+    border-color: rgba(255, 255, 255, 0.55) !important;
   }
   [data-slot='checkbox'][data-state='checked'] {
-    background-color: #1e293b;
-    border-color: #1e293b;
-    color: #fafafa;
+    background-color: #0f172a !important;
+    border-color: #0f172a !important;
+    color: #fafafa !important;
   }
   .dark [data-slot='checkbox'][data-state='checked'] {
-    background-color: #e2e8f0;
-    border-color: #e2e8f0;
-    color: #0f172a;
+    background-color: #e2e8f0 !important;
+    border-color: #e2e8f0 !important;
+    color: #0f172a !important;
   }
 }
 
@@ -238,6 +240,16 @@
 .dark [data-tooltip-position='bottom']::before {
   border-top-color: transparent;
   border-bottom-color: rgb(250 250 250 / 0.95);
+}
+
+/* Suppress data-attribute tooltips on touch-only devices.
+   On touch they stick after tap and clash with the minimal mobile UI.
+   bits-ui tooltips are guarded separately in tooltip-content.svelte. */
+@media (hover: none) {
+  [data-tooltip]::after,
+  [data-tooltip]::before {
+    display: none !important;
+  }
 }
 
 /* ============================================

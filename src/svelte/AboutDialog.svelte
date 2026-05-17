@@ -1,10 +1,12 @@
 <script lang="ts">
   import { getBuildInfo } from '../utils/tauri-bridge';
-  import { checkForUpdates } from '../utils/updater-bridge';
+  import { checkForUpdates, downloadAndInstall } from '../utils/updater-bridge';
+  import { isTauri, isTauriDesktop } from '../utils/platform.js';
   import { openExternalUrl } from '../utils/external-links.js';
   import { Button } from '$lib/components/ui/button';
   import X from '@lucide/svelte/icons/x';
   import ExternalLink from '@lucide/svelte/icons/external-link';
+  import Download from '@lucide/svelte/icons/download';
 
   const openExternal = async (url: string) => {
     try {
@@ -35,6 +37,15 @@
   let loaded = $state(false);
   let loading = $state(false);
   let loadSequence = 0;
+  let availableUpdate: {
+    available?: boolean;
+    version?: string;
+    body?: string;
+    _update?: unknown;
+  } | null = $state(null);
+  let installing = $state(false);
+  let installProgress = $state(0);
+  let installError = $state('');
 
   const osLabels: Record<string, string> = {
     macos: 'macOS',
@@ -84,12 +95,15 @@
         if (sequence !== loadSequence) return;
         if (update?.available) {
           updateStatus = `Update available: v${update.version}`;
+          availableUpdate = update;
         } else {
           updateStatus = version ? `Up to date (v${version})` : 'Up to date';
+          availableUpdate = null;
         }
       } catch {
         if (sequence !== loadSequence) return;
         updateStatus = 'Unable to check';
+        availableUpdate = null;
       }
     } else {
       version = version || fallbackVersion;
@@ -110,7 +124,32 @@
     void loadAboutInfo();
   });
 
+  const handleInstall = async () => {
+    if (!availableUpdate || installing) return;
+    installing = true;
+    installError = '';
+    installProgress = 0;
+    try {
+      await downloadAndInstall(
+        availableUpdate,
+        ({ downloaded, contentLength }: { downloaded: number; contentLength: number }) => {
+          if (contentLength > 0) {
+            installProgress = Math.min(1, downloaded / contentLength);
+          }
+        },
+      );
+    } catch (err: unknown) {
+      installError = (
+        err && typeof err === 'object' && 'message' in err && typeof err.message === 'string'
+          ? err.message
+          : 'Update failed'
+      ) as string;
+      installing = false;
+    }
+  };
+
   const close = () => {
+    if (installing) return;
     open = false;
     onClose?.();
   };
@@ -168,6 +207,54 @@
             <dt class="text-muted-foreground">License</dt>
             <dd>{license || 'BUSL-1.1'}</dd>
           </dl>
+
+          {#if isTauriDesktop && availableUpdate?.available}
+            <div class="rounded-md border border-sky-500/40 bg-sky-500/10 p-3 text-sm">
+              <div class="mb-2 font-medium">
+                Update available: v{availableUpdate.version}
+              </div>
+              {#if availableUpdate.body}
+                <div
+                  class="mb-3 max-h-32 overflow-y-auto whitespace-pre-wrap text-xs text-muted-foreground"
+                >
+                  {availableUpdate.body}
+                </div>
+              {/if}
+              {#if installing}
+                <div class="space-y-2">
+                  <div class="h-1.5 w-full overflow-hidden rounded bg-muted">
+                    <div
+                      class="h-full bg-sky-500 transition-all"
+                      style="width: {Math.round(installProgress * 100)}%"
+                    ></div>
+                  </div>
+                  <div class="text-xs text-muted-foreground">
+                    Downloading… {Math.round(installProgress * 100)}%
+                  </div>
+                </div>
+              {:else}
+                <div class="flex items-center gap-2">
+                  <Button size="sm" onclick={handleInstall}>
+                    <Download class="mr-1.5 h-3.5 w-3.5" />
+                    Install and restart
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onclick={() =>
+                      openExternal(
+                        'https://github.com/forwardemail/mail.forwardemail.net/releases',
+                      )}
+                  >
+                    View on GitHub
+                  </Button>
+                </div>
+              {/if}
+              {#if installError}
+                <div class="mt-2 text-xs text-destructive">{installError}</div>
+              {/if}
+            </div>
+          {/if}
 
           <div class="border-t border-border pt-3 text-xs text-muted-foreground">
             <p>
