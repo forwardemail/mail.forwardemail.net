@@ -839,6 +839,8 @@ const autoSyncTimer = null;
 let starfieldDisposer = null;
 let themeUnsub = null;
 let systemThemeMediaQuery = null;
+// Named handler so add/removeEventListener share the same reference.
+const onSystemThemeChange = () => applyTheme();
 
 // SPA-style navigation to avoid reload flicker
 viewModel.navigate = (path, options) => {
@@ -2021,17 +2023,14 @@ async function bootstrap() {
 
     // Listen for OS-level light/dark mode changes so the app reacts
     // immediately when the system theme switches (e.g. macOS auto
-    // appearance schedule).  Without this listener, applyTheme only
-    // runs when the user-facing setting store changes.
-    if (systemThemeMediaQuery) {
-      systemThemeMediaQuery.removeEventListener('change', applyTheme);
-    }
-
-    if (globalThis.matchMedia) {
+    // appearance schedule). Attach the listener exactly once per
+    // module load — bootstrap may run multiple times (account switch,
+    // app-lock unlock) and the previous code re-attached with a fresh
+    // arrow on every call, leaking listeners and breaking remove via
+    // a mismatched reference.
+    if (!systemThemeMediaQuery && globalThis.matchMedia) {
       systemThemeMediaQuery = globalThis.matchMedia('(prefers-color-scheme: dark)');
-      systemThemeMediaQuery.addEventListener('change', () => {
-        applyTheme();
-      });
+      systemThemeMediaQuery.addEventListener('change', onSystemThemeChange);
     }
 
     // Apply saved font preference

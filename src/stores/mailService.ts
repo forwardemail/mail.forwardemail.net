@@ -140,6 +140,13 @@ function triggerDownload(href: string, filename: string): void {
 // Chunked append keeps each round-trip small even when the destination is a
 // user-chosen file path.
 const TAURI_WRITE_CHUNK_SIZE = 256 * 1024;
+
+// Attachments above this size skip the JS-side base64/data-URL cache and
+// write straight to disk. Building a data URL of a 100 MB binary creates
+// a ~133 MB string PLUS the original buffer, easily tripling the heap
+// footprint — the documented OOM cause behind the macOS attachment-open
+// abort() crashes (kernel triage: mach_vm_allocate_kernel failed).
+const LARGE_ATTACHMENT_BYTES = 50 * 1024 * 1024;
 const WINDOWS_RESERVED_FILENAMES = new Set([
   'CON',
   'PRN',
@@ -239,6 +246,101 @@ function bytesFromDataUrl(href: string): Uint8Array | null {
   }
 
   return new TextEncoder().encode(decodeURIComponent(payload));
+}
+
+// Convert an attachment's `content` field (which may be a base64 string,
+// an ArrayBuffer, a typed array, or a { data: number[] } shape) into a
+// raw Uint8Array without going through a giant intermediate data URL.
+function contentToBytes(content: unknown): Uint8Array | null {
+  if (content == null) return null;
+  if (content instanceof Uint8Array) return content;
+  if (content instanceof ArrayBuffer) return new Uint8Array(content);
+  if (ArrayBuffer.isView(content)) {
+    const view = content as ArrayBufferView;
+    return new Uint8Array(view.buffer, view.byteOffset, view.byteLength);
+  }
+  if (Array.isArray(content)) return new Uint8Array(content);
+  if (typeof content === 'object' && Array.isArray((content as { data?: unknown }).data)) {
+    return new Uint8Array((content as { data: number[] }).data);
+  }
+  if (typeof content === 'string') {
+    const cleaned = content.replace(/\s+/g, '');
+    const looksLikeBase64 = /^[A-Za-z0-9/+]+={0,2}$/.test(cleaned);
+    if (looksLikeBase64) return decodeBase64ToBytes(cleaned);
+    return new TextEncoder().encode(content);
+  }
+  return null;
+}
+
+// Write a Uint8Array straight to a user-chosen save location on Tauri,
+// or trigger a Blob-based download on the web. Bypasses bufferToDataUrl
+// so we never materialize a base64 representation of the attachment.
+function triggerDownloadBytes(bytes: Uint8Array, filename: string, _contentType: string): void {
+  if (isTauriDesktop) {
+    triggerDownloadBytesTauri(bytes, filename).catch((err) => {
+      console.warn('[mailService] Tauri save failed:', err);
+    });
+    return;
+  }
+  try {
+    const blob = new Blob([bytes as ArrayBufferView], {
+      type: _contentType || 'application/octet-stream',
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  } catch (err) {
+    console.error('triggerDownloadBytes failed', err);
+  }
+}
+
+async function triggerDownloadBytesTauri(bytes: Uint8Array, filename: string): Promise<void> {
+  const { save } = await import('@tauri-apps/plugin-dialog');
+  const { remove, writeFile } = await import('@tauri-apps/plugin-fs');
+
+  const safeFilename = sanitizeDownloadFilename(filename);
+  const outputPath = await save({
+    defaultPath: safeFilename,
+    filters: buildSaveDialogFilters(safeFilename),
+  });
+  if (!outputPath) return;
+
+  let startedWriting = false;
+  try {
+    if (bytes.byteLength <= TAURI_WRITE_CHUNK_SIZE) {
+      startedWriting = true;
+      await writeFile(outputPath, bytes);
+      return;
+    }
+    for (let offset = 0; offset < bytes.byteLength; offset += TAURI_WRITE_CHUNK_SIZE) {
+      const chunk = bytes.subarray(
+        offset,
+        Math.min(offset + TAURI_WRITE_CHUNK_SIZE, bytes.byteLength),
+      );
+      startedWriting = true;
+      await writeFile(outputPath, chunk, { append: offset > 0 });
+    }
+  } catch (err) {
+    if (startedWriting) {
+      try {
+        await remove(outputPath);
+      } catch (cleanupErr) {
+        console.warn('[mailService] Failed to remove partial attachment:', cleanupErr);
+      }
+    }
+
+    dispatchMailServiceToast(
+      `Could not save "${safeFilename}" to the selected location. Please choose another folder, retry the download, or allow access if your operating system blocked the write.`,
+      'error',
+    );
+    throw err;
+  }
 }
 
 async function readDownloadBytes(href: string): Promise<Uint8Array> {
@@ -1580,14 +1682,28 @@ export const mailService = {
             triggerDownload(cachedMatch.url as string, filename);
             return;
           } else if (cachedMatch.content) {
+            const cachedContentType = (cachedMatch.contentType ||
+              cachedMatch.mimeType ||
+              contentType) as string;
+            const bytes = contentToBytes(cachedMatch.content);
+            const isLarge = (attachment.size || 0) > LARGE_ATTACHMENT_BYTES;
+            // For large attachments we skip the data-URL stage entirely
+            // (it would build a multi-hundred-MB base64 string and OOM
+            // the renderer). Smaller files keep the cache write so they
+            // stay available offline.
+            if (bytes && (isLarge || !bytes.byteLength)) {
+              triggerDownloadBytes(bytes, filename, cachedContentType);
+              return;
+            }
             const dataUrl = bufferToDataUrl({
               content: cachedMatch.content,
-              contentType: (cachedMatch.contentType ||
-                cachedMatch.mimeType ||
-                contentType) as string,
+              contentType: cachedContentType,
             });
-            // Cache blob for future offline access
-            cacheAttachmentBlob(messageId, filename, dataUrl, attachment.size || 0).catch(() => {});
+            if (!isLarge) {
+              cacheAttachmentBlob(messageId, filename, dataUrl, attachment.size || 0).catch(
+                () => {},
+              );
+            }
             triggerDownload(dataUrl, filename);
             return;
           }
@@ -1627,12 +1743,20 @@ export const mailService = {
       if (match.url) {
         triggerDownload(match.url as string, filename);
       } else if (match.content) {
+        const matchContentType = (match.contentType || match.mimeType || contentType) as string;
+        const bytes = contentToBytes(match.content);
+        const isLarge = (attachment.size || 0) > LARGE_ATTACHMENT_BYTES;
+        if (bytes && (isLarge || !bytes.byteLength)) {
+          triggerDownloadBytes(bytes, filename, matchContentType);
+          return;
+        }
         const dataUrl = bufferToDataUrl({
           content: match.content,
-          contentType: (match.contentType || match.mimeType || contentType) as string,
+          contentType: matchContentType,
         });
-        // Cache blob for future offline access
-        cacheAttachmentBlob(messageId, filename, dataUrl, attachment.size || 0).catch(() => {});
+        if (!isLarge) {
+          cacheAttachmentBlob(messageId, filename, dataUrl, attachment.size || 0).catch(() => {});
+        }
         triggerDownload(dataUrl, filename);
       }
     } catch {

@@ -801,6 +801,11 @@
 
   // Drag and drop state
   let draggedItem = $state<unknown>(null);
+  // Set to the full multi-select group when the user drags a row that's
+  // part of an active multi-selection. Single-row drags hold a one-item
+  // array. The drop handler iterates this list so shift-click + drag
+  // moves the entire set in one gesture.
+  let draggedItems = $state<unknown[]>([]);
   let dragOverFolder = $state<string | null>(null);
   let dragExpandTimeout: ReturnType<typeof setTimeout> | null = null;
   let dragEnterCounter = 0;
@@ -2704,7 +2709,23 @@
       return;
     }
 
-    draggedItem = item;
+    // Multi-select drag: if the dragged row is part of the current
+    // multi-select set, collect every selected conversation/message so
+    // the drop handler can move them all at once. Otherwise it's a
+    // single-row drag and we only carry the one item.
+    const selectedIds = $selectedConversationIds || [];
+    const list = ($threadingEnabled ? $filteredConversations : $filteredMessages) || [];
+    if (selectedIds.length > 1 && selectedIds.includes(item.id)) {
+      const selectedSet = new Set(selectedIds);
+      draggedItems = list.filter((c) => selectedSet.has(c.id));
+      // Keep the clicked item authoritative for any single-item code paths
+      // that still read draggedItem.
+      draggedItem = item;
+    } else {
+      draggedItems = [item];
+      draggedItem = item;
+    }
+
     e.dataTransfer.effectAllowed = 'move';
 
     // Create a ghost image
@@ -2713,8 +2734,8 @@
       e.dataTransfer.setDragImage(row, 0, 0);
     }
 
-    // Set data for the drag operation
-    e.dataTransfer.setData('text/plain', item.id);
+    // Set data for the drag operation — comma-separated ids for multi.
+    e.dataTransfer.setData('text/plain', draggedItems.map((i) => i.id).join(','));
 
     // Add dragging class for styling
     setTimeout(() => {
@@ -2724,6 +2745,7 @@
 
   const handleDragEnd = (e) => {
     draggedItem = null;
+    draggedItems = [];
     dragOverFolder = null;
     dragEnterCounter = 0;
     if (dragExpandTimeout) {
@@ -2752,11 +2774,14 @@
 
     dragOverFolder = folder.path;
 
-    // Auto-expand collapsed folders after hovering for 800ms
+    // Spring-loaded folder expand: only after a long hover, so an
+    // unintentional pass-through doesn't shift the drop target away
+    // from the user. Increased from 800ms (which fired during normal
+    // movement) to 1500ms; the cancel on dragleave is intact below.
     if (hasChildren(folder) && !$expandedFolders.has(folder.path)) {
       dragExpandTimeout = setTimeout(() => {
         toggleFolderExpansion(folder.path);
-      }, 800);
+      }, 1500);
     }
   };
 
@@ -2832,15 +2857,15 @@
 
   const handleFolderDrop = async (e, folder) => {
     e.preventDefault();
-    if (!draggedItem) return;
+    if (!draggedItem && (!draggedItems || draggedItems.length === 0)) return;
 
-    // Store reference to dragged item before clearing state
-    const itemToMove = draggedItem;
+    // Snapshot the drag set (single or multi) before clearing state.
+    const itemsToMove = draggedItems.length ? draggedItems.slice() : [draggedItem];
     const targetFolder = folder.path;
-    const sourceFolder = itemToMove.folder;
 
-    // Don't move if dropping on the same folder
-    if (targetFolder === sourceFolder) {
+    // Drop everything except items whose source is already the target.
+    const filteredItems = itemsToMove.filter((it) => it && it.folder !== targetFolder);
+    if (filteredItems.length === 0) {
       handleDragEnd(e);
       return;
     }
@@ -2848,25 +2873,31 @@
     // Clear drag state
     handleDragEnd(e);
 
-    // Move the message/conversation
     try {
-      // Check if it's a conversation (has messages array) or individual message
-      const isConversation = itemToMove.messages && itemToMove.messages.length > 0;
-
-      if (isConversation) {
-        // Move all messages in the conversation
-        for (const msg of itemToMove.messages) {
-          if (mailboxStore?.actions?.moveMessage) {
-            await mailboxStore.actions.moveMessage(msg, targetFolder, { stayInFolder: true });
+      let totalMessageCount = 0;
+      for (const itemToMove of filteredItems) {
+        const isConversation = itemToMove.messages && itemToMove.messages.length > 0;
+        if (isConversation) {
+          for (const msg of itemToMove.messages) {
+            if (mailboxStore?.actions?.moveMessage) {
+              await mailboxStore.actions.moveMessage(msg, targetFolder, { stayInFolder: true });
+            }
           }
+          totalMessageCount += itemToMove.messages.length;
+        } else {
+          if (mailboxStore?.actions?.moveMessage) {
+            await mailboxStore.actions.moveMessage(itemToMove, targetFolder, {
+              stayInFolder: true,
+            });
+          }
+          totalMessageCount += 1;
         }
-        showToast(`Moved ${itemToMove.messages.length} message(s) to ${folder.name}`, 'success');
-      } else {
-        // Move single message
-        if (mailboxStore?.actions?.moveMessage) {
-          await mailboxStore.actions.moveMessage(itemToMove, targetFolder, { stayInFolder: true });
-        }
+      }
+
+      if (totalMessageCount === 1) {
         showToast(`Moved to ${folder.name}`, 'success');
+      } else {
+        showToast(`Moved ${totalMessageCount} message(s) to ${folder.name}`, 'success');
       }
     } catch (err) {
       console.error('Failed to move message:', err);

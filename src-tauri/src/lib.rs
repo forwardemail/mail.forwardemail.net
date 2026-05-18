@@ -481,11 +481,19 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let quit = MenuItem::with_id(app, "tray_quit", "Quit Forward Email", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&compose, &check_mail, &sep1, &show_hide, &sep2, &quit])?;
 
+    // macOS template icons must be monochrome with a real alpha channel so
+    // the OS can invert them for light/dark menu bars. The default 32x32.png
+    // is opaque RGBA (full square) — using it as a template would render as
+    // a solid black block. The tray-template-32x32.png asset is a white-on-
+    // alpha silhouette derived from the brand mark.
+    #[cfg(target_os = "macos")]
+    let icon = Image::from_bytes(include_bytes!("../icons/tray-template-32x32.png"))?;
+    #[cfg(not(target_os = "macos"))]
     let icon = Image::from_bytes(include_bytes!("../icons/32x32.png"))?;
 
     let _tray = TrayIconBuilder::new()
         .icon(icon)
-        .icon_as_template(false)
+        .icon_as_template(cfg!(target_os = "macos"))
         .menu(&menu)
         .show_menu_on_left_click(true)
         .tooltip("Forward Email")

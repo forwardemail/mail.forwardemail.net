@@ -17,6 +17,8 @@ import { sortMessages, normalizeSortDate, getMessageUidValue } from '../utils/me
 import { decodeMimeHeader } from '../utils/mime-utils.js';
 import { validateFolderName } from '../utils/folder-validation.ts';
 import { queueMutation, getQueuedMessageIds } from '../utils/mutation-queue';
+import { nextCandidate } from '../svelte/mailbox/utils/mailbox-helpers.js';
+import { selectedConversation } from './mailboxActions';
 import {
   folders,
   selectedFolder,
@@ -1752,11 +1754,23 @@ const createMailboxStore = () => {
       messages.set(nextList);
       addPendingDeletes([msg.id]);
       if (originalSelected?.id === msg.id) {
-        const removedIndex = originalList.findIndex((m) => m.id === msg.id);
-        const fallbackIndex = removedIndex >= 0 ? Math.min(removedIndex, nextList.length - 1) : 0;
-        const nextSelected = fallbackIndex >= 0 ? nextList[fallbackIndex] || null : null;
+        // Apple Mail-style smart direction: if the message below is read
+        // and the one above is unread, advance UP instead of down. Without
+        // this we always advance down even when the user is reading from
+        // the bottom of their unread stack. Also updates BOTH selection
+        // stores in lock-step so the row highlight (selectedConversation)
+        // and the header subject (selectedMessage) stay consistent —
+        // previously only selectedMessage was updated, which is why the
+        // subject moved but the highlight stayed on the moved row.
+        const nextSelected = nextCandidate({
+          list: nextList,
+          threadingEnabled: false,
+          selectedMessage: originalSelected,
+          selectedConversation: get(selectedConversation),
+        });
         selectedConversationIds.set([]);
         selectedMessage.set(nextSelected);
+        selectedConversation.set(nextSelected);
       }
     } else {
       selectedFolder.set(target);
@@ -1820,6 +1834,16 @@ const createMailboxStore = () => {
       await queueMutation('move', mutationPayload);
       result.success = true; // Queued successfully, treat as success from UI perspective
     }
+
+    // Reconcile with the server after the optimistic update so any new
+    // messages that arrived between the move and now appear immediately,
+    // rather than waiting for the next websocket NEW_MESSAGE tick. Without
+    // this users report "new emails don't show up until I click away and
+    // back" after a drag-drop. Fire-and-forget: don't block the caller.
+    if (stayInFolder) {
+      void loadMessages().catch(() => {});
+    }
+
     return result;
   };
 
@@ -2235,15 +2259,24 @@ const createMailboxStore = () => {
         return { success: true, count: 0 };
       }
 
-      // Mark as read via API (batch request)
+      // Mark as read via API. The server's PUT /v1/messages controller
+      // accepts `body.flags` (the IMAP flag array) — it does NOT accept
+      // `body.is_unread`. Previously we sent { is_unread: false } and the
+      // server silently no-op'd, so "Mark all as read" appeared local-only
+      // and reverted on the next sync. Send a proper flags payload that
+      // preserves existing flags (e.g. \Flagged) and adds \Seen.
       for (const msg of unreadMessages) {
         const apiId = getMessageApiId(msg);
         if (!apiId) continue;
 
+        const existingFlags = Array.isArray(msg.flags) ? msg.flags : [];
+        if (existingFlags.includes('\\Seen')) continue;
+        const newFlags = [...existingFlags, '\\Seen'];
+
         try {
           await Remote.request(
             'MessageUpdate',
-            { is_unread: false },
+            { flags: newFlags, folder: msg.folder },
             { method: 'PUT', pathOverride: `/v1/messages/${encodeURIComponent(apiId)}` },
           );
         } catch (err) {
@@ -2251,11 +2284,18 @@ const createMailboxStore = () => {
         }
       }
 
-      // Update IndexedDB
+      // Update IndexedDB optimistically (and stamp \Seen into the flags
+      // array so subsequent sync passes don't flip the bit back).
       await db.messages
         .where('[account+folder]')
         .equals([account, folderPath])
-        .modify({ is_unread: false, is_unread_index: 0 });
+        .modify((m) => {
+          m.is_unread = false;
+          m.is_unread_index = 0;
+          const flags = Array.isArray(m.flags) ? m.flags : [];
+          if (!flags.includes('\\Seen')) flags.push('\\Seen');
+          m.flags = flags;
+        });
 
       // Reload current folder if it matches
       if (get(selectedFolder) === folderPath) {

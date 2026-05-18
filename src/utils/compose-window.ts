@@ -98,7 +98,9 @@ export async function openComposeWindow(options?: ComposeWindowOptions): Promise
     // macOS 26+ WebKit crashes inside WebPageProxy::dispatchSetObscuredContentInsets
     // when a webview is constructed synchronously from a click handler; yielding
     // to the next tick lets the originating event finish dispatching first.
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    // 0ms was insufficient on 26.3+ (the AppKit event hasn't fully drained);
+    // 50ms matches the working close-side delay in Compose.svelte.
+    await new Promise((resolve) => setTimeout(resolve, 50));
 
     const win = new WebviewWindow(label, {
       title:
