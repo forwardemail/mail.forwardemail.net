@@ -94,7 +94,7 @@
     "ical.js": "2.2.1",
     "ky": "^1.14.3",
     "libsodium-wrappers": "^0.8.4",
-    "lucide-svelte": "^0.577.0",
+    "lucide-svelte": "^1.0.1",
     "marked": "^12.0.2",
     "msgpackr": "^1.11.10",
     "openpgp": "^6.3.0",
