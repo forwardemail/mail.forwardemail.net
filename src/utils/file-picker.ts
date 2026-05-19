@@ -12,6 +12,14 @@
 
 import { isTauriDesktop } from './platform.js';
 
+// macOS 26 (Tahoe) crashes the bundled tauri-plugin-dialog file picker:
+// rfd 0.16's NSOpenPanel binding is non-nullable, but +openPanel started
+// returning nil on Tahoe and the objc2 retain assertion panics → SIGABRT.
+// Detect macOS and route through our custom Rust command instead, which
+// uses msg_send! with a nullable return type and an alloc/init fallback.
+const isMacOS =
+  typeof navigator !== 'undefined' && /Mac|iPhone|iPad/i.test(navigator.platform || '');
+
 /**
  * Pick files using Tauri's native dialog on desktop.
  * Returns File[] on success, null if cancelled or not on Tauri desktop.
@@ -25,15 +33,28 @@ export async function pickFiles({
 } = {}): Promise<File[] | null> {
   if (!isTauriDesktop) return null;
 
-  const { open } = await import('@tauri-apps/plugin-dialog');
   const { readFile } = await import('@tauri-apps/plugin-fs');
 
-  const filters = buildFilters(accept);
-
-  const selected = await open({ multiple, filters });
-  if (!selected) return null;
-
-  const paths = Array.isArray(selected) ? selected : [selected];
+  let paths: string[];
+  if (isMacOS) {
+    const { invoke } = await import('@tauri-apps/api/core');
+    try {
+      const result = await invoke<string[]>('pick_files_macos', { multiple });
+      if (!result || result.length === 0) return null;
+      paths = result;
+    } catch (err) {
+      console.warn('[file-picker] pick_files_macos failed, falling back to plugin:', err);
+      const { open } = await import('@tauri-apps/plugin-dialog');
+      const selected = await open({ multiple, filters: buildFilters(accept) });
+      if (!selected) return null;
+      paths = Array.isArray(selected) ? selected : [selected];
+    }
+  } else {
+    const { open } = await import('@tauri-apps/plugin-dialog');
+    const selected = await open({ multiple, filters: buildFilters(accept) });
+    if (!selected) return null;
+    paths = Array.isArray(selected) ? selected : [selected];
+  }
 
   const files = await Promise.all(
     paths.map(async (filePath) => {

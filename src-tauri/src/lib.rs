@@ -5,6 +5,9 @@ use tauri::{Emitter, Listener, Manager};
 mod diagnostics;
 mod redaction;
 
+#[cfg(target_os = "macos")]
+mod file_picker_macos;
+
 #[cfg(desktop)]
 use tauri::{
     image::Image,
@@ -745,6 +748,8 @@ pub fn run() {
             is_default_mailto_handler,
             #[cfg(desktop)]
             set_default_mailto_handler,
+            #[cfg(target_os = "macos")]
+            file_picker_macos::pick_files_macos,
         ])
         .manage(PendingDeepLinks(Mutex::new(Vec::new())))
         .setup(|app| {
