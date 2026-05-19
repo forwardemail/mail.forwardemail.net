@@ -151,10 +151,12 @@ if (fs.existsSync(infoPlistPath)) {
   }
 }
 
-// ── 4. Patch aps-environment based on build profile ─────────────────────────
-// The Entitlements.plist ships with aps-environment=development by default.
-// For App Store / ad-hoc / enterprise builds, switch to production so APNs
-// routes through the production gateway.
+// ── 4. Inject aps-environment for iOS builds ────────────────────────────────
+// Entitlements.plist no longer ships with aps-environment (the Developer ID
+// cert used for macOS distribution is not APNs-authorized; embedding the
+// entitlement caused macOS launch-time validation to reject the signed
+// bundle with "Taskgated Invalid Signature"). This script runs only for iOS
+// builds and INSERTS the entitlement just before xcodebuild signs the IPA.
 //
 // Env vars:
 //   IOS_EXPORT_METHOD  - 'app-store' | 'ad-hoc' | 'enterprise' | 'release-testing'
@@ -171,13 +173,25 @@ if (fs.existsSync(entPlistPath)) {
     exportMethod === 'enterprise';
 
   const targetEnv = isProduction ? 'production' : 'development';
-  entPlist = entPlist.replace(
-    /<key>aps-environment<\/key>\s*<string>[^<]*<\/string>/,
-    `<key>aps-environment</key>\n  <string>${targetEnv}</string>`,
-  );
+  const apsBlock = `  <key>aps-environment</key>\n  <string>${targetEnv}</string>\n`;
+
+  if (/<key>aps-environment<\/key>/.test(entPlist)) {
+    // Pre-existing entry (e.g. from a previous iOS build that didn't clean up
+    // after itself) — replace its value.
+    entPlist = entPlist.replace(
+      /<key>aps-environment<\/key>\s*<string>[^<]*<\/string>\n?/,
+      apsBlock,
+    );
+  } else {
+    // Insert just before </dict>. Anchored to the last </dict> in case the
+    // plist ever grows nested dicts; current shape is flat so this matches
+    // the only one.
+    entPlist = entPlist.replace(/<\/dict>(\s*<\/plist>\s*)$/m, `${apsBlock}</dict>$1`);
+  }
+
   fs.writeFileSync(entPlistPath, entPlist);
   console.log(
-    `Patched aps-environment to "${targetEnv}" (export=${exportMethod || 'dev'}, APNS_PRODUCTION=${forceProduction})`,
+    `Injected aps-environment="${targetEnv}" into Entitlements.plist (export=${exportMethod || 'dev'}, APNS_PRODUCTION=${forceProduction})`,
   );
 } else {
   console.warn('Entitlements.plist not found — skipping aps-environment patch');

@@ -17,8 +17,19 @@
   <!-- Allow unsigned executable memory (required by WebKit JIT) -->
   <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
   <true/>
-  <!-- APNs Push Notifications (environment set dynamically by inject-ios-signing.cjs) -->
-  <key>aps-environment</key>
-  <string>development</string>
+
+  <!-- NOTE: APNs (aps-environment) is intentionally NOT declared here.
+       This Entitlements.plist is applied to BOTH iOS and macOS desktop
+       builds via bundle.macOS.entitlements in tauri.conf.json. The
+       Forward Email LLC Developer ID Application certificate (used for
+       macOS distribution) is not authorized for APNs, so embedding
+       aps-environment caused the macOS launch-time entitlement check
+       to fail with "CODESIGNING 1 Taskgated Invalid Signature" even
+       though codesign + notarization succeeded at build time.
+
+       For iOS, scripts/inject-ios-signing.cjs inserts the right
+       aps-environment value ("development" or "production") into this
+       file just before xcodebuild runs. Desktop builds never run that
+       script, so the entitlement stays absent for macOS distribution. -->
 </dict>
 </plist>
