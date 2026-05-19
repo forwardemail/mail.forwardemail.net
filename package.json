@@ -132,7 +132,7 @@
     "fake-indexeddb": "6.2.5",
     "globals": "^14.0.0",
     "husky": "^9.1.7",
-    "jsdom": "^25.0.1",
+    "jsdom": "^29.1.1",
     "lint-staged": "^15.5.2",
     "mode-watcher": "^1.1.0",
     "np": "^10.3.0",
