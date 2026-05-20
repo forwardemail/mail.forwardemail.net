@@ -220,9 +220,93 @@ jobs:
           tagName: ${{ steps.release_meta.outputs.tag_name }}
           releaseName: ${{ steps.release_meta.outputs.release_name }}
           releaseId: ${{ steps.resolve_release.outputs.release_id }}
-          releaseDraft: ${{ steps.resolve_release.outputs.release_draft }}
+          # Always upload to a DRAFT release; the publish-release job at the
+          # end of this workflow promotes the draft → published only after
+          # every matrix row passed (build + signing + structural asserts +
+          # launch-survives smoke). Prevents the v0.10.17–v0.10.21 failure
+          # class where a release was created and visible to users before
+          # all rows had verified the bundles open.
+          releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
+
+      # Structural asserts on the macOS bundle BEFORE we publish it.
+      # Catches the class of bug where codesign + notarization succeed at
+      # build time but the kernel rejects the binary at exec time due to
+      # an entitlement-vs-cert mismatch (see
+      # docs/desktop-postmortem-macos-entitlements-2026-05-19.md for the
+      # 0.10.17–0.10.21 incident this guards against).
+      #
+      # Three checks, ordered cheap-to-expensive:
+      #   1. codesign authority is the Forward Email LLC Developer ID.
+      #   2. spctl reports "Notarized Developer ID" — Gatekeeper would
+      #      accept it.
+      #   3. Entitlement allowlist: nothing outside the known-good set is
+      #      embedded. Specifically refuses aps-environment, the entitlement
+      #      that broke 0.10.17–0.10.21.
+      #   4. Launch-survives test: exec the binary and verify it lives ≥3s
+      #      without being SIGKILLed. Catches taskgated rejection that
+      #      codesign and spctl don't see.
+      - name: Verify macOS bundle (codesign + entitlements + launch)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -u
+          APP="src-tauri/target/${{ matrix.target }}/release/bundle/macos/Forward Email.app"
+          BIN="$APP/Contents/MacOS/forwardemail-desktop"
+          if [ ! -d "$APP" ]; then
+            echo "::error::Bundle not found at $APP — tauri-action did not produce a .app"
+            exit 1
+          fi
+
+          echo "=== 1. codesign authority ==="
+          if ! codesign -dv --verbose=4 "$APP" 2>&1 | tee /tmp/cs.out; then
+            echo "::error::codesign -dv failed — bundle is not signed"
+            exit 1
+          fi
+          if ! grep -q "Authority=Developer ID Application: Forward Email LLC" /tmp/cs.out; then
+            echo "::error::Bundle is not signed with Forward Email LLC Developer ID"
+            grep "Authority=" /tmp/cs.out || true
+            exit 1
+          fi
+          if ! grep -q "TeamIdentifier=FH83QMJS7P" /tmp/cs.out; then
+            echo "::error::Bundle TeamIdentifier does not match Forward Email LLC (FH83QMJS7P)"
+            exit 1
+          fi
+
+          echo "=== 2. spctl notarization ==="
+          if ! spctl -a -vvv "$APP" 2>&1 | tee /tmp/spctl.out; then
+            echo "::error::spctl rejects the bundle"
+            exit 1
+          fi
+          if ! grep -q "Notarized Developer ID" /tmp/spctl.out; then
+            echo "::error::Bundle is not notarized — Gatekeeper would reject it"
+            exit 1
+          fi
+
+          echo "=== 3. entitlement allowlist ==="
+          codesign -d --entitlements - "$APP" 2>&1 | tee /tmp/ents.out
+          if grep -q "aps-environment" /tmp/ents.out; then
+            echo "::error::aps-environment entitlement present on macOS Developer ID bundle. The Forward Email LLC cert is not APNs-authorized; the kernel will SIGKILL on launch. See docs/desktop-postmortem-macos-entitlements-2026-05-19.md"
+            exit 1
+          fi
+
+          echo "=== 4. launch-survives test (3s) ==="
+          "$BIN" >/tmp/launch.out 2>&1 &
+          PID=$!
+          sleep 3
+          if kill -0 "$PID" 2>/dev/null; then
+            echo "Bundle survived 3 seconds — codesign/entitlements look OK at exec time"
+            kill "$PID" 2>/dev/null || true
+            wait "$PID" 2>/dev/null || true
+          else
+            echo "::error::Binary exited within 3s of launch. This indicates taskgated rejected the signed bundle — usually an entitlement-vs-cert mismatch. Last output from the binary:"
+            cat /tmp/launch.out || true
+            echo ""
+            echo "Searching for matching crash log…"
+            log show --predicate 'process == "forwardemail-desktop" AND messageType == fault' --last 1m 2>/dev/null | head -40 || true
+            exit 1
+          fi
 
       # SLSA build provenance attestation. Publishes a signed attestation
       # to the Sigstore transparency log binding each desktop bundle to
@@ -241,3 +325,64 @@ jobs:
             src-tauri/target/${{ matrix.target }}/release/bundle/deb/*.deb
             src-tauri/target/${{ matrix.target }}/release/bundle/rpm/*.rpm
             src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage
+
+  # E2E webview gate: build the Tauri binary with the webdriver feature
+  # and run the cross-platform spec suite (incl. native-attachment-add /
+  # native-attachment-open / native-compose-window) on the same matrix
+  # we ship. Catches platform-native crash classes (NSOpenPanel, WebKit
+  # insets, attachment OOM) that the build-and-release verification step
+  # cannot exercise because it only launches the binary for 3 seconds.
+  e2e-webview-gate:
+    name: E2E webview (gate)
+    uses: ./.github/workflows/e2e-webview.yml
+    with:
+      release_gate: true
+    secrets: inherit
+
+  # Release gate: promote the draft release to published ONLY after every
+  # build-and-release matrix row AND every e2e-webview matrix row passed.
+  # With `needs:` set, this job is automatically skipped when any
+  # dependency failed, leaving the release as a draft that the user can
+  # inspect and either fix and re-run or delete. Prevents partial/broken
+  # releases from being user-visible (the v0.10.17–v0.10.21 failure mode
+  # where an unsigned bundle shipped under a published tag).
+  publish-release:
+    name: Publish release (gate)
+    needs: [build-and-release, e2e-webview-gate]
+    runs-on: ubuntu-latest
+    environment: release
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Resolve release metadata
+        id: release_meta
+        shell: bash
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then
+            TAG_NAME="v${{ inputs.version }}"
+          else
+            RAW_TAG="${{ github.event.inputs.tag || github.ref_name }}"
+            case "$RAW_TAG" in
+              desktop-v*|v*) TAG_NAME="$RAW_TAG" ;;
+              *)             TAG_NAME="v$RAW_TAG" ;;
+            esac
+          fi
+          echo "tag_name=$TAG_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Promote draft to published
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.release_meta.outputs.tag_name }}"
+          echo "Promoting $TAG from draft to published…"
+          # `gh release edit` is idempotent — if the release is already
+          # published this is a no-op rather than an error, which is the
+          # behavior we want for any manually-published re-runs.
+          gh release edit "$TAG" --draft=false
+          echo "Release $TAG is now published."

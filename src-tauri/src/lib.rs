@@ -8,6 +8,9 @@ mod redaction;
 #[cfg(target_os = "macos")]
 mod file_picker_macos;
 
+#[cfg(target_os = "macos")]
+mod self_heal_macos;
+
 #[cfg(desktop)]
 use tauri::{
     image::Image,
@@ -831,6 +834,12 @@ pub fn run() {
             set_default_mailto_handler,
             #[cfg(target_os = "macos")]
             file_picker_macos::pick_files_macos,
+            #[cfg(target_os = "macos")]
+            self_heal_macos::self_heal_flush_launch_services,
+            #[cfg(target_os = "macos")]
+            self_heal_macos::self_heal_detect_stale_bundles,
+            #[cfg(target_os = "macos")]
+            self_heal_macos::self_heal_cleanup_stale_bundles,
             #[cfg(mobile)]
             check_unified_push,
             #[cfg(mobile)]

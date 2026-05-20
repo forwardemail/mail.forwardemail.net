@@ -2009,6 +2009,17 @@ async function bootstrap() {
     // safely issue API requests.
     markAppReady();
 
+    // macOS self-heal: refresh LaunchServices and, if we find stale
+    // bundles from a broken 0.10.17–0.10.21 install in the user's home
+    // directory, offer to move them to Trash. No-op on non-macOS and
+    // when nothing stale is found. See
+    // docs/desktop-postmortem-macos-entitlements-2026-05-19.md
+    import('./utils/self-heal-macos.js')
+      .then(({ runMacOSSelfHeal }) => runMacOSSelfHeal())
+      .catch((err) => {
+        console.warn('[bootstrap] self-heal init failed:', err);
+      });
+
     // Start inactivity timer if app lock is enabled (re-locks after idle)
     if (isLockEnabled() && isVaultConfigured()) {
       startAppLockTimer();

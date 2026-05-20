@@ -7754,6 +7754,7 @@
                                   actionMenuOpen = false;
                                   mailboxView?.replyTo?.($selectedMessage);
                                 }}
+                                data-testid="action-menu-reply"
                               >
                                 <Reply class="h-4 w-4" />
                                 <span>Reply</span>
@@ -8549,6 +8550,7 @@
                                 class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm bg-secondary hover:bg-secondary/80 cursor-pointer transition-colors"
                                 onclick={() => mailService.downloadAttachment(att, group.message)}
                                 title="Download {att.name || att.filename}"
+                                data-testid="attachment-row"
                               >
                                 <span>{att.name || att.filename}</span>
                                 {#if att.size}<span class="text-xs text-muted-foreground"

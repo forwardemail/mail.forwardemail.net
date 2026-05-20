@@ -3558,7 +3558,12 @@
             </div>
             <Tooltip.Root>
               <Tooltip.Trigger>
-                <Button variant="ghost" size="icon" onclick={triggerFilePicker}>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onclick={triggerFilePicker}
+                  data-testid="compose-add-attachment"
+                >
                   <Paperclip class="h-4 w-4" />
                 </Button>
               </Tooltip.Trigger>
