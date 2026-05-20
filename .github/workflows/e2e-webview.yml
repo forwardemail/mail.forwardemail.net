@@ -241,3 +241,13 @@ jobs:
           path: e2e-webview/screenshots/
           if-no-files-found: ignore
           retention-days: 7
+
+      - name: Fail job if tests failed
+        # The test steps use continue-on-error so the artifact-upload steps
+        # above always run on failure. This gate restores red CI when any
+        # spec fails — without it, a failing matrix row reports green.
+        if: ${{ steps.gate.outputs.skip != 'true' && (steps.test-linux.outcome == 'failure' || steps.test-other.outcome == 'failure') }}
+        shell: bash
+        run: |
+          echo "::error::E2E tests failed on ${{ matrix.label }} — see job logs and uploaded artifacts."
+          exit 1
