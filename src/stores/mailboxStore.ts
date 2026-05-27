@@ -2305,6 +2305,25 @@ const createMailboxStore = () => {
       });
       await db.messages.bulkPut(updated);
 
+      // Stage each flip as a pending flag mutation. Without this, the
+      // loadMessages() call below re-merges server data (which still
+      // reports is_unread=true in demo mode, and may briefly report it
+      // in production while the server processes the bulk update) and
+      // clobbers the optimistic state. applyPendingFlagMutations
+      // re-applies the override on every messages.set() until either
+      // confirmFlagMutations sees server agreement or the 30s TTL
+      // expires.
+      for (const m of unreadMessages) {
+        if (!m?.id) continue;
+        const flags = Array.isArray(m.flags) ? m.flags : [];
+        const nextFlags = flags.includes('\\Seen') ? flags : [...flags, '\\Seen'];
+        addPendingFlagMutation(m.id, {
+          is_unread: false,
+          is_unread_index: 0,
+          flags: nextFlags,
+        });
+      }
+
       // Reload current folder if it matches
       if (get(selectedFolder) === folderPath) {
         await loadMessages();

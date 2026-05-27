@@ -17,26 +17,75 @@ export async function openApp(browser: WebdriverIO.Browser): Promise<void> {
  * sits below the password + Stay-signed-in checkbox). Observed on the
  * macOS-arm64 CI runner: the spawned window was ~1024×190 px tall, which
  * left the demo button outside the viewport and `waitForClickable` timed
- * out even with scrollIntoView. The Tauri window-state plugin may also
- * restore a tiny saved size across spec runs.
- *
- * Tries WebDriver setWindowRect first (works on every desktop driver
- * including tauri-webdriver). Failures are non-fatal — the assertion
- * that follows still surfaces the underlying issue clearly.
+ * out even with scrollIntoView. The tauri-plugin-window-state plugin
+ * restores a saved size across spec runs and tauri-webdriver does not
+ * implement W3C setWindowRect, so we have to resize via the Tauri
+ * JS bridge (which targets the native window directly).
  */
 async function ensureUsableViewport(browser: WebdriverIO.Browser): Promise<void> {
   const MIN_W = 1280;
   const MIN_H = 800;
   try {
-    const size = (await browser.execute(() => ({
-      w: window.innerWidth,
-      h: window.innerHeight,
-    }))) as { w: number; h: number };
-    if (size.w >= MIN_W && size.h >= MIN_H) return;
-    await browser.setWindowSize(MIN_W, MIN_H);
+    type ResizeResult = {
+      ok: boolean;
+      resized?: boolean;
+      w?: number;
+      h?: number;
+      reason?: string;
+    };
+    const result = (await browser.executeAsync(
+      // The async-execute callback receives (minW, minH, done). Returning
+      // before `done()` would lose the result; the trailing argument is
+      // injected by WebDriverIO regardless of how many params we declare.
+      function (minW, minH, done) {
+        try {
+          var iw = window.innerWidth || 0;
+          var ih = window.innerHeight || 0;
+          if (iw >= minW && ih >= minH) {
+            done({ ok: true, resized: false, w: iw, h: ih });
+            return;
+          }
+          // Dynamic import keeps the call cheap when the bridge isn't
+          // present (e.g. tests running against a plain browser).
+          import('@tauri-apps/api/window')
+            .then(function (mod) {
+              var Logical = mod.LogicalSize;
+              var current = mod.getCurrentWindow && mod.getCurrentWindow();
+              if (!current || !Logical) {
+                done({ ok: false, reason: 'no-tauri-window-api' });
+                return;
+              }
+              current
+                .setSize(new Logical(minW, minH))
+                .then(function () {
+                  done({ ok: true, resized: true, w: minW, h: minH });
+                })
+                .catch(function (err) {
+                  done({ ok: false, reason: String((err && err.message) || err) });
+                });
+            })
+            .catch(function (err) {
+              done({ ok: false, reason: String((err && err.message) || err) });
+            });
+        } catch (err) {
+          done({
+            ok: false,
+            reason: String((err as { message?: string })?.message || err),
+          });
+        }
+      },
+      MIN_W,
+      MIN_H,
+    )) as ResizeResult;
+    if (result?.resized) {
+      // Tauri's setSize resolves before the OS finishes the resize.
+      // Give the WebView a tick to reflect the new innerWidth/innerHeight
+      // so the next selector check sees the larger viewport.
+      await new Promise((r) => setTimeout(r, 200));
+    }
   } catch {
-    // Driver may not support setWindowSize — let the test continue and
-    // fail loudly on the real assertion rather than swallowing this here.
+    // Best-effort — let the test continue and fail loudly on the real
+    // assertion rather than swallowing this here.
   }
 }
 
