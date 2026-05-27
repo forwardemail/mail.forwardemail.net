@@ -110,7 +110,28 @@
       // so it never fails itself on older WebView features.
       (function () {
         var SHOWN = false;
+        // Skip the overlay when an error clearly came from the WebDriver
+        // test harness rather than the app itself. tauri-webdriver issues
+        // `execute/sync` calls during DOM rebuilds; if the targeted
+        // element vanished mid-call WebDriverIO throws "stale element
+        // reference" which bubbles into the page as an unhandledrejection,
+        // hitting this overlay and blocking the next test interaction (the
+        // overlay has z-index:max; the button under it becomes "not
+        // clickable" forever). These messages never occur outside a
+        // webdriver session, so filtering on the literal string is safe
+        // for production diagnostics.
+        function isTestHarnessNoise(message) {
+          if (!message) return false;
+          var msg = String(message);
+          return (
+            /stale element reference/i.test(msg) ||
+            /WebDriverError/i.test(msg) ||
+            /element click intercepted/i.test(msg) ||
+            /no such element/i.test(msg)
+          );
+        }
         function showFatal(detail) {
+          if (isTestHarnessNoise(detail)) return;
           if (SHOWN) {
             // Append subsequent errors so we capture cascades
             var prev = document.getElementById('fe-fatal-error');

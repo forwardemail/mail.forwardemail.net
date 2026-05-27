@@ -696,6 +696,10 @@
   let resizingVertical = $state(false);
   let messagesPaneEl: HTMLElement | null = $state(null);
   let readerPaneEl: HTMLElement | null = $state(null);
+  // Last anchor row id for shift+click range selection. Updated on plain
+  // and cmd/ctrl+click; range select then spans from anchor to clicked row
+  // in the currently visible list order.
+  let lastSelectionAnchorId: string | null = $state(null);
 
   // Classic layout mode (vertical split) on desktop - switches to fullscreen at 900px
   const isVerticalDesktop = $derived(!isProductivityLayout && !isClassicMobileViewport());
@@ -2492,6 +2496,41 @@
     mailboxView?.toggleConversationSelection?.(item, event);
   };
 
+  // Row-click dispatcher with keyboard-modifier multi-select.
+  // - plain click → open (selectConversation / selectMessage) and set anchor
+  // - cmd/ctrl+click → toggle in selection set (additive); update anchor
+  // - shift+click → select range from anchor to clicked row in visible order
+  // The `open` callback is the plain-click action — passed by each row so
+  // we don't lose the existing draft / conversation-vs-message branching.
+  const handleRowClick = (item, event, list, open) => {
+    const isAdditive = !!(event?.metaKey || event?.ctrlKey);
+    const isRange = !!event?.shiftKey;
+    if (!isAdditive && !isRange) {
+      lastSelectionAnchorId = item?.id ?? null;
+      open();
+      return;
+    }
+    // Modifier path takes over: prevent the default "open" so the reader
+    // pane doesn't switch mid-multi-select.
+    event?.preventDefault?.();
+    event?.stopPropagation?.();
+    if (isRange && lastSelectionAnchorId) {
+      const ids = (list || []).map((it) => it?.id).filter(Boolean);
+      const anchorIdx = ids.indexOf(lastSelectionAnchorId);
+      const targetIdx = ids.indexOf(item?.id);
+      if (anchorIdx >= 0 && targetIdx >= 0) {
+        const [lo, hi] = anchorIdx <= targetIdx ? [anchorIdx, targetIdx] : [targetIdx, anchorIdx];
+        const rangeIds = ids.slice(lo, hi + 1);
+        selectionMode = true;
+        mailboxStore?.actions?.setSelectedIds?.(rangeIds);
+        return;
+      }
+    }
+    // Additive (cmd/ctrl) — or shift+click without an anchor — falls back to toggle.
+    lastSelectionAnchorId = item?.id ?? null;
+    toggleSelection(item, event);
+  };
+
   const clearSelection = () => {
     mailboxStore?.actions?.setSelectedIds?.([]);
     selectionMode = false;
@@ -2776,12 +2815,14 @@
 
     // Spring-loaded folder expand: only after a long hover, so an
     // unintentional pass-through doesn't shift the drop target away
-    // from the user. Increased from 800ms (which fired during normal
-    // movement) to 1500ms; the cancel on dragleave is intact below.
+    // from the user. Bumped from 1500ms → 2500ms because expansion still
+    // felt disorienting: the parent's children push later siblings
+    // off-screen, moving the user's actual intended drop target. The
+    // cancel on dragleave is intact below.
     if (hasChildren(folder) && !$expandedFolders.has(folder.path)) {
       dragExpandTimeout = setTimeout(() => {
         toggleFolderExpansion(folder.path);
-      }, 1500);
+      }, 2500);
     }
   };
 
@@ -2870,6 +2911,23 @@
       return;
     }
 
+    // Compute the next selection BEFORE the move so the source row is
+    // still in the list. nextCandidate prefers an unread row above when
+    // the row below is read (Apple Mail style); previously the reader
+    // pane kept showing the moved message's subject because nothing
+    // re-pointed selectedMessage/selectedConversation. Picking from
+    // nextCandidate also fixes "drag and drop doesn't move to next
+    // unread email up".
+    const movedIds = new Set(filteredItems.map((it) => it?.id).filter(Boolean));
+    const wasSelected = filteredItems.some(
+      (it) =>
+        it?.id === $selectedMessage?.id ||
+        it?.id === $selectedConversation?.id ||
+        (it?.messages || []).some((m) => m?.id === $selectedMessage?.id),
+    );
+    const fallback = wasSelected ? nextCandidate() : null;
+    const fallbackIsMoved = fallback && movedIds.has(fallback.id);
+
     // Clear drag state
     handleDragEnd(e);
 
@@ -2891,6 +2949,21 @@
             });
           }
           totalMessageCount += 1;
+        }
+      }
+
+      // Re-point selection so the reader pane stops showing the moved
+      // message's subject. If nextCandidate landed on a row that's now
+      // moving too (multi-select drop), clear selection entirely.
+      if (wasSelected) {
+        if (fallback && !fallbackIsMoved) {
+          if ($threadingEnabled) selectConversation(fallback);
+          else selectMessage(fallback);
+        } else {
+          mailboxStore?.state?.selectedMessage?.set?.(null);
+          mailboxStore?.state?.selectedConversation?.set?.(null);
+          mailboxStore?.state?.messageBody?.set?.('');
+          mailboxStore?.state?.attachments?.set?.([]);
         }
       }
 
@@ -6438,14 +6511,15 @@
                             role="button"
                             tabindex="0"
                             draggable={window.innerWidth > 640}
-                            onclick={() => {
-                              const message = conv?.messages?.[conv.messages.length - 1] || conv;
-                              if (isDraftMessage(message || conv)) {
-                                openDraftFromMessage(message || conv);
-                                return;
-                              }
-                              selectConversation(conv);
-                            }}
+                            onclick={(e) =>
+                              handleRowClick(conv, e, $filteredConversations || [], () => {
+                                const message = conv?.messages?.[conv.messages.length - 1] || conv;
+                                if (isDraftMessage(message || conv)) {
+                                  openDraftFromMessage(message || conv);
+                                  return;
+                                }
+                                selectConversation(conv);
+                              })}
                             onkeydown={(e) =>
                               activateOnKeys(e, () => {
                                 const message = conv?.messages?.[conv.messages.length - 1] || conv;
@@ -6580,6 +6654,7 @@
                                 aria-label={($selectedConversationIds || []).includes(conv.id)
                                   ? 'Deselect'
                                   : 'Select'}
+                                data-slot="checkbox"
                                 onclick={(e) => {
                                   e.stopPropagation();
                                   toggleSelection(conv, e);
@@ -6848,13 +6923,14 @@
                           role="button"
                           tabindex="0"
                           draggable={window.innerWidth > 640}
-                          onclick={() => {
-                            if (isDraftMessage(msg)) {
-                              openDraftFromMessage(msg);
-                              return;
-                            }
-                            selectMessage(msg);
-                          }}
+                          onclick={(e) =>
+                            handleRowClick(msg, e, $filteredMessages || [], () => {
+                              if (isDraftMessage(msg)) {
+                                openDraftFromMessage(msg);
+                                return;
+                              }
+                              selectMessage(msg);
+                            })}
                           onkeydown={(e) =>
                             activateOnKeys(e, () => {
                               if (isDraftMessage(msg)) {
