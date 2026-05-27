@@ -291,5 +291,16 @@ export function shouldShowMailtoPrompt(account) {
   if (hasPromptBeenShown(account)) return false;
   // Don't show if we already know we're the default
   if (getRegistrationStatusSync() === 'default') return false;
+  // Demo mode is intentionally read-only and the prompt's "Set as
+  // default" action mutates user-system state — also it overlays the
+  // mailbox UI right around when e2e tests are clicking buttons and
+  // waiting for modals, which racks up flaky failures. Skip it.
+  try {
+    if (typeof localStorage !== 'undefined' && localStorage.getItem('fe_demo_mode') === '1') {
+      return false;
+    }
+  } catch {
+    // localStorage may be unavailable in some embedded contexts — fall through
+  }
   return true;
 }

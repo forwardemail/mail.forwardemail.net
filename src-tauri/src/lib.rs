@@ -753,8 +753,21 @@ pub fn run() {
                     },
                 );
             }))
-            .plugin(tauri_plugin_window_state::Builder::new().build())
             .plugin(tauri_plugin_global_shortcut::Builder::new().build());
+
+        // tauri-plugin-window-state persists window size/position across
+        // launches. Under the webdriver feature this causes problems on
+        // macOS-arm64 CI: the runner spawns the app fresh each spec, but
+        // the plugin restores whatever tiny size the previous spec's
+        // afterEach left behind (or a system-default 1024×190 if no
+        // state file yet), leaving the Try Demo button below the
+        // viewport and the helper's resize call racing the WebView's
+        // own restore on next launch. Disabling it for e2e builds gives
+        // each spawn the tauri.conf.json default (1280×800).
+        #[cfg(not(feature = "webdriver"))]
+        {
+            builder = builder.plugin(tauri_plugin_window_state::Builder::new().build());
+        }
 
         // The updater silently auto-installs (no onUpdateAvailable callback at
         // the call site in main.ts) the moment GitHub Releases reports a newer

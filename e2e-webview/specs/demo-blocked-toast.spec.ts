@@ -55,10 +55,31 @@ describe('demo write actions are blocked with a toast', () => {
     await confirmBtn.waitForClickable({ timeout: 10_000 });
     await confirmBtn.click();
 
-    // Demo interceptor blocks MessageDelete and surfaces the toast.
-    const toast = await browser.$('[data-testid="toast-message"]');
-    await toast.waitForDisplayed({ timeout: 10_000 });
-    const text = (await toast.getText()).toLowerCase();
-    expect(text).toContain('demo');
+    // Demo interceptor blocks MessageDelete and surfaces the toast. The
+    // generic [data-testid="toast-message"] selector also matches transient
+    // status toasts ("search index built", "syncing", etc.), and on faster
+    // CI runners those can land in the slot before the demo toast and trip
+    // the assertion. Poll for the actual demo-blocked text instead of
+    // reading whichever toast happens to be on screen first.
+    let toastText = '';
+    await browser.waitUntil(
+      async () => {
+        const toasts = await browser.$$('[data-testid="toast-message"]');
+        const len = await toasts.length;
+        for (let i = 0; i < len; i++) {
+          const t = (await toasts[i].getText()).toLowerCase();
+          if (t.includes('demo')) {
+            toastText = t;
+            return true;
+          }
+        }
+        return false;
+      },
+      {
+        timeout: 10_000,
+        timeoutMsg: 'expected a toast containing "demo" after the blocked delete',
+      },
+    );
+    expect(toastText).toContain('demo');
   });
 });
