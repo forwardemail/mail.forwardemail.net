@@ -440,36 +440,38 @@
    DARK MODE (for shadcn html.dark pattern)
    ============================================ */
 .dark {
-  /* shadcn dark theme variables — saturation dropped from the original
-   * 222° / 217° blue-tint palette to a near-neutral cool gray so dark
-   * mode reads as black rather than blue. Primary cyan accent retained
-   * for highlights, rings, and focus states. */
-  --background: 240 5% 6%;
+  /* shadcn dark theme variables — surface tokens are pure neutral
+   * (hue 0, saturation 0) so dark mode reads as true black/grey rather
+   * than blue. Previous palette held hue 240° at 4-6% sat which is
+   * imperceptible per-pixel but tinted noticeably blue at full-window
+   * scale. Primary cyan accent (199°) retained for highlights, rings,
+   * and focus states. */
+  --background: 0 0% 6%;
   --foreground: 0 0% 98%;
-  --card: 240 5% 8%;
+  --card: 0 0% 8%;
   --card-foreground: 0 0% 98%;
-  --popover: 240 6% 10%;
+  --popover: 0 0% 10%;
   --popover-foreground: 0 0% 98%;
   --primary: 199 89% 49%;
-  --primary-foreground: 240 6% 10%;
-  --secondary: 240 4% 16%;
+  --primary-foreground: 0 0% 10%;
+  --secondary: 0 0% 16%;
   --secondary-foreground: 0 0% 98%;
-  --muted: 240 4% 16%;
-  --muted-foreground: 240 5% 65%;
-  --accent: 240 4% 16%;
+  --muted: 0 0% 16%;
+  --muted-foreground: 0 0% 65%;
+  --accent: 0 0% 16%;
   --accent-foreground: 0 0% 98%;
   --destructive: 0 62.8% 60.6%;
   --destructive-foreground: 0 0% 98%;
-  --border: 240 4% 18%;
-  --input: 240 4% 18%;
+  --border: 0 0% 18%;
+  --input: 0 0% 18%;
   --ring: 199 89% 49%;
-  --sidebar-background: 240 5.9% 10%;
-  --sidebar-foreground: 240 4.8% 95.9%;
+  --sidebar-background: 0 0% 10%;
+  --sidebar-foreground: 0 0% 95.9%;
   --sidebar-primary: 224.3 76.3% 48%;
   --sidebar-primary-foreground: 0 0% 100%;
-  --sidebar-accent: 240 3.7% 15.9%;
-  --sidebar-accent-foreground: 240 4.8% 95.9%;
-  --sidebar-border: 240 3.7% 15.9%;
+  --sidebar-accent: 0 0% 15.9%;
+  --sidebar-accent-foreground: 0 0% 95.9%;
+  --sidebar-border: 0 0% 15.9%;
   --sidebar-ring: 217.2 91.2% 59.8%;
 
   /* Surface colors */

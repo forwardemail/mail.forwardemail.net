@@ -125,6 +125,44 @@ async function runTask(task) {
         maxMessages: task.maxMessages || settings.maxHeaders,
       });
     }
+    // Forward sync just stopped at the sync_max_headers cap. Schedule a
+    // low-priority backfill so older history fills in over time. Appended
+    // (not unshifted) so it sits behind any other queued work, and
+    // re-enqueued in small batches so the queue interleaves naturally
+    // with user-triggered tasks (folder switch, manual refresh).
+    pushTask({
+      type: 'backfill',
+      folder: task.folder,
+      pageSize: task.pageSize || settings.pageSize || 50,
+    });
+  } else if (task.type === 'backfill') {
+    let result;
+    try {
+      result = await sendSyncTask(
+        {
+          ...task,
+          account: currentAccount,
+          pageSize: task.pageSize || settings.pageSize || 50,
+          pendingDeleteIds: getPendingDeleteIds(),
+        },
+        { timeout: 120_000 },
+      );
+    } catch (err) {
+      // Backfill is best-effort. On error, don't loop — let the next
+      // metadata sync (folder switch, manual refresh) re-trigger it.
+      warn('[sync-controller] backfill task failed', err);
+      return;
+    }
+    // Re-queue the next batch unless the worker says we're done. The
+    // append (pushTask) ensures any user-triggered work that came in
+    // during this batch runs first.
+    if (result && !result.done) {
+      pushTask({
+        type: 'backfill',
+        folder: task.folder,
+        pageSize: task.pageSize || settings.pageSize || 50,
+      });
+    }
   } else if (task.type === 'bodies') {
     await sendSyncTask(
       {

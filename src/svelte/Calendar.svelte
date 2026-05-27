@@ -2484,9 +2484,19 @@
     error = '';
     try {
       if (!calendarsLoaded || force) {
+        // First mount (or explicit force): fetchCalendars internally calls
+        // loadEventsForSelection(true), so events come along for the ride.
         await fetchCalendars();
         if (requestId !== loadRequestId) return;
         calendarsLoaded = true;
+      } else {
+        // Subsequent load() (tab switch / route change re-activation):
+        // calendars are already in memory so fetchCalendars is skipped, but
+        // events created in another client/web UI since first mount would
+        // otherwise stay invisible until the cache TTL expires. Force a
+        // fresh event fetch for the active selection.
+        await loadEventsForSelection(true);
+        if (requestId !== loadRequestId) return;
       }
     } catch (err) {
       if (requestId !== loadRequestId) return;
@@ -3765,13 +3775,16 @@
     // Granular merge for remote (websocket-driven) calendar changes. DELETE
     // is the only one we can do without a server-side payload upgrade — the
     // event id is present in the WS notification, so we just remove it from
-    // local state without a full re-fetch. CREATE / UPDATE fall through to
-    // load() until the server starts including event bodies in the WS push.
+    // local state without a full re-fetch. CREATE / UPDATE re-fetch events
+    // for the active selection (force=true bypasses the cached event list);
+    // load() alone only loads the calendar list, not the events, which is
+    // why events created outside the app didn't appear here even though
+    // notifications fired for them.
     const applyRemoteChange = (detail: { type?: string; payload?: unknown }) => {
       const t = detail?.type;
       const data = detail?.payload as Record<string, unknown> | undefined;
       if (!t || !data) {
-        load().catch(() => {});
+        loadEventsForSelection(true).catch(() => {});
         return;
       }
       if (t === 'calendarEventDeleted') {
@@ -3785,7 +3798,7 @@
           return;
         }
       }
-      load().catch(() => {});
+      loadEventsForSelection(true).catch(() => {});
     };
 
     registerApi?.({

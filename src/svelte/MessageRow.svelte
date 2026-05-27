@@ -168,7 +168,7 @@
 
   <div class="flex min-w-0 flex-col gap-1">
     <div class="flex items-center justify-between gap-2">
-      <div class="flex items-center gap-1.5 font-semibold text-foreground">
+      <div class="flex items-center gap-1.5 text-foreground {unread ? 'font-bold' : 'font-normal'}">
         {#if starred}
           <Star class="h-3.5 w-3.5 fill-yellow-400 text-yellow-400" />
         {/if}
@@ -177,7 +177,9 @@
       <span class="shrink-0 text-xs text-muted-foreground">{date}</span>
     </div>
 
-    <div class="truncate font-medium text-foreground">{subject}</div>
+    <div class="truncate text-foreground {unread ? 'font-semibold' : 'font-normal'}">
+      {subject}
+    </div>
 
     <div class="flex items-center gap-1.5 truncate text-sm text-muted-foreground">
       {#if hasAttachment}

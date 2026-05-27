@@ -423,6 +423,144 @@ async function runMetadataTask(task, postProgress) {
   };
 }
 
+// ============================================================================
+// Backfill (background historical pagination)
+// ============================================================================
+//
+// runMetadataTask is forward-only — once initial sync stops at the
+// sync_max_headers cap, the oldest synced message becomes a permanent floor
+// (the API doesn't expose before_uid). runBackfillTask walks the `page`
+// offset backwards in small batches and lets writeMessages dedupe; the
+// controller re-schedules the task after each batch so foreground work
+// (folder navigation, manual refresh, body fetch) can preempt.
+//
+// Stop conditions: server returned an empty page BACKFILL_EMPTY_STREAK_LIMIT
+// times in a row, hit the per-folder safety cap, or this batch returned
+// only duplicates (already in IDB).
+
+const BACKFILL_PAGES_PER_BATCH = 5;
+const BACKFILL_EMPTY_STREAK_LIMIT = 3;
+const BACKFILL_THROTTLE_MS = 800;
+const BACKFILL_DEFAULT_LIMIT = 50;
+// Per-folder safety cap. Folders with truly enormous history won't backfill
+// forever; users who want more can raise this via a settings extension later.
+const BACKFILL_SAFETY_CAP = 20_000;
+
+async function runBackfillTask(task, postProgress) {
+  const account = accountKey(task.account);
+  const folder = task.folder;
+  if (!account || !folder) return { done: true, reason: 'invalid_task' };
+
+  let manifest = await getManifest(account, folder);
+  if (manifest.backfillComplete) {
+    return { done: true, reason: 'already_complete' };
+  }
+  if ((manifest.backfillTotalInserted || 0) >= BACKFILL_SAFETY_CAP) {
+    await updateManifest(account, folder, { backfillComplete: true });
+    return { done: true, reason: 'safety_cap' };
+  }
+
+  const limit = task.pageSize || BACKFILL_DEFAULT_LIMIT;
+  // First-ever backfill starts AFTER what forward sync covered. messagesFetched
+  // is a running total from runMetadataTask; ceil(/limit) + 1 is the first
+  // page below the forward-sync floor. Bumped to >= 2 because page 1 is
+  // always the newest and would just duplicate.
+  let page =
+    manifest.backfillPage ?? Math.max(2, Math.ceil((manifest.messagesFetched || 0) / limit) + 1);
+  let emptyStreak = manifest.backfillEmptyStreak || 0;
+  let totalInsertedThisRun = 0;
+  let pagesThisRun = 0;
+  let exhausted = false;
+
+  while (pagesThisRun < BACKFILL_PAGES_PER_BATCH) {
+    const params = {
+      folder,
+      page,
+      limit,
+      include_body: 0,
+      raw: false,
+      attachments: false,
+    };
+
+    let res;
+    try {
+      res = await fetchMessageList(params);
+    } catch (err) {
+      // Network/auth hiccup — return partial progress; the controller
+      // will retry on the next batch.
+      console.warn('[sync.worker] backfill fetch failed:', err);
+      break;
+    }
+
+    const rawList = parseResultList(res);
+    if (!Array.isArray(rawList) || !rawList.length) {
+      emptyStreak += 1;
+      page += 1;
+      pagesThisRun += 1;
+      if (emptyStreak >= BACKFILL_EMPTY_STREAK_LIMIT) {
+        exhausted = true;
+        break;
+      }
+      continue;
+    }
+    emptyStreak = 0;
+
+    const normalized = rawList
+      .map((item) => normalizeMessageForCache(item, folder, account))
+      .filter((item) => item?.id);
+
+    if (normalized.length) {
+      const writeResult = await writeMessages(
+        account,
+        folder,
+        normalized,
+        task.pendingDeleteIds || [],
+      );
+      totalInsertedThisRun += writeResult.inserted;
+    }
+
+    page += 1;
+    pagesThisRun += 1;
+
+    postProgress?.({
+      type: 'progress',
+      folder,
+      stage: 'backfill',
+      page,
+      fetched: totalInsertedThisRun,
+      inserted: totalInsertedThisRun,
+    });
+
+    if (totalInsertedThisRun + (manifest.backfillTotalInserted || 0) >= BACKFILL_SAFETY_CAP) {
+      exhausted = true;
+      break;
+    }
+
+    // Throttle so backfill stays well behind any foreground network
+    // activity. Yield to the event loop between throttled waits so
+    // higher-priority worker messages get processed promptly.
+    await new Promise((resolve) => setTimeout(resolve, BACKFILL_THROTTLE_MS));
+  }
+
+  const nextManifest = {
+    backfillPage: page,
+    backfillEmptyStreak: emptyStreak,
+    backfillTotalInserted: (manifest.backfillTotalInserted || 0) + totalInsertedThisRun,
+    lastBackfillAt: Date.now(),
+  };
+  if (exhausted) {
+    nextManifest.backfillComplete = true;
+  }
+  await updateManifest(account, folder, nextManifest);
+
+  return {
+    done: exhausted,
+    inserted: totalInsertedThisRun,
+    page,
+    pagesProcessed: pagesThisRun,
+  };
+}
+
 // Keyed `${account}::${folder}` — prevents repeated heal scans within a
 // single worker lifetime. Cleared automatically when the worker restarts.
 const healedFromFieldFolders = new Set<string>();
@@ -1083,6 +1221,10 @@ async function handleTask(taskId, task) {
     let summary = null;
     if (task.type === 'metadata') {
       summary = await runMetadataTask(task, (p) => {
+        self.postMessage({ ...p, taskId });
+      });
+    } else if (task.type === 'backfill') {
+      summary = await runBackfillTask(task, (p) => {
         self.postMessage({ ...p, taskId });
       });
     } else if (task.type === 'bodies') {

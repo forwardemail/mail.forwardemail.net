@@ -1396,9 +1396,13 @@ describe('round-2 fix regression guards', () => {
   it('MessageRow binds unread to font weight on both from line and subject', () => {
     // Pre-fix: from line was unconditionally font-semibold, subject was
     // unconditionally font-medium — only the bg-primary/5 tint cued unread.
-    // Now: bold for unread, normal for read on both.
-    expect(messageRowSrc).toContain("{unread\n          ? 'font-bold'\n          : 'font-normal'}");
-    expect(messageRowSrc).toContain("{unread ? 'font-semibold' : 'font-normal'}");
+    // Now: bold for unread, normal for read on both. Whitespace-tolerant
+    // regex so reformats (e.g. prettier line wrapping) don't false-fail.
+    expect(messageRowSrc).toMatch(/\{\s*unread\s*\?\s*'font-bold'\s*:\s*'font-normal'\s*\}/);
+    expect(messageRowSrc).toMatch(/\{\s*unread\s*\?\s*'font-semibold'\s*:\s*'font-normal'\s*\}/);
+    // Defence-in-depth: assert the *unconditional* pre-fix classes are gone.
+    expect(messageRowSrc).not.toMatch(/gap-1\.5\s+font-semibold\s+text-foreground"/);
+    expect(messageRowSrc).not.toMatch(/truncate\s+font-medium\s+text-foreground"/);
   });
 
   it('Calendar applyRemoteChange triggers a fresh event fetch for CREATE/UPDATE', () => {
