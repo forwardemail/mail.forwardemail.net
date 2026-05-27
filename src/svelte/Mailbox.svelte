@@ -6432,6 +6432,8 @@
                           <div
                             class={`flex items-center gap-3 cursor-pointer ${isMobile ? 'px-4 py-3' : 'px-3 py-1.5'} ${swiping && swipeItemId === conv.id ? 'user-select-none' : ''} ${window.innerWidth > 640 ? 'cursor-grab active:cursor-grabbing' : ''}`}
                             data-conversation-row
+                            data-testid="message-row"
+                            data-message-id={conv.id}
                             data-unread={conv.hasUnread || conv.is_unread ? 'true' : 'false'}
                             role="button"
                             tabindex="0"
