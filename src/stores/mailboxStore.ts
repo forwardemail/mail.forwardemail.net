@@ -629,6 +629,40 @@ const createMailboxStore = () => {
     if (state.promise) {
       return state.promise;
     }
+
+    // Demo mode fast-path: serve folders straight from the synchronous demo
+    // interceptor (Remote.request → getDemoData). Demo has no real IndexedDB
+    // cache and the sync worker isn't demo-aware, so touching either only
+    // risks a worker stall (DB_WORKER_INIT_TIMEOUT, seen on slow CI) — the
+    // exact failure that left the demo sidebar with zero folders while
+    // messages still rendered. Keep demo fully in-memory and worker-independent.
+    if (isDemoMode()) {
+      const demoPromise = (async () => {
+        const res = await Remote.request('Folders', {}, { method: 'GET' });
+        const raw = res?.Result || res || [];
+        const list = Array.isArray(raw) ? raw : raw.Items || raw.items || [];
+        const mapped = buildFolderList(list);
+        e2eTrace(`loadFolders DEMO set n=${mapped.length}`);
+        folders.set(mapped);
+        const currentFolder = get(selectedFolder);
+        if ((!currentFolder || currentFolder === '') && mapped.length) {
+          const inbox = mapped.find((f) => f.path?.toUpperCase?.() === 'INBOX');
+          const defaultFolder = inbox?.path || mapped[0]?.path;
+          if (defaultFolder) selectedFolder.set(defaultFolder);
+        }
+        updateFolderUnreadCounts();
+        state.lastFetchAt = Date.now();
+      })();
+      state.promise = demoPromise;
+      folderLoadState.set(account, state);
+      try {
+        return await demoPromise;
+      } finally {
+        state.promise = null;
+        folderLoadState.set(account, state);
+      }
+    }
+
     if (!force && state.lastFetchAt && Date.now() - state.lastFetchAt < FOLDERS_CACHE_TTL) {
       // TTL still valid but store may be empty (blanked by resetMailboxStateForAccount)
       const currentFolders = get(folders);
@@ -654,8 +688,19 @@ const createMailboxStore = () => {
 
     const promise = (async () => {
       try {
-        // cache first
-        const cached = await db.folders.where('account').equals(account).toArray();
+        // cache first — IndexedDB is only a cache. A DB failure here (e.g. the
+        // db worker times out / is mid-recovery: DB_WORKER_INIT_TIMEOUT) must
+        // NOT abort the load. loadMessages already tolerates a dead cache and
+        // falls through to the network/demo source; loadFolders must too,
+        // otherwise a transient worker stall leaves the sidebar with zero
+        // folders even though the list is available from the server (or, in
+        // demo mode, the synchronous demo interceptor).
+        let cached = [];
+        try {
+          cached = await db.folders.where('account').equals(account).toArray();
+        } catch (cacheErr) {
+          warn('loadFolders cache read failed; continuing to source', cacheErr);
+        }
         if (cached?.length) {
           const mappedCached = buildFolderList(cached);
           folders.set(mappedCached);
@@ -691,17 +736,24 @@ const createMailboxStore = () => {
           const raw = res?.Result || res || [];
           list = Array.isArray(raw) ? raw : raw.Items || raw.items || [];
 
-          // Use transaction for atomic folder cache update (fallback path only)
-          await db.transaction('rw', db.folders, async () => {
-            await db.folders.where('account').equals(account).delete();
-            await db.folders.bulkPut(
-              list.map((f) => ({
-                ...f,
-                account,
-                updatedAt: Date.now(),
-              })),
-            );
-          });
+          // Use transaction for atomic folder cache update (fallback path only).
+          // Persisting to cache is best-effort: if the db worker is down the
+          // write will fail, but we already have `list` from the source and
+          // must still render it — so a failed cache write must not abort.
+          try {
+            await db.transaction('rw', db.folders, async () => {
+              await db.folders.where('account').equals(account).delete();
+              await db.folders.bulkPut(
+                list.map((f) => ({
+                  ...f,
+                  account,
+                  updatedAt: Date.now(),
+                })),
+              );
+            });
+          } catch (writeErr) {
+            warn('loadFolders cache write failed; continuing with in-memory list', writeErr);
+          }
         }
 
         const mapped = buildFolderList(list || []);
