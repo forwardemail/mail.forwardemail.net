@@ -1045,21 +1045,29 @@ const createMailboxStore = () => {
 
     const fetchWithFallback = async (params, stageLabel) => {
       if (stageLabel) tracer.stage(stageLabel);
-      try {
-        const res = await sendSyncRequest('messagePage', {
-          account,
-          ...params,
-        });
-        return { source: 'worker', res };
-      } catch {
-        const res = await Remote.request('MessageList', params, {
-          method: 'GET',
-          pathOverride: '/v1/messages',
-          timeout: 60_000,
-        });
-
-        return { source: 'main', res };
+      // Demo mode: the sync worker isn't demo-aware and can hang (it doesn't
+      // resolve against the synchronous demo interceptor), leaving the message
+      // list stuck on its loading skeleton. Skip it and serve straight from
+      // the demo-intercepted Remote.request — mirrors loadFolders' demo
+      // fast-path. The 'main' source parsing handles the demo array shape.
+      if (!isDemoMode()) {
+        try {
+          const res = await sendSyncRequest('messagePage', {
+            account,
+            ...params,
+          });
+          return { source: 'worker', res };
+        } catch {
+          // fall through to the main-thread Remote request below
+        }
       }
+      const res = await Remote.request('MessageList', params, {
+        method: 'GET',
+        pathOverride: '/v1/messages',
+        timeout: 60_000,
+      });
+
+      return { source: 'main', res };
     };
 
     const requestParams = {
