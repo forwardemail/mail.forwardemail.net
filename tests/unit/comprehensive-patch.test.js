@@ -1228,6 +1228,10 @@ describe('pre-release regression guards', () => {
     'utf8',
   );
   const swSyncSrc = fs.readFileSync(path.resolve(__dirname, '../../public/sw-sync.js'), 'utf8');
+  const swNormalizeSrc = fs.readFileSync(
+    path.resolve(__dirname, '../../public/sw-message-normalize.js'),
+    'utf8',
+  );
   const syncHelpersSrc = fs.readFileSync(
     path.resolve(__dirname, '../../src/utils/sync-helpers.ts'),
     'utf8',
@@ -1282,11 +1286,15 @@ describe('pre-release regression guards', () => {
   });
 
   it('sw-sync normalizeMessage never falls back to Date.now() for the message date', () => {
-    // The literal "Date.now()" fallback that caused the bulk-sync date bug
-    // must be gone — the line now resolves to 0 when no date field is usable.
-    expect(swSyncSrc).not.toMatch(/new Date\(rawDate \|\| Date\.now\(\)\)/);
-    expect(swSyncSrc).toContain('raw.created_at ||');
-    expect(swSyncSrc).toMatch(/parsedDate\.getTime\(\)\s*:\s*0/);
+    // The SW message normalizer now lives in the shared sw-message-normalize.js.
+    // The literal "Date.now()" fallback that caused the bulk-sync date bug must
+    // stay gone — the date resolves to 0 when no date field is usable.
+    expect(swNormalizeSrc).not.toMatch(/new Date\(rawDate \|\| Date\.now\(\)\)/);
+    expect(swNormalizeSrc).not.toMatch(/dateVal \|\| Date\.now\(\)/);
+    expect(swNormalizeSrc).toContain('raw.created_at ||');
+    expect(swNormalizeSrc).toMatch(/parsedDate\.getTime\(\)\s*:\s*0/);
+    // sw-sync.js itself must delegate to the shared normalizer.
+    expect(swSyncSrc).toContain('self.normalizeMessageRecord(');
   });
 
   it('sync-helpers normalizeMessageForCache never falls back to Date.now() for the message date', () => {

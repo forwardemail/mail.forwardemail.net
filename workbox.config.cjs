@@ -16,8 +16,9 @@ module.exports = {
     'email-iframe.js',
   ],
   swDest: 'dist/sw.js',
-  // Import sync handler for background sync
-  importScripts: ['sw-sync.js'],
+  // Import sync handler for background sync. sw-message-normalize.js defines the
+  // shared message normalizer and MUST load first so sw-sync.js can call it.
+  importScripts: ['sw-message-normalize.js', 'sw-sync.js'],
   // SPA fallback — serve index.html for all navigation requests when offline.
   // Enables the app to load from cache when the network is unavailable.
   navigateFallback: '/index.html',

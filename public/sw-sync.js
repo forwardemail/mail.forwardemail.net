@@ -277,69 +277,12 @@
 
   const isCancelled = (folderKey) => state.get(folderKey)?.cancelled;
 
-  const normalizeMessage = (raw, account, folder) => {
-    // Prefer server-assigned receive time over sender's clock, and never
-    // silently stamp messages with Date.now() — that produced the bug where
-    // a full sync made every email appear to have arrived at sync time.
-    const rawDate =
-      raw.created_at ||
-      raw.Date ||
-      raw.date ||
-      raw.internal_date ||
-      raw.header_date ||
-      raw.received_at ||
-      null;
-    const parsedDate = rawDate ? new Date(rawDate) : null;
-    const dateMs = parsedDate && Number.isFinite(parsedDate.getTime()) ? parsedDate.getTime() : 0;
-    if (!dateMs && LOG) {
-      console.warn('[SW sync] message has no usable date field', {
-        id: raw.Uid || raw.id || raw.uid,
-        keys: Object.keys(raw || {}),
-      });
-    }
-    const subject = raw.Subject || raw.subject || '(No subject)';
-    const flags = Array.isArray(raw.flags) ? raw.flags : [];
-    const messageId =
-      raw.MessageId || raw.message_id || raw['Message-ID'] || raw.id || raw.Uid || raw.uid;
-
-    return {
-      id: raw.Uid || raw.id || raw.uid,
-      account,
-      folder: raw.folder_path || raw.folder || raw.path || folder,
-      dateMs,
-      date: dateMs,
-      from:
-        raw.From?.Display ||
-        raw.From?.Email ||
-        raw.from?.text ||
-        raw.from ||
-        raw.sender ||
-        (raw.nodemailer?.from && raw.nodemailer.from.text) ||
-        'Unknown',
-      subject,
-      normalizedSubject: subject,
-      snippet:
-        raw.Plain?.slice?.(0, 140) ||
-        raw.snippet ||
-        raw.preview ||
-        raw.textAsHtml ||
-        raw.text ||
-        raw.nodemailer?.textAsHtml ||
-        raw.nodemailer?.text ||
-        '',
-      flags,
-      is_unread: Array.isArray(flags) ? !flags.includes('\\Seen') : (raw.is_unread ?? true),
-      is_starred: raw.is_starred || flags.includes('\\Flagged'),
-      has_attachment: Boolean(raw.has_attachment || raw.hasAttachments),
-      bodyIndexed: false,
-      pending: false,
-      threadId: raw.threadId || raw.ThreadId || raw.thread_id,
-      message_id: messageId,
-      in_reply_to: raw.in_reply_to || raw.inReplyTo || raw['In-Reply-To'],
-      references: raw.references || raw.References,
-      updatedAt: Date.now(),
-    };
-  };
+  // Message normalization lives in the shared sw-message-normalize.js
+  // (loaded first via workbox importScripts) so the SW and the canonical
+  // src/utils/sync-helpers.ts agree on the data-integrity fields. See that file
+  // and tests/unit/message-normalize-contract.test.ts.
+  const normalizeMessage = (raw, account, folder) =>
+    self.normalizeMessageRecord(raw, folder, account);
 
   const writeMessages = async (messages) => {
     if (!messages?.length) return;
