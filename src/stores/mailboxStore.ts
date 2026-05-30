@@ -557,6 +557,11 @@ const createMailboxStore = () => {
   };
 
   const updateFolderUnreadCounts = async () => {
+    // Demo mode is IndexedDB-free (WebKitGTK stalls IndexedDB under tauri://).
+    // This recomputes per-folder counts via `await db.messages...count()`, which
+    // would hang; demo folder badge counts are served by the demo Folders
+    // interceptor (recomputeFolderCounts) instead, so skip the db recompute.
+    if (isDemoMode()) return;
     try {
       const account = Local.get('email') || 'default';
       const currentFolders = get(folders);
@@ -1295,13 +1300,13 @@ const createMailboxStore = () => {
       confirmFlagMutations(merged);
 
       let prunedIds: string[] = [];
-      // NOTE: the db.messages write runs even in demo mode. It happens AFTER
-      // messages.set() above (so a slow/stalled write can't block first paint
-      // or the readiness gate), and persisting demo messages is required by
-      // db.messages readers such as markFolderAsRead(), which would otherwise
-      // see an empty cache and mark nothing. Only the cache READ is skipped in
-      // demo (the read was the Linux/WebKitGTK stall, before first paint).
-      if (merged.length || shouldPrune) {
+      // Demo mode is fully IndexedDB-free: WebKitGTK (Tauri's Linux WebView)
+      // stalls IndexedDB even on the main thread under the tauri:// scheme, so
+      // ANY awaited db op can hang. Demo data is ephemeral and never needs
+      // persisting, and markFolderAsRead reads the in-memory store (not
+      // db.messages) in demo, so skip the write entirely. The visible list is
+      // already updated by messages.set() above.
+      if (!isDemoMode() && (merged.length || shouldPrune)) {
         // Resolve in-flight mutation IDs before opening the tx so we don't
         // clobber an optimistic move/label whose server round-trip hasn't
         // completed yet. If the queue read fails, skip pruning this pass.
@@ -2355,6 +2360,36 @@ const createMailboxStore = () => {
   const markFolderAsRead = async (folderPath) => {
     const account = Local.get('email') || 'default';
 
+    // Demo mode is IndexedDB-free (WebKitGTK stalls IndexedDB under tauri://,
+    // even on the main thread). Mark off the in-memory store instead of reading
+    // db.messages — the folder being marked is the selected, rendered one, so
+    // messagesStore holds its messages. Demo MessageUpdate is served by the
+    // synchronous interceptor (tracks read state for re-fetches); the optimistic
+    // pending-flag mutation flips the rows. Folder badge counts come from the
+    // demo Folders interceptor on the next folder load.
+    if (isDemoMode()) {
+      const storeMessages = get(messages) || [];
+      const unread = storeMessages.filter((m) => m.is_unread === true);
+      if (!unread.length) return { success: true, count: 0 };
+      for (const m of unread) {
+        const flags = Array.isArray(m.flags) ? m.flags : [];
+        const nextFlags = flags.includes('\\Seen') ? flags : [...flags, '\\Seen'];
+        const apiId = getMessageApiId(m);
+        if (apiId) {
+          Remote.request(
+            'MessageUpdate',
+            { flags: nextFlags, folder: m.folder },
+            { method: 'PUT', pathOverride: `/v1/messages/${encodeURIComponent(apiId)}` },
+          ).catch(() => {});
+        }
+        if (m.id) {
+          addPendingFlagMutation(m.id, { is_unread: false, is_unread_index: 0, flags: nextFlags });
+        }
+      }
+      messages.set(applyPendingFlagMutations(get(messages)));
+      return { success: true, count: unread.length };
+    }
+
     try {
       // Get all unread messages in folder
       const allFolderMessages = await db.messages
@@ -2362,10 +2397,6 @@ const createMailboxStore = () => {
         .equals([account, folderPath])
         .toArray();
       const unreadMessages = allFolderMessages.filter((m) => m.is_unread === true);
-
-      e2eTrace(
-        `markFolderAsRead folder=${folderPath} dbMode=${(globalThis as Record<string, unknown>).__feDbMode} inDb=${allFolderMessages.length} unread=${unreadMessages.length}`,
-      );
       if (!unreadMessages.length) {
         return { success: true, count: 0 };
       }
