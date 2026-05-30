@@ -134,20 +134,31 @@ export async function initDbClient() {
         await bootstrapReady;
       }
 
+      // WebKitGTK (Tauri's Linux desktop WebView) stalls IndexedDB inside Web
+      // Workers under the tauri:// scheme. It's intermittent per page load —
+      // the worker can pass a one-shot init probe yet hang on a later op — so a
+      // probe alone is unreliable. Skip the worker outright on Linux desktop and
+      // run the engine on the main thread (not subject to the restriction).
+      // macOS (WKWebView), Windows (WebView2) and Android (Chromium) are
+      // unaffected and keep using the worker + probe below.
+      if (shouldUseMainThreadDb()) {
+        e2eTrace('db: WebKitGTK/Linux -> main-thread engine (worker skipped)');
+        const result = await initMainThread();
+        initialized = true;
+        return result;
+      }
+
       try {
         const result = await initViaWorker();
         initialized = true;
         return result;
       } catch (workerErr) {
-        // The worker's IndexedDB is non-functional — most notably WebKitGTK on
-        // Linux, which stalls IndexedDB inside Web Workers under the tauri://
-        // scheme (init times out, or ops hang after a successful init). Tear the
-        // worker down and run the SAME Dexie engine on the main thread, which is
-        // not subject to that restriction. macOS/Windows never reach this path
-        // (the worker init + probe succeed), so they are unaffected. This also
-        // dissolves the old recovery death-spiral: initDbClient now resolves
-        // successfully via the main thread instead of repeatedly retrying a
-        // worker that can't open IndexedDB.
+        // Defensive catch-all for any OTHER environment where the worker's
+        // IndexedDB is non-functional (init times out, or the probe round-trip
+        // fails). Tear the worker down and run the SAME Dexie engine on the main
+        // thread. This also dissolves the old recovery death-spiral: initDbClient
+        // resolves via the main thread instead of repeatedly retrying a worker
+        // that can't open IndexedDB.
         console.warn(
           '[db-worker-client] DB worker IndexedDB unavailable; using main-thread engine:',
           workerErr?.message,
@@ -156,13 +167,7 @@ export async function initDbClient() {
           `db: worker IndexedDB unavailable (${workerErr?.code || workerErr?.message}) -> main-thread engine`,
         );
         terminateDbWorker();
-        useMainThread = true;
-        const result = await executeOperation({ action: 'init', payload: { dbName: DB_NAME } });
-        if (result?.success === false) {
-          const err = new Error(result?.error || 'Main-thread database init failed');
-          err.code = 'DB_INIT_FAILED';
-          throw err;
-        }
+        const result = await initMainThread();
         initialized = true;
         return result;
       }
@@ -175,6 +180,37 @@ export async function initDbClient() {
   })();
 
   return initPromise;
+}
+
+/**
+ * True on Tauri's Linux desktop WebView (WebKitGTK), where IndexedDB inside a
+ * Web Worker stalls under the tauri:// scheme. macOS (Macintosh UA), Windows
+ * (Windows UA) and Android (Chromium WebView, has "Android" in the UA) all run
+ * the worker fine and return false. Best-effort UA sniff; on any error we fall
+ * through to the worker + probe path, so a miss just costs a probe round-trip.
+ */
+function shouldUseMainThreadDb() {
+  try {
+    const isTauri = typeof globalThis.__TAURI_INTERNALS__ !== 'undefined';
+    const ua = globalThis.navigator?.userAgent || '';
+    return isTauri && /\bLinux\b/.test(ua) && !/Android/.test(ua);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Initialize the Dexie engine on the main thread (the WebKitGTK fallback path).
+ */
+async function initMainThread() {
+  useMainThread = true;
+  const result = await executeOperation({ action: 'init', payload: { dbName: DB_NAME } });
+  if (result?.success === false) {
+    const err = new Error(result?.error || 'Main-thread database init failed');
+    err.code = 'DB_INIT_FAILED';
+    throw err;
+  }
+  return result;
 }
 
 /**
