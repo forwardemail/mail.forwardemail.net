@@ -1295,11 +1295,13 @@ const createMailboxStore = () => {
       confirmFlagMutations(merged);
 
       let prunedIds: string[] = [];
-      // Demo mode: don't persist/prune ephemeral demo messages in IndexedDB —
-      // pointless, and the db worker write stalls on Linux/WebKitGTK, which
-      // would strand loadMessages before its finally (loading never clears,
-      // the dedup deferred never resolves). The store is already updated above.
-      if (!isDemoMode() && (merged.length || shouldPrune)) {
+      // NOTE: the db.messages write runs even in demo mode. It happens AFTER
+      // messages.set() above (so a slow/stalled write can't block first paint
+      // or the readiness gate), and persisting demo messages is required by
+      // db.messages readers such as markFolderAsRead(), which would otherwise
+      // see an empty cache and mark nothing. Only the cache READ is skipped in
+      // demo (the read was the Linux/WebKitGTK stall, before first paint).
+      if (merged.length || shouldPrune) {
         // Resolve in-flight mutation IDs before opening the tx so we don't
         // clobber an optimistic move/label whose server round-trip hasn't
         // completed yet. If the queue read fails, skip pruning this pass.
