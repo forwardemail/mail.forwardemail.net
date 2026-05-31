@@ -73,7 +73,7 @@ import {
   setTerminateWorkersCallback,
   terminateDbWorker,
 } from './utils/db';
-import { markBootstrapReady, markAppReady, e2eTrace } from './utils/bootstrap-ready.js';
+import { markBootstrapReady, markAppReady } from './utils/bootstrap-ready.js';
 import { initPerfObservers } from './utils/perf-logger.ts';
 import { attemptRecovery } from './utils/db-recovery';
 import { parseMailto, mailtoToPrefill } from './utils/mailto';
@@ -1202,9 +1202,6 @@ composeMailboxView.set(viewModel.mailboxView);
 viewModel.settingsModal.toasts = viewModel.toasts;
 
 routeStore.subscribe((route) => {
-  e2eTrace(
-    `routeSub route=${route} bootstrapComplete=${_bootstrapComplete} email=${Local.get('email') || 'none'}`,
-  );
   const mailboxMode =
     route === 'mailbox' ||
     route === 'settings' ||
@@ -1262,7 +1259,6 @@ routeStore.subscribe((route) => {
   }
 
   if (route === 'mailbox') {
-    e2eTrace('routeSub -> mailboxView.load()');
     viewModel.mailboxView.load();
   }
 
@@ -2083,9 +2079,7 @@ async function bootstrap() {
     }
 
     // Svelte compose handles its own editor initialization
-    e2eTrace(`boot:end route=${route} email=${Local.get('email') || 'none'}`);
     if (route === 'mailbox') {
-      e2eTrace('boot -> mailboxView.load()');
       viewModel.mailboxView.load();
     }
 

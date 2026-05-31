@@ -12,7 +12,7 @@
   import { db } from '../utils/db';
   import { sendSyncRequest } from '../utils/sync-worker-client.js';
   import { Local } from '../utils/storage';
-  import { appReady, e2eTrace } from '../utils/bootstrap-ready.js';
+  import { appReady } from '../utils/bootstrap-ready.js';
   import { formatCompactDate, formatReaderDate } from '../utils/date';
   import { i18n } from '../utils/i18n';
   import {
@@ -336,7 +336,6 @@
   $effect(() => {
     if (isActive && !wasActive) {
       const folder = get(selectedFolder);
-      e2eTrace(`mbx:becameActive folder=${folder || 'none'} folders=${get(folders)?.length ?? 0}`);
       if (!folder) {
         mailboxStore?.actions?.selectFolder?.('INBOX');
       }
@@ -4989,20 +4988,16 @@
     // decryption) before issuing any API requests.  Without this gate the
     // Mailbox onMount races with bootstrap and fires API calls with
     // encrypted credentials → 401.
-    e2eTrace(`mbx:onMount registered appReady.then isActive=${isActive}`);
     appReady.then(() => {
-      e2eTrace(`mbx:appReady-resolved isActive=${isActive}`);
       // Don't fire API calls if the Mailbox isn't the active route.
       // The component is always mounted (hidden via display:none on other
       // routes), so without this guard it issues requests with no
       // credentials when the user is on the login screen.
       if (!isActive) {
-        e2eTrace('mbx:appReady-resolved SKIP (inactive) — load chain not run');
         return;
       }
 
       if (mailboxStore?.actions?.loadFolders) {
-        e2eTrace('mbx:appReady -> loadFolders().then(loadMessages)');
         mailboxStore.actions
           .loadFolders()
           .then(() => mailboxStore.actions?.loadMessages?.())

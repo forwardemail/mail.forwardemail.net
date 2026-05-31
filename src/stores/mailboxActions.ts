@@ -1,7 +1,6 @@
 import { writable, derived, get } from 'svelte/store';
 import Dexie from 'dexie';
 import { Remote } from '../utils/remote';
-import { e2eTrace } from '../utils/bootstrap-ready.js'; // TEMPORARY: demo-stall diagnosis
 import { Local, Session, Accounts } from '../utils/storage';
 import { db } from '../utils/db';
 import { mailboxStore } from './mailboxStore';
@@ -212,18 +211,13 @@ export const load = async () => {
   const nextAccount = Local.get('email') || 'default';
   initialSyncStarted.set(true);
   if (loadPromise && loadAccount === nextAccount) {
-    e2eTrace(`load() DEDUP account=${nextAccount} gen=${loadGeneration}`);
     return loadPromise;
   }
   const thisGeneration = ++loadGeneration;
   loadAccount = nextAccount;
-  e2eTrace(`load() START account=${nextAccount} gen=${thisGeneration}`);
   loadPromise = (async () => {
     await loadAccounts();
-    if (thisGeneration !== loadGeneration) {
-      e2eTrace(`load() BAIL@accounts gen=${thisGeneration}/${loadGeneration}`);
-      return;
-    }
+    if (thisGeneration !== loadGeneration) return;
 
     // Sync settings in background — don't block the load chain on network.
     // Cache is applied synchronously by fetchSettings(); the network refresh
@@ -237,13 +231,7 @@ export const load = async () => {
       () => ({ status: 'fulfilled' }),
       (err) => ({ status: 'rejected', reason: err }),
     );
-    e2eTrace(
-      `load() afterFolders status=${foldersResult.status} count=${get(mailboxStore.state.folders)?.length ?? 0} gen=${thisGeneration}/${loadGeneration}`,
-    );
-    if (thisGeneration !== loadGeneration) {
-      e2eTrace(`load() BAIL@folders gen=${thisGeneration}/${loadGeneration}`);
-      return;
-    }
+    if (thisGeneration !== loadGeneration) return;
 
     // If loadFolders() failed and we have no folders, bail with error state
     if (foldersResult.status === 'rejected') {
@@ -273,9 +261,6 @@ export const load = async () => {
     if (messagesResult.status === 'rejected') {
       warn('[load] loadMessages failed', messagesResult.reason);
     }
-    e2eTrace(
-      `load() afterMessages msgs=${messagesResult.status} count=${get(mailboxStore.state.messages)?.length ?? 0} loading=${get(mailboxStore.state.loading)} gen=${thisGeneration}/${loadGeneration}`,
-    );
     if (thisGeneration !== loadGeneration) return;
 
     // Incrementally index any new labels from the freshly loaded messages

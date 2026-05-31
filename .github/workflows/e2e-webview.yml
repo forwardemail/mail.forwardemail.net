@@ -51,19 +51,17 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Linux rows are advisory (continue-on-error below): WebKitGTK under
-          # Xvfb intermittently loses a demo-entry render race that neither
-          # macOS (same WebKit engine) nor Windows hits, so a Linux failure
-          # alone shouldn't block CI or the release gate. The job still runs
-          # and reports red for signal — just non-blocking.
+          # Linux is now gating like every other platform. It was advisory while
+          # we chased WebKitGTK flakiness; the root cause (IndexedDB stalls under
+          # WebKitGTK + the tauri:// scheme, and the db blocking boot) is fixed —
+          # demo mode is IndexedDB-free and bootstrap no longer waits on the db —
+          # so Linux should be deterministically green.
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             label: linux-22
-            advisory: true
           - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             label: linux-24
-            advisory: true
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             label: windows-x64
@@ -83,9 +81,6 @@ jobs:
             push_only: true
     runs-on: ${{ matrix.os }}
     name: WebView E2E (${{ matrix.label }})
-    # Advisory rows (Linux) report failures but don't fail the workflow run or
-    # the release gate that calls this workflow. Windows + macOS stay gating.
-    continue-on-error: ${{ matrix.advisory == true }}
     timeout-minutes: 45
 
     steps:

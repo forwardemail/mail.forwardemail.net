@@ -21,7 +21,6 @@ import { bootstrapReady } from './bootstrap-ready.js';
 // Same Dexie engine the worker runs, importable on the main thread for the
 // fallback below (WebKitGTK stalls IndexedDB inside Web Workers).
 import { executeOperation } from './db-engine.ts';
-import { e2eTrace } from './bootstrap-ready.js'; // TEMPORARY: db-worker fallback diagnosis
 
 let worker = null;
 let messagePort = null; // For worker-to-worker communication
@@ -142,7 +141,6 @@ export async function initDbClient() {
       // macOS (WKWebView), Windows (WebView2) and Android (Chromium) are
       // unaffected and keep using the worker + probe below.
       if (shouldUseMainThreadDb()) {
-        e2eTrace('db: WebKitGTK/Linux -> main-thread engine (worker skipped)');
         const result = await initMainThread();
         initialized = true;
         return result;
@@ -151,11 +149,6 @@ export async function initDbClient() {
       try {
         const result = await initViaWorker();
         initialized = true;
-        try {
-          globalThis.__feDbMode = 'worker'; // TEMPORARY: db-fallback diagnosis
-        } catch {
-          /* ignore */
-        }
         return result;
       } catch (workerErr) {
         // Defensive catch-all for any OTHER environment where the worker's
@@ -167,9 +160,6 @@ export async function initDbClient() {
         console.warn(
           '[db-worker-client] DB worker IndexedDB unavailable; using main-thread engine:',
           workerErr?.message,
-        );
-        e2eTrace(
-          `db: worker IndexedDB unavailable (${workerErr?.code || workerErr?.message}) -> main-thread engine`,
         );
         terminateDbWorker();
         const result = await initMainThread();
@@ -209,11 +199,6 @@ function shouldUseMainThreadDb() {
  */
 async function initMainThread() {
   useMainThread = true;
-  try {
-    globalThis.__feDbMode = 'main-thread'; // TEMPORARY: db-fallback diagnosis
-  } catch {
-    /* ignore */
-  }
   const result = await executeOperation({ action: 'init', payload: { dbName: DB_NAME } });
   if (result?.success === false) {
     const err = new Error(result?.error || 'Main-thread database init failed');
