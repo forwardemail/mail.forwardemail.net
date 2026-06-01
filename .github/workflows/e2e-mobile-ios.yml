@@ -1,0 +1,155 @@
+name: E2E Mobile (iOS)
+
+on:
+  schedule:
+    - cron: '30 6 * * *' # 06:30 UTC nightly (staggered after the Android run)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-mobile-ios-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '22'
+
+jobs:
+  ios-e2e:
+    runs-on: macos-15
+    name: iOS E2E (simulator)
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (iOS simulator)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios-sim
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          shared-key: e2e-ios
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Setup pnpm
+        # No `version:` — action-setup reads packageManager from package.json.
+        uses: pnpm/action-setup@v4
+
+      - name: Install root dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install e2e-mobile dependencies
+        working-directory: e2e-mobile
+        run: pnpm install --frozen-lockfile
+
+      - name: Select latest Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+
+      - name: Install CocoaPods
+        run: |
+          if ! command -v pod &>/dev/null; then
+            brew install cocoapods
+          fi
+          pod --version
+
+      - name: Install Appium 2 + XCUITest driver
+        run: |
+          npm install -g appium@^2
+          appium driver install xcuitest
+
+      - name: Initialize iOS project
+        env:
+          # CI=true disables interactive prompts; simulator builds need no team.
+          CI: 'true'
+        run: pnpm tauri ios init
+
+      - name: Build iOS app (debug, simulator)
+        run: pnpm tauri ios build --debug --target aarch64-sim
+
+      - name: Boot an iOS simulator
+        id: sim
+        run: |
+          set -eu
+          # Pick the newest available iPhone simulator on the runner.
+          UDID="$(xcrun simctl list devices available --json | python3 -c "import json,sys; ds=json.load(sys.stdin)['devices']; print(next((d['udid'] for rt in ds for d in ds[rt] if 'iPhone' in d['name']), ''))")"
+          if [ -z "$UDID" ]; then
+            echo "::error::No iPhone simulator available on this runner"; exit 1
+          fi
+          echo "Booting simulator $UDID"
+          xcrun simctl boot "$UDID" || true
+          xcrun simctl bootstatus "$UDID" -b
+          echo "udid=$UDID" >> "$GITHUB_OUTPUT"
+
+      - name: Run E2E against the simulator
+        id: ios-test
+        continue-on-error: true
+        env:
+          E2E_PLATFORM: ios
+          IOS_UDID: ${{ steps.sim.outputs.udid }}
+        run: |
+          # dash-safe (sh): NO `set -o pipefail`.
+          set -eu
+          APP_PATH="$(find src-tauri/gen/apple/build -name '*.app' -type d | head -n1)"
+          if [ -z "$APP_PATH" ]; then
+            echo "::error::No .app found under src-tauri/gen/apple/build"; exit 1
+          fi
+          export IOS_APP_PATH="$(cd "$APP_PATH" && pwd)"
+          echo "Using app: $IOS_APP_PATH"
+
+          appium --port 4723 > appium.log 2>&1 &
+          APPIUM_PID=$!
+          trap 'kill $APPIUM_PID 2>/dev/null || true' EXIT
+
+          # Wait for Appium to be ready (max 30s).
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:4723/status > /dev/null; then break; fi
+            sleep 1
+          done
+
+          cd e2e-mobile
+          pnpm test
+
+      - name: Upload Appium log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-appium-log
+          path: appium.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-e2e-reports
+          path: e2e-mobile/reports/
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Upload failure screenshots
+        if: ${{ steps.ios-test.outcome == 'failure' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-e2e-screenshots
+          path: e2e-mobile/screenshots/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      # The test step uses continue-on-error so the artifact-upload steps above
+      # always run on failure. This gate restores a red job when the run fails.
+      - name: Fail job if E2E failed
+        if: ${{ steps.ios-test.outcome == 'failure' }}
+        run: |
+          echo "::error::iOS E2E failed — see the Appium log, reports, and screenshot artifacts."
+          exit 1

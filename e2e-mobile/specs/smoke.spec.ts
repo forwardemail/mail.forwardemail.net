@@ -1,15 +1,14 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { newBrowser, closeBrowser } from '../support/browser.js';
-import { switchToTauriWebview, waitForFrontendReady, isTauriWebview } from '../support/app.js';
+import {
+  switchToTauriWebview,
+  waitForFrontendReady,
+  isTauriWebview,
+  mobileCapabilities,
+  e2ePlatform,
+} from '../support/app.js';
 
-const APK_PATH = process.env.APK_PATH;
-if (!APK_PATH) {
-  throw new Error(
-    'APK_PATH env var is required. Set it to the absolute path of the debug APK before running.',
-  );
-}
-
-describe('android app smoke', () => {
+describe(`${e2ePlatform()} app smoke`, () => {
   let browser: WebdriverIO.Browser;
 
   beforeAll(async () => {
@@ -18,14 +17,7 @@ describe('android app smoke', () => {
       port: 4723,
       path: '/',
       logLevel: 'warn',
-      capabilities: {
-        platformName: 'Android',
-        'appium:automationName': 'UiAutomator2',
-        'appium:app': APK_PATH,
-        'appium:autoGrantPermissions': true,
-        'appium:autoWebview': false,
-        'appium:newCommandTimeout': 240,
-      } as WebdriverIO.Capabilities,
+      capabilities: mobileCapabilities(),
     });
     await switchToTauriWebview(browser);
     await waitForFrontendReady(browser);
@@ -33,7 +25,7 @@ describe('android app smoke', () => {
 
   afterAll(closeBrowser);
 
-  it('runs inside the native Android System WebView (Tauri-bridged)', async () => {
+  it('runs inside the native WebView (Tauri-bridged)', async () => {
     expect(await isTauriWebview(browser)).toBe(true);
   });
 
