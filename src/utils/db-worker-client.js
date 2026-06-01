@@ -184,7 +184,7 @@ export async function initDbClient() {
  * the worker fine and return false. Best-effort UA sniff; on any error we fall
  * through to the worker + probe path, so a miss just costs a probe round-trip.
  */
-function shouldUseMainThreadDb() {
+export function shouldUseMainThreadDb() {
   try {
     const isTauri = typeof globalThis.__TAURI_INTERNALS__ !== 'undefined';
     const ua = globalThis.navigator?.userAgent || '';
