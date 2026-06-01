@@ -17,11 +17,15 @@ describe(`${e2ePlatform()} app smoke`, () => {
       port: 4723,
       path: '/',
       logLevel: 'warn',
+      // The POST /session that creates the session also builds WebDriverAgent
+      // on the first iOS run; the default 120s client timeout aborts mid-build.
+      // Give the HTTP request room to outlast a cold WDA build.
+      connectionRetryTimeout: 300_000,
       capabilities: mobileCapabilities(),
     });
     await switchToTauriWebview(browser);
     await waitForFrontendReady(browser);
-  }, 120_000);
+  }, 360_000);
 
   afterAll(closeBrowser);
 

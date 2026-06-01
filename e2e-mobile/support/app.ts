@@ -31,6 +31,15 @@ export function mobileCapabilities(): WebdriverIO.Capabilities {
         : {}),
       'appium:autoWebview': false,
       'appium:newCommandTimeout': 240,
+      // CI runners are headless. The workflow pre-boots the simulator with
+      // `simctl boot` (no UI), so without this XCUITest sees a "booted but UI
+      // not visible" sim and hangs forever on `open -Fn Simulator.app` trying
+      // to show the window. isHeadless tells it to run the sim windowless.
+      'appium:isHeadless': true,
+      // First session on a fresh runner builds WebDriverAgent from source,
+      // which can take a couple of minutes — give it room before giving up.
+      'appium:wdaLaunchTimeout': 240_000,
+      'appium:wdaConnectionTimeout': 240_000,
     } as WebdriverIO.Capabilities;
   }
   const apk = process.env.APK_PATH;

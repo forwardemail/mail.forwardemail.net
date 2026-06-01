@@ -16,9 +16,19 @@
 # below are relative to the repo root.
 set -euo pipefail
 
-APK_PATH="$(find src-tauri/gen/android/app/build/outputs/apk -name '*.apk' -path '*x86_64*' | head -n1)"
+APK_DIR="src-tauri/gen/android/app/build/outputs/apk"
+# `tauri android build --apk --target x86_64 --debug` writes a single
+# "universal" APK: $APK_DIR/universal/debug/app-universal-debug.apk. It bundles
+# the x86_64 lib we built, so it installs on the x86_64 emulator — but the path
+# has no "x86_64" in it. Prefer an x86_64-named APK if one ever appears, then
+# the universal, then any APK.
+APK_PATH="$(find "$APK_DIR" -name '*.apk' -path '*x86_64*' 2>/dev/null | head -n1)"
+[ -n "$APK_PATH" ] || APK_PATH="$(find "$APK_DIR" -name '*.apk' -path '*universal*' 2>/dev/null | head -n1)"
+[ -n "$APK_PATH" ] || APK_PATH="$(find "$APK_DIR" -name '*.apk' 2>/dev/null | head -n1)"
 if [ -z "$APK_PATH" ]; then
-  echo "::error::No APK found under src-tauri/gen/android/app/build/outputs/apk"
+  echo "::error::No APK found under $APK_DIR"
+  echo "--- contents of $APK_DIR ---"
+  find "$APK_DIR" -type f 2>/dev/null || echo "(directory does not exist)"
   exit 1
 fi
 APK_PATH="$(realpath "$APK_PATH")"
