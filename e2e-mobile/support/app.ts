@@ -36,9 +36,11 @@ export function mobileCapabilities(): WebdriverIO.Capabilities {
       // not visible" sim and hangs forever on `open -Fn Simulator.app` trying
       // to show the window. isHeadless tells it to run the sim windowless.
       'appium:isHeadless': true,
-      // First session on a fresh runner builds WebDriverAgent from source,
-      // which can take a couple of minutes — give it room before giving up.
-      'appium:wdaLaunchTimeout': 240_000,
+      // First session on a fresh runner compiles WebDriverAgent from source
+      // (xcodebuild build-for-testing) — observed ~4-5 min cold on macos-15.
+      // wdaLaunchTimeout must cover that whole build or the session aborts
+      // mid-compile. Keep it comfortably above the worst observed build time.
+      'appium:wdaLaunchTimeout': 420_000,
       'appium:wdaConnectionTimeout': 240_000,
     } as WebdriverIO.Capabilities;
   }
