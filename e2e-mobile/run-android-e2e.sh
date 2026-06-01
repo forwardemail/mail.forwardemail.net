@@ -35,7 +35,12 @@ APK_PATH="$(realpath "$APK_PATH")"
 echo "Using APK: $APK_PATH"
 export APK_PATH
 
-appium --port 4723 > appium.log 2>&1 &
+# Switching into the Android System WebView context needs a Chromedriver that
+# matches the emulator's WebView (Chrome 113 on the API 34 image); the version
+# bundled with uiautomator2 won't ("No Chromedriver found that can automate
+# Chrome 113..."). Enable the chromedriver_autodownload insecure feature so the
+# driver fetches the matching Chromedriver on demand at context-switch time.
+appium --port 4723 --allow-insecure=uiautomator2:chromedriver_autodownload > appium.log 2>&1 &
 APPIUM_PID=$!
 trap 'kill "$APPIUM_PID" 2>/dev/null || true' EXIT
 
