@@ -111,7 +111,12 @@ jobs:
           arch: x86_64
           profile: pixel_6
           script: |
-            set -euo pipefail
+            # NB: android-emulator-runner runs this with /usr/bin/sh (dash),
+            # which does NOT support `set -o pipefail` — using it aborts the
+            # whole script on line 1 ("Illegal option -o pipefail", exit 2)
+            # before Appium or the tests ever run, which silently produced a
+            # green job that tested nothing. `set -eu` is dash-compatible.
+            set -eu
             APK_PATH="$(find src-tauri/gen/android/app/build/outputs/apk -name '*.apk' -path '*x86_64*' | head -n1)"
             if [ -z "$APK_PATH" ]; then
               echo "::error::No APK found under src-tauri/gen/android/app/build/outputs/apk"
@@ -160,3 +165,12 @@ jobs:
           path: e2e-mobile/screenshots/
           if-no-files-found: ignore
           retention-days: 7
+
+      # The emulator step uses continue-on-error so the artifact-upload steps
+      # above always run on failure. This gate restores a red job when the
+      # Appium run fails — without it a broken Android suite reported green.
+      - name: Fail job if E2E failed
+        if: ${{ steps.emulator-test.outcome == 'failure' }}
+        run: |
+          echo "::error::Android E2E failed — see the Appium log, reports, and screenshot artifacts."
+          exit 1
