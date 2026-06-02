@@ -35,16 +35,20 @@ APK_PATH="$(realpath "$APK_PATH")"
 echo "Using APK: $APK_PATH"
 export APK_PATH
 
-# Force the System WebView into SOFTWARE rendering before the app launches.
-# Root cause of the emulator dying at the WebView context switch: the Tauri
-# WebView's GPU-accelerated Skia compositing (logcat showed an
-# `s_glBindAttribLocation` shader storm + "Skipped 56 frames" + 1s Davey jank)
-# is translated through the headless emulator's software-GL pipe, which it
-# can't sustain — the whole emulator drops to adb "offline" mid-render. The
-# emulator image is userdebug, so the System WebView honors this flags file
-# (first token is a dummy argv[0]). --disable-gpu makes it raster in software:
-# slower, but the GL storm — and the crash — go away.
-adb shell "echo '_ --disable-gpu --disable-gpu-compositing' > /data/local/tmp/webview-command-line" || true
+# Move WebView RASTERIZATION to the CPU before the app launches, while keeping
+# the GPU compositor alive. Two failure modes had to be threaded:
+#   - GPU rasterization ON: the WebView's Skia path-tessellation shaders
+#     (s_glBindAttribLocation storm + "Skipped 56 frames" + 1s Davey jank),
+#     translated through the headless emulator's software-GL pipe, overwhelm it
+#     and drop the whole emulator to adb "offline" mid-render.
+#   - GPU fully OFF (--disable-gpu/--disable-gpu-compositing): wry's Android
+#     WebView composites into a hardware surface and can't init without the GPU
+#     compositor, so the app process dies on launch.
+# --disable-gpu-rasterization keeps the (lightweight) GPU compositor that wry
+# needs but rasters tiles in software, which is exactly the heavy GL work that
+# was killing the emulator. The image is userdebug so the WebView honors this
+# flags file (first token is a dummy argv[0]).
+adb shell "echo '_ --disable-gpu-rasterization' > /data/local/tmp/webview-command-line" || true
 adb shell 'chmod 0644 /data/local/tmp/webview-command-line' || true
 echo "WebView command-line flags: $(adb shell cat /data/local/tmp/webview-command-line 2>/dev/null || echo '(unset)')"
 
