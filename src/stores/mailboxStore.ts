@@ -1002,8 +1002,23 @@ const createMailboxStore = () => {
                 .where('[account+folder]')
                 .equals([account, folder])
                 .count();
+              // The cached count alone caps pagination at whatever's been
+              // synced locally — on desktop that stalls infinite scroll well
+              // before the folder's real end. Also consult the folder's
+              // server-reported total so we keep `hasNextPage` true when the
+              // server has more; the next-page load fetches it from the API
+              // (line ~1178 then sets the authoritative value), and the remote
+              // circuit breaker keeps a degraded env from storming.
+              const folderRec = get(folders).find(
+                (f) => f.path?.toUpperCase?.() === folder?.toUpperCase?.(),
+              );
+              const serverTotal = Number.isFinite(folderRec?.totalCount)
+                ? folderRec.totalCount
+                : null;
+              const moreInCache = totalCount > startIdx + limit;
+              const moreOnServer = serverTotal != null && serverTotal > startIdx + limit;
               if ((Local.get('email') || 'default') === account) {
-                hasNextPage.set(totalCount > startIdx + limit);
+                hasNextPage.set(moreInCache || moreOnServer);
               }
             } catch {
               // ignore count failures
