@@ -23,20 +23,23 @@ const isMacOS =
 export const isMacOSPlatform = isMacOS;
 
 /**
- * True on macOS 26 "Tahoe" or later — the versions where the bundled plugin
- * dialog's rfd path can SIGABRT, so we must not fall back to it. The WKWebView
- * UA is frozen at "10_15_7", so read the real version via plugin-os. Robust to
- * the product-vs-Darwin ambiguity: Tahoe reports product major 26 but Darwin
- * major 25, and there is no macOS product 16–25, so `major >= 25` means Tahoe+
- * either way, while Sequoia (product 15 / Darwin 24) stays below the line. On
- * any detection failure, assume Tahoe — skipping a maybe-crashing fallback is
- * the safer default.
+ * Whether this Mac is Apple Silicon (aarch64). The WKWebView UA is frozen at
+ * "10_15_7", so the real arch comes from plugin-os.
+ *
+ * This is the axis that matters for the file picker: the bundled plugin dialog's
+ * rfd path SIGABRTs on the NSOpenPanel nil-return ONLY on Apple Silicon. On
+ * Intel (x86_64) the plugin is unaffected and is the path that actually works
+ * (it's what worked before our custom command existed) — and our custom command
+ * `pick_files_macos` instead returns nil there (seen on Intel Sonoma 14.7.3 AND
+ * Intel Tahoe) and its `app.activate()` blanks the compose window. So: use the
+ * plugin on Intel, and reserve the custom command for Apple Silicon, where it
+ * trades the SIGABRT for a graceful nil. On detection failure, assume Apple
+ * Silicon — the safer default (never risk the rfd SIGABRT).
  */
-async function isMacOSTahoeOrLater(): Promise<boolean> {
+async function isAppleSilicon(): Promise<boolean> {
   try {
-    const { version } = await import('@tauri-apps/plugin-os');
-    const major = parseInt(String(version()).split('.')[0], 10);
-    return !Number.isFinite(major) || major >= 25;
+    const { arch } = await import('@tauri-apps/plugin-os');
+    return arch() === 'aarch64';
   } catch {
     return true;
   }
@@ -58,32 +61,29 @@ export async function pickFiles({
   const { readFile } = await import('@tauri-apps/plugin-fs');
 
   let paths: string[];
-  if (isMacOS) {
+  if (isMacOS && (await isAppleSilicon())) {
+    // Apple Silicon only: the plugin's rfd path SIGABRTs on the NSOpenPanel
+    // nil-return, so go through our nullable custom command. It may itself
+    // return nil (no panel constructible) — surface a typed error the caller
+    // handles instead of letting the raw native string become an unhandled
+    // rejection.
     const { invoke } = await import('@tauri-apps/api/core');
     try {
       const result = await invoke<string[]>('pick_files_macos', { multiple });
       if (!result || result.length === 0) return null;
       paths = result;
     } catch (err) {
-      // pick_files_macos couldn't construct an NSOpenPanel. On macOS < 26 the
-      // bundled plugin dialog is safe and is what actually works there, so fall
-      // back to it — removing this fallback regressed the picker on non-Tahoe
-      // Macs where the custom command returns nil but the plugin succeeds. On
-      // macOS 26 (Tahoe) the plugin's rfd open() can SIGABRT, so do NOT call it
-      // there; surface a typed error the caller handles instead.
-      if (await isMacOSTahoeOrLater()) {
-        const e = new Error('The macOS file picker is unavailable on this system.');
-        (e as Error & { code?: string }).code = 'FILE_PICKER_UNAVAILABLE';
-        (e as Error & { cause?: unknown }).cause = err;
-        throw e;
-      }
-      console.warn('[file-picker] pick_files_macos failed; falling back to plugin dialog:', err);
-      const { open } = await import('@tauri-apps/plugin-dialog');
-      const selected = await open({ multiple, filters: buildFilters(accept) });
-      if (!selected) return null;
-      paths = Array.isArray(selected) ? selected : [selected];
+      const e = new Error('The macOS file picker is unavailable on this system.');
+      (e as Error & { code?: string }).code = 'FILE_PICKER_UNAVAILABLE';
+      (e as Error & { cause?: unknown }).cause = err;
+      throw e;
     }
   } else {
+    // Intel macOS + every other desktop platform: the bundled plugin dialog is
+    // the working, crash-free path. On Intel this is what worked before the
+    // custom command was introduced — the custom command returns nil there and
+    // its app.activate() blanks the compose window, so we deliberately don't
+    // call it on Intel.
     const { open } = await import('@tauri-apps/plugin-dialog');
     const selected = await open({ multiple, filters: buildFilters(accept) });
     if (!selected) return null;

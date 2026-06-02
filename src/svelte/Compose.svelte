@@ -1859,8 +1859,7 @@
       // clean message instead of an unhandled rejection (the "Fatal (compose)"
       // overlay), and don't fall through to the HTML <input> — it can SIGABRT
       // the WKWebView the same way.
-      attachmentError =
-        'Could not open the file picker. This is a known issue on some macOS versions — please try again.';
+      attachmentError = 'Could not open the file picker — a known macOS issue we are working on.';
       console.error('[compose] file picker failed', err);
       return;
     }
@@ -1876,8 +1875,7 @@
     try {
       files = await pickFiles({ accept: 'image/*' });
     } catch (err) {
-      attachmentError =
-        'Could not open the image picker. This is a known issue on some macOS versions — please try again.';
+      attachmentError = 'Could not open the image picker — a known macOS issue we are working on.';
       console.error('[compose] image picker failed', err);
       return;
     }
