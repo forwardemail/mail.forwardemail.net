@@ -17,17 +17,38 @@ if (!version) {
   process.exit(1);
 }
 
-// Update tauri.conf.json
+// Update tauri.conf.json — targeted version-line replace so the file's existing
+// formatting (e.g. inline short arrays) is preserved. A JSON.parse/stringify
+// round-trip would reformat the whole file and produce noisy release diffs.
 const tauriConfPath = path.join(root, 'src-tauri', 'tauri.conf.json');
-const tauriConf = JSON.parse(fs.readFileSync(tauriConfPath, 'utf8'));
-tauriConf.version = version;
-fs.writeFileSync(tauriConfPath, JSON.stringify(tauriConf, null, 2) + '\n');
+let tauriConf = fs.readFileSync(tauriConfPath, 'utf8');
+tauriConf = tauriConf.replace(/^(\s*"version":\s*)"[^"]*"/m, `$1"${version}"`);
+// Sanity check: still valid JSON and the version actually took.
+if (JSON.parse(tauriConf).version !== version) {
+  console.error('Failed to set version in tauri.conf.json');
+  process.exit(1);
+}
+fs.writeFileSync(tauriConfPath, tauriConf);
 
 // Update Cargo.toml (first version = line under [package])
 const cargoPath = path.join(root, 'src-tauri', 'Cargo.toml');
 let cargo = fs.readFileSync(cargoPath, 'utf8');
+const crateName = (cargo.match(/^name = "(.+)"$/m) || [])[1] || 'forwardemail-desktop';
 cargo = cargo.replace(/^version = ".*"$/m, `version = "${version}"`);
 fs.writeFileSync(cargoPath, cargo);
+
+// Update Cargo.lock so the crate's own [[package]] entry stays in lockstep —
+// otherwise `cargo build --locked` (CI desktop builds) fails on a version
+// mismatch. Only touch this crate's entry, identified by its name.
+const cargoLockPath = path.join(root, 'src-tauri', 'Cargo.lock');
+if (fs.existsSync(cargoLockPath)) {
+  let lock = fs.readFileSync(cargoLockPath, 'utf8');
+  const lockRe = new RegExp(`(name = "${crateName}"\\nversion = )"[^"]*"`);
+  if (lockRe.test(lock)) {
+    lock = lock.replace(lockRe, `$1"${version}"`);
+    fs.writeFileSync(cargoLockPath, lock);
+  }
+}
 
 // Update Android tauri.properties (versionName + versionCode)
 const tauriPropsPath = path.join(root, 'src-tauri', 'gen', 'android', 'app', 'tauri.properties');
@@ -44,10 +65,10 @@ if (fs.existsSync(tauriPropsPath)) {
   ].join('\n');
   fs.writeFileSync(tauriPropsPath, props);
   console.log(
-    `Synced version ${version} → tauri.conf.json, Cargo.toml, tauri.properties (versionCode=${versionCode})`,
+    `Synced version ${version} → tauri.conf.json, Cargo.toml, Cargo.lock, tauri.properties (versionCode=${versionCode})`,
   );
 } else {
   console.log(
-    `Synced version ${version} → tauri.conf.json, Cargo.toml (tauri.properties not found, skipping)`,
+    `Synced version ${version} → tauri.conf.json, Cargo.toml, Cargo.lock (tauri.properties not found, skipping)`,
   );
 }

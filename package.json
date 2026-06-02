@@ -33,7 +33,7 @@
     "format:fix": "prettier . --write",
     "prepare": "husky install",
     "prerelease": "bash scripts/prerelease.sh",
-    "release": "np",
+    "release": "npm_config_ignore_scripts=false np --no-cleanup",
     "release:desktop": "bash scripts/release-desktop.sh",
     "tauri:check-cache": "bash scripts/check-cargo-cache.sh",
     "tauri:sync-version": "node scripts/sync-version.cjs",
@@ -46,7 +46,7 @@
     "tauri:ios:build": "bash scripts/ios-build.sh",
     "tauri:icon": "tauri icon src-tauri/icons/app-icon.png",
     "tauri:signer:generate": "tauri signer generate -w ~/.tauri/forwardemail.key",
-    "version": "node scripts/sync-version.cjs && git add src-tauri/tauri.conf.json src-tauri/Cargo.toml"
+    "version": "node scripts/sync-version.cjs && git add src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock"
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.2.8",
