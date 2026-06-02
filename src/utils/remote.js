@@ -4,6 +4,7 @@ import { buildApiKeyAuthHeader, getAuthHeader } from './auth.ts';
 import { logApiError } from './error-logger.ts';
 import { logPerfEvent } from './perf-logger.ts';
 import { interceptDemoRequest, isDemoMode } from './demo-mode';
+import { createCircuitBreaker, parseRetryAfterMs } from './circuit-breaker.js';
 
 // Action-specific timeouts for better performance
 const TIMEOUT_BY_ACTION = {
@@ -60,58 +61,12 @@ function recordAuthFailure() {
 // Under a degraded environment (e.g. a struggling WKWebView whose db worker
 // fell back to the main thread) reads time out, the retry layer multiplies
 // each into more attempts, and the backend gets hammered. After a burst of
-// transient failures (timeouts / 5xx / 429) we open a breaker and fail GETs
+// transient failures (timeouts / 5xx / 429) the breaker opens and we fail GETs
 // fast for a short cooldown so the client stops piling on. Mutations
 // (POST/PUT/DELETE) bypass it — they're low-volume and user-initiated — as
-// does any caller that passes { bypassCircuit: true }. A 429's Retry-After,
-// when present, sets the cooldown directly so we honor the backend's own
-// backpressure instead of fighting it.
-const CIRCUIT_FAILURE_THRESHOLD = 5;
-const CIRCUIT_COOLDOWN_MS = 8000;
-const CIRCUIT_MAX_COOLDOWN_MS = 60_000;
-let _transientFailures = 0;
-let _circuitOpenUntil = 0;
-
-function isCircuitOpen() {
-  return Date.now() < _circuitOpenUntil;
-}
-
-function openCircuit(ms = CIRCUIT_COOLDOWN_MS) {
-  _circuitOpenUntil = Date.now() + Math.min(ms, CIRCUIT_MAX_COOLDOWN_MS);
-  _transientFailures = 0;
-}
-
-function recordTransientSuccess() {
-  _transientFailures = 0;
-}
-
-// retryAfterMs > 0 (from a 429 Retry-After header) opens the breaker
-// immediately; otherwise we only open it once a burst crosses the threshold.
-function recordTransientFailure(retryAfterMs = 0) {
-  if (retryAfterMs > 0) {
-    openCircuit(retryAfterMs);
-    return;
-  }
-  _transientFailures++;
-  if (_transientFailures >= CIRCUIT_FAILURE_THRESHOLD) {
-    openCircuit();
-  }
-}
-
-// Parse a Retry-After header (delta-seconds or HTTP-date) into ms. Returns 0
-// when absent/unparseable so the caller falls back to the threshold logic.
-function parseRetryAfterMs(response) {
-  try {
-    const raw = response?.headers?.get?.('retry-after');
-    if (!raw) return 0;
-    const secs = Number(raw);
-    if (Number.isFinite(secs)) return Math.max(0, secs * 1000);
-    const when = Date.parse(raw);
-    return Number.isFinite(when) ? Math.max(0, when - Date.now()) : 0;
-  } catch {
-    return 0;
-  }
-}
+// does any caller that passes { bypassCircuit: true }. The sync worker runs an
+// independent instance of this same breaker over its own raw-fetch path.
+const requestCircuit = createCircuitBreaker();
 
 // Create base ky instance with default configuration
 const api = ky.create({
@@ -158,7 +113,7 @@ export const Remote = {
 
     // Circuit breaker: when tripped, fail GETs fast instead of adding to the
     // storm. Mutations and explicit { bypassCircuit } callers go through.
-    if (method === 'get' && !options.bypassCircuit && isCircuitOpen()) {
+    if (method === 'get' && !options.bypassCircuit && requestCircuit.isOpen()) {
       const err = new Error('Backing off — service temporarily unavailable');
       err.status = 503;
       err.circuitOpen = true;
@@ -255,7 +210,7 @@ export const Remote = {
       // Successful response — reset consecutive auth failure counter and
       // close the circuit breaker.
       recordAuthSuccess();
-      recordTransientSuccess();
+      requestCircuit.recordSuccess();
 
       // Allow callers to explicitly request text (e.g. raw RFC822 EML downloads)
       if (options.responseAs === 'text') {
@@ -292,10 +247,13 @@ export const Remote = {
 
         // Feed the circuit breaker: 429 (honor Retry-After) and 5xx mean the
         // backend is rate-limiting or struggling — back off rather than pile on.
+        // Any other status (4xx incl. 404) proves the backend is alive — close it.
         if (err.status === 429) {
-          recordTransientFailure(parseRetryAfterMs(error.response));
+          requestCircuit.recordFailure(parseRetryAfterMs(error.response?.headers));
         } else if (err.status >= 500) {
-          recordTransientFailure();
+          requestCircuit.recordFailure();
+        } else {
+          requestCircuit.recordSuccess();
         }
 
         // Try to get error details from response
@@ -314,14 +272,14 @@ export const Remote = {
       } else if (error.name === 'TimeoutError') {
         // Timeout error — counts toward the circuit breaker (a degraded env
         // times everything out; backing off is what protects the backend).
-        recordTransientFailure();
+        requestCircuit.recordFailure();
         const err = new Error('Request timeout');
         err.status = 408;
         logApiError(action, method.toUpperCase(), 408, err);
         throw err;
       } else {
         // Network error or other error (no status code)
-        recordTransientFailure();
+        requestCircuit.recordFailure();
         logApiError(action, method.toUpperCase(), 0, error);
         throw error;
       }

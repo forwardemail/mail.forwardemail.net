@@ -31,6 +31,7 @@ import {
   worklistFromHeaders,
   backfillBatchDone,
 } from './sync-pure.ts';
+import { createCircuitBreaker, parseRetryAfterMs } from '../utils/circuit-breaker.js';
 
 // ============================================================================
 // Database Client via MessageChannel
@@ -227,12 +228,44 @@ async function syncDraftRecord(draft) {
 // Fetch with Timeout
 // ============================================================================
 
+// Independent circuit breaker for the worker's own raw-fetch path (the
+// main-thread Remote.request path has its own instance). The body-backfill
+// loop is the app's highest-volume request source, so when the backend is
+// struggling we fail background GETs fast here too instead of hammering it.
+const fetchCircuit = createCircuitBreaker();
+
 function fetchWithTimeout(url, options = {}, timeoutMs = FETCH_TIMEOUT_MS) {
+  const method = (options.method || 'GET').toUpperCase();
+
+  // Fail GETs fast while the breaker is open. Mutations (draft sync POST/PUT)
+  // always go through — they're low-volume and user-initiated.
+  if (method === 'GET' && fetchCircuit.isOpen()) {
+    const err = new Error('Backing off — service temporarily unavailable');
+    (err as Error & { circuitOpen?: boolean }).circuitOpen = true;
+    return Promise.reject(err);
+  }
+
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-  return fetch(url, { ...options, signal: controller.signal }).finally(() =>
-    clearTimeout(timeoutId),
-  );
+  return fetch(url, { ...options, signal: controller.signal })
+    .then((res) => {
+      // 429/5xx mean rate-limited or struggling; anything else (incl. 4xx like
+      // 404) proves the backend is alive and closes the breaker.
+      if (res.status === 429) {
+        fetchCircuit.recordFailure(parseRetryAfterMs(res.headers));
+      } else if (res.status >= 500) {
+        fetchCircuit.recordFailure();
+      } else {
+        fetchCircuit.recordSuccess();
+      }
+      return res;
+    })
+    .catch((err) => {
+      // AbortError (our timeout) or a network error — both transient.
+      fetchCircuit.recordFailure();
+      throw err;
+    })
+    .finally(() => clearTimeout(timeoutId));
 }
 
 // ============================================================================
