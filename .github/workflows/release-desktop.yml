@@ -17,6 +17,11 @@ on:
         required: false
         type: string
         description: 'Whether the target GitHub release is currently a draft'
+      skip_e2e_gate:
+        required: false
+        type: boolean
+        default: false
+        description: 'Skip the internal e2e-webview gate. release.yml sets this true because it already runs the e2e-webview gate once for both desktop and mobile; without it the full 5-platform suite runs twice per release. Standalone desktop-v* / dispatch runs leave it false so they stay self-gated.'
   workflow_dispatch:
     inputs:
       tag:
@@ -334,6 +339,9 @@ jobs:
   # cannot exercise because it only launches the binary for 3 seconds.
   e2e-webview-gate:
     name: E2E webview (gate)
+    # Skipped when release.yml orchestrates (it already ran this gate once for
+    # both desktop + mobile); runs for standalone desktop-v* / dispatch.
+    if: ${{ inputs.skip_e2e_gate != true }}
     uses: ./.github/workflows/e2e-webview.yml
     with:
       release_gate: true
@@ -349,6 +357,13 @@ jobs:
   publish-release:
     name: Publish release (gate)
     needs: [build-and-release, e2e-webview-gate]
+    # `!cancelled()` (a status function) lets this run even when the gate was
+    # deliberately skipped (skip_e2e_gate, set by release.yml, which gated
+    # upstream). Still blocks on a failed build or a failed/cancelled gate, so a
+    # broken build never publishes; a 'skipped' gate is treated as satisfied.
+    if: ${{ !cancelled()
+      && needs.build-and-release.result == 'success'
+      && (needs.e2e-webview-gate.result == 'success' || needs.e2e-webview-gate.result == 'skipped') }}
     runs-on: ubuntu-latest
     environment: release
     timeout-minutes: 5

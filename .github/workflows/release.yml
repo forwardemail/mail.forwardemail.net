@@ -152,6 +152,10 @@ jobs:
       version: ${{ needs.create-release.outputs.version }}
       release_id: ${{ needs.create-release.outputs.release_id }}
       release_draft: ${{ needs.create-release.outputs.release_draft }}
+      # This job already `needs: e2e-webview` (the top-level gate that also
+      # gates mobile), so skip release-desktop.yml's internal gate to avoid
+      # running the full 5-platform suite a second time per release.
+      skip_e2e_gate: true
     secrets: inherit
 
   # ── 2b. Build Mobile (Android APK/AAB + iOS IPA) ───────────────────────
