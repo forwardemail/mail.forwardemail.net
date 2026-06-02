@@ -35,6 +35,19 @@ APK_PATH="$(realpath "$APK_PATH")"
 echo "Using APK: $APK_PATH"
 export APK_PATH
 
+# Force the System WebView into SOFTWARE rendering before the app launches.
+# Root cause of the emulator dying at the WebView context switch: the Tauri
+# WebView's GPU-accelerated Skia compositing (logcat showed an
+# `s_glBindAttribLocation` shader storm + "Skipped 56 frames" + 1s Davey jank)
+# is translated through the headless emulator's software-GL pipe, which it
+# can't sustain — the whole emulator drops to adb "offline" mid-render. The
+# emulator image is userdebug, so the System WebView honors this flags file
+# (first token is a dummy argv[0]). --disable-gpu makes it raster in software:
+# slower, but the GL storm — and the crash — go away.
+adb shell "echo '_ --disable-gpu --disable-gpu-compositing' > /data/local/tmp/webview-command-line" || true
+adb shell 'chmod 0644 /data/local/tmp/webview-command-line' || true
+echo "WebView command-line flags: $(adb shell cat /data/local/tmp/webview-command-line 2>/dev/null || echo '(unset)')"
+
 # Capture logcat in the background so a renderer/emulator crash is diagnosable
 # after the fact (lowmemorykiller / OOM vs an app tombstone). Written to the
 # repo root and uploaded as an artifact by the workflow. Best-effort: if the
