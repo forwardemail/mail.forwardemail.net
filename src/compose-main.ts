@@ -63,20 +63,28 @@ if (composeRoot) {
       onSent: async (result?: {
         archive?: boolean;
         queued?: boolean;
+        scheduled?: boolean;
+        sendAt?: unknown;
         draftId?: string;
         serverDraftId?: string;
         sourceMessageId?: string;
         sentCopyPayload?: Record<string, unknown>;
+        // The send/queued/scheduled toast to surface in the MAIN window. We
+        // don't show it here — this window closes right after — so we relay it.
+        toast?: { message: string; type?: string };
       }) => {
-        // Notify main window about the send so it can clean up the draft
-        // (the compose webview can't access IDB / db worker reliably).
+        // Notify the main window about the send so it can clean up the draft
+        // (the compose webview can't access IDB / db worker reliably) and show
+        // the toast where the user is actually looking.
         try {
           const { emit } = await import('@tauri-apps/api/event');
           await emit('compose:sent', result || {});
         } catch {
           // Not in Tauri context — ignore
         }
-        // Close this window after a brief delay for the toast to show
+        // Fallback close. Compose.svelte's closeNativeWindow() is the primary,
+        // macOS-crash-safe close (it defers off the AppKit tick); this is a
+        // backstop in case that path didn't run.
         setTimeout(async () => {
           try {
             const { getCurrentWindow } = await import('@tauri-apps/api/window');

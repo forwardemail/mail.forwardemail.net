@@ -13,7 +13,9 @@ describe('hasMorePages', () => {
   });
 
   it('is false when the cache is exhausted and the server total is unknown', () => {
-    expect(hasMorePages({ cachedCount: 100, serverTotal: null, offset: 0, limit: 100 })).toBe(false);
+    expect(hasMorePages({ cachedCount: 100, serverTotal: null, offset: 0, limit: 100 })).toBe(
+      false,
+    );
   });
 
   it('is true when the server has more even though the cache is exhausted (the desktop bug)', () => {

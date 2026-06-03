@@ -2244,11 +2244,20 @@
         hour: 'numeric',
         minute: '2-digit',
       });
-      toasts?.show?.(`Email scheduled for ${formattedDate}`, 'success');
+      const scheduledMsg = `Email scheduled for ${formattedDate}`;
+      // In the native compose window the toast is shown by the main window
+      // after we close (see the compose:sent handler in main.ts) — showing it
+      // here would just flash and vanish with the closing window.
+      if (!nativeWindow) toasts?.show?.(scheduledMsg, 'success');
       closeScheduleModal();
       setVisible(false);
       reset();
-      onSent?.({ queued: true, scheduled: true, sendAt });
+      onSent?.({
+        queued: true,
+        scheduled: true,
+        sendAt,
+        toast: nativeWindow ? { message: scheduledMsg, type: 'success' } : undefined,
+      });
       if (nativeWindow) closeNativeWindow();
     } catch (err) {
       console.error('[Compose] Failed to schedule email', err);
@@ -2307,11 +2316,17 @@
         if (serverDraftIdToDelete && serverDraftIdToDelete !== msgIdToDelete) {
           await deleteSourceMessage(serverDraftIdToDelete);
         }
-        toasts?.show?.('Message queued - will send when online', 'info');
+        if (!nativeWindow) toasts?.show?.('Message queued - will send when online', 'info');
         setVisible(false);
         const shouldArchive = archiveAfterSend;
         reset();
-        onSent?.({ queued: true, archive: shouldArchive });
+        onSent?.({
+          queued: true,
+          archive: shouldArchive,
+          toast: nativeWindow
+            ? { message: 'Message queued - will send when online', type: 'info' }
+            : undefined,
+        });
         if (nativeWindow) closeNativeWindow();
       } catch (err) {
         error = 'Failed to queue message';
@@ -2375,7 +2390,7 @@
         ]).catch(() => {});
       }
       success = 'Message sent';
-      toasts?.show?.('Message sent', 'success');
+      if (!nativeWindow) toasts?.show?.('Message sent', 'success');
       setVisible(false);
       const shouldArchive = archiveAfterSend;
       // Build a lightweight sent copy payload for the main window (strip attachment content)
@@ -2402,6 +2417,7 @@
         serverDraftId: serverDraftIdToDelete,
         sourceMessageId: msgIdToDelete,
         sentCopyPayload,
+        toast: nativeWindow ? { message: 'Message sent', type: 'success' } : undefined,
       });
       if (nativeWindow) closeNativeWindow();
     } catch (err) {
@@ -2425,11 +2441,17 @@
           if (serverDraftIdToDelete && serverDraftIdToDelete !== msgIdToDelete) {
             await deleteSourceMessage(serverDraftIdToDelete);
           }
-          toasts?.show?.('Network error - message queued for retry', 'warning');
+          if (!nativeWindow) toasts?.show?.('Network error - message queued for retry', 'warning');
           setVisible(false);
           const shouldArchive = archiveAfterSend;
           reset();
-          onSent?.({ queued: true, archive: shouldArchive });
+          onSent?.({
+            queued: true,
+            archive: shouldArchive,
+            toast: nativeWindow
+              ? { message: 'Network error - message queued for retry', type: 'warning' }
+              : undefined,
+          });
           if (nativeWindow) closeNativeWindow();
         } catch (queueErr) {
           error = e?.message || 'Send failed';

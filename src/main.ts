@@ -1026,8 +1026,19 @@ if (isTauriDesktop) {
             serverDraftId?: string;
             sourceMessageId?: string;
             sentCopyPayload?: Record<string, unknown>;
+            toast?: { message: string; type?: string };
           }
         | undefined;
+
+      // Show the send/queued/scheduled toast HERE, in the main window. The
+      // native compose window suppresses it on purpose: that window closes
+      // ~100ms after send, so a toast shown there just flashes and vanishes
+      // with the window. It hands the message to us to surface where the user
+      // is actually looking.
+      if (result?.toast?.message) {
+        toasts?.show?.(result.toast.message, (result.toast.type as string) || 'success');
+      }
+
       const preservedSelection = get(selectedMessage);
       const preservedSelectionId = preservedSelection?.id || null;
       const preservedFolder = preservedSelection?.folder || get(mailboxStore.state.selectedFolder);
