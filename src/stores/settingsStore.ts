@@ -18,6 +18,25 @@ import type { SettingDefinition } from './settingsRegistry';
 import type { Label, PgpKey } from '../types';
 import { warn } from '../utils/logger.ts';
 import { getAuthHeader } from '../utils/auth';
+import {
+  DEFAULT_REMOTE_SETTINGS,
+  describeLabelError,
+  labelsArrayToMap,
+  extractSettingsFromAccount,
+  buildAccountUpdatePayload,
+  normalizeTasksSort,
+  parseOverrideValue,
+  buildRemoteSettingChange,
+} from './settings-helpers';
+import type {
+  RemoteSettings,
+  SettingsChanges,
+  AccountResponse,
+  TasksSortKey,
+} from './settings-helpers';
+// Re-export the public setting types that moved into settings-helpers so
+// existing importers (e.g. Calendar.svelte's TasksSortKey) keep working.
+export type { RemoteSettings, TasksSortKey } from './settings-helpers';
 
 // Surface a toast via the existing fe:mail-service-toast bridge wired
 // in main.ts. Used by label sync paths so failures aren't silently
@@ -27,32 +46,6 @@ import { getAuthHeader } from '../utils/auth';
 function dispatchLabelToast(message: string, type: 'error' | 'warning' | 'success' = 'error') {
   if (typeof window === 'undefined') return;
   window.dispatchEvent(new CustomEvent('fe:mail-service-toast', { detail: { message, type } }));
-}
-
-function describeLabelError(action: string, err: unknown): string {
-  const status =
-    (err as { status?: number; statusCode?: number })?.status ??
-    (err as { status?: number; statusCode?: number })?.statusCode;
-  const baseMsg = err instanceof Error ? err.message : 'Unknown error';
-  if (status === 401 || /authorization required/i.test(baseMsg)) {
-    return `Couldn't ${action}: sign in with your alias password to sync labels across devices.`;
-  }
-  if (status === 400) return `Couldn't ${action}: ${baseMsg}`;
-  if (status && status >= 500) return `Couldn't ${action}: server error (${status}). Try again.`;
-  return `Couldn't ${action}: ${baseMsg}`;
-}
-
-export interface RemoteSettings {
-  mail: {
-    archive_folder: string | null;
-    sent_folder: string | null;
-    drafts_folder: string | null;
-  };
-  labels: Label[];
-  aliases: {
-    defaults: Record<string, unknown>;
-  };
-  [key: string]: unknown;
 }
 
 export interface SyncSettings {
@@ -86,19 +79,6 @@ interface OverrideOptions {
   account?: string;
   value?: unknown;
 }
-
-// Default remote settings (API-backed, account-scoped)
-const DEFAULT_REMOTE_SETTINGS: RemoteSettings = {
-  mail: {
-    archive_folder: null,
-    sent_folder: null,
-    drafts_folder: null,
-  },
-  labels: [],
-  aliases: {
-    defaults: {},
-  },
-};
 
 const ACCOUNT_CACHE_TTL = 15000;
 
@@ -149,139 +129,6 @@ export async function fetchAccountData({ force = false } = {}): Promise<unknown>
     }
     throw err;
   }
-}
-
-interface LabelSettingValue {
-  name?: string;
-  color?: string;
-  hidden?: boolean;
-  source?: string;
-}
-
-/**
- * Convert API label_settings map into an array of labels with keyword
- */
-function mapLabelSettingsToArray(labelSettings: Record<string, LabelSettingValue> = {}): Label[] {
-  if (!labelSettings || typeof labelSettings !== 'object') return [];
-  return Object.entries(labelSettings).map(([keyword, value = {}]) => ({
-    keyword,
-    name: value.name || keyword,
-    color: value.color,
-    hidden: Boolean(value.hidden),
-    source: value.source || 'custom',
-  }));
-}
-
-/**
- * Convert label array into API label_settings map
- */
-function labelsArrayToMap(labels: Label[] = []): Record<string, LabelSettingValue> {
-  const map: Record<string, LabelSettingValue> = {};
-  (labels || []).forEach((label) => {
-    if (!label?.keyword) return;
-    map[label.keyword] = {
-      name: label.name || label.keyword,
-      color: label.color,
-      hidden: Boolean(label.hidden),
-      source: label.source || 'custom',
-    };
-  });
-  return map;
-}
-
-interface AccountResponse {
-  settings?: {
-    mail?: {
-      archive_folder?: string | null;
-      sent_folder?: string | null;
-      drafts_folder?: string | null;
-    };
-    aliases?: {
-      defaults?: Record<string, unknown>;
-    };
-    labels?: Label[];
-    label_settings?: Record<string, LabelSettingValue>;
-  };
-  label_settings?: Record<string, LabelSettingValue>;
-  mail_archive_folder?: string | null;
-  mail_sent_folder?: string | null;
-  mail_drafts_folder?: string | null;
-}
-
-/**
- * Extract settings fields from /v1/account response.
- * Supports both legacy nested `settings` and new flat alias fields.
- */
-function extractSettingsFromAccount(response: AccountResponse = {}): RemoteSettings {
-  const settings = response.settings || {};
-  const mail = settings.mail || {};
-  const aliases = settings.aliases || {};
-  const labelMap = settings.label_settings || response.label_settings;
-  const labels = Array.isArray(settings.labels)
-    ? settings.labels
-    : mapLabelSettingsToArray(labelMap);
-
-  return {
-    mail: {
-      archive_folder: mail.archive_folder ?? response.mail_archive_folder ?? null,
-      sent_folder: mail.sent_folder ?? response.mail_sent_folder ?? null,
-      drafts_folder: mail.drafts_folder ?? response.mail_drafts_folder ?? null,
-    },
-    labels,
-    aliases: {
-      defaults: aliases.defaults ?? DEFAULT_REMOTE_SETTINGS.aliases.defaults,
-    },
-  };
-}
-
-interface SettingsChanges {
-  mail?: {
-    archive_folder?: string | null;
-    sent_folder?: string | null;
-    drafts_folder?: string | null;
-  };
-  labels?: Label[];
-  aliases?: {
-    defaults?: Record<string, unknown>;
-  };
-  [key: string]: unknown;
-}
-
-/**
- * Convert internal settings shape into the flat API payload expected by /v1/account
- */
-function buildAccountUpdatePayload(changes: SettingsChanges = {}): {
-  settings?: Record<string, unknown>;
-} {
-  const payload: { settings: Record<string, unknown> } = { settings: {} };
-
-  if (changes.mail) {
-    const mail: Record<string, unknown> = {};
-    if (changes.mail.archive_folder !== undefined) {
-      mail.archive_folder = changes.mail.archive_folder;
-    }
-    if (changes.mail.sent_folder !== undefined) {
-      mail.sent_folder = changes.mail.sent_folder;
-    }
-    if (changes.mail.drafts_folder !== undefined) {
-      mail.drafts_folder = changes.mail.drafts_folder;
-    }
-    if (Object.keys(mail).length) {
-      payload.settings.mail = mail;
-    }
-  }
-
-  if (changes.labels !== undefined) {
-    payload.settings.label_settings = labelsArrayToMap(changes.labels);
-  }
-
-  if (changes.aliases?.defaults !== undefined) {
-    payload.settings.aliases = {
-      defaults: changes.aliases.defaults,
-    };
-  }
-
-  return Object.keys(payload.settings).length ? payload : {};
 }
 
 // Remote settings store (per-alias, synced with API)
@@ -359,26 +206,12 @@ export const hideCompletedTodos: Readable<boolean> = derived(
   [remoteSettings, localSettingsVersion],
   ([$remote]) => Boolean(getEffectiveSettingValue('hide_completed_todos', { remote: $remote })),
 );
-export type TasksSortKey = 'due' | 'title' | 'created';
-const VALID_TASKS_SORT: TasksSortKey[] = ['due', 'title', 'created'];
-const normalizeTasksSort = (raw: unknown): TasksSortKey => {
-  const value = String(raw || '').toLowerCase() as TasksSortKey;
-  return VALID_TASKS_SORT.includes(value) ? value : 'due';
-};
 export const tasksSort: Readable<TasksSortKey> = derived(
   [remoteSettings, localSettingsVersion],
   ([$remote]) => normalizeTasksSort(getEffectiveSettingValue('tasks_sort', { remote: $remote })),
 );
 
 const getAccountKey = (account?: string): string => account || Local.get('email') || 'default';
-
-const parseOverrideValue = (raw: unknown, fallback = false): boolean => {
-  if (raw === null || raw === undefined) return fallback;
-  const normalized = String(raw).toLowerCase();
-  if (normalized === 'true' || normalized === '1') return true;
-  if (normalized === 'false' || normalized === '0') return false;
-  return fallback;
-};
 
 const getLocalSettingValue = (def: SettingDefinition | null, account?: string): unknown => {
   if (!def) return undefined;
@@ -474,17 +307,6 @@ export const getEffectiveSettingValue = (
     return getRemoteSettingValue(def, remote);
   }
   return def.defaultValue;
-};
-
-const buildRemoteSettingChange = (
-  def: SettingDefinition,
-  value: unknown,
-): Record<string, unknown> => {
-  if (!def?.remotePath?.length) return {};
-  return def.remotePath.reduceRight(
-    (acc: unknown, key: string) => ({ [key]: acc }),
-    value,
-  ) as Record<string, unknown>;
 };
 
 export const setSettingValue = async (
