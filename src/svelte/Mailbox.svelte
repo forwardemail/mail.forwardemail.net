@@ -811,7 +811,6 @@
   // moves the entire set in one gesture.
   let draggedItems = $state<unknown[]>([]);
   let dragOverFolder = $state<string | null>(null);
-  let dragExpandTimeout: ReturnType<typeof setTimeout> | null = null;
   let dragEnterCounter = 0;
   let dragScrollInterval: ReturnType<typeof setInterval> | null = null;
 
@@ -2787,10 +2786,6 @@
     draggedItems = [];
     dragOverFolder = null;
     dragEnterCounter = 0;
-    if (dragExpandTimeout) {
-      clearTimeout(dragExpandTimeout);
-      dragExpandTimeout = null;
-    }
     if (dragScrollInterval) {
       clearInterval(dragScrollInterval);
       dragScrollInterval = null;
@@ -2813,17 +2808,10 @@
 
     dragOverFolder = folder.path;
 
-    // Spring-loaded folder expand: only after a long hover, so an
-    // unintentional pass-through doesn't shift the drop target away
-    // from the user. Bumped from 1500ms → 2500ms because expansion still
-    // felt disorienting: the parent's children push later siblings
-    // off-screen, moving the user's actual intended drop target. The
-    // cancel on dragleave is intact below.
-    if (hasChildren(folder) && !$expandedFolders.has(folder.path)) {
-      dragExpandTimeout = setTimeout(() => {
-        toggleFolderExpansion(folder.path);
-      }, 2500);
-    }
+    // Spring-loaded folder expand is intentionally disabled: auto-expanding a
+    // collapsed parent mid-drag pushed its children into the list and shoved
+    // later siblings off-screen, moving the user's intended drop target out
+    // from under the cursor. Users expand folders manually before dragging.
   };
 
   const handleFolderDragOver = (e, folder) => {
@@ -2888,11 +2876,6 @@
       if (dragOverFolder === folder.path) {
         dragOverFolder = null;
       }
-
-      if (dragExpandTimeout) {
-        clearTimeout(dragExpandTimeout);
-        dragExpandTimeout = null;
-      }
     }
   };
 
@@ -2931,6 +2914,30 @@
     // Clear drag state
     handleDragEnd(e);
 
+    // Advance the reader BEFORE the move, mirroring archive/delete. Selecting
+    // the neighbour first means the reader pane loads the next email in place
+    // and its row highlights immediately; it also makes moveMessage() see a
+    // different selectedMessage, so it skips its own competing selection update
+    // (which previously fought this one and left the highlight on the moved
+    // row). nextCandidate already prefers an unread neighbour — including the
+    // one above when the row below is already read — which fixes "drag doesn't
+    // move to the next unread email up". If the next candidate is itself part
+    // of a multi-select drop, clear the reader instead.
+    const advancingReader = wasSelected && fallback && !fallbackIsMoved;
+    const releaseReaderHold =
+      isProductivityLayout && advancingReader ? holdReaderTransition() : null;
+    if (wasSelected) {
+      if (advancingReader) {
+        if ($threadingEnabled) selectConversation(fallback);
+        else selectMessage(fallback);
+      } else {
+        mailboxStore?.state?.selectedMessage?.set?.(null);
+        mailboxStore?.state?.selectedConversation?.set?.(null);
+        mailboxStore?.state?.messageBody?.set?.('');
+        mailboxStore?.state?.attachments?.set?.([]);
+      }
+    }
+
     try {
       let totalMessageCount = 0;
       for (const itemToMove of filteredItems) {
@@ -2952,21 +2959,6 @@
         }
       }
 
-      // Re-point selection so the reader pane stops showing the moved
-      // message's subject. If nextCandidate landed on a row that's now
-      // moving too (multi-select drop), clear selection entirely.
-      if (wasSelected) {
-        if (fallback && !fallbackIsMoved) {
-          if ($threadingEnabled) selectConversation(fallback);
-          else selectMessage(fallback);
-        } else {
-          mailboxStore?.state?.selectedMessage?.set?.(null);
-          mailboxStore?.state?.selectedConversation?.set?.(null);
-          mailboxStore?.state?.messageBody?.set?.('');
-          mailboxStore?.state?.attachments?.set?.([]);
-        }
-      }
-
       if (totalMessageCount === 1) {
         showToast(`Moved to ${folder.name}`, 'success');
       } else {
@@ -2975,6 +2967,8 @@
     } catch (err) {
       console.error('Failed to move message:', err);
       showToast('Failed to move message', 'error');
+    } finally {
+      releaseReaderHold?.();
     }
   };
 
@@ -6458,7 +6452,7 @@
                     <ul class="divide-y divide-border">
                       {#each convList as conv (conv.id)}
                         <li
-                          class={`relative cursor-pointer hover:bg-accent/50 transition-colors ${activeConvId === conv.id ? 'msg-active' : ''}`}
+                          class={`relative cursor-pointer hover:bg-accent/50 transition-colors ${activeConvId === conv.id || ($selectedConversationIds || []).includes(conv.id) ? 'msg-active' : ''}`}
                           oncontextmenu={(e) => openContextMenu(e, conv)}
                           ondblclick={(e) => {
                             const message = conv?.messages?.[conv.messages.length - 1];
