@@ -132,6 +132,13 @@
   let calendars = $state<unknown[]>([]);
   let selectedCalendarIds = $state<string[]>([]);
   let activeCalendarId = $state('');
+  // Calendar ids we've seen on the server before (persisted alongside the
+  // selection). Lets reconcileCalendarSelection tell a genuinely new calendar
+  // (default it to visible) apart from one the user deliberately hid (keep it
+  // hidden). Without this, calendars created outside the app were never added
+  // to the selected set, so their events fired notifications but were filtered
+  // out of the calendar view.
+  let knownCalendarIds: string[] = [];
   let events = $state<unknown[]>([]);
   let allEvents = $state<unknown[]>([]);
   let eventsScope = $state('none');
@@ -1632,7 +1639,7 @@
 
   const parseCalendarPrefs = (
     value: unknown,
-  ): { selectedIds: string[]; activeId: string } | null => {
+  ): { selectedIds: string[]; activeId: string; knownIds: string[] } | null => {
     if (!value) return null;
     if (typeof value === 'string') {
       try {
@@ -1656,7 +1663,8 @@
         : typeof v.selectedCalendarId === 'string'
           ? v.selectedCalendarId
           : '';
-    return { selectedIds, activeId };
+    const knownIds = Array.isArray(v.knownIds) ? (v.knownIds as string[]).filter(Boolean) : [];
+    return { selectedIds, activeId, knownIds };
   };
 
   const readCalendarPrefs = async (accountKey: string) => {
@@ -1675,6 +1683,9 @@
     const key = getCalendarPrefsKey(accountKey);
     const payload = {
       selectedIds: uniqueIds(selectedIds),
+      // Persist the seen-set too, with the current selection as a floor so we
+      // never lose track of which calendars already existed.
+      knownIds: uniqueIds([...knownCalendarIds, ...selectedIds]),
     };
     try {
       Local.set(key, JSON.stringify(payload));
@@ -1694,8 +1705,19 @@
   ) => {
     const listIds = uniqueIds((list || []).map(getCalendarId) as string[]);
     const listSet = new Set(listIds);
-    let selectedIds = uniqueIds((prefs?.selectedIds || []).filter((id) => listSet.has(id)));
+    const knownSet = new Set(knownCalendarIds);
+    // Keep the user's prior selection (dropping calendars that no longer
+    // exist) and additionally default any calendar we've never seen before to
+    // visible. A calendar created elsewhere (another CalDAV client, the web)
+    // should show up without the user hunting for it; only calendars they
+    // explicitly deselected — seen before, but not selected — stay hidden.
+    const prevSelected = (prefs?.selectedIds || []).filter((id) => listSet.has(id));
+    const newlySeen = listIds.filter((id) => !knownSet.has(id));
+    let selectedIds = uniqueIds([...prevSelected, ...newlySeen]);
     if (!selectedIds.length && listIds.length) selectedIds = listIds;
+    // Record everything currently on the server so the next reconcile can tell
+    // new calendars apart from deselected ones.
+    knownCalendarIds = uniqueIds([...knownCalendarIds, ...listIds]);
     // Always default to the "Calendar" calendar (not Tasks or other custom calendars)
     const defaultId = selectedIds.find((id) => {
       const cal = list.find((c) => getCalendarId(c) === id);
@@ -2128,6 +2150,9 @@
     const accountKey = getAccountKey();
     const calendarsCacheKey = getCalendarsCacheKey(accountKey);
     const storedPrefs = await readCalendarPrefs(accountKey);
+    // Seed the seen-set from this account's stored prefs before reconciling so
+    // new vs. deselected calendars can be distinguished (see reconcile).
+    knownCalendarIds = uniqueIds(storedPrefs?.knownIds || []);
 
     const cached = await db.meta.get(calendarsCacheKey);
     if (requestId !== loadRequestId) return;
