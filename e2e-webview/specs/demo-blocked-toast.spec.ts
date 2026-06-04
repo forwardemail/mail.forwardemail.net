@@ -4,7 +4,7 @@ import { resolveAppBinary } from '../support/platform.js';
 import { openApp } from '../support/app.js';
 import { clearStorage } from '../support/state.js';
 import { activateDemo } from '../support/demo.js';
-import { nativeClick } from '../support/interact.js';
+import { nativeClick, enterSelectionMode } from '../support/interact.js';
 
 describe('demo write actions are blocked with a toast', () => {
   let browser: WebdriverIO.Browser;
@@ -40,8 +40,10 @@ describe('demo write actions are blocked with a toast', () => {
       timeoutMsg: 'no message rows rendered after demo activation',
     });
 
-    // Toggle the first row's checkbox to enter selection mode.
+    // Card view hides per-row checkboxes until selection mode is active, so
+    // enter selection mode first, then select the first row's checkbox.
     const rows = await browser.$$('[data-testid="message-row"]');
+    await enterSelectionMode(browser);
     const checkbox = await rows[0].$('[data-slot="checkbox"]');
     await nativeClick(browser, checkbox);
 

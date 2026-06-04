@@ -4,7 +4,7 @@ import { resolveAppBinary } from '../support/platform.js';
 import { openApp } from '../support/app.js';
 import { clearStorage } from '../support/state.js';
 import { activateDemo } from '../support/demo.js';
-import { nativeClick } from '../support/interact.js';
+import { nativeClick, enterSelectionMode } from '../support/interact.js';
 
 describe('mark as read (optimistic update)', () => {
   let browser: WebdriverIO.Browser;
@@ -52,6 +52,8 @@ describe('mark as read (optimistic update)', () => {
     const messageId = await target.getAttribute('data-message-id');
     expect(messageId).toBeTruthy();
 
+    // Card view hides per-row checkboxes until selection mode is active.
+    await enterSelectionMode(browser);
     const checkbox = await target.$('[data-slot="checkbox"]');
     await nativeClick(browser, checkbox);
 
@@ -80,6 +82,8 @@ describe('mark as read (optimistic update)', () => {
     const before = await $$count('[data-testid="message-row"][data-unread="true"]');
 
     const unreadRows = await browser.$$('[data-testid="message-row"][data-unread="true"]');
+    // Card view hides per-row checkboxes until selection mode is active.
+    await enterSelectionMode(browser);
     const checkbox = await unreadRows[0].$('[data-slot="checkbox"]');
     await nativeClick(browser, checkbox);
     const markRead = await browser.$('[aria-label="Mark selected as read"]');

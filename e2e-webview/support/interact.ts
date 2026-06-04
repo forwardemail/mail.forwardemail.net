@@ -45,3 +45,24 @@ export async function nativeClick(browser: WebdriverIO.Browser, el: ClickableEl)
     await el.click();
   }
 }
+
+/**
+ * Enter multi-select mode via the list toolbar.
+ *
+ * Card view is the default, and it hides the per-row [data-slot="checkbox"]
+ * until the user activates selection mode (more list space; the checkboxes
+ * come back on demand). Tests that select rows by clicking their checkbox must
+ * call this first — otherwise the checkbox simply isn't in the DOM yet. Call
+ * once per app load: a second click on this toolbar button toggles "select
+ * all" rather than re-entering the mode.
+ */
+export async function enterSelectionMode(browser: WebdriverIO.Browser): Promise<void> {
+  const toggle = await browser.$('[aria-label="Enter selection mode"]');
+  await toggle.waitForExist({ timeout: 15_000 });
+  await nativeClick(browser, toggle);
+  // Per-row checkboxes only render once selection mode is active.
+  await browser.$('[data-slot="checkbox"]').waitForExist({
+    timeout: 10_000,
+    timeoutMsg: 'checkboxes did not appear after entering selection mode',
+  });
+}
