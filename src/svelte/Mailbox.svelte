@@ -1039,12 +1039,12 @@
     }
   };
 
-  // Reference to message list container for scrolling
-  let messageListWrapper;
+  // Reference to message list container for scrolling. $state so the infinite-
+  // scroll $effect re-binds the observer when the element (re)mounts.
+  let messageListWrapper = $state<HTMLElement | undefined>();
   // Note: messageBodyContainer removed - email body now rendered in EmailIframe
   let outboxMessageBodyContainer;
-  let infiniteScrollSentinel;
-  let infiniteScrollObserver;
+  let infiniteScrollSentinel = $state<HTMLElement | undefined>();
   let menuUnlisten: (() => void) | null = null;
   let checkMailUnlisten: (() => void) | null = null;
 
@@ -5079,28 +5079,9 @@
       });
     }
 
-    // Set up infinite scroll observer (mobile + desktop).
-    if (typeof window !== 'undefined' && 'IntersectionObserver' in window) {
-      infiniteScrollObserver = new IntersectionObserver(
-        (entries) => {
-          entries.forEach((entry) => {
-            if (entry.isIntersecting && $hasNextPage && !$loading) {
-              nextPage();
-            }
-          });
-        },
-        {
-          root: messageListWrapper,
-          rootMargin: '100px', // Trigger 100px before reaching the bottom
-          threshold: 0.1,
-        },
-      );
-
-      // Observe the sentinel element when it's available
-      if (infiniteScrollSentinel) {
-        infiniteScrollObserver.observe(infiniteScrollSentinel);
-      }
-    }
+    // Infinite scroll is wired reactively below via $effect (see
+    // "Infinite scroll observer"), not here — the observer must re-bind
+    // whenever the scroll container / sentinel element (re)mounts.
 
     // Set up store subscriptions to replace $effect blocks that were causing loops
     // These run once on mount and clean up on destroy
@@ -5229,22 +5210,34 @@
 
     return () => {
       window.removeEventListener('click', closeHandler, true);
-      if (infiniteScrollObserver) {
-        infiniteScrollObserver.disconnect();
-      }
       // Clean up store subscriptions
       mailboxSubscriptions.forEach((unsub) => unsub?.());
       mailboxSubscriptions = [];
     };
   });
 
-  // Observe infinite scroll sentinel when it becomes available - guard
-  let sentinelObserved = false;
+  // Infinite scroll observer (all clients). Watches a 1px sentinel at the bottom
+  // of the message-list scroll container and loads the next page as it nears
+  // view. As a reactive $effect keyed on the actual elements, it re-creates the
+  // observer whenever the wrapper or sentinel (re)mounts — folder switch, outbox
+  // toggle, first render — which the previous onMount/one-shot setup could miss,
+  // leaving desktop stuck on a single page (== the old messages-per-page value).
+  // Only the element refs are tracked here; $hasNextPage/$loading are read inside
+  // the callback so changing them doesn't churn the observer.
   $effect(() => {
-    if (infiniteScrollSentinel && infiniteScrollObserver && !sentinelObserved) {
-      sentinelObserved = true;
-      infiniteScrollObserver.observe(infiniteScrollSentinel);
-    }
+    const root = messageListWrapper;
+    const sentinel = infiniteScrollSentinel;
+    if (!root || !sentinel || typeof IntersectionObserver === 'undefined') return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting && $hasNextPage && !$loading) nextPage();
+        }
+      },
+      { root, rootMargin: '400px', threshold: 0 },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
   });
 
   // No longer need to sync to KO observables - mailboxView now uses Svelte stores directly
@@ -5319,11 +5312,10 @@
 
   // Prefetch next page for instant pagination
   const getMessagePageSize = () => {
-    const effective = getEffectiveSettingValue('messages_per_page');
-    const parsed = Number.parseInt(effective, 10);
-    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+    // Fixed internal page size — infinite scroll paginates in chunks; there is
+    // no longer a user-facing "messages per page" setting.
     const settings = getSyncSettings();
-    return settings.pageSize || 20;
+    return settings.pageSize || 50;
   };
 
   const prefetchNextPage = async () => {

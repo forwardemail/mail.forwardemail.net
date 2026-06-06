@@ -164,7 +164,6 @@
   let attachmentReminderEnabled = $state(false);
   let defaultReplyAll = $state(false);
   let sendAndArchiveDefault = $state(false);
-  let messagesPerPage = $state(20);
   let archiveFolder = $state('');
   let sentFolder = $state('');
   let draftsFolder = $state('');
@@ -227,7 +226,7 @@
   let lastProfileAccount = '';
   let editingProfileName = $state(false);
   let hybridOverrides = $state<Record<string, boolean>>({});
-  const hybridSettingIds = ['theme', 'layout_mode', 'messages_per_page', 'compose_plain_default'];
+  const hybridSettingIds = ['theme', 'layout_mode', 'compose_plain_default'];
 
   const commitProfileName = () => {
     editingProfileName = false;
@@ -302,8 +301,6 @@
         return theme;
       case 'layout_mode':
         return layoutModeChoice;
-      case 'messages_per_page':
-        return messagesPerPage;
       case 'compose_plain_default':
         return composePlainDefault;
       default:
@@ -319,9 +316,6 @@
         break;
       case 'layout_mode':
         layoutModeChoice = (value as string) || 'full';
-        break;
-      case 'messages_per_page':
-        messagesPerPage = Number.parseInt(value as string, 10) || 20;
         break;
       case 'compose_plain_default':
         composePlainDefault = Boolean(value);
@@ -604,10 +598,6 @@
     );
     sendAndArchiveDefault = Boolean(
       getEffectiveSettingValue('send_and_archive_default', { account: currentAcct }),
-    );
-    messagesPerPage = Number.parseInt(
-      getEffectiveSettingValue('messages_per_page', { account: currentAcct }) || '20',
-      10,
     );
     archiveFolder = getEffectiveSettingValue('archive_folder', { account: currentAcct }) || '';
     sentFolder = getEffectiveSettingValue('sent_folder', { account: currentAcct }) || '';
@@ -1078,17 +1068,6 @@
       );
     } catch (err) {
       toasts?.show?.((err as Error)?.message || 'Failed to update week start setting', 'error');
-    }
-  };
-
-  const saveMessagesPerPage = async () => {
-    try {
-      await setSettingValue('messages_per_page', messagesPerPage, {
-        account: getAccountId(),
-      });
-      toasts?.show?.('Messages per page updated', 'success');
-    } catch (err) {
-      toasts?.show?.((err as Error)?.message || 'Failed to save messages per page', 'error');
     }
   };
 
@@ -1780,52 +1759,6 @@
             </label>
             <p class="text-sm text-muted-foreground">
               When replying, the primary send button will archive the conversation after sending.
-            </p>
-          </Card.Content>
-        </Card.Root>
-
-        <Card.Root>
-          <Card.Header>
-            <Card.Title>Messages per page</Card.Title>
-          </Card.Header>
-          <Card.Content class="space-y-3">
-            <div class="flex flex-wrap gap-4">
-              <label class="flex items-center gap-2">
-                <input
-                  type="radio"
-                  name="perpage"
-                  value={20}
-                  bind:group={messagesPerPage}
-                  onchange={saveMessagesPerPage}
-                  class="accent-primary"
-                />
-                <span>20 messages</span>
-              </label>
-              <label class="flex items-center gap-2">
-                <input
-                  type="radio"
-                  name="perpage"
-                  value={50}
-                  bind:group={messagesPerPage}
-                  onchange={saveMessagesPerPage}
-                  class="accent-primary"
-                />
-                <span>50 messages</span>
-              </label>
-              <label class="flex items-center gap-2">
-                <input
-                  type="radio"
-                  name="perpage"
-                  value={100}
-                  bind:group={messagesPerPage}
-                  onchange={saveMessagesPerPage}
-                  class="accent-primary"
-                />
-                <span>100 messages</span>
-              </label>
-            </div>
-            <p class="text-sm text-muted-foreground">
-              Number of conversations to show per page. Higher values may impact performance.
             </p>
           </Card.Content>
         </Card.Root>

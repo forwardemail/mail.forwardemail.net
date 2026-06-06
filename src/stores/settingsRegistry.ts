@@ -182,14 +182,6 @@ export const SETTINGS_REGISTRY: Record<string, SettingDefinition> = {
     localParse: (raw) => parseBoolean(raw, false),
     localSerialize: (value) => serializeBoolean(Boolean(value)),
   },
-  messages_per_page: {
-    id: 'messages_per_page',
-    label: 'Messages Per Page',
-    scope: SETTING_SCOPES.DEVICE,
-    localKey: 'messages_per_page',
-    valueType: 'number',
-    defaultValue: 50,
-  },
   archive_folder: {
     id: 'archive_folder',
     label: 'Archive Folder',

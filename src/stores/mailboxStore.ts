@@ -143,11 +143,11 @@ const createMailboxStore = () => {
   const formatDate = (value) => formatFriendlyDate(value);
 
   const getLimit = () => {
+    // Fixed internal page size for infinite-scroll pagination. The user-facing
+    // "messages per page" setting was removed in favor of infinite scroll on
+    // every client; pages are an internal chunking detail now.
     const settings = getSyncSettings();
-    const effective = getEffectiveSettingValue('messages_per_page');
-    const parsed = Number.parseInt(effective, 10);
-    if (Number.isFinite(parsed) && parsed > 0) return parsed;
-    return settings.pageSize || 20;
+    return settings.pageSize || 50;
   };
 
   const selectFolder = (path) => {

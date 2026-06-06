@@ -165,10 +165,6 @@ export const layoutMode: Readable<unknown> = derived(
   [remoteSettings, localSettingsVersion],
   ([$remote]) => getEffectiveSettingValue('layout_mode', { remote: $remote }),
 );
-export const messagesPerPage: Readable<unknown> = derived(
-  [remoteSettings, localSettingsVersion],
-  ([$remote]) => getEffectiveSettingValue('messages_per_page', { remote: $remote }),
-);
 export const archiveFolder: Readable<string | null> = derived(
   remoteSettings,
   ($s) => $s.mail?.archive_folder || null,
@@ -347,10 +343,6 @@ export const effectiveTheme: Readable<unknown> = derived(
 export const effectiveLayoutMode: Readable<unknown> = derived(
   [remoteSettings, localSettingsVersion],
   ([$remote]) => getEffectiveSettingValue('layout_mode', { remote: $remote }),
-);
-export const effectiveMessagesPerPage: Readable<unknown> = derived(
-  [remoteSettings, localSettingsVersion],
-  ([$remote]) => getEffectiveSettingValue('messages_per_page', { remote: $remote }),
 );
 export const effectiveComposePlainDefault: Readable<boolean> = derived(
   [remoteSettings, localSettingsVersion],
@@ -723,10 +715,6 @@ export const settingsActions = {
     return setSettingValue('layout_mode', normalized);
   },
 
-  async setMessagesPerPage(count: number): Promise<boolean> {
-    return setSettingValue('messages_per_page', count);
-  },
-
   async setArchiveFolder(folder: string): Promise<boolean> {
     return setSettingValue('archive_folder', folder);
   },
@@ -1048,7 +1036,6 @@ export const settingsStore = {
   // Derived stores
   theme,
   layoutMode,
-  messagesPerPage,
   archiveFolder,
   bodyIndexing,
   prefetchConfig,
@@ -1058,7 +1045,6 @@ export const settingsStore = {
   attachmentReminder,
   effectiveTheme,
   effectiveLayoutMode,
-  effectiveMessagesPerPage,
   effectiveComposePlainDefault,
   effectiveArchiveFolder,
 

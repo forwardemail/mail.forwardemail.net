@@ -1340,10 +1340,16 @@ describe('pre-release regression guards', () => {
   it('Mailbox.svelte removed the "Page N" desktop pagination and enabled desktop infinite scroll', () => {
     expect(mailboxSveltePrSrc).not.toContain('<span>Page {$page}</span>');
     expect(mailboxSveltePrSrc).not.toContain('class="fe-pagination');
-    // Infinite-scroll observer no longer gates on isMobileViewport().
+    // Infinite scroll loads the next page on intersect (no isMobileViewport gate).
     expect(mailboxSveltePrSrc).toMatch(
-      /infiniteScrollObserver\s*=\s*new IntersectionObserver[\s\S]{0,400}entry\.isIntersecting && \$hasNextPage/,
+      /new IntersectionObserver[\s\S]{0,400}entry\.isIntersecting && \$hasNextPage && !\$loading/,
     );
+    // The observer is wired as a reactive $effect keyed on the element refs, so
+    // it re-binds whenever the scroll container / sentinel (re)mount — the prior
+    // onMount/one-shot setup could miss them and strand desktop on one page.
+    expect(mailboxSveltePrSrc).toMatch(/let messageListWrapper = \$state/);
+    expect(mailboxSveltePrSrc).toMatch(/let infiniteScrollSentinel = \$state/);
+    expect(mailboxSveltePrSrc).not.toMatch(/let sentinelObserved/);
   });
 
   it('account switch clears the viewed-email state in the currentAccount subscriber', () => {
