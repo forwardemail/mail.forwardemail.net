@@ -15,6 +15,13 @@
   import { queueEmail } from '../utils/outbox-service';
   import { refreshTaskReminders } from '../utils/task-reminders';
   import {
+    buildAllDayRange,
+    buildLocalDateTime,
+    zonedWallClockToUTC,
+    parseAllDayFromIcal,
+    localDateOf,
+  } from '../utils/ical-datetime';
+  import {
     expandRecurringEvents,
     getRecurrenceText,
     buildRrule,
@@ -1054,6 +1061,13 @@
       attendees?: string;
       timezone?: string;
       recurrence?: RecurrenceSpec;
+      // All-day events are emitted as RFC 5545 VALUE=DATE (date-only, no TZID).
+      allDay?: boolean;
+      // Pre-computed iCal value to emit verbatim. For timed events this is the
+      // literal wall-clock 'YYYYMMDDTHHMMSS' (device-tz independent); for all-day
+      // it is the date 'YYYYMMDD'. Falls back to ISO conversion when omitted.
+      startValue?: string;
+      endValue?: string;
     },
     options: {
       method?: string;
@@ -1098,10 +1112,30 @@
     // "3pm in NY" across DST and on devices in other zones. Falling back
     // to bare UTC zulu loses that wall-clock anchor and is the cause of
     // the cross-device time-drift bug.
-    const useTzid = Boolean(timezone) && timezone !== 'UTC';
+    const allDay = Boolean(event.allDay);
+    const useTzid = !allDay && Boolean(timezone) && timezone !== 'UTC';
     const tzParam = useTzid ? `;TZID=${escape(timezone as string)}` : '';
-    const dtstart = useTzid ? formatICalLocal(start, timezone as string) : formatICalDate(start);
-    const dtend = useTzid ? formatICalLocal(end, timezone as string) : formatICalDate(end);
+    let dtstartLine: string;
+    let dtendLine: string;
+    if (allDay && event.startValue && event.endValue) {
+      // RFC 5545 §3.8.2.4/§3.8.2.2: all-day events use date-only values and an
+      // *exclusive* DTEND (the day after the last day). No TZID/VTIMEZONE.
+      dtstartLine = `DTSTART;VALUE=DATE:${event.startValue}`;
+      dtendLine = `DTEND;VALUE=DATE:${event.endValue}`;
+    } else {
+      // Timed. Prefer the literal wall-clock the caller computed straight from
+      // the typed components — that is independent of the device zone, so the
+      // time the user entered round-trips intact. Fall back to converting the
+      // ISO instant for legacy callers that only pass start/end.
+      const dtstart = useTzid
+        ? event.startValue || formatICalLocal(start, timezone as string)
+        : formatICalDate(start);
+      const dtend = useTzid
+        ? event.endValue || formatICalLocal(end, timezone as string)
+        : formatICalDate(end);
+      dtstartLine = `DTSTART${tzParam}:${dtstart}`;
+      dtendLine = `DTEND${tzParam}:${dtend}`;
+    }
     const eventUid = uid || `${Date.now()}@forwardemail.net`;
     const lines = [
       'BEGIN:VCALENDAR',
@@ -1119,8 +1153,8 @@
       'BEGIN:VEVENT',
       `UID:${eventUid}`,
       `DTSTAMP:${dtstamp}`,
-      `DTSTART${tzParam}:${dtstart}`,
-      `DTEND${tzParam}:${dtend}`,
+      dtstartLine,
+      dtendLine,
       `SUMMARY:${escape(summary || 'Untitled Event')}`,
     );
     if (description) lines.push(`DESCRIPTION:${escape(description)}`);
@@ -1898,6 +1932,10 @@
           e.dtstart ||
           e.start_time,
       );
+      // Detect all-day from the raw ICS (DTSTART;VALUE=DATE). The literal date
+      // strings let the renderer draw a date-only bar with no timezone day-shift,
+      // instead of a midnight→next-midnight block that spills into a second day.
+      const allDayInfo = parseAllDayFromIcal(e.ical);
       return {
         id: e.id || e.uid || e.event_id,
         title: e.summary || e.title || e.name || (componentType === 'VTODO' ? 'Task' : 'Event'),
@@ -1911,6 +1949,9 @@
         attendees: e.attendees || '',
         notify: e.notify || e.reminder || 0,
         componentType,
+        allDay: allDayInfo.allDay,
+        allDayStart: allDayInfo.startDate || '',
+        allDayEnd: allDayInfo.endDate || '',
         status: firstNonEmptyString(e.status, e.task_status),
         completedAt: firstNonEmptyString(e.completed, e.completed_at, e.completedAt),
         percentComplete: Number(e.percent_complete || e.percentComplete || 0),
@@ -2289,6 +2330,39 @@
     return `${year}-${month}-${day} ${hours}:${minutes}`;
   };
 
+  // Map an event to Schedule-X start/end. All-day events are emitted as
+  // date-only strings ("YYYY-MM-DD") which Schedule-X renders as an all-day bar
+  // (end is INCLUSIVE here, unlike iCal's exclusive DTEND). Timed events keep
+  // the "YYYY-MM-DD HH:mm" form. Without this, an all-day event came through as
+  // a midnight→next-midnight timed block that visually spanned two days.
+  const formatRangeForScheduleX = (e: Record<string, unknown>) => {
+    if (e.allDay === true) {
+      const isRecurringInstance = Boolean(e.recurrenceOccurrence);
+      // Prefer the literal calendar dates parsed from the ICS (no tz day-shift).
+      // Recurring instances carry the master's dates, so derive per-occurrence.
+      let startDate = isRecurringInstance ? '' : String(e.allDayStart || '');
+      let endDate = isRecurringInstance ? '' : String(e.allDayEnd || '');
+      if (!startDate) {
+        const sd = toDate((e.start || e.startDate || e.start_time) as string);
+        if (sd && !isNaN(sd.getTime())) startDate = localDateOf(sd);
+      }
+      if (!endDate) {
+        const ed = toDate((e.end || e.endDate || e.end_time) as string);
+        if (ed && !isNaN(ed.getTime())) {
+          // Step back a minute so an exclusive next-midnight end resolves to the
+          // inclusive last day; clamp so we never end before we start.
+          const inclusive = localDateOf(new Date(ed.getTime() - 60000));
+          endDate = inclusive >= startDate ? inclusive : startDate;
+        }
+      }
+      if (startDate) return { start: startDate, end: endDate || startDate };
+    }
+    return {
+      start: formatForScheduleX((e.start || e.startDate || e.start_time) as string),
+      end: formatForScheduleX((e.end || e.endDate || e.end_time) as string),
+    };
+  };
+
   const buildScheduleCalendars = (list: unknown[]) => {
     const entries: Record<string, unknown> = {};
     (list || []).forEach((cal, index) => {
@@ -2478,11 +2552,12 @@
       const mapped = visibleEvents
         .map((ev) => {
           const e = ev as Record<string, unknown>;
+          const range = formatRangeForScheduleX(e);
           return {
             id: e.id || e.uid,
             title: e.title || e.summary || e.name || 'Event',
-            start: formatForScheduleX((e.start || e.startDate || e.start_time) as string),
-            end: formatForScheduleX((e.end || e.endDate || e.end_time) as string),
+            start: range.start,
+            end: range.end,
             calendarId: e.calendarId || e.calendar_id || 'default',
           };
         })
@@ -2880,6 +2955,16 @@
 
     try {
       let range: { start: Date; end: Date } | null = null;
+      // iCal DTSTART/DTEND values + optimistic instants, computed per branch so
+      // the wall-clock the user typed is anchored to the SELECTED timezone (not
+      // the device zone, which caused the 1-hour-off drift), and all-day events
+      // become RFC 5545 VALUE=DATE instead of a midnight→23:59 timed block.
+      let icalStartValue = '';
+      let icalEndValue = '';
+      let startISO = '';
+      let endISO = '';
+      let allDayStartDate = ''; // inclusive 'YYYY-MM-DD' for the all-day renderer
+      let allDayEndDate = '';
 
       if (isTodo) {
         if (newEvent.hasDate && newEvent.date) {
@@ -2893,18 +2978,33 @@
           }
         }
       } else if (newEvent.allDay) {
-        // Construct dates from local components to avoid `new Date('YYYY-MM-DD')`
-        // parsing as UTC midnight (which shifts a day in negative-offset zones).
-        const [sY, sM, sD] = newEvent.date.split('-').map(Number);
-        const [eY, eM, eD] = (newEvent.endDate || newEvent.date).split('-').map(Number);
-        const startDate = new Date(sY, sM - 1, sD, 0, 0, 0, 0);
-        const endDate = new Date(eY, eM - 1, eD, 23, 59, 59, 999);
-        if (endDate < startDate) {
+        const startDateStr = newEvent.date;
+        const endDateStr = newEvent.endDate || newEvent.date;
+        // Compare plain 'YYYY-MM-DD' strings — lexicographic order is
+        // chronological, with no Date/timezone involved.
+        if (endDateStr < startDateStr) {
           setError('End date must be on or after start date.');
           savingEvent = false;
           return;
         }
+        const allDayRange = buildAllDayRange(startDateStr, endDateStr);
+        if (!allDayRange) {
+          setError('Invalid date.');
+          savingEvent = false;
+          return;
+        }
+        icalStartValue = allDayRange.dtstart; // 'YYYYMMDD'
+        icalEndValue = allDayRange.dtend; // exclusive next-day 'YYYYMMDD'
+        allDayStartDate = startDateStr;
+        allDayEndDate = endDateStr;
+        // Optimistic in-memory instants: local midnight of the first/last day.
+        const [sY, sM, sD] = startDateStr.split('-').map(Number);
+        const [eY, eM, eD] = endDateStr.split('-').map(Number);
+        const startDate = new Date(sY, sM - 1, sD, 0, 0, 0, 0);
+        const endDate = new Date(eY, eM - 1, eD, 0, 0, 0, 0);
         range = { start: startDate, end: endDate };
+        startISO = startDate.toISOString();
+        endISO = endDate.toISOString();
       } else {
         const { date, endDate, startTime, startMeridiem, endTime, endMeridiem } = newEvent;
         if (!startTime || !endTime || !startMeridiem || !endMeridiem) {
@@ -2916,24 +3016,39 @@
         // recurring events even if the End date input was somehow set.
         const recurringSingleDay =
           newEvent.recurrence.mode !== 'none' && newEvent.recurrence.mode !== 'custom';
+        const endDateForEvent = recurringSingleDay ? date : endDate || date;
         range = ensureEndAfterStart(
           date,
           startTime,
           startMeridiem,
           endTime,
           endMeridiem,
-          recurringSingleDay ? date : endDate || date,
+          endDateForEvent,
         );
         if (!range) {
           setError('End must be after start.');
           savingEvent = false;
           return;
         }
+        // Emit the literal wall-clock the user typed, tagged with the SELECTED
+        // zone — not the device zone the JS Date above happens to use.
+        const start24 = to24Hour(startTime, startMeridiem);
+        const end24 = to24Hour(endTime, endMeridiem);
+        const selTz = newEvent.timezone || getDefaultTimezone();
+        icalStartValue = buildLocalDateTime(date, start24);
+        icalEndValue = buildLocalDateTime(endDateForEvent, end24);
+        // Optimistic instants anchored to the selected zone so the in-memory
+        // render matches what we persist (and what reload will show).
+        const startUtc = zonedWallClockToUTC(date, start24, selTz);
+        const endUtc = zonedWallClockToUTC(endDateForEvent, end24, selTz);
+        startISO = startUtc ? startUtc.toISOString() : range.start.toISOString();
+        endISO = endUtc ? endUtc.toISOString() : range.end.toISOString();
       }
 
       const { description, location, url, timezone, attendees, notify, allDay } = newEvent;
-      const startISO = range ? range.start.toISOString() : '';
-      const endISO = range ? range.end.toISOString() : '';
+      // Todo path (and any branch that didn't set them) falls back to the range.
+      if (!startISO && range) startISO = range.start.toISOString();
+      if (!endISO && range) endISO = range.end.toISOString();
 
       const icalData = isTodo
         ? generateICalTodo({
@@ -2958,6 +3073,9 @@
             end: endISO,
             reminder: Number(notify) || 0,
             recurrence: newEvent.recurrence,
+            allDay: newEvent.allDay,
+            startValue: icalStartValue,
+            endValue: icalEndValue,
           });
 
       const payload = { calendar_id: resolvedCalendarId, ical: icalData };
@@ -2978,6 +3096,9 @@
         notify: Number(notify) || 0,
         componentType: newEvent.componentType,
         ...(isTodo ? { status: 'NEEDS-ACTION', percentComplete: 0, completedAt: '' } : {}),
+        ...(newEvent.allDay
+          ? { allDay: true, allDayStart: allDayStartDate, allDayEnd: allDayEndDate }
+          : {}),
         raw: created ? JSON.parse(JSON.stringify(created)) : null,
       };
       allEvents = [...allEvents, createdEvent];
