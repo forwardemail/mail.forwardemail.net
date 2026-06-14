@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import ICAL from 'ical.js';
 import {
   toICalDate,
   addDaysISO,
@@ -8,6 +9,7 @@ import {
   zonedWallClockToUTC,
   parseAllDayFromIcal,
   localDateOf,
+  buildVTimezone,
 } from '../../src/utils/ical-datetime';
 
 describe('toICalDate', () => {
@@ -170,5 +172,67 @@ describe('localDateOf', () => {
     // Construct via local components so the test is TZ-agnostic.
     const d = new Date(2025, 6, 31, 12, 0, 0);
     expect(localDateOf(d)).toBe('2025-07-31');
+  });
+});
+
+describe('buildVTimezone (resolved via ical.js — the DST-offset regression)', () => {
+  // Build an ICS using the synthesized VTIMEZONE + a TZID-anchored DTSTART, then
+  // resolve the instant exactly as the backend does. This is the real proof: the
+  // old no-RRULE VTIMEZONE resolved America/Denver summer to 07:00Z (MST) instead
+  // of 06:00Z (MDT).
+  const resolve = (tzid: string, year: number, localStamp: string): string => {
+    const ics = [
+      'BEGIN:VCALENDAR',
+      'VERSION:2.0',
+      'PRODID:-//t//EN',
+      'CALSCALE:GREGORIAN',
+      ...buildVTimezone(tzid, year),
+      'BEGIN:VEVENT',
+      'UID:t@t',
+      'DTSTAMP:20260101T000000Z',
+      `DTSTART;TZID=${tzid}:${localStamp}`,
+      'END:VEVENT',
+      'END:VCALENDAR',
+    ].join('\r\n');
+    const comp = new ICAL.Component(ICAL.parse(ics));
+    const vt = comp.getFirstSubcomponent('vtimezone');
+    if (vt) {
+      const tz = new ICAL.Timezone(vt);
+      ICAL.TimezoneService.register(tz.tzid, tz);
+    }
+    const ev = new ICAL.Event(comp.getFirstSubcomponent('vevent'));
+    const iso = ev.startDate.toJSDate().toISOString();
+    ICAL.TimezoneService.reset();
+    return iso;
+  };
+
+  it('America/Denver summer midnight resolves to MDT (06:00Z), not MST', () => {
+    expect(resolve('America/Denver', 2026, '20260615T000000')).toBe('2026-06-15T06:00:00.000Z');
+  });
+
+  it('America/Denver winter midnight resolves to MST (07:00Z)', () => {
+    expect(resolve('America/Denver', 2026, '20260115T000000')).toBe('2026-01-15T07:00:00.000Z');
+  });
+
+  it('America/Phoenix (no DST) resolves to a fixed -07:00 year-round', () => {
+    expect(resolve('America/Phoenix', 2026, '20260615T000000')).toBe('2026-06-15T07:00:00.000Z');
+    expect(resolve('America/Phoenix', 2026, '20260115T000000')).toBe('2026-01-15T07:00:00.000Z');
+  });
+
+  it('Europe/Berlin honors the EU last-Sunday DST rule (CEST +2 in summer)', () => {
+    expect(resolve('Europe/Berlin', 2026, '20260615T120000')).toBe('2026-06-15T10:00:00.000Z');
+    expect(resolve('Europe/Berlin', 2026, '20260115T120000')).toBe('2026-01-15T11:00:00.000Z');
+  });
+
+  it('emits recurring (RRULE) transitions for a DST zone', () => {
+    const lines = buildVTimezone('America/Denver', 2026);
+    expect(lines.filter((l) => l.startsWith('RRULE:')).length).toBe(2);
+    expect(lines.some((l) => l.includes('BYDAY=2SU'))).toBe(true); // 2nd Sun March
+    expect(lines.some((l) => l.includes('BYDAY=1SU'))).toBe(true); // 1st Sun November
+  });
+
+  it('returns no VTIMEZONE for UTC / empty', () => {
+    expect(buildVTimezone('UTC')).toEqual([]);
+    expect(buildVTimezone('')).toEqual([]);
   });
 });

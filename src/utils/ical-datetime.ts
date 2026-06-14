@@ -170,3 +170,146 @@ export function parseAllDayFromIcal(ical: unknown): {
 export function localDateOf(d: Date): string {
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 }
+
+// ── VTIMEZONE synthesis ──────────────────────────────────────────────────────
+//
+// Why this is non-trivial: the previous generator emitted STANDARD/DAYLIGHT
+// components with one-shot 1970 DTSTARTs and NO RRULE. ical.js (and the backend,
+// which uses it) then treats the single most-recent transition as permanent — so
+// a summer America/Denver event resolved to MST (−0700) instead of MDT (−0600),
+// storing the instant 1 hour late on every round-trip (compounding if re-saved).
+// We must emit RECURRING transitions (FREQ=YEARLY...) so the right offset applies
+// in every DST period. Derived purely from Intl — no tzdata dependency.
+
+const WEEKDAYS = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'];
+
+const fmtVtzOffset = (mins: number): string => {
+  const sign = mins >= 0 ? '+' : '-';
+  const abs = Math.abs(mins);
+  return `${sign}${pad2(Math.floor(abs / 60))}${pad2(abs % 60)}`;
+};
+
+const zoneAbbr = (tzid: string, at: Date): string => {
+  try {
+    const dtf = new Intl.DateTimeFormat('en-US', { timeZone: tzid, timeZoneName: 'short' });
+    return dtf.formatToParts(at).find((p) => p.type === 'timeZoneName')?.value || '';
+  } catch {
+    return '';
+  }
+};
+
+/**
+ * Find the UTC instants in `year` where `tzid`'s offset changes (DST on/off).
+ * Coarse daily scan, then binary-search each change to the second. Returns at
+ * most a handful of entries; empty for zones without DST.
+ */
+function findZoneTransitions(
+  tzid: string,
+  year: number,
+): Array<{ at: number; from: number; to: number }> {
+  const DAY = 86_400_000;
+  const start = Date.UTC(year, 0, 1);
+  const end = Date.UTC(year + 1, 0, 1);
+  const out: Array<{ at: number; from: number; to: number }> = [];
+  let prev = zoneOffsetMinutes(tzid, new Date(start));
+  for (let t = start + DAY; t <= end; t += DAY) {
+    const cur = zoneOffsetMinutes(tzid, new Date(t));
+    if (cur !== prev) {
+      let lo = t - DAY;
+      let hi = t;
+      while (hi - lo > 1000) {
+        const mid = lo + Math.floor((hi - lo) / 2);
+        if (zoneOffsetMinutes(tzid, new Date(mid)) === prev) lo = mid;
+        else hi = mid;
+      }
+      out.push({ at: hi, from: prev, to: zoneOffsetMinutes(tzid, new Date(hi)) });
+      prev = zoneOffsetMinutes(tzid, new Date(hi));
+    }
+  }
+  return out;
+}
+
+// Anchor transition DTSTARTs in a base year so every modern event has a
+// preceding occurrence — ical.js (RFC 5545) projects an RRULE forward from
+// DTSTART but NOT backward, so a same-year anchor leaves pre-first-transition
+// dates (e.g. January) unresolved (offset 0). The yearly RRULE carries the rule
+// forward to every year.
+const VTZ_ANCHOR_YEAR = 1970;
+
+/** The `nth` (1..4, or -1 for last) `weekday` (0=Sun) of a month, as a UTC Date. */
+function nthWeekdayOfMonth(year: number, month1: number, nth: number, weekday: number): Date {
+  if (nth === -1) {
+    const lastDom = new Date(Date.UTC(year, month1, 0)).getUTCDate();
+    const lastDow = new Date(Date.UTC(year, month1 - 1, lastDom)).getUTCDay();
+    return new Date(Date.UTC(year, month1 - 1, lastDom - ((lastDow - weekday + 7) % 7)));
+  }
+  const firstDow = new Date(Date.UTC(year, month1 - 1, 1)).getUTCDay();
+  return new Date(Date.UTC(year, month1 - 1, 1 + ((weekday - firstDow + 7) % 7) + (nth - 1) * 7));
+}
+
+function transitionComponent(
+  kind: 'STANDARD' | 'DAYLIGHT',
+  tr: { at: number; from: number; to: number },
+  tzid: string,
+): string[] {
+  // The transition's wall-clock is its instant in the *from* offset.
+  const wall = new Date(tr.at + tr.from * 60_000);
+  const weekday = wall.getUTCDay();
+  const month = wall.getUTCMonth() + 1;
+  const dom = wall.getUTCDate();
+  const daysInMonth = new Date(Date.UTC(wall.getUTCFullYear(), month, 0)).getUTCDate();
+  // Last-of-month (EU rule) -> -1; otherwise the nth occurrence (US rule).
+  const nth = dom > daysInMonth - 7 ? -1 : Math.floor((dom - 1) / 7) + 1;
+  // Keep the wall-clock time-of-day, but anchor the DATE in the base year.
+  const anchor = nthWeekdayOfMonth(VTZ_ANCHOR_YEAR, month, nth, weekday);
+  const dtstart =
+    `${anchor.getUTCFullYear()}${pad2(month)}${pad2(anchor.getUTCDate())}` +
+    `T${pad2(wall.getUTCHours())}${pad2(wall.getUTCMinutes())}${pad2(wall.getUTCSeconds())}`;
+  return [
+    `BEGIN:${kind}`,
+    `DTSTART:${dtstart}`,
+    `RRULE:FREQ=YEARLY;BYMONTH=${month};BYDAY=${nth}${WEEKDAYS[weekday]}`,
+    `TZOFFSETFROM:${fmtVtzOffset(tr.from)}`,
+    `TZOFFSETTO:${fmtVtzOffset(tr.to)}`,
+    `TZNAME:${zoneAbbr(tzid, new Date(tr.at)) || kind}`,
+    `END:${kind}`,
+  ];
+}
+
+/**
+ * Synthesize a valid RFC 5545 VTIMEZONE for an IANA zone, with RECURRING
+ * STANDARD/DAYLIGHT transitions so parsers resolve the correct offset in every
+ * DST period (the prior no-RRULE form caused a 1h drift). Zones without DST get
+ * a single fixed STANDARD. Returns [] for '' / 'UTC'. `year` defaults to the
+ * current year; the yearly RRULE makes it apply to all years.
+ */
+export function buildVTimezone(tzid: string, year?: number): string[] {
+  if (!tzid || tzid === 'UTC') return [];
+  try {
+    const refYear = year ?? new Date().getUTCFullYear();
+    const transitions = findZoneTransitions(tzid, refYear);
+    const lines = ['BEGIN:VTIMEZONE', `TZID:${tzid}`];
+    if (transitions.length < 2) {
+      // No DST observed: a single permanent STANDARD offset.
+      const ref = new Date(Date.UTC(refYear, 0, 15));
+      const off = zoneOffsetMinutes(tzid, ref);
+      lines.push(
+        'BEGIN:STANDARD',
+        'DTSTART:19700101T000000',
+        `TZOFFSETFROM:${fmtVtzOffset(off)}`,
+        `TZOFFSETTO:${fmtVtzOffset(off)}`,
+        `TZNAME:${zoneAbbr(tzid, ref) || 'GMT'}`,
+        'END:STANDARD',
+      );
+    } else {
+      // Pair the year's transitions: rise in offset => DAYLIGHT, fall => STANDARD.
+      for (const tr of transitions) {
+        lines.push(...transitionComponent(tr.to > tr.from ? 'DAYLIGHT' : 'STANDARD', tr, tzid));
+      }
+    }
+    lines.push('END:VTIMEZONE');
+    return lines;
+  } catch {
+    return [];
+  }
+}

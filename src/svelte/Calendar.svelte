@@ -20,6 +20,7 @@
     zonedWallClockToUTC,
     parseAllDayFromIcal,
     localDateOf,
+    buildVTimezone,
   } from '../utils/ical-datetime';
   import {
     expandRecurringEvents,
@@ -349,99 +350,9 @@
   const isForeignZone = (eventZone: string | undefined | null) =>
     !!eventZone && eventZone !== 'UTC' && eventZone !== viewerZone;
 
-  // Compute the UTC offset (minutes) a given IANA zone has at a given moment.
-  // Positive east of UTC. Used to synthesize VTIMEZONE blocks below.
-  const getZoneOffsetMinutes = (tzid: string, at: Date): number => {
-    const dtf = new Intl.DateTimeFormat('en-US', {
-      timeZone: tzid,
-      hourCycle: 'h23',
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-    });
-    const parts = dtf.formatToParts(at);
-    const m: Record<string, string> = {};
-    for (const p of parts) m[p.type] = p.value;
-    const asUtc = Date.UTC(
-      Number(m.year),
-      Number(m.month) - 1,
-      Number(m.day),
-      Number(m.hour) === 24 ? 0 : Number(m.hour),
-      Number(m.minute),
-      Number(m.second),
-    );
-    return Math.round((asUtc - at.getTime()) / 60000);
-  };
-
-  // Short timezone name (e.g. "EST", "PDT") for a given IANA zone at a moment.
-  const getZoneAbbr = (tzid: string, at: Date): string => {
-    try {
-      const dtf = new Intl.DateTimeFormat('en-US', { timeZone: tzid, timeZoneName: 'short' });
-      const parts = dtf.formatToParts(at);
-      const tzn = parts.find((p) => p.type === 'timeZoneName');
-      return tzn?.value || '';
-    } catch {
-      return '';
-    }
-  };
-
-  // Synthesize a minimal RFC 5545 VTIMEZONE block for a given IANA zone using
-  // only Intl (no tzdata dependency). Emits a single STANDARD entry for fixed
-  // zones; for zones observing DST, emits STANDARD + DAYLIGHT with offsets
-  // computed for the current year. Lacks the precise DST RRULE that a full
-  // tzdata would provide, but is valid and resolves the right offset for any
-  // event near the current era — sufficient for CalDAV client interop.
-  const buildMinimalVTimezone = (tzid: string): string[] => {
-    if (!tzid || tzid === 'UTC') return [];
-    try {
-      const year = new Date().getUTCFullYear();
-      const winter = new Date(Date.UTC(year, 0, 15));
-      const summer = new Date(Date.UTC(year, 6, 15));
-      const winterOff = getZoneOffsetMinutes(tzid, winter);
-      const summerOff = getZoneOffsetMinutes(tzid, summer);
-      const fmtOff = (mins: number) => {
-        const sign = mins >= 0 ? '+' : '-';
-        const abs = Math.abs(mins);
-        const h = String(Math.floor(abs / 60)).padStart(2, '0');
-        const m = String(abs % 60).padStart(2, '0');
-        return `${sign}${h}${m}`;
-      };
-      const lines: string[] = ['BEGIN:VTIMEZONE', `TZID:${tzid}`];
-      if (winterOff === summerOff) {
-        lines.push(
-          'BEGIN:STANDARD',
-          'DTSTART:19700101T000000',
-          `TZOFFSETFROM:${fmtOff(winterOff)}`,
-          `TZOFFSETTO:${fmtOff(winterOff)}`,
-          `TZNAME:${getZoneAbbr(tzid, winter) || 'GMT'}`,
-          'END:STANDARD',
-        );
-      } else {
-        lines.push(
-          'BEGIN:STANDARD',
-          'DTSTART:19701101T020000',
-          `TZOFFSETFROM:${fmtOff(summerOff)}`,
-          `TZOFFSETTO:${fmtOff(winterOff)}`,
-          `TZNAME:${getZoneAbbr(tzid, winter) || 'STD'}`,
-          'END:STANDARD',
-          'BEGIN:DAYLIGHT',
-          'DTSTART:19700315T020000',
-          `TZOFFSETFROM:${fmtOff(winterOff)}`,
-          `TZOFFSETTO:${fmtOff(summerOff)}`,
-          `TZNAME:${getZoneAbbr(tzid, summer) || 'DST'}`,
-          'END:DAYLIGHT',
-        );
-      }
-
-      lines.push('END:VTIMEZONE');
-      return lines;
-    } catch {
-      return [];
-    }
-  };
+  // VTIMEZONE synthesis lives in src/utils/ical-datetime.ts (buildVTimezone) so
+  // it can be unit-tested against ical.js — the prior inline version emitted
+  // no-RRULE transitions that resolved the wrong DST offset (1h drift).
 
   // Wall-clock formatter: produces YYYYMMDDTHHMMSS rendered in the given
   // IANA tz. Used with DTSTART;TZID=<tz>:<wallClock> instead of the legacy
@@ -1147,7 +1058,7 @@
     // RFC 5545 §3.6.5: any referenced TZID must be defined by a VTIMEZONE
     // component in the same calendar. Without this, strict CalDAV clients
     // (Apple, DAVx5) treat the TZID as opaque or fall back to UTC.
-    if (useTzid) lines.push(...buildMinimalVTimezone(timezone as string));
+    if (useTzid) lines.push(...buildVTimezone(timezone as string));
 
     lines.push(
       'BEGIN:VEVENT',
@@ -1209,6 +1120,11 @@
       completedAt?: string;
       percentComplete?: number;
       reminder?: number;
+      // Literal iCal wall-clock 'YYYYMMDDTHHMMSS' for DTSTART/DUE, computed from
+      // the typed components (device-tz independent). Falls back to converting
+      // the start/due ISO instant when omitted.
+      startValue?: string;
+      dueValue?: string;
     },
     options: { method?: string } = {},
   ) => {
@@ -1251,7 +1167,7 @@
       'CALSCALE:GREGORIAN',
       `METHOD:${method}`,
     ];
-    if (useTzid) lines.push(...buildMinimalVTimezone(timezone as string));
+    if (useTzid) lines.push(...buildVTimezone(timezone as string));
 
     lines.push(
       'BEGIN:VTODO',
@@ -1260,8 +1176,14 @@
       `SUMMARY:${escape(summary || 'Untitled Task')}`,
     );
     const tzParam = useTzid ? `;TZID=${escape(timezone as string)}` : '';
-    const dtstart = useTzid ? formatICalLocal(start, timezone as string) : formatICalDate(start);
-    const dueDate = useTzid ? formatICalLocal(due, timezone as string) : formatICalDate(due);
+    // Prefer the literal wall-clock from the typed components so the time the
+    // user entered round-trips intact regardless of the device zone.
+    const dtstart = useTzid
+      ? task.startValue || formatICalLocal(start, timezone as string)
+      : formatICalDate(start);
+    const dueDate = useTzid
+      ? task.dueValue || formatICalLocal(due, timezone as string)
+      : formatICalDate(due);
     const completed = formatICalDate(completedAt);
     if (dtstart) lines.push(`DTSTART${tzParam}:${dtstart}`);
     if (dueDate) lines.push(`DUE${tzParam}:${dueDate}`);
@@ -2930,6 +2852,150 @@
     focusTitleInput();
   };
 
+  // Shared date/time computation for BOTH create (saveNewEvent) and edit
+  // (updateEvent). Keeping it in one place is what prevents the two paths from
+  // drifting — the original 1h-off + all-day bugs lived in this duplicated logic.
+  // Anchors the wall-clock the user typed to the SELECTED timezone (never the
+  // device zone) and emits RFC 5545 VALUE=DATE for all-day events.
+  type EventDateForm = {
+    componentType?: string;
+    date: string;
+    endDate?: string;
+    startTime?: string;
+    startMeridiem?: string;
+    endTime?: string;
+    endMeridiem?: string;
+    allDay?: boolean;
+    hasDate?: boolean;
+    hasTime?: boolean;
+    timezone?: string;
+    recurrence?: RecurrenceSpec;
+  };
+  type EventDateValues = {
+    range: { start: Date; end: Date } | null;
+    startISO: string;
+    endISO: string;
+    // iCal DTSTART value + DTEND (event) / DUE (todo) value: a literal wall-clock
+    // 'YYYYMMDDTHHMMSS' for timed, or a 'YYYYMMDD' date for all-day. Empty => let
+    // the generator fall back to converting the ISO instant.
+    startValue: string;
+    endValue: string;
+    allDay: boolean;
+    allDayStartDate: string;
+    allDayEndDate: string;
+  };
+  const computeEventDateValues = (
+    form: EventDateForm,
+  ): { ok: true; values: EventDateValues } | { ok: false; error: string } => {
+    const isTodo = form.componentType === 'VTODO';
+    const selTz = form.timezone || getDefaultTimezone();
+    const blank: EventDateValues = {
+      range: null,
+      startISO: '',
+      endISO: '',
+      startValue: '',
+      endValue: '',
+      allDay: false,
+      allDayStartDate: '',
+      allDayEndDate: '',
+    };
+
+    if (isTodo) {
+      // Tasks: date and time are both optional. No date => a floating task.
+      if (!(form.hasDate && form.date)) return { ok: true, values: blank };
+      if (form.hasTime && form.startTime && form.startMeridiem) {
+        const t24 = to24Hour(form.startTime, form.startMeridiem);
+        const startValue = buildLocalDateTime(form.date, t24);
+        const utc =
+          zonedWallClockToUTC(form.date, t24, selTz) ?? new Date(`${form.date}T${t24}:00`);
+        const iso = utc.toISOString();
+        return {
+          ok: true,
+          values: {
+            ...blank,
+            range: { start: utc, end: utc },
+            startISO: iso,
+            endISO: iso,
+            startValue,
+            endValue: startValue,
+          },
+        };
+      }
+      // Date-only task: keep the existing midnight-local behavior (the generator
+      // converts the ISO instant); a wall-clock value isn't meaningful here.
+      const dt = new Date(`${form.date}T00:00:00`);
+      const iso = dt.toISOString();
+      return {
+        ok: true,
+        values: { ...blank, range: { start: dt, end: dt }, startISO: iso, endISO: iso },
+      };
+    }
+
+    if (form.allDay) {
+      const startDateStr = form.date;
+      const endDateStr = form.endDate || form.date;
+      // Plain 'YYYY-MM-DD' comparison — lexicographic order is chronological.
+      if (endDateStr < startDateStr)
+        return { ok: false, error: 'End date must be on or after start date.' };
+      const allDayRange = buildAllDayRange(startDateStr, endDateStr);
+      if (!allDayRange) return { ok: false, error: 'Invalid date.' };
+      const [sY, sM, sD] = startDateStr.split('-').map(Number);
+      const [eY, eM, eD] = endDateStr.split('-').map(Number);
+      const startDate = new Date(sY, sM - 1, sD, 0, 0, 0, 0);
+      const endDate = new Date(eY, eM - 1, eD, 0, 0, 0, 0);
+      return {
+        ok: true,
+        values: {
+          range: { start: startDate, end: endDate },
+          startISO: startDate.toISOString(),
+          endISO: endDate.toISOString(),
+          startValue: allDayRange.dtstart,
+          endValue: allDayRange.dtend,
+          allDay: true,
+          allDayStartDate: startDateStr,
+          allDayEndDate: endDateStr,
+        },
+      };
+    }
+
+    // Timed event.
+    const { date, endDate, startTime, startMeridiem, endTime, endMeridiem } = form;
+    if (!date || !startTime || !endTime || !startMeridiem || !endMeridiem) {
+      return { ok: false, error: 'Start and end times are required.' };
+    }
+    // Belt and suspenders: simple recurring events are single-day per occurrence
+    // even if an End date was somehow set (that input means UNTIL for them).
+    const recurringSingleDay =
+      !!form.recurrence && form.recurrence.mode !== 'none' && form.recurrence.mode !== 'custom';
+    const endDateForEvent = recurringSingleDay ? date : endDate || date;
+    const range = ensureEndAfterStart(
+      date,
+      startTime,
+      startMeridiem,
+      endTime,
+      endMeridiem,
+      endDateForEvent,
+    );
+    if (!range) return { ok: false, error: 'End must be after start.' };
+    const start24 = to24Hour(startTime, startMeridiem);
+    const end24 = to24Hour(endTime, endMeridiem);
+    const startUtc = zonedWallClockToUTC(date, start24, selTz);
+    const endUtc = zonedWallClockToUTC(endDateForEvent, end24, selTz);
+    return {
+      ok: true,
+      values: {
+        range,
+        startISO: startUtc ? startUtc.toISOString() : range.start.toISOString(),
+        endISO: endUtc ? endUtc.toISOString() : range.end.toISOString(),
+        startValue: buildLocalDateTime(date, start24),
+        endValue: buildLocalDateTime(endDateForEvent, end24),
+        allDay: false,
+        allDayStartDate: '',
+        allDayEndDate: '',
+      },
+    };
+  };
+
   const saveNewEvent = async () => {
     const isTodo = newEvent.componentType === 'VTODO';
     const title = newEvent.title?.trim() || (isTodo ? 'Task' : 'Event');
@@ -2954,101 +3020,23 @@
     const resolvedCalendarId = getCalendarId(calendar);
 
     try {
-      let range: { start: Date; end: Date } | null = null;
-      // iCal DTSTART/DTEND values + optimistic instants, computed per branch so
-      // the wall-clock the user typed is anchored to the SELECTED timezone (not
-      // the device zone, which caused the 1-hour-off drift), and all-day events
-      // become RFC 5545 VALUE=DATE instead of a midnight→23:59 timed block.
-      let icalStartValue = '';
-      let icalEndValue = '';
-      let startISO = '';
-      let endISO = '';
-      let allDayStartDate = ''; // inclusive 'YYYY-MM-DD' for the all-day renderer
-      let allDayEndDate = '';
-
-      if (isTodo) {
-        if (newEvent.hasDate && newEvent.date) {
-          if (newEvent.hasTime && newEvent.startTime && newEvent.startMeridiem) {
-            const start24 = to24Hour(newEvent.startTime, newEvent.startMeridiem);
-            const dt = new Date(`${newEvent.date}T${start24}:00`);
-            range = { start: dt, end: dt };
-          } else {
-            const dt = new Date(`${newEvent.date}T00:00:00`);
-            range = { start: dt, end: dt };
-          }
-        }
-      } else if (newEvent.allDay) {
-        const startDateStr = newEvent.date;
-        const endDateStr = newEvent.endDate || newEvent.date;
-        // Compare plain 'YYYY-MM-DD' strings — lexicographic order is
-        // chronological, with no Date/timezone involved.
-        if (endDateStr < startDateStr) {
-          setError('End date must be on or after start date.');
-          savingEvent = false;
-          return;
-        }
-        const allDayRange = buildAllDayRange(startDateStr, endDateStr);
-        if (!allDayRange) {
-          setError('Invalid date.');
-          savingEvent = false;
-          return;
-        }
-        icalStartValue = allDayRange.dtstart; // 'YYYYMMDD'
-        icalEndValue = allDayRange.dtend; // exclusive next-day 'YYYYMMDD'
-        allDayStartDate = startDateStr;
-        allDayEndDate = endDateStr;
-        // Optimistic in-memory instants: local midnight of the first/last day.
-        const [sY, sM, sD] = startDateStr.split('-').map(Number);
-        const [eY, eM, eD] = endDateStr.split('-').map(Number);
-        const startDate = new Date(sY, sM - 1, sD, 0, 0, 0, 0);
-        const endDate = new Date(eY, eM - 1, eD, 0, 0, 0, 0);
-        range = { start: startDate, end: endDate };
-        startISO = startDate.toISOString();
-        endISO = endDate.toISOString();
-      } else {
-        const { date, endDate, startTime, startMeridiem, endTime, endMeridiem } = newEvent;
-        if (!startTime || !endTime || !startMeridiem || !endMeridiem) {
-          setError('Start and end times are required.');
-          savingEvent = false;
-          return;
-        }
-        // Belt and suspenders: each occurrence is single-day for simple
-        // recurring events even if the End date input was somehow set.
-        const recurringSingleDay =
-          newEvent.recurrence.mode !== 'none' && newEvent.recurrence.mode !== 'custom';
-        const endDateForEvent = recurringSingleDay ? date : endDate || date;
-        range = ensureEndAfterStart(
-          date,
-          startTime,
-          startMeridiem,
-          endTime,
-          endMeridiem,
-          endDateForEvent,
-        );
-        if (!range) {
-          setError('End must be after start.');
-          savingEvent = false;
-          return;
-        }
-        // Emit the literal wall-clock the user typed, tagged with the SELECTED
-        // zone — not the device zone the JS Date above happens to use.
-        const start24 = to24Hour(startTime, startMeridiem);
-        const end24 = to24Hour(endTime, endMeridiem);
-        const selTz = newEvent.timezone || getDefaultTimezone();
-        icalStartValue = buildLocalDateTime(date, start24);
-        icalEndValue = buildLocalDateTime(endDateForEvent, end24);
-        // Optimistic instants anchored to the selected zone so the in-memory
-        // render matches what we persist (and what reload will show).
-        const startUtc = zonedWallClockToUTC(date, start24, selTz);
-        const endUtc = zonedWallClockToUTC(endDateForEvent, end24, selTz);
-        startISO = startUtc ? startUtc.toISOString() : range.start.toISOString();
-        endISO = endUtc ? endUtc.toISOString() : range.end.toISOString();
+      const dateResult = computeEventDateValues(newEvent);
+      if (!dateResult.ok) {
+        setError(dateResult.error);
+        savingEvent = false;
+        return;
       }
+      const {
+        range,
+        startISO,
+        endISO,
+        startValue: icalStartValue,
+        endValue: icalEndValue,
+        allDayStartDate,
+        allDayEndDate,
+      } = dateResult.values;
 
       const { description, location, url, timezone, attendees, notify, allDay } = newEvent;
-      // Todo path (and any branch that didn't set them) falls back to the range.
-      if (!startISO && range) startISO = range.start.toISOString();
-      if (!endISO && range) endISO = range.end.toISOString();
 
       const icalData = isTodo
         ? generateICalTodo({
@@ -3059,6 +3047,8 @@
             timezone: timezone || getDefaultTimezone(),
             start: startISO,
             due: endISO,
+            startValue: icalStartValue,
+            dueValue: icalEndValue,
             status: 'NEEDS-ACTION',
             reminder: Number(notify) || 0,
           })
@@ -3190,6 +3180,10 @@
     const endSplit = to12Hour(endLocal.split('T')[1]);
     const componentType = firstNonEmptyString(fullEvent.componentType, 'VEVENT').toUpperCase();
     const isTodo = componentType === 'VTODO';
+    // Preserve all-day events on edit (mapCalendarEvents flags them from the
+    // ICS): without this the modal reset allDay to false and saved them back as
+    // a timed midnight→23:59 block.
+    const isAllDay = !isTodo && (fullEvent as Record<string, unknown>).allDay === true;
     const hasValidDate = !!datePart && !Number.isNaN(startDate.getTime());
     const editHasDate = isTodo ? hasValidDate : true;
     const startHHMM = startLocal.split('T')[1] || '';
@@ -3227,13 +3221,16 @@
         fullEvent.calendar_id ||
         resolveActiveCalendarId()) as string,
       title: (fullEvent.title as string) || '',
-      date: datePart,
-      endDate: endDatePart,
+      date: isAllDay && fullEvent.allDayStart ? (fullEvent.allDayStart as string) : datePart,
+      endDate:
+        isAllDay && fullEvent.allDayEnd && editRecurrenceSpec.mode === 'none'
+          ? (fullEvent.allDayEnd as string)
+          : endDatePart,
       startTime: startSplit.time,
       startMeridiem: startSplit.meridiem,
       endTime: endSplit.time,
       endMeridiem: endSplit.meridiem,
-      allDay: false,
+      allDay: isAllDay,
       description: (fullEvent.description as string) || '',
       location: (fullEvent.location as string) || '',
       url: (fullEvent.url as string) || '',
@@ -3297,38 +3294,20 @@
       setError(isTodo ? 'Title is required.' : 'Title, date, and times are required.');
       return;
     }
-    let range: { start: Date; end: Date } | null = null;
-    if (isTodo) {
-      if (editEvent.hasDate && date) {
-        if (editEvent.hasTime && startTime && startMeridiem) {
-          const start24 = to24Hour(startTime, startMeridiem);
-          const dt = new Date(`${date}T${start24}:00`);
-          range = { start: dt, end: dt };
-        } else {
-          const dt = new Date(`${date}T00:00:00`);
-          range = { start: dt, end: dt };
-        }
-      }
-    } else {
-      if (!date || !startTime || !endTime || !startMeridiem || !endMeridiem) {
-        setError('Title, date, and times are required.');
-        return;
-      }
-      const recurringSingleDay =
-        editEvent.recurrence.mode !== 'none' && editEvent.recurrence.mode !== 'custom';
-      range = ensureEndAfterStart(
-        date,
-        startTime,
-        startMeridiem,
-        endTime,
-        endMeridiem,
-        recurringSingleDay ? date : endDate || date,
-      );
-      if (!range) {
-        setError('End time must be after start time.');
-        return;
-      }
+    const dateResult = computeEventDateValues(editEvent);
+    if (!dateResult.ok) {
+      setError(dateResult.error);
+      return;
     }
+    const {
+      startISO,
+      endISO,
+      startValue: icalStartValue,
+      endValue: icalEndValue,
+      allDay: allDayResolved,
+      allDayStartDate,
+      allDayEndDate,
+    } = dateResult.values;
     try {
       const previousCalendarId =
         (
@@ -3337,8 +3316,6 @@
               ((ev as Record<string, unknown>).id || (ev as Record<string, unknown>).uid) === id,
           ) as Record<string, unknown> | undefined
         )?.calendarId || '';
-      const startISO = range ? range.start.toISOString() : '';
-      const endISO = range ? range.end.toISOString() : '';
       const icalData = isTodo
         ? generateICalTodo({
             summary: title,
@@ -3348,6 +3325,8 @@
             timezone: timezone || getDefaultTimezone(),
             start: startISO,
             due: endISO,
+            startValue: icalStartValue,
+            dueValue: icalEndValue,
             uid: id,
             status: status || 'NEEDS-ACTION',
             completedAt: completedAt || '',
@@ -3369,6 +3348,9 @@
             uid: id.includes('::') ? id.split('::')[0] : id,
             reminder: Number(notify) || 0,
             recurrence: editEvent.recurrence,
+            allDay: editEvent.allDay,
+            startValue: icalStartValue,
+            endValue: icalEndValue,
           });
       const persistId = id.includes('::') ? id.split('::')[0] : id;
       const payload = { id: persistId, calendar_id: calendarId, ical: icalData };
@@ -3397,6 +3379,9 @@
                     percentComplete: Number(percentComplete) || 0,
                   }
                 : {}),
+              ...(allDayResolved
+                ? { allDay: true, allDayStart: allDayStartDate, allDayEnd: allDayEndDate }
+                : { allDay: false }),
             }
           : ev,
       );
@@ -5116,142 +5101,154 @@
               />
             </div>
           </div>
-          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div class="space-y-2">
-              <Label>Start time</Label>
-              {#if isMobile}
-                <Input
-                  type="time"
-                  value={to24Hour(editEvent.startTime, editEvent.startMeridiem)}
-                  oninput={(e) => {
-                    const v = (e.target as HTMLInputElement).value;
-                    const { time, meridiem } = to12Hour(v);
-                    editEvent = { ...editEvent, startTime: time, startMeridiem: meridiem };
-                    modalDirty = true;
-                  }}
-                />
-              {:else}
-                <div class="flex gap-2">
-                  <div class="relative flex-1">
-                    <Input
-                      type="text"
-                      placeholder="12:00"
-                      value={editEvent.startTime}
-                      onfocus={() => {
-                        showEditStartPicker = true;
-                        showEditEndPicker = false;
-                      }}
-                      oninput={(e) => {
-                        const val = (e.target as HTMLInputElement).value;
-                        setEditEventTime('startTime', val);
-                        modalDirty = true;
-                      }}
-                      onblur={() => {
-                        setTimeout(() => {
-                          showEditStartPicker = false;
-                        }, 150);
-                      }}
-                    />
-                    {#if showEditStartPicker}
-                      <div
-                        class="time-dropdown absolute top-full left-0 right-0 mt-1 max-h-[220px] overflow-y-auto border border-border bg-popover shadow-lg z-20"
-                      >
-                        {#each timeOptions as opt}
-                          <button
-                            type="button"
-                            class="w-full px-3 py-2 text-left text-sm hover:bg-accent"
-                            onmousedown={(e) => {
-                              e.preventDefault();
-                              setEditEventTime('startTime', opt.value);
-                              showEditStartPicker = false;
-                            }}
-                          >
-                            {opt.display}
-                          </button>
-                        {/each}
-                      </div>
-                    {/if}
-                  </div>
-                  <Select.Root type="single" bind:value={editEvent.startMeridiem}>
-                    <Select.Trigger size="default" class="h-9 w-[70px]">
-                      {editEvent.startMeridiem || 'AM'}
-                    </Select.Trigger>
-                    <Select.Content>
-                      <Select.Item value="AM">AM</Select.Item>
-                      <Select.Item value="PM">PM</Select.Item>
-                    </Select.Content>
-                  </Select.Root>
-                </div>
-              {/if}
-            </div>
-            <div class="space-y-2">
-              <Label>End time</Label>
-              {#if isMobile}
-                <Input
-                  type="time"
-                  value={to24Hour(editEvent.endTime, editEvent.endMeridiem)}
-                  oninput={(e) => {
-                    const v = (e.target as HTMLInputElement).value;
-                    const { time, meridiem } = to12Hour(v);
-                    editEvent = { ...editEvent, endTime: time, endMeridiem: meridiem };
-                    modalDirty = true;
-                  }}
-                />
-              {:else}
-                <div class="flex gap-2">
-                  <div class="relative flex-1">
-                    <Input
-                      type="text"
-                      placeholder="1:00"
-                      value={editEvent.endTime}
-                      onfocus={() => {
-                        showEditEndPicker = true;
-                        showEditStartPicker = false;
-                      }}
-                      oninput={(e) => {
-                        const val = (e.target as HTMLInputElement).value;
-                        setEditEventTime('endTime', val);
-                        modalDirty = true;
-                      }}
-                      onblur={() => {
-                        setTimeout(() => {
+          <label class="flex items-center gap-2 cursor-pointer text-sm">
+            <Checkbox
+              checked={editEvent.allDay}
+              onCheckedChange={(v) => {
+                editEvent.allDay = !!v;
+                modalDirty = true;
+              }}
+            />
+            <span>All-day</span>
+          </label>
+          {#if !editEvent.allDay}
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div class="space-y-2">
+                <Label>Start time</Label>
+                {#if isMobile}
+                  <Input
+                    type="time"
+                    value={to24Hour(editEvent.startTime, editEvent.startMeridiem)}
+                    oninput={(e) => {
+                      const v = (e.target as HTMLInputElement).value;
+                      const { time, meridiem } = to12Hour(v);
+                      editEvent = { ...editEvent, startTime: time, startMeridiem: meridiem };
+                      modalDirty = true;
+                    }}
+                  />
+                {:else}
+                  <div class="flex gap-2">
+                    <div class="relative flex-1">
+                      <Input
+                        type="text"
+                        placeholder="12:00"
+                        value={editEvent.startTime}
+                        onfocus={() => {
+                          showEditStartPicker = true;
                           showEditEndPicker = false;
-                        }, 150);
-                      }}
-                    />
-                    {#if showEditEndPicker}
-                      <div
-                        class="time-dropdown absolute top-full left-0 right-0 mt-1 max-h-[220px] overflow-y-auto border border-border bg-popover shadow-lg z-20"
-                      >
-                        {#each timeOptions as opt}
-                          <button
-                            type="button"
-                            class="w-full px-3 py-2 text-left text-sm hover:bg-accent"
-                            onmousedown={(e) => {
-                              e.preventDefault();
-                              setEditEventTime('endTime', opt.value);
-                              showEditEndPicker = false;
-                            }}
-                          >
-                            {opt.display}
-                          </button>
-                        {/each}
-                      </div>
-                    {/if}
+                        }}
+                        oninput={(e) => {
+                          const val = (e.target as HTMLInputElement).value;
+                          setEditEventTime('startTime', val);
+                          modalDirty = true;
+                        }}
+                        onblur={() => {
+                          setTimeout(() => {
+                            showEditStartPicker = false;
+                          }, 150);
+                        }}
+                      />
+                      {#if showEditStartPicker}
+                        <div
+                          class="time-dropdown absolute top-full left-0 right-0 mt-1 max-h-[220px] overflow-y-auto border border-border bg-popover shadow-lg z-20"
+                        >
+                          {#each timeOptions as opt}
+                            <button
+                              type="button"
+                              class="w-full px-3 py-2 text-left text-sm hover:bg-accent"
+                              onmousedown={(e) => {
+                                e.preventDefault();
+                                setEditEventTime('startTime', opt.value);
+                                showEditStartPicker = false;
+                              }}
+                            >
+                              {opt.display}
+                            </button>
+                          {/each}
+                        </div>
+                      {/if}
+                    </div>
+                    <Select.Root type="single" bind:value={editEvent.startMeridiem}>
+                      <Select.Trigger size="default" class="h-9 w-[70px]">
+                        {editEvent.startMeridiem || 'AM'}
+                      </Select.Trigger>
+                      <Select.Content>
+                        <Select.Item value="AM">AM</Select.Item>
+                        <Select.Item value="PM">PM</Select.Item>
+                      </Select.Content>
+                    </Select.Root>
                   </div>
-                  <Select.Root type="single" bind:value={editEvent.endMeridiem}>
-                    <Select.Trigger size="default" class="h-9 w-[70px]">
-                      {editEvent.endMeridiem || 'AM'}
-                    </Select.Trigger>
-                    <Select.Content>
-                      <Select.Item value="AM">AM</Select.Item>
-                      <Select.Item value="PM">PM</Select.Item>
-                    </Select.Content>
-                  </Select.Root>
-                </div>
-              {/if}
+                {/if}
+              </div>
+              <div class="space-y-2">
+                <Label>End time</Label>
+                {#if isMobile}
+                  <Input
+                    type="time"
+                    value={to24Hour(editEvent.endTime, editEvent.endMeridiem)}
+                    oninput={(e) => {
+                      const v = (e.target as HTMLInputElement).value;
+                      const { time, meridiem } = to12Hour(v);
+                      editEvent = { ...editEvent, endTime: time, endMeridiem: meridiem };
+                      modalDirty = true;
+                    }}
+                  />
+                {:else}
+                  <div class="flex gap-2">
+                    <div class="relative flex-1">
+                      <Input
+                        type="text"
+                        placeholder="1:00"
+                        value={editEvent.endTime}
+                        onfocus={() => {
+                          showEditEndPicker = true;
+                          showEditStartPicker = false;
+                        }}
+                        oninput={(e) => {
+                          const val = (e.target as HTMLInputElement).value;
+                          setEditEventTime('endTime', val);
+                          modalDirty = true;
+                        }}
+                        onblur={() => {
+                          setTimeout(() => {
+                            showEditEndPicker = false;
+                          }, 150);
+                        }}
+                      />
+                      {#if showEditEndPicker}
+                        <div
+                          class="time-dropdown absolute top-full left-0 right-0 mt-1 max-h-[220px] overflow-y-auto border border-border bg-popover shadow-lg z-20"
+                        >
+                          {#each timeOptions as opt}
+                            <button
+                              type="button"
+                              class="w-full px-3 py-2 text-left text-sm hover:bg-accent"
+                              onmousedown={(e) => {
+                                e.preventDefault();
+                                setEditEventTime('endTime', opt.value);
+                                showEditEndPicker = false;
+                              }}
+                            >
+                              {opt.display}
+                            </button>
+                          {/each}
+                        </div>
+                      {/if}
+                    </div>
+                    <Select.Root type="single" bind:value={editEvent.endMeridiem}>
+                      <Select.Trigger size="default" class="h-9 w-[70px]">
+                        {editEvent.endMeridiem || 'AM'}
+                      </Select.Trigger>
+                      <Select.Content>
+                        <Select.Item value="AM">AM</Select.Item>
+                        <Select.Item value="PM">PM</Select.Item>
+                      </Select.Content>
+                    </Select.Root>
+                  </div>
+                {/if}
+              </div>
             </div>
-          </div>
+          {/if}
         {/if}
         {#if editEvent.componentType !== 'VTODO' && editEvent.date}
           <div class="space-y-2">
