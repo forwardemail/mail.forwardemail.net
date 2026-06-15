@@ -1,6 +1,10 @@
 import { Local } from './storage';
 import { warn } from './logger.ts';
 
+// BCP 47 language-region tag in the exact shape Schedule-X validates against:
+// two lowercase language letters, a hyphen, two uppercase region letters.
+const REGION_LOCALE = /^[a-z]{2}-[A-Z]{2}$/;
+
 class I18n {
   constructor() {
     this.translations = {};
@@ -69,15 +73,31 @@ class I18n {
   }
 
   /**
-   * Get a short locale suitable for libraries that only accept language-region
-   * (e.g., 'en-GB' from 'en-GB-oxendict'). Returns at most the first two
-   * subtags of the formatting locale.
+   * Get a locale in the strict `xx-XX` form (two lowercase language letters,
+   * a hyphen, two uppercase region letters) required by libraries like
+   * Schedule-X. Schedule-X throws "Invalid locale" for anything else —
+   * including the bare "en" some browsers report in navigator.language, a
+   * lowercase region ("en-us"), a script subtag ("zh-Hans-CN"), or a numeric
+   * region ("es-419") — and that throw crashes the calendar route through the
+   * global fatal-error overlay.
+   *
+   * Normalizes casing and, when a region is missing or non-conformant, derives
+   * a likely one via Intl.Locale's CLDR data ("en" -> "en-US", "de" -> "de-DE").
+   * Returns undefined when no conformant tag can be produced (e.g. 3-letter
+   * languages like "fil") so callers can apply their own default.
    */
   getShortFormattingLocale() {
     const full = this.formattingLocale;
     if (!full) return undefined;
-    const parts = full.split('-');
-    return parts.length > 2 ? `${parts[0]}-${parts[1]}` : full;
+    if (REGION_LOCALE.test(full)) return full;
+    try {
+      const loc = new Intl.Locale(full).maximize();
+      const candidate = `${(loc.language || '').toLowerCase()}-${(loc.region || '').toUpperCase()}`;
+      if (REGION_LOCALE.test(candidate)) return candidate;
+    } catch {
+      // Intl.Locale throws on malformed tags — fall through to undefined.
+    }
+    return undefined;
   }
 
   /**

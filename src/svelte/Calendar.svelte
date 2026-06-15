@@ -2426,28 +2426,38 @@
       } else {
         ensureSafeMutationObserver();
         const isDark = calendarIsDark;
-        calendarInstance = createCalendar({
-          locale: i18n.getShortFormattingLocale() || 'en-US',
-          views: [viewDay, viewWeek, viewMonthGrid],
-          defaultView: resolveDefaultView(),
-          // 0 = Sunday, 1 = Monday (schedule-x WeekDay). Read non-reactively;
-          // the effect below rebuilds the calendar when this setting changes.
-          firstDayOfWeek: get(startWeekOnSunday) ? 0 : 1,
-          events: safeEvents,
-          isDark,
-          defaultCalendarId: resolveActiveCalendarId() || 'default',
-          calendars: buildScheduleCalendars(calendars),
-          callbacks: {
-            onClickDate: (date: string) => {
-              openNewEvent(date);
+        // Schedule-X renders synchronously and throws on a malformed locale
+        // (and potentially other invariants). An uncaught throw here reaches
+        // the global error handler and blanks the entire app behind the fatal
+        // overlay, so isolate it: a calendar that fails to build should not
+        // take down the rest of webmail.
+        try {
+          calendarInstance = createCalendar({
+            locale: i18n.getShortFormattingLocale() || 'en-US',
+            views: [viewDay, viewWeek, viewMonthGrid],
+            defaultView: resolveDefaultView(),
+            // 0 = Sunday, 1 = Monday (schedule-x WeekDay). Read non-reactively;
+            // the effect below rebuilds the calendar when this setting changes.
+            firstDayOfWeek: get(startWeekOnSunday) ? 0 : 1,
+            events: safeEvents,
+            isDark,
+            defaultCalendarId: resolveActiveCalendarId() || 'default',
+            calendars: buildScheduleCalendars(calendars),
+            callbacks: {
+              onClickDate: (date: string) => {
+                openNewEvent(date);
+              },
+              onClickDateTime: (dateTime: string) => {
+                openNewEvent(dateTime);
+              },
+              onEventClick: (ev: unknown) => openEditEvent(ev),
             },
-            onClickDateTime: (dateTime: string) => {
-              openNewEvent(dateTime);
-            },
-            onEventClick: (ev: unknown) => openEditEvent(ev),
-          },
-        });
-        calendarCreated = true;
+          });
+          calendarCreated = true;
+        } catch (err) {
+          console.error('Failed to create calendar:', err);
+          calendarInstance = null;
+        }
       }
     }
   });
