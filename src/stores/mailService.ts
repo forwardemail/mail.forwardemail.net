@@ -371,6 +371,39 @@ const recentCacheHits = new Map<string, number>();
 const CACHE_HIT_DEBOUNCE_MS = 500;
 const MAX_CACHE_HIT_ENTRIES = 200;
 
+// Key (`${account}:${messageId}`) of the message whose body was most recently
+// delivered to onBody. Updated in lockstep with every recentCacheHits.set so
+// the debounce can distinguish "this message's body is already on screen"
+// (safe to skip the re-render) from "a DIFFERENT message has been shown since
+// this one was last hit" (must re-deliver, else the header/body desync — see
+// shouldDebounceBodyRender).
+let lastDeliveredBodyKey: string | null = null;
+
+/**
+ * Decide whether to SKIP re-delivering a cached message body (the onBody
+ * callback) on a cache hit.
+ *
+ * Skip only when the re-render is genuinely redundant: the same message was
+ * delivered very recently AND its body is still the one displayed
+ * (`lastDeliveredKey` still points at it). Debouncing on recency ALONE was the
+ * bug that desynced the reader header from the body — rapidly selecting
+ * A → B → A within the window skipped A's re-render, leaving B's body (or a
+ * cleared/blank one) under A's freshly-set header until the window elapsed.
+ * Requiring the displayed-body key to match closes that hole while preserving
+ * the no-double-render optimization for genuine repeat loads of one message.
+ */
+export function shouldDebounceBodyRender(
+  cacheKey: string,
+  nowMs: number,
+  hits: Map<string, number>,
+  lastDeliveredKey: string | null,
+  windowMs: number = CACHE_HIT_DEBOUNCE_MS,
+): boolean {
+  const lastHitTime = hits.get(cacheKey) || 0;
+  const isRecentHit = nowMs - lastHitTime < windowMs;
+  return isRecentHit && lastDeliveredKey === cacheKey;
+}
+
 // Account-level AbortController — aborted on account switch to cancel stale fetches
 let accountAbortController: AbortController | null = null;
 
@@ -499,6 +532,7 @@ export const clearPgpKeyCache = (): void => {
   keyNeedsPassphraseCache.clear();
   missingKeyModalShownByAccount.clear();
   recentCacheHits.clear(); // Allow immediate re-evaluation after key changes
+  lastDeliveredBodyKey = null;
   bumpPgpKeysVersion();
 };
 
@@ -538,6 +572,7 @@ export const clearMailServiceState = (): void => {
   }
   inFlightRequests.clear();
   recentCacheHits.clear();
+  lastDeliveredBodyKey = null;
 };
 
 /**
@@ -580,13 +615,11 @@ async function handleCachedPgpRaw(
       if (freshCache?.body && !isPgpEncrypted(freshCache.body)) {
         // Already decrypted by background task - check for debouncing
         const cacheKey = `${account}:${messageId}`;
-        const lastHitTime = recentCacheHits.get(cacheKey) || 0;
         const nowMs = Date.now();
-        const isRecentHit = nowMs - lastHitTime < CACHE_HIT_DEBOUNCE_MS;
 
         onPgpStatus?.({ locked: false });
 
-        if (isRecentHit) {
+        if (shouldDebounceBodyRender(cacheKey, nowMs, recentCacheHits, lastDeliveredBodyKey)) {
           debugLog('[PGP] Cache hit debounced for message', messageId);
           tracer.end({ status: `${stage}_pgp_debounced` });
           return true;
@@ -692,7 +725,7 @@ export const mailService = {
   ): Promise<void> {
     const {
       onLoading,
-      onBody,
+      onBody: rawOnBody,
       onAttachments,
       onError,
       onMeta,
@@ -714,6 +747,20 @@ export const mailService = {
       onError?.(new Error('Invalid message ID'));
       return;
     }
+
+    // Wrap onBody so EVERY body delivery — cache hit, re-sanitize, network
+    // fetch, or PGP decrypt — records which message's body is now on screen.
+    // The cache-hit debounce consults lastDeliveredBodyKey to avoid skipping a
+    // re-render when a DIFFERENT message has been displayed since this one was
+    // last loaded (the header/body desync). Routing all deliveries through one
+    // wrapper keeps that key accurate regardless of which path served the body.
+    const deliveryKey = `${account}:${messageId}`;
+    const onBody = rawOnBody
+      ? (html: string): void => {
+          lastDeliveredBodyKey = deliveryKey;
+          rawOnBody(html);
+        }
+      : undefined;
     const tracer =
       perf ||
       createPerfTracer('message.load', {
@@ -792,16 +839,23 @@ export const mailService = {
           return;
         }
 
-        // Check for rapid repeated cache hits - debounce onBody calls
+        // Skip re-delivering the body only when it is genuinely redundant — the
+        // same message was hit recently AND its body is still on screen.
+        // Debouncing on recency alone desynced the header from the body during
+        // rapid A → B → A navigation (see shouldDebounceBodyRender).
         const cacheKey = `${account}:${messageId}`;
-        const lastHitTime = recentCacheHits.get(cacheKey) || 0;
         const now = Date.now();
-        const isRecentHit = now - lastHitTime < CACHE_HIT_DEBOUNCE_MS;
+        const skipBodyRender = shouldDebounceBodyRender(
+          cacheKey,
+          now,
+          recentCacheHits,
+          lastDeliveredBodyKey,
+        );
 
         onPgpStatus?.({ locked: false });
-        tracer.stage('cache_hit', { fresh: true, cacheAge: 0, debounced: isRecentHit });
+        tracer.stage('cache_hit', { fresh: true, cacheAge: 0, debounced: skipBodyRender });
 
-        if (isRecentHit) {
+        if (skipBodyRender) {
           // Skip calling onBody again - we just called it recently
           debugLog(`[mailService] Cache hit debounced for message ${messageId}`);
           onLoading?.(false);
