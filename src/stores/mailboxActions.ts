@@ -38,7 +38,7 @@ import { clearMailServiceState } from './mailService';
 import { normalizeEmail, dedupeAddresses, extractAddressList } from '../utils/address.ts';
 import { validateLabelName } from '../utils/label-validation.ts';
 import { resolveSearchBodyIndexing } from '../utils/search-body-indexing.js';
-import { LABEL_PALETTE } from '../utils/labels.js';
+import { LABEL_PALETTE, canonicalizeLabelKeyword } from '../utils/labels.js';
 import { isHiddenLabel } from '../utils/label-filters';
 import { queueMutation } from '../utils/mutation-queue';
 import { config } from '../config';
@@ -958,22 +958,28 @@ export const contextLabel = async (msgOrLabel, labelMaybe, options = {}) => {
   const messageList = get(mailboxStore.state.messages) || [];
   const latest = msgId != null ? messageList.find((entry) => entry?.id === msgId) : null;
   const targetMsg = latest || msg;
-  const labelId =
-    typeof label === 'object' ? label.id || label.keyword || label.value || label.name : label;
+  // Canonicalize to the backend's stored form (lowercase) so the optimistic
+  // value equals what the server persists — otherwise a "Work" tag shows now
+  // but the server returns "work" on refresh and the chip mismatches/vanishes.
+  const labelId = canonicalizeLabelKeyword(
+    typeof label === 'object' ? label.id || label.keyword || label.value || label.name : label,
+  );
   const account = Local.get('email') || 'default';
-  const currentLabels = Array.isArray(targetMsg.labels) ? targetMsg.labels.map(String) : [];
-  const hasLabel = currentLabels.includes(String(labelId));
+  const currentLabels = Array.isArray(targetMsg.labels)
+    ? targetMsg.labels.map(canonicalizeLabelKeyword)
+    : [];
+  const hasLabel = currentLabels.includes(labelId);
   let nextLabels = currentLabels;
   if (action === 'add') {
     if (hasLabel) return;
-    nextLabels = currentLabels.concat(String(labelId));
+    nextLabels = currentLabels.concat(labelId);
   } else if (action === 'remove') {
     if (!hasLabel) return;
-    nextLabels = currentLabels.filter((l) => l !== String(labelId));
+    nextLabels = currentLabels.filter((l) => l !== labelId);
   } else {
     nextLabels = hasLabel
-      ? currentLabels.filter((l) => l !== String(labelId))
-      : currentLabels.concat(String(labelId));
+      ? currentLabels.filter((l) => l !== labelId)
+      : currentLabels.concat(labelId);
   }
 
   // Optimistic update in memory
@@ -1024,9 +1030,7 @@ export const contextLabel = async (msgOrLabel, labelMaybe, options = {}) => {
 
   const labelList = get(availableLabels);
   const lbl = labelList.find(
-    (l) =>
-      (l.id || l.keyword || l.value || l.name) === labelId ||
-      String(l.id || l.keyword || l.value || l.name) === String(labelId),
+    (l) => canonicalizeLabelKeyword(l.id || l.keyword || l.value || l.name) === labelId,
   );
   const labelName = lbl?.name || lbl?.label || lbl?.value || labelId;
 

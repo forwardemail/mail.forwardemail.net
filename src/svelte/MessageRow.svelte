@@ -6,6 +6,7 @@
   import { formatCompactDate } from '../utils/date';
   import { extractDisplayName } from '../utils/address.ts';
   import { truncatePreview } from '../utils/preview';
+  import { canonicalizeLabelKeyword } from '../utils/labels.js';
   import type { Message } from '$types';
 
   interface ConversationItem {
@@ -188,20 +189,16 @@
       {#if labels && labels.length > 0}
         <span class="flex items-center gap-1">
           {#each labels.slice(0, 3) as lbl}
-            {#if labelMap.get(lbl)}
-              <Badge
-                variant="secondary"
-                class="h-5 px-1.5 text-xs"
-                style={labelMap.get(lbl)?.color
-                  ? `background:${labelMap.get(lbl)?.color}; color:#fff;`
-                  : ''}
-              >
-                {labelMap.get(lbl)?.name ||
-                  labelMap.get(lbl)?.label ||
-                  labelMap.get(lbl)?.value ||
-                  lbl}
-              </Badge>
-            {/if}
+            {@const def = labelMap.get(canonicalizeLabelKeyword(lbl))}
+            <!-- Render even when the definition isn't loaded on this client so a
+                 persisted tag never silently disappears; fall back to the keyword. -->
+            <Badge
+              variant="secondary"
+              class="h-5 px-1.5 text-xs"
+              style={def?.color ? `background:${def.color}; color:#fff;` : ''}
+            >
+              {def?.name || def?.label || def?.value || lbl}
+            </Badge>
           {/each}
         </span>
       {/if}

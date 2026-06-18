@@ -25,7 +25,11 @@
   import { validateLabelName } from '../utils/label-validation.ts';
   import DOMPurify from 'dompurify';
   import { restoreBlockedImages } from '../utils/sanitize.js';
-  import { LABEL_PALETTE, pickLabelColor as pickLabelColorFromPalette } from '../utils/labels.js';
+  import {
+    LABEL_PALETTE,
+    pickLabelColor as pickLabelColorFromPalette,
+    canonicalizeLabelKeyword,
+  } from '../utils/labels.js';
   import { processQuotedContent, initQuoteToggles } from '../utils/quote-collapse.js';
   import {
     activateOnKeys,
@@ -679,11 +683,13 @@
     $folders ? $folders.filter((f: { path?: string }) => f.path && f.path !== $selectedFolder) : [],
   );
   const availableLabelsFromStore = $derived($availableLabels || []);
+  // Key by the canonical (lowercased) keyword so a message's server-normalized
+  // keyword (e.g. "work") matches its case-preserved definition (e.g. "Work").
   const labelMap = $derived(
     new Map(
       (availableLabelsFromStore || []).map(
         (l: { id?: string; keyword?: string; value?: string; name?: string }) => [
-          l.id || l.keyword || l.value || l.name,
+          canonicalizeLabelKeyword(l.id || l.keyword || l.value || l.name),
           l,
         ],
       ),
@@ -3202,14 +3208,14 @@
     return activeMsg ? [activeMsg] : [];
   };
   const labelStateForTargets = (label, targets = []) => {
-    const id = String(getLabelId(label) || '');
+    const id = canonicalizeLabelKeyword(getLabelId(label));
     if (!id) return 'none';
     if (!targets.length) return 'none';
     const total = targets.length;
     let withLabel = 0;
     targets.forEach((msg) => {
       const labels = msg.labels || msg.label_ids || msg.labelIds || [];
-      const normalized = (labels || []).map((l) => String(l));
+      const normalized = (labels || []).map((l) => canonicalizeLabelKeyword(l));
       if (normalized.includes(id)) withLabel += 1;
     });
     if (withLabel === 0) return 'none';
@@ -6789,19 +6795,18 @@
                                     <div class="flex items-center gap-1 mt-0.5">
                                       {#each conv.labels.slice(0, 3) as lbl}
                                         {#if typeof lbl === 'string' && lbl && lbl !== '[]'}
-                                          {#if labelMap.get(lbl)}
-                                            <span
-                                              class="inline-flex items-center px-1.5 py-0.5 text-[10px] truncate max-w-[80px]"
-                                              style={labelMap.get(lbl).color
-                                                ? `background:${labelMap.get(lbl).color}; color:#fff;`
-                                                : ''}
-                                            >
-                                              {labelMap.get(lbl).name ||
-                                                labelMap.get(lbl).label ||
-                                                labelMap.get(lbl).value ||
-                                                lbl}
-                                            </span>
-                                          {/if}
+                                          {@const def = labelMap.get(canonicalizeLabelKeyword(lbl))}
+                                          <!-- Render the tag even when its definition isn't loaded
+                                               (e.g. not yet synced on this client) so persisted
+                                               labels never silently vanish; fall back to the keyword. -->
+                                          <span
+                                            class="inline-flex items-center px-1.5 py-0.5 text-[10px] truncate max-w-[80px]"
+                                            style={def?.color
+                                              ? `background:${def.color}; color:#fff;`
+                                              : ''}
+                                          >
+                                            {def?.name || def?.label || def?.value || lbl}
+                                          </span>
                                         {/if}
                                       {/each}
                                       {#if conv.labels.length > 3}
@@ -6905,19 +6910,18 @@
                                     <div class="flex items-center gap-1">
                                       {#each conv.labels.slice(0, 3) as lbl}
                                         {#if typeof lbl === 'string' && lbl && lbl !== '[]'}
-                                          {#if labelMap.get(lbl)}
-                                            <span
-                                              class="inline-flex items-center px-1.5 py-0.5 text-[10px] truncate max-w-[80px]"
-                                              style={labelMap.get(lbl).color
-                                                ? `background:${labelMap.get(lbl).color}; color:#fff;`
-                                                : ''}
-                                            >
-                                              {labelMap.get(lbl).name ||
-                                                labelMap.get(lbl).label ||
-                                                labelMap.get(lbl).value ||
-                                                lbl}
-                                            </span>
-                                          {/if}
+                                          {@const def = labelMap.get(canonicalizeLabelKeyword(lbl))}
+                                          <!-- Render the tag even when its definition isn't loaded
+                                               (e.g. not yet synced on this client) so persisted
+                                               labels never silently vanish; fall back to the keyword. -->
+                                          <span
+                                            class="inline-flex items-center px-1.5 py-0.5 text-[10px] truncate max-w-[80px]"
+                                            style={def?.color
+                                              ? `background:${def.color}; color:#fff;`
+                                              : ''}
+                                          >
+                                            {def?.name || def?.label || def?.value || lbl}
+                                          </span>
                                         {/if}
                                       {/each}
                                       {#if conv.labels.length > 3}
