@@ -5,7 +5,7 @@ import {
   waitForFrontendReady,
   isTauriWebview,
   waitForTauriWebviewContext,
-  nativeHierarchyHasWebView,
+  appActivityInForeground,
   mobileCapabilities,
   e2ePlatform,
 } from '../support/app.js';
@@ -62,8 +62,14 @@ describe(`${platform} app smoke`, () => {
       expect(webviewContext).toContain('net.forwardemail.mail');
     });
 
-    it('shows a WebView in the native view hierarchy', async () => {
-      expect(await nativeHierarchyHasWebView(browser)).toBe(true);
+    it('keeps the Tauri app activity in the foreground (native-only)', async () => {
+      // Read the foreground app from the window manager (dumpsys, pure adb) — we
+      // never search the native hierarchy for the WebView node, because that
+      // traversal recurses into the WebView's web-content a11y subtree and
+      // crashes UiAutomator2 on the software-GL emulator (see app.ts). Together
+      // with the bundle-id WebView context above, this proves the app launched,
+      // brought up a WebView, AND is the foreground activity.
+      expect(await appActivityInForeground(browser)).toBe(true);
     });
   }
 });

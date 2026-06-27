@@ -109,26 +109,34 @@ export async function waitForTauriWebviewContext(
   );
 }
 
-// Native-only check (Android): confirm a WebView exists in the UiAutomator2
-// native view hierarchy. We do NOT use getPageSource() here: serializing the
-// whole native tree to XML recurses into the WebView's web-content accessibility
-// subtree, which crashes the UiAutomator2 instrumentation on the software-GL CI
-// emulator ("...instrumentation process is not running (probably crashed)").
-// The `-android uiautomator` strategy searches the hierarchy natively (no XML
-// dump) and stops at the WebView node. classNameMatches catches wry's
-// RustWebView, which extends — and reports its a11y class as — WebView.
-export async function nativeHierarchyHasWebView(
+// Native-only check (Android): confirm the Tauri app's native activity is the
+// foreground app. We deliberately do NOT search the native view hierarchy for a
+// WebView node — the obvious assertion, and what earlier revisions tried both via
+// getPageSource() and via a `-android uiautomator` classNameMatches selector.
+// BOTH crash the run on the software-GL CI emulator, for the same reason: ANY
+// UiAutomator2 hierarchy operation walks the full AccessibilityNodeInfo tree,
+// which recurses into the live WebView's web-content a11y subtree. That forces
+// the WebView to render its a11y nodes, triggering the WebView GPU-rasterization
+// storm (a flood of `s_glBindAttribLocation` shader compiles through the emulated
+// GL pipe — see the e2e-mobile iteration notes) that takes the UiAutomator2
+// instrumentation offline mid-call ("...instrumentation process is not running
+// (probably crashed)", exit 255). It is the SAME storm the WebView context switch
+// caused; switching find strategies only made it flaky, not safe (it survived
+// several nightlies, then the storm won again). getCurrentPackage() instead reads
+// the foreground app from `dumpsys window` (pure adb — no a11y snapshot, no
+// WebView descent), so it is emulator-safe. Combined with the bundle-id WebView
+// context (waitForTauriWebviewContext), this proves the app is foregrounded AND
+// has a live WebView, without ever touching the subtree that crashes the run.
+export async function appActivityInForeground(
   browser: WebdriverIO.Browser,
   timeoutMs = 15_000,
 ): Promise<boolean> {
-  const uiSelector = 'new UiSelector().classNameMatches(".*[Ww]eb[Vv]iew.*")';
   const deadline = Date.now() + timeoutMs;
   do {
     try {
-      const matches = await browser.findElements('-android uiautomator', uiSelector);
-      if (matches.length > 0) return true;
+      if ((await browser.getCurrentPackage()) === TAURI_BUNDLE_ID) return true;
     } catch {
-      // Transient UiAutomator2 hiccup — retry until the deadline.
+      // Transient adb hiccup right after launch — retry until the deadline.
     }
     await new Promise((r) => setTimeout(r, 500));
   } while (Date.now() < deadline);
