@@ -23,7 +23,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # KVM acceleration is required for the Android emulator on Linux runners.
       # Without it the emulator falls back to software rendering and tests
@@ -46,7 +46,7 @@ jobs:
             patchelf
 
       - name: Setup Java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
@@ -63,20 +63,20 @@ jobs:
           shared-key: e2e-android
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
 
       - name: Install Android NDK
         run: sdkmanager "ndk;27.0.12077973"
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Setup pnpm
         # No `version:` — action-setup reads packageManager from package.json,
         # and specifying both causes ERR_PNPM_BAD_PM_VERSION.
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6.0.9
 
       - name: Install root dependencies
         run: pnpm install --frozen-lockfile
@@ -136,7 +136,7 @@ jobs:
 
       - name: Upload Appium log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: appium-log
           path: appium.log
@@ -145,7 +145,7 @@ jobs:
 
       - name: Upload logcat
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: android-logcat
           path: logcat.log
@@ -154,7 +154,7 @@ jobs:
 
       - name: Upload test reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: android-e2e-reports-api34
           path: e2e-mobile/reports/
@@ -163,7 +163,7 @@ jobs:
 
       - name: Upload failure screenshots
         if: ${{ steps.emulator-test.outcome == 'failure' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: android-e2e-screenshots-api34
           path: e2e-mobile/screenshots/

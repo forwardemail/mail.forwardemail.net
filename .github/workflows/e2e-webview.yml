@@ -97,7 +97,7 @@ jobs:
 
       - name: Checkout
         if: steps.gate.outputs.skip != 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Linux dependencies
         if: steps.gate.outputs.skip != 'true' && runner.os == 'Linux'
@@ -168,7 +168,7 @@ jobs:
 
       - name: Setup Node.js
         if: steps.gate.outputs.skip != 'true'
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -176,7 +176,7 @@ jobs:
         if: steps.gate.outputs.skip != 'true'
         # No `version:` — action-setup reads packageManager from package.json,
         # and specifying both causes ERR_PNPM_BAD_PM_VERSION.
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6.0.9
 
       - name: Install root dependencies
         if: steps.gate.outputs.skip != 'true'
@@ -190,7 +190,7 @@ jobs:
       - name: Cache tauri-webdriver intermediary
         if: steps.gate.outputs.skip != 'true'
         id: cache-twd
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/bin/tauri-webdriver
@@ -252,7 +252,7 @@ jobs:
 
       - name: Upload test reports
         if: always() && steps.gate.outputs.skip != 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: e2e-webview-${{ matrix.label }}-reports
           path: e2e-webview/reports/
@@ -261,7 +261,7 @@ jobs:
 
       - name: Upload failure screenshots
         if: ${{ steps.gate.outputs.skip != 'true' && (steps.test-linux.outcome == 'failure' || steps.test-other.outcome == 'failure') }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: e2e-webview-${{ matrix.label }}-screenshots
           path: e2e-webview/screenshots/
