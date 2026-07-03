@@ -1917,7 +1917,9 @@
         <Card.Root>
           <Card.Header>
             <Card.Title>PGP encryption</Card.Title>
-            <Card.Description>Signed in as <strong>{aliasEmail}</strong></Card.Description>
+            {#if aliasEmail}
+              <Card.Description>Signed in as <strong>{aliasEmail}</strong></Card.Description>
+            {/if}
           </Card.Header>
           <Card.Content class="space-y-4">
             <div class="flex items-center justify-between">
@@ -2405,8 +2407,42 @@
 
         <Card.Root>
           <Card.Header>
-            <Card.Title>Storage Usage</Card.Title>
-            <Card.Description>Monitor local storage quota and usage.</Card.Description>
+            <Card.Title>Mailbox Storage</Card.Title>
+            <Card.Description>Server-side storage used by this alias.</Card.Description>
+          </Card.Header>
+          <Card.Content class="space-y-4">
+            {#if storageTotalValue > 0}
+              <div class="space-y-2 text-sm">
+                <div>
+                  <strong>Used:</strong>
+                  {formatStorageValue(storageUsedValue)} / {formatStorageValue(storageTotalValue)} ({storagePercentValue()}%)
+                </div>
+                <div><strong>Available:</strong> {formatStorageValue(storageTotalValue - storageUsedValue)}</div>
+              </div>
+              <div class="h-2 w-full overflow-hidden bg-secondary">
+                <div
+                  class="h-full bg-primary transition-all"
+                  style="width: {storagePercentValue()}%"
+                ></div>
+              </div>
+              {#if storagePercentValue() > 90}
+                <Alert.Root variant="destructive">
+                  <AlertTriangle class="h-4 w-4" />
+                  <Alert.Description
+                    >Mailbox storage almost full! Consider upgrading your plan.</Alert.Description
+                  >
+                </Alert.Root>
+              {/if}
+            {:else}
+              <p class="text-sm text-muted-foreground">Storage information unavailable</p>
+            {/if}
+          </Card.Content>
+        </Card.Root>
+
+        <Card.Root>
+          <Card.Header>
+            <Card.Title>Local Cache</Card.Title>
+            <Card.Description>Data cached on this device for offline access.</Card.Description>
           </Card.Header>
           <Card.Content class="space-y-4">
             {#if loadingCacheStats}
@@ -2414,12 +2450,11 @@
             {:else if storageInfo}
               <div class="space-y-2 text-sm">
                 <div>
-                  <strong>Total Usage:</strong>
+                  <strong>Cache Usage:</strong>
                   {storageInfo.usageFormatted || '—'} / {storageInfo.quotaFormatted || '—'} ({(
                     storageInfo.percentage as number
                   )?.toFixed(1) || 0}%)
                 </div>
-                <div><strong>Available:</strong> {storageInfo.availableFormatted || '—'}</div>
               </div>
               <div class="h-2 w-full overflow-hidden bg-secondary">
                 <div
@@ -2427,16 +2462,8 @@
                   style="width: {(storageInfo.percentage as number) || 0}%"
                 ></div>
               </div>
-              {#if (storageInfo.percentage as number) > 90}
-                <Alert.Root variant="destructive">
-                  <AlertTriangle class="h-4 w-4" />
-                  <Alert.Description
-                    >Storage almost full! Consider clearing cache.</Alert.Description
-                  >
-                </Alert.Root>
-              {/if}
             {:else}
-              <p class="text-sm text-muted-foreground">Unable to load storage information</p>
+              <p class="text-sm text-muted-foreground">Unable to load cache information</p>
             {/if}
             <Button variant="outline" onclick={loadCacheStatistics} disabled={loadingCacheStats}>
               {loadingCacheStats ? 'Loading...' : 'Refresh Statistics'}
