@@ -77,8 +77,7 @@ export const getSecurityInfo = (msg) => {
   let hasAnyInfo = false;
 
   // Try arc-authentication-results first, then fall back to authentication-results
-  const rawAuthResults =
-    headers['arc-authentication-results'] || headers['authentication-results'];
+  const rawAuthResults = headers['arc-authentication-results'] || headers['authentication-results'];
   const authResults = resolveHeaderValue(rawAuthResults);
 
   if (authResults) {

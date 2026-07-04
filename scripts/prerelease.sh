@@ -47,3 +47,9 @@ if [ "$LATEST_TAG" != "none" ] && [ "$CURRENT_VERSION" != "$LATEST_TAG_VERSION" 
 fi
 
 echo "✅ Pre-release: local checkout is synced (version: $CURRENT_VERSION, latest tag: $LATEST_TAG)"
+
+# 6. Run lint and format checks before np starts
+echo "🔍 Pre-release: running lint and format checks..."
+pnpm lint
+pnpm format
+echo "✅ Pre-release: lint and format checks passed"

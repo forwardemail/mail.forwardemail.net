@@ -2177,8 +2177,7 @@ export const viewOriginal = async (msg) => {
 
   // Get decrypted text/html body for encrypted messages
   const decryptedText =
-    content?.textContent ||
-    (typeof content?.body === 'string' ? content.body : '');
+    content?.textContent || (typeof content?.body === 'string' ? content.body : '');
 
   // Detect current theme from parent window
   const isLightMode =

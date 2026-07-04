@@ -4783,12 +4783,15 @@
             fromDisplay || (typeof fallbackFrom === 'string' ? fallbackFrom : '') || msg.from || '';
           // Preserve current is_unread/flags from the store — markMessageRead may
           // have already flipped them before onMeta fires.
-          const currentSel = source.state?.selectedMessage ? get(source.state.selectedMessage) : null;
+          const currentSel = source.state?.selectedMessage
+            ? get(source.state.selectedMessage)
+            : null;
           const enriched = {
             ...msg,
             // Keep the authoritative read-state from the store/optimistic update
             is_unread: currentSel?.id === msg.id ? currentSel.is_unread : msg.is_unread,
-            is_unread_index: currentSel?.id === msg.id ? currentSel.is_unread_index : msg.is_unread_index,
+            is_unread_index:
+              currentSel?.id === msg.id ? currentSel.is_unread_index : msg.is_unread_index,
             flags: currentSel?.id === msg.id ? currentSel.flags : msg.flags,
             nodemailer: meta.nodemailer || meta.nodemailer === false ? meta.nodemailer : meta,
             to: pickValueArray('to') || meta.to?.text || msg.to,

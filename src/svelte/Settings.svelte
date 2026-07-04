@@ -2417,7 +2417,10 @@
                   <strong>Used:</strong>
                   {formatStorageValue(storageUsedValue)} / {formatStorageValue(storageTotalValue)} ({storagePercentValue()}%)
                 </div>
-                <div><strong>Available:</strong> {formatStorageValue(storageTotalValue - storageUsedValue)}</div>
+                <div>
+                  <strong>Available:</strong>
+                  {formatStorageValue(storageTotalValue - storageUsedValue)}
+                </div>
               </div>
               <div class="h-2 w-full overflow-hidden bg-secondary">
                 <div

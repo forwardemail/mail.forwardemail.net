@@ -38,6 +38,8 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
+          fetch-depth: 0
+          fetch-tags: true
 
       - name: Extract and validate version
         id: version
@@ -105,15 +107,23 @@ jobs:
               gh api -X DELETE "repos/${GH_REPO}/releases/${did}" || true
             done
 
-            # Create a new release (only happens for manual tag pushes
-            # or workflow_dispatch where np didn't run).
+            # Create a new release with np-style commit list as body.
+            # Find the previous tag to generate a commit log between versions.
+            PREV_TAG=$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || echo "")
+            if [ -n "$PREV_TAG" ]; then
+              COMMITS=$(git log --pretty=format:'- %s  %H' "${PREV_TAG}..${TAG}" | grep -v '^- chore(release):' || true)
+              BODY=$(printf '%s\n\n---\n\nhttps://github.com/%s/compare/%s...%s' "$COMMITS" "$GH_REPO" "$PREV_TAG" "$TAG")
+            else
+              BODY="https://github.com/${GH_REPO}/releases/tag/${TAG}"
+            fi
+
             echo "Creating new GitHub Release for $TAG"
             response=$(gh api --method POST "repos/${GH_REPO}/releases" \
               -f tag_name="$TAG" \
               -f name="$TAG" \
+              -f body="$BODY" \
               -F draft=true \
-              -F prerelease=false \
-              -F generate_release_notes=true)
+              -F prerelease=false)
 
             release_id=$(echo "$response" | jq -r '.id')
             upload_url=$(echo "$response" | jq -r '.upload_url')
