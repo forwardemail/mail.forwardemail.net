@@ -747,17 +747,33 @@ function removePasskeyEnvelope() {
  * @returns {Promise<void>}
  */
 async function disableLock() {
-  if (_dek) {
-    // Unwrap the IndexedDB cache FIRST. After the DEK is wiped the sealed
-    // records would be permanently unreadable.
+  // A page reload can leave the session "unlocked" with the in-memory DEK
+  // gone. Recover it before deciding whether we can decrypt, so we don't
+  // orphan the sealed cache.
+  if (!_dek) {
     try {
-      const bridge = await import('./db-crypto-bridge.js');
-      await bridge.decryptAllIdbData();
-    } catch (err) {
-      console.error('[crypto-store] IDB decryption sweep failed:', err);
+      await restoreSessionDek();
+    } catch {
+      // fall through — handled below
     }
-    await decryptExistingLocalStorage();
   }
+
+  const bridge = await import('./db-crypto-bridge.js');
+
+  if (_dek) {
+    // We have the key: unwrap the IndexedDB cache FIRST, since the DEK is
+    // wiped below. If the sweep throws, decryptAllIdbData has already restored
+    // the live crypto config, so we abort here WITHOUT removing the vault —
+    // the encrypted data stays recoverable and the user can retry.
+    await bridge.decryptAllIdbData();
+    await decryptExistingLocalStorage();
+  } else {
+    // No key: the sealed cache is unreadable and can't be decrypted. Clear it
+    // (it re-syncs from the server) and drop the engine's fail-closed flag so
+    // writes stop throwing DbLockedError.
+    await bridge.abandonEncryptedCache();
+  }
+
   localStorage.removeItem(VAULT_KEY);
   lock();
   _enabled = false;

@@ -107,11 +107,37 @@ export async function decryptAllIdbData() {
   }
   // Keep the key available for the sweep but drop the fail-closed flag so
   // concurrent writes during the sweep land as plaintext (which is the
-  // post-disable end state anyway). Clear the key when done.
+  // post-disable end state anyway).
   await sendCryptoConfig({ required: false, rawKey });
   try {
-    return await reencryptAllDb('decrypt');
-  } finally {
+    const result = await reencryptAllDb('decrypt');
+    // Success: the cache is plaintext now, so drop the key too.
     await sendCryptoConfig({ required: false, rawKey: null });
+    return result;
+  } catch (err) {
+    // The sweep failed and the cache is still (partly) sealed. Restore the
+    // live config (required + key) so reads/writes keep working and the caller
+    // can abort the disable with data intact, then rethrow.
+    await syncDbCryptoState().catch(() => {});
+    throw err;
   }
+}
+
+/**
+ * Give up on an unreadable encrypted cache. Used when disabling App Lock with
+ * no key available (e.g. the DEK couldn't be restored): the sealed records
+ * can't be decrypted, so clear them and drop the engine's fail-closed flag so
+ * the app recovers and re-syncs from the server instead of throwing
+ * DbLockedError on every write.
+ */
+export async function abandonEncryptedCache() {
+  await initDbCryptoBridge();
+  await sendCryptoConfig({ required: false, rawKey: null });
+  try {
+    const { clearCache } = await import('./db-worker-client.js');
+    await clearCache();
+  } catch (err) {
+    warn('[db-crypto-bridge] Failed to clear encrypted cache', err);
+  }
+  await updateSwGateFlag();
 }

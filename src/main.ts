@@ -1946,6 +1946,22 @@ async function bootstrap() {
     // resolves later the cache simply attaches then, and the read/write paths
     // already tolerate a not-yet-ready cache (they fall through to the network /
     // demo interceptor).
+    // Restore the in-memory DEK from the session stash BEFORE the crypto
+    // bridge pushes config to the engine. On an SPA reload the session can be
+    // "unlocked" (wasUnlockedThisSession) while the DEK is gone. If the bridge
+    // ran first it would compute isUnlocked() === false and push a fail-closed
+    // {required: true, no key} config, which makes the engine reject sensitive
+    // writes (DbLockedError) and return stripped records (blank rows) until a
+    // later restore. Doing it here means the first config push already carries
+    // the key. Best-effort: if it can't restore, the lock screen shows later.
+    if (isLockEnabled() && isVaultConfigured() && wasUnlockedThisSession() && !isUnlocked()) {
+      try {
+        await restoreSessionDek();
+      } catch (err) {
+        console.warn('[bootstrap] session DEK restore failed:', err);
+      }
+    }
+
     // Register the at-rest encryption config provider BEFORE the database
     // initializes: the db client re-applies it after every (re)init, so the
     // engine knows to fail closed while the vault is locked and receives the
