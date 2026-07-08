@@ -48,12 +48,13 @@ type DbRecord = Record<string, unknown> & { _enc?: Envelope };
 
 // Fields that MUST stay plaintext because a real query path uses them:
 // primary-key components, queried indexes ([account+folder+date],
-// [account+folder+is_unread_index], where('from') repair sweep is
-// intentionally NOT preserved), and fields used by sortBy call sites.
-// Everything else is sealed, including fields the schema declares as indexes
-// but nothing ever queries (subject/snippet on messages, body/textContent on
-// messageBodies): those dead indexes then store ciphertext, which is exactly
-// as useless as before but no longer a plaintext copy on disk.
+// [account+folder+is_unread_index], the where('from') repair sweep), and
+// fields used by sortBy call sites. Everything else is sealed. This list
+// tracks the Dexie version 2 index keep-list in db-engine.ts; both come from
+// the same audit of every .where() call in the app and workers. One caveat:
+// `from` stays sealed here even though its index survives, so the repair
+// sweep only matches legacy plaintext rows (acceptable, it exists to fix
+// records written by an old bug).
 const PLAINTEXT_FIELDS: Record<string, Set<string>> = {
   messages: new Set([
     'account',

@@ -4,13 +4,19 @@ const CACHE_VERSION = `v${pkg.version.replace(/\./g, '-')}`;
 
 module.exports = {
   globDirectory: 'dist',
-  // Precache the app shell (HTML, fonts, icons) for offline-first support.
+  // Precache the app shell (HTML, icons) for offline-first support.
   // JS/CSS bundles have content hashes so browser HTTP cache handles them,
   // but we precache them too so the app can load fully offline.
+  //
+  // Fonts are deliberately NOT precached: the runtime lazy-loads them only
+  // when the user picks a non-system font (font-loader.js), yet the old
+  // glob shipped all 118 files (~2 MB) to every install and re-downloaded
+  // them on every release because the cache version tracks pkg.version.
+  // The runtime route below keeps a chosen font available offline instead.
   globPatterns: [
     'index.html',
     'assets/*.{js,css}',
-    '**/*.{woff2,woff,png,svg,ico}',
+    '**/*.{png,svg,ico}',
     'manifest.json',
     'sw-*.js',
     'email-iframe.js',
@@ -29,6 +35,22 @@ module.exports = {
   skipWaiting: true,
   clientsClaim: true,
   runtimeCaching: [
+    {
+      // Fonts load lazily and rarely change; cache on first use so a chosen
+      // custom font keeps working offline without precaching the whole set.
+      urlPattern: /\.(?:woff2?|ttf|otf)$/,
+      handler: 'CacheFirst',
+      options: {
+        cacheName: 'fonts-v1',
+        expiration: {
+          maxEntries: 24,
+          maxAgeSeconds: 365 * 24 * 60 * 60, // 1 year; font files are content-hashed
+        },
+        cacheableResponse: {
+          statuses: [0, 200],
+        },
+      },
+    },
     {
       urlPattern: /\.(?:png|jpg|jpeg|svg|gif|ico)$/,
       handler: 'CacheFirst',

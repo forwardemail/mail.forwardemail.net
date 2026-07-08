@@ -15,7 +15,7 @@
  */
 
 import Dexie, { type IndexableType, type Table, type TransactionMode } from 'dexie';
-import { DB_NAME, SCHEMA_VERSION } from './db-constants.ts';
+import { DB_NAME, DEXIE_VERSION } from './db-constants.ts';
 import {
   configureDbCrypto,
   changesTouchSensitiveFields,
@@ -163,7 +163,9 @@ class WebmailDatabase extends Dexie {
 
   constructor(name: string) {
     super(name);
-    this.version(SCHEMA_VERSION).stores({
+    // Version 1: the original schema. Kept so installs still on it upgrade
+    // in place when they open the database with the newer declaration below.
+    this.version(1).stores({
       accounts: 'id,email,createdAt,updatedAt',
       folders: '[account+path],account,path,parentPath,unread_count,specialUse,updatedAt',
       messages:
@@ -180,6 +182,33 @@ class WebmailDatabase extends Dexie {
       settings: 'account,settings,updatedAt',
       settingsLabels: 'account,labels,updatedAt',
       outbox: '[account+id],id,account,status,retryCount,nextRetryAt,sendAt,createdAt,updatedAt',
+    });
+    // Version 2: keep only indexes a real query path uses. Version 1 indexed
+    // nearly every field, and on the two highest-write tables that meant
+    // building secondary B-trees over full email bodies (messageBodies.body,
+    // textContent, attachments) and a dozen never-queried message fields.
+    // Dropping them cuts write amplification during sync and shrinks the
+    // database on disk. Records themselves are untouched by the upgrade.
+    // The keep-list mirrors PLAINTEXT_FIELDS in db-crypto.ts; both derive
+    // from the same audit of every .where() call in the app and workers
+    // (public/sw-sync.js and sync-core.js use no indexes at all).
+    this.version(DEXIE_VERSION).stores({
+      accounts: 'id',
+      folders: '[account+path],account',
+      // from: kept for the empty-sender repair sweep in sync.worker.ts.
+      // folder: kept for the cross-account count in Mailbox.svelte.
+      messages:
+        '[account+id],account,folder,[account+folder],[account+folder+date],[account+folder+is_unread_index],from',
+      messageBodies: '[account+id],account,[account+folder]',
+      drafts: '[account+id],account',
+      searchIndex: '[account+key],account',
+      indexMeta: '[account+key],account',
+      meta: 'key',
+      syncManifests: '[account+folder],account',
+      labels: '[account+id],account',
+      settings: 'account',
+      settingsLabels: 'account',
+      outbox: '[account+id],account',
     });
   }
 }

@@ -34,9 +34,9 @@ interface SettingsRow {
   updatedAt?: number;
 }
 
-// Mirror the subset of the schema defined in src/workers/db.worker.ts. If
-// the production schema changes, this test will start failing until the
-// mirror is updated — which is the intent: a tripwire for silent drift.
+// Mirror the subset of the schema defined in src/utils/db-engine.ts. If the
+// production schema changes, this test will start failing until the mirror
+// is updated, which is the intent: a tripwire for silent drift.
 class TestDatabase extends Dexie {
   messages!: Table<Message>;
   meta!: Table<Meta>;
@@ -45,12 +45,21 @@ class TestDatabase extends Dexie {
 
   constructor(name: string) {
     super(name);
+    // Version 1: original over-indexed schema (upgrade path coverage).
     this.version(1).stores({
       messages:
         '[account+id],id,folder,account,[account+folder],[account+folder+date],[account+folder+is_unread_index],date',
       meta: 'key,updatedAt',
       folders: '[account+path],account,path,unread_count',
       settings: 'account,updatedAt',
+    });
+    // Version 2: only the indexes real query paths use, matching db-engine.ts.
+    this.version(2).stores({
+      messages:
+        '[account+id],account,folder,[account+folder],[account+folder+date],[account+folder+is_unread_index],from',
+      meta: 'key',
+      folders: '[account+path],account',
+      settings: 'account',
     });
   }
 }
@@ -168,6 +177,63 @@ describe('attachment-cache eviction contract', () => {
     };
     expect(manifest.totalBytes).toBe(500);
     expect(manifest.entries.map((e) => e.key)).toEqual(['b', 'c']);
+  });
+});
+
+describe('version 1 to version 2 upgrade (dead-index removal)', () => {
+  it('keeps existing data intact and drops unused indexes in place', async () => {
+    const name = `webmail-upgrade-${Math.random().toString(36).slice(2)}`;
+
+    // Create and populate a database at version 1 only, like an existing
+    // install would have on disk.
+    class V1Database extends Dexie {
+      messages!: Table<Message>;
+      constructor() {
+        super(name);
+        this.version(1).stores({
+          messages:
+            '[account+id],id,folder,account,[account+folder],[account+folder+date],[account+folder+is_unread_index],date',
+          meta: 'key,updatedAt',
+          folders: '[account+path],account,path,unread_count',
+          settings: 'account,updatedAt',
+        });
+      }
+    }
+    const v1 = new V1Database();
+    await v1.open();
+    await v1.messages.bulkPut([
+      { account: 'a', id: '1', folder: 'INBOX', date: 100, subject: 'keep me' },
+      { account: 'a', id: '2', folder: 'Archive', date: 200, subject: 'me too' },
+    ]);
+    v1.close();
+
+    // Reopen with the v1+v2 declaration (what shipping code does). Dexie
+    // upgrades in place: records survive, dead indexes disappear.
+    const upgraded = new TestDatabase(name);
+    try {
+      await upgraded.open();
+
+      const all = await upgraded.messages.toArray();
+      expect(all).toHaveLength(2);
+      expect(all.find((m) => m.id === '1')?.subject).toBe('keep me');
+
+      // Kept index still works.
+      const inbox = await upgraded.messages
+        .where('[account+folder]')
+        .equals(['a', 'INBOX'])
+        .toArray();
+      expect(inbox).toHaveLength(1);
+
+      // Dropped index is really gone (querying it now throws).
+      await expect(upgraded.messages.where('date').equals(100).toArray()).rejects.toThrow();
+
+      // New writes land in the slimmer index set without errors.
+      await upgraded.messages.put({ account: 'a', id: '3', folder: 'INBOX', date: 300 });
+      expect(await upgraded.messages.where('account').equals('a').count()).toBe(3);
+    } finally {
+      upgraded.close();
+      await Dexie.delete(name);
+    }
   });
 });
 

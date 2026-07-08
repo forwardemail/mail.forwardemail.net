@@ -1779,6 +1779,18 @@ async function showLockScreen(): Promise<void> {
             unmount(comp);
             lockOverlay.style.display = 'none';
             _lockScreenPromise = null;
+            // While the app sat locked, background loads (websocket ticks,
+            // sync completions) read IndexedDB without the key, so sealed
+            // messages landed in the in-memory list and LRU cache as empty
+            // shells (no subject or sender). Drop that cache and re-read the
+            // current folder now that the key is back; without this the
+            // blank rows stick around until the user re-selects the folder.
+            try {
+              mailboxStore.actions.clearFolderMessageCache?.();
+              void mailboxStore.actions.loadMessages?.()?.catch?.(() => {});
+            } catch {
+              // Refresh is best-effort; re-selecting the folder recovers too.
+            }
             resolve();
           },
           { once: true },

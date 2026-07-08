@@ -142,14 +142,26 @@ function clearSessionDek() {
 /**
  * Propagate the current lock state to the DB engine's at-rest encryption
  * (and the SW gate flag). Dynamic import avoids a static cycle: the bridge
- * imports this module. Fire-and-forget unless the caller awaits.
+ * imports this module.
+ *
+ * Bounded: unlock paths await this so the engine has the key before the
+ * mailbox reads IndexedDB, but if the DB client is still initializing we
+ * give up after a short window instead of holding the unlock hostage. In
+ * that case no reads have happened yet either, and db-worker-client
+ * re-applies the config right after init completes.
  */
+const NOTIFY_BRIDGE_TIMEOUT_MS = 2000;
+
 function notifyDbCryptoBridge() {
-  return import('./db-crypto-bridge.js')
+  const sync = import('./db-crypto-bridge.js')
     .then((bridge) => bridge.syncDbCryptoState())
     .catch((err) => {
       console.error('[crypto-store] Failed to sync DB crypto state:', err);
     });
+  return Promise.race([
+    sync,
+    new Promise((resolve) => setTimeout(resolve, NOTIFY_BRIDGE_TIMEOUT_MS)),
+  ]);
 }
 
 /**
@@ -378,9 +390,13 @@ async function openVault(kek) {
     // returns plaintext values for auth headers.
     restoreSessionCredentials();
     // Sweep any sensitive values that were written in plaintext while locked
-    // (e.g. a token refresh), then hand the key to the DB engine.
+    // (e.g. a token refresh).
     encryptExistingLocalStorage().catch(() => {});
-    notifyDbCryptoBridge();
+    // Hand the key to the DB engine BEFORE reporting the unlock as done.
+    // Fire-and-forget here let the mailbox read IndexedDB ahead of the key
+    // push, so sealed messages rendered as empty rows (no subject or sender)
+    // until a refresh.
+    await notifyDbCryptoBridge();
     return true;
   } catch {
     // Wrong PIN / passkey — decryption failed
@@ -491,7 +507,9 @@ async function restoreSessionDek() {
     _enabled = true;
     _initialized = true;
     restoreSessionCredentials();
-    notifyDbCryptoBridge();
+    // Awaited so the engine has the key before bootstrap continues into the
+    // first mailbox load (see openVault).
+    await notifyDbCryptoBridge();
     return true;
   } catch (err) {
     console.error('[crypto-store] Failed to restore session DEK:', err);
@@ -657,7 +675,9 @@ async function unlockWithPasskey(prfOutput) {
         // returns plaintext values for auth headers.
         restoreSessionCredentials();
         encryptExistingLocalStorage().catch(() => {});
-        notifyDbCryptoBridge();
+        // Awaited so the engine has the key before the unlock resolves and
+        // the mailbox starts reading IndexedDB (see openVault).
+        await notifyDbCryptoBridge();
         return true;
       }
     } catch {

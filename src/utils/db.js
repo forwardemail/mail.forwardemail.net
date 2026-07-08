@@ -28,7 +28,7 @@ import {
   resetDatabase as resetDb,
 } from './db-worker-client.js';
 import { bootstrapReady } from './bootstrap-ready.js';
-import { SCHEMA_VERSION } from './db-constants.ts';
+import { SCHEMA_VERSION, DEXIE_VERSION } from './db-constants.ts';
 import {
   getRecoveryInfo,
   clearRecoveryState,
@@ -82,9 +82,15 @@ async function ensureVersionCompatibility() {
     };
     const normalizedVersion = rawInfo ? normalizeDexieVersion(rawInfo.version) : null;
 
-    if (rawInfo && normalizedVersion > CURRENT_SCHEMA_VERSION) {
+    // Downgrade guard: an OLDER app build opening a database created by a
+    // NEWER build can't parse the schema, so wipe and re-sync. Compare
+    // against the Dexie schema version (in-place upgrades bump it), NOT
+    // SCHEMA_VERSION (the database-name generation, still 1). Comparing
+    // against SCHEMA_VERSION here would treat every upgraded database as
+    // "from the future" and wipe the cache on every boot.
+    if (rawInfo && normalizedVersion > DEXIE_VERSION) {
       const error = new Error(
-        `Found newer schema (${normalizedVersion}) than expected (${CURRENT_SCHEMA_VERSION}); forcing reset`,
+        `Found newer schema (${normalizedVersion}) than expected (${DEXIE_VERSION}); forcing reset`,
       );
       warn(`[DB] ${error.message}`);
 
@@ -402,7 +408,7 @@ export async function getDatabaseInfo() {
     const info = await getDbInfo();
     return {
       ...info,
-      expectedVersion: CURRENT_SCHEMA_VERSION,
+      expectedVersion: DEXIE_VERSION,
       initialized: dbInitialized,
       recovery: getRecoveryInfo(),
     };
@@ -500,15 +506,17 @@ if (import.meta.hot) {
  * SCHEMA UPGRADE GUIDE
  * ============================================================================
  *
- * Schema is now defined in db.worker.js. When making schema changes:
+ * Schema is defined in db-engine.ts. When making schema changes:
  *
- * 1. Update SCHEMA_VERSION in db-constants.js
- * 2. Update the schema in db.worker.js
- * 3. The db worker handles all migrations internally
+ * 1. For index/field changes within the same database: bump DEXIE_VERSION in
+ *    db-constants.ts and add a new this.version(N).stores() declaration in
+ *    db-engine.ts (keep the old declarations so installs upgrade in place).
+ * 2. Only bump SCHEMA_VERSION (the database NAME generation, must match
+ *    public/sw-sync.js) for a truly incompatible layout that requires a
+ *    fresh database and full re-sync.
  *
- * For complex migrations, you may need to:
- * - Add migration logic in db.worker.js
- * - Use the 'transaction' action for atomic updates
+ * For complex migrations, add an .upgrade() callback to the new version in
+ * db-engine.ts.
  *
  * ============================================================================
  */

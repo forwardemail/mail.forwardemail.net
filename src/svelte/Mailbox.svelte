@@ -6962,7 +6962,9 @@
                     </ul>
                   {:else}
                     {@const msgList = $filteredMessages}
-                    {#each msgList as msg}
+                    <!-- Keyed so Svelte moves rows instead of rewriting them in
+                         place when the list prepends or reorders. -->
+                    {#each msgList as msg (msg.id)}
                       <article
                         class={`relative cursor-pointer hover:bg-accent/50 transition-colors ${activeMsgId === msg.id || ($selectedConversationIds || []).includes(msg.id) ? 'msg-active' : ''}`}
                         oncontextmenu={(e) => openContextMenu(e, msg)}
