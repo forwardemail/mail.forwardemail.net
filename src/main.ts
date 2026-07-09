@@ -2986,7 +2986,10 @@ handleHashActions = function () {
     setTimeout(() => {
       if (typeof viewModel.mailboxView.onSearch === 'function') {
         viewModel.mailboxView.onSearch(term);
-        viewModel.mailboxView.page?.(1);
+        // page is a writable store, not a function, so reset it via .set(1).
+        // Calling it as page(1) threw "page is not a function" and aborted
+        // the whole search-from-URL flow (e.g. Contacts "view emails").
+        viewModel.mailboxView.page?.set?.(1);
         viewModel.mailboxView.loadMessages?.();
       }
     }, 0);

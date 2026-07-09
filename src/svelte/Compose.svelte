@@ -217,8 +217,10 @@
   let showBcc = $state(false);
   let showReplyTo = $state(false);
   let linkInputEl = $state<HTMLInputElement | undefined>();
-  let subjectInputEl = $state<HTMLInputElement | undefined>();
-  let plainTextInputEl = $state<HTMLTextAreaElement | undefined>();
+  // null (not undefined) so bind:ref matches the Input/Textarea components'
+  // `ref = $bindable(null)` fallback (Svelte rejects bind:ref to undefined).
+  let subjectInputEl = $state<HTMLInputElement | null>(null);
+  let plainTextInputEl = $state<HTMLTextAreaElement | null>(null);
   let lastFocusedField = $state('to');
   const MAX_MINIMIZED_DRAFTS = 3;
   let minimizedDrafts = $state<unknown[]>([]);
@@ -3397,7 +3399,7 @@
             bind:value={subject}
             oninput={markDraftDirty}
             onfocus={() => (lastFocusedField = 'subject')}
-            bind:this={subjectInputEl}
+            bind:ref={subjectInputEl}
           />
         </div>
 
@@ -3414,7 +3416,7 @@
               bind:value={body}
               oninput={markDraftDirty}
               onfocus={() => (lastFocusedField = 'editor')}
-              bind:this={plainTextInputEl}
+              bind:ref={plainTextInputEl}
             />
           {/if}
         </div>

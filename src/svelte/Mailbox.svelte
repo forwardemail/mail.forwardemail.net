@@ -921,7 +921,9 @@
 
   // Outbox refresh moved to manual trigger (was causing loops)
   let searchSuggestionsVisible = $state(false);
-  let searchInputEl: HTMLInputElement | undefined = $state();
+  // null (not undefined) to match the Input component's `ref = $bindable(null)`
+  // fallback — Svelte rejects bind:ref to an undefined value with a fallback.
+  let searchInputEl: HTMLInputElement | null = $state(null);
   let selectionMode = $state(false);
   $effect(() => {
     if (!selectionMode) return;
@@ -5516,7 +5518,7 @@
               placeholder="Search mail"
               title="Search mail (Ctrl+K)"
               value={$query}
-              bind:this={searchInputEl}
+              bind:ref={searchInputEl}
               onfocus={showSuggestions}
               onblur={hideSuggestions}
               oninput={(e) => {
