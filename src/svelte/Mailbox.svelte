@@ -6316,26 +6316,30 @@
                   >
                     <Trash2 class="h-5 w-5" />
                   </button>
-                  <button
-                    class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
-                    type="button"
-                    aria-label="Mark selected as read"
-                    data-tooltip="Mark selected as read"
-                    data-tooltip-position="bottom"
-                    onclick={bulkMarkAsRead}
-                  >
-                    <MailOpen class="h-5 w-5" />
-                  </button>
-                  <button
-                    class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
-                    type="button"
-                    aria-label="Mark selected as unread"
-                    data-tooltip="Mark selected as unread"
-                    data-tooltip-position="bottom"
-                    onclick={bulkMarkAsUnread}
-                  >
-                    <MailIcon class="h-5 w-5" />
-                  </button>
+                  {#if !isMobile}
+                    <!-- Mark read/unread are hidden on mobile so the bulk bar
+                         stays on a single row instead of wrapping to two. -->
+                    <button
+                      class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                      type="button"
+                      aria-label="Mark selected as read"
+                      data-tooltip="Mark selected as read"
+                      data-tooltip-position="bottom"
+                      onclick={bulkMarkAsRead}
+                    >
+                      <MailOpen class="h-5 w-5" />
+                    </button>
+                    <button
+                      class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                      type="button"
+                      aria-label="Mark selected as unread"
+                      data-tooltip="Mark selected as unread"
+                      data-tooltip-position="bottom"
+                      onclick={bulkMarkAsUnread}
+                    >
+                      <MailIcon class="h-5 w-5" />
+                    </button>
+                  {/if}
                   <div class="relative" data-bulk-move>
                     <button
                       class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
@@ -6627,7 +6631,7 @@
                                 style="background: {($selectedConversationIds || []).includes(
                                   conv.id,
                                 )
-                                  ? 'hsl(var(--primary))'
+                                  ? 'var(--primary)'
                                   : getAvatarColor(getConversationFromDisplay(conv))}"
                                 aria-label={($selectedConversationIds || []).includes(conv.id)
                                   ? 'Deselect'
@@ -6642,10 +6646,10 @@
                                     viewBox="0 0 24 24"
                                     class="h-5 w-5"
                                     fill="none"
-                                    stroke="white"
                                     stroke-width="3"
                                     stroke-linecap="round"
                                     stroke-linejoin="round"
+                                    style="stroke: var(--primary-foreground);"
                                   >
                                     <polyline points="20 6 9 17 4 12" />
                                   </svg>
