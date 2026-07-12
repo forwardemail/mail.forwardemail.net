@@ -1826,7 +1826,7 @@
         getCalendarEventsList,
       );
       if (!list || requestId !== loadRequestId) return;
-      const mapped = mapCalendarEvents(list);
+      const mapped = applyPendingEventMutations(mapCalendarEvents(list));
       allEvents = mapped;
       eventsScope = 'all';
       eventsScopeCalendarId = '';
@@ -1870,7 +1870,7 @@
         getCalendarEventsList,
       );
       if (!list || requestId !== loadRequestId) return;
-      const mapped = mapCalendarEvents(list, calendarId);
+      const mapped = applyPendingEventMutations(mapCalendarEvents(list, calendarId));
       allEvents = mapped;
       eventsScope = 'calendar';
       eventsScopeCalendarId = calendarId;
@@ -3377,6 +3377,74 @@
     }
   };
 
+  // Optimistic changes waiting on server confirmation, keyed by event id.
+  // Fetches that land while a write is in flight re-apply this overlay so
+  // stale server data cannot undo what the user just did. A null patch
+  // means the item is pending delete. The token lets a failed write know
+  // whether a newer change already superseded it before rolling back.
+  let pendingMutationToken = 0;
+  const pendingEventMutations = new Map<
+    string,
+    { token: number; patch: Record<string, unknown> | null }
+  >();
+
+  const applyPendingEventMutations = (list: unknown[]): unknown[] => {
+    if (!pendingEventMutations.size) return list;
+    const result: unknown[] = [];
+    for (const ev of list) {
+      const entry = pendingEventMutations.get((ev as Record<string, unknown>).id as string);
+      if (!entry) {
+        result.push(ev);
+        continue;
+      }
+      if (entry.patch === null) continue;
+      result.push({ ...(ev as Record<string, unknown>), ...entry.patch });
+    }
+    return result;
+  };
+
+  // Server writes for the same item run in order. Without this, rapid
+  // toggles could race and the older PUT could arrive at the server last.
+  const eventWriteChains = new Map<string, Promise<unknown>>();
+  const serializeEventWrite = (id: string, run: () => Promise<unknown>): Promise<unknown> => {
+    const prev = eventWriteChains.get(id) || Promise.resolve();
+    const next = prev.then(run, run);
+    const tail = next.catch(() => {});
+    eventWriteChains.set(id, tail);
+    tail.then(() => {
+      if (eventWriteChains.get(id) === tail) eventWriteChains.delete(id);
+    });
+    return next;
+  };
+
+  // Persist in-memory events to the per-calendar cache, plus the all-events
+  // cache when that scope is active. Fire and forget; a miss self-heals on
+  // the next fetch.
+  const persistEventsCache = (calendarId: string) => {
+    db.meta
+      .put({
+        key: getEventsCacheKey(getAccountKey(), calendarId),
+        value: sanitizeForWorker(
+          allEvents.filter(
+            (ev) =>
+              ((ev as Record<string, unknown>).calendarId ||
+                (ev as Record<string, unknown>).calendar_id) === calendarId,
+          ),
+        ),
+        updatedAt: Date.now(),
+      })
+      .catch((e: unknown) => console.warn('[Calendar] Failed to cache events:', e));
+    if (eventsScope === 'all') {
+      db.meta
+        .put({
+          key: getAllEventsCacheKey(getAccountKey()),
+          value: sanitizeForWorker(allEvents),
+          updatedAt: Date.now(),
+        })
+        .catch((e: unknown) => console.warn('[Calendar] Failed to cache all events:', e));
+    }
+  };
+
   const setTaskCompletion = async (
     taskOverride: Record<string, unknown> | undefined,
     completed: boolean,
@@ -3393,11 +3461,14 @@
       task.calendar_id ||
       (taskOverride ? '' : editEvent.calendarId) ||
       resolveActiveCalendarId()) as string;
+    const taskId = (task.id as string) || editEvent.id;
     const completedAt = completed ? new Date().toISOString() : '';
     const status = completed ? 'COMPLETED' : 'NEEDS-ACTION';
     const percentComplete = completed ? 100 : 0;
+
+    let icalData: string;
     try {
-      const icalData = generateICalTodo({
+      icalData = generateICalTodo({
         summary: (task.title as string) || 'Task',
         description: (task.description as string) || '',
         location: (task.location as string) || '',
@@ -3405,50 +3476,69 @@
         timezone: (task.timezone as string) || getDefaultTimezone(),
         start: (task.start as string) || '',
         due: (task.end as string) || (task.start as string) || '',
-        uid: (task.id as string) || editEvent.id,
+        uid: taskId,
         status,
         completedAt,
         percentComplete,
       });
-      await Remote.request(
-        'CalendarEventUpdate',
-        { id: task.id, calendar_id: calendarId, ical: icalData },
-        { method: 'PUT', pathOverride: `/v1/calendar-events/${task.id}` },
-      );
-      allEvents = allEvents.map((ev) =>
-        (ev as Record<string, unknown>).id === task.id
-          ? { ...ev, status, completedAt, percentComplete }
-          : ev,
-      );
-      applySelectedEvents();
-      if (editEvent.id === (task.id as string)) {
-        editEvent = { ...editEvent, status, completedAt, percentComplete };
-      }
-      db.meta
-        .put({
-          key: getEventsCacheKey(getAccountKey(), calendarId),
-          value: sanitizeForWorker(
-            allEvents.filter(
-              (ev) =>
-                ((ev as Record<string, unknown>).calendarId ||
-                  (ev as Record<string, unknown>).calendar_id) === calendarId,
-            ),
-          ),
-          updatedAt: Date.now(),
-        })
-        .catch((e) => console.warn('[Calendar] Failed to cache task update:', e));
-      if (eventsScope === 'all') {
-        db.meta
-          .put({
-            key: getAllEventsCacheKey(getAccountKey()),
-            value: sanitizeForWorker(allEvents),
-            updatedAt: Date.now(),
-          })
-          .catch((e) => console.warn('[Calendar] Failed to cache all events:', e));
-      }
-      setError('');
-      toasts?.show?.(completed ? 'Task completed' : 'Task reopened', 'success');
     } catch (err) {
+      setError(
+        (err as Error)?.message ||
+          (completed ? 'Unable to complete task.' : 'Unable to reopen task.'),
+      );
+      return;
+    }
+
+    // Apply the change locally first so the checkbox responds instantly.
+    // The server write runs below and rolls this back if it fails.
+    const previous = {
+      status: (task.status as string) || '',
+      completedAt: (task.completedAt as string) || '',
+      percentComplete: Number(task.percentComplete || 0),
+    };
+    const patch = { status, completedAt, percentComplete };
+    const token = ++pendingMutationToken;
+    pendingEventMutations.set(taskId, { token, patch });
+    allEvents = allEvents.map((ev) =>
+      (ev as Record<string, unknown>).id === taskId
+        ? { ...(ev as Record<string, unknown>), ...patch }
+        : ev,
+    );
+    applySelectedEvents();
+    if (editEvent.id === taskId) {
+      editEvent = { ...editEvent, ...patch };
+    }
+    persistEventsCache(calendarId);
+    setError('');
+    toasts?.show?.(completed ? 'Task completed' : 'Task reopened', 'success');
+
+    try {
+      await serializeEventWrite(taskId, () =>
+        Remote.request(
+          'CalendarEventUpdate',
+          { id: taskId, calendar_id: calendarId, ical: icalData },
+          { method: 'PUT', pathOverride: `/v1/calendar-events/${taskId}` },
+        ),
+      );
+      if (pendingEventMutations.get(taskId)?.token === token) {
+        pendingEventMutations.delete(taskId);
+      }
+    } catch (err) {
+      // Roll back only if no newer change superseded this one. A later
+      // write sends the full item state, so its outcome wins either way.
+      if (pendingEventMutations.get(taskId)?.token === token) {
+        pendingEventMutations.delete(taskId);
+        allEvents = allEvents.map((ev) =>
+          (ev as Record<string, unknown>).id === taskId
+            ? { ...(ev as Record<string, unknown>), ...previous }
+            : ev,
+        );
+        applySelectedEvents();
+        if (editEvent.id === taskId) {
+          editEvent = { ...editEvent, ...previous };
+        }
+        persistEventsCache(calendarId);
+      }
       setError(
         (err as Error)?.message ||
           (completed ? 'Unable to complete task.' : 'Unable to reopen task.'),
@@ -3471,46 +3561,45 @@
     // synthetic occurrence suffix so the DELETE targets the master.
     // Per-instance deletes use deleteOccurrenceOnly (writes EXDATE).
     const persistId = id.includes('::') ? id.split('::')[0] : id;
+
+    // Remove locally and close the modal right away. The server delete runs
+    // below and restores the item if it fails.
+    const removed = allEvents.find((ev) => (ev as Record<string, unknown>).id === persistId);
+    const token = ++pendingMutationToken;
+    pendingEventMutations.set(persistId, { token, patch: null });
+    allEvents = allEvents.filter((ev) => (ev as Record<string, unknown>).id !== persistId);
+    applySelectedEvents();
+    setError('');
+    setSuccess('Event deleted successfully');
+    editEventModal = false;
+    showDeleteConfirm = false;
+    persistEventsCache(calendarId);
+
     try {
-      await Remote.request(
-        'CalendarEventDelete',
-        { calendar_id: calendarId },
-        { method: 'DELETE', pathOverride: `/v1/calendar-events/${persistId}` },
+      await serializeEventWrite(persistId, () =>
+        Remote.request(
+          'CalendarEventDelete',
+          { calendar_id: calendarId },
+          { method: 'DELETE', pathOverride: `/v1/calendar-events/${persistId}` },
+        ),
       );
-      allEvents = allEvents.filter((ev) => (ev as Record<string, unknown>).id !== persistId);
-      applySelectedEvents();
-
-      // Close modals immediately after successful API call
-      setError('');
-      setSuccess('Event deleted successfully');
-      editEventModal = false;
-      showDeleteConfirm = false;
-
-      // Cache in background (don't block on this) - sanitize to avoid postMessage clone errors
-      db.meta
-        .put({
-          key: getEventsCacheKey(getAccountKey(), calendarId),
-          value: sanitizeForWorker(
-            allEvents.filter(
-              (ev) =>
-                ((ev as Record<string, unknown>).calendarId ||
-                  (ev as Record<string, unknown>).calendar_id) === calendarId,
-            ),
-          ),
-          updatedAt: Date.now(),
-        })
-        .catch((e) => console.warn('[Calendar] Failed to cache events:', e));
-
-      if (eventsScope === 'all') {
-        db.meta
-          .put({
-            key: getAllEventsCacheKey(getAccountKey()),
-            value: sanitizeForWorker(allEvents),
-            updatedAt: Date.now(),
-          })
-          .catch((e) => console.warn('[Calendar] Failed to cache all events:', e));
+      if (pendingEventMutations.get(persistId)?.token === token) {
+        pendingEventMutations.delete(persistId);
       }
     } catch (err) {
+      const httpStatus =
+        (err as { status?: number })?.status || (err as { statusCode?: number })?.statusCode;
+      const supersededByNewerWrite = pendingEventMutations.get(persistId)?.token !== token;
+      if (!supersededByNewerWrite) {
+        pendingEventMutations.delete(persistId);
+      }
+      // Already gone server side counts as a successful delete.
+      if (httpStatus === 404) return;
+      if (!supersededByNewerWrite && removed) {
+        allEvents = [...allEvents, removed];
+        applySelectedEvents();
+        persistEventsCache(calendarId);
+      }
       setError((err as Error)?.message || 'Unable to delete event.');
     }
   };
