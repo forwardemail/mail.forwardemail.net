@@ -508,8 +508,10 @@ export function didMetadataChange(
 }
 
 export function getMessageApiId(
-  msg: Partial<Message> & Record<string, unknown> = {},
+  msg: (Partial<Message> & Record<string, unknown>) | null | undefined = {},
 ): string | number | null {
+  if (!msg) return null;
+
   return (
     (msg.id as string) ||
     (msg.message_id as string) ||
