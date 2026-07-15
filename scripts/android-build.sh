@@ -26,16 +26,41 @@ if [ -n "$MISSING" ]; then
   exit 1
 fi
 
+ANDROID_PUSH_PROVIDER="${ANDROID_PUSH_PROVIDER:-unified-push}"
+case "$ANDROID_PUSH_PROVIDER" in
+  unified-push)
+    export VITE_ANDROID_PUSH_PROVIDER="unified-push"
+    FEATURE_ARGS=()
+    ;;
+  fcm)
+    export VITE_ANDROID_PUSH_PROVIDER="fcm"
+    FEATURE_ARGS=(--features fcm)
+    ;;
+  both)
+    export VITE_ANDROID_PUSH_PROVIDER="auto"
+    FEATURE_ARGS=(--features fcm)
+    ;;
+  *)
+    echo "Invalid ANDROID_PUSH_PROVIDER: $ANDROID_PUSH_PROVIDER (expected unified-push, fcm, or both)" >&2
+    exit 1
+    ;;
+esac
+export ANDROID_PUSH_PROVIDER
+
+FCM_CAPABILITY="src-tauri/capabilities/android-fcm.generated.json"
+trap 'rm -f "$FCM_CAPABILITY"' EXIT
+
 echo "📦 Android Build"
-echo "   SDK:  $ANDROID_HOME"
-echo "   NDK:  $ANDROID_NDK_HOME"
+echo "   SDK:   $ANDROID_HOME"
+echo "   NDK:   $ANDROID_NDK_HOME"
+echo "   Push:  $ANDROID_PUSH_PROVIDER"
 echo ""
 
-# ── Inject generated-project patches ──────────────────────────────────────
+# ── Configure generated-project integrations ──────────────────────────────
 # These scripts modify src-tauri/gen/android/ after `tauri android init`
-# regenerates it.  They are idempotent and safe to re-run.
-node scripts/inject-android-fcm.cjs
+# regenerates it. They are idempotent and safe to re-run.
+node scripts/configure-android-push.cjs
 node scripts/inject-android-signing.cjs
 node scripts/inject-android-mainactivity.cjs
 
-exec npx tauri android build "$@"
+npx tauri android build "${FEATURE_ARGS[@]}" "$@"

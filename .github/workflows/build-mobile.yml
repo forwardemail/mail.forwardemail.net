@@ -20,7 +20,7 @@ env:
 jobs:
   android:
     runs-on: ubuntu-22.04
-    name: Build Android (APK)
+    name: Build Android (Google-free UnifiedPush APK)
 
     steps:
       - name: Checkout
@@ -75,15 +75,17 @@ jobs:
       - name: Initialize Android project
         run: pnpm tauri android init
 
-      - name: Build Android APK (debug)
+      - name: Build Google-free Android APK (debug)
         env:
           NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.0.12077973
-        run: pnpm tauri android build --debug
+          ANDROID_PUSH_PROVIDER: unified-push
+          VAPID_PUBLIC_KEY: ${{ vars.VAPID_PUBLIC_KEY }}
+        run: pnpm tauri:android:build --debug
 
       - name: Upload Android APK
         uses: actions/upload-artifact@v4
         with:
-          name: android-debug-apk
+          name: android-google-free-unifiedpush-debug-apk
           path: |
             src-tauri/gen/android/app/build/outputs/apk/**/*.apk
           retention-days: 7

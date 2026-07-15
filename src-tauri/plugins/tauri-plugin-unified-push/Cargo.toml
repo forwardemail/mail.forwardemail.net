@@ -1,0 +1,18 @@
+[package]
+name = "tauri-plugin-unified-push"
+version = "0.1.0"
+description = "First-party UnifiedPush bridge for the Forward Email Android app"
+authors = ["Forward Email <support@forwardemail.net>"]
+license = "BUSL-1.1"
+edition = "2021"
+rust-version = "1.77.2"
+links = "tauri-plugin-unified-push"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2.10.3", default-features = false }
+thiserror = "2"
+
+[build-dependencies]
+tauri-plugin = { version = "2.5.4", features = ["build"] }

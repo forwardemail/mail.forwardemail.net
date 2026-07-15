@@ -179,6 +179,8 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Lint
         run: pnpm lint
+      - name: Verify generated README table of contents is committed
+        run: git diff --exit-code -- README.md
       - name: Format
         run: pnpm format
       - name: Unit tests
@@ -275,19 +277,24 @@ jobs:
           GH_REPO: ${{ github.repository }}
           RELEASE_ID: ${{ steps.resolve_release.outputs.release_id }}
         run: |
+          set -euo pipefail
           mkdir -p artifacts
           cd artifacts
-          patterns='\.(dmg|app\.tar\.gz|app\.tar\.gz\.sig|msi|msi\.zip|msi\.zip\.sig|nsis\.zip|nsis\.zip\.sig|exe|deb|rpm|AppImage|AppImage\.tar\.gz|AppImage\.tar\.gz\.sig|apk|aab|ipa)$'
+          # Hash every published asset, including updater signatures and
+          # latest.json. Exclude only a checksum file left by a rerun.
           gh api "repos/${GH_REPO}/releases/${RELEASE_ID}/assets" \
-            --jq ".[] | select(.name | test(\"${patterns}\")) | [.id, .name] | @tsv" | \
+            --jq '.[] | select(.name != "SHA256SUMS.txt") | [.id, .name] | @tsv' | \
             while IFS=$'\t' read -r asset_id asset_name; do
               [ -z "$asset_id" ] && continue
               echo "→ $asset_name"
+              temporary_file="${asset_name}.part"
+              rm -f -- "$temporary_file"
               gh api -H "Accept: application/octet-stream" \
-                "repos/${GH_REPO}/releases/assets/${asset_id}" > "$asset_name" || true
+                "repos/${GH_REPO}/releases/assets/${asset_id}" > "$temporary_file"
+              mv -- "$temporary_file" "$asset_name"
             done
           echo "=== Downloaded files ==="
-          ls -la . || true
+          ls -la .
 
       - name: Generate SHA-256 checksums
         id: sums

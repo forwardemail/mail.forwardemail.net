@@ -89,6 +89,7 @@ vi.mock('../../src/utils/logger.ts', () => ({
 vi.mock('../../src/utils/platform.js', () => ({
   isTauri: false,
   isTauriDesktop: false,
+  isTauriMobile: false,
   swReadyWithTimeout: vi.fn().mockResolvedValue(null),
 }));
 

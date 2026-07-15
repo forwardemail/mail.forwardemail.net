@@ -13,6 +13,9 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [features]
 default = []
+# Google-free Android builds (F-Droid, Obtainium, and direct distribution) use
+# UnifiedPush only. Play builds opt into Firebase/FCM explicitly with `--features fcm`.
+fcm = ["dep:tauri-plugin-remote-push"]
 # Embeds a W3C WebDriver server for E2E tests. Desktop-only, never enable
 # in release builds — the server binds 127.0.0.1:4445 and grants full
 # automation control of the app.
@@ -50,20 +53,21 @@ tauri-plugin-updater = "2.10.1"
 tauri-plugin-global-shortcut = "2.3.1"
 tauri-plugin-webdriver = { version = "0.2.1", optional = true }
 
-# Available on desktop + Android (handles UnifiedPush via the Android
-# bridge per lib.rs). Excluded from iOS only: tauri-plugin-remote-push
-# 1.0.10's published crate omits the `ios/` Xcode project, so the
-# Tauri build script's xcodebuild call fails with "directory does not
-# contain an Xcode project". iOS push needs to go through the native
-# APNs path until upstream ships a fix.
-[target.'cfg(not(target_os = "ios"))'.dependencies]
-tauri-plugin-remote-push = "1.0.10"
-
 # Mobile-only: native haptic feedback (iOS Taptic Engine + Android vibrator).
 # navigator.vibrate is a no-op inside the iOS WKWebView, so iOS gets no haptics
 # without this plugin; the JS bridge falls back to navigator.vibrate elsewhere.
 [target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
 tauri-plugin-haptics = "2"
+
+# The published mobile-push crate provides direct APNs device tokens on iOS.
+[target.'cfg(target_os = "ios")'.dependencies]
+tauri-plugin-mobile-push = "0.1.4"
+
+# UnifiedPush is always available on Android and does not depend on Google Play
+# Services. The FCM plugin is optional and enabled only for Play builds.
+[target.'cfg(target_os = "android")'.dependencies]
+tauri-plugin-remote-push = { version = "1.0.10", optional = true }
+tauri-plugin-unified-push = { path = "plugins/tauri-plugin-unified-push" }
 
 # macOS-only: Objective-C bindings for dock badge + the custom NSOpenPanel
 # wrapper that works around the rfd 0.16 / objc2-app-kit 0.3.2 panic on

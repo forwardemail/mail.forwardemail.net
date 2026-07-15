@@ -10,14 +10,14 @@ All platforms share a single version. Running `pnpm release` bumps `package.json
 
 The desktop release workflow is [`release-desktop.yml`](../.github/workflows/release-desktop.yml). It creates or updates a **draft** GitHub Release and uploads the Tauri desktop artifacts for the full desktop matrix.
 
-| Platform | Architecture | Artifacts                                                |
-| -------- | ------------ | -------------------------------------------------------- |
-| macOS    | arm64        | `.dmg`, updater archive + signature                      |
-| macOS    | x64          | `.dmg`, updater archive + signature                      |
-| Windows  | x64          | `.msi`, `-setup.exe`, updater archive + signature        |
-| Windows  | arm64        | `-setup.exe`, updater archive + signature                |
-| Linux    | x64          | `.AppImage`, `.deb`, `.rpm`, updater archive + signature |
-| Linux    | arm64        | `.deb`, `.rpm`, updater archive + signature              |
+| Platform | Architecture | Installer bundles                                                                                                     | Updater/signature assets                      |
+| -------- | ------------ | --------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
+| macOS    | arm64        | `Forward.Email_<version>_aarch64.dmg`                                                                                 | `Forward.Email_aarch64.app.tar.gz` and `.sig` |
+| macOS    | x64          | `Forward.Email_<version>_x64.dmg`                                                                                     | `Forward.Email_x64.app.tar.gz` and `.sig`     |
+| Windows  | x64          | `Forward.Email_<version>_x64_en-US.msi`, `Forward.Email_<version>_x64-setup.exe`                                      | matching `.sig` sidecars                      |
+| Windows  | arm64        | `Forward.Email_<version>_arm64-setup.exe`                                                                             | matching `.sig` sidecar                       |
+| Linux    | x64          | `Forward.Email_<version>_amd64.AppImage`, `Forward.Email_<version>_amd64.deb`, `Forward.Email-<version>-1.x86_64.rpm` | matching `.sig` sidecars                      |
+| Linux    | arm64        | `Forward.Email_<version>_arm64.deb`, `Forward.Email-<version>-1.aarch64.rpm`                                          | matching `.sig` sidecars                      |
 
 The workflow uses native GitHub-hosted runners for `macos-15`, `macos-15-intel`, `ubuntu-22.04`, `ubuntu-22.04-arm`, `windows-latest`, and `windows-11-arm`. Linux arm64 intentionally publishes Debian and RPM bundles only, because the broader Linux bundle set is not reliable on that ARM runner. Windows arm64 currently publishes the NSIS setup executable rather than MSI so the arm64 path stays aligned with the documented Windows installer support in Tauri.
 
@@ -68,21 +68,16 @@ Trigger the desktop workflow manually via GitHub Actions:
 
 ### Desktop
 
-| Platform | Architecture          | Files                                                                |
-| -------- | --------------------- | -------------------------------------------------------------------- |
-| macOS    | Apple Silicon (arm64) | `.dmg`, `.app.tar.gz`, `.app.tar.gz.sig`                             |
-| macOS    | Intel (x64)           | `.dmg`, `.app.tar.gz`, `.app.tar.gz.sig`                             |
-| Windows  | x64                   | `.msi`, `.msi.sig`, `-setup.exe`, `-setup.exe.sig`                   |
-| Windows  | arm64                 | `-setup.exe`, `-setup.exe.sig`                                       |
-| Linux    | x64                   | `.AppImage`, `.AppImage.sig`, `.deb`, `.deb.sig`, `.rpm`, `.rpm.sig` |
-| Linux    | arm64                 | `.deb`, `.deb.sig`, `.rpm`, `.rpm.sig`                               |
+The exact desktop asset basenames are listed in the matrix above. Tauri also uploads `latest.json`, and the unified release workflow adds `SHA256SUMS.txt`. Linux arm64 intentionally has no AppImage; Windows arm64 intentionally has no MSI.
 
 ### Android
 
-| File                                      | Description                                     |
-| ----------------------------------------- | ----------------------------------------------- |
-| `forwardemail-mail_<version>_android.apk` | Signed universal APK for sideloading            |
-| `forwardemail-mail_<version>_android.aab` | Signed Android App Bundle for Play Store upload |
+| File                                             | Description                                                       |
+| ------------------------------------------------ | ----------------------------------------------------------------- |
+| `forwardemail-mail_<version>_android-play.apk`   | Signed Play-profile APK for sideloading                           |
+| `forwardemail-mail_<version>_android-fdroid.apk` | Signed F-Droid-profile APK for third-party distribution           |
+| `forwardemail-mail_<version>_android-play.aab`   | Signed Play-profile Android App Bundle for Play Store upload      |
+| `forwardemail-mail_<version>_android-fdroid.aab` | Signed F-Droid-profile Android App Bundle for archival publishing |
 
 Built by [`release-mobile.yml`](../.github/workflows/release-mobile.yml). Requires Android signing secrets in the `release` environment (see [SECRETS.md](./SECRETS.md#generating-the-android-keystore)).
 

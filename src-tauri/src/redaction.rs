@@ -29,10 +29,8 @@ fn patterns() -> &'static Patterns {
             r"(?i)\b(alias_auth|api_key|password|token|secret|credential)[=:]\s*\S+",
         )
         .unwrap(),
-        authorization: Regex::new(
-            r#"(?i)(["']?authorization["']?\s*[:=]\s*["']?)[^"'\s,}]+"#,
-        )
-        .unwrap(),
+        authorization: Regex::new(r#"(?i)(["']?authorization["']?\s*[:=]\s*["']?)[^"'\s,}]+"#)
+            .unwrap(),
         posix_home: Regex::new(r"/(?:Users|home)/[A-Za-z0-9._-]+").unwrap(),
         windows_home: Regex::new(r"([A-Za-z]):\\Users\\[A-Za-z0-9._-]+").unwrap(),
         email: Regex::new(r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b").unwrap(),
@@ -61,21 +59,21 @@ pub fn redact(input: &str) -> String {
     let p = patterns();
 
     // Stage 1 — credentials.
-    let s = p.bearer.replace_all(input, |caps: &Captures| {
-        format!("{} [REDACTED]", &caps[1])
-    });
-    let s = p.credential_kv.replace_all(&s, |caps: &Captures| {
-        format!("{}=[REDACTED]", &caps[1])
-    });
-    let s = p.authorization.replace_all(&s, |caps: &Captures| {
-        format!("{}[REDACTED]", &caps[1])
-    });
+    let s = p
+        .bearer
+        .replace_all(input, |caps: &Captures| format!("{} [REDACTED]", &caps[1]));
+    let s = p
+        .credential_kv
+        .replace_all(&s, |caps: &Captures| format!("{}=[REDACTED]", &caps[1]));
+    let s = p
+        .authorization
+        .replace_all(&s, |caps: &Captures| format!("{}[REDACTED]", &caps[1]));
 
     // Stage 2 — home directory paths.
     let s = p.posix_home.replace_all(&s, "~");
-    let s = p.windows_home.replace_all(&s, |caps: &Captures| {
-        format!("{}:\\Users\\~", &caps[1])
-    });
+    let s = p
+        .windows_home
+        .replace_all(&s, |caps: &Captures| format!("{}:\\Users\\~", &caps[1]));
 
     // Stage 3 — email addresses.
     let s = p.email.replace_all(&s, |caps: &Captures| {
@@ -129,7 +127,10 @@ mod tests {
 
     #[test]
     fn hash_email_is_case_insensitive() {
-        assert_eq!(hash_email("Alice@Example.COM"), hash_email("alice@example.com"));
+        assert_eq!(
+            hash_email("Alice@Example.COM"),
+            hash_email("alice@example.com")
+        );
     }
 
     #[test]

@@ -42,9 +42,13 @@ env:
 jobs:
   android:
     runs-on: ubuntu-22.04
-    name: Release Android (signed APK + AAB)
+    name: Release Android (${{ matrix.profile }}, signed APK + AAB)
     # Use the 'release' environment for scoped secrets
     environment: release
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [play, fdroid]
 
     steps:
       - name: Checkout
@@ -119,33 +123,49 @@ jobs:
       - name: Inject custom MainActivity.kt
         run: node scripts/inject-android-mainactivity.cjs
 
+      - name: Decode Firebase configuration for Play profile
+        if: matrix.profile == 'play'
+        env:
+          GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
+        run: |
+          if [ -z "$GOOGLE_SERVICES_JSON_BASE64" ]; then
+            echo "Error: GOOGLE_SERVICES_JSON_BASE64 is required for the Play profile"
+            exit 1
+          fi
+          printf '%s' "$GOOGLE_SERVICES_JSON_BASE64" | base64 -d > /tmp/google-services.json
+
       - name: Inject signing config into build.gradle.kts
         run: node scripts/inject-android-signing.cjs
 
-      - name: Build Android (release, signed)
+      - name: Build Android (release, signed, ${{ matrix.profile }})
         env:
           NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.0.12077973
           ANDROID_KEYSTORE: /tmp/keystore.jks
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: pnpm tauri android build
+          ANDROID_PUSH_PROVIDER: ${{ matrix.profile == 'play' && 'both' || 'unified-push' }}
+          GOOGLE_SERVICES_JSON: /tmp/google-services.json
+          VAPID_PUBLIC_KEY: ${{ vars.VAPID_PUBLIC_KEY }}
+          REQUIRE_PUSH_CONFIG: 1
+        run: pnpm tauri:android:build
 
       - name: Rename APK with version
         run: |
           VERSION="${{ inputs.version || inputs.tag || github.ref_name }}"
           VERSION="${VERSION#v}"
+          PROFILE="${{ matrix.profile }}"
           APK_DIR="src-tauri/gen/android/app/build/outputs/apk"
           AAB_DIR="src-tauri/gen/android/app/build/outputs/bundle"
           # Find and rename APKs
           find "$APK_DIR" -name '*.apk' -type f | while read -r f; do
             dir=$(dirname "$f")
-            mv "$f" "$dir/forwardemail-mail_${VERSION}_android.apk"
+            mv "$f" "$dir/forwardemail-mail_${VERSION}_android-${PROFILE}.apk"
           done
           # Find and rename AABs
           find "$AAB_DIR" -name '*.aab' -type f | while read -r f; do
             dir=$(dirname "$f")
-            mv "$f" "$dir/forwardemail-mail_${VERSION}_android.aab"
+            mv "$f" "$dir/forwardemail-mail_${VERSION}_android-${PROFILE}.aab"
           done
 
       # SLSA build provenance for the signed APK + AAB. Users verify with
@@ -154,8 +174,8 @@ jobs:
         uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2
         with:
           subject-path: |
-            src-tauri/gen/android/app/build/outputs/apk/**/forwardemail-mail_*_android.apk
-            src-tauri/gen/android/app/build/outputs/bundle/**/forwardemail-mail_*_android.aab
+            src-tauri/gen/android/app/build/outputs/apk/**/forwardemail-mail_*_android-*.apk
+            src-tauri/gen/android/app/build/outputs/bundle/**/forwardemail-mail_*_android-*.aab
 
       - name: Resolve release ID (prefer published over draft)
         id: resolve_release
@@ -209,6 +229,7 @@ jobs:
       # upload — re-running the same version will fail here.
       - name: Check Play Console upload secret
         id: play_check
+        if: matrix.profile == 'play'
         shell: bash
         env:
           SA: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT }}
@@ -222,11 +243,11 @@ jobs:
 
       - name: Locate AAB for Play upload
         id: play_aab
-        if: steps.play_check.outputs.enabled == 'true'
+        if: matrix.profile == 'play' && steps.play_check.outputs.enabled == 'true'
         run: |
           set -euo pipefail
           AAB=$(find src-tauri/gen/android/app/build/outputs/bundle \
-            -name 'forwardemail-mail_*_android.aab' -type f | head -n 1)
+            -name 'forwardemail-mail_*_android-play.aab' -type f | head -n 1)
           if [ -z "$AAB" ]; then
             echo "::error::No .aab found for Play Console upload"
             exit 1
@@ -235,7 +256,7 @@ jobs:
           echo "Uploading $AAB to Play track '${{ vars.PLAY_TRACK || 'internal' }}'"
 
       - name: Upload AAB to Google Play
-        if: steps.play_check.outputs.enabled == 'true'
+        if: matrix.profile == 'play' && steps.play_check.outputs.enabled == 'true'
         uses: r0adkll/upload-google-play@e738b9dd8f2476ea806d921b64aacd24f34515a5 # v1.1.5
         with:
           serviceAccountJsonPlainText: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT }}
@@ -247,6 +268,7 @@ jobs:
       - name: Clean up keystore
         if: always()
         run: |
+          rm -f /tmp/google-services.json
           rm -f /tmp/keystore.jks
           # Overwrite before delete to prevent recovery
           dd if=/dev/urandom of=/tmp/keystore.jks bs=1024 count=10 2>/dev/null || true

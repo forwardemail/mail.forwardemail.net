@@ -7,14 +7,6 @@ vi.mock('../../src/utils/background-service.js', () => ({
   unregisterPushToken: vi.fn(),
 }));
 
-vi.mock('../../src/utils/unified-push.js', () => ({
-  isUnifiedPushAvailable: vi.fn(() => Promise.resolve(false)),
-  registerUnifiedPush: vi.fn(() => Promise.resolve(null)),
-  unregisterUnifiedPush: vi.fn(() => Promise.resolve()),
-  initUnifiedPushListener: vi.fn(() => Promise.resolve()),
-  isUnifiedPushRegistered: vi.fn(() => false),
-}));
-
 import { handlePushPayload } from '../../src/utils/push-notifications.js';
 
 describe('push notification payload routing', () => {

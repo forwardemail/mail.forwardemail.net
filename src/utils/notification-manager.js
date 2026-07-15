@@ -29,6 +29,7 @@ import { decodeMimeHeader } from './mime-utils.js';
 import { extractFromField } from './sync-helpers.ts';
 import { extractEmail } from './address.ts';
 import { Local } from './storage.js';
+import { createRealtimeEventCoalescer } from './realtime-event-coalescer.js';
 
 // ── In-app toast reference ─────────────────────────────────────────────────
 // Set from main.ts via setNotificationToasts() — same pattern as
@@ -579,7 +580,7 @@ async function prependNewMessageToStore({ msg, mailbox, from, subject, uid }) {
   }
 }
 
-async function handleNewMessage(data) {
+async function handleNewMessage(data, { suppressVisual = false } = {}) {
   if (!data || typeof data !== 'object') return;
 
   const msg = data.message || data;
@@ -669,20 +670,22 @@ async function handleNewMessage(data) {
     // separately in websocket-updater and will eventually catch up.
   });
 
-  showNotification({
-    title: `New email from ${displayName}`,
-    body: safeSubject,
-    tag: safeTag,
-    channelId: 'new-mail',
-    data: {
-      path: sanitizePath(`#inbox/${uid}`),
-      url: `forwardemail://mailbox#inbox/${encodeURIComponent(String(uid))}`,
-      uid,
-    },
-  });
+  if (!suppressVisual) {
+    showNotification({
+      title: `New email from ${displayName}`,
+      body: safeSubject,
+      tag: safeTag,
+      channelId: 'new-mail',
+      data: {
+        path: sanitizePath(`#inbox/${uid}`),
+        url: `forwardemail://mailbox#inbox/${encodeURIComponent(String(uid))}`,
+        uid,
+      },
+    });
 
-  // In-app toast (visible when the app window is focused)
-  _toasts?.show?.(`New email from ${displayName}: ${safeSubject}`, 'info');
+    // In-app toast (visible when the app window is focused)
+    _toasts?.show?.(`New email from ${displayName}: ${safeSubject}`, 'info');
+  }
 }
 
 function handleFlagsUpdated(data) {
@@ -703,9 +706,10 @@ function handleMessagesExpunged(data) {
   incrementBadge(-count);
 }
 
-function handleMailboxCreated(data) {
+function handleMailboxCreated(data, { suppressVisual = false } = {}) {
   if (!data || typeof data !== 'object') return;
   const path = sanitize(data.path || data.mailbox?.path || 'Unknown', MAX_BODY_LEN);
+  if (suppressVisual) return;
   showNotification({
     title: 'Folder Created',
     body: `New folder: ${path}`,
@@ -714,9 +718,10 @@ function handleMailboxCreated(data) {
   });
 }
 
-function handleMailboxDeleted(data) {
+function handleMailboxDeleted(data, { suppressVisual = false } = {}) {
   if (!data || typeof data !== 'object') return;
   const path = sanitize(data.path || 'Unknown', MAX_BODY_LEN);
+  if (suppressVisual) return;
   showNotification({
     title: 'Folder Deleted',
     body: `Folder removed: ${path}`,
@@ -725,10 +730,11 @@ function handleMailboxDeleted(data) {
   });
 }
 
-function handleMailboxRenamed(data) {
+function handleMailboxRenamed(data, { suppressVisual = false } = {}) {
   if (!data || typeof data !== 'object') return;
   const oldPath = sanitize(data.oldPath || '', MAX_BODY_LEN);
   const newPath = sanitize(data.newPath || '', MAX_BODY_LEN);
+  if (suppressVisual) return;
   showNotification({
     title: 'Folder Renamed',
     body: `"${oldPath}" -> "${newPath}"`,
@@ -737,7 +743,7 @@ function handleMailboxRenamed(data) {
   });
 }
 
-function handleCalendarEventCreated(data) {
+function handleCalendarEventCreated(data, { suppressVisual = false } = {}) {
   if (!data || typeof data !== 'object') return;
   const isTask = extractCalendarComponentType(data) === 'VTODO';
   const label = isTask ? 'Task' : 'Event';
@@ -746,6 +752,7 @@ function handleCalendarEventCreated(data) {
     MAX_BODY_LEN,
   );
   const itemId = extractCalendarItemId(data);
+  if (suppressVisual) return;
   showNotification({
     title: `Calendar ${label} Created`,
     body: summary,
@@ -754,12 +761,13 @@ function handleCalendarEventCreated(data) {
   });
 }
 
-function handleCalendarEventUpdated(data) {
+function handleCalendarEventUpdated(data, { suppressVisual = false } = {}) {
   if (!data || typeof data !== 'object') return;
   const isTask = extractCalendarComponentType(data) === 'VTODO';
   const label = isTask ? 'Task' : 'Event';
   const summary = sanitize(extractCalendarSummary(data) || `${label} updated`, MAX_BODY_LEN);
   const itemId = extractCalendarItemId(data);
+  if (suppressVisual) return;
   showNotification({
     title: `Calendar ${label} Updated`,
     body: summary,
@@ -768,10 +776,11 @@ function handleCalendarEventUpdated(data) {
   });
 }
 
-function handleContactCreated(data) {
+function handleContactCreated(data, { suppressVisual = false } = {}) {
   if (!data || typeof data !== 'object') return;
   const name = sanitize(extractContactName(data) || 'New contact', MAX_BODY_LEN);
   const contactId = extractContactId(data);
+  if (suppressVisual) return;
   showNotification({
     title: 'Contact Added',
     body: name,
@@ -780,10 +789,11 @@ function handleContactCreated(data) {
   });
 }
 
-function handleContactUpdated(data) {
+function handleContactUpdated(data, { suppressVisual = false } = {}) {
   if (!data || typeof data !== 'object') return;
   const name = sanitize(extractContactName(data) || 'Contact updated', MAX_BODY_LEN);
   const contactId = extractContactId(data);
+  if (suppressVisual) return;
   showNotification({
     title: 'Contact Updated',
     body: name,
@@ -792,7 +802,7 @@ function handleContactUpdated(data) {
   });
 }
 
-function handleNewRelease(data) {
+function handleNewRelease(data, { suppressVisual = false } = {}) {
   if (!data || typeof data !== 'object') return;
 
   // Unwrap the nested release object if present (server sends
@@ -803,12 +813,69 @@ function handleNewRelease(data) {
   const version = sanitize(r.tagName || r.tag_name || r.version || 'new', 64);
   const name = sanitize(r.name || `Version ${version}`, MAX_BODY_LEN);
   const url = sanitizeUrl(r.htmlUrl || r.html_url || '');
+  if (suppressVisual) return;
   showNotification({
     title: 'Forward Email Update Available',
     body: `${name} is now available. Click to learn more.`,
     tag: sanitize(`release-${version}`, MAX_TAG_LEN),
     data: url ? { url } : {},
   });
+}
+
+// ── Transport routing ───────────────────────────────────────────────────────
+
+const ROUTED_NOTIFICATION_EVENTS = new Set([
+  WS_EVENTS.NEW_MESSAGE,
+  WS_EVENTS.FLAGS_UPDATED,
+  WS_EVENTS.MESSAGES_EXPUNGED,
+  WS_EVENTS.MAILBOX_CREATED,
+  WS_EVENTS.MAILBOX_DELETED,
+  WS_EVENTS.MAILBOX_RENAMED,
+  WS_EVENTS.CALENDAR_EVENT_CREATED,
+  WS_EVENTS.CALENDAR_EVENT_UPDATED,
+  WS_EVENTS.CONTACT_CREATED,
+  WS_EVENTS.CONTACT_UPDATED,
+  WS_EVENTS.NEW_RELEASE,
+]);
+
+function routeNotificationEvent(eventName, data, options) {
+  switch (eventName) {
+    case WS_EVENTS.NEW_MESSAGE:
+      handleNewMessage(data, options);
+      return true;
+    case WS_EVENTS.FLAGS_UPDATED:
+      handleFlagsUpdated(data);
+      return true;
+    case WS_EVENTS.MESSAGES_EXPUNGED:
+      handleMessagesExpunged(data);
+      return true;
+    case WS_EVENTS.MAILBOX_CREATED:
+      handleMailboxCreated(data, options);
+      return true;
+    case WS_EVENTS.MAILBOX_DELETED:
+      handleMailboxDeleted(data, options);
+      return true;
+    case WS_EVENTS.MAILBOX_RENAMED:
+      handleMailboxRenamed(data, options);
+      return true;
+    case WS_EVENTS.CALENDAR_EVENT_CREATED:
+      handleCalendarEventCreated(data, options);
+      return true;
+    case WS_EVENTS.CALENDAR_EVENT_UPDATED:
+      handleCalendarEventUpdated(data, options);
+      return true;
+    case WS_EVENTS.CONTACT_CREATED:
+      handleContactCreated(data, options);
+      return true;
+    case WS_EVENTS.CONTACT_UPDATED:
+      handleContactUpdated(data, options);
+      return true;
+    case WS_EVENTS.NEW_RELEASE:
+      handleNewRelease(data, options);
+      return true;
+    default:
+      return false;
+  }
 }
 
 // ── Wire Up ─────────────────────────────────────────────────────────────────
@@ -826,65 +893,28 @@ export function connectNotifications(wsClient) {
   }
 
   const unsubs = [];
+  const coalescer = createRealtimeEventCoalescer({
+    onEvent: routeNotificationEvent,
+  });
 
-  unsubs.push(wsClient.on(WS_EVENTS.NEW_MESSAGE, handleNewMessage));
-  unsubs.push(wsClient.on(WS_EVENTS.FLAGS_UPDATED, handleFlagsUpdated));
-  unsubs.push(wsClient.on(WS_EVENTS.MESSAGES_EXPUNGED, handleMessagesExpunged));
-  unsubs.push(wsClient.on(WS_EVENTS.MAILBOX_CREATED, handleMailboxCreated));
-  unsubs.push(wsClient.on(WS_EVENTS.MAILBOX_DELETED, handleMailboxDeleted));
-  unsubs.push(wsClient.on(WS_EVENTS.MAILBOX_RENAMED, handleMailboxRenamed));
-  unsubs.push(wsClient.on(WS_EVENTS.CALENDAR_EVENT_CREATED, handleCalendarEventCreated));
-  unsubs.push(wsClient.on(WS_EVENTS.CALENDAR_EVENT_UPDATED, handleCalendarEventUpdated));
-  unsubs.push(wsClient.on(WS_EVENTS.CONTACT_CREATED, handleContactCreated));
-  if (WS_EVENTS.CONTACT_UPDATED) {
-    unsubs.push(wsClient.on(WS_EVENTS.CONTACT_UPDATED, handleContactUpdated));
+  for (const eventName of ROUTED_NOTIFICATION_EVENTS) {
+    unsubs.push(wsClient.on(eventName, (payload) => coalescer.handleWebSocket(eventName, payload)));
   }
-  unsubs.push(wsClient.on(WS_EVENTS.NEW_RELEASE, handleNewRelease));
 
-  // ── Route push notifications through the same handlers as WebSocket ────
-  // APNs/FCM foreground pushes and UnifiedPush messages dispatch
-  // 'fe:push-notification' DOM events.  Handle them identically to WS
-  // events so the user always sees a notification regardless of delivery
-  // channel (push vs WebSocket).
+  // APNs, FCM, and UnifiedPush all enter through one DOM event.  The coalescer
+  // lets a matching socket event win in the foreground and otherwise consumes
+  // push after a bounded delay, while suppressing visuals already shown by the
+  // operating system.
   const pushHandler = (event) => {
     const payload = event?.detail;
-    if (!payload || typeof payload.event !== 'string') return;
-    switch (payload.event) {
-      case 'newMessage':
-        handleNewMessage(payload);
-        break;
-      case 'flagsUpdated':
-        handleFlagsUpdated(payload);
-        break;
-      case 'messagesExpunged':
-        handleMessagesExpunged(payload);
-        break;
-      case 'mailboxCreated':
-        handleMailboxCreated(payload);
-        break;
-      case 'mailboxDeleted':
-        handleMailboxDeleted(payload);
-        break;
-      case 'mailboxRenamed':
-        handleMailboxRenamed(payload);
-        break;
-      case 'calendarEventCreated':
-        handleCalendarEventCreated(payload);
-        break;
-      case 'calendarEventUpdated':
-        handleCalendarEventUpdated(payload);
-        break;
-      case 'contactCreated':
-        handleContactCreated(payload);
-        break;
-      default:
-        break;
-    }
+    if (!ROUTED_NOTIFICATION_EVENTS.has(payload?.event)) return;
+    coalescer.handlePush(payload);
   };
   window.addEventListener('fe:push-notification', pushHandler);
   unsubs.push(() => window.removeEventListener('fe:push-notification', pushHandler));
 
   return () => {
+    coalescer.destroy();
     for (const unsub of unsubs) {
       if (typeof unsub === 'function') unsub();
     }

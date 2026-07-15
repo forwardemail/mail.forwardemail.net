@@ -82,6 +82,7 @@ import {
   requestNotificationPermission,
 } from '../../src/utils/notification-manager.js';
 import { notify } from '../../src/utils/notification-bridge.js';
+import { PUSH_COALESCE_MS } from '../../src/utils/realtime-event-coalescer.js';
 
 function createMockWsClient() {
   const handlers = new Map();
@@ -101,14 +102,18 @@ function createMockWsClient() {
 function fireNewMessage(payload) {
   window.dispatchEvent(
     new CustomEvent('fe:push-notification', {
-      detail: { event: 'newMessage', ...payload },
+      detail: {
+        event: 'newMessage',
+        notification_id: payload.notification_id || `filter-${payload.message?.uid}`,
+        ...payload,
+      },
     }),
   );
 }
 
 async function expectNoNotification(reason) {
-  // Give async handlers a chance to schedule, then assert nothing was shown.
-  await new Promise((r) => setTimeout(r, 50));
+  await vi.advanceTimersByTimeAsync(PUSH_COALESCE_MS);
+  await vi.dynamicImportSettled();
   expect(notify, reason).not.toHaveBeenCalled();
 }
 
@@ -116,6 +121,7 @@ describe('notification-manager new-message filter', () => {
   let cleanup;
 
   beforeEach(async () => {
+    vi.useFakeTimers();
     vi.clearAllMocks();
     await requestNotificationPermission();
     cleanup = connectNotifications(createMockWsClient());
@@ -123,6 +129,7 @@ describe('notification-manager new-message filter', () => {
 
   afterEach(() => {
     if (cleanup) cleanup();
+    vi.useRealTimers();
   });
 
   it('suppresses notification when the arriving message is already \\Seen', async () => {
@@ -190,9 +197,9 @@ describe('notification-manager new-message filter', () => {
         subject: 'fresh delivery',
       },
     });
-    await vi.waitFor(() => {
-      expect(notify).toHaveBeenCalled();
-    });
+    await vi.advanceTimersByTimeAsync(PUSH_COALESCE_MS);
+    await vi.dynamicImportSettled();
+    await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
     const call = notify.mock.calls[0][0];
     expect(call.body).toContain('fresh delivery');
   });

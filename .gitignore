@@ -3,6 +3,7 @@ node_modules
 coverage
 playwright-report
 test-results
+.readme-screenshot-preview/
 e2e-webview/reports
 e2e-webview/screenshots
 e2e-mobile/reports
@@ -18,7 +19,11 @@ vite.config.js.timestamp*
 
 # Tauri
 src-tauri/target/
+src-tauri/plugins/**/target/
+src-tauri/plugins/**/android/.gradle/
+src-tauri/plugins/**/android/build/
 src-tauri/gen/
+src-tauri/capabilities/android-fcm.generated.json
 
 # Build artifacts
 *.dmg
@@ -33,4 +38,13 @@ src-tauri/gen/
 *.sig
 *.nsis.zip
 
-forwardemail.jks
+# Mobile signing and push credentials
+*.jks
+*.keystore
+*.p12
+*.mobileprovision
+*.p8
+google-services.json
+firebase-service-account*.json
+
+dev-screenshots/

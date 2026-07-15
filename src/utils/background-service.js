@@ -18,8 +18,8 @@
  *
  *   - **iOS:** APNs (Apple Push Notification service) via server-side push.
  *     The server sends push notifications when new mail arrives.
- *   - **Android:** FCM (Firebase Cloud Messaging) via server-side push.
- *     The server sends push notifications when new mail arrives.
+ *   - **Android:** FCM on Google-enabled builds or UnifiedPush through a
+ *     user-selected distributor on Google-free builds.
  *
  *   When the app returns to foreground, the WebSocket reconnects automatically
  *   via the existing exponential backoff logic in websocket-client.js.
@@ -41,6 +41,7 @@
  *   - App state transitions are debounced to prevent rapid cycling.
  */
 
+import { getAuthHeader } from './auth.ts';
 import { isTauri, isTauriDesktop, isTauriMobile, getPlatform } from './platform.js';
 
 // ── Constants ──────────────────────────────────────────────────────────────
@@ -52,6 +53,7 @@ const TOKEN_MAX_LENGTH = 4096;
 // ── State ──────────────────────────────────────────────────────────────────
 
 let pushToken = null;
+let pushRegistrationId = null;
 let isBackground = false;
 let resumeTimer = null;
 let onResumeCallbacks = [];
@@ -60,90 +62,121 @@ let onBackgroundCallbacks = [];
 // ── Push Token Management ──────────────────────────────────────────────────
 
 /**
- * Validate a push notification token.
+ * Validate a push notification token or serialized UnifiedPush subscription.
  */
-function isValidToken(token) {
-  return (
-    typeof token === 'string' &&
-    token.length > 0 &&
-    token.length <= TOKEN_MAX_LENGTH &&
-    /^[\w:_\-./]+$/.test(token)
-  );
+function isValidToken(token, provider) {
+  if (typeof token !== 'string' || token.length === 0 || token.length > TOKEN_MAX_LENGTH) {
+    return false;
+  }
+
+  if (provider !== 'unified-push') return /^[\w:_\-./]+$/.test(token);
+
+  try {
+    const subscription = JSON.parse(token);
+    const endpoint = new URL(subscription?.endpoint);
+    return (
+      endpoint.protocol === 'https:' &&
+      typeof subscription?.keys?.p256dh === 'string' &&
+      /^B[A-Za-z0-9_-]{86}$/.test(subscription.keys.p256dh) &&
+      typeof subscription?.keys?.auth === 'string' &&
+      /^[A-Za-z0-9_-]{22}$/.test(subscription.keys.auth)
+    );
+  } catch {
+    return false;
+  }
 }
 
 /**
  * Register a push notification token with the Forward Email server.
  *
- * @param {string} token - The device push token (APNs or FCM)
- * @param {string} platform - 'ios' | 'android'
- * @param {string} authToken - User's API auth token
- * @returns {Promise<boolean>} true if registration succeeded
+ * The native APNs/FCM plugins name platforms by operating system, while
+ * UnifiedPush is already named by delivery provider.
+ *
+ * @param {string} token - Device token or serialized UnifiedPush subscription
+ * @param {string} platform - 'ios' | 'android' | 'apns' | 'fcm' | 'unified-push'
+ * @returns {Promise<string|null>} the server-side registration ID
  */
-export async function registerPushToken(token, platform, authToken) {
-  if (!isValidToken(token)) {
-    console.warn('[background-service] Invalid push token');
-    return false;
+export async function registerPushToken(token, platform) {
+  const provider = platform === 'ios' ? 'apns' : platform === 'android' ? 'fcm' : platform;
+
+  if (!['apns', 'fcm', 'unified-push'].includes(provider)) {
+    console.warn('[background-service] Invalid push provider:', platform);
+    return null;
   }
 
-  if (!['ios', 'android'].includes(platform)) {
-    console.warn('[background-service] Invalid platform:', platform);
-    return false;
-  }
-
-  if (typeof authToken !== 'string' || authToken.length === 0) {
-    console.warn('[background-service] Missing auth token');
-    return false;
+  if (!isValidToken(token, provider)) {
+    console.warn('[background-service] Invalid push token or subscription');
+    return null;
   }
 
   try {
+    const authorization = getAuthHeader({ allowApiKey: false, required: true });
     const response = await fetch(PUSH_TOKEN_ENDPOINT, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${authToken}`,
+        Authorization: authorization,
       },
       body: JSON.stringify({
         token,
-        platform,
-        app_id: 'net.forwardemail.mail',
+        platform: provider,
+        device_name: `${provider} (${navigator.userAgent})`.slice(0, 255),
       }),
     });
 
     if (!response.ok) {
       console.warn('[background-service] Token registration failed:', response.status);
-      return false;
+      return null;
+    }
+
+    const registration = await response.json();
+    if (!registration || typeof registration.id !== 'string' || !registration.id) {
+      console.warn('[background-service] Token registration returned no ID');
+      return null;
     }
 
     pushToken = token;
-    return true;
+    pushRegistrationId = registration.id;
+    return registration.id;
   } catch (err) {
     console.warn('[background-service] Token registration error:', err);
-    return false;
+    return null;
   }
 }
 
 /**
- * Unregister the current push token from the server.
+ * Unregister a push-token resource from the server.
  *
- * @param {string} authToken - User's API auth token
+ * @param {string|null} registrationId - ID returned by POST /v1/push-tokens
+ * @returns {Promise<boolean>} true when the registration is absent afterward
  */
-export async function unregisterPushToken(authToken) {
-  if (!pushToken) return;
+export async function unregisterPushToken(registrationId = pushRegistrationId) {
+  if (typeof registrationId !== 'string' || !registrationId) return true;
 
   try {
-    await fetch(PUSH_TOKEN_ENDPOINT, {
+    const authorization = getAuthHeader({ allowApiKey: false, required: true });
+    const response = await fetch(`${PUSH_TOKEN_ENDPOINT}/${encodeURIComponent(registrationId)}`, {
       method: 'DELETE',
       headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${authToken}`,
+        Authorization: authorization,
       },
-      body: JSON.stringify({ token: pushToken }),
     });
-  } catch {
-    // Best effort
+
+    if (!response.ok && response.status !== 404) {
+      console.warn('[background-service] Token deletion failed:', response.status);
+      return false;
+    }
+  } catch (err) {
+    console.warn('[background-service] Token deletion error:', err);
+    return false;
   }
 
-  pushToken = null;
+  if (registrationId === pushRegistrationId) {
+    pushToken = null;
+    pushRegistrationId = null;
+  }
+
+  return true;
 }
 
 // ── App Lifecycle ──────────────────────────────────────────────────────────

@@ -1,12 +1,4 @@
-/**
- * Notification Manager – Push Event Listener Tests
- *
- * Verifies that the 'fe:push-notification' DOM event listener added by
- * connectNotifications() correctly routes push payloads through the same
- * handlers as WebSocket events.
- */
-
-// ── Mocks ─────────────────────────────────────────────────────────────────
+// Notification Manager – native push and WebSocket coalescing regressions.
 
 vi.mock('../../src/utils/platform.js', () => ({
   isTauri: false,
@@ -60,10 +52,10 @@ vi.mock('../../src/utils/storage.js', () => ({
   Local: { get: vi.fn(() => 'user@example.com') },
 }));
 vi.mock('../../src/utils/mime-utils.js', () => ({
-  decodeMimeHeader: vi.fn((v) => v),
+  decodeMimeHeader: vi.fn((value) => value),
 }));
 vi.mock('../../src/utils/address.ts', () => ({
-  extractEmail: vi.fn((v) => (typeof v === 'string' ? v : '')),
+  extractEmail: vi.fn((value) => (typeof value === 'string' ? value : '')),
 }));
 
 import {
@@ -73,8 +65,7 @@ import {
   setBadgeCount,
 } from '../../src/utils/notification-manager.js';
 import { notify } from '../../src/utils/notification-bridge.js';
-
-// ── Helpers ───────────────────────────────────────────────────────────────
+import { PUSH_COALESCE_MS } from '../../src/utils/realtime-event-coalescer.js';
 
 function createMockWsClient() {
   const listeners = {};
@@ -83,7 +74,7 @@ function createMockWsClient() {
       if (!listeners[event]) listeners[event] = [];
       listeners[event].push(handler);
       return () => {
-        listeners[event] = listeners[event].filter((h) => h !== handler);
+        listeners[event] = listeners[event].filter((candidate) => candidate !== handler);
       };
     },
     emit(event, data) {
@@ -92,13 +83,12 @@ function createMockWsClient() {
   };
 }
 
-// ── Tests ─────────────────────────────────────────────────────────────────
-
 describe('notification-manager push event listener', () => {
   let wsClient;
   let cleanup;
 
   beforeEach(async () => {
+    vi.useFakeTimers();
     vi.clearAllMocks();
     await setBadgeCount(0);
     await requestNotificationPermission();
@@ -108,22 +98,24 @@ describe('notification-manager push event listener', () => {
 
   afterEach(() => {
     if (cleanup) cleanup();
+    vi.useRealTimers();
   });
 
   it('registers a window event listener for fe:push-notification', () => {
     const spy = vi.spyOn(window, 'removeEventListener');
     cleanup();
     cleanup = null;
-    // Cleanup should remove the push event listener
+
     expect(spy).toHaveBeenCalledWith('fe:push-notification', expect.any(Function));
     spy.mockRestore();
   });
 
-  it('routes push newMessage events through handleNewMessage', async () => {
+  it('routes a push newMessage after the bounded WebSocket wait', async () => {
     window.dispatchEvent(
       new CustomEvent('fe:push-notification', {
         detail: {
           event: 'newMessage',
+          notification_id: '123e4567-e89b-12d3-a456-426614174000',
           mailbox: 'INBOX',
           message: {
             uid: 'push-123',
@@ -134,126 +126,158 @@ describe('notification-manager push event listener', () => {
       }),
     );
 
-    await vi.waitFor(() => {
-      expect(notify).toHaveBeenCalled();
-    });
+    expect(notify).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(PUSH_COALESCE_MS);
+    await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
 
     const call = notify.mock.calls[0][0];
     expect(call.title).toContain('Push Sender');
     expect(call.body).toContain('Push notification test');
   });
 
-  it('routes push flagsUpdated events to update badge', async () => {
+  it('routes push flagsUpdated side effects only after the bounded wait', async () => {
     await setBadgeCount(5);
-
     window.dispatchEvent(
       new CustomEvent('fe:push-notification', {
         detail: {
           event: 'flagsUpdated',
+          notification_id: '123e4567-e89b-12d3-a456-426614174001',
           action: 'add',
           flags: ['\\Seen'],
         },
       }),
     );
 
-    // Badge should decrement
-    await vi.waitFor(() => {
-      expect(getBadgeCount()).toBe(4);
-    });
+    expect(getBadgeCount()).toBe(5);
+    await vi.advanceTimersByTimeAsync(PUSH_COALESCE_MS);
+    expect(getBadgeCount()).toBe(4);
   });
 
-  it('routes push mailboxCreated events', async () => {
+  it('routes mailbox and calendar push fallbacks', async () => {
     window.dispatchEvent(
       new CustomEvent('fe:push-notification', {
         detail: {
           event: 'mailboxCreated',
+          notification_id: '123e4567-e89b-12d3-a456-426614174002',
           path: 'NewFolder',
         },
       }),
     );
-
-    await vi.waitFor(() => {
-      expect(notify).toHaveBeenCalled();
-    });
-
-    const call = notify.mock.calls[0][0];
-    expect(call.title).toBe('Folder Created');
-    expect(call.body).toContain('NewFolder');
-  });
-
-  it('routes push calendarEventCreated events', async () => {
     window.dispatchEvent(
       new CustomEvent('fe:push-notification', {
         detail: {
           event: 'calendarEventCreated',
+          notification_id: '123e4567-e89b-12d3-a456-426614174003',
           summary: 'Team Meeting',
           id: 'cal-push-1',
         },
       }),
     );
+    await vi.advanceTimersByTimeAsync(PUSH_COALESCE_MS);
 
-    await vi.waitFor(() => {
-      expect(notify).toHaveBeenCalled();
-    });
-
-    const call = notify.mock.calls[0][0];
-    expect(call.title).toBe('Calendar Event Created');
-    expect(call.body).toContain('Team Meeting');
-  });
-
-  it('ignores push events with missing event field', () => {
-    window.dispatchEvent(
-      new CustomEvent('fe:push-notification', {
-        detail: { data: 'no event field' },
+    expect(notify).toHaveBeenCalledTimes(2);
+    expect(notify.mock.calls[0][0]).toEqual(
+      expect.objectContaining({
+        title: 'Folder Created',
+        body: expect.stringContaining('NewFolder'),
       }),
     );
-
-    expect(notify).not.toHaveBeenCalled();
-  });
-
-  it('ignores push events with non-string event field', () => {
-    window.dispatchEvent(
-      new CustomEvent('fe:push-notification', {
-        detail: { event: 123 },
+    expect(notify.mock.calls[1][0]).toEqual(
+      expect.objectContaining({
+        title: 'Calendar Event Created',
+        body: expect.stringContaining('Team Meeting'),
       }),
     );
-
-    expect(notify).not.toHaveBeenCalled();
   });
 
-  it('ignores push events with unknown event type', () => {
-    window.dispatchEvent(
-      new CustomEvent('fe:push-notification', {
-        detail: { event: 'unknownEvent' },
-      }),
-    );
-
-    expect(notify).not.toHaveBeenCalled();
-  });
-
-  it('ignores push events with null detail', () => {
-    window.dispatchEvent(
-      new CustomEvent('fe:push-notification', {
-        detail: null,
-      }),
-    );
-
-    expect(notify).not.toHaveBeenCalled();
-  });
-
-  it('removes push listener on cleanup', () => {
-    cleanup();
-    cleanup = null;
-
-    // After cleanup, dispatching should not trigger notifications
+  it('prefers WebSocket when push arrives first inside the coalescing window', async () => {
+    const notificationId = '123e4567-e89b-12d3-a456-426614174004';
     window.dispatchEvent(
       new CustomEvent('fe:push-notification', {
         detail: {
           event: 'mailboxCreated',
-          path: 'ShouldNotNotify',
+          notification_id: notificationId,
+          path: 'SocketWins',
         },
       }),
     );
+    expect(notify).not.toHaveBeenCalled();
+
+    wsClient.emit('mailboxCreated', {
+      notification_id: notificationId,
+      path: 'SocketWins',
+    });
+    await vi.advanceTimersByTimeAsync(PUSH_COALESCE_MS);
+
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify.mock.calls[0][0].body).toContain('SocketWins');
+  });
+
+  it('suppresses a late matching push after WebSocket delivery', async () => {
+    const notificationId = '123e4567-e89b-12d3-a456-426614174005';
+    wsClient.emit('mailboxCreated', {
+      notification_id: notificationId,
+      path: 'AlreadyHandled',
+    });
+    window.dispatchEvent(
+      new CustomEvent('fe:push-notification', {
+        detail: {
+          event: 'mailboxCreated',
+          notification_id: notificationId,
+          path: 'AlreadyHandled',
+        },
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(PUSH_COALESCE_MS);
+
+    expect(notify).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not display a second visual for a push already shown by the system', async () => {
+    window.dispatchEvent(
+      new CustomEvent('fe:push-notification', {
+        detail: {
+          event: 'mailboxCreated',
+          notification_id: '123e4567-e89b-12d3-a456-426614174006',
+          path: 'SystemDisplayed',
+          displayedBySystem: true,
+        },
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(PUSH_COALESCE_MS);
+
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['missing event field', { data: 'no event field' }],
+    ['non-string event field', { event: 123 }],
+    ['unknown event type', { event: 'unknownEvent' }],
+    ['null detail', null],
+  ])('ignores push events with %s', (_description, detail) => {
+    window.dispatchEvent(new CustomEvent('fe:push-notification', { detail }));
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it('removes the listener and cancels pending fallback work on cleanup', async () => {
+    window.dispatchEvent(
+      new CustomEvent('fe:push-notification', {
+        detail: {
+          event: 'mailboxCreated',
+          notification_id: '123e4567-e89b-12d3-a456-426614174007',
+          path: 'PendingBeforeCleanup',
+        },
+      }),
+    );
+
+    cleanup();
+    cleanup = null;
+    window.dispatchEvent(
+      new CustomEvent('fe:push-notification', {
+        detail: { event: 'mailboxCreated', path: 'ShouldNotNotify' },
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(PUSH_COALESCE_MS);
 
     expect(notify).not.toHaveBeenCalled();
   });

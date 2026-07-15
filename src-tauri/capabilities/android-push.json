@@ -1,0 +1,8 @@
+{
+  "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/tauri-v2.0.0/crates/tauri-cli/capabilities-schema.json",
+  "identifier": "android-push",
+  "description": "Android-only permissions for Google-free UnifiedPush registration, delivery listeners, and subscription lifecycle management.",
+  "windows": ["main"],
+  "permissions": ["unified-push:default"],
+  "platforms": ["android"]
+}

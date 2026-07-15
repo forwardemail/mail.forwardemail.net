@@ -1,39 +1,39 @@
 /**
  * Push Notifications – Safety & Platform Guard Tests
  *
- * Verifies that push notification initialization:
- *   - Is a no-op on non-mobile platforms (desktop, web browser)
- *   - Is a no-op when no auth token is provided
- *   - Is idempotent (calling init twice doesn't double-register)
- *   - Handles errors gracefully without throwing
- *   - Properly cleans up on sign-out
+ * Verifies that native remote-push initialization:
+ *   - Is a no-op on non-mobile platforms
+ *   - Is idempotent
+ *   - Does not require callers to pass credentials
+ *   - Deletes the exact persisted server registration on cleanup
+ *   - Handles malformed notification payloads safely
  */
 
-// ── Mocks (factories must be self-contained for vi.mock hoisting) ─────────
+const { localStorageState, localGet, localSet, localRemove } = vi.hoisted(() => {
+  const state = new Map();
+  return {
+    localStorageState: state,
+    localGet: vi.fn((key) => state.get(key) ?? null),
+    localSet: vi.fn((key, value) => state.set(key, value)),
+    localRemove: vi.fn((key) => state.delete(key)),
+  };
+});
 
 vi.mock('../../src/utils/platform.js', () => ({
   isTauriMobile: false,
 }));
 
 vi.mock('../../src/utils/background-service.js', () => ({
-  registerPushToken: vi.fn(() => Promise.resolve(true)),
+  registerPushToken: vi.fn(() => Promise.resolve('registration-id')),
   unregisterPushToken: vi.fn(() => Promise.resolve()),
 }));
 
-vi.mock('../../src/utils/unified-push.js', () => ({
-  isUnifiedPushAvailable: vi.fn(() => Promise.resolve(false)),
-  registerUnifiedPush: vi.fn(() => Promise.resolve(null)),
-  unregisterUnifiedPush: vi.fn(() => Promise.resolve()),
-  initUnifiedPushListener: vi.fn(() => Promise.resolve()),
-  isUnifiedPushRegistered: vi.fn(() => false),
-}));
-
-vi.mock('@tauri-apps/api/event', () => ({
-  listen: vi.fn(() => Promise.resolve(() => {})),
-}));
-
 vi.mock('../../src/utils/storage.js', () => ({
-  Local: { get: vi.fn(() => null) },
+  Local: {
+    get: localGet,
+    set: localSet,
+    remove: localRemove,
+  },
 }));
 
 import {
@@ -44,67 +44,74 @@ import {
 } from '../../src/utils/push-notifications.js';
 import { registerPushToken, unregisterPushToken } from '../../src/utils/background-service.js';
 
-// ── Tests ─────────────────────────────────────────────────────────────────
+const REGISTRATION_ID_STORAGE_KEY = 'push_notification_registration_id';
+const TOKEN_STORAGE_KEY = 'push_notification_token';
+const TOKEN_PLATFORM_KEY = 'push_notification_platform';
 
 describe('push-notifications safety guards', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    localStorageState.clear();
     vi.clearAllMocks();
-    // Reset initialized state between tests
-    cleanupPushNotifications(null);
+    await cleanupPushNotifications();
+    vi.clearAllMocks();
   });
 
   describe('platform guards (isTauriMobile = false)', () => {
     it('returns false on non-mobile platforms (desktop/web)', async () => {
-      const result = await initPushNotifications({ authToken: 'test-token' });
-      expect(result).toBe(false);
-      expect(registerPushToken).not.toHaveBeenCalled();
-    });
-
-    it('does not attempt registration without auth token', async () => {
-      const result = await initPushNotifications({});
-      expect(result).toBe(false);
-      expect(registerPushToken).not.toHaveBeenCalled();
-    });
-
-    it('does not attempt registration with empty auth token', async () => {
-      const result = await initPushNotifications({ authToken: '' });
-      expect(result).toBe(false);
-      expect(registerPushToken).not.toHaveBeenCalled();
-    });
-
-    it('does not attempt registration with no options', async () => {
       const result = await initPushNotifications();
       expect(result).toBe(false);
       expect(registerPushToken).not.toHaveBeenCalled();
     });
 
+    it('does not need caller-supplied credentials', async () => {
+      const result = await initPushNotifications();
+      expect(result).toBe(false);
+      expect(registerPushToken).not.toHaveBeenCalled();
+    });
+
+    it('ignores obsolete caller options safely', async () => {
+      const result = await initPushNotifications({ authToken: 'legacy-token' });
+      expect(result).toBe(false);
+      expect(registerPushToken).not.toHaveBeenCalled();
+    });
+
     it('does not throw when called multiple times', async () => {
-      const result1 = await initPushNotifications({ authToken: 'test' });
-      const result2 = await initPushNotifications({ authToken: 'test' });
+      const result1 = await initPushNotifications();
+      const result2 = await initPushNotifications();
       expect(result1).toBe(false);
       expect(result2).toBe(false);
     });
   });
 
   describe('cleanup', () => {
-    it('calls unregisterPushToken on cleanup with auth', async () => {
-      await cleanupPushNotifications('my-auth-token');
-      expect(unregisterPushToken).toHaveBeenCalledWith('my-auth-token');
+    it('deletes the persisted server registration ID', async () => {
+      localStorageState.set(REGISTRATION_ID_STORAGE_KEY, 'registration-123');
+
+      await cleanupPushNotifications();
+
+      expect(unregisterPushToken).toHaveBeenCalledWith('registration-123');
+      expect(localRemove).toHaveBeenCalledWith(TOKEN_STORAGE_KEY);
+      expect(localRemove).toHaveBeenCalledWith(TOKEN_PLATFORM_KEY);
+      expect(localRemove).toHaveBeenCalledWith(REGISTRATION_ID_STORAGE_KEY);
     });
 
-    it('does not call unregister without auth token', async () => {
-      await cleanupPushNotifications(null);
+    it('does not call unregister without a persisted registration ID', async () => {
+      await cleanupPushNotifications();
       expect(unregisterPushToken).not.toHaveBeenCalled();
     });
 
     it('resets initialized state on cleanup', async () => {
-      await cleanupPushNotifications('token');
+      await cleanupPushNotifications();
       expect(isPushInitialized()).toBe(false);
     });
 
     it('is safe to call cleanup multiple times', async () => {
-      await cleanupPushNotifications('token');
-      await cleanupPushNotifications('token');
+      localStorageState.set(REGISTRATION_ID_STORAGE_KEY, 'registration-123');
+
+      await cleanupPushNotifications();
+      await cleanupPushNotifications();
+
+      expect(unregisterPushToken).toHaveBeenCalledTimes(1);
       expect(isPushInitialized()).toBe(false);
     });
   });
@@ -176,14 +183,15 @@ describe('push-notifications safety guards', () => {
       expect(result).toEqual({ action: 'navigate', path: '#notes' });
     });
 
-    it('handles XSS attempts in payload fields safely', () => {
+    it('encodes untrusted payload fields before navigation', () => {
       const result = handlePushPayload({
-        type: 'new-message',
-        uid: '<script>alert(1)</script>',
-        mailbox: 'INBOX',
+        type: 'calendar-event',
+        data: { id: '<script>alert(1)</script>' },
       });
-      expect(result).toHaveProperty('action', 'navigate');
-      expect(result.path).toContain('#INBOX/');
+      expect(result).toEqual({
+        action: 'navigate',
+        path: '/calendar#event=%3Cscript%3Ealert(1)%3C%2Fscript%3E',
+      });
     });
   });
 });

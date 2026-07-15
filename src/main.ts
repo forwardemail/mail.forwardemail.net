@@ -2570,15 +2570,15 @@ async function bootstrap() {
           });
         }
       });
-      // Initialize push notifications on mobile (APNs, FCM, UnifiedPush fallback)
-      import('./utils/push-notifications.js').then(({ initPushNotifications }) => {
-        const authToken = Local.get('authToken') || Local.get('api_key') || '';
-        if (authToken) {
-          initPushNotifications({ authToken }).catch((error) => {
+      // The push-token API is alias-scoped. Initialize only when alias Basic
+      // credentials identify the active alias unambiguously.
+      if (isTauriMobile && Local.get('alias_auth')) {
+        import('./utils/push-notifications.js').then(({ initPushNotifications }) => {
+          initPushNotifications().catch((error) => {
             console.warn('[main] Push notification init failed:', error);
           });
-        }
-      });
+        });
+      }
     }
 
     if (canUseServiceWorker() && import.meta.env.PROD) {

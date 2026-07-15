@@ -1,32 +1,78 @@
 #!/usr/bin/env bash
 # Build iOS app. Defaults to an unsigned simulator build — pass --target
-# aarch64 (or other device targets) plus signing env for a device build.
+# aarch64 (or another device target) plus signing env for a device build.
 
 set -euo pipefail
 
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT_DIR"
+
 XCODE_PATH="$(xcode-select -p 2>/dev/null || true)"
 if [ -z "$XCODE_PATH" ] || [[ "$XCODE_PATH" == *CommandLineTools* ]]; then
-  echo "❌ Full Xcode.app required (run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer)"
+  echo "Full Xcode.app required (run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer)"
   exit 1
 fi
 
 if ! command -v pod &>/dev/null; then
-  echo "❌ CocoaPods not found (install: brew install cocoapods)"
+  echo "CocoaPods not found (install: brew install cocoapods)"
   exit 1
 fi
 
-# If caller didn't pass --target, default to the host-arch simulator.
-TARGET_FLAG=""
-if [[ "$*" != *"--target"* ]]; then
-  case "$(uname -m)" in
-    arm64) TARGET_FLAG="--target aarch64-sim" ;;
-    x86_64) TARGET_FLAG="--target x86_64-sim" ;;
+TARGET=""
+EXPORT_METHOD_ARG=""
+ARGS=("$@")
+for ((i = 0; i < ${#ARGS[@]}; i++)); do
+  case "${ARGS[$i]}" in
+    --target)
+      TARGET="${ARGS[$((i + 1))]:-}"
+      ;;
+    --target=*)
+      TARGET="${ARGS[$i]#*=}"
+      ;;
+    --export-method)
+      EXPORT_METHOD_ARG="${ARGS[$((i + 1))]:-}"
+      ;;
+    --export-method=*)
+      EXPORT_METHOD_ARG="${ARGS[$i]#*=}"
+      ;;
   esac
+done
+
+# If caller did not pass --target, default to the host-architecture simulator.
+TARGET_FLAG=""
+if [ -z "$TARGET" ]; then
+  case "$(uname -m)" in
+    arm64)
+      TARGET="aarch64-sim"
+      ;;
+    x86_64)
+      TARGET="x86_64-sim"
+      ;;
+  esac
+  TARGET_FLAG="--target $TARGET"
 fi
 
-echo "📦 iOS Build"
+echo "iOS Build"
 echo "   Xcode:  $XCODE_PATH"
-[ -n "$TARGET_FLAG" ] && echo "   Target: ${TARGET_FLAG#--target }"
+echo "   Target: ${TARGET:-<Tauri default>}"
 echo ""
 
+# Simulator builds cannot register with APNs and do not need signing. Device
+# builds must use the generated iOS-only entitlement file; do not add
+# aps-environment to src-tauri/Entitlements.plist because macOS also uses it.
+if [[ "$TARGET" != *-sim ]]; then
+  if [ ! -d src-tauri/gen/apple ]; then
+    npx tauri ios init --ci
+  fi
+
+  DEFAULT_EXPORT_METHOD="release-testing"
+  if [[ " $* " == *" --debug "* ]]; then
+    DEFAULT_EXPORT_METHOD="debugging"
+  fi
+
+  IOS_EXPORT_METHOD="${IOS_EXPORT_METHOD:-${EXPORT_METHOD_ARG:-$DEFAULT_EXPORT_METHOD}}" \
+    node scripts/inject-ios-signing.cjs
+fi
+
+# shellcheck disable=SC2086
 exec npx tauri ios build $TARGET_FLAG "$@"

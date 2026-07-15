@@ -125,6 +125,7 @@ vi.mock('../../src/utils/websocket-client', () => ({
 // Now import the module under test
 import { Local } from '../../src/utils/storage';
 import { createInboxUpdater } from '../../src/utils/websocket-updater.js';
+import { PUSH_COALESCE_MS } from '../../src/utils/realtime-event-coalescer.js';
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -317,6 +318,7 @@ describe('refreshFolder (core sync bug fix)', () => {
 
   afterEach(() => {
     updater.destroy();
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -417,6 +419,71 @@ describe('refreshFolder (core sync bug fix)', () => {
     simulateWsEvent('newMessage', {});
 
     expect(mockLoadMessages).toHaveBeenCalled();
+  });
+
+  it('runs refresh work once when push arrives before the matching WebSocket event', async () => {
+    vi.useFakeTimers();
+    const notificationId = '123e4567-e89b-12d3-a456-426614174100';
+    window.dispatchEvent(
+      new CustomEvent('fe:push-notification', {
+        detail: {
+          event: 'newMessage',
+          notification_id: notificationId,
+          mailbox: 'INBOX',
+          message: { uid: 100 },
+        },
+      }),
+    );
+    expect(mockStartInitialSync).not.toHaveBeenCalled();
+
+    simulateWsEvent('newMessage', {
+      notification_id: notificationId,
+      mailbox: 'INBOX',
+      message: { uid: 100 },
+    });
+    await vi.advanceTimersByTimeAsync(PUSH_COALESCE_MS);
+
+    expect(mockStartInitialSync).toHaveBeenCalledTimes(1);
+    expect(mockLoadMessages).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses push refresh as a bounded fallback when WebSocket delivery is absent', async () => {
+    vi.useFakeTimers();
+    window.dispatchEvent(
+      new CustomEvent('fe:push-notification', {
+        detail: {
+          event: 'newMessage',
+          notification_id: '123e4567-e89b-12d3-a456-426614174101',
+          mailbox: 'INBOX',
+          message: { uid: 101 },
+        },
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(PUSH_COALESCE_MS - 1);
+    expect(mockStartInitialSync).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(mockStartInitialSync).toHaveBeenCalledTimes(1);
+    expect(mockLoadMessages).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves system-displayed background push reconciliation to the visibility handler', async () => {
+    vi.useFakeTimers();
+    window.dispatchEvent(
+      new CustomEvent('fe:push-notification', {
+        detail: {
+          event: 'newMessage',
+          notification_id: '123e4567-e89b-12d3-a456-426614174102',
+          mailbox: 'INBOX',
+          message: { uid: 102 },
+          displayedBySystem: true,
+        },
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(PUSH_COALESCE_MS);
+
+    expect(mockStartInitialSync).not.toHaveBeenCalled();
+    expect(mockLoadMessages).not.toHaveBeenCalled();
   });
 });
 

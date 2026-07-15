@@ -132,7 +132,9 @@ fn toggle_window_visibility(app: tauri::AppHandle) -> Result<(), String> {
         window.hide().map_err(|e: tauri::Error| e.to_string())?;
     } else {
         window.show().map_err(|e: tauri::Error| e.to_string())?;
-        window.set_focus().map_err(|e: tauri::Error| e.to_string())?;
+        window
+            .set_focus()
+            .map_err(|e: tauri::Error| e.to_string())?;
     }
     Ok(())
 }
@@ -196,8 +198,8 @@ fn add_windows_registry_value(key: &str, name: Option<&str>, data: &str) -> Resu
 
 #[cfg(all(desktop, target_os = "windows"))]
 fn register_windows_mail_client() -> Result<(), String> {
-    let exe_path = std::env::current_exe()
-        .map_err(|e| format!("current_exe unavailable: {}", e))?;
+    let exe_path =
+        std::env::current_exe().map_err(|e| format!("current_exe unavailable: {}", e))?;
     let exe = exe_path.display().to_string();
     let command = format!("\"{}\" \"%1\"", exe);
     let classes_key = format!(r"HKCU\Software\Classes\{}", WINDOWS_MAILTO_PROGID);
@@ -209,7 +211,11 @@ fn register_windows_mail_client() -> Result<(), String> {
     add_windows_registry_value(&classes_key, None, "URL:Forward Email MailTo Protocol")?;
     add_windows_registry_value(&classes_key, Some("URL Protocol"), "")?;
     add_windows_registry_value(&format!(r"{}\DefaultIcon", classes_key), None, &exe)?;
-    add_windows_registry_value(&format!(r"{}\shell\open\command", classes_key), None, &command)?;
+    add_windows_registry_value(
+        &format!(r"{}\shell\open\command", classes_key),
+        None,
+        &command,
+    )?;
 
     add_windows_registry_value(&mail_client_key, None, WINDOWS_MAIL_CLIENT_NAME)?;
     add_windows_registry_value(
@@ -217,7 +223,11 @@ fn register_windows_mail_client() -> Result<(), String> {
         None,
         &command,
     )?;
-    add_windows_registry_value(&capabilities_key, Some("ApplicationName"), WINDOWS_MAIL_CLIENT_NAME)?;
+    add_windows_registry_value(
+        &capabilities_key,
+        Some("ApplicationName"),
+        WINDOWS_MAIL_CLIENT_NAME,
+    )?;
     add_windows_registry_value(
         &capabilities_key,
         Some("ApplicationDescription"),
@@ -228,7 +238,10 @@ fn register_windows_mail_client() -> Result<(), String> {
     add_windows_registry_value(
         r"HKCU\Software\RegisteredApplications",
         Some(WINDOWS_MAIL_CLIENT_NAME),
-        &format!(r"Software\Clients\Mail\{}\Capabilities", WINDOWS_MAIL_CLIENT_NAME),
+        &format!(
+            r"Software\Clients\Mail\{}\Capabilities",
+            WINDOWS_MAIL_CLIENT_NAME
+        ),
     )?;
 
     Ok(())
@@ -237,16 +250,12 @@ fn register_windows_mail_client() -> Result<(), String> {
 /// Check if this app is the default mailto: handler.
 #[cfg(desktop)]
 #[tauri::command]
-async fn is_default_mailto_handler(
-    app: tauri::AppHandle,
-) -> Result<MailtoStatus, String> {
+async fn is_default_mailto_handler(app: tauri::AppHandle) -> Result<MailtoStatus, String> {
     is_default_mailto_handler_impl(&app).await
 }
 
 #[cfg(all(desktop, target_os = "macos"))]
-async fn is_default_mailto_handler_impl(
-    _app: &tauri::AppHandle,
-) -> Result<MailtoStatus, String> {
+async fn is_default_mailto_handler_impl(_app: &tauri::AppHandle) -> Result<MailtoStatus, String> {
     use core_foundation::base::TCFType;
     use core_foundation::string::{CFString, CFStringRef};
 
@@ -278,9 +287,7 @@ async fn is_default_mailto_handler_impl(
 }
 
 #[cfg(all(desktop, target_os = "windows"))]
-async fn is_default_mailto_handler_impl(
-    app: &tauri::AppHandle,
-) -> Result<MailtoStatus, String> {
+async fn is_default_mailto_handler_impl(app: &tauri::AppHandle) -> Result<MailtoStatus, String> {
     use tauri_plugin_deep_link::DeepLinkExt;
 
     match app.deep_link().is_registered("mailto") {
@@ -306,9 +313,7 @@ async fn is_default_mailto_handler_impl(
 }
 
 #[cfg(all(desktop, target_os = "linux"))]
-async fn is_default_mailto_handler_impl(
-    app: &tauri::AppHandle,
-) -> Result<MailtoStatus, String> {
+async fn is_default_mailto_handler_impl(app: &tauri::AppHandle) -> Result<MailtoStatus, String> {
     use tauri_plugin_deep_link::DeepLinkExt;
 
     match app.deep_link().is_registered("mailto") {
@@ -342,9 +347,7 @@ struct SetMailtoResult {
 /// Attempt to set this app as the default mailto: handler.
 #[cfg(desktop)]
 #[tauri::command]
-async fn set_default_mailto_handler(
-    app: tauri::AppHandle,
-) -> Result<SetMailtoResult, String> {
+async fn set_default_mailto_handler(app: tauri::AppHandle) -> Result<SetMailtoResult, String> {
     set_default_mailto_handler_impl(&app).await
 }
 
@@ -479,13 +482,34 @@ extern "C" {
 
 #[cfg(desktop)]
 fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
-    let compose = MenuItem::with_id(app, "tray_compose", "Compose New Message", true, None::<&str>)?;
-    let check_mail = MenuItem::with_id(app, "tray_check_mail", "Check for New Mail", true, None::<&str>)?;
+    let compose = MenuItem::with_id(
+        app,
+        "tray_compose",
+        "Compose New Message",
+        true,
+        None::<&str>,
+    )?;
+    let check_mail = MenuItem::with_id(
+        app,
+        "tray_check_mail",
+        "Check for New Mail",
+        true,
+        None::<&str>,
+    )?;
     let sep1 = PredefinedMenuItem::separator(app)?;
-    let show_hide = MenuItem::with_id(app, "tray_show_hide", "Show/Hide Forward Email", true, None::<&str>)?;
+    let show_hide = MenuItem::with_id(
+        app,
+        "tray_show_hide",
+        "Show/Hide Forward Email",
+        true,
+        None::<&str>,
+    )?;
     let sep2 = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, "tray_quit", "Quit Forward Email", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&compose, &check_mail, &sep1, &show_hide, &sep2, &quit])?;
+    let menu = Menu::with_items(
+        app,
+        &[&compose, &check_mail, &sep1, &show_hide, &sep2, &quit],
+    )?;
 
     // macOS template icons must be monochrome with a real alpha channel so
     // the OS can invert them for light/dark menu bars. The default 32x32.png
@@ -625,7 +649,14 @@ fn setup_menu(app: &tauri::App) -> Result<Menu<tauri::Wry>, Box<dyn std::error::
 
     let menu = Menu::with_items(
         app,
-        &[&app_menu, &file_menu, &edit_menu, &view_menu, &window_menu, &help_menu],
+        &[
+            &app_menu,
+            &file_menu,
+            &edit_menu,
+            &view_menu,
+            &window_menu,
+            &help_menu,
+        ],
     )?;
 
     Ok(menu)
@@ -637,89 +668,7 @@ fn setup_menu(app: &tauri::App) -> Result<Menu<tauri::Wry>, Box<dyn std::error::
 /// Only `mailto:` and `forwardemail:` are permitted.
 fn is_valid_deep_link(url: &str) -> bool {
     let trimmed = url.trim().to_lowercase();
-    trimmed.starts_with("mailto:")
-        || trimmed.starts_with("forwardemail:")
-}
-
-// ── UnifiedPush Commands ─────────────────────────────────────────────────────
-// These commands are only compiled for mobile targets (iOS/Android). On iOS they
-// are no-ops since UnifiedPush is Android-only.
-
-/// Check if a UnifiedPush distributor is available on the device.
-/// On Android, queries the content provider for registered distributors.
-/// Returns false on iOS/desktop (UnifiedPush is Android-only).
-#[cfg(mobile)]
-#[tauri::command]
-async fn check_unified_push(app: tauri::AppHandle) -> Result<bool, String> {
-    // On Android, check for UnifiedPush distributor via content resolver.
-    // The tauri-plugin-remote-push handles the native Android side;
-    // we check if any UP distributor is installed by querying the system.
-    #[cfg(target_os = "android")]
-    {
-        // Emit a request to the Kotlin/Java side to check for UP distributors.
-        // The native Android bridge (in MainActivity.kt) handles the actual
-        // PackageManager query and responds via 'unified-push-available' event.
-        // For synchronous fallback, we optimistically return true if the
-        // remote-push plugin is active (it bundles UP support).
-        let _ = &app;
-        Ok(true)
-    }
-    #[cfg(not(target_os = "android"))]
-    {
-        let _ = app;
-        Ok(false)
-    }
-}
-
-/// Register with the UnifiedPush distributor.
-/// Returns the endpoint URL on success.
-#[cfg(mobile)]
-#[tauri::command]
-async fn register_unified_push(
-    app: tauri::AppHandle,
-    instance: String,
-) -> Result<String, String> {
-    if instance.is_empty() || instance.len() > 256 {
-        return Err("Invalid instance identifier".to_string());
-    }
-    #[cfg(target_os = "android")]
-    {
-        // Emit event to the Android native side to trigger registration
-        app.emit("register-unified-push-request", &instance)
-            .map_err(|e| format!("Failed to request UP registration: {}", e))?;
-        // The actual endpoint will be returned asynchronously via
-        // 'unified-push-endpoint' event from the native side.
-        // For now, return a placeholder that the JS side will update.
-        Err("Registration is asynchronous — listen for unified-push-endpoint event".to_string())
-    }
-    #[cfg(not(target_os = "android"))]
-    {
-        let _ = (app, instance);
-        Err("UnifiedPush is only available on Android".to_string())
-    }
-}
-
-/// Unregister from the UnifiedPush distributor.
-#[cfg(mobile)]
-#[tauri::command]
-async fn unregister_unified_push(
-    app: tauri::AppHandle,
-    instance: String,
-) -> Result<(), String> {
-    if instance.is_empty() || instance.len() > 256 {
-        return Err("Invalid instance identifier".to_string());
-    }
-    #[cfg(target_os = "android")]
-    {
-        app.emit("unregister-unified-push-request", &instance)
-            .map_err(|e| format!("Failed to request UP unregistration: {}", e))?;
-        Ok(())
-    }
-    #[cfg(not(target_os = "android"))]
-    {
-        let _ = (app, instance);
-        Ok(())
-    }
+    trimmed.starts_with("mailto:") || trimmed.starts_with("forwardemail:")
 }
 
 // ── App Entry Point ──────────────────────────────────────────────────────────
@@ -814,6 +763,26 @@ pub fn run() {
         builder = builder.plugin(tauri_plugin_haptics::init());
     }
 
+    // Direct APNs tokens on iOS. This crate must not be compiled on Android,
+    // where its current Rust command shim returns empty/no-op responses.
+    #[cfg(target_os = "ios")]
+    {
+        builder = builder.plugin(tauri_plugin_mobile_push::init());
+    }
+
+    // UnifiedPush is the Google-free Android baseline. Play builds enable the
+    // optional `fcm` Cargo feature and register Firebase as an additional
+    // transport; F-Droid/Obtainium builds never link the FCM plugin.
+    #[cfg(target_os = "android")]
+    {
+        builder = builder.plugin(tauri_plugin_unified_push::init());
+    }
+
+    #[cfg(all(target_os = "android", feature = "fcm"))]
+    {
+        builder = builder.plugin(tauri_plugin_remote_push::init());
+    }
+
     builder
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_deep_link::init())
@@ -828,9 +797,7 @@ pub fn run() {
             // disk, stdout, or the webview bridge — so secrets captured by
             // third-party crates (updater, tauri internals, plugins) never
             // enter the log in plaintext.
-            let ts_fmt = format_description!(
-                "[year]-[month]-[day]T[hour]:[minute]:[second]"
-            );
+            let ts_fmt = format_description!("[year]-[month]-[day]T[hour]:[minute]:[second]");
 
             tauri_plugin_log::Builder::new()
                 .targets([
@@ -889,12 +856,6 @@ pub fn run() {
             file_picker_macos::save_file_macos,
             #[cfg(target_os = "macos")]
             self_heal_macos::self_heal_flush_launch_services,
-            #[cfg(mobile)]
-            check_unified_push,
-            #[cfg(mobile)]
-            register_unified_push,
-            #[cfg(mobile)]
-            unregister_unified_push,
         ])
         .manage(PendingDeepLinks(Mutex::new(Vec::new())))
         .setup(|app| {
@@ -921,10 +882,14 @@ pub fn run() {
                         }
                     }
                     "website" => {
-                        let _ = app.opener().open_url("https://forwardemail.net", None::<&str>);
+                        let _ = app
+                            .opener()
+                            .open_url("https://forwardemail.net", None::<&str>);
                     }
                     "support" => {
-                        let _ = app.opener().open_url("https://forwardemail.net/help", None::<&str>);
+                        let _ = app
+                            .opener()
+                            .open_url("https://forwardemail.net/help", None::<&str>);
                     }
                     _ => {}
                 });
@@ -943,14 +908,15 @@ pub fn run() {
 
                 let shortcut = Shortcut::new(Some(modifiers), Code::KeyM);
                 let handle = app.handle().clone();
-                app.global_shortcut().on_shortcut(shortcut, move |_app, _shortcut, event| {
-                    if event.state == ShortcutState::Pressed {
-                        if let Some(window) = handle.get_webview_window("main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
+                app.global_shortcut()
+                    .on_shortcut(shortcut, move |_app, _shortcut, event| {
+                        if event.state == ShortcutState::Pressed {
+                            if let Some(window) = handle.get_webview_window("main") {
+                                let _ = window.show();
+                                let _ = window.set_focus();
+                            }
                         }
-                    }
-                })?;
+                    })?;
             }
 
             // Forward Android back button to the frontend
@@ -991,20 +957,16 @@ pub fn run() {
             app.listen("deep-link://new-url", move |event| {
                 if let Ok(urls) = serde_json::from_str::<Vec<String>>(event.payload()) {
                     // Filter to only allowed URL schemes
-                    let safe_urls: Vec<String> = urls
-                        .into_iter()
-                        .filter(|u| is_valid_deep_link(u))
-                        .collect();
+                    let safe_urls: Vec<String> =
+                        urls.into_iter().filter(|u| is_valid_deep_link(u)).collect();
                     if !safe_urls.is_empty() {
                         // Also push to pending queue as a safety net
                         if let Some(state) = handle.try_state::<PendingDeepLinks>() {
                             let mut queue = state.0.lock().unwrap_or_else(|e| e.into_inner());
                             queue.extend(safe_urls.clone());
                         }
-                        let _ = handle.emit(
-                            "deep-link-received",
-                            DeepLinkPayload { urls: safe_urls },
-                        );
+                        let _ =
+                            handle.emit("deep-link-received", DeepLinkPayload { urls: safe_urls });
                     }
                 }
             });
@@ -1027,7 +989,8 @@ pub fn run() {
             // and no windows are visible (e.g. after closing with the red ✕).
             #[cfg(target_os = "macos")]
             if let tauri::RunEvent::Reopen {
-                has_visible_windows, ..
+                has_visible_windows,
+                ..
             } = _event
             {
                 if !has_visible_windows {

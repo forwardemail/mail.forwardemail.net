@@ -44,7 +44,7 @@ import { queueMutation } from '../utils/mutation-queue';
 import { config } from '../config';
 import { createInboxUpdater } from '../utils/websocket-updater';
 import { i18n } from '../utils/i18n';
-import { isTauri, isTauriDesktop, swReadyWithTimeout } from '../utils/platform.js';
+import { isTauri, isTauriDesktop, isTauriMobile, swReadyWithTimeout } from '../utils/platform.js';
 import { downloadFile } from '../utils/download';
 import { warn } from '../utils/logger.ts';
 import { resetTabs } from './tabStore';
@@ -1638,6 +1638,15 @@ export const signOut = async () => {
     // demo-mode module may not be loaded
   }
 
+  // Delete this account's server-side push resources while its credentials
+  // are still present. The helper is a no-op on non-mobile builds.
+  try {
+    const { cleanupPushNotifications } = await import('../utils/push-notifications.js');
+    await cleanupPushNotifications();
+  } catch (err) {
+    warn('Failed to clean up push registration during sign out', err);
+  }
+
   clearSensitiveClientStorage(currentEmail);
 
   if (currentEmail) {
@@ -1840,6 +1849,16 @@ const preloadAccountCache = async (account) => {
 };
 
 const performAccountSwitch = async (email) => {
+  // Remove the previous account's token while its credentials are still active.
+  if (isTauriMobile) {
+    try {
+      const { cleanupPushNotifications } = await import('../utils/push-notifications.js');
+      await cleanupPushNotifications();
+    } catch (err) {
+      warn('Failed to clean up push registration before account switch', err);
+    }
+  }
+
   // Use Accounts.setActive to properly switch account credentials
   const switched = Accounts.setActive(email);
 
@@ -1935,6 +1954,15 @@ const performAccountSwitch = async (email) => {
   // Note: we don't clearSettings() here because cached settings were already applied
   // above and load() -> syncSettings() will refresh from network in the background.
   await load();
+
+  if (isTauriMobile && Local.get('alias_auth')) {
+    try {
+      const { initPushNotifications } = await import('../utils/push-notifications.js');
+      await initPushNotifications();
+    } catch (err) {
+      warn('Failed to register push for the active account', err);
+    }
+  }
 };
 
 /**

@@ -1,0 +1,11 @@
+[default]
+description = "Allows the Forward Email Android app to manage UnifiedPush registration, distributor selection, queued messages, and native event listeners."
+permissions = [
+  "allow-get-state",
+  "allow-register",
+  "allow-pick-distributor",
+  "allow-drain-messages",
+  "allow-unregister",
+  "allow-registerListener",
+  "allow-removeListener",
+]

@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-drain-messages"
+description = "Enables the drain_messages command without any pre-configured scope."
+commands.allow = ["drain_messages"]
+
+[[permission]]
+identifier = "deny-drain-messages"
+description = "Denies the drain_messages command without any pre-configured scope."
+commands.deny = ["drain_messages"]

@@ -215,6 +215,18 @@
   >([]);
   const isMac =
     typeof navigator !== 'undefined' && navigator.platform.toUpperCase().includes('MAC');
+  const isTauriAndroid =
+    isTauri &&
+    typeof navigator !== 'undefined' &&
+    navigator.userAgent.toLowerCase().includes('android');
+  let unifiedPushState = $state<{
+    availableDistributors: string[];
+    distributor: string | null;
+    selectionRequired: boolean;
+    subscription: { endpoint: string } | null;
+  } | null>(null);
+  let unifiedPushLoading = $state(false);
+  let unifiedPushError = $state('');
 
   const buildAvailableFolders = (
     list: { path?: string; name?: string; fullName?: string; fullname?: string }[] = [],
@@ -563,10 +575,41 @@
 
   let subscriptions: Unsubscriber[] = [];
 
+  const refreshUnifiedPushState = async () => {
+    if (!isTauriAndroid) return;
+    unifiedPushLoading = true;
+    try {
+      const { getUnifiedPushProviderState } = await import('../utils/push-notifications.js');
+      unifiedPushState = await getUnifiedPushProviderState();
+      unifiedPushError = '';
+    } catch (err) {
+      unifiedPushError = err instanceof Error ? err.message : String(err);
+    } finally {
+      unifiedPushLoading = false;
+    }
+  };
+
+  const chooseUnifiedPushDistributor = async () => {
+    unifiedPushLoading = true;
+    unifiedPushError = '';
+    try {
+      const { selectUnifiedPushDistributor } = await import('../utils/push-notifications.js');
+      await selectUnifiedPushDistributor();
+      toasts?.show?.('UnifiedPush distributor selected. Registration is completing.', 'success');
+      await refreshUnifiedPushState();
+    } catch (err) {
+      unifiedPushError = err instanceof Error ? err.message : String(err);
+      toasts?.show?.('Unable to select a UnifiedPush distributor.', 'error');
+    } finally {
+      unifiedPushLoading = false;
+    }
+  };
+
   onMount(() => {
     loadFromStorage();
     loadShortcuts();
     loadDatabaseInfo();
+    if (isTauriAndroid) void refreshUnifiedPushState();
 
     const hash = window.location.hash?.slice(1) || '';
     if (hash === 'security' || hash === 'accounts') {
@@ -1763,6 +1806,65 @@
             </Button>
           </Card.Content>
         </Card.Root>
+
+        {#if isTauriAndroid}
+          <Card.Root>
+            <Card.Header>
+              <Card.Title>UnifiedPush</Card.Title>
+              <Card.Description>
+                Receive encrypted remote notifications through a distributor you control, without
+                Google Play Services.
+              </Card.Description>
+            </Card.Header>
+            <Card.Content class="space-y-3">
+              {#if unifiedPushLoading && !unifiedPushState}
+                <p class="text-sm text-muted-foreground">Checking UnifiedPush distributors…</p>
+              {:else}
+                <div class="text-sm">
+                  <div>
+                    Selected distributor:
+                    <strong>{unifiedPushState?.distributor || 'None'}</strong>
+                  </div>
+                  <div class="text-muted-foreground">
+                    {unifiedPushState?.availableDistributors?.length || 0} compatible distributor(s) installed.
+                  </div>
+                  <div class="text-muted-foreground">
+                    Server registration:
+                    {unifiedPushState?.subscription ? 'active' : 'not active'}
+                  </div>
+                </div>
+              {/if}
+
+              {#if unifiedPushError}
+                <Alert.Root variant="destructive">
+                  <AlertCircle class="h-4 w-4" />
+                  <Alert.Description>{unifiedPushError}</Alert.Description>
+                </Alert.Root>
+              {/if}
+
+              <div class="flex flex-wrap gap-2">
+                <Button
+                  variant="outline"
+                  onclick={chooseUnifiedPushDistributor}
+                  disabled={unifiedPushLoading}
+                >
+                  {unifiedPushLoading ? 'Opening…' : 'Choose UnifiedPush distributor'}
+                </Button>
+                <Button
+                  variant="ghost"
+                  onclick={() => openExternal('https://unifiedpush.org/users/distributors/')}
+                >
+                  <ExternalLink class="mr-2 h-4 w-4" />
+                  Find a distributor
+                </Button>
+              </div>
+              <p class="text-xs text-muted-foreground">
+                Forward Email sends standards-based, VAPID-authenticated Web Push payloads to the
+                selected distributor. The connector decrypts them on this device.
+              </p>
+            </Card.Content>
+          </Card.Root>
+        {/if}
 
         <!-- In-app account deletion (App Store 5.1.1(v) / Google Play). Distinct
              from "Sign out", which only removes the account from this device. -->

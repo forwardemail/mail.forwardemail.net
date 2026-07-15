@@ -102,6 +102,7 @@ export default defineConfig({
     'import.meta.env.VITE_APP_VERSION': JSON.stringify(APP_VERSION),
     'import.meta.env.VITE_BUILD_HASH': JSON.stringify(BUILD_HASH),
     'import.meta.env.VITE_PKG_VERSION': JSON.stringify(pkg.version),
+    'import.meta.env.VAPID_PUBLIC_KEY': JSON.stringify(process.env.VAPID_PUBLIC_KEY || ''),
   },
   resolve: {
     alias: {

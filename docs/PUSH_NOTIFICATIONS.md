@@ -1,425 +1,207 @@
 # Push Notifications Setup Guide
 
-This document describes how to set up push notifications for the Forward Email
-Tauri mobile apps on iOS (APNs), Android (FCM), and devices without Google Play
-Services (UnifiedPush).
+This document describes the Forward Email mobile push architecture and its deployment requirements. The native transports are **APNs on iOS**, **UnifiedPush on every Android build**, and optional **FCM on Google Play builds**. Desktop and browser builds support local notification display but do not register a remote push subscription.
 
-## Architecture Overview
+## Support and permission matrix
+
+| Target or profile    | Remote transport              | Local display                                                | Build and permission source                                                                                                | Status                                             |
+| -------------------- | ----------------------------- | ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| iOS                  | APNs                          | Tauri notification plugin                                    | iOS-only mobile-push commands, runtime authorization, and generated iOS `aps-environment` entitlement                      | Supported                                          |
+| Android, Google-free | UnifiedPush                   | Native background notification plus foreground Tauri display | First-party UnifiedPush connector, `POST_NOTIFICATIONS`, `RECEIVE_BOOT_COMPLETED`, and Android-only UnifiedPush capability | Supported; no Firebase or Play Services dependency |
+| Android, Google Play | FCM with UnifiedPush fallback | Tauri/native display                                         | Optional FCM Cargo feature and generated FCM capability, plus the always-present UnifiedPush connector                     | Supported                                          |
+| macOS                | None                          | Tauri notification plugin                                    | Shared notification commands; the macOS entitlement intentionally contains no `aps-environment`                            | Local notifications only                           |
+| Windows              | None                          | Tauri notification plugin                                    | Shared notification commands                                                                                               | Local notifications only                           |
+| Ubuntu/Linux         | None                          | Desktop notification service                                 | Shared notification commands                                                                                               | Local notifications only                           |
+| Browser/PWA          | None                          | Web Notifications API                                        | Browser notification permission                                                                                            | Local notifications only; no Web Push subscription |
+
+> **UnifiedPush is not a manifest permission.** It is a distributor-mediated Android protocol. A compatible distributor application must be installed and selected, and the backend must encrypt each message to the subscription’s endpoint and public keys.
+
+## Architecture
 
 ```mermaid
 sequenceDiagram
-    participant App as Mobile App<br/>(Tauri + WebView)
-    participant API as Forward Email<br/>API Server
-    participant Push as APNs / FCM /<br/>UnifiedPush Gateway
+    participant App as Forward Email mobile app
+    participant API as Forward Email API
+    participant Provider as APNs, FCM, or UnifiedPush distributor
 
-    App->>App: 1. Request permission & get device token
-    App->>API: 2. POST /v1/push-tokens (register token)
-    API->>API: 3. Store device token
-    Note over App,API: Later, when new mail arrives...
-    API->>Push: 4. Send push via gateway
-    Push->>App: 5. Deliver push notification
-    App->>App: 6. Display notification & navigate
+    App->>App: Request notification permission
+    App->>Provider: Obtain APNs/FCM token or UnifiedPush subscription
+    App->>API: POST /v1/push-tokens with alias Basic auth
+    API->>API: Store token/subscription and return registration ID
+    Note over App,API: A push-worthy mail event occurs
+    API->>Provider: Send provider-specific payload
+    Provider->>App: Deliver notification/message
+    App->>App: Refresh state and route notification tap
+    App->>API: DELETE /v1/push-tokens/:id on sign-out, account switch, or subscription rotation
 ```
 
-### Flow
-
-1. **App Launch**: The Tauri app requests push notification permission from the
-   OS and obtains a device token (APNs token on iOS, FCM registration token on
-   Android).
-
-2. **Token Registration**: The device token is sent to the Forward Email API
-   server via `POST /v1/push-tokens` with the user's authentication token.
-
-3. **Server-Side Push**: When new mail arrives for the user, the server sends a
-   push notification via APNs (iOS) or FCM (Android) using the stored device
-   token.
-
-4. **Notification Display**: The OS displays the notification even if the app is
-   backgrounded or closed. Tapping the notification opens the app and navigates
-   to the relevant message.
-
-## iOS Setup (APNs)
-
-### Prerequisites
-
-- Apple Developer Program membership
-- Xcode installed on macOS
-- A physical iOS device (push notifications do not work in the simulator)
-
-### Step 1: Enable Push Notifications Capability
-
-1. Open the Tauri iOS project in Xcode:
-
-   ```bash
-   cd src-tauri/gen/apple
-   open ForwardEmail.xcodeproj
-   ```
-
-2. Select the project target → **Signing & Capabilities**.
-
-3. Click **+ Capability** → Add **Push Notifications**.
-
-4. Also add **Background Modes** and check **Remote notifications**.
-
-### Step 2: Create APNs Key
-
-1. Go to [Apple Developer Portal](https://developer.apple.com/account/resources/authkeys/list).
-
-2. Click **Keys** → **Create a Key**.
-
-3. Enter a name (e.g., "Forward Email Push Key").
-
-4. Check **Apple Push Notifications service (APNs)**.
-
-5. Click **Continue** → **Register**.
-
-6. Download the `.p8` key file. **Save it securely — it can only be downloaded once.**
-
-7. Note the **Key ID** and your **Team ID** (visible in the top-right of the portal).
-
-### Step 3: Configure Server Environment
-
-Set the following environment variables on the Forward Email API server:
-
-```env
-# APNs Configuration
-APNS_KEY_ID=ABC123DEFG          # Your APNs Key ID
-APNS_TEAM_ID=TEAM123456         # Your Apple Developer Team ID
-APNS_KEY_PATH=/path/to/AuthKey_ABC123DEFG.p8  # Path to the .p8 key file
-APNS_BUNDLE_ID=net.forwardemail.mail           # Must match the app bundle ID
-APNS_PRODUCTION=true             # false for sandbox/development
-
-# Alternative: Base64-encoded key (for cloud deployments)
-# APNS_KEY_BASE64=LS0tLS1CRUdJTi...
-```
-
-### Step 4: Update Entitlements
-
-The `Entitlements.plist` should include:
-
-```xml
-<key>aps-environment</key>
-<string>production</string>
-```
-
-For development builds, use `development` instead of `production`.
-
-### Step 5: Server-Side APNs Integration
-
-The server should use a library like `apns2` (Node.js) or `a2` (Rust) to send
-push notifications:
-
-```javascript
-// Example: Node.js server-side APNs push
-const apn = require('apn');
-
-const provider = new apn.Provider({
-  token: {
-    key: process.env.APNS_KEY_PATH,
-    keyId: process.env.APNS_KEY_ID,
-    teamId: process.env.APNS_TEAM_ID,
-  },
-  production: process.env.APNS_PRODUCTION === 'true',
-});
-
-async function sendPushNotification(deviceToken, { title, body, data }) {
-  const notification = new apn.Notification();
-  notification.pushType = 'alert'; // REQUIRED for iOS 13+ (apns-push-type header)
-  notification.alert = { title, body };
-  notification.topic = process.env.APNS_BUNDLE_ID; // e.g. 'net.forwardemail.mail'
-  notification.badge = data.unreadCount || 1;
-  notification.sound = 'default';
-  notification.priority = 10; // Immediate delivery for visible alerts
-  notification.payload = { type: 'new-message', ...data };
-  notification.expiry = Math.floor(Date.now() / 1000) + 86400; // 24h TTL
-
-  const result = await provider.send(notification, deviceToken);
-  return result;
-}
-```
-
-> **Important:** The original `apn` package (v2.2.0) on npm does not support
-> the `pushType` header required by iOS 13+. Use
-> [`@parse/node-apn`](https://github.com/parse-community/node-apn) (maintained
-> fork) or [`apn2`](https://github.com/nicklockwood/apn2) which support the
-> HTTP/2 APNs protocol with all required headers.
-
-## Android Setup (FCM)
-
-### Prerequisites
-
-- Google account with Firebase access
-- Android SDK installed
-
-### Step 1: Create Firebase Project
-
-1. Go to [Firebase Console](https://console.firebase.google.com/).
-
-2. Click **Add project** → Enter "Forward Email" → Continue.
-
-3. Disable Google Analytics (optional) → **Create project**.
-
-### Step 2: Add Android App to Firebase
-
-1. In the Firebase project, click **Add app** → **Android**.
-
-2. Enter the package name: `net.forwardemail.mail`
-
-3. Enter the app nickname: "Forward Email"
-
-4. Download `google-services.json`.
-
-5. Place it in `src-tauri/gen/android/app/google-services.json`.
-
-### Step 3: Get Server Key
-
-1. In Firebase Console → **Project Settings** → **Cloud Messaging** tab.
-
-2. If FCM API (V1) is enabled, note the **Sender ID**.
-
-3. For the server, you'll use a **Service Account** key:
-   - Go to **Project Settings** → **Service accounts**.
-   - Click **Generate new private key**.
-   - Download the JSON key file.
-
-### Step 4: Configure Server Environment
-
-```env
-# FCM Configuration
-FCM_PROJECT_ID=forward-email-12345       # Your Firebase project ID
-FCM_SERVICE_ACCOUNT_PATH=/path/to/service-account.json
-# Alternative: Base64-encoded service account JSON
-# FCM_SERVICE_ACCOUNT_BASE64=eyJ0eXBlIjoi...
-```
-
-### Step 5: Server-Side FCM Integration
-
-```javascript
-// Example: Node.js server-side FCM push (using firebase-admin)
-const admin = require('firebase-admin');
-
-admin.initializeApp({
-  credential: admin.credential.cert(
-    JSON.parse(fs.readFileSync(process.env.FCM_SERVICE_ACCOUNT_PATH, 'utf8')),
-  ),
-});
-
-async function sendPushNotification(deviceToken, { title, body, data }) {
-  const message = {
-    token: deviceToken,
-    notification: { title, body },
-    data: {
-      type: 'new-message',
-      uid: String(data.uid || ''),
-      mailbox: data.mailbox || 'INBOX',
-    },
-    android: {
-      priority: 'high',
-      notification: {
-        channelId: 'new-mail',
-        sound: 'default',
-        clickAction: 'OPEN_MAIL',
-      },
-    },
-  };
-
-  const response = await admin.messaging().send(message);
-  return response;
-}
-```
-
-## Push Notification Payload Format
-
-All push notifications from the Forward Email server should use this payload
-format:
+UnifiedPush registration returns a serialized Web Push-compatible subscription:
 
 ```json
 {
-  "type": "new-message",
-  "uid": "12345",
-  "mailbox": "INBOX",
-  "from": "sender@example.com",
-  "subject": "Hello World",
-  "unreadCount": 5
+  "endpoint": "https://distributor.example/path/token",
+  "keys": {
+    "p256dh": "base64url-uncompressed-p256-public-key",
+    "auth": "base64url-auth-secret"
+  }
 }
 ```
 
-### Supported Types
+The backend validates and canonicalizes this structure, rejects unsafe endpoints, encrypts notification JSON with RFC 8291 Web Push encryption, and signs the request with VAPID. The Android connector decrypts the message before it reaches the application callback service.
 
-| Type             | Description                    | Navigation Target |
-| ---------------- | ------------------------------ | ----------------- |
-| `new-message`    | New email received             | `#INBOX/{uid}`    |
-| `calendar-event` | Calendar event created/updated | `#calendar`       |
-| `contact-update` | Contact created/updated        | `#contacts`       |
+Backend event producers call one transport-neutral notifier with one immutable `notification_id`. That notifier explicitly starts alias-scoped push delivery to every active token and publishes the same envelope to Redis for WebSocket fan-out. The API subscriber owns only socket delivery. Push therefore starts even when the alias has **zero active WebSocket clients** or no WebSocket subscriber is available; a Redis claim suppresses duplicate provider fan-out if the same immutable notification envelope is retried.
 
-## Client-Side Integration
+The client initializes remote push only when `alias_auth` identifies an active alias. It stores the server registration ID, deletes that exact resource before credentials are cleared, and re-registers after an account switch or provider subscription rotation. API-key-only sessions do not initialize alias-scoped remote push.
 
-The client-side push notification handling is in `src/utils/push-notifications.js`.
+## Provider provisioning and cross-repository values
 
-### Initialization
+The client never receives APNs signing keys, Firebase service-account credentials, or the VAPID private key. Configure those values in `forwardemail.net` according to its [push provider setup guide](https://github.com/forwardemail/forwardemail.net/blob/master/PUSH_NOTIFICATIONS.md), then copy only the explicitly identified public client values into this repository.
 
-```javascript
-import { initPushNotifications } from './utils/push-notifications.js';
+### APNs and the shared Apple services key
 
-// Call after user signs in
-await initPushNotifications({
-  authToken: userAuthToken,
-});
-```
+The backend deliberately reuses its existing `APPLE_KEY_ID`, `APPLE_TEAM_ID`, and `APPLE_KEY_PATH` credentials from Sign in with Apple for APNs. Do not create or document separate APNs-specific credential variables.
 
-### Cleanup
+| Backend variable  | Requirement                | Exact value and source                                                                                |
+| ----------------- | -------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `APPLE_KEY_ID`    | Required for APNs          | The 10-character Key ID displayed for the Apple services `.p8` key                                    |
+| `APPLE_TEAM_ID`   | Required for APNs          | The 10-character Team ID shown in Apple Developer **Membership details**                              |
+| `APPLE_KEY_PATH`  | Required for APNs          | Absolute server path to the shared `.p8` file, normally `/var/www/production/AuthKey_<KEY_ID>.p8`     |
+| `APNS_BUNDLE_ID`  | Required for this app      | `net.forwardemail.mail`                                                                               |
+| `APNS_PRODUCTION` | Required deployment choice | `true` for TestFlight/App Store tokens; `false` for development-signed device and APNs sandbox tokens |
 
-```javascript
-import { cleanupPushNotifications } from './utils/push-notifications.js';
+In [Apple Developer](https://developer.apple.com/account/resources/authkeys/list), reuse the existing key when it already has both **Sign in with Apple** and **Apple Push Notifications service (APNs)** enabled. Otherwise, an Account Holder or Admin must create or reconfigure the shared key, record its Key ID, download the `.p8` file once, and enable Push Notifications on the `net.forwardemail.mail` App ID. Regenerate the development and distribution provisioning profiles after changing the App ID capability.
 
-// Call on sign-out
-await cleanupPushNotifications(userAuthToken);
-```
+The backend certificate playbook prompts for the local `.p8` path and uploads it to `/var/www/production/<local-basename>`. Set `APPLE_KEY_PATH` to that deployed path. The client repository does not receive this `.p8` file; its separate iOS signing certificate, provisioning profile, and App Store Connect values are documented in [`docs/SECRETS.md`](SECRETS.md).
 
-## Environment Variables Summary
+### Firebase values
 
-### Server-Side (API Server)
+The Google Play build and backend sender use the same Firebase project but require different files:
 
-| Variable                   | Required | Description                                |
-| -------------------------- | -------- | ------------------------------------------ |
-| `APNS_KEY_ID`              | iOS      | APNs authentication key ID                 |
-| `APNS_TEAM_ID`             | iOS      | Apple Developer Team ID                    |
-| `APNS_KEY_PATH`            | iOS      | Path to `.p8` key file                     |
-| `APNS_BUNDLE_ID`           | iOS      | App bundle identifier                      |
-| `APNS_PRODUCTION`          | iOS      | `true` for production, `false` for sandbox |
-| `FCM_PROJECT_ID`           | Android  | Firebase project ID                        |
-| `FCM_SERVICE_ACCOUNT_PATH` | Android  | Path to service account JSON               |
+| Value                         | Used by             | How to obtain and store it                                                                                                                                             |
+| ----------------------------- | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `FCM_PROJECT_ID`              | Backend             | Firebase **Project settings → General → Project ID**; do not use the display name, project number, or application ID                                                   |
+| `FCM_SERVICE_ACCOUNT_PATH`    | Backend             | Absolute path to a secret service-account JSON key authorized for FCM HTTP v1; the backend playbook installs it as `/var/www/production/firebase-service-account.json` |
+| `GOOGLE_SERVICES_JSON`        | Local Play build    | Absolute local path to the Android app’s downloaded `google-services.json` client configuration                                                                        |
+| `GOOGLE_SERVICES_JSON_BASE64` | GitHub Play release | Base64 encoding of that same `google-services.json`, stored as a GitHub Actions secret                                                                                 |
 
-### Client-Side (Build Environment)
+In the [Firebase console](https://console.firebase.google.com/), create or select the production project, register the Android application ID `net.forwardemail.mail`, and download its latest `google-services.json` from **Project settings → General → Your apps**. Enable the Firebase Cloud Messaging API. For the backend, generate a dedicated service-account JSON key from **Project settings → Service accounts** or Google Cloud IAM and grant only the permissions needed to send FCM HTTP v1 messages to that project.
 
-| Variable               | Required | Description                                                                      |
-| ---------------------- | -------- | -------------------------------------------------------------------------------- |
-| `GOOGLE_SERVICES_JSON` | Android  | Path to `google-services.json` (default: `scripts/android/google-services.json`) |
-| `APPLE_TEAM_ID`        | iOS      | Apple Developer Team ID (for signing)                                            |
-| `IOS_EXPORT_METHOD`    | iOS      | `app-store`, `ad-hoc`, `enterprise`, or `release-testing`                        |
-| `APNS_PRODUCTION`      | iOS      | Set to `true` to force production APNs gateway                                   |
-| `IOS_SIGNING_IDENTITY` | iOS      | Code signing identity (default: `Apple Distribution`)                            |
-| `IOS_PROFILE_NAME`     | iOS      | Provisioning profile name                                                        |
+> `google-services.json` is client configuration; `firebase-service-account.json` is a backend credential. They are not interchangeable. Never copy the backend service-account JSON into this repository, an APK/AAB, or GitHub Actions for the client build.
 
-The push token registration endpoint (`/v1/push-tokens`) is hardcoded to the
-Forward Email API — no client-side URL configuration is needed.
-
-## Testing
-
-### iOS Testing
-
-1. Build the app for a physical device (not simulator).
-2. Sign in and grant notification permission.
-3. Background the app.
-4. Send an email to the signed-in account.
-5. Verify the push notification appears.
-
-### Android Testing
-
-1. Build the app and install on a device or emulator with Google Play Services.
-2. Sign in and grant notification permission.
-3. Background the app.
-4. Send an email to the signed-in account.
-5. Verify the push notification appears.
-
-### Token Registration Testing
-
-Use the Forward Email API to verify token registration:
+Create the Play-release secret without introducing line wrapping:
 
 ```bash
-curl -X GET https://api.forwardemail.net/v1/push-tokens \
-  -H "Authorization: Bearer YOUR_AUTH_TOKEN"
+base64 < /absolute/path/google-services.json | tr -d '\n'
 ```
 
-## UnifiedPush (FCM Alternative)
+Store the result as GitHub Actions secret `GOOGLE_SERVICES_JSON_BASE64`. Local Play builds instead set `GOOGLE_SERVICES_JSON=/absolute/path/google-services.json`.
 
-For Android devices without Google Play Services (e.g., GrapheneOS, /e/OS,
-LineageOS), the app supports [UnifiedPush](https://unifiedpush.org) as a
-fallback push notification provider.
+### UnifiedPush and VAPID
 
-### How It Works
+Generate one stable VAPID pair from the backend repository and retain it across releases:
 
-1. The user installs a UnifiedPush distributor app (e.g.,
-   [ntfy](https://ntfy.sh), NextPush).
-2. On app launch, if FCM token acquisition fails, the app checks for a
-   UnifiedPush distributor.
-3. If found, the app registers with the distributor and receives an endpoint
-   URL.
-4. The endpoint URL is sent to the Forward Email API server.
-5. When new mail arrives, the server sends an HTTP POST to the endpoint URL.
-6. The distributor forwards the message to the Forward Email app.
-
-### Push Provider Priority
-
-| Priority | Provider                   | Condition                               |
-| -------- | -------------------------- | --------------------------------------- |
-| 1        | FCM (Android) / APNs (iOS) | Google Play Services available          |
-| 2        | UnifiedPush                | Distributor installed, no FCM           |
-| 3        | WebSocket                  | Always active when app is in foreground |
-
-FCM and UnifiedPush handle background push (app closed or backgrounded).
-WebSocket provides real-time updates when the app is in the foreground. They
-complement each other.
-
-### Server-Side UnifiedPush Integration
-
-The Forward Email API server sends push notifications to UnifiedPush endpoints
-using standard HTTP POST. No special SDK is required:
-
-```javascript
-// Example: Send push to a UnifiedPush endpoint
-async function sendUnifiedPush(endpoint, payload) {
-  await fetch(endpoint, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-}
+```bash
+pnpm exec web-push generate-vapid-keys
 ```
 
-The payload format is the same as the WebSocket event format:
+| Generated or chosen value | Backend setting     | Mail repository setting                                                                             |
+| ------------------------- | ------------------- | --------------------------------------------------------------------------------------------------- |
+| Public key                | `VAPID_PUBLIC_KEY`  | GitHub Actions variable and local build environment `VAPID_PUBLIC_KEY`                              |
+| Private key               | `VAPID_PRIVATE_KEY` | Never copy to this repository, Actions, APK, AAB, or CI logs                                        |
+| Contact URI               | `VAPID_SUBJECT`     | Backend only; normally `mailto:support@forwardemail.net` or an HTTPS URL controlled by the operator |
 
-```json
-{
-  "event": "newMessage",
-  "mailbox": "INBOX",
-  "message": { "uid": 42 }
-}
+The public and private values must remain a matched pair. Changing the VAPID pair requires Android clients to create new UnifiedPush subscriptions. The public key is intentionally embedded in Android artifacts; the private key remains a backend-only production secret.
+
+A complete backend example is:
+
+```env
+APPLE_TEAM_ID=TEAM123456
+APPLE_KEY_ID=ABC123DEFG
+APPLE_KEY_PATH=/var/www/production/AuthKey_ABC123DEFG.p8
+APNS_BUNDLE_ID=net.forwardemail.mail
+APNS_PRODUCTION=true
+
+FCM_PROJECT_ID=forward-email-production
+FCM_SERVICE_ACCOUNT_PATH=/var/www/production/firebase-service-account.json
+
+VAPID_SUBJECT=mailto:support@forwardemail.net
+VAPID_PUBLIC_KEY=BN...
+VAPID_PRIVATE_KEY=...
 ```
 
-### Testing UnifiedPush
+The UnifiedPush sender treats HTTP `404` and `410` responses as permanently invalid subscriptions and participates in the existing failure-count and token-pruning lifecycle. Retryable provider or network failures retain the subscription for later delivery.
 
-1. Install [ntfy](https://f-droid.org/en/packages/io.heckel.ntfy/) from F-Droid.
-2. Build and install the Forward Email app on a device without Google Play
-   Services.
-3. Sign in — the app should detect the ntfy distributor and register.
-4. Background the app.
-5. Send an email to the signed-in account.
-6. Verify the push notification appears via ntfy.
+## iOS application and signing configuration
 
-## Troubleshooting
+The bundle identifier is `net.forwardemail.mail`. Enable **Push Notifications** for that App ID and regenerate the provisioning profile. Signed device profiles must include `aps-environment`.
 
-### iOS
+The shared `src-tauri/Entitlements.plist` remains free of `aps-environment` because macOS also consumes it. `scripts/inject-ios-signing.cjs` generates an iOS-only entitlement file and selects `production` for distribution exports or `development` for development-signed device builds.
 
-- **No token received**: Ensure Push Notifications capability is enabled in
-  Xcode and the provisioning profile includes push notifications.
-- **Notifications not delivered**: Check that `aps-environment` in entitlements
-  matches the APNs environment (sandbox vs production).
-- **Token invalid**: APNs tokens are environment-specific. A sandbox token won't
-  work with the production APNs endpoint.
+Use `scripts/ios-build.sh` for signed builds. Release automation uses these Actions secrets: `APPLE_TEAM_ID`, `IOS_CERTIFICATE_BASE64`, `IOS_CERTIFICATE_PASSWORD`, `IOS_PROVISIONING_PROFILE_BASE64`, `APP_STORE_CONNECT_API_KEY`, `APP_STORE_CONNECT_KEY_ID`, and `APP_STORE_CONNECT_ISSUER_ID`.
 
-### Android
+## Android UnifiedPush configuration
 
-- **No token received**: Ensure `google-services.json` is in the correct
-  location and the Firebase project is properly configured.
-- **Notifications not shown**: Check that the notification channel (`new-mail`)
-  is created and not disabled by the user in system settings.
-- **FCM quota exceeded**: Firebase has daily limits for free-tier projects.
-  Consider upgrading to the Blaze plan for production use.
+The first-party Tauri plugin under `src-tauri/plugins/tauri-plugin-unified-push` uses the stable UnifiedPush Android connector. It performs distributor discovery, explicit user-driven distributor selection, VAPID-bound registration, callback persistence, subscription rotation, message acknowledgment, foreground event forwarding, and background native notification display.
 
-## Related Documentation
+A user needs a compatible UnifiedPush distributor. After installing one, the user can open Forward Email settings and select or change the distributor. Startup may silently re-register a previously selected distributor, but the application opens the distributor picker only from this explicit user action.
 
-- [WEBSOCKET.md](./WEBSOCKET.md) — WebSocket protocol (complements push for foreground delivery)
-- [ARCHITECTURE.md](./ARCHITECTURE.md) — Full architecture document
-- [SECURITY.md](./SECURITY.md) — Notification security hardening details
-- [DEVELOPMENT.md](./DEVELOPMENT.md) — Building and testing on physical devices
+The client queues messages received while the webview is unavailable. It drains them on initialization and marks notifications already displayed by Android so the frontend can refresh mailbox state without displaying a duplicate notification.
+
+### Build profiles
+
+| Profile     | Command                           | Native content                                                                                                                            | Intended distribution                                                     |
+| ----------- | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| Google-free | `pnpm tauri:android:build:fdroid` | UnifiedPush only; no Firebase Gradle plugin, Firebase Messaging library, FCM service, generated FCM capability, or `google-services.json` | F-Droid, direct APK, alternative stores, and privacy-focused distribution |
+| Play        | `pnpm tauri:android:build:play`   | UnifiedPush plus optional FCM; runtime prefers FCM and can fall back to UnifiedPush                                                       | Google Play                                                               |
+| Default     | `pnpm tauri:android:build`        | Same as Google-free                                                                                                                       | Safe default for downstream packagers                                     |
+
+Development equivalents are `pnpm tauri:android:dev:fdroid` and `pnpm tauri:android:dev:play`.
+
+Every profile that contains UnifiedPush requires the public key at build time. This is the Forward Email application server's public VAPID identity, not a distributor setting and not a value entered by end users. Android users choose or change any installed UnifiedPush distributor through the system picker in Settings; the private VAPID key remains only on the matching Forward Email backend.
+
+```bash
+VAPID_PUBLIC_KEY='BN...' \
+  pnpm tauri:android:build:fdroid -- --apk
+```
+
+For a Play dual-provider build, also supply Firebase configuration:
+
+```bash
+VAPID_PUBLIC_KEY='BN...' \
+GOOGLE_SERVICES_JSON=/absolute/path/google-services.json \
+  pnpm tauri:android:build:play -- --aab
+```
+
+`scripts/configure-android-push.cjs` is idempotent. It removes stale Firebase files, Gradle declarations, manifest services, and generated FCM capabilities before applying the selected profile. This prevents a previous Play build from contaminating a later F-Droid artifact.
+
+### Continuous integration and releases
+
+Store `VAPID_PUBLIC_KEY` as a GitHub Actions **variable**. Its value must exactly equal backend `VAPID_PUBLIC_KEY`. Store `GOOGLE_SERVICES_JSON_BASE64` as an Actions **secret** for the Play profile only.
+
+The release workflow creates distinct Play and Google-free Android artifacts. It uploads only the Play AAB to Google Play. Routine Android CI and emulator E2E builds use the Google-free profile so the first-party connector continuously compiles without Firebase or Google Play Services.
+
+For F-Droid metadata, invoke the default or `:fdroid` command and set `VAPID_PUBLIC_KEY` in the controlled build environment. No proprietary Firebase artifact or Firebase secret is required for that profile.
+
+## Authentication and token lifecycle
+
+The push-token endpoint requires alias-scoped HTTP Basic credentials. Registration is rejected when alias credentials are missing or ambiguous. The client never sends provider credentials; it sends only an APNs/FCM token or a UnifiedPush subscription.
+
+On sign-out, account replacement, provider change, registration failure, or endpoint rotation, the client deletes the old backend registration where possible and unregisters native listeners/subscriptions as appropriate. Instance identifiers prevent callbacks from an obsolete UnifiedPush registration from replacing the active subscription.
+
+## Validation and device smoke tests
+
+| Validation                   | Expected result                                                                                                     |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| Google-free dependency audit | Built dependency graph contains UnifiedPush connector but no Firebase Messaging or Play Services push dependency    |
+| Profile-switch test          | Running Play configuration and then Google-free configuration removes all Firebase files and declarations           |
+| UnifiedPush registration     | Settings shows the selected distributor and backend stores a complete serialized subscription                       |
+| Encrypted delivery           | A backend event reaches the distributor and is decrypted by the connector without plaintext provider payloads       |
+| Background receipt           | Android displays one `new-mail` notification while the webview is suspended                                         |
+| Foreground receipt           | Mailbox state refreshes and only one notification is displayed                                                      |
+| Subscription rotation        | Old backend registration is deleted and the replacement subscription becomes active                                 |
+| Permanent endpoint failure   | `404` or `410` increments/prunes the obsolete registration through the normal failure lifecycle                     |
+| Sign-out/account switch      | Existing server registration, native listeners, and provider state are cleaned up before new credentials initialize |
+| Play profile                 | FCM works when available; UnifiedPush remains selectable as the non-Google alternative                              |
+| iOS/macOS entitlement split  | iOS signed build has `aps-environment`; shared macOS entitlement does not                                           |
+
+Physical-device tests should cover at least one distributor from the intended F-Droid ecosystem, Android 13+ notification permission, process termination/restart, distributor replacement, network loss, account switch, and notification tap routing. A successful compile alone does not validate distributor behavior.

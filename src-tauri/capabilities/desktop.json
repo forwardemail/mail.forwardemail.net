@@ -1,14 +1,13 @@
 {
   "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/tauri-v2.0.0/crates/tauri-cli/capabilities-schema.json",
   "identifier": "desktop",
-  "description": "Desktop-only permissions for plugins not available on mobile (updater, window-state, remote-push).",
+  "description": "Desktop-only permissions for updater, window-state, and global shortcuts.",
   "windows": ["main"],
   "permissions": [
     "updater:allow-check",
     "updater:allow-download-and-install",
     "window-state:default",
-    "global-shortcut:allow-is-registered",
-    "remote-push:default"
+    "global-shortcut:allow-is-registered"
   ],
   "platforms": ["linux", "macOS", "windows"]
 }

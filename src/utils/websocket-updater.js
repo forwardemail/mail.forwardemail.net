@@ -28,6 +28,7 @@ import { createWebSocketClient, createReleaseWatcher, WS_EVENTS } from './websoc
 import { connectNotifications, requestNotificationPermission } from './notification-manager';
 import { isDemoMode } from './demo-mode.js';
 import { fetchLabels } from '../stores/settingsStore';
+import { createRealtimeEventCoalescer } from './realtime-event-coalescer.js';
 
 // ── Constants ──────────────────────────────────────────────────────────────
 const FALLBACK_POLL_INTERVAL_MS = 60_000; // 1 min fallback when WS disconnected
@@ -227,129 +228,105 @@ function createWebSocketUpdater() {
       if (!demoMode && isNonEmptyString(email) && isNonEmptyString(password)) {
         wsClient = createWebSocketClient({ email, password });
 
-        // Wire up IMAP events to store refreshes
-        wsUnsubs.push(
-          wsClient.on(WS_EVENTS.NEW_MESSAGE, (data) => {
-            const mailbox = safeString(data?.mailbox, 'INBOX');
-            refreshFolder(mailbox);
-          }),
-        );
+        // WebSocket and native push carry the same logical events.  Register
+        // every data refresh behind one coalescer so each side effect runs once,
+        // while push remains a bounded fallback when the foreground socket is
+        // slow or disconnected.
+        const updateHandlers = new Map();
+        const updateCoalescer = createRealtimeEventCoalescer({
+          onEvent(eventName, data) {
+            updateHandlers.get(eventName)?.(data);
+          },
+        });
+        const registerUpdateHandler = (eventName, handler) => {
+          updateHandlers.set(eventName, handler);
+          wsUnsubs.push(
+            wsClient.on(eventName, (data) => updateCoalescer.handleWebSocket(eventName, data)),
+          );
+        };
 
-        wsUnsubs.push(
-          wsClient.on(WS_EVENTS.MESSAGES_MOVED, (data) => {
-            if (data && typeof data === 'object') {
-              refreshFolder(safeString(data.sourceMailbox));
-              refreshFolder(safeString(data.destinationMailbox));
-            }
-          }),
-        );
+        registerUpdateHandler(WS_EVENTS.NEW_MESSAGE, (data) => {
+          refreshFolder(safeString(data?.mailbox, 'INBOX'));
+        });
+        registerUpdateHandler(WS_EVENTS.MESSAGES_MOVED, (data) => {
+          if (!data || typeof data !== 'object') return;
+          refreshFolder(safeString(data.sourceMailbox));
+          refreshFolder(safeString(data.destinationMailbox));
+        });
+        registerUpdateHandler(WS_EVENTS.MESSAGES_COPIED, (data) => {
+          if (data && typeof data === 'object') {
+            refreshFolder(safeString(data.destinationMailbox));
+          }
+        });
+        for (const eventName of [
+          WS_EVENTS.FLAGS_UPDATED,
+          WS_EVENTS.LABELS_UPDATED,
+          WS_EVENTS.MESSAGES_EXPUNGED,
+        ]) {
+          registerUpdateHandler(eventName, (data) => {
+            if (data && typeof data === 'object') refreshFolder(safeString(data.mailbox));
+          });
+        }
 
-        wsUnsubs.push(
-          wsClient.on(WS_EVENTS.MESSAGES_COPIED, (data) => {
-            if (data && typeof data === 'object') {
-              refreshFolder(safeString(data.destinationMailbox));
-            }
-          }),
-        );
+        for (const eventName of [
+          WS_EVENTS.MAILBOX_CREATED,
+          WS_EVENTS.MAILBOX_DELETED,
+          WS_EVENTS.MAILBOX_RENAMED,
+        ]) {
+          registerUpdateHandler(eventName, () => mailboxStore.actions.loadFolders?.());
+        }
 
-        wsUnsubs.push(
-          wsClient.on(WS_EVENTS.FLAGS_UPDATED, (data) => {
-            if (data && typeof data === 'object') {
-              refreshFolder(safeString(data.mailbox));
-            }
-          }),
-        );
-
-        wsUnsubs.push(
-          wsClient.on(WS_EVENTS.LABELS_UPDATED, (data) => {
-            if (data && typeof data === 'object') {
-              refreshFolder(safeString(data.mailbox));
-            }
-          }),
-        );
-
-        wsUnsubs.push(
-          wsClient.on(WS_EVENTS.MESSAGES_EXPUNGED, (data) => {
-            if (data && typeof data === 'object') {
-              refreshFolder(safeString(data.mailbox));
-            }
-          }),
-        );
-
-        // Folder structure changes — reload folder list
-        wsUnsubs.push(
-          wsClient.on(WS_EVENTS.MAILBOX_CREATED, () => {
-            mailboxStore.actions.loadFolders?.();
-          }),
-        );
-        wsUnsubs.push(
-          wsClient.on(WS_EVENTS.MAILBOX_DELETED, () => {
-            mailboxStore.actions.loadFolders?.();
-          }),
-        );
-        wsUnsubs.push(
-          wsClient.on(WS_EVENTS.MAILBOX_RENAMED, () => {
-            mailboxStore.actions.loadFolders?.();
-          }),
-        );
-
-        // CalDAV events
-        for (const evt of [
+        for (const eventName of [
           WS_EVENTS.CALENDAR_CREATED,
           WS_EVENTS.CALENDAR_UPDATED,
           WS_EVENTS.CALENDAR_DELETED,
         ]) {
-          wsUnsubs.push(
-            wsClient.on(evt, (data) => {
-              if (data && typeof data === 'object') {
-                dispatchFrozen('fe:calendar-changed', data);
-              }
-            }),
-          );
+          registerUpdateHandler(eventName, (data) => {
+            if (data && typeof data === 'object') dispatchFrozen('fe:calendar-changed', data);
+          });
         }
-
-        for (const evt of [
+        for (const eventName of [
           WS_EVENTS.CALENDAR_EVENT_CREATED,
           WS_EVENTS.CALENDAR_EVENT_UPDATED,
           WS_EVENTS.CALENDAR_EVENT_DELETED,
         ]) {
-          wsUnsubs.push(
-            wsClient.on(evt, (data) => {
-              if (data && typeof data === 'object') {
-                // Carry the WS event name forward as `type` so downstream
-                // handlers can do granular merges (e.g. apply-only-this-delete
-                // without a full calendar refetch). Existing handlers that
-                // ignore `type` keep working — they just trigger reload().
-                dispatchFrozen('fe:calendar-event-changed', { type: evt, payload: data });
-              }
-            }),
-          );
+          registerUpdateHandler(eventName, (data) => {
+            if (!data || typeof data !== 'object') return;
+            // Carry the transport event name forward so downstream handlers can
+            // apply granular merges without requiring a full calendar refetch.
+            dispatchFrozen('fe:calendar-event-changed', { type: eventName, payload: data });
+          });
         }
 
-        // CardDAV events
-        for (const evt of [WS_EVENTS.ADDRESS_BOOK_CREATED, WS_EVENTS.ADDRESS_BOOK_DELETED]) {
-          wsUnsubs.push(
-            wsClient.on(evt, (data) => {
-              if (data && typeof data === 'object') {
-                dispatchFrozen('fe:contacts-changed', data);
-              }
-            }),
-          );
+        for (const eventName of [WS_EVENTS.ADDRESS_BOOK_CREATED, WS_EVENTS.ADDRESS_BOOK_DELETED]) {
+          registerUpdateHandler(eventName, (data) => {
+            if (data && typeof data === 'object') dispatchFrozen('fe:contacts-changed', data);
+          });
         }
-
-        for (const evt of [
+        for (const eventName of [
           WS_EVENTS.CONTACT_CREATED,
           WS_EVENTS.CONTACT_UPDATED,
           WS_EVENTS.CONTACT_DELETED,
         ]) {
-          wsUnsubs.push(
-            wsClient.on(evt, (data) => {
-              if (data && typeof data === 'object') {
-                dispatchFrozen('fe:contact-changed', data);
-              }
-            }),
-          );
+          registerUpdateHandler(eventName, (data) => {
+            if (data && typeof data === 'object') dispatchFrozen('fe:contact-changed', data);
+          });
         }
+
+        const pushUpdateHandler = (event) => {
+          const payload = event?.detail;
+          if (!updateHandlers.has(payload?.event)) return;
+          // Native events already displayed while backgrounded are reconciled by
+          // the visibility handler below.  Replaying them here would duplicate
+          // the resume refresh before the WebSocket has a chance to reconnect.
+          if (payload.displayedBySystem === true) return;
+          updateCoalescer.handlePush(payload);
+        };
+        window.addEventListener('fe:push-notification', pushUpdateHandler);
+        wsUnsubs.push(() => {
+          window.removeEventListener('fe:push-notification', pushUpdateHandler);
+          updateCoalescer.destroy();
+        });
 
         // Dispatch auth failure to the app so it can show a toast / prompt re-login
         wsUnsubs.push(

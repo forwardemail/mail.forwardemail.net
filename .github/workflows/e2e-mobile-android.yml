@@ -96,10 +96,12 @@ jobs:
       - name: Initialize Android project
         run: pnpm tauri android init
 
-      - name: Build Android APK (debug, x86_64)
+      - name: Build Google-free Android APK (debug, x86_64)
         env:
           NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.0.12077973
-        run: pnpm tauri android build --apk --debug --target x86_64
+          ANDROID_PUSH_PROVIDER: unified-push
+          VAPID_PUBLIC_KEY: ${{ vars.VAPID_PUBLIC_KEY }}
+        run: pnpm tauri:android:build --apk --debug --target x86_64
 
       - name: Run E2E in emulator
         id: emulator-test

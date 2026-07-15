@@ -179,8 +179,11 @@ importers:
       tailwind-merge:
         specifier: ^3.5.0
         version: 3.5.0
+      tauri-plugin-mobile-push-api:
+        specifier: ^0.1.4
+        version: 0.1.4(@tauri-apps/api@2.10.1)
       tauri-plugin-remote-push-api:
-        specifier: ^1.0.10
+        specifier: 1.0.10
         version: 1.0.10
     devDependencies:
       '@commitlint/cli':
@@ -3475,6 +3478,7 @@ packages:
   git-raw-commits@5.0.1:
     resolution: {integrity: sha512-Y+csSm2GD/PCSh6Isd/WiMjNAydu0VBiG9J7EdQsNA5P9uXvLayqjmTsNlK5Gs9IhblFZqOU0yid5Il5JPoLiQ==}
     engines: {node: '>=18'}
+    deprecated: Deprecated and no longer maintained. Use @conventional-changelog/git-client instead.
     hasBin: true
 
   github-url-from-git@1.5.0:
@@ -4345,6 +4349,7 @@ packages:
 
   lucide-svelte@0.577.0:
     resolution: {integrity: sha512-0i88o57KsaHWnc80J57fY99CWzlZsSdtH5kKjLUJa7z8dum/9/AbINNLzJ7NiRFUdOgMnfAmJt8jFbW2zeC5qQ==}
+    deprecated: Package deprecated. Please use @lucide/svelte instead.
     peerDependencies:
       svelte: '>=5.53.5'
 
@@ -5668,6 +5673,11 @@ packages:
 
   tar-stream@3.1.7:
     resolution: {integrity: sha512-qJj60CXt7IU1Ffyc3NJMjh6EkuCFej46zUqJ4J7pqYlThyd9bO0XBTmcOIhSzZJVWfsLks0+nle/j538YAW9RQ==}
+
+  tauri-plugin-mobile-push-api@0.1.4:
+    resolution: {integrity: sha512-AJayYS3iAQ8zoXdTebs1Ml91H+mDBA3wexWjfoEx8oa4EsE6AiODvVZHzQZ7l0QeXTvYcxyCF3txI7XJjI8IBw==}
+    peerDependencies:
+      '@tauri-apps/api': '>=2.0.0'
 
   tauri-plugin-remote-push-api@1.0.10:
     resolution: {integrity: sha512-FfMRFQT1ylH51sDswDH40DeTU95bGn8HTEWkBPVu7VzA5OZNxm1/LGcP6iaLewgLRLo8mrXsGQ8UU+mdV2v8nw==}
@@ -12108,6 +12118,10 @@ snapshots:
     transitivePeerDependencies:
       - bare-abort-controller
       - react-native-b4a
+
+  tauri-plugin-mobile-push-api@0.1.4(@tauri-apps/api@2.10.1):
+    dependencies:
+      '@tauri-apps/api': 2.10.1
 
   tauri-plugin-remote-push-api@1.0.10:
     dependencies:

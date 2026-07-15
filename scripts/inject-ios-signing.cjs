@@ -32,6 +32,41 @@ if (!fs.existsSync(appleDir)) {
   process.exit(1);
 }
 
+// Generate an iOS-only entitlement file inside the generated Apple project.
+// The committed Entitlements.plist is shared with macOS and must never contain
+// aps-environment because Developer ID macOS profiles are not APNs-authorized.
+const baseEntitlementsPath = path.join(root, 'src-tauri', 'Entitlements.plist');
+const iosEntitlementsName = 'ForwardEmail-iOS.entitlements';
+const iosEntitlementsPath = path.join(appleDir, iosEntitlementsName);
+const exportMethod = method.toLowerCase();
+const forceProduction = process.env.APNS_PRODUCTION === 'true';
+const isProduction =
+  forceProduction ||
+  exportMethod === 'app-store-connect' ||
+  exportMethod === 'release-testing' ||
+  exportMethod === 'app-store' ||
+  exportMethod === 'ad-hoc' ||
+  exportMethod === 'enterprise';
+const apsEnvironment = isProduction ? 'production' : 'development';
+
+if (!fs.existsSync(baseEntitlementsPath)) {
+  console.error(`${baseEntitlementsPath} not found — cannot generate iOS entitlements`);
+  process.exit(1);
+}
+
+let iosEntitlements = fs.readFileSync(baseEntitlementsPath, 'utf8');
+const apsBlock = `  <key>aps-environment</key>\n  <string>${apsEnvironment}</string>\n`;
+if (/<key>aps-environment<\/key>/.test(iosEntitlements)) {
+  iosEntitlements = iosEntitlements.replace(
+    /<key>aps-environment<\/key>\s*<string>[^<]*<\/string>\n?/,
+    apsBlock,
+  );
+} else {
+  iosEntitlements = iosEntitlements.replace(/<\/dict>(\s*<\/plist>\s*)$/m, `${apsBlock}</dict>$1`);
+}
+fs.writeFileSync(iosEntitlementsPath, iosEntitlements);
+console.log(`Generated ${iosEntitlementsName} with aps-environment="${apsEnvironment}"`);
+
 // ── 1. Patch project.yml (deployment target + signing settings) ─────────
 const projectYmlPath = path.join(appleDir, 'project.yml');
 let projYml = fs.readFileSync(projectYmlPath, 'utf8');
@@ -55,6 +90,7 @@ if (!projYml.includes('CODE_SIGN_STYLE')) {
     `        CODE_SIGN_STYLE: Manual`,
     `        DEVELOPMENT_TEAM: ${teamId}`,
     `        CODE_SIGN_IDENTITY: "${signingIdentity}"`,
+    `        CODE_SIGN_ENTITLEMENTS: "${iosEntitlementsName}"`,
   ];
   if (profileName) {
     signingLines.push(`        PROVISIONING_PROFILE_SPECIFIER: "${profileName}"`);
@@ -74,7 +110,19 @@ if (!projYml.includes('CODE_SIGN_STYLE')) {
   modified = true;
   console.log('Injected signing settings into project.yml');
 } else {
-  console.log('Signing settings already present in project.yml — skipping');
+  console.log('Signing settings already present in project.yml — updating entitlements only');
+}
+
+const entitlementsSetting = `        CODE_SIGN_ENTITLEMENTS: "${iosEntitlementsName}"`;
+if (/^\s*CODE_SIGN_ENTITLEMENTS:/m.test(projYml)) {
+  const updatedYml = projYml.replace(/^\s*CODE_SIGN_ENTITLEMENTS:.*$/m, entitlementsSetting);
+  if (updatedYml !== projYml) {
+    projYml = updatedYml;
+    modified = true;
+  }
+} else if (projYml.includes('CODE_SIGN_STYLE')) {
+  projYml = projYml.replace(/(^\s*CODE_SIGN_STYLE:.*$)/m, `$1\n${entitlementsSetting}`);
+  modified = true;
 }
 
 if (modified) {
@@ -188,48 +236,5 @@ if (fs.existsSync(infoPlistPath)) {
   }
 }
 
-// ── 4. Inject aps-environment for iOS builds ────────────────────────────────
-// Entitlements.plist no longer ships with aps-environment (the Developer ID
-// cert used for macOS distribution is not APNs-authorized; embedding the
-// entitlement caused macOS launch-time validation to reject the signed
-// bundle with "Taskgated Invalid Signature"). This script runs only for iOS
-// builds and INSERTS the entitlement just before xcodebuild signs the IPA.
-//
-// Env vars:
-//   IOS_EXPORT_METHOD  - 'app-store' | 'ad-hoc' | 'enterprise' | 'release-testing'
-//   APNS_PRODUCTION    - 'true' to force production regardless of export method
-const entPlistPath = path.resolve(__dirname, '..', 'src-tauri', 'Entitlements.plist');
-if (fs.existsSync(entPlistPath)) {
-  let entPlist = fs.readFileSync(entPlistPath, 'utf8');
-  const exportMethod = (process.env.IOS_EXPORT_METHOD || '').toLowerCase();
-  const forceProduction = process.env.APNS_PRODUCTION === 'true';
-  const isProduction =
-    forceProduction ||
-    exportMethod === 'app-store' ||
-    exportMethod === 'ad-hoc' ||
-    exportMethod === 'enterprise';
-
-  const targetEnv = isProduction ? 'production' : 'development';
-  const apsBlock = `  <key>aps-environment</key>\n  <string>${targetEnv}</string>\n`;
-
-  if (/<key>aps-environment<\/key>/.test(entPlist)) {
-    // Pre-existing entry (e.g. from a previous iOS build that didn't clean up
-    // after itself) — replace its value.
-    entPlist = entPlist.replace(
-      /<key>aps-environment<\/key>\s*<string>[^<]*<\/string>\n?/,
-      apsBlock,
-    );
-  } else {
-    // Insert just before </dict>. Anchored to the last </dict> in case the
-    // plist ever grows nested dicts; current shape is flat so this matches
-    // the only one.
-    entPlist = entPlist.replace(/<\/dict>(\s*<\/plist>\s*)$/m, `${apsBlock}</dict>$1`);
-  }
-
-  fs.writeFileSync(entPlistPath, entPlist);
-  console.log(
-    `Injected aps-environment="${targetEnv}" into Entitlements.plist (export=${exportMethod || 'dev'}, APNS_PRODUCTION=${forceProduction})`,
-  );
-} else {
-  console.warn('Entitlements.plist not found — skipping aps-environment patch');
-}
+// APNs authorization is now isolated to ForwardEmail-iOS.entitlements in the
+// generated Apple project; the shared macOS entitlement file remains unchanged.

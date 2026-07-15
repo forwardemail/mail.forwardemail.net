@@ -2,6 +2,46 @@
 
 This is the official, open-source, and end-to-end encrypted webmail client for [Forward Email](https://forwardemail.net). It is available as a fast and modern web app, a cross-platform desktop app for Windows, macOS, and Linux, and a native mobile app for iOS and Android.
 
+## Table of Contents
+
+<!-- readme-toc:start -->
+
+- [Downloads & Releases](#downloads--releases)
+  - [Ubuntu / Debian installation](#ubuntu--debian-installation)
+- [Screenshots](#screenshots)
+- [Security & Privacy](#security--privacy)
+  - [Client-Side Encryption & App Lock](#client-side-encryption--app-lock)
+  - [Tamper-Proof Builds](#tamper-proof-builds)
+- [Features](#features)
+- [Architecture Overview](#architecture-overview)
+- [Tech Stack](#tech-stack)
+  - [Key Components](#key-components)
+  - [Documentation](#documentation)
+- [Project Structure](#project-structure)
+- [Getting Started](#getting-started)
+  - [Prerequisites](#prerequisites)
+  - [Installation](#installation)
+  - [Development](#development)
+  - [Build](#build)
+  - [Code Quality](#code-quality)
+  - [Testing](#testing)
+- [Contributing](#contributing)
+  - [Commit Messages](#commit-messages)
+  - [Releasing](#releasing)
+- [Configuration](#configuration)
+- [Deployment](#deployment)
+  - [Infrastructure](#infrastructure)
+  - [Cache Strategy](#cache-strategy)
+  - [CI/CD Pipeline](#cicd-pipeline)
+  - [Required Secrets & Variables](#required-secrets--variables)
+  - [Cloudflare API Token Setup](#cloudflare-api-token-setup)
+  - [Worker Setup](#worker-setup)
+  - [Manual Deployment](#manual-deployment)
+  - [Troubleshooting](#troubleshooting)
+- [License](#license)
+
+<!-- readme-toc:end -->
+
 ## Downloads & Releases
 
 Official desktop and Android artifacts are published on the [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases) page. Desktop builds are produced by the public [GitHub Actions](https://github.com/forwardemail/mail.forwardemail.net/actions) release workflows, and the desktop release matrix now targets **macOS arm64/x64**, **Windows x64/arm64**, and **Linux x64/arm64**.
@@ -13,7 +53,7 @@ Official desktop and Android artifacts are published on the [GitHub Releases](ht
 | **Windows** | arm64                 | `-setup.exe` on [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases)                  | —                         |
 | **macOS**   | Apple Silicon & Intel | `.dmg` on [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases)                        | App Store (Coming Soon)   |
 | **Linux**   | x64                   | `.deb` / `.AppImage` / `.rpm` on [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases) | —                         |
-| **Linux**   | arm64                 | `.deb` / `.AppImage` / `.rpm` on [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases) | —                         |
+| **Linux**   | arm64                 | `.deb` / `.rpm` on [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases)               | —                         |
 | **Android** | Universal             | `.apk` / `.aab` on [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases)               | Google Play (Coming Soon) |
 | **iOS**     | arm64                 | TestFlight / App Store distribution                                                                                | App Store (Coming Soon)   |
 
@@ -33,22 +73,30 @@ sudo apt update
 sudo apt install ./Forward.Email_<version>_arm64.deb
 ```
 
-If you prefer a portable binary, download the matching `.AppImage` for your architecture from [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases), make it executable, and run it directly:
+For a portable **Linux x64 / amd64** binary, download `Forward.Email_<version>_amd64.AppImage` from [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases), make it executable, and run it directly. The release matrix does not publish an arm64 AppImage; Linux arm64 users should install the `.deb` or `.rpm` asset instead.
 
 ```bash
-chmod +x Forward.Email_<version>_<arch>.AppImage
-./Forward.Email_<version>_<arch>.AppImage
+chmod +x Forward.Email_<version>_amd64.AppImage
+./Forward.Email_<version>_amd64.AppImage
 ```
 
-Replace `<arch>` with `amd64` or `arm64` to match the asset you downloaded. If you are building your own custom Linux binary instead of installing a published release, use the desktop development guide in [`docs/desktop-setup.md`](./docs/desktop-setup.md).
+If you are building your own custom Linux binary instead of installing a published release, use the desktop development guide in [`docs/desktop-setup.md`](./docs/desktop-setup.md).
 
 > **Note for macOS users:** If you download the `.dmg` from GitHub Releases, you may need to run the following command if you see a "damaged" or unverified app error:
 >
 > ```bash
-> sudo xattr -rd com.apple.quarantine /Applications/ForwardEmail.app
+> sudo xattr -rd com.apple.quarantine "/Applications/Forward Email.app"
 > ```
 >
-> Replace `/Applications/ForwardEmail.app` with the actual path if you installed the app elsewhere.
+> Replace `/Applications/Forward Email.app` with the actual path if you installed the app elsewhere.
+
+## Screenshots
+
+<!-- readme-screenshots:start -->
+
+The collapsible desktop and mobile screenshot gallery is generated from the production Demo Account after a successful release. Run `pnpm screenshots:readme:dry-run` to validate the same capture process locally without changing tracked files.
+
+<!-- readme-screenshots:end -->
 
 ## Security & Privacy
 

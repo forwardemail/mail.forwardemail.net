@@ -31,10 +31,35 @@ if [ -n "$MISSING" ]; then
   exit 1
 fi
 
+ANDROID_PUSH_PROVIDER="${ANDROID_PUSH_PROVIDER:-unified-push}"
+case "$ANDROID_PUSH_PROVIDER" in
+  unified-push)
+    export VITE_ANDROID_PUSH_PROVIDER="unified-push"
+    FEATURE_ARGS=()
+    ;;
+  fcm)
+    export VITE_ANDROID_PUSH_PROVIDER="fcm"
+    FEATURE_ARGS=(--features fcm)
+    ;;
+  both)
+    export VITE_ANDROID_PUSH_PROVIDER="auto"
+    FEATURE_ARGS=(--features fcm)
+    ;;
+  *)
+    echo "Invalid ANDROID_PUSH_PROVIDER: $ANDROID_PUSH_PROVIDER (expected unified-push, fcm, or both)" >&2
+    exit 1
+    ;;
+esac
+export ANDROID_PUSH_PROVIDER
+
+FCM_CAPABILITY="src-tauri/capabilities/android-fcm.generated.json"
+trap 'rm -f "$FCM_CAPABILITY"' EXIT
+
 echo "📱 Android Dev Environment"
-echo "   SDK:  $ANDROID_HOME"
-echo "   NDK:  $ANDROID_NDK_HOME"
-echo "   JDK:  $JAVA_HOME"
+echo "   SDK:   $ANDROID_HOME"
+echo "   NDK:   $ANDROID_NDK_HOME"
+echo "   JDK:   $JAVA_HOME"
+echo "   Push:  $ANDROID_PUSH_PROVIDER"
 
 # ── adb reverse for emulator ──────────────────────────────────────────────
 # The Vite dev server runs on localhost:5174 on the host.
@@ -56,7 +81,17 @@ if adb devices 2>/dev/null | grep -q "device$\|emulator"; then
   fi
 fi
 
+# ── Generated-project integration ──────────────────────────────────────────
+ANDROID_MANIFEST="src-tauri/gen/android/app/src/main/AndroidManifest.xml"
+if [ ! -f "$ANDROID_MANIFEST" ]; then
+  echo "   🏗️  Initializing generated Android project..."
+  npx tauri android init
+fi
+
+node scripts/inject-android-mainactivity.cjs
+node scripts/configure-android-push.cjs
+
 # ── Launch ─────────────────────────────────────────────────────────────────
 echo "   🚀 Starting tauri android dev..."
 echo ""
-exec npx tauri android dev "$@"
+npx tauri android dev "${FEATURE_ARGS[@]}" "$@"

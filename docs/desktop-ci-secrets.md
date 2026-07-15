@@ -121,8 +121,11 @@ If you want a full cross-platform walkthrough, including `.cer` + private-key co
 
 After a successful release build, check the draft GitHub Release for:
 
-- **macOS:** `Forward Email_<version>_aarch64.dmg`, `Forward Email_<version>_x64.dmg`, `.app.tar.gz` + `.app.tar.gz.sig`
-- **Windows:** `.msi`, `.nsis.zip` + `.nsis.zip.sig`
-- **Linux:** `.AppImage`, `.AppImage.tar.gz` + `.AppImage.tar.gz.sig`, `.deb`
+- **macOS arm64:** `Forward.Email_<version>_aarch64.dmg`, `Forward.Email_aarch64.app.tar.gz`, and `Forward.Email_aarch64.app.tar.gz.sig`
+- **macOS x64:** `Forward.Email_<version>_x64.dmg`, `Forward.Email_x64.app.tar.gz`, and `Forward.Email_x64.app.tar.gz.sig`
+- **Windows x64:** `Forward.Email_<version>_x64_en-US.msi`, `Forward.Email_<version>_x64_en-US.msi.sig`, `Forward.Email_<version>_x64-setup.exe`, and `Forward.Email_<version>_x64-setup.exe.sig`
+- **Windows arm64:** `Forward.Email_<version>_arm64-setup.exe` and `Forward.Email_<version>_arm64-setup.exe.sig`
+- **Linux x64:** `Forward.Email_<version>_amd64.AppImage`, `Forward.Email_<version>_amd64.deb`, `Forward.Email-<version>-1.x86_64.rpm`, and each file's matching `.sig` sidecar
+- **Linux arm64:** `Forward.Email_<version>_arm64.deb`, `Forward.Email-<version>-1.aarch64.rpm`, and each file's matching `.sig` sidecar
 
-Each `.sig` file contains the Minisign signature used by the auto-updater to verify integrity. If `.sig` files are missing, check that `TAURI_SIGNING_PRIVATE_KEY` is correctly set.
+`latest.json` is the Tauri updater manifest. The unified release workflow also publishes `SHA256SUMS.txt` over every release asset present before checksum generation. Each `.sig` file contains the Minisign signature used by the auto-updater to verify integrity. If expected `.sig` files are missing, check that `TAURI_SIGNING_PRIVATE_KEY` is correctly set.

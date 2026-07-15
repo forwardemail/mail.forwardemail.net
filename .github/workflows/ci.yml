@@ -91,6 +91,9 @@ jobs:
       - name: Lint
         run: pnpm lint
 
+      - name: Verify generated README table of contents is committed
+        run: git diff --exit-code -- README.md
+
       - name: Format
         run: pnpm format
 
