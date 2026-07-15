@@ -65,6 +65,8 @@ export function buildTableOfContents(readme) {
 }
 
 export function replaceTableOfContents(readme, tableOfContents) {
+  const newline = readme.includes('\r\n') ? '\r\n' : '\n';
+  const normalizedTableOfContents = tableOfContents.replace(/\r?\n/g, newline);
   const startIndex = readme.indexOf(TOC_START);
   const endIndex = readme.indexOf(TOC_END);
 
@@ -82,7 +84,7 @@ export function replaceTableOfContents(readme, tableOfContents) {
 
   const before = readme.slice(0, startIndex + TOC_START.length);
   const after = readme.slice(endIndex);
-  return `${before}\n\n${tableOfContents}\n\n${after}`;
+  return `${before}${newline}${newline}${normalizedTableOfContents}${newline}${newline}${after}`;
 }
 
 export function updateTableOfContents(readme) {
