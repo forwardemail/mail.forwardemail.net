@@ -5,9 +5,11 @@ Complete setup guide for deploying the webmail app from scratch using Cloudflare
 
 ```mermaid
 flowchart LR
-    A["pnpm release"] --> B["np: lint, test, build, bump, tag"] --> C["GitHub Release published"]
-    C --> D["Deploy workflow: build, R2 sync, Worker deploy, cache purge"]
-    D --> E["Result: Static PWA served from Cloudflare edge"]
+    A["pnpm release"] --> B["np: lint, test, build, bump, tag"] --> C["Release workflow"]
+    C --> D["E2E + desktop/mobile builds"]
+    D --> E["Inline R2 sync, Worker deploy, cache purge"]
+    E --> F["Publish GitHub Release + checksums"]
+    E --> G["Static PWA served from Cloudflare edge"]
 ```
 
 ## Prerequisites
@@ -83,10 +85,14 @@ Save these credentials:
 
 ## 2. GitHub Repository Setup
 
-### 2.1 Secrets
+The tagged release pipeline also builds and signs desktop and mobile applications. This deployment checklist repeats only the Cloudflare values; provision the complete platform-signing, push, store-upload, release-control, and notification inventory from [SECRETS.md](./SECRETS.md).
+
+### 2.1 Web deployment secrets
+
+Store these values in the **`release`** GitHub Actions environment:
 
 ```
- Settings → Secrets and variables → Actions → Secrets
+Settings → Secrets and variables → Actions → Environments → release
 ```
 
 | Secret                 | Source   | Description                 |
@@ -97,15 +103,19 @@ Save these credentials:
 | `CLOUDFLARE_API_TOKEN` | Step 1.4 | API token for Workers/cache |
 | `CLOUDFLARE_ZONE_ID`   | Step 1.3 | Zone ID for cache purge     |
 
-### 2.2 Variables
+Optional `MATRIX_TOKEN` is different: store it as a **repository Actions secret**, because notification jobs do not attach the `release` environment.
+
+### 2.2 Web deployment variable
 
 ```
- Settings → Secrets and variables → Actions → Variables
+Settings → Secrets and variables → Actions → Variables
 ```
 
 | Variable    | Value          | Description    |
 | ----------- | -------------- | -------------- |
 | `R2_BUCKET` | `webmail-prod` | R2 bucket name |
+
+The same Actions Variables page also holds release values such as `VAPID_PUBLIC_KEY`, optional `PLAY_TRACK` and `IOS_SIGNING_IDENTITY`, and the emergency-only `ALLOW_NO_UPDATER` override. See [SECRETS.md](./SECRETS.md) before running a tagged release.
 
 ---
 
@@ -183,26 +193,32 @@ None needed — the app is entirely client-side after build.
 
 ## 6. CI/CD Pipeline
 
-There are two separate GitHub Actions workflows:
+Three workflow entry points are relevant:
 
 ### CI (`.github/workflows/ci.yml`)
 
-Runs on every push to `main` and on pull requests. Performs lint, format, unit tests, build, and E2E tests (PRs only). **Does not deploy.**
+Runs on pushes and pull requests. It performs the standard validation suite and **does not deploy**.
 
-### Deploy (`.github/workflows/deploy.yml`)
+### Release (`.github/workflows/release.yml`)
 
-Runs only when a GitHub Release is published. Builds the app, syncs to R2, deploys the Worker, and purges the Cloudflare cache.
+Runs for `v*` tags and by manual dispatch. It gates the release with WebView E2E, calls the reusable desktop and mobile build workflows, deploys the web application inline, publishes the GitHub Release, generates checksums, and optionally notifies Matrix.
+
+The web deployment is inline because release events created with the automatic `GITHUB_TOKEN` do not trigger another workflow.
+
+### Manual redeploy (`.github/workflows/deploy.yml`)
+
+Runs only through `workflow_dispatch`. Use it as a recovery path to rebuild and redeploy the current web application without creating another tagged release.
 
 ```mermaid
 flowchart TD
     subgraph CI ["CI workflow (push / PR)"]
         A1["Install"] --> A2["Lint + Format"] --> A3["Unit tests"] --> A4["Build"]
-        A4 --> A5["E2E tests (PR only)"]
     end
-    subgraph Deploy ["Deploy workflow (release published)"]
-        B1["Install + Build"] --> B2["Deploy to R2"] --> B3["Deploy Worker"] --> B4["Purge CDN cache"]
-    end
-    R["pnpm release → GitHub Release published"] --> Deploy
+    T["v* tag"] --> R1["Release: WebView E2E"]
+    R1 --> R2["Desktop + mobile builds"]
+    R2 --> R3["Inline R2 + Worker deploy"]
+    R3 --> R4["Publish release + checksums"]
+    M["Manual workflow_dispatch"] --> D1["deploy.yml recovery redeploy"]
 ```
 
 ### Releasing
@@ -219,7 +235,7 @@ This will:
 2. Run lint, format, tests, and build
 3. Bump the version in `package.json` and create a git tag
 4. Push the commit and tag to GitHub
-5. Publish a GitHub Release, which triggers the Deploy workflow
+5. Trigger the unified Release workflow, which builds all platforms, deploys the web application inline, and publishes the GitHub Release
 
 ---
 
@@ -227,7 +243,7 @@ This will:
 
 ```mermaid
 flowchart TD
-    A["1. pnpm release"] --> B["2. Monitor GitHub Actions (Deploy workflow)"] --> C["3. Verify"]
+    A["1. pnpm release"] --> B["2. Monitor GitHub Actions (Release workflow)"] --> C["3. Verify"]
     C --> D["R2 bucket has files?"]
     C --> E["Worker deployed?<br/>npx wrangler deployments list"]
     C --> F["Site loads?<br/>https://mail.yourdomain.com"]
@@ -262,13 +278,14 @@ flowchart TD
 
 ## 9. Troubleshooting
 
-| Problem                  | Fix                                                                                                     |
-| ------------------------ | ------------------------------------------------------------------------------------------------------- |
-| Worker not serving files | `cd worker && pnpm tail` — Check wrangler.toml routes                                                   |
-| R2 bucket empty          | `aws --endpoint-url "$ENDPOINT" s3 ls "s3://${R2_BUCKET}/"`                                             |
-| Cache not clearing       | Manual purge: `curl -X POST ".../purge_cache" --data '{"purge_everything":true}'`                       |
-| Deploy 403 error         | Verify API token has: Workers Scripts: Edit, Workers R2: Edit, Cache Purge: Purge, Workers Routes: Edit |
-| Deploy not triggering    | Ensure `pnpm release` published a GitHub Release (check the Releases tab), not just a tag               |
+| Problem                     | Fix                                                                                                     |
+| --------------------------- | ------------------------------------------------------------------------------------------------------- |
+| Worker not serving files    | `cd worker && pnpm tail` — Check wrangler.toml routes                                                   |
+| R2 bucket empty             | `aws --endpoint-url "$ENDPOINT" s3 ls "s3://${R2_BUCKET}/"`                                             |
+| Cache not clearing          | Manual purge: `curl -X POST ".../purge_cache" --data '{"purge_everything":true}'`                       |
+| Deploy 403 error            | Verify API token has: Workers Scripts: Edit, Workers R2: Edit, Cache Purge: Purge, Workers Routes: Edit |
+| Release not triggering      | Ensure `pnpm release` pushed a `v*` tag and inspect the **Release** workflow in the Actions tab         |
+| Manual redeploy unavailable | Run `.github/workflows/deploy.yml` with `workflow_dispatch`; it is not triggered by release publication |
 
 ---
 
@@ -279,19 +296,20 @@ flowchart TD
     A["1. Create R2 bucket: webmail-staging"] --> B["2. Create Worker: update wrangler.toml name"]
     B --> C["3. Add route: staging-mail.yourdomain.com/*"]
     C --> D["4. Create GitHub environment with separate secrets"]
-    D --> E["5. Add environment filter to deploy.yml"]
+    D --> E["5. Route both release.yml inline deploy and deploy.yml recovery jobs to that environment"]
 ```
 
 ---
 
 ## Quick Reference
 
-| Resource        | Location                                  |
-| --------------- | ----------------------------------------- |
-| R2 Bucket       | Cloudflare Dashboard → R2                 |
-| Worker          | Cloudflare Dashboard → Workers & Pages    |
-| DNS             | Cloudflare Dashboard → Your Domain → DNS  |
-| Secrets         | GitHub → Settings → Secrets and variables |
-| CI Workflow     | `.github/workflows/ci.yml`                |
-| Deploy Workflow | `.github/workflows/deploy.yml`            |
-| Worker Config   | `worker/wrangler.toml`                    |
+| Resource         | Location                                  |
+| ---------------- | ----------------------------------------- |
+| R2 Bucket        | Cloudflare Dashboard → R2                 |
+| Worker           | Cloudflare Dashboard → Workers & Pages    |
+| DNS              | Cloudflare Dashboard → Your Domain → DNS  |
+| Secrets          | GitHub → Settings → Secrets and variables |
+| CI Workflow      | `.github/workflows/ci.yml`                |
+| Release Workflow | `.github/workflows/release.yml`           |
+| Manual Redeploy  | `.github/workflows/deploy.yml`            |
+| Worker Config    | `worker/wrangler.toml`                    |

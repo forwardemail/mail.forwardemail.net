@@ -6,11 +6,13 @@ This document is the canonical reference for every secret and variable used by t
 
 Open **Settings → Secrets and variables → Actions** in the GitHub repository, then use the locations below.
 
-| Location                                | Put here                                                                       | Used by                                                   |
-| --------------------------------------- | ------------------------------------------------------------------------------ | --------------------------------------------------------- |
-| **Environment secrets** → `release`     | Certificates, private keys, passwords, API tokens, and signing credentials     | `release-desktop.yml`, `release-mobile.yml`, `deploy.yml` |
-| **Repository or environment variables** | Non-secret values such as bucket names and optional signing-identity overrides | `deploy.yml`, `release-mobile.yml`                        |
-| **Automatic GitHub secret**             | `GITHUB_TOKEN` only                                                            | Release creation and asset uploads                        |
+| Location                                | Put here                                                                                  | Used by                                                                    |
+| --------------------------------------- | ----------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| **Environment secrets** → `release`     | Certificates, private keys, passwords, deployment tokens, and store credentials           | `release.yml`, `release-desktop.yml`, `release-mobile.yml`, `deploy.yml`   |
+| **Repository secrets**                  | Optional `MATRIX_TOKEN`; notification jobs do not attach the `release` environment        | `release.yml`, `matrix-all-github-activity-notification.yml`               |
+| **Repository or environment variables** | Non-secret build and deployment values such as bucket, VAPID, Play, and signing overrides | `release.yml`, `release-desktop.yml`, `release-mobile.yml`, `deploy.yml`   |
+| **Repository variables**                | Break-glass `ALLOW_NO_UPDATER` override                                                   | `release-desktop.yml`                                                      |
+| **Automatic GitHub secret**             | `GITHUB_TOKEN` only                                                                       | Release creation, reusable workflows, deployment, and release asset upload |
 
 `GITHUB_TOKEN` is provided automatically by GitHub Actions. Do not create it manually.
 
@@ -18,18 +20,20 @@ Open **Settings → Secrets and variables → Actions** in the GitHub repository
 
 ### Desktop signing and updater secrets
 
-| Name                                 | Type   | Required | Purpose                                                                  |
-| ------------------------------------ | ------ | -------- | ------------------------------------------------------------------------ |
-| `TAURI_SIGNING_PRIVATE_KEY`          | Secret | Yes      | Private key used to sign Tauri updater bundles and generate `.sig` files |
-| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Secret | Yes      | Password chosen when generating the updater private key                  |
-| `APPLE_CERTIFICATE`                  | Secret | Optional | Base64-encoded macOS `.p12` certificate for desktop code signing         |
-| `APPLE_CERTIFICATE_PASSWORD`         | Secret | Optional | Password used when exporting the macOS `.p12`                            |
-| `APPLE_SIGNING_IDENTITY`             | Secret | Optional | macOS signing identity string such as `Developer ID Application: ...`    |
-| `APPLE_ID`                           | Secret | Optional | Apple ID email used for notarization                                     |
-| `APPLE_PASSWORD`                     | Secret | Optional | App-specific password used for notarization                              |
-| `APPLE_TEAM_ID`                      | Secret | Optional | Apple Developer Team ID used by desktop notarization and shared with iOS |
-| `WINDOWS_CERTIFICATE`                | Secret | Optional | Base64-encoded exportable `.pfx` Windows code-signing certificate        |
-| `WINDOWS_CERTIFICATE_PASSWORD`       | Secret | Optional | Password used when exporting the Windows `.pfx`                          |
+| Name                                 | Type   | Required           | Purpose                                                                  |
+| ------------------------------------ | ------ | ------------------ | ------------------------------------------------------------------------ |
+| `TAURI_SIGNING_PRIVATE_KEY`          | Secret | Yes                | Private key used to sign Tauri updater bundles and generate `.sig` files |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Secret | Yes                | Password chosen when generating the updater private key                  |
+| `APPLE_CERTIFICATE`                  | Secret | Yes for macOS rows | Base64-encoded macOS `.p12` certificate for desktop code signing         |
+| `APPLE_CERTIFICATE_PASSWORD`         | Secret | Yes for macOS rows | Password used when exporting the macOS `.p12`                            |
+| `APPLE_SIGNING_IDENTITY`             | Secret | Yes for macOS rows | macOS signing identity string such as `Developer ID Application: ...`    |
+| `APPLE_ID`                           | Secret | Yes for macOS rows | Apple ID email used for notarization                                     |
+| `APPLE_PASSWORD`                     | Secret | Yes for macOS rows | App-specific password used for notarization                              |
+| `APPLE_TEAM_ID`                      | Secret | Yes for macOS rows | Apple Developer Team ID used by desktop notarization and shared with iOS |
+| `WINDOWS_CERTIFICATE`                | Secret | Optional           | Base64-encoded exportable `.pfx` Windows code-signing certificate        |
+| `WINDOWS_CERTIFICATE_PASSWORD`       | Secret | Optional           | Password used when exporting the Windows `.pfx`                          |
+
+The updater signing key is required for normal production desktop releases. The workflow fails closed when `TAURI_SIGNING_PRIVATE_KEY` is absent unless the break-glass `ALLOW_NO_UPDATER=true` repository variable is set; that override intentionally omits updater artifacts and should not be left enabled. Every macOS release row also fails closed unless all six Apple signing and notarization secrets above are present.
 
 ### Mobile signing secrets
 
@@ -78,6 +82,15 @@ to the GitHub Release and skips only the Play upload.
 | `CLOUDFLARE_ZONE_ID`   | Secret   | Yes for cache purge | Cloudflare zone ID                                            |
 | `CLOUDFLARE_API_TOKEN` | Secret   | Yes for deploys     | Cloudflare API token with Workers, R2, and cache-purge access |
 | `R2_BUCKET`            | Variable | Yes for web deploys | Bucket name that stores built static assets                   |
+
+### Release control and notification inputs
+
+| Name               | Type                | Required | Purpose                                                                                        |
+| ------------------ | ------------------- | -------- | ---------------------------------------------------------------------------------------------- |
+| `ALLOW_NO_UPDATER` | Repository variable | No       | Emergency override; `true` permits desktop release artifacts without Tauri updater signatures  |
+| `MATRIX_TOKEN`     | Repository secret   | No       | Matrix access token used by the release summary and repository-activity notification workflows |
+
+Leave `ALLOW_NO_UPDATER` unset during normal operation. It exists only to unblock an intentional non-updatable desktop release when updater signing is unavailable. Because the Matrix jobs do not attach the `release` environment, `MATRIX_TOKEN` must be a repository Actions secret rather than an environment-only secret. When it is absent, release artifacts and deployment are unaffected; only Matrix delivery is skipped.
 
 ## Generating and storing each value
 
@@ -281,9 +294,11 @@ After populating the values above, verify the setup in the following order.
 
 | Check                                                                 | Expected result                                                                                           |
 | --------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| `Settings → Secrets and variables → Actions → Environments → release` | All signing secrets are present in the `release` environment                                              |
-| `Settings → Secrets and variables → Actions → Variables`              | `VAPID_PUBLIC_KEY`, `R2_BUCKET`, and optional `IOS_SIGNING_IDENTITY` are present if needed                |
-| Desktop release workflow                                              | `.sig` updater files are created when the Tauri signing key is present                                    |
+| `Settings → Secrets and variables → Actions → Environments → release` | All required signing, store, and deployment secrets are present in the `release` environment              |
+| `Settings → Secrets and variables → Actions → Secrets`                | Optional `MATRIX_TOKEN` is a repository secret if Matrix delivery is enabled                              |
+| `Settings → Secrets and variables → Actions → Variables`              | `VAPID_PUBLIC_KEY`, `R2_BUCKET`, and any needed `PLAY_TRACK` or `IOS_SIGNING_IDENTITY` are present        |
+| Updater override                                                      | `ALLOW_NO_UPDATER` is absent or not `true` during normal production releases                              |
+| Desktop release workflow                                              | `.sig` updater files are created; a missing updater key fails unless the break-glass override is explicit |
 | iOS release workflow                                                  | The job does not skip, logs the active Xcode and iPhoneOS SDK, and uploads an IPA to TestFlight           |
 | Android release workflow                                              | Exactly one dual-provider APK and one matching AAB are produced; missing release inputs fail at preflight |
 | Android push configuration                                            | `VAPID_PUBLIC_KEY` equals the backend public key; the release decodes a valid `google-services.json`      |

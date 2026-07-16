@@ -1,6 +1,6 @@
 ## How the Build Runs
 
-The desktop release workflow builds the Tauri app across the supported desktop matrix whenever `release-desktop.yml` is triggered by a `desktop-v*` tag or a manual dispatch from the Actions tab.
+The desktop release workflow builds the Tauri app across the supported desktop matrix when the top-level `release.yml` orchestrator calls it, when a `desktop-v*` tag is pushed, or when it is started manually from the Actions tab.
 
 The build matrix now compiles for **6 desktop targets in parallel**:
 
@@ -18,7 +18,7 @@ The workflow uses native GitHub-hosted runners for each architecture, including 
 ## Build Pipeline
 
 1. **Build** — Compiles and bundles the Tauri desktop app for each target in the matrix.
-2. **Sign** — Produces updater signatures when the release signing key is configured, and performs platform signing where the required secrets are present.
+2. **Sign** — Requires the Tauri updater signing key and produces updater signatures for normal releases. The build fails closed when the key is absent unless the emergency repository variable `ALLOW_NO_UPDATER=true` is set intentionally; platform signing also runs where its required secrets are present.
 3. **Windows trust** — Code signing improves Microsoft Defender and SmartScreen trust, but reputation still depends on the shipped certificate and download history; workflow changes alone cannot remove those warnings.
 4. **Upload** — Pushes the generated artifacts into the draft GitHub Release associated with the desktop tag.
 

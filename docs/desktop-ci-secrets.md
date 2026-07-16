@@ -59,7 +59,7 @@ Commit this change — the public key is safe to store in the repository.
 3. Enter the version (e.g. `0.3.2`) — no `v` prefix needed.
 4. Click **Run workflow**.
 
-This orchestrates: GitHub Release creation → Desktop builds → Mobile builds → Checksums.
+This orchestrates the WebView E2E gate, draft GitHub Release creation, desktop and mobile builds, web deployment, release publication, checksums, and the optional Matrix notification.
 
 ## Complete Secrets Reference
 
@@ -69,26 +69,27 @@ All secrets should be added to the **`release`** GitHub environment.
 | ------------------------------------ | -------- | ----------------------------------------------------------------- | ----------------------------------------------------------------------- |
 | `TAURI_SIGNING_PRIVATE_KEY`          | Yes      | Minisign private key for updater signatures                       | `pnpm tauri signer generate` (see above)                                |
 | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Yes      | Password for the signing private key                              | Set during `signer generate`                                            |
-| `APPLE_CERTIFICATE`                  | Optional | Base64-encoded macOS `.p12` certificate                           | Export from Keychain Access                                             |
-| `APPLE_CERTIFICATE_PASSWORD`         | Optional | Password for the `.p12` certificate                               | Set during export                                                       |
-| `APPLE_SIGNING_IDENTITY`             | Optional | Signing identity string (e.g. `Developer ID Application: ...`)    | `security find-identity -v -p codesigning`                              |
-| `APPLE_ID`                           | Optional | Apple ID email for notarization                                   | Apple Developer account                                                 |
-| `APPLE_PASSWORD`                     | Optional | App-specific password for notarization                            | [appleid.apple.com](https://appleid.apple.com) → App-Specific Passwords |
-| `APPLE_TEAM_ID`                      | Optional | Apple Developer Team ID                                           | [developer.apple.com](https://developer.apple.com) → Membership         |
+| `APPLE_CERTIFICATE`                  | Yes      | Base64-encoded macOS `.p12` certificate                           | Export from Keychain Access                                             |
+| `APPLE_CERTIFICATE_PASSWORD`         | Yes      | Password for the `.p12` certificate                               | Set during export                                                       |
+| `APPLE_SIGNING_IDENTITY`             | Yes      | Signing identity string (e.g. `Developer ID Application: ...`)    | `security find-identity -v -p codesigning`                              |
+| `APPLE_ID`                           | Yes      | Apple ID email for notarization                                   | Apple Developer account                                                 |
+| `APPLE_PASSWORD`                     | Yes      | App-specific password for notarization                            | [appleid.apple.com](https://appleid.apple.com) → App-Specific Passwords |
+| `APPLE_TEAM_ID`                      | Yes      | Apple Developer Team ID                                           | [developer.apple.com](https://developer.apple.com) → Membership         |
 | `WINDOWS_CERTIFICATE`                | Optional | Base64-encoded exportable Windows `.pfx` code-signing certificate | Exported from the Windows cert store or your certificate issuer         |
 | `WINDOWS_CERTIFICATE_PASSWORD`       | Optional | Password used when exporting the Windows `.pfx`                   | Set during `.pfx` export                                                |
 
+The desktop workflow also reads the repository variable `ALLOW_NO_UPDATER`. Leave it unset during normal releases: the workflow fails closed when `TAURI_SIGNING_PRIVATE_KEY` is missing. Setting `ALLOW_NO_UPDATER=true` is an emergency override that deliberately produces release artifacts without updater signatures.
+
 **Note:** `GITHUB_TOKEN` is provided automatically by GitHub Actions — do not add it manually.
 
-## macOS Code Signing (Future)
+## macOS Code Signing and Notarization
 
-Once you have an Apple Developer Program membership:
+The macOS matrix rows fail closed unless all six Apple signing and notarization secrets in the table above are present. With an Apple Developer Program membership:
 
 1. Create a Developer ID Application certificate in Xcode or the Apple Developer portal.
 2. Export it as a `.p12` file from Keychain Access.
 3. Base64-encode it: `base64 -i certificate.p12 | pbcopy`
-4. Add `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD`, and `APPLE_TEAM_ID` to the `release` environment.
-5. Set `signingIdentity` in `src-tauri/tauri.conf.json` → `bundle.macOS.signingIdentity`.
+4. Add `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD`, and `APPLE_TEAM_ID` to the `release` environment. The workflow passes `APPLE_SIGNING_IDENTITY` to Tauri at build time; keep `bundle.macOS.signingIdentity` unset in the committed configuration.
 
 ## Windows Code Signing
 
@@ -128,4 +129,4 @@ After a successful release build, check the draft GitHub Release for:
 - **Linux x64:** `Forward.Email_<version>_amd64.AppImage`, `Forward.Email_<version>_amd64.deb`, `Forward.Email-<version>-1.x86_64.rpm`, and each file's matching `.sig` sidecar
 - **Linux arm64:** `Forward.Email_<version>_arm64.deb`, `Forward.Email-<version>-1.aarch64.rpm`, and each file's matching `.sig` sidecar
 
-`latest.json` is the Tauri updater manifest. The unified release workflow also publishes `SHA256SUMS.txt` over every release asset present before checksum generation. Each `.sig` file contains the Minisign signature used by the auto-updater to verify integrity. If expected `.sig` files are missing, check that `TAURI_SIGNING_PRIVATE_KEY` is correctly set.
+`latest.json` is the Tauri updater manifest. The unified release workflow also publishes `SHA256SUMS.txt` over every release asset present before checksum generation. Each `.sig` file contains the Minisign signature used by the auto-updater to verify integrity. A normal release fails before building when `TAURI_SIGNING_PRIVATE_KEY` is missing; if updater artifacts are absent, confirm that the signing key was available and that the break-glass `ALLOW_NO_UPDATER` variable was not enabled.

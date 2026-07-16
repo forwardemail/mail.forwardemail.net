@@ -1,6 +1,6 @@
 # Push Notifications Setup Guide
 
-This document describes the Forward Email mobile push architecture and its deployment requirements. The native transports are **APNs on iOS**, **UnifiedPush on every Android build**, and optional **FCM on Google Play builds**. Desktop and browser builds support local notification display but do not register a remote push subscription.
+This document describes the Forward Email mobile push architecture and its deployment requirements. The native transports are **APNs on iOS** and one dual-provider Android release containing both **FCM and UnifiedPush**. FCM is the runtime default when configured; users can explicitly select UnifiedPush as the Google-free alternative. Desktop and browser builds support local notification display but do not register a remote push subscription.
 
 ## Support and permission matrix
 
@@ -77,12 +77,12 @@ The backend certificate playbook prompts for the local `.p8` path and uploads it
 
 The Google Play build and backend sender use the same Firebase project but require different files:
 
-| Value                         | Used by             | How to obtain and store it                                                                                                                                             |
-| ----------------------------- | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `FCM_PROJECT_ID`              | Backend             | Firebase **Project settings → General → Project ID**; do not use the display name, project number, or application ID                                                   |
-| `FCM_SERVICE_ACCOUNT_PATH`    | Backend             | Absolute path to a secret service-account JSON key authorized for FCM HTTP v1; the backend playbook installs it as `/var/www/production/firebase-service-account.json` |
-| `GOOGLE_SERVICES_JSON`        | Local Play build    | Absolute local path to the Android app’s downloaded `google-services.json` client configuration                                                                        |
-| `GOOGLE_SERVICES_JSON_BASE64` | GitHub Play release | Base64 encoding of that same `google-services.json`, stored as a GitHub Actions secret                                                                                 |
+| Value                         | Used by                | How to obtain and store it                                                                                                                                             |
+| ----------------------------- | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `FCM_PROJECT_ID`              | Backend                | Firebase **Project settings → General → Project ID**; do not use the display name, project number, or application ID                                                   |
+| `FCM_SERVICE_ACCOUNT_PATH`    | Backend                | Absolute path to a secret service-account JSON key authorized for FCM HTTP v1; the backend playbook installs it as `/var/www/production/firebase-service-account.json` |
+| `GOOGLE_SERVICES_JSON`        | Local FCM build        | Absolute local path to the Android app’s downloaded `google-services.json` client configuration                                                                        |
+| `GOOGLE_SERVICES_JSON_BASE64` | GitHub Android release | Base64 encoding of that same `google-services.json`, stored as a GitHub Actions secret                                                                                 |
 
 In the [Firebase console](https://console.firebase.google.com/), create or select the production project, register the Android application ID `net.forwardemail.mail`, and download its latest `google-services.json` from **Project settings → General → Your apps**. Enable the Firebase Cloud Messaging API. For the backend, generate a dedicated service-account JSON key from **Project settings → Service accounts** or Google Cloud IAM and grant only the permissions needed to send FCM HTTP v1 messages to that project.
 
@@ -94,7 +94,7 @@ Create the Play-release secret without introducing line wrapping:
 base64 < /absolute/path/google-services.json | tr -d '\n'
 ```
 
-Store the result as GitHub Actions secret `GOOGLE_SERVICES_JSON_BASE64`. Local Play builds instead set `GOOGLE_SERVICES_JSON=/absolute/path/google-services.json`.
+Store the result as GitHub Actions secret `GOOGLE_SERVICES_JSON_BASE64`. Local FCM-enabled builds instead set `GOOGLE_SERVICES_JSON=/absolute/path/google-services.json`.
 
 ### UnifiedPush and VAPID
 

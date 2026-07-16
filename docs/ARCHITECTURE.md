@@ -108,14 +108,15 @@ The application provides an optional App Lock feature that encrypts all locally 
 
 ## Release Flow
 
-1.  `pnpm release` bumps the version across `package.json`, `tauri.conf.json`, and `Cargo.toml`, tags (e.g., `v0.7.0`), and pushes.
-2.  The [`release.yml`](../.github/workflows/release.yml) orchestrator workflow is triggered by the `v*` tag.
-3.  It creates a draft GitHub Release, then calls `release-desktop.yml` via `workflow_call` to build desktop binaries for all platforms.
-4.  The workflows build, sign, and (on macOS) notarize all application binaries.
-5.  The compiled artifacts are uploaded to the draft GitHub Release.
-6.  The `chore(release):` commit pushed to `main` triggers [`ci.yml`](../.github/workflows/ci.yml), which detects the release commit and deploys to Cloudflare R2.
-7.  Once the draft is published, [`deploy.yml`](../.github/workflows/deploy.yml) also deploys the web application as a safety net.
-8.  The `newRelease` WebSocket event is broadcast to all connected clients, and the Tauri desktop app's auto-updater will detect and download the new version.
+1.  `pnpm release` bumps the version across `package.json`, `tauri.conf.json`, and `Cargo.toml`, creates a `v*` tag, and pushes the commit and tag.
+2.  The [`release.yml`](../.github/workflows/release.yml) orchestrator is triggered by the tag and runs the WebView E2E gate.
+3.  It creates a draft GitHub Release, then calls `release-desktop.yml` and `release-mobile.yml` through `workflow_call`.
+4.  The reusable workflows build, sign, package, notarize where applicable, and upload desktop and mobile artifacts; configured store-upload steps run in the mobile workflow.
+5.  After the platform builds pass, `release.yml` builds and deploys the web application to Cloudflare R2 and Workers inline, then purges the cache.
+6.  Inline deployment is required because a release created with the automatic `GITHUB_TOKEN` does not trigger a separate release-event workflow.
+7.  The orchestrator publishes the GitHub Release, generates `SHA256SUMS.txt`, and optionally sends a Matrix notification.
+8.  [`deploy.yml`](../.github/workflows/deploy.yml) remains a manual `workflow_dispatch` recovery path; it is not triggered by release publication.
+9.  The `newRelease` WebSocket event is broadcast to all connected clients, and the Tauri desktop app's auto-updater detects and downloads the new version.
 
 For the full release process, see [RELEASES.md](./RELEASES.md).
 

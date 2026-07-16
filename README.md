@@ -407,10 +407,14 @@ graph TB
 
 ### CI/CD Pipeline
 
-This repository currently documents two primary release workflows:
+The top-level **Release** workflow (`.github/workflows/release.yml`) is the production orchestrator for every `v*` tag. It runs the WebView E2E gate, creates the draft GitHub Release, calls the reusable desktop and mobile workflows, deploys the web application to Cloudflare R2 and Workers, publishes the release, generates checksums, and optionally sends a Matrix notification.
 
-1. **Release Desktop (Tauri)** (`.github/workflows/release-desktop.yml`) for macOS x64/arm64, Windows x64/arm64, and Linux x64/arm64 desktop artifacts. See [Desktop Build CI guide](docs/desktop-build-ci.md) for the platform matrix, runner details, and artifact expectations.
-2. **Release Mobile** (`.github/workflows/release-mobile.yml`) for signed Android APK/AAB output and signed iOS IPA upload to TestFlight. See [Release Process](docs/RELEASES.md), [iOS Setup](docs/ios-setup.md), and [Secrets](docs/SECRETS.md) for the exact signing inputs and release flow.
+The orchestrator calls two reusable platform workflows:
+
+1. **Release Desktop (Tauri)** (`.github/workflows/release-desktop.yml`) builds macOS x64/arm64, Windows x64/arm64, and Linux x64/arm64 desktop artifacts. See [Desktop Build CI guide](docs/desktop-build-ci.md) for the platform matrix, runner details, and artifact expectations.
+2. **Release Mobile** (`.github/workflows/release-mobile.yml`) builds the signed dual-provider Android APK/AAB and the signed iOS IPA, then uploads configured store artifacts. See [Release Process](docs/RELEASES.md), [iOS Setup](docs/ios-setup.md), and [Secrets](docs/SECRETS.md) for the exact signing inputs and release flow.
+
+The separate `deploy.yml` workflow is a manual `workflow_dispatch` recovery path for redeploying the current web build; normal tagged releases deploy inline from `release.yml`.
 
 Local validation for release work should still cover the standard web checks before tagging a release:
 
@@ -454,15 +458,25 @@ For exact secret generation, GitHub environment setup, and platform-specific sig
 | `APP_STORE_CONNECT_API_KEY`          | Full contents of the downloaded App Store Connect `.p8` key       |
 | `APP_STORE_CONNECT_KEY_ID`           | App Store Connect API key ID                                      |
 | `APP_STORE_CONNECT_ISSUER_ID`        | App Store Connect issuer ID                                       |
+| `GOOGLE_SERVICES_JSON_BASE64`        | Firebase Android client configuration for the dual-provider build |
+| `GOOGLE_PLAY_SERVICE_ACCOUNT`        | Optional Google Play publishing service-account JSON              |
+| `MATRIX_TOKEN`                       | Optional repository secret for release and activity notifications |
+
+All secrets above except `MATRIX_TOKEN` belong in the **`release`** environment. `MATRIX_TOKEN` is a repository Actions secret because the notification jobs do not attach the `release` environment. `GITHUB_TOKEN` is supplied automatically by GitHub Actions and must not be created manually.
 
 **GitHub Variables:**
 
-| Variable               | Description                                                              |
-| ---------------------- | ------------------------------------------------------------------------ |
-| `R2_BUCKET`            | R2 bucket name for static assets                                         |
-| `IOS_SIGNING_IDENTITY` | Optional iOS signing identity override; defaults to `Apple Distribution` |
+| Variable               | Description                                                                          |
+| ---------------------- | ------------------------------------------------------------------------------------ |
+| `R2_BUCKET`            | R2 bucket name for static assets                                                     |
+| `IOS_SIGNING_IDENTITY` | Optional iOS signing identity override; defaults to `Apple Distribution`             |
+| `VAPID_PUBLIC_KEY`     | Required public half of the backend VAPID pair embedded in Android release builds    |
+| `PLAY_TRACK`           | Optional Google Play track; defaults to `internal`                                   |
+| `ALLOW_NO_UPDATER`     | Emergency desktop override; `true` permits release artifacts without updater signing |
 
-For generation steps and exact setup instructions, see [docs/SECRETS.md](./docs/SECRETS.md).
+`ALLOW_NO_UPDATER` is a break-glass repository variable, not a normal release setting. Leave it unset so desktop releases fail closed when `TAURI_SIGNING_PRIVATE_KEY` is missing.
+
+For generation steps, storage locations, required/optional status, and exact setup instructions, see [docs/SECRETS.md](./docs/SECRETS.md).
 
 ### Cloudflare API Token Setup
 
