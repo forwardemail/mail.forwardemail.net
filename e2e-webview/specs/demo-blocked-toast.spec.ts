@@ -58,32 +58,28 @@ describe('demo write actions are blocked with a toast', () => {
     const confirmBtn = await browser.$('[data-testid="confirm-dialog-confirm"]');
     await confirmBtn.waitForDisplayed({ timeout: 15_000 });
 
-    // The native click on the freshly-mounted confirm button is occasionally
-    // dropped on the slow macos-x64 runner — the dialog stays up and the delete
-    // never reaches Remote.request, so the demo interceptor never toasts. Make
-    // the confirm self-healing: re-issue the click each poll tick while the
-    // dialog is still open (idempotent once it closes), then look for the toast.
-    // The demo-blocked toast lives 15s, so once it fires this can't miss it. The
-    // generic [data-testid="toast-message"] selector also matches transient
-    // status toasts, so we poll for the actual "demo" text rather than reading
-    // whichever toast lands first. getText/isDisplayed are guarded because a
-    // toast/dialog element can detach mid-read on the webview driver.
+    // macOS WebDriver can invalidate an element handle while Svelte replaces
+    // the dialog subtree. Resolve and click the live button inside the renderer
+    // on every poll instead of reusing the original WebDriver element. Read the
+    // toast text in the same renderer call so a detach between element lookup
+    // and getText() cannot hide the 15-second demo warning.
     let toastText = '';
     await browser.waitUntil(
       async () => {
-        if (await confirmBtn.isDisplayed().catch(() => false)) {
-          await nativeClick(browser, confirmBtn).catch(() => {});
-        }
-        const toasts = await browser.$$('[data-testid="toast-message"]');
-        const len = await toasts.length;
-        for (let i = 0; i < len; i++) {
-          const t = (await toasts[i].getText().catch(() => '')).toLowerCase();
-          if (t.includes('demo')) {
-            toastText = t;
-            return true;
-          }
-        }
-        return false;
+        const toastTexts = await browser.execute(() => {
+          const confirm = document.querySelector<HTMLButtonElement>(
+            '[data-testid="confirm-dialog-confirm"]',
+          );
+          confirm?.click();
+
+          return Array.from(document.querySelectorAll('[data-testid="toast-message"]')).map(
+            (toast) => toast.textContent?.trim().toLowerCase() || '',
+          );
+        });
+        const match = toastTexts.find((text) => text.includes('demo'));
+        if (!match) return false;
+        toastText = match;
+        return true;
       },
       {
         timeout: 20_000,
