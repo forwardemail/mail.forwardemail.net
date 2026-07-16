@@ -9,6 +9,7 @@
   import { isTauri } from '../utils/platform.js';
   import { searchStore } from '../stores/searchStore';
   import { Remote } from '../utils/remote';
+  import { isDemoMode } from '../utils/demo-mode';
   import { db } from '../utils/db';
   import { sendSyncRequest } from '../utils/sync-worker-client.js';
   import { Local } from '../utils/storage';
@@ -3530,7 +3531,10 @@
       if (mailboxStore?.actions?.bulkDeleteMessages) {
         const { failed } = await mailboxStore.actions.bulkDeleteMessages(targets);
         await reloadMessages();
-        if (failed > 0) {
+        // Remote.request already surfaces the actionable demo warning. Avoid
+        // replacing it immediately with a generic failure toast: the toast host
+        // intentionally displays only one item at a time.
+        if (failed > 0 && !isDemoMode()) {
           showToast(`Failed to delete ${failed} message${failed === 1 ? '' : 's'}`, 'error');
         }
       } else {

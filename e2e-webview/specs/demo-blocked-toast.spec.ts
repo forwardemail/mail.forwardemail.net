@@ -58,24 +58,30 @@ describe('demo write actions are blocked with a toast', () => {
     const confirmBtn = await browser.$('[data-testid="confirm-dialog-confirm"]');
     await confirmBtn.waitForDisplayed({ timeout: 15_000 });
 
-    // macOS WebDriver can invalidate an element handle while Svelte replaces
-    // the dialog subtree. Resolve and click the live button inside the renderer
-    // on every poll instead of reusing the original WebDriver element. Read the
-    // toast text in the same renderer call so a detach between element lookup
-    // and getText() cannot hide the 15-second demo warning.
+    // Resolve a fresh handle on each attempt. Svelte removes the dialog as soon
+    // as the async action starts, so disappearance proves the click reached the
+    // real component handler without retaining a stale WebDriver element.
+    await browser.waitUntil(
+      async () => {
+        const liveConfirm = await browser.$('[data-testid="confirm-dialog-confirm"]');
+        if (!(await liveConfirm.isExisting().catch(() => false))) return true;
+        await nativeClick(browser, liveConfirm).catch(() => {});
+        return !(await liveConfirm.isExisting().catch(() => true));
+      },
+      {
+        timeout: 15_000,
+        timeoutMsg: 'confirm dialog did not close after confirming the blocked delete',
+      },
+    );
+
     let toastText = '';
     await browser.waitUntil(
       async () => {
-        const toastTexts = await browser.execute(() => {
-          const confirm = document.querySelector<HTMLButtonElement>(
-            '[data-testid="confirm-dialog-confirm"]',
-          );
-          confirm?.click();
-
-          return Array.from(document.querySelectorAll('[data-testid="toast-message"]')).map(
+        const toastTexts = (await browser.execute(() =>
+          Array.from(document.querySelectorAll('[data-testid="toast-message"]')).map(
             (toast) => toast.textContent?.trim().toLowerCase() || '',
-          );
-        });
+          ),
+        )) as string[];
         const match = toastTexts.find((text) => text.includes('demo'));
         if (!match) return false;
         toastText = match;
