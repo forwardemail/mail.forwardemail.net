@@ -28,6 +28,7 @@ import {
 const TOKEN_STORAGE_KEY = 'push_notification_token';
 const TOKEN_PLATFORM_KEY = 'push_notification_platform';
 const REGISTRATION_ID_STORAGE_KEY = 'push_notification_registration_id';
+const ANDROID_PREFERRED_PROVIDER_KEY = 'push_notification_preferred_provider';
 const ANDROID_PROVIDER = (import.meta.env.VITE_ANDROID_PUSH_PROVIDER || 'auto').toLowerCase();
 
 let initialized = false;
@@ -270,6 +271,18 @@ async function initializeAndroidPush() {
   if (ANDROID_PROVIDER === 'unified-push') return initializeUnifiedPush();
   if (ANDROID_PROVIDER === 'fcm') return initializeAndroidFcmPush();
 
+  // A dual-provider build defaults to FCM, but an explicit UnifiedPush
+  // distributor choice is a durable device preference and must survive restarts.
+  if (Local.get(ANDROID_PREFERRED_PROVIDER_KEY) === 'unified-push') {
+    try {
+      if (await initializeUnifiedPush()) return true;
+    } catch (error) {
+      console.info('[push] Preferred UnifiedPush unavailable; trying FCM:', error);
+    }
+
+    return initializeAndroidFcmPush();
+  }
+
   try {
     if (await initializeAndroidFcmPush()) return true;
   } catch (error) {
@@ -351,12 +364,25 @@ export function isPushInitialized() {
 /**
  * Open the UnifiedPush distributor picker after an explicit settings action.
  */
+export function getAndroidPushProviderPreference() {
+  return Local.get(ANDROID_PREFERRED_PROVIDER_KEY) === 'unified-push' ? 'unified-push' : 'fcm';
+}
+
 export async function selectUnifiedPushDistributor() {
   if (!isUnifiedPushSupported()) return false;
+  await cleanupPushNotifications();
   await initializeUnifiedPushListeners();
   await pickUnifiedPushDistributor();
+  Local.set(ANDROID_PREFERRED_PROVIDER_KEY, 'unified-push');
   activeNativeProvider = 'unified-push';
   return true;
+}
+
+export async function selectFcmPushProvider() {
+  if (!isUnifiedPushSupported()) return false;
+  Local.remove(ANDROID_PREFERRED_PROVIDER_KEY);
+  await cleanupPushNotifications();
+  return initPushNotifications();
 }
 
 export async function getUnifiedPushProviderState() {

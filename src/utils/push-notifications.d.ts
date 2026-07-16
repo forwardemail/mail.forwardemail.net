@@ -20,6 +20,8 @@ export function cleanupPushNotifications(): Promise<void>;
 export function getStoredPushToken(): string | null;
 export function getPushPlatform(): 'ios' | 'android' | 'apns' | 'fcm' | 'unified-push' | null;
 export function isPushInitialized(): boolean;
+export function getAndroidPushProviderPreference(): 'fcm' | 'unified-push';
+export function selectFcmPushProvider(): Promise<boolean>;
 export function selectUnifiedPushDistributor(): Promise<boolean>;
 export function getUnifiedPushProviderState(): Promise<UnifiedPushProviderState | null>;
 export function handlePushPayload(payload: unknown): PushNavigationAction | null;

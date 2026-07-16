@@ -4,15 +4,15 @@ This document describes the Forward Email mobile push architecture and its deplo
 
 ## Support and permission matrix
 
-| Target or profile    | Remote transport              | Local display                                                | Build and permission source                                                                                                | Status                                             |
-| -------------------- | ----------------------------- | ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
-| iOS                  | APNs                          | Tauri notification plugin                                    | iOS-only mobile-push commands, runtime authorization, and generated iOS `aps-environment` entitlement                      | Supported                                          |
-| Android, Google-free | UnifiedPush                   | Native background notification plus foreground Tauri display | First-party UnifiedPush connector, `POST_NOTIFICATIONS`, `RECEIVE_BOOT_COMPLETED`, and Android-only UnifiedPush capability | Supported; no Firebase or Play Services dependency |
-| Android, Google Play | FCM with UnifiedPush fallback | Tauri/native display                                         | Optional FCM Cargo feature and generated FCM capability, plus the always-present UnifiedPush connector                     | Supported                                          |
-| macOS                | None                          | Tauri notification plugin                                    | Shared notification commands; the macOS entitlement intentionally contains no `aps-environment`                            | Local notifications only                           |
-| Windows              | None                          | Tauri notification plugin                                    | Shared notification commands                                                                                               | Local notifications only                           |
-| Ubuntu/Linux         | None                          | Desktop notification service                                 | Shared notification commands                                                                                               | Local notifications only                           |
-| Browser/PWA          | None                          | Web Notifications API                                        | Browser notification permission                                                                                            | Local notifications only; no Web Push subscription |
+| Target or profile     | Remote transport                     | Local display                                                | Build and permission source                                                                                                | Status                                             |
+| --------------------- | ------------------------------------ | ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| iOS                   | APNs                                 | Tauri notification plugin                                    | iOS-only mobile-push commands, runtime authorization, and generated iOS `aps-environment` entitlement                      | Supported                                          |
+| Android, Google-free  | UnifiedPush                          | Native background notification plus foreground Tauri display | First-party UnifiedPush connector, `POST_NOTIFICATIONS`, `RECEIVE_BOOT_COMPLETED`, and Android-only UnifiedPush capability | Supported; no Firebase or Play Services dependency |
+| Android, dual release | FCM plus user-selectable UnifiedPush | Tauri/native display                                         | FCM Cargo feature and generated FCM capability, plus the always-present UnifiedPush connector                              | Supported; one APK and AAB                         |
+| macOS                 | None                                 | Tauri notification plugin                                    | Shared notification commands; the macOS entitlement intentionally contains no `aps-environment`                            | Local notifications only                           |
+| Windows               | None                                 | Tauri notification plugin                                    | Shared notification commands                                                                                               | Local notifications only                           |
+| Ubuntu/Linux          | None                                 | Desktop notification service                                 | Shared notification commands                                                                                               | Local notifications only                           |
+| Browser/PWA           | None                                 | Web Notifications API                                        | Browser notification permission                                                                                            | Local notifications only; no Web Push subscription |
 
 > **UnifiedPush is not a manifest permission.** It is a distributor-mediated Android protocol. A compatible distributor application must be installed and selected, and the backend must encrypt each message to the subscription’s endpoint and public keys.
 
@@ -143,7 +143,7 @@ Use `scripts/ios-build.sh` for signed builds. Release automation uses these Acti
 
 The first-party Tauri plugin under `src-tauri/plugins/tauri-plugin-unified-push` uses the stable UnifiedPush Android connector. It performs distributor discovery, explicit user-driven distributor selection, VAPID-bound registration, callback persistence, subscription rotation, message acknowledgment, foreground event forwarding, and background native notification display.
 
-A user needs a compatible UnifiedPush distributor. After installing one, the user can open Forward Email settings and select or change the distributor. Startup may silently re-register a previously selected distributor, but the application opens the distributor picker only from this explicit user action.
+A user needs a compatible UnifiedPush distributor. After installing one, the user can open Forward Email settings and select or change the distributor. In the dual-provider APK, FCM is the default until the user makes that explicit choice; the selected UnifiedPush preference then persists across application restarts and is attempted before FCM. The application opens the distributor picker only from the explicit settings action.
 
 The client queues messages received while the webview is unavailable. It drains them on initialization and marks notifications already displayed by Android so the frontend can refresh mailbox state without displaying a duplicate notification.
 
@@ -152,7 +152,7 @@ The client queues messages received while the webview is unavailable. It drains 
 | Profile     | Command                           | Native content                                                                                                                            | Intended distribution                                                     |
 | ----------- | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
 | Google-free | `pnpm tauri:android:build:fdroid` | UnifiedPush only; no Firebase Gradle plugin, Firebase Messaging library, FCM service, generated FCM capability, or `google-services.json` | F-Droid, direct APK, alternative stores, and privacy-focused distribution |
-| Play        | `pnpm tauri:android:build:play`   | UnifiedPush plus optional FCM; runtime prefers FCM and can fall back to UnifiedPush                                                       | Google Play                                                               |
+| Play        | `pnpm tauri:android:build:play`   | UnifiedPush plus FCM; runtime defaults to FCM and honors a durable user-selected UnifiedPush distributor                                  | Single GitHub release APK/AAB and Google Play                             |
 | Default     | `pnpm tauri:android:build`        | Same as Google-free                                                                                                                       | Safe default for downstream packagers                                     |
 
 Development equivalents are `pnpm tauri:android:dev:fdroid` and `pnpm tauri:android:dev:play`.
@@ -176,11 +176,11 @@ GOOGLE_SERVICES_JSON=/absolute/path/google-services.json \
 
 ### Continuous integration and releases
 
-Store `VAPID_PUBLIC_KEY` as a GitHub Actions **variable**. Its value must exactly equal backend `VAPID_PUBLIC_KEY`. Store `GOOGLE_SERVICES_JSON_BASE64` as an Actions **secret** for the Play profile only.
+Store `VAPID_PUBLIC_KEY` as a GitHub Actions **variable**. Its value must exactly equal backend `VAPID_PUBLIC_KEY`. Store `GOOGLE_SERVICES_JSON_BASE64` as a `release` environment **secret**. Both are required by the fail-fast preflight for the single dual-provider release.
 
-The release workflow creates distinct Play and Google-free Android artifacts. It uploads only the Play AAB to Google Play. Routine Android CI and emulator E2E builds use the Google-free profile so the first-party connector continuously compiles without Firebase or Google Play Services.
+The release workflow creates exactly one signed dual-provider APK and one matching AAB. It uploads that AAB to Google Play when the Play service-account secret is configured. Routine Android CI and emulator E2E builds retain Google-free coverage so the first-party connector continuously compiles without Firebase or Google Play Services.
 
-For F-Droid metadata, invoke the default or `:fdroid` command and set `VAPID_PUBLIC_KEY` in the controlled build environment. No proprietary Firebase artifact or Firebase secret is required for that profile.
+For F-Droid metadata or other reproducible Google-free downstream builds, invoke the default or `:fdroid` command and set `VAPID_PUBLIC_KEY` in the controlled build environment. No proprietary Firebase artifact or Firebase secret is required for that profile, and it is intentionally not published as a second GitHub release APK.
 
 ## Authentication and token lifecycle
 
@@ -201,7 +201,7 @@ On sign-out, account replacement, provider change, registration failure, or endp
 | Subscription rotation        | Old backend registration is deleted and the replacement subscription becomes active                                 |
 | Permanent endpoint failure   | `404` or `410` increments/prunes the obsolete registration through the normal failure lifecycle                     |
 | Sign-out/account switch      | Existing server registration, native listeners, and provider state are cleaned up before new credentials initialize |
-| Play profile                 | FCM works when available; UnifiedPush remains selectable as the non-Google alternative                              |
+| Dual-provider release        | One APK contains FCM and UnifiedPush; an explicit distributor choice persists and takes precedence after restart    |
 | iOS/macOS entitlement split  | iOS signed build has `aps-environment`; shared macOS entitlement does not                                           |
 
 Physical-device tests should cover at least one distributor from the intended F-Droid ecosystem, Android 13+ notification permission, process termination/restart, distributor replacement, network loss, account switch, and notification tap routing. A successful compile alone does not validate distributor behavior.

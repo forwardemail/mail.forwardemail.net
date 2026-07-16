@@ -324,8 +324,17 @@ async function stabilizePage(page) {
         transition-delay: 0s !important;
         transition-duration: 0s !important;
       }
+      #toasts-root, [data-testid="toast-list"],
       [data-sonner-toaster], .svelte-sonner-toaster { display: none !important; }
     `,
+  });
+  await page.evaluate(() => {
+    globalThis.scrollTo(0, 0);
+    document.scrollingElement?.scrollTo(0, 0);
+    for (const element of document.querySelectorAll('*')) {
+      if (element.scrollTop !== 0) element.scrollTop = 0;
+      if (element.scrollLeft !== 0) element.scrollLeft = 0;
+    }
   });
   await waitForFonts(page);
   await page.waitForTimeout(250);
@@ -447,6 +456,15 @@ async function prepareView(page, baseUrl, view, isMobile) {
         state: 'visible',
         timeout: DEFAULT_TIMEOUT,
       });
+      await page.getByRole('button', { name: 'Run again' }).waitFor({
+        state: 'visible',
+        timeout: DEFAULT_TIMEOUT,
+      });
+      await page.waitForFunction(
+        () => document.querySelector('[role="status"]') === null,
+        undefined,
+        { timeout: 30_000 },
+      );
       break;
     }
     case 'settings': {

@@ -42,17 +42,40 @@ env:
 jobs:
   android:
     runs-on: ubuntu-22.04
-    name: Release Android (${{ matrix.profile }}, signed APK + AAB)
-    # Use the 'release' environment for scoped secrets
+    name: Release Android (FCM + UnifiedPush, signed APK + AAB)
+    # Use the 'release' environment for scoped secrets.
     environment: release
-    strategy:
-      fail-fast: false
-      matrix:
-        profile: [play, fdroid]
 
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      # Fail before installing any toolchain when the single dual-provider
+      # release cannot be built. VAPID_PUBLIC_KEY is public configuration, but
+      # it must exactly match the backend key pair.
+      - name: Preflight Android release configuration
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
+          VAPID_PUBLIC_KEY: ${{ vars.VAPID_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          missing=()
+          [ -z "$ANDROID_KEYSTORE_BASE64" ] && missing+=(ANDROID_KEYSTORE_BASE64)
+          [ -z "$ANDROID_KEYSTORE_PASSWORD" ] && missing+=(ANDROID_KEYSTORE_PASSWORD)
+          [ -z "$ANDROID_KEY_ALIAS" ] && missing+=(ANDROID_KEY_ALIAS)
+          [ -z "$ANDROID_KEY_PASSWORD" ] && missing+=(ANDROID_KEY_PASSWORD)
+          [ -z "$GOOGLE_SERVICES_JSON_BASE64" ] && missing+=(GOOGLE_SERVICES_JSON_BASE64)
+          [ -z "$VAPID_PUBLIC_KEY" ] && missing+=(VAPID_PUBLIC_KEY)
+          if [ ${#missing[@]} -gt 0 ]; then
+            printf '::error::Missing Android release configuration: %s\n' "${missing[*]}"
+            printf '::error::Set secrets in the release environment and VAPID_PUBLIC_KEY as a repository Actions variable.\n'
+            exit 1
+          fi
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable (pinned 2026-05-12; bump periodically to track new Rust releases)
@@ -123,28 +146,28 @@ jobs:
       - name: Inject custom MainActivity.kt
         run: node scripts/inject-android-mainactivity.cjs
 
-      - name: Decode Firebase configuration for Play profile
-        if: matrix.profile == 'play'
+      - name: Decode Firebase configuration
         env:
           GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
         run: |
-          if [ -z "$GOOGLE_SERVICES_JSON_BASE64" ]; then
-            echo "Error: GOOGLE_SERVICES_JSON_BASE64 is required for the Play profile"
+          set -euo pipefail
+          printf '%s' "$GOOGLE_SERVICES_JSON_BASE64" | base64 -d > /tmp/google-services.json
+          if [ ! -s /tmp/google-services.json ]; then
+            echo "::error::Firebase Android configuration failed to decode"
             exit 1
           fi
-          printf '%s' "$GOOGLE_SERVICES_JSON_BASE64" | base64 -d > /tmp/google-services.json
 
       - name: Inject signing config into build.gradle.kts
         run: node scripts/inject-android-signing.cjs
 
-      - name: Build Android (release, signed, ${{ matrix.profile }})
+      - name: Build Android (release, signed, FCM + UnifiedPush)
         env:
           NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.0.12077973
           ANDROID_KEYSTORE: /tmp/keystore.jks
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-          ANDROID_PUSH_PROVIDER: ${{ matrix.profile == 'play' && 'both' || 'unified-push' }}
+          ANDROID_PUSH_PROVIDER: both
           GOOGLE_SERVICES_JSON: /tmp/google-services.json
           VAPID_PUBLIC_KEY: ${{ vars.VAPID_PUBLIC_KEY }}
           REQUIRE_PUSH_CONFIG: 1
@@ -154,19 +177,18 @@ jobs:
         run: |
           VERSION="${{ inputs.version || inputs.tag || github.ref_name }}"
           VERSION="${VERSION#v}"
-          PROFILE="${{ matrix.profile }}"
           APK_DIR="src-tauri/gen/android/app/build/outputs/apk"
           AAB_DIR="src-tauri/gen/android/app/build/outputs/bundle"
-          # Find and rename APKs
-          find "$APK_DIR" -name '*.apk' -type f | while read -r f; do
-            dir=$(dirname "$f")
-            mv "$f" "$dir/forwardemail-mail_${VERSION}_android-${PROFILE}.apk"
-          done
-          # Find and rename AABs
-          find "$AAB_DIR" -name '*.aab' -type f | while read -r f; do
-            dir=$(dirname "$f")
-            mv "$f" "$dir/forwardemail-mail_${VERSION}_android-${PROFILE}.aab"
-          done
+          # A release publishes exactly one APK and one AAB. Both contain the
+          # FCM and UnifiedPush integrations; runtime selects the provider.
+          mapfile -t APKS < <(find "$APK_DIR" -name '*.apk' -type f)
+          mapfile -t AABS < <(find "$AAB_DIR" -name '*.aab' -type f)
+          if [ ${#APKS[@]} -ne 1 ] || [ ${#AABS[@]} -ne 1 ]; then
+            echo "::error::Expected exactly one APK and one AAB; found ${#APKS[@]} APK(s) and ${#AABS[@]} AAB(s)"
+            exit 1
+          fi
+          mv "${APKS[0]}" "$(dirname "${APKS[0]}")/forwardemail-mail_${VERSION}_android.apk"
+          mv "${AABS[0]}" "$(dirname "${AABS[0]}")/forwardemail-mail_${VERSION}_android.aab"
 
       # SLSA build provenance for the signed APK + AAB. Users verify with
       # `gh attestation verify <file> --owner forwardemail`.
@@ -174,8 +196,8 @@ jobs:
         uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2
         with:
           subject-path: |
-            src-tauri/gen/android/app/build/outputs/apk/**/forwardemail-mail_*_android-*.apk
-            src-tauri/gen/android/app/build/outputs/bundle/**/forwardemail-mail_*_android-*.aab
+            src-tauri/gen/android/app/build/outputs/apk/**/forwardemail-mail_*_android.apk
+            src-tauri/gen/android/app/build/outputs/bundle/**/forwardemail-mail_*_android.aab
 
       - name: Resolve release ID (prefer published over draft)
         id: resolve_release
@@ -229,7 +251,6 @@ jobs:
       # upload — re-running the same version will fail here.
       - name: Check Play Console upload secret
         id: play_check
-        if: matrix.profile == 'play'
         shell: bash
         env:
           SA: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT }}
@@ -243,11 +264,11 @@ jobs:
 
       - name: Locate AAB for Play upload
         id: play_aab
-        if: matrix.profile == 'play' && steps.play_check.outputs.enabled == 'true'
+        if: steps.play_check.outputs.enabled == 'true'
         run: |
           set -euo pipefail
           AAB=$(find src-tauri/gen/android/app/build/outputs/bundle \
-            -name 'forwardemail-mail_*_android-play.aab' -type f | head -n 1)
+            -name 'forwardemail-mail_*_android.aab' -type f | head -n 1)
           if [ -z "$AAB" ]; then
             echo "::error::No .aab found for Play Console upload"
             exit 1
@@ -256,7 +277,7 @@ jobs:
           echo "Uploading $AAB to Play track '${{ vars.PLAY_TRACK || 'internal' }}'"
 
       - name: Upload AAB to Google Play
-        if: matrix.profile == 'play' && steps.play_check.outputs.enabled == 'true'
+        if: steps.play_check.outputs.enabled == 'true'
         uses: r0adkll/upload-google-play@e738b9dd8f2476ea806d921b64aacd24f34515a5 # v1.1.5
         with:
           serviceAccountJsonPlainText: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT }}
@@ -265,14 +286,16 @@ jobs:
           track: ${{ vars.PLAY_TRACK || 'internal' }}
           status: completed
 
-      - name: Clean up keystore
+      - name: Clean up Android credentials
         if: always()
         run: |
           rm -f /tmp/google-services.json
-          rm -f /tmp/keystore.jks
-          # Overwrite before delete to prevent recovery
-          dd if=/dev/urandom of=/tmp/keystore.jks bs=1024 count=10 2>/dev/null || true
-          rm -f /tmp/keystore.jks
+          # Best-effort overwrite before deleting the decoded keystore.
+          if [ -f /tmp/keystore.jks ]; then
+            size=$(wc -c < /tmp/keystore.jks)
+            dd if=/dev/urandom of=/tmp/keystore.jks bs=1 count="$size" conv=notrunc 2>/dev/null || true
+            rm -f /tmp/keystore.jks
+          fi
 
   ios:
     runs-on: macos-26

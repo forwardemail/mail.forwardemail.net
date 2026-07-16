@@ -72,14 +72,12 @@ The exact desktop asset basenames are listed in the matrix above. Tauri also upl
 
 ### Android
 
-| File                                             | Description                                                       |
-| ------------------------------------------------ | ----------------------------------------------------------------- |
-| `forwardemail-mail_<version>_android-play.apk`   | Signed Play-profile APK for sideloading                           |
-| `forwardemail-mail_<version>_android-fdroid.apk` | Signed F-Droid-profile APK for third-party distribution           |
-| `forwardemail-mail_<version>_android-play.aab`   | Signed Play-profile Android App Bundle for Play Store upload      |
-| `forwardemail-mail_<version>_android-fdroid.aab` | Signed F-Droid-profile Android App Bundle for archival publishing |
+| File                                      | Description                                                                                             |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `forwardemail-mail_<version>_android.apk` | Signed sideloadable APK containing both FCM and UnifiedPush; users may select a UnifiedPush distributor |
+| `forwardemail-mail_<version>_android.aab` | The same dual-provider application as an Android App Bundle for Google Play                             |
 
-Built by [`release-mobile.yml`](../.github/workflows/release-mobile.yml). Requires Android signing secrets in the `release` environment (see [SECRETS.md](./SECRETS.md#generating-the-android-keystore)).
+Built by [`release-mobile.yml`](../.github/workflows/release-mobile.yml). The release job requires Android signing secrets, Firebase client configuration, and the matching VAPID public key before toolchain setup (see [SECRETS.md](./SECRETS.md#generating-the-android-keystore)). Google-free downstream and F-Droid builds remain available through the UnifiedPush-only build command, but the GitHub release intentionally publishes one APK rather than parallel provider-specific APKs.
 
 ### iOS
 

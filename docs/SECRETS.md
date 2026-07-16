@@ -49,10 +49,10 @@ Open **Settings → Secrets and variables → Actions** in the GitHub repository
 
 ### Mobile push build inputs
 
-| Name                          | Type                | Required                                                   | Purpose                                                                                  |
-| ----------------------------- | ------------------- | ---------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `VAPID_PUBLIC_KEY`            | Repository variable | Yes for every Android profile                              | Public half of the backend VAPID pair embedded for UnifiedPush subscription registration |
-| `GOOGLE_SERVICES_JSON_BASE64` | `release` secret    | Yes only for the Google Play build in `release-mobile.yml` | One-line base64 encoding of the Firebase Android app’s `google-services.json`            |
+| Name                          | Type                | Required                                                        | Purpose                                                                                  |
+| ----------------------------- | ------------------- | --------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `VAPID_PUBLIC_KEY`            | Repository variable | Yes for the Android release and every UnifiedPush-capable build | Public half of the backend VAPID pair embedded for UnifiedPush subscription registration |
+| `GOOGLE_SERVICES_JSON_BASE64` | `release` secret    | Yes for the single dual-provider job in `release-mobile.yml`    | One-line base64 encoding of the Firebase Android app’s `google-services.json`            |
 
 The Android application never receives the backend `VAPID_PRIVATE_KEY` or Firebase service-account JSON. Those remain backend-only production credentials.
 
@@ -182,14 +182,14 @@ pnpm exec web-push generate-vapid-keys
 
 Store the generated public value as the repository Actions variable `VAPID_PUBLIC_KEY`. It must exactly equal the backend environment value of the same name. The generated private value is the backend-only `VAPID_PRIVATE_KEY`; never add it to this repository, GitHub Actions, an APK/AAB, or a CI log.
 
-For Google Play builds, open the [Firebase console](https://console.firebase.google.com/), select the same project used by backend FCM delivery, and register the Android application ID `net.forwardemail.mail`. Download `google-services.json` from **Project settings → General → Your apps**, then encode it as one line:
+For the dual-provider GitHub/Google Play release, open the [Firebase console](https://console.firebase.google.com/), select the same project used by backend FCM delivery, and register the Android application ID `net.forwardemail.mail`. Download `google-services.json` from **Project settings → General → Your apps**, then encode it as one line:
 
 ```bash
 # macOS and Linux
 base64 < /absolute/path/google-services.json | tr -d '\n'
 ```
 
-Store that output as the `release` environment secret `GOOGLE_SERVICES_JSON_BASE64`. Local Play builds use the original file rather than the encoded secret:
+Store that output as the `release` environment secret `GOOGLE_SERVICES_JSON_BASE64`. The release preflight requires this value together with all Android signing values and the repository variable `VAPID_PUBLIC_KEY` before it installs Rust, Java, Android, or Node toolchains. Local dual-provider builds use the original file rather than the encoded secret:
 
 ```bash
 VAPID_PUBLIC_KEY='BN...' \
@@ -197,7 +197,7 @@ GOOGLE_SERVICES_JSON=/absolute/path/google-services.json \
   pnpm tauri:android:build:play -- --aab
 ```
 
-Google-free and default builds still require `VAPID_PUBLIC_KEY`, but they do not use Firebase:
+Google-free downstream and F-Droid builds still require `VAPID_PUBLIC_KEY`, but they do not use Firebase and are not emitted as a second GitHub release APK:
 
 ```bash
 VAPID_PUBLIC_KEY='BN...' pnpm tauri:android:build:fdroid -- --apk
@@ -257,14 +257,14 @@ A full step-by-step walkthrough for the Cloudflare values is in [deployment-chec
 
 After populating the values above, verify the setup in the following order.
 
-| Check                                                                 | Expected result                                                                                     |
-| --------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `Settings → Secrets and variables → Actions → Environments → release` | All signing secrets are present in the `release` environment                                        |
-| `Settings → Secrets and variables → Actions → Variables`              | `VAPID_PUBLIC_KEY`, `R2_BUCKET`, and optional `IOS_SIGNING_IDENTITY` are present if needed          |
-| Desktop release workflow                                              | `.sig` updater files are created when the Tauri signing key is present                              |
-| iOS release workflow                                                  | The job does not skip, logs the active Xcode and iPhoneOS SDK, and uploads an IPA to TestFlight     |
-| Android release workflow                                              | Google-free APK and Play APK/AAB artifacts are produced with the intended provider dependencies     |
-| Android push configuration                                            | `VAPID_PUBLIC_KEY` equals the backend public key; Play builds decode a valid `google-services.json` |
+| Check                                                                 | Expected result                                                                                           |
+| --------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `Settings → Secrets and variables → Actions → Environments → release` | All signing secrets are present in the `release` environment                                              |
+| `Settings → Secrets and variables → Actions → Variables`              | `VAPID_PUBLIC_KEY`, `R2_BUCKET`, and optional `IOS_SIGNING_IDENTITY` are present if needed                |
+| Desktop release workflow                                              | `.sig` updater files are created when the Tauri signing key is present                                    |
+| iOS release workflow                                                  | The job does not skip, logs the active Xcode and iPhoneOS SDK, and uploads an IPA to TestFlight           |
+| Android release workflow                                              | Exactly one dual-provider APK and one matching AAB are produced; missing release inputs fail at preflight |
+| Android push configuration                                            | `VAPID_PUBLIC_KEY` equals the backend public key; the release decodes a valid `google-services.json`      |
 
 ## Related documentation
 

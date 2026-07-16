@@ -225,6 +225,7 @@
     selectionRequired: boolean;
     subscription: { endpoint: string } | null;
   } | null>(null);
+  let androidPushProvider = $state<'fcm' | 'unified-push'>('fcm');
   let unifiedPushLoading = $state(false);
   let unifiedPushError = $state('');
 
@@ -579,7 +580,9 @@
     if (!isTauriAndroid) return;
     unifiedPushLoading = true;
     try {
-      const { getUnifiedPushProviderState } = await import('../utils/push-notifications.js');
+      const { getAndroidPushProviderPreference, getUnifiedPushProviderState } =
+        await import('../utils/push-notifications.js');
+      androidPushProvider = getAndroidPushProviderPreference();
       unifiedPushState = await getUnifiedPushProviderState();
       unifiedPushError = '';
     } catch (err) {
@@ -600,6 +603,22 @@
     } catch (err) {
       unifiedPushError = err instanceof Error ? err.message : String(err);
       toasts?.show?.('Unable to select a UnifiedPush distributor.', 'error');
+    } finally {
+      unifiedPushLoading = false;
+    }
+  };
+
+  const chooseFcmPushProvider = async () => {
+    unifiedPushLoading = true;
+    unifiedPushError = '';
+    try {
+      const { selectFcmPushProvider } = await import('../utils/push-notifications.js');
+      if (!(await selectFcmPushProvider())) throw new Error('fcm_unavailable');
+      toasts?.show?.('Firebase Cloud Messaging selected.', 'success');
+      await refreshUnifiedPushState();
+    } catch (err) {
+      unifiedPushError = err instanceof Error ? err.message : String(err);
+      toasts?.show?.('Unable to switch to Firebase Cloud Messaging.', 'error');
     } finally {
       unifiedPushLoading = false;
     }
@@ -1810,10 +1829,10 @@
         {#if isTauriAndroid}
           <Card.Root>
             <Card.Header>
-              <Card.Title>UnifiedPush</Card.Title>
+              <Card.Title>Android push provider</Card.Title>
               <Card.Description>
-                Receive encrypted remote notifications through a distributor you control, without
-                Google Play Services.
+                Use Firebase Cloud Messaging or choose a UnifiedPush distributor without Google Play
+                Services. Your explicit provider choice persists across restarts.
               </Card.Description>
             </Card.Header>
             <Card.Content class="space-y-3">
@@ -1821,6 +1840,11 @@
                 <p class="text-sm text-muted-foreground">Checking UnifiedPush distributors…</p>
               {:else}
                 <div class="text-sm">
+                  <div>
+                    Preferred provider:
+                    <strong>{androidPushProvider === 'unified-push' ? 'UnifiedPush' : 'FCM'}</strong
+                    >
+                  </div>
                   <div>
                     Selected distributor:
                     <strong>{unifiedPushState?.distributor || 'None'}</strong>
@@ -1848,7 +1872,14 @@
                   onclick={chooseUnifiedPushDistributor}
                   disabled={unifiedPushLoading}
                 >
-                  {unifiedPushLoading ? 'Opening…' : 'Choose UnifiedPush distributor'}
+                  {unifiedPushLoading ? 'Working…' : 'Choose UnifiedPush distributor'}
+                </Button>
+                <Button
+                  variant="outline"
+                  onclick={chooseFcmPushProvider}
+                  disabled={unifiedPushLoading || androidPushProvider === 'fcm'}
+                >
+                  Use Firebase Cloud Messaging
                 </Button>
                 <Button
                   variant="ghost"
@@ -1859,8 +1890,9 @@
                 </Button>
               </div>
               <p class="text-xs text-muted-foreground">
-                Forward Email sends standards-based, VAPID-authenticated Web Push payloads to the
-                selected distributor. The connector decrypts them on this device.
+                UnifiedPush uses standards-based, VAPID-authenticated Web Push payloads. Selecting a
+                distributor safely unregisters the previous provider before future notifications use
+                your new choice.
               </p>
             </Card.Content>
           </Card.Root>

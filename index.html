@@ -188,6 +188,14 @@
           if (!e) return true;
           if (isExtensionViolation(e)) return true;
           var blocked = String(e.blockedURI || '').toLowerCase();
+          // The Diagnostics page deliberately fetches this exact URL to prove
+          // connect-src enforcement. The browser must block it, but that expected
+          // result must not cover the working app with the fatal CSP overlay.
+          if (
+            e.effectiveDirective === 'connect-src' &&
+            blocked === 'https://example.invalid/csp-probe'
+          )
+            return true;
           // Our CSP intentionally blocks eval (only wasm-unsafe-eval is allowed)
           // and the app never calls eval, so an eval violation is always from a
           // browser extension or injected script, never our code.
