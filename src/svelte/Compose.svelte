@@ -73,6 +73,7 @@
   import { isTauriDesktop } from '../utils/platform';
   import { i18n } from '../utils/i18n';
   import { Remote } from '../utils/remote';
+  import { isDemoBlockedError, isDemoMode, showDemoBlockedToast } from '../utils/demo-mode';
   import { getContacts, mergeRecentAddresses } from '../utils/contact-cache';
   import { Local } from '../utils/storage';
   import { db } from '../utils/db';
@@ -1226,6 +1227,11 @@
       draftDirty = false;
       toasts?.show?.('Draft saved', 'success');
     } catch (err) {
+      if (isDemoBlockedError(err)) {
+        draftStatus = 'idle';
+        draftStatusDetail = '';
+        return;
+      }
       draftStatus = 'error';
       const errorMessage = (err as Error)?.message || 'Unknown error';
       draftStatusDetail = errorMessage;
@@ -2298,6 +2304,10 @@
   };
 
   const sendLater = async () => {
+    if (isDemoMode()) {
+      showDemoBlockedToast('Schedule email');
+      return;
+    }
     autosaveTimer?.stop();
     const sendAt = getScheduledTimestamp();
     if (!sendAt) {
@@ -2349,8 +2359,10 @@
       if (nativeWindow) closeNativeWindow();
     } catch (err) {
       console.error('[Compose] Failed to schedule email', err);
-      error = 'Failed to schedule message. Please try again.';
-      toasts?.show?.(error, 'error');
+      if (!isDemoBlockedError(err)) {
+        error = 'Failed to schedule message. Please try again.';
+        toasts?.show?.(error, 'error');
+      }
     } finally {
       sending = false;
     }
@@ -2380,6 +2392,10 @@
   const getUndoSendDelay = () => Number(getEffectiveSettingValue('undo_send_delay')) || 0;
 
   const proceedWithSend = async () => {
+    if (isDemoMode()) {
+      showDemoBlockedToast('Send email');
+      return;
+    }
     autosaveTimer?.stop();
     const payload = buildPayload();
     if (!payload) return;
@@ -2424,8 +2440,10 @@
         });
         if (nativeWindow) closeNativeWindow();
       } catch (err) {
-        error = 'Failed to queue message';
-        toasts?.show?.(error, 'error');
+        if (!isDemoBlockedError(err)) {
+          error = 'Failed to queue message';
+          toasts?.show?.(error, 'error');
+        }
       } finally {
         sending = false;
       }
@@ -2464,8 +2482,10 @@
         });
         if (nativeWindow) closeNativeWindow();
       } catch (err) {
-        error = 'Failed to queue message';
-        toasts?.show?.(error, 'error');
+        if (!isDemoBlockedError(err)) {
+          error = 'Failed to queue message';
+          toasts?.show?.(error, 'error');
+        }
       } finally {
         sending = false;
       }
@@ -2567,6 +2587,7 @@
       });
       if (nativeWindow) closeNativeWindow();
     } catch (err) {
+      if (isDemoBlockedError(err)) return;
       const e = err as { message?: string; status?: number };
       if (e.message?.includes('network') || e.message?.includes('fetch') || e.status === 0) {
         try {
@@ -2600,8 +2621,10 @@
           });
           if (nativeWindow) closeNativeWindow();
         } catch (queueErr) {
-          error = e?.message || 'Send failed';
-          toasts?.show?.(error, 'error');
+          if (!isDemoBlockedError(queueErr)) {
+            error = e?.message || 'Send failed';
+            toasts?.show?.(error, 'error');
+          }
         }
       } else {
         error = e?.message || 'Send failed';

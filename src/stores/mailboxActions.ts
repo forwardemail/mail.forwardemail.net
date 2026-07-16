@@ -33,7 +33,7 @@ import {
 } from './mailbox-actions-helpers';
 import { startInitialSync, queueBodiesForFolder } from '../utils/sync-controller';
 import { resetSyncWorkerReady } from '../utils/sync-worker-client.js';
-import { isDemoMode } from '../utils/demo-mode';
+import { isDemoBlockedError, isDemoMode } from '../utils/demo-mode';
 import { clearMailServiceState } from './mailService';
 import { normalizeEmail, dedupeAddresses, extractAddressList } from '../utils/address.ts';
 import { validateLabelName } from '../utils/label-validation.ts';
@@ -1336,6 +1336,7 @@ export const createLabel = async (name, color = '') => {
       color: color || undefined,
     });
     if (!res?.success) {
+      if (res?.blocked) return { success: false, blocked: true };
       const msg = res?.error || 'Failed to create label';
       toastsRef?.show?.(msg, 'error');
       return { success: false, error: msg };
@@ -1345,6 +1346,7 @@ export const createLabel = async (name, color = '') => {
     return { success: true, label: res.label };
   } catch (err) {
     warn('createLabel failed', err);
+    if (isDemoBlockedError(err)) return { success: false, blocked: true };
     const msg = err?.message || 'Failed to create label';
     toastsRef?.show?.(msg, 'error');
     return { success: false, error: msg };
@@ -1366,6 +1368,7 @@ export const updateLabel = async (keyword, updates = {}) => {
   try {
     const res = await updateSettingsLabel(keyword, updates);
     if (!res?.success) {
+      if (res?.blocked) return { success: false, blocked: true };
       const msg = res?.error || 'Failed to update label';
       toastsRef?.show?.(msg, 'error');
       return { success: false, error: msg };
@@ -1375,6 +1378,7 @@ export const updateLabel = async (keyword, updates = {}) => {
     return { success: true };
   } catch (err) {
     warn('updateLabel failed', err);
+    if (isDemoBlockedError(err)) return { success: false, blocked: true };
     const msg = err?.message || 'Failed to update label';
     toastsRef?.show?.(msg, 'error');
     return { success: false, error: msg };
@@ -1388,6 +1392,7 @@ export const deleteLabel = async (keyword) => {
   try {
     const res = await deleteSettingsLabel(keyword);
     if (!res?.success) {
+      if (res?.blocked) return { success: false, blocked: true };
       const msg = res?.error || 'Failed to delete label';
       toastsRef?.show?.(msg, 'error');
       return { success: false, error: msg };
@@ -1397,6 +1402,7 @@ export const deleteLabel = async (keyword) => {
     return { success: true };
   } catch (err) {
     warn('deleteLabel failed', err);
+    if (isDemoBlockedError(err)) return { success: false, blocked: true };
     const msg = err?.message || 'Failed to delete label';
     toastsRef?.show?.(msg, 'error');
     return { success: false, error: msg };

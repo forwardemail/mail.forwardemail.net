@@ -90,6 +90,7 @@ fi
 
 node scripts/inject-android-mainactivity.cjs
 node scripts/configure-android-push.cjs
+node scripts/configure-mobile-display-name.cjs
 
 # ── Launch ─────────────────────────────────────────────────────────────────
 echo "   🚀 Starting tauri android dev..."

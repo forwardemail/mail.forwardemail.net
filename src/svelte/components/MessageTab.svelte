@@ -34,6 +34,7 @@
   // Services
   import { mailService } from '../../stores/mailService';
   import { Remote } from '../../utils/remote';
+  import { isDemoBlockedError } from '../../utils/demo-mode';
   import { Local } from '../../utils/storage';
   import { processQuotedContent } from '../../utils/quote-collapse.js';
   import { formatFriendlyDate } from '../../utils/date';
@@ -273,7 +274,9 @@
       );
       closeTab(tabId);
     } catch (err) {
-      error = (err as Error)?.message || 'Failed to delete message';
+      if (!isDemoBlockedError(err)) {
+        error = (err as Error)?.message || 'Failed to delete message';
+      }
     }
   }
 
@@ -293,7 +296,9 @@
       );
       closeTab(tabId);
     } catch (err) {
-      error = (err as Error)?.message || 'Failed to archive message';
+      if (!isDemoBlockedError(err)) {
+        error = (err as Error)?.message || 'Failed to archive message';
+      }
     }
   }
 

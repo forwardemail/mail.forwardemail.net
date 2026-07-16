@@ -154,9 +154,9 @@ body.light-mode:not(.mailbox-mode) {
 
 /* Ensure inputs don't trigger zoom on iOS */
 @media (max-width: 640px) {
-  input[type='text'],
-  input[type='email'],
-  input[type='search'],
+  input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='button']):not(
+      [type='submit']
+    ):not([type='reset']),
   textarea,
   select {
     font-size: 16px !important;
@@ -184,6 +184,14 @@ body.light-mode:not(.mailbox-mode) {
     #calendar-root {
       height: 100dvh;
     }
+  }
+}
+
+/* Keep the last interactive row above the home indicator/navigation bar. */
+@media (max-width: 640px) {
+  .fe-mobile-page-scroll {
+    padding-bottom: calc(1rem + var(--sai-bottom)) !important;
+    scroll-padding-bottom: calc(1rem + var(--sai-bottom));
   }
 }
 

@@ -10,7 +10,7 @@
   import MailtoSettings from './components/MailtoSettings.svelte';
   import { forceDeleteAllDatabases } from '../utils/db-recovery.js';
   import { closeDatabase, terminateDbWorker } from '../utils/db-worker-client.js';
-  import { deactivateDemoMode } from '../utils/demo-mode.js';
+  import { deactivateDemoMode, isDemoBlockedError } from '../utils/demo-mode.js';
   import { refreshSyncWorkerPgpKeys, unlockPgpKey } from '../utils/sync-worker-client.js';
   import { initPerfObservers } from '../utils/perf-logger.ts';
   import { mailService, clearPgpKeyCache, invalidatePgpCachedBodies } from '../stores/mailService';
@@ -869,6 +869,16 @@
     }, 5000);
   };
 
+  const setMutationError = (err: unknown, fallback: string) => {
+    if (isDemoBlockedError(err)) return;
+    setError((err as Error)?.message || fallback);
+  };
+
+  const showMutationError = (err: unknown, fallback: string) => {
+    if (isDemoBlockedError(err)) return;
+    toasts?.show?.((err as Error)?.message || fallback, 'error');
+  };
+
   interface LabelItem {
     keyword?: string;
     id?: string;
@@ -943,6 +953,7 @@
           color: (labelModalColor || '').trim() || undefined,
         });
         if (!res?.success) {
+          if (res?.blocked) return;
           labelModalError = res?.error || 'Failed to update label.';
           return;
         }
@@ -952,13 +963,16 @@
           (labelModalColor || '').trim() || undefined,
         );
         if (!res?.success) {
+          if (res?.blocked) return;
           labelModalError = res?.error || 'Failed to create label.';
           return;
         }
       }
       closeLabelModal();
     } catch (err) {
-      labelModalError = (err as Error)?.message || 'Unable to save label.';
+      if (!isDemoBlockedError(err)) {
+        labelModalError = (err as Error)?.message || 'Unable to save label.';
+      }
     } finally {
       labelModalSaving = false;
     }
@@ -973,11 +987,12 @@
     try {
       const res = await deleteMailboxLabel(key);
       if (!res?.success) {
+        if (res?.blocked) return;
         setError(res?.error || 'Failed to delete label.');
         return;
       }
     } catch (err) {
-      setError((err as Error)?.message || 'Failed to delete label.');
+      setMutationError(err, 'Failed to delete label.');
     } finally {
       labelsDeleting = '';
     }
@@ -1000,7 +1015,7 @@
       await mailboxStore.actions.deleteFolder?.(folder.path);
       setSuccess('Folder deleted.');
     } catch (err) {
-      setError((err as Error)?.message || 'Failed to delete folder.');
+      setMutationError(err, 'Failed to delete folder.');
     } finally {
       folderDeleting = '';
     }
@@ -1040,7 +1055,7 @@
       applyTheme?.(theme);
       toasts?.show?.('Theme updated', 'success');
     } catch (err) {
-      toasts?.show?.((err as Error)?.message || 'Failed to save theme', 'error');
+      showMutationError(err, 'Failed to save theme');
     }
   };
 
@@ -1049,7 +1064,7 @@
       await setLayoutMode?.(layoutModeChoice);
       toasts?.show?.('Layout updated', 'success');
     } catch (err) {
-      toasts?.show?.((err as Error)?.message || 'Failed to save layout', 'error');
+      showMutationError(err, 'Failed to save layout');
     }
   };
 
@@ -1063,7 +1078,7 @@
       applyFont(family);
       toasts?.show?.('Font updated', 'success');
     } catch (err) {
-      toasts?.show?.((err as Error)?.message || 'Failed to load font', 'error');
+      showMutationError(err, 'Failed to load font');
       fontChoice = 'system';
       currentFontFamily = getFontFamily('system');
       applyFont(currentFontFamily);
@@ -1086,7 +1101,7 @@
         'success',
       );
     } catch (err) {
-      toasts?.show?.((err as Error)?.message || 'Failed to save browser override', 'error');
+      showMutationError(err, 'Failed to save browser override');
     }
   };
 
@@ -1112,7 +1127,7 @@
       });
       toasts?.show?.('Undo send updated', 'success');
     } catch (err) {
-      toasts?.show?.((err as Error)?.message || 'Failed to save undo send', 'error');
+      showMutationError(err, 'Failed to save undo send');
     }
   };
 
@@ -1123,7 +1138,7 @@
       });
       toasts?.show?.('Composer default updated', 'success');
     } catch (err) {
-      toasts?.show?.((err as Error)?.message || 'Failed to save composer default', 'error');
+      showMutationError(err, 'Failed to save composer default');
     }
   };
 
@@ -1135,10 +1150,7 @@
         'success',
       );
     } catch (err) {
-      toasts?.show?.(
-        (err as Error)?.message || 'Failed to save attachment reminder setting',
-        'error',
-      );
+      showMutationError(err, 'Failed to save attachment reminder setting');
     }
   };
 
@@ -1152,7 +1164,7 @@
         'success',
       );
     } catch (err) {
-      toasts?.show?.((err as Error)?.message || 'Failed to save reply default', 'error');
+      showMutationError(err, 'Failed to save reply default');
     }
   };
 
@@ -1166,7 +1178,7 @@
         'success',
       );
     } catch (err) {
-      toasts?.show?.((err as Error)?.message || 'Failed to save send default', 'error');
+      showMutationError(err, 'Failed to save send default');
     }
   };
 
@@ -1180,7 +1192,7 @@
         'success',
       );
     } catch (err) {
-      toasts?.show?.((err as Error)?.message || 'Failed to update image blocking setting', 'error');
+      showMutationError(err, 'Failed to update image blocking setting');
     }
   };
 
@@ -1194,7 +1206,7 @@
         'success',
       );
     } catch (err) {
-      toasts?.show?.((err as Error)?.message || 'Failed to update tracking pixel setting', 'error');
+      showMutationError(err, 'Failed to update tracking pixel setting');
     }
   };
 
@@ -1206,7 +1218,7 @@
         'success',
       );
     } catch (err) {
-      toasts?.show?.((err as Error)?.message || 'Failed to update plain text setting', 'error');
+      showMutationError(err, 'Failed to update plain text setting');
     }
   };
 
@@ -1222,10 +1234,7 @@
         'success',
       );
     } catch (err) {
-      toasts?.show?.(
-        (err as Error)?.message || 'Failed to update completed todos setting',
-        'error',
-      );
+      showMutationError(err, 'Failed to update completed todos setting');
     }
   };
 
@@ -1239,7 +1248,7 @@
         'success',
       );
     } catch (err) {
-      toasts?.show?.((err as Error)?.message || 'Failed to update week start setting', 'error');
+      showMutationError(err, 'Failed to update week start setting');
     }
   };
 
@@ -1248,7 +1257,7 @@
       await setSettingValue('archive_folder', archiveFolder || null, { account: getAccountId() });
       toasts?.show?.('Archive folder updated', 'success');
     } catch (err) {
-      toasts?.show?.((err as Error)?.message || 'Failed to save archive folder', 'error');
+      showMutationError(err, 'Failed to save archive folder');
     }
   };
 
@@ -1257,7 +1266,7 @@
       await setSettingValue('sent_folder', sentFolder || null, { account: getAccountId() });
       toasts?.show?.('Sent folder updated', 'success');
     } catch (err) {
-      toasts?.show?.((err as Error)?.message || 'Failed to save sent folder', 'error');
+      showMutationError(err, 'Failed to save sent folder');
     }
   };
 
@@ -1266,7 +1275,7 @@
       await setSettingValue('drafts_folder', draftsFolder || null, { account: getAccountId() });
       toasts?.show?.('Drafts folder updated', 'success');
     } catch (err) {
-      toasts?.show?.((err as Error)?.message || 'Failed to save drafts folder', 'error');
+      showMutationError(err, 'Failed to save drafts folder');
     }
   };
 
@@ -1275,7 +1284,7 @@
       await setSettingValue('trash_folder', trashFolder || null, { account: getAccountId() });
       toasts?.show?.('Trash folder updated', 'success');
     } catch (err) {
-      toasts?.show?.((err as Error)?.message || 'Failed to save trash folder', 'error');
+      showMutationError(err, 'Failed to save trash folder');
     }
   };
 
@@ -1284,7 +1293,7 @@
       await setSettingValue('junk_folder', junkFolder || null, { account: getAccountId() });
       toasts?.show?.('Junk folder updated', 'success');
     } catch (err) {
-      toasts?.show?.((err as Error)?.message || 'Failed to save junk folder', 'error');
+      showMutationError(err, 'Failed to save junk folder');
     }
   };
 
@@ -1722,7 +1731,10 @@
   </Alert.Root>
 {/if}
 
-<div class="flex flex-col md:flex-row h-[calc(100vh-3.5rem)]">
+<div
+  class="flex min-h-0 flex-col md:flex-row"
+  style="height: calc(100dvh - 3.5rem - var(--sai-top));"
+>
   <!-- Sidebar -->
   <aside class="hidden w-56 shrink-0 border-r border-border p-4 md:block">
     <nav class="flex flex-col gap-1">
@@ -1771,7 +1783,7 @@
   </div>
 
   <!-- Content -->
-  <div class="flex-1 overflow-y-auto p-4 md:p-6">
+  <div class="fe-mobile-page-scroll flex-1 overflow-y-auto p-4 md:p-6">
     <div class="mx-auto max-w-4xl space-y-6">
       {#if section === 'general'}
         <Card.Root>

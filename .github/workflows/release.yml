@@ -452,14 +452,28 @@ jobs:
             -H "Content-Type: application/json" \
             --data '{"purge_everything":true}'
 
-  # ── 6. Notify Matrix (final step — runs only on full success) ──────────
+  # ── 6. Capture and publish README screenshots ──────────────────────────
+  # Runs against the freshly deployed production app. This is a required
+  # release job: all 64 images must be captured, embedded in README.md, and
+  # committed with docs/screenshots before the release can pass.
+  release-screenshots:
+    needs: [create-release, deploy]
+    if: always() && needs.deploy.result == 'success'
+    uses: ./.github/workflows/readme-screenshots.yml
+    with:
+      base_url: 'https://mail.forwardemail.net'
+      dry_run: false
+      source_ref: ${{ github.sha }}
+    secrets: inherit
+
+  # ── 7. Notify Matrix (final step — runs only on full success) ──────────
   # Standalone matrix workflow has `release:` disabled so this is the single
   # source of release notifications. Uses a direct curl to the Client-Server
   # API to sidestep lkiesow/matrix-notification@v1 and surface 4xx/5xx bodies
   # directly in the CI log for debuggability.
   notify-matrix:
-    needs: [create-release, deploy]
-    if: always() && needs.deploy.result == 'success'
+    needs: [create-release, deploy, release-screenshots]
+    if: always() && needs.deploy.result == 'success' && needs.release-screenshots.result == 'success'
     runs-on: ubuntu-latest
     env:
       MATRIX_TOKEN: ${{ secrets.MATRIX_TOKEN }}
@@ -495,7 +509,7 @@ jobs:
           fi
           echo "Matrix notification sent (HTTP ${http_code})"
 
-  # ── 7. Release summary (always runs) ──────────────────────────────────
+  # ── 8. Release summary (always runs) ──────────────────────────────────
   # Inspects every upstream job result and fails loudly on partial-success
   # so a release that "looks done" but didn't actually produce artifacts
   # can't silently land. Sibling of notify-matrix (neither blocks the other).
@@ -509,6 +523,7 @@ jobs:
       - checksums
       - publish
       - deploy
+      - release-screenshots
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -522,6 +537,7 @@ jobs:
           SUMS: ${{ needs.checksums.result }}
           PUB: ${{ needs.publish.result }}
           DEPLOY: ${{ needs.deploy.result }}
+          SHOTS: ${{ needs.release-screenshots.result }}
           TAG: v${{ needs.create-release.outputs.version }}
         run: |
           {
@@ -537,6 +553,7 @@ jobs:
             echo "| checksums      | \`$SUMS\` |"
             echo "| publish        | \`$PUB\` |"
             echo "| deploy         | \`$DEPLOY\` |"
+            echo "| release-screenshots | \`$SHOTS\` |"
           } >> "$GITHUB_STEP_SUMMARY"
 
           fail=0
@@ -547,7 +564,8 @@ jobs:
               "e2e-webview:$E2E" \
               "ci-gate:$GATE" \
               "build-desktop:$DESK" \
-              "deploy:$DEPLOY"; do
+              "deploy:$DEPLOY" \
+              "release-screenshots:$SHOTS"; do
             name="${pair%%:*}"
             result="${pair#*:}"
             if [ "$result" != "success" ]; then

@@ -102,6 +102,13 @@ fi
 # iOS Simulator shares host loopback, so no port-forwarding equivalent of
 # `adb reverse` is needed — Vite on localhost:5174 is reachable directly.
 
+# ── Generated-project integration ──────────────────────────────────────────
+if [ ! -d src-tauri/gen/apple ]; then
+  echo "   🏗️  Initializing generated iOS project..."
+  npx tauri ios init --ci
+fi
+node scripts/configure-mobile-display-name.cjs
+
 # ── Launch ─────────────────────────────────────────────────────────────────
 # `tauri ios dev` takes DEVICE as a positional arg — pass the simulator NAME
 # (not the UDID) because the Tauri CLI resolves it via fuzzy name-matching.

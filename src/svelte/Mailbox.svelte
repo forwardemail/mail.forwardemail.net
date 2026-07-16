@@ -9,7 +9,8 @@
   import { isTauri } from '../utils/platform.js';
   import { searchStore } from '../stores/searchStore';
   import { Remote } from '../utils/remote';
-  import { isDemoMode } from '../utils/demo-mode';
+  import { isDemoBlockedError, isDemoMode } from '../utils/demo-mode';
+  import { evaluateEdgeSwipe, isEdgeSwipeStart } from '../utils/mobile-edge-swipe';
   import { db } from '../utils/db';
   import { sendSyncRequest } from '../utils/sync-worker-client.js';
   import { Local } from '../utils/storage';
@@ -812,6 +813,7 @@
   let readerSwipeDistance = $state(0);
   let readerSwiping = $state(false);
   let readerSwipeDirection = $state<string | null>(null);
+  let iframeEdgeBackGesture = false;
 
   // Drag and drop state
   let draggedItem = $state<unknown>(null);
@@ -2002,6 +2004,11 @@
     if (!targets.length) return;
     const fallback = nextCandidate();
     const releaseReaderHold = isProductivityLayout && fallback ? holdReaderTransition() : null;
+    if (isDemoMode()) {
+      await archiveMessages(targets, { reload: false });
+      releaseReaderHold?.();
+      return;
+    }
     try {
       // Select next message immediately (before the async operation)
       if (fallback) {
@@ -2013,7 +2020,7 @@
       showToast(targets.length > 1 ? `Archived ${targets.length} messages` : 'Archived', 'success');
     } catch (err) {
       console.warn('archiveSelected failed', err);
-      showToast('Failed to archive', 'error');
+      showMutationError(err, 'Failed to archive');
     } finally {
       releaseReaderHold?.();
     }
@@ -2024,7 +2031,11 @@
     const fallback = nextCandidate();
 
     const releaseReaderHold = isProductivityLayout && fallback ? holdReaderTransition() : null;
-    deleteMessages([msg]);
+    const result = await deleteMessages([msg]);
+    if (result?.blocked) {
+      releaseReaderHold?.();
+      return;
+    }
 
     // Select the next message
     if (fallback) {
@@ -2581,6 +2592,8 @@
 
     const container = messageListWrapper;
     if (!container || isRefreshing) return;
+    // The global router owns drags that begin in the native back-swipe zone.
+    if (isEdgeSwipeStart(e.touches[0].clientX)) return;
 
     if (container.scrollTop === 0) {
       const containerTop = container.getBoundingClientRect().top;
@@ -2629,7 +2642,7 @@
         await reloadMessages();
         showToast('Inbox refreshed', 'success');
       } catch (err) {
-        showToast('Failed to refresh', 'error');
+        showMutationError(err, 'Failed to refresh');
       } finally {
         // Only clear refreshing state after work is done
         isRefreshing = false;
@@ -2660,6 +2673,8 @@
     // Only on mobile
     if (window.innerWidth > 640) return;
     if (swipeAnimating) return;
+    // Do not archive a row when the user intended the app-level back gesture.
+    if (isEdgeSwipeStart(e.touches[0].clientX)) return;
 
     swipeItemId = item.id;
     swipeStartX = e.touches[0].clientX;
@@ -2734,16 +2749,16 @@
       setTimeout(async () => {
         if (direction === 'right') {
           try {
-            await archiveMessage(item);
-            showToast('Archived', 'success');
+            const result = await archiveMessage(item);
+            if (!result?.blocked) showToast('Archived', 'success');
           } catch (err) {
-            showToast('Failed to archive', 'error');
+            showMutationError(err, 'Failed to archive');
           }
         } else {
           try {
             deleteMessages([item]);
           } catch (err) {
-            showToast('Failed to delete', 'error');
+            showMutationError(err, 'Failed to delete');
           }
         }
         resetSwipe();
@@ -2994,7 +3009,7 @@
       }
     } catch (err) {
       console.error('Failed to move message:', err);
-      showToast('Failed to move message', 'error');
+      showMutationError(err, 'Failed to move message');
     } finally {
       releaseReaderHold?.();
     }
@@ -3005,8 +3020,19 @@
     if (window.innerWidth > 640) return;
     if (!$mobileReader) return;
 
-    readerSwipeStartX = e.touches[0].clientX;
-    readerSwipeStartY = e.touches[0].clientY;
+    const touch = e.touches[0];
+    if (isEdgeSwipeStart(touch.clientX)) {
+      // Document-level edge navigation owns this gesture.
+      readerSwipeStartX = 0;
+      readerSwipeStartY = 0;
+      readerSwipeDistance = 0;
+      readerSwiping = false;
+      readerSwipeDirection = null;
+      return;
+    }
+
+    readerSwipeStartX = touch.clientX;
+    readerSwipeStartY = touch.clientY;
     readerSwipeDistance = 0;
     readerSwiping = false;
     readerSwipeDirection = null;
@@ -3083,6 +3109,7 @@
     if (phase === 'start') {
       readerSwipeStartX = typeof detail?.x === 'number' ? detail.x : 0;
       readerSwipeStartY = typeof detail?.y === 'number' ? detail.y : 0;
+      iframeEdgeBackGesture = isEdgeSwipeStart(readerSwipeStartX);
       readerSwipeDistance = 0;
       readerSwiping = false;
       readerSwipeDirection = null;
@@ -3090,32 +3117,54 @@
       if (!readerSwipeStartX) return;
       const dx = typeof detail?.dx === 'number' ? detail.dx : 0;
       const dy = typeof detail?.dy === 'number' ? detail.dy : 0;
-      if (!readerSwiping && Math.abs(dx) > 15 && Math.abs(dx) > Math.abs(dy) * 2) {
-        readerSwiping = true;
-        readerSwipeDirection = dx > 0 ? 'right' : 'left';
-      }
-      if (readerSwiping) {
+      if (iframeEdgeBackGesture) {
+        const edgeSwipe = evaluateEdgeSwipe({
+          startX: readerSwipeStartX,
+          startY: readerSwipeStartY,
+          currentX: readerSwipeStartX + dx,
+          currentY: readerSwipeStartY + dy,
+        });
+        readerSwiping = edgeSwipe.hasHorizontalIntent;
         readerSwipeDistance = dx;
+      } else {
+        if (!readerSwiping && Math.abs(dx) > 15 && Math.abs(dx) > Math.abs(dy) * 2) {
+          readerSwiping = true;
+          readerSwipeDirection = dx > 0 ? 'right' : 'left';
+        }
+        if (readerSwiping) {
+          readerSwipeDistance = dx;
+        }
       }
     } else if (phase === 'end') {
-      const distance = Math.abs(readerSwipeDistance);
-      const direction = readerSwipeDistance > 0 ? 'right' : 'left';
-      if (distance > 50 && readerSwiping) {
-        if (direction === 'left') selectNext();
-        else selectPrevious();
+      if (iframeEdgeBackGesture) {
+        const edgeSwipe = evaluateEdgeSwipe({
+          startX: readerSwipeStartX,
+          startY: readerSwipeStartY,
+          currentX: readerSwipeStartX + readerSwipeDistance,
+          currentY: readerSwipeStartY,
+        });
+        if (edgeSwipe.shouldNavigate && history.length > 1) history.back();
+      } else {
+        const distance = Math.abs(readerSwipeDistance);
+        const direction = readerSwipeDistance > 0 ? 'right' : 'left';
+        if (distance > 50 && readerSwiping) {
+          if (direction === 'left') selectNext();
+          else selectPrevious();
+        }
       }
       readerSwipeStartX = 0;
       readerSwipeStartY = 0;
       readerSwipeDistance = 0;
       readerSwiping = false;
       readerSwipeDirection = null;
+      iframeEdgeBackGesture = false;
     }
   };
 
   const archiveMessage = async (msg) => {
     if (!msg) return;
     const targets = msg?.messages?.length ? msg.messages : [msg];
-    await archiveMessages(targets);
+    return archiveMessages(targets);
   };
 
   const archiveMessages = async (messages, { reload = true } = {}) => {
@@ -3123,11 +3172,13 @@
     if (!targets.length) return;
     try {
       for (const target of targets) {
+        let result;
         if (mailboxStore?.actions?.archiveMessage) {
-          await mailboxStore.actions.archiveMessage(target);
+          result = await mailboxStore.actions.archiveMessage(target);
         } else if (mailboxView?.archiveMessage) {
-          await mailboxView.archiveMessage(target);
+          result = await mailboxView.archiveMessage(target);
         }
+        if (result?.blocked) return result;
       }
       if (reload) {
         await reloadMessages();
@@ -3162,6 +3213,9 @@
   };
 
   const showToast = (msg, type = 'info') => mailboxView?.toasts?.show?.(msg, type);
+  const showMutationError = (error: unknown, message: string) => {
+    if (!isDemoBlockedError(error)) showToast(message, 'error');
+  };
   let missingMessageIdToastShown = false;
   const formatAddressList = (list = []) => displayAddresses(list).join(', ');
   const resolveAddressValue = (list, fallback) => {
@@ -3397,7 +3451,7 @@
           await mailboxStore?.actions?.deleteFolder?.(folder.path);
           showToast(`Deleted folder "${folder.name || folder.path}"`, 'success');
         } catch (err) {
-          showToast(`Failed to delete folder: ${err.message}`, 'error');
+          showMutationError(err, `Failed to delete folder: ${err.message}`);
         }
       },
       true, // danger
@@ -3424,7 +3478,7 @@
         showToast(`Renamed folder to "${value}"`, 'success');
       }
     } catch (err) {
-      showToast(`Failed to ${action} folder: ${err.message}`, 'error');
+      showMutationError(err, `Failed to ${action} folder: ${err.message}`);
     } finally {
       folderActionModal = null;
     }
@@ -3451,10 +3505,11 @@
     try {
       // Use optimized bulk move if available
       if (mailboxStore?.actions?.bulkMoveMessages) {
-        const { success, failed } = await mailboxStore.actions.bulkMoveMessages(
-          messages,
-          archivePath,
-        );
+        const result = await mailboxStore.actions.bulkMoveMessages(messages, archivePath, {
+          demoAction: 'Archive',
+        });
+        if (result?.blocked) return;
+        const { success, failed } = result;
         clearSelection();
         await reloadMessages();
 
@@ -3470,9 +3525,11 @@
 
         for (const msg of messages) {
           try {
+            let result;
             if (mailboxStore?.actions?.archiveMessage)
-              await mailboxStore.actions.archiveMessage(msg);
-            else await mailboxView?.archiveMessage?.(msg);
+              result = await mailboxStore.actions.archiveMessage(msg);
+            else result = await mailboxView?.archiveMessage?.(msg);
+            if (result?.blocked) return;
             successCount++;
           } catch {
             // continue
@@ -3488,7 +3545,7 @@
         );
       }
     } catch (err) {
-      showToast('Failed to archive messages', 'error');
+      showMutationError(err, 'Failed to archive messages');
     }
   };
 
@@ -3518,18 +3575,24 @@
     const targets = resolveDeleteTargetsHelper(messagesToDelete);
     if (!targets.length) return;
 
-    // Remove from UI optimistically.
-    // The messages store uses deferredWritable which automatically defers
-    // .set() calls that shrink the array through requestAnimationFrame,
-    // preventing the macOS 26+ WebKit use-after-free crash.  See deferred-store.ts.
-    const idsToRemove = new Set(targets.map((m) => m.id));
-    const currentMessages = get(messagesStore);
-    messagesStore.set(currentMessages.filter((m) => !idsToRemove.has(m.id)));
-    clearSelection();
+    // Remove from UI optimistically for real accounts. Demo mutations are
+    // preflighted by the store before any optimistic state change so blocked
+    // actions leave the message, selection, and reader position intact.
+    if (!isDemoMode()) {
+      // The messages store uses deferredWritable which automatically defers
+      // .set() calls that shrink the array through requestAnimationFrame,
+      // preventing the macOS 26+ WebKit use-after-free crash. See deferred-store.ts.
+      const idsToRemove = new Set(targets.map((m) => m.id));
+      const currentMessages = get(messagesStore);
+      messagesStore.set(currentMessages.filter((m) => !idsToRemove.has(m.id)));
+      clearSelection();
+    }
 
     try {
       if (mailboxStore?.actions?.bulkDeleteMessages) {
-        const { failed } = await mailboxStore.actions.bulkDeleteMessages(targets);
+        const result = await mailboxStore.actions.bulkDeleteMessages(targets);
+        if (result?.blocked) return result;
+        const { failed } = result;
         await reloadMessages();
         // Remote.request already surfaces the actionable demo warning. Avoid
         // replacing it immediately with a generic failure toast: the toast host
@@ -3547,9 +3610,10 @@
         }
         pruneMessages(targets.map((m) => m.id));
       }
+      return { success: targets.length, failed: 0 };
     } catch (err) {
       console.error('deleteMessages failed', err);
-      showToast('Failed to delete some messages', 'error');
+      showMutationError(err, 'Failed to delete some messages');
     }
   };
 
@@ -3627,7 +3691,7 @@
         }
       }
     } catch (err) {
-      showToast('Failed to move messages', 'error');
+      showMutationError(err, 'Failed to move messages');
     }
   };
   const moveReaderTo = async (path) => {
@@ -3658,7 +3722,7 @@
       }
       await reloadMessages();
     } catch (err) {
-      showToast('Failed to move message', 'error');
+      showMutationError(err, 'Failed to move message');
     } finally {
       releaseReaderHold?.();
     }
@@ -4120,7 +4184,7 @@
         'success',
       );
     } catch (err) {
-      showToast('Failed to archive', 'error');
+      showMutationError(err, 'Failed to archive');
     }
   };
 
@@ -4129,13 +4193,15 @@
     const messageToDelete = contextMenuMessage;
     closeContextMenu();
     try {
+      let result;
       if (mailboxStore?.actions?.deleteMessage)
-        await mailboxStore.actions.deleteMessage(messageToDelete);
-      else await mailboxView?.deleteMessage?.(messageToDelete);
+        result = await mailboxStore.actions.deleteMessage(messageToDelete);
+      else result = await mailboxView?.deleteMessage?.(messageToDelete);
+      if (result?.blocked) return;
       showToast('Deleted', 'success');
       await reloadMessages();
     } catch (err) {
-      showToast('Failed to delete', 'error');
+      showMutationError(err, 'Failed to delete');
     }
   };
 
@@ -4151,7 +4217,7 @@
       showToast('Message moved', 'success');
       await reloadMessages();
     } catch (err) {
-      showToast('Failed to move message', 'error');
+      showMutationError(err, 'Failed to move message');
     }
   };
 
@@ -6500,6 +6566,9 @@
                   {#if pullDistance > 0 || isRefreshing}
                     <div
                       class={`flex items-center justify-center gap-2 py-3 text-muted-foreground ${pullDistance > 60 ? 'text-primary' : ''} ${isRefreshing ? 'text-primary' : ''}`}
+                      role="status"
+                      aria-live="polite"
+                      aria-atomic="true"
                       style="opacity: {isRefreshing
                         ? 1
                         : Math.min(pullDistance / 60, 1)}; margin-top: {isRefreshing
@@ -6527,7 +6596,7 @@
                       </div>
                       <span
                         >{isRefreshing
-                          ? 'Refreshing...'
+                          ? 'Refreshing…'
                           : pullDistance > 60
                             ? 'Release to refresh'
                             : 'Pull to refresh'}</span

@@ -74,24 +74,24 @@ describe('demo write actions are blocked with a toast', () => {
       },
     );
 
-    let toastText = '';
+    const expectedToast =
+      'Delete message isn’t available in the demo. Create an account to make changes.';
+    let toastTexts: string[] = [];
     await browser.waitUntil(
       async () => {
-        const toastTexts = (await browser.execute(() =>
+        toastTexts = (await browser.execute(() =>
           Array.from(document.querySelectorAll('[data-testid="toast-message"]')).map(
-            (toast) => toast.textContent?.trim().toLowerCase() || '',
+            (toast) => toast.textContent?.trim() || '',
           ),
         )) as string[];
-        const match = toastTexts.find((text) => text.includes('demo'));
-        if (!match) return false;
-        toastText = match;
-        return true;
+        return toastTexts.includes(expectedToast);
       },
       {
         timeout: 20_000,
-        timeoutMsg: 'expected a toast containing "demo" after the blocked delete',
+        timeoutMsg: `expected the friendly demo toast after the blocked delete: ${expectedToast}`,
       },
     );
-    expect(toastText).toContain('demo');
+    expect(toastTexts).toContain(expectedToast);
+    expect(toastTexts.some((text) => /failed to delete/i.test(text))).toBe(false);
   });
 });

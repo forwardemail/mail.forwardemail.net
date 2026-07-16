@@ -99,7 +99,9 @@ export const Remote = {
         // Write actions return { blocked: true } — throw so callers
         // enter their error path.  The demo toast was already shown.
         if (demo.result?.blocked) {
-          const err = new Error('Demo mode');
+          const err = new Error('This action is not available in the demo');
+          err.name = 'DemoBlockedError';
+          err.code = 'DEMO_ACTION_BLOCKED';
           err.isDemo = true;
           throw err;
         }

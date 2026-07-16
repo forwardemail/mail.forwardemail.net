@@ -2,6 +2,7 @@ import { writable, get, derived } from 'svelte/store';
 import type { Writable, Readable } from 'svelte/store';
 import { Remote } from '../utils/remote';
 import { Local } from '../utils/storage';
+import { isDemoBlockedError } from '../utils/demo-mode';
 import { db, handleDatabaseError } from '../utils/db';
 import { validateLabelName } from '../utils/label-validation.ts';
 import {
@@ -65,6 +66,7 @@ export interface LabelCreateInput {
 
 export interface LabelResult {
   success: boolean;
+  blocked?: boolean;
   error?: string;
   status?: number;
   label?: Label;
@@ -883,7 +885,7 @@ export async function createLabel(label: LabelCreateInput): Promise<LabelResult>
     await Remote.request(
       'AccountUpdate',
       { settings: { label_settings: labelsArrayToMap(updatedLabels) } },
-      { method: 'PUT' },
+      { method: 'PUT', demoAction: 'Create label' },
     );
 
     // Keep remoteSettings.labels in sync for consumers that rely on it
@@ -897,6 +899,7 @@ export async function createLabel(label: LabelCreateInput): Promise<LabelResult>
     warn('[settingsStore] Failed to create label:', err);
     // Revert optimistic update to pre-mutation state.
     settingsLabels.set(previousLabels);
+    if (isDemoBlockedError(err)) return { success: false, blocked: true };
     const status = (err as { status?: number })?.status;
     dispatchLabelToast(describeLabelError('create label', err));
     const error = err instanceof Error ? err.message : 'Failed to create label';
@@ -953,7 +956,7 @@ export async function updateLabel(keyword: string, updates: Partial<Label>): Pro
     await Remote.request(
       'AccountUpdate',
       { settings: { label_settings: labelsArrayToMap(updatedLabels) } },
-      { method: 'PUT' },
+      { method: 'PUT', demoAction: 'Update label' },
     );
 
     remoteSettings.update((current) => ({ ...current, labels: updatedLabels }));
@@ -966,6 +969,7 @@ export async function updateLabel(keyword: string, updates: Partial<Label>): Pro
     warn('[settingsStore] Failed to update label:', err);
     // Revert optimistic update.
     settingsLabels.set(previousLabels);
+    if (isDemoBlockedError(err)) return { success: false, blocked: true };
     const status = (err as { status?: number })?.status;
     dispatchLabelToast(describeLabelError('update label', err));
     const error = err instanceof Error ? err.message : 'Failed to update label';
@@ -1003,7 +1007,7 @@ export async function deleteLabel(keyword: string): Promise<LabelResult> {
     await Remote.request(
       'AccountUpdate',
       { settings: { label_settings: labelsArrayToMap(updatedLabels) } },
-      { method: 'PUT' },
+      { method: 'PUT', demoAction: 'Delete label' },
     );
 
     remoteSettings.update((current) => ({ ...current, labels: updatedLabels }));
@@ -1016,6 +1020,7 @@ export async function deleteLabel(keyword: string): Promise<LabelResult> {
     warn('[settingsStore] Failed to delete label:', err);
     // Revert optimistic update
     settingsLabels.set(previousLabels);
+    if (isDemoBlockedError(err)) return { success: false, blocked: true };
     const status = (err as { status?: number })?.status;
     dispatchLabelToast(describeLabelError('delete label', err));
     const error = err instanceof Error ? err.message : 'Failed to delete label';

@@ -12,6 +12,7 @@
   import CopyIcon from '@lucide/svelte/icons/copy';
   import { Local } from '../utils/storage';
   import { Remote } from '../utils/remote';
+  import { isDemoBlockedError } from '../utils/demo-mode';
   import { isOnline } from '../utils/network-status';
   import { isTauri } from '../utils/platform';
   import { readRecentLogs } from '../utils/tauri-bridge';
@@ -218,8 +219,10 @@
       submitSuccess = true;
       setTimeout(onClose, 5000);
     } catch (error) {
-      console.error('Failed to submit feedback:', error);
-      submitError = (error as Error).message || 'Failed to submit feedback. Please try again.';
+      if (!isDemoBlockedError(error)) {
+        console.error('Failed to submit feedback:', error);
+        submitError = (error as Error).message || 'Failed to submit feedback. Please try again.';
+      }
     } finally {
       submitting = false;
     }

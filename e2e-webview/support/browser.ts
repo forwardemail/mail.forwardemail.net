@@ -100,14 +100,12 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
 // spec. webdriverio's default 120s connectionRetryTimeout would mask a genuine
 // hang, so cap it here and let the (raised) 60s beforeAll ceiling backstop it.
 const WIN_SESSION_TIMEOUT_MS = 45_000;
-// A warm relaunch (exe already Defender-scanned) binds :4445 and registers its
-// window within a few seconds; cap the window-race retry well under the 60s
-// beforeAll ceiling so a genuinely windowless app still fails the gate.
-const WIN_WARM_RETRY_TIMEOUT_MS = 15_000;
-// tauri-plugin-webdriver rejects POST /session with this when the app process
-// is up and :4445 is bound but its WINDOW isn't registered yet — a transient
-// cold-start race, distinct from a slow :4445 bind (which hangs → times out).
-const WIN_WINDOW_RACE = /no window could be found|no such window/i;
+// Once the in-app server answers, its native window can still take several
+// seconds to register. Let webdriverio retry the same POST /session request so
+// the already-running app can finish initialization; killing and relaunching on
+// this response simply restarts the race. Six retries provide 15.5s of bounded
+// exponential backoff inside the 45s session budget.
+const WIN_SESSION_RETRY_COUNT = 6;
 
 export async function newBrowser(opts: RemoteOptions): Promise<WebdriverIO.Browser> {
   // macOS/Linux dismiss native dialogs reliably and don't exhibit the port
@@ -118,40 +116,26 @@ export async function newBrowser(opts: RemoteOptions): Promise<WebdriverIO.Brows
     return current;
   }
 
-  // Windows has two cold-start failure modes that need OPPOSITE handling:
-  //  (1) Slow :4445 bind (Defender scanning the fresh exe) — remote() HANGS, so
-  //      a single long-timeout attempt waits it out. Killing mid-scan only
-  //      restarts the scan and cascades (2026-06-15 fix), so we never retry it.
-  //  (2) App up + :4445 bound but WINDOW not registered yet — the plugin
-  //      rejects POST /session IMMEDIATELY with "no window could be found", which
-  //      waiting-out-the-timeout can't catch, so the first spec to launch could
-  //      fail outright. The exe is already scanned by the time it answers, so
-  //      one WARM relaunch comes up fast. Each attempt reclaims any app a prior
-  //      spec (or this one's failed attempt) left holding :4445 first.
+  // Windows has two startup delays that must not trigger process churn:
+  //  (1) Defender can delay the first :4445 bind, so the initial request keeps
+  //      the existing generous timeout instead of killing a healthy cold boot.
+  //  (2) The in-app server can answer before its native window is registered.
+  //      Webdriverio retries that same request with exponential backoff while the
+  //      existing process finishes initialization, rather than relaunching it.
+  await forceKillApp();
+  await waitForPortFree(IN_APP_WEBDRIVER_PORT, 3000);
+
   const winOpts: RemoteOptions = {
     connectionRetryTimeout: WIN_SESSION_TIMEOUT_MS,
-    connectionRetryCount: 0,
+    connectionRetryCount: WIN_SESSION_RETRY_COUNT,
     ...opts,
   };
-  const attemptSession = async (capMs: number): Promise<WebdriverIO.Browser> => {
-    await forceKillApp();
-    await waitForPortFree(IN_APP_WEBDRIVER_PORT, 3000);
-    return withTimeout(
-      remote({ ...winOpts, connectionRetryTimeout: capMs }),
-      capMs + 2000,
-      `webdriver session creation exceeded ${capMs}ms (Windows cold-start)`,
-    );
-  };
 
-  try {
-    current = await attemptSession(WIN_SESSION_TIMEOUT_MS);
-    return current;
-  } catch (err) {
-    // Retry ONLY the window-not-ready race — never our own timeout (mode 1).
-    if (!WIN_WINDOW_RACE.test(String((err as Error)?.message || err))) throw err;
-    console.warn('[e2e] Windows session hit the cold-start window race — warm-relaunching once.');
-  }
-  current = await attemptSession(WIN_WARM_RETRY_TIMEOUT_MS);
+  current = await withTimeout(
+    remote(winOpts),
+    WIN_SESSION_TIMEOUT_MS + 2000,
+    `webdriver session creation exceeded ${WIN_SESSION_TIMEOUT_MS}ms (Windows cold-start)`,
+  );
   return current;
 }
 

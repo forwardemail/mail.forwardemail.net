@@ -73,6 +73,7 @@ import { setIndexToasts, searchStore } from './stores/searchStore';
 import { setDemoToasts } from './utils/demo-mode';
 import { setNotificationToasts } from './utils/notification-manager';
 import { bindExternalLinkInterceptor } from './utils/external-links.js';
+import { bindEdgeSwipeBack } from './utils/mobile-edge-swipe';
 // Database initialization with recovery support
 import {
   initializeDatabase,
@@ -1080,6 +1081,13 @@ viewModel.navigate = (path, options) => {
 viewModel.mailboxView.navigate = viewModel.navigate;
 viewModel.settingsModal.navigate = viewModel.navigate;
 mailboxActions.setNavigate(viewModel.navigate);
+
+// Mobile iOS/Android: mirror the native left-edge back gesture while keeping
+// the existing History API as the single source of route and reader state.
+bindEdgeSwipeBack({
+  isEnabled: () => currentRoute() !== 'login' && history.length > 1,
+  onBack: () => history.back(),
+});
 
 viewModel.pgpPassphraseModal = passphraseApi;
 

@@ -5,6 +5,7 @@
   import { pickFiles } from '../utils/file-picker';
   import { isTauriDesktop } from '../utils/platform.js';
   import { Remote } from '../utils/remote';
+  import { isDemoBlockedError } from '../utils/demo-mode';
   import { Local } from '../utils/storage';
   import {
     removeContactFromCache,
@@ -1019,7 +1020,9 @@
         }).catch(() => {});
       }
     } catch (err) {
-      error = (err as Error)?.message || 'Unable to save contact.';
+      if (!isDemoBlockedError(err)) {
+        error = (err as Error)?.message || 'Unable to save contact.';
+      }
     } finally {
       loading = false;
     }
@@ -1138,7 +1141,9 @@
       }
       modalVisible = false;
     } catch (err) {
-      modalError = (err as Error)?.message || 'Unable to save contact.';
+      if (!isDemoBlockedError(err)) {
+        modalError = (err as Error)?.message || 'Unable to save contact.';
+      }
     } finally {
       modalSaving = false;
     }
@@ -1172,8 +1177,10 @@
       removeContactFromCache(confirmTarget.id).catch(() => {});
       toasts?.show?.('Contact deleted', 'success');
     } catch (err) {
-      error = (err as Error)?.message || 'Unable to delete contact.';
-      toasts?.show?.(error, 'error');
+      if (!isDemoBlockedError(err)) {
+        error = (err as Error)?.message || 'Unable to delete contact.';
+        toasts?.show?.(error, 'error');
+      }
     }
     cancelDelete();
   };
@@ -1336,7 +1343,7 @@
         </div>
       </div>
       <ul
-        class="flex-1 overflow-y-auto"
+        class="fe-mobile-page-scroll flex-1 overflow-y-auto"
         data-testid="contact-list"
         data-loading={loading ? 'true' : 'false'}
         data-count={filtered.length}
@@ -1393,7 +1400,11 @@
     </div>
 
     <!-- Contact Detail -->
-    <div class="overflow-y-auto min-h-0 p-4 md:p-6 {selectedContact ? 'block' : 'hidden md:block'}">
+    <div
+      class="fe-mobile-page-scroll overflow-y-auto min-h-0 p-4 md:p-6 {selectedContact
+        ? 'block'
+        : 'hidden md:block'}"
+    >
       {#if selectedContact && draft}
         <div class="mx-auto max-w-2xl">
           <!-- Header with avatar and actions -->

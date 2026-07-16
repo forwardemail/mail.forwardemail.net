@@ -10,6 +10,7 @@
   import AlertTriangle from '@lucide/svelte/icons/alert-triangle';
   import { onMount } from 'svelte';
   import { Remote } from '../../utils/remote';
+  import { isDemoBlockedError } from '../../utils/demo-mode';
   import { Local } from '../../utils/storage';
   import { db } from '../../utils/db';
   import { queueEmail } from '../../utils/outbox-service';
@@ -276,7 +277,9 @@
       added = true;
       onAdded?.();
     } catch (err) {
-      error = (err as Error)?.message || 'Failed to add event.';
+      if (!isDemoBlockedError(err)) {
+        error = (err as Error)?.message || 'Failed to add event.';
+      }
     } finally {
       saving = false;
     }
@@ -313,7 +316,9 @@
       removed = true;
       dispatchCalendarChange('deleted');
     } catch (err) {
-      error = (err as Error)?.message || 'Failed to remove event.';
+      if (!isDemoBlockedError(err)) {
+        error = (err as Error)?.message || 'Failed to remove event.';
+      }
     } finally {
       saving = false;
     }
@@ -360,7 +365,9 @@
       });
       rsvpSent = partstat;
     } catch (err) {
-      error = (err as Error)?.message || 'Failed to send RSVP.';
+      if (!isDemoBlockedError(err)) {
+        error = (err as Error)?.message || 'Failed to send RSVP.';
+      }
     } finally {
       rsvpSending = null;
     }

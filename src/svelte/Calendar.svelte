@@ -10,6 +10,7 @@
   import { i18n } from '../utils/i18n';
   import { Local } from '../utils/storage';
   import { Remote } from '../utils/remote';
+  import { isDemoBlockedError } from '../utils/demo-mode';
   import { db } from '../utils/db';
   import { normalizeEmail } from '../utils/address';
   import { queueEmail } from '../utils/outbox-service';
@@ -1988,7 +1989,7 @@
         // Refresh failed but calendar was created — user can reload
       }
     } catch (err: unknown) {
-      if ((err as { isDemo?: boolean })?.isDemo) {
+      if (isDemoBlockedError(err)) {
         newCalendarModal = false;
         return;
       }
@@ -2029,7 +2030,7 @@
       await loadEventsForSelection(true);
       toasts?.show?.('Calendar deleted', 'success');
     } catch (err: unknown) {
-      if ((err as { isDemo?: boolean })?.isDemo) {
+      if (isDemoBlockedError(err)) {
         deleteCalendarModal = false;
         return;
       }
@@ -3072,9 +3073,12 @@
       newEvent = draft;
       modalDirty = true;
       newEventModal = true;
-      setError(
-        (err as Error)?.message || (isTodo ? 'Unable to create task.' : 'Unable to create event.'),
-      );
+      if (!isDemoBlockedError(err)) {
+        setError(
+          (err as Error)?.message ||
+            (isTodo ? 'Unable to create task.' : 'Unable to create event.'),
+        );
+      }
       return;
     }
 
@@ -3391,7 +3395,9 @@
           }
         }
       }
-      setError((err as Error)?.message || 'Unable to update event.');
+      if (!isDemoBlockedError(err)) {
+        setError((err as Error)?.message || 'Unable to update event.');
+      }
     }
   };
 
@@ -3565,10 +3571,12 @@
         }
         persistEventsCache(calendarId);
       }
-      setError(
-        (err as Error)?.message ||
-          (completed ? 'Unable to complete task.' : 'Unable to reopen task.'),
-      );
+      if (!isDemoBlockedError(err)) {
+        setError(
+          (err as Error)?.message ||
+            (completed ? 'Unable to complete task.' : 'Unable to reopen task.'),
+        );
+      }
     }
   };
 
@@ -3626,7 +3634,9 @@
         applySelectedEvents();
         persistEventsCache(calendarId);
       }
-      setError((err as Error)?.message || 'Unable to delete event.');
+      if (!isDemoBlockedError(err)) {
+        setError((err as Error)?.message || 'Unable to delete event.');
+      }
     }
   };
 
@@ -3690,7 +3700,9 @@
       showDeleteConfirm = false;
       recurrenceEditPrompt = { open: false, action: null };
     } catch (err) {
-      setError((err as Error)?.message || 'Unable to delete occurrence.');
+      if (!isDemoBlockedError(err)) {
+        setError((err as Error)?.message || 'Unable to delete occurrence.');
+      }
     }
   };
 
@@ -3766,7 +3778,9 @@
       editEventModal = false;
       recurrenceEditPrompt = { open: false, action: null };
     } catch (err) {
-      setError((err as Error)?.message || 'Unable to update occurrence.');
+      if (!isDemoBlockedError(err)) {
+        setError((err as Error)?.message || 'Unable to update occurrence.');
+      }
     }
   };
 
@@ -4217,7 +4231,7 @@
       </button>
     </div>
 
-    <div class="calendar-content flex-1 flex flex-col p-4 min-h-0">
+    <div class="calendar-content fe-mobile-page-scroll flex-1 flex flex-col p-4 min-h-0">
       {#if loading}
         <div class="flex items-center justify-center h-64 text-muted-foreground">
           Loading calendar...
@@ -4248,7 +4262,7 @@
             New Task
           </Button>
         </div>
-        <div class="flex-1 overflow-y-auto" data-testid="tasks-list">
+        <div class="fe-mobile-page-scroll flex-1 overflow-y-auto" data-testid="tasks-list">
           <TasksList
             tasks={tasksList as Record[]}
             onSelect={(task) => openEditEvent(task)}

@@ -33,7 +33,7 @@ let _toasts = null;
 const _readMessageIds = new Set();
 
 const SIGN_UP_URL = 'https://forwardemail.net';
-const BLOCKED_MSG = 'Action not available in demo account. Sign up at https://forwardemail.net';
+const BLOCKED_MSG = 'This action isn’t available in the demo. Create an account to make changes.';
 
 // Actions that are read-only and should return fake data
 const READ_ACTIONS = new Set([
@@ -60,6 +60,7 @@ const WRITE_ACTIONS = new Set([
   'FolderCreate',
   'FolderUpdate',
   'FolderDelete',
+  'MessageCreate',
   'MessageDelete',
   'ContactsCreate',
   'ContactsUpdate',
@@ -125,6 +126,15 @@ export function setDemoToasts(toasts) {
 }
 
 /**
+ * Return true when a failed mutation was intentionally blocked by demo mode.
+ * Callers use this to avoid showing a second, generic failure message after
+ * the central demo notice has already explained what happened.
+ */
+export function isDemoBlockedError(error) {
+  return Boolean(error && (error.isDemo === true || error.code === 'DEMO_ACTION_BLOCKED'));
+}
+
+/**
  * Show the "not available in demo" toast with a sign-up action button.
  * If the user clicks the action, we log them out and open the sign-up page.
  */
@@ -135,13 +145,13 @@ export function showDemoBlockedToast(actionLabel) {
   }
 
   const label = actionLabel
-    ? `"${actionLabel}" is not available in demo mode. Sign up at forwardemail.net`
+    ? `${actionLabel} isn’t available in the demo. Create an account to make changes.`
     : BLOCKED_MSG;
 
   _toasts.show(label, 'warning', {
-    duration: 15000,
+    duration: 12000,
     action: {
-      label: 'Sign Up',
+      label: 'Create Account',
       callback: () => {
         exitDemoAndRedirect();
       },
@@ -264,8 +274,11 @@ export function interceptDemoRequest(action, params = {}, options = {}) {
       return { handled: true, result: { ok: true, demo: true } };
     }
     if (params?.folder) {
-      // Folder change with no flags ⇒ a move (incl. delete-to-trash).
-      showDemoBlockedToast('Move');
+      // Folder change with no flags ⇒ a move. Callers that expose a more
+      // specific user action (for example delete-to-trash or archive) can
+      // provide a demo-only label in request options; Remote does not forward
+      // this option to the network transport outside demo mode.
+      showDemoBlockedToast(options?.demoAction || 'Move');
       return { handled: true, result: { ok: false, demo: true, blocked: true } };
     }
     return { handled: true, result: { ok: true, demo: true } };
@@ -276,9 +289,11 @@ export function interceptDemoRequest(action, params = {}, options = {}) {
     return { handled: true, result: { ok: true, demo: true } };
   }
 
-  // Block write actions with toast
+  // Block write actions with toast. Callers using a shared endpoint can
+  // provide a more specific, demo-only action label; Remote never forwards
+  // this option to the network transport outside demo mode.
   if (WRITE_ACTIONS.has(action)) {
-    const friendlyName = getFriendlyActionName(action);
+    const friendlyName = options?.demoAction || getFriendlyActionName(action);
     showDemoBlockedToast(friendlyName);
     // Return handled with a special demo marker so Remote.request can
     // return without making a real API call.  The toast is the feedback.
@@ -379,6 +394,7 @@ function getFriendlyActionName(action) {
     FolderCreate: 'Create folder',
     FolderUpdate: 'Update folder',
     FolderDelete: 'Delete folder',
+    MessageCreate: 'Save draft',
     MessageUpdate: 'Update message',
     MessageDelete: 'Delete message',
     ContactsCreate: 'Create contact',

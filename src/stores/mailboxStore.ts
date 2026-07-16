@@ -2,7 +2,7 @@ import { writable, get } from 'svelte/store';
 import Dexie from 'dexie';
 import { Remote } from '../utils/remote';
 import { hasMorePages } from '../utils/pagination.js';
-import { isDemoMode } from '../utils/demo-mode';
+import { isDemoBlockedError, isDemoMode } from '../utils/demo-mode';
 import { db } from '../utils/db';
 import { Local } from '../utils/storage';
 import { searchStore } from './searchStore';
@@ -1504,7 +1504,7 @@ const createMailboxStore = () => {
     if (!msg?.id) return;
     const target = getArchiveFolderPath();
     if (!target) return;
-    return moveMessage(msg, target, { stayInFolder: true });
+    return moveMessage(msg, target, { stayInFolder: true, demoAction: 'Archive' });
   };
 
   const deleteMessage = async (msg, { permanent = false } = {}) => {
@@ -1522,13 +1522,27 @@ const createMailboxStore = () => {
     // If not permanent delete and not already in Trash, move to Trash instead
     if (!permanent && !isInTrash) {
       if (trashPath) {
-        return moveMessage(msg, trashPath, { stayInFolder: true });
+        return moveMessage(msg, trashPath, {
+          stayInFolder: true,
+          demoAction: 'Delete message',
+        });
       }
     }
 
     // Permanent delete, already in trash, or trash folder not found - use DELETE API
     const apiId = getMessageApiId(msg);
     if (!apiId) return;
+    if (isDemoMode()) {
+      try {
+        let path = `/v1/messages/${encodeURIComponent(apiId)}`;
+        if (permanent) path += '?permanent=1';
+        await Remote.request('MessageDelete', {}, { method: 'DELETE', pathOverride: path });
+      } catch (err) {
+        if (isDemoBlockedError(err)) return { success: false, blocked: true };
+        throw err;
+      }
+    }
+
     const account = Local.get('email') || 'default';
     const recordId = msg.id;
 
@@ -1615,7 +1629,9 @@ const createMailboxStore = () => {
       // Move messages not in trash to trash
       let moveResults = { success: 0, failed: 0 };
       if (notInTrash.length) {
-        moveResults = await bulkMoveMessages(notInTrash, trashPath);
+        moveResults = await bulkMoveMessages(notInTrash, trashPath, {
+          demoAction: 'Delete message',
+        });
       }
 
       // Permanently delete messages already in trash
@@ -1635,6 +1651,21 @@ const createMailboxStore = () => {
     const validMessages = messagesToDelete.filter((msg) => msg?.id && getMessageApiId(msg));
 
     if (!validMessages.length) return { success: 0, failed: 0 };
+
+    if (isDemoMode()) {
+      const apiId = getMessageApiId(validMessages[0]);
+      if (apiId == null) return { success: 0, failed: validMessages.length };
+      let path = `/v1/messages/${encodeURIComponent(apiId)}`;
+      if (permanent) path += '?permanent=1';
+      try {
+        await Remote.request('MessageDelete', {}, { method: 'DELETE', pathOverride: path });
+      } catch (err) {
+        if (isDemoBlockedError(err)) {
+          return { success: 0, failed: validMessages.length, blocked: true };
+        }
+        throw err;
+      }
+    }
 
     // Optimistic UI update - remove all messages at once
     const originalList = get(messages);
@@ -1719,7 +1750,7 @@ const createMailboxStore = () => {
   const moveMessage = async (
     msg,
     targetOverride,
-    { stayInFolder = true, allowFromSent = false } = {},
+    { stayInFolder = true, allowFromSent = false, demoAction = 'Move' } = {},
   ) => {
     const apiId = getMessageApiId(msg);
     if (!apiId) return { success: false };
@@ -1739,6 +1770,23 @@ const createMailboxStore = () => {
           toasts?.show?.('Cannot move messages from Sent folder', 'info');
           return { success: false };
         }
+      }
+    }
+
+    if (isDemoMode()) {
+      try {
+        await Remote.request(
+          'MessageUpdate',
+          { folder: target },
+          {
+            method: 'PUT',
+            pathOverride: `/v1/messages/${encodeURIComponent(apiId)}`,
+            demoAction,
+          },
+        );
+      } catch (err) {
+        if (isDemoBlockedError(err)) return { success: false, blocked: true };
+        throw err;
       }
     }
 
@@ -1863,7 +1911,7 @@ const createMailboxStore = () => {
    * Bulk move messages - optimized for performance
    * Batches UI updates, API calls, DB writes, and search indexing
    */
-  const bulkMoveMessages = async (messagesToMove, target) => {
+  const bulkMoveMessages = async (messagesToMove, target, { demoAction = 'Move' } = {}) => {
     if (!target || !messagesToMove?.length) return { success: 0, failed: 0 };
 
     const account = Local.get('email') || 'default';
@@ -1885,6 +1933,27 @@ const createMailboxStore = () => {
     });
 
     if (!validMessages.length) return { success: 0, failed: 0 };
+
+    if (isDemoMode()) {
+      const apiId = getMessageApiId(validMessages[0]);
+      if (apiId == null) return { success: 0, failed: validMessages.length };
+      try {
+        await Remote.request(
+          'MessageUpdate',
+          { folder: target },
+          {
+            method: 'PUT',
+            pathOverride: `/v1/messages/${encodeURIComponent(apiId)}`,
+            demoAction,
+          },
+        );
+      } catch (err) {
+        if (isDemoBlockedError(err)) {
+          return { success: 0, failed: validMessages.length, blocked: true };
+        }
+        throw err;
+      }
+    }
 
     // Optimistic UI update - remove all messages at once
     const originalList = get(messages);

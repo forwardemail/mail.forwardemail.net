@@ -43,7 +43,7 @@ export function buildIframeSrcdoc(
     : emailHtml;
 
   return `<!DOCTYPE html>
-<html>
+<html class="${bodyClass}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -51,6 +51,7 @@ export function buildIframeSrcdoc(
   <style>
     ${getResetStyles()}
     ${getAppearanceStyles()}
+    ${getScrollbarStyles()}
     ${getQuoteToggleStyles()}
     ${getPlainTextStyles()}
   </style>
@@ -264,6 +265,54 @@ function getAppearanceStyles(): string {
     /* Ensure images are visible (don't invert them) */
     body.fe-iframe-dark img {
       background-color: transparent !important;
+    }
+  `;
+}
+
+function getScrollbarStyles(): string {
+  return `
+    html.fe-iframe-light {
+      --fe-scrollbar-thumb: rgba(100, 116, 139, 0.38);
+      --fe-scrollbar-thumb-hover: rgba(100, 116, 139, 0.58);
+      --fe-scrollbar-thumb-active: rgba(100, 116, 139, 0.72);
+    }
+
+    html.fe-iframe-dark {
+      --fe-scrollbar-thumb: rgba(163, 163, 163, 0.44);
+      --fe-scrollbar-thumb-hover: rgba(189, 189, 189, 0.64);
+      --fe-scrollbar-thumb-active: rgba(212, 212, 212, 0.8);
+    }
+
+    html, body, * {
+      scrollbar-color: var(--fe-scrollbar-thumb) transparent;
+      scrollbar-width: thin;
+    }
+
+    *::-webkit-scrollbar {
+      width: 10px;
+      height: 10px;
+    }
+
+    *::-webkit-scrollbar-track,
+    *::-webkit-scrollbar-corner {
+      background: transparent !important;
+    }
+
+    *::-webkit-scrollbar-thumb {
+      min-width: 36px;
+      min-height: 36px;
+      border: 2px solid transparent;
+      border-radius: 999px;
+      background-color: var(--fe-scrollbar-thumb) !important;
+      background-clip: padding-box;
+    }
+
+    *::-webkit-scrollbar-thumb:hover {
+      background-color: var(--fe-scrollbar-thumb-hover) !important;
+    }
+
+    *::-webkit-scrollbar-thumb:active {
+      background-color: var(--fe-scrollbar-thumb-active) !important;
     }
   `;
 }

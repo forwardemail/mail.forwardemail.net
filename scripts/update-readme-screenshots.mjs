@@ -74,7 +74,7 @@ function usage() {
   return `Update the README screenshot gallery from a live Forward Email Mail deployment.
 
 Usage:
-  pnpm screenshots:readme -- [options]
+  pnpm screenshots:readme [options]
 
 Options:
   --base-url <url>          Deployment to capture (default: ${DEFAULT_BASE_URL})

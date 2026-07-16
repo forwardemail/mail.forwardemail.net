@@ -60,6 +60,7 @@ echo ""
 # These scripts modify src-tauri/gen/android/ after `tauri android init`
 # regenerates it. They are idempotent and safe to re-run.
 node scripts/configure-android-push.cjs
+node scripts/configure-mobile-display-name.cjs
 node scripts/inject-android-signing.cjs
 node scripts/inject-android-mainactivity.cjs
 

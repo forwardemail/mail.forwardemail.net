@@ -1,11 +1,23 @@
-name: Refresh README screenshots
+name: README screenshots
 
 on:
-  workflow_run:
-    workflows:
-      - Release
-    types:
-      - completed
+  workflow_call:
+    inputs:
+      base_url:
+        description: 'Mail deployment to capture'
+        required: false
+        default: 'https://mail.forwardemail.net'
+        type: string
+      dry_run:
+        description: 'Capture and validate without committing changes'
+        required: false
+        default: false
+        type: boolean
+      source_ref:
+        description: 'Repository ref containing the screenshot generator'
+        required: false
+        default: 'main'
+        type: string
   workflow_dispatch:
     inputs:
       base_url:
@@ -18,30 +30,32 @@ on:
         required: false
         default: false
         type: boolean
+      source_ref:
+        description: 'Repository ref containing the screenshot generator'
+        required: false
+        default: 'main'
+        type: string
 
 permissions:
   contents: write
 
 concurrency:
-  group: readme-screenshots
+  group: readme-screenshots-${{ inputs.source_ref || github.ref }}
   cancel-in-progress: false
 
 jobs:
-  refresh:
+  capture:
     name: Capture and publish README screenshots
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      SCREENSHOT_BASE_URL: ${{ inputs.base_url || 'https://mail.forwardemail.net' }}
+      SCREENSHOT_BASE_URL: ${{ inputs.base_url }}
+      SCREENSHOT_DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
     steps:
-      - name: Check out the latest default branch
+      - name: Check out the requested source revision
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          ref: main
+          ref: ${{ inputs.source_ref }}
           fetch-depth: 0
 
       - name: Set up pnpm
@@ -52,7 +66,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: 20
+          node-version: 22
           cache: pnpm
 
       - name: Install dependencies
@@ -61,34 +75,66 @@ jobs:
       - name: Install Chromium
         run: pnpm exec playwright install --with-deps chromium
 
-      - name: Capture and validate production screenshots
-        id: capture
-        continue-on-error: true
+      - name: Capture production screenshots and update the README gallery
         run: |
+          set -euo pipefail
           args=(--base-url "$SCREENSHOT_BASE_URL")
-          if [[ "${{ inputs.dry_run || false }}" == 'true' ]]; then
+          if [[ "$SCREENSHOT_DRY_RUN" == 'true' ]]; then
             args+=(--dry-run)
           fi
-          pnpm screenshots:readme -- "${args[@]}"
+          pnpm screenshots:readme "${args[@]}"
 
-      - name: Explain skipped update
-        if: steps.capture.outcome != 'success'
+      - name: Validate the complete README screenshot set
         run: |
-          echo '::warning::README screenshots were not updated because production validation or capture failed.'
-          {
-            echo '### README screenshots were skipped'
-            echo
-            echo 'The production validation or screenshot capture failed. No README or screenshot assets were committed.'
-          } >> "$GITHUB_STEP_SUMMARY"
+          set -euo pipefail
+          if [[ "$SCREENSHOT_DRY_RUN" == 'true' ]]; then
+            screenshot_root='.readme-screenshot-preview/docs/screenshots'
+          else
+            screenshot_root='docs/screenshots'
+          fi
 
-      - name: Commit a complete screenshot set
-        if: >-
-          steps.capture.outcome == 'success' &&
-          (github.event_name != 'workflow_dispatch' || inputs.dry_run != true)
+          screenshot_count=$(find "$screenshot_root" -type f -name '*.jpg' | wc -l | tr -d ' ')
+          if [[ "$screenshot_count" != '64' ]]; then
+            echo "::error::Expected 64 screenshots, found $screenshot_count"
+            exit 1
+          fi
+
+          if [[ "$SCREENSHOT_DRY_RUN" == 'true' ]]; then
+            exit 0
+          fi
+
+          start_count=$(grep -c '<!-- readme-screenshots:start -->' README.md || true)
+          end_count=$(grep -c '<!-- readme-screenshots:end -->' README.md || true)
+          if [[ "$start_count" != '1' || "$end_count" != '1' ]]; then
+            echo '::error::README screenshot markers must each appear exactly once'
+            exit 1
+          fi
+
+          missing_reference=0
+          while IFS= read -r image; do
+            if ! grep -Fq "($image)" README.md; then
+              echo "::error::README does not reference $image"
+              missing_reference=1
+            fi
+          done < <(find docs/screenshots -type f -name '*.jpg' | sort)
+
+          readme_reference_count=$(grep -oE 'docs/screenshots/[^)]+\.jpg' README.md | sort -u | wc -l | tr -d ' ')
+          if [[ "$readme_reference_count" != '64' ]]; then
+            echo "::error::Expected 64 unique README screenshot references, found $readme_reference_count"
+            missing_reference=1
+          fi
+
+          if [[ "$missing_reference" != '0' ]]; then
+            exit 1
+          fi
+
+      - name: Commit README.md and docs/screenshots to main
+        if: ${{ !inputs.dry_run }}
         env:
-          RELEASE_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.event.workflow_run.id || github.run_id }}
+          SCREENSHOT_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          if git diff --quiet -- README.md docs/screenshots; then
+          set -euo pipefail
+          if [[ -z "$(git status --porcelain -- README.md docs/screenshots)" ]]; then
             echo 'No README screenshot changes were generated.'
             exit 0
           fi
@@ -103,24 +149,20 @@ jobs:
           fi
 
           git commit -m 'docs: refresh release screenshots [skip ci]' \
-            -m "Generated after ${RELEASE_RUN_URL}"
+            -m "Generated by ${SCREENSHOT_RUN_URL}"
+          git fetch origin main
+          git rebase origin/main
+          git push origin HEAD:main
 
-          if ! git push origin HEAD:main; then
-            echo '::warning::The screenshot commit was not pushed because main changed concurrently.'
-            echo 'No repository content was modified by this workflow run.' >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-
-          echo 'The README screenshot gallery was refreshed successfully.' >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Summarize a manual dry run
-        if: >-
-          steps.capture.outcome == 'success' &&
-          github.event_name == 'workflow_dispatch' &&
-          inputs.dry_run == true
+      - name: Summarize README screenshot publication
         run: |
           {
-            echo '### README screenshot dry run passed'
+            echo '### README screenshots passed'
             echo
-            echo 'Every required production view was captured and validated. No tracked files were changed.'
+            echo 'All 64 production screenshots were captured and validated.'
+            if [[ "$SCREENSHOT_DRY_RUN" == 'true' ]]; then
+              echo 'Dry-run mode made no repository changes.'
+            else
+              echo 'The generated image files and README gallery were committed to `main` when changes were present.'
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
