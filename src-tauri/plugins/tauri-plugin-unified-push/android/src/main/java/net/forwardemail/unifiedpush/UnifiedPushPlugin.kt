@@ -24,7 +24,6 @@ import org.unifiedpush.android.connector.PushService
 import org.unifiedpush.android.connector.UnifiedPush
 import org.unifiedpush.android.connector.data.PushEndpoint
 import org.unifiedpush.android.connector.data.PushMessage
-import org.unifiedpush.android.connector.data.ResolvedDistributor
 import java.nio.charset.StandardCharsets
 
 private const val EVENT_SUBSCRIPTION = "subscription-changed"
@@ -100,13 +99,24 @@ class UnifiedPushPlugin(private val activity: Activity) : Plugin(activity) {
       return
     }
 
-    when (val resolved = UnifiedPush.resolveDefaultDistributor(context)) {
-      is ResolvedDistributor.Found -> {
-        UnifiedPush.saveDistributor(context, resolved.packageName)
-        requestRegistration(context, args, invoke)
+    val distributors = UnifiedPush.getDistributors(context)
+    if (distributors.isEmpty()) {
+      invoke.reject("no_unifiedpush_distributor_available")
+      return
+    }
+
+    UnifiedPush.tryUseDefaultDistributor(activity) { success ->
+      if (!success) {
+        invoke.reject(
+          if (distributors.size > 1) {
+            "distributor_selection_required"
+          } else {
+            "no_unifiedpush_distributor_available"
+          }
+        )
+        return@tryUseDefaultDistributor
       }
-      ResolvedDistributor.ToSelect -> invoke.reject("distributor_selection_required")
-      ResolvedDistributor.NoneAvailable -> invoke.reject("no_unifiedpush_distributor_available")
+      requestRegistration(context, args, invoke)
     }
   }
 
@@ -170,7 +180,7 @@ class UnifiedPushPlugin(private val activity: Activity) : Plugin(activity) {
 
   private fun distributorSelectionRequired(context: Context): Boolean {
     if (UnifiedPush.getSavedDistributor(context) != null) return false
-    return UnifiedPush.resolveDefaultDistributor(context) == ResolvedDistributor.ToSelect
+    return UnifiedPush.getDistributors(context).size > 1
   }
 
   fun emitSubscription(instanceId: String, subscription: JSONObject) {

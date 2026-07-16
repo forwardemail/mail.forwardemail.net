@@ -22,6 +22,7 @@ const capabilityPath = path.join(root, 'src-tauri', 'capabilities', 'android-fcm
 const provider = (process.env.ANDROID_PUSH_PROVIDER || 'unified-push').toLowerCase();
 const requireConfig = process.env.REQUIRE_PUSH_CONFIG === '1';
 const validProviders = new Set(['unified-push', 'fcm', 'both']);
+const minimumKotlinVersion = '2.2.21';
 
 if (!validProviders.has(provider)) {
   throw new Error(
@@ -54,6 +55,42 @@ function writeIfChanged(file, value) {
 
 function removeFile(file) {
   if (fs.existsSync(file)) fs.rmSync(file);
+}
+
+function compareVersions(left, right) {
+  const normalize = (version) => version.split(/[.-]/).slice(0, 3).map(Number);
+  const leftParts = normalize(left);
+  const rightParts = normalize(right);
+
+  for (let index = 0; index < 3; index += 1) {
+    const difference = (leftParts[index] || 0) - (rightParts[index] || 0);
+    if (difference !== 0) return difference;
+  }
+  return 0;
+}
+
+function ensureCompatibleKotlinCompiler() {
+  let source = read(projectGradlePath);
+  const pattern = /classpath\("org\.jetbrains\.kotlin:kotlin-gradle-plugin:([^"\n]+)"\)/;
+  const match = source.match(pattern);
+
+  if (!match) {
+    throw new Error(
+      `Generated Android project does not declare the Kotlin Gradle plugin in ${projectGradlePath}.`,
+    );
+  }
+
+  const generatedVersion = match[1];
+  if (compareVersions(generatedVersion, minimumKotlinVersion) < 0) {
+    source = source.replace(
+      pattern,
+      `classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:${minimumKotlinVersion}")`,
+    );
+    writeIfChanged(projectGradlePath, source);
+    return minimumKotlinVersion;
+  }
+
+  return generatedVersion;
 }
 
 function stripFcmGradleWiring() {
@@ -180,6 +217,7 @@ function configureCapability() {
   );
 }
 
+const kotlinVersion = ensureCompatibleKotlinCompiler();
 stripFcmGradleWiring();
 removeFile(googleServicesDest);
 
@@ -204,5 +242,6 @@ configureManifest();
 configureCapability();
 
 console.log(`Configured Android push profile: ${provider}`);
+console.log(`  Kotlin: ${kotlinVersion}`);
 console.log(`  UnifiedPush: ${enablesUnifiedPush ? 'enabled' : 'runtime-disabled'}`);
 console.log(`  FCM: ${enablesFcm ? 'enabled' : 'not linked'}`);

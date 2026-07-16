@@ -34,5 +34,5 @@ android {
 
 dependencies {
   compileOnly(project(":tauri-android"))
-  implementation("org.unifiedpush.android:connector:3.3.3")
+  implementation("org.unifiedpush.android:connector:3.2.0")
 }

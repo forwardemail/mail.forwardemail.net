@@ -31,7 +31,7 @@ function createFixture() {
 
   writeFileSync(
     join(androidDir, 'build.gradle.kts'),
-    `buildscript {\n    dependencies {\n    }\n}\n`,
+    `buildscript {\n    dependencies {\n        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.25")\n    }\n}\n`,
   );
   writeFileSync(
     join(appDir, 'build.gradle.kts'),
@@ -75,15 +75,35 @@ describe('configure-android-push', () => {
     const result = configure(fixture, 'unified-push');
 
     expect(result.status, result.stderr).toBe(0);
-    expect(readFileSync(join(fixture.androidDir, 'build.gradle.kts'), 'utf8')).not.toContain(
-      'com.google.gms',
-    );
+    const projectGradle = readFileSync(join(fixture.androidDir, 'build.gradle.kts'), 'utf8');
+    expect(projectGradle).toContain('kotlin-gradle-plugin:2.2.21');
+    expect(projectGradle).not.toContain('kotlin-gradle-plugin:1.9.25');
+    expect(result.stdout).toContain('Kotlin: 2.2.21');
+    expect(projectGradle).not.toContain('com.google.gms');
     expect(readFileSync(join(fixture.appDir, 'build.gradle.kts'), 'utf8')).not.toContain(
       'com.google.firebase',
     );
     expect(readFileSync(fixture.manifestPath, 'utf8')).not.toContain('firebase');
     expect(existsSync(join(fixture.appDir, 'google-services.json'))).toBe(false);
     expect(existsSync(fixture.capabilityPath)).toBe(false);
+  });
+
+  it('preserves a generated Kotlin compiler that is already newer than the minimum', () => {
+    const fixture = createFixture();
+    const projectGradlePath = join(fixture.androidDir, 'build.gradle.kts');
+    writeFileSync(
+      projectGradlePath,
+      readFileSync(projectGradlePath, 'utf8').replace(
+        'kotlin-gradle-plugin:1.9.25',
+        'kotlin-gradle-plugin:2.3.20',
+      ),
+    );
+
+    const result = configure(fixture, 'unified-push');
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(readFileSync(projectGradlePath, 'utf8')).toContain('kotlin-gradle-plugin:2.3.20');
+    expect(result.stdout).toContain('Kotlin: 2.3.20');
   });
 
   it('adds Firebase and the optional FCM capability only for dual-provider Play builds', () => {
