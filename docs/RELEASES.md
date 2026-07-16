@@ -10,6 +10,12 @@ All platforms share a single version. Running `pnpm release` bumps `package.json
 
 The desktop release workflow is [`release-desktop.yml`](../.github/workflows/release-desktop.yml). It creates or updates a **draft** GitHub Release and uploads the Tauri desktop artifacts for the full desktop matrix.
 
+The unified [`release.yml`](../.github/workflows/release.yml) runs the webview E2E gate before it
+calls the reusable desktop workflow, so it passes `skip_e2e_gate: true` to avoid running the same
+suite twice. GitHub therefore shows the nested `build-desktop / E2E webview (gate)` as skipped by
+design. The six macOS, Windows, and Linux desktop build rows are still created; a skipped nested
+gate does not mean desktop CI was removed.
+
 | Platform | Architecture | Installer bundles                                                                                                     | Updater/signature assets                      |
 | -------- | ------------ | --------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
 | macOS    | arm64        | `Forward.Email_<version>_aarch64.dmg`                                                                                 | `Forward.Email_aarch64.app.tar.gz` and `.sig` |
@@ -89,7 +95,11 @@ The same IPA is uploaded to **App Store Connect → TestFlight** via `xcrun alto
 
 ## Code Signing
 
-Signing is automatic when secrets are configured. Without secrets, builds are unsigned but still functional.
+Local and non-release builds can be unsigned. CI release behavior is stricter: the Android
+release fails its preflight unless all four keystore values are configured, while the iOS release
+skips when its signing and App Store Connect values are unavailable. Desktop signing and
+notarization remain conditional on their platform credentials. See the workflow-specific
+requirements below before creating a release tag.
 
 | Platform     | Signing                           | Notes                                                                                    |
 | ------------ | --------------------------------- | ---------------------------------------------------------------------------------------- |

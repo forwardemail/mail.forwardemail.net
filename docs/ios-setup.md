@@ -177,10 +177,11 @@ Find the build at [appstoreconnect.apple.com](https://appstoreconnect.apple.com)
 
 Forward Email uses TLS for network transport and user-held PGP keys for email content — both typically qualify as **exempt** encryption under US EAR (§740.17(b)(1) / 5D992.c).
 
-Two ways to handle the compliance question:
-
-- **Answer once in ASC**: when the first build hits "Missing Compliance", click it → "Yes, my app uses encryption" → "Yes, the app qualifies for the exemptions" → submit. ASC remembers for future builds in the same major version.
-- **Set once in Info.plist** to skip the prompt permanently: add `<key>ITSAppUsesNonExemptEncryption</key><false/>` to `src-tauri/gen/apple/forwardemail-desktop_iOS/Info.plist`. (Not currently injected by our CI — would need to add to [`inject-ios-signing.cjs`](../scripts/inject-ios-signing.cjs).)
+[`scripts/inject-ios-signing.cjs`](../scripts/inject-ios-signing.cjs) sets
+`ITSAppUsesNonExemptEncryption=false` in the generated iOS `Info.plist` during every signed CI
+build. This normally prevents the build from entering the App Store Connect "Missing Compliance"
+state. If App Store Connect still asks the question, answer that the app uses encryption and
+qualifies for the exemptions, then confirm that the uploaded archive contains the generated key.
 
 Consult a lawyer if the app later ships non-standard crypto (custom ciphers, ECC on-device key gen without TLS context, etc).
 

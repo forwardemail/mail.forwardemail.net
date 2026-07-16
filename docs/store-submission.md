@@ -108,11 +108,10 @@ App Store Connect won't even prompt per build.)
   `NSFaceIDUsageDescription` (biometric is WebAuthn/passkeys via the system, not
   `LocalAuthentication`), `NSUserTrackingUsageDescription` (no ATT/IDFA), location strings.
 
-**Push for 1.0 [CONFIRM]:** push (FCM/APNs) is **deferred to 1.1** but `aps-environment` is
-injected by `inject-ios-signing.cjs`. An unused entitlement is harmless, but to avoid a "your
-app declares push but doesn't use it" reviewer question, either (a) leave it — generally fine —
-or (b) gate the `aps-environment` injection off until 1.1. Recommend (a) + a one-line review
-note that push lands in a later update.
+**Push notifications:** APNs support is implemented for iOS. `inject-ios-signing.cjs` generates
+the iOS-only `aps-environment` entitlement while leaving the shared macOS entitlements unchanged.
+The App Review note should state that Forward Email uses push notifications for new-mail delivery
+and that notification permission is requested at runtime.
 
 **Account deletion:** Settings → **Delete account** → `forwardemail.net/my-account/security`.
 Add a review note pointing the reviewer there (it's distinct from Sign out, satisfying 5.1.1(v)).
@@ -171,13 +170,17 @@ settings/account. None are currently in the repo (`e2e-webview/screenshots` are 
 
 ## 7. Permissions declared (low review friction)
 
-**Android** (`AndroidManifest.xml`): `INTERNET`, `ACCESS_NETWORK_STATE`, `POST_NOTIFICATIONS`,
-`VIBRATE`. No SMS/location/storage/camera/contacts/accessibility → clean Data Safety story.
-Deep-link intent filters: `mailto:` + `forwardemail:` (custom schemes, so **no** `assetlinks.json`
-needed). Single exported activity (`MainActivity`); FileProvider is `exported=false`.
+**Android:** `INTERNET`, `ACCESS_NETWORK_STATE`, `POST_NOTIFICATIONS`, `VIBRATE`, and
+`RECEIVE_BOOT_COMPLETED` support network access, notification display, and UnifiedPush
+re-registration after restart. The dual-provider release also contains the generated FCM service
+and the first-party UnifiedPush connector. It requests no SMS, location, storage, camera, contacts,
+or accessibility permission. Deep-link intent filters use `mailto:` and `forwardemail:` custom
+schemes, so no `assetlinks.json` file is needed. `MainActivity` is the only exported activity, and
+the FileProvider is not exported.
 
-**iOS:** `NSPhotoLibraryUsageDescription` only (+ `aps-environment` for future push). Custom-scheme
-deep links → **no** Associated Domains needed.
+**iOS:** `NSPhotoLibraryUsageDescription` supports the image picker, and the iOS-only
+`aps-environment` entitlement enables APNs. Custom-scheme deep links do not require Associated
+Domains.
 
 ---
 
@@ -187,9 +190,9 @@ deep links → **no** Associated Domains needed.
 2. **[CONFIRM]** Device family — iPhone-only vs universal → determines iPad screenshot requirement.
 3. **[CONFIRM]** Diagnostics-in-feedback: list it or rely on the user-initiated carve-out (pick the
    same answer for Apple §4 and Google §5).
-4. **[CONFIRM]** iOS push entitlement for 1.0 — leave injected (recommended) + review note, or gate off until 1.1.
+4. Complete a physical-device APNs smoke test and include the new-mail push behavior in the App Review notes.
 5. **[CONFIRM]** Age-rating questionnaire — answer "No" to unrestricted web access.
 6. Provision the 6 iOS TestFlight secrets (build pipeline is ready; secret-gated).
-7. Create the Play Console app + closed/open testing tracks; add automated AAB upload
-   (`r0adkll/upload-google-play` or fastlane `supply`) to `release-mobile.yml` — the signed AAB is
-   already produced, it just isn't uploaded anywhere but GitHub Releases.
+7. Create the Play Console app and testing tracks. Store its service-account JSON as the
+   `GOOGLE_PLAY_SERVICE_ACCOUNT` release secret and optionally set the `PLAY_TRACK` variable;
+   `release-mobile.yml` already uploads the generated AAB when that secret is configured.

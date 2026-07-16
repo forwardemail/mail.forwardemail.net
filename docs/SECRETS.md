@@ -56,6 +56,18 @@ Open **Settings → Secrets and variables → Actions** in the GitHub repository
 
 The Android application never receives the backend `VAPID_PRIVATE_KEY` or Firebase service-account JSON. Those remain backend-only production credentials.
 
+### Google Play upload inputs
+
+| Name                          | Type                | Required                           | Purpose                                                                                     |
+| ----------------------------- | ------------------- | ---------------------------------- | ------------------------------------------------------------------------------------------- |
+| `GOOGLE_PLAY_SERVICE_ACCOUNT` | `release` secret    | Optional; required for Play upload | Full Google Play Console service-account JSON authorized to publish `net.forwardemail.mail` |
+| `PLAY_TRACK`                  | Repository variable | Optional; defaults to `internal`   | Google Play track that receives the release AAB                                             |
+
+The Play upload credential is separate from both Firebase files. It authorizes publishing in
+Google Play Console; it is not used for FCM delivery and must not be embedded in the application.
+When `GOOGLE_PLAY_SERVICE_ACCOUNT` is absent, the workflow still publishes the signed APK and AAB
+to the GitHub Release and skips only the Play upload.
+
 ### Deployment secrets and variables
 
 | Name                   | Type     | Required            | Purpose                                                       |
@@ -206,6 +218,16 @@ VAPID_PUBLIC_KEY='BN...' pnpm tauri:android:build:fdroid -- --apk
 > `google-services.json` is Firebase client configuration. The backend’s `firebase-service-account.json` is a private server credential and must never be substituted here or embedded in a client artifact.
 
 See [`PUSH_NOTIFICATIONS.md`](./PUSH_NOTIFICATIONS.md) for provider architecture, profile behavior, backend handoff, and device validation.
+
+### Google Play publishing
+
+Create a service account in Google Play Console, grant it permission to publish the
+`net.forwardemail.mail` application, and store the complete JSON key as the `release` environment
+secret `GOOGLE_PLAY_SERVICE_ACCOUNT`. Set the optional repository or environment variable
+`PLAY_TRACK` to the target track; when omitted, `release-mobile.yml` uploads to `internal`.
+
+This is not the backend `firebase-service-account.json` and not the client
+`google-services.json`. Keep all three files separate because they authorize different systems.
 
 ### iOS TestFlight signing secrets
 

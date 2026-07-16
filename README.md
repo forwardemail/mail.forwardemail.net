@@ -124,14 +124,14 @@ Our implementation supports a wide range of authenticators for Passkey-based App
 
 ### Tamper-Proof Builds
 
-All builds are handled by public GitHub Actions workflows directly from the source code. Desktop applications are signed with platform-specific certificates (Apple Developer ID and Windows EV Code Signing) and the Tauri updater uses Ed25519 signatures to verify the integrity of every update package. All auto-updates, notifications, and IDLE-like real-time push support are handled directly between the app and our servers with zero third-party involvement.
+All builds are handled by public [GitHub Actions](https://github.com/features/actions) workflows directly from the source code. Desktop applications are signed with platform-specific certificates (Apple Developer ID and Windows Authenticode), and the [Tauri](https://github.com/tauri-apps/tauri) updater uses Ed25519 signatures to verify every update package. Mailbox content and WebSocket updates travel directly between the app and Forward Email. Platform delivery infrastructure is used only where the operating system requires it: APNs on iOS, FCM or a user-selected UnifiedPush distributor on Android, and GitHub Releases for desktop update packages. Forward Email does not add advertising, analytics, or tracking intermediaries to those paths.
 
 ## Features
 
 - **Blazing Fast**: Built with Rust and Svelte 5 for a lightweight and responsive experience.
 - **End-to-End Encrypted**: Cryptographic encryption for your entire client-side app — browser, desktop, or mobile.
 - **Open-Source**: All code for the web, desktop, and mobile apps is available on GitHub.
-- **Zero Third-Party Involvement**: Auto-updates, notifications, and real-time IDLE-like push support are handled directly by the app with no third-party servers or services involved.
+- **No Advertising or Tracking Intermediaries**: Mailbox data and real-time WebSocket updates stay between the app and Forward Email. Platform push providers and release hosting are used only to deliver native notifications and signed application updates.
 - **Real-time Updates**: Mailbox updates are pushed instantly via WebSockets.
 - **Cross-Platform Notifications**: Native desktop and mobile push notifications.
 - **Multi-account** — Login with multiple Forward Email accounts, alias auth, and optional API key override.
