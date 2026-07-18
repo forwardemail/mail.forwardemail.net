@@ -133,8 +133,6 @@
         return 'Choose a UnifiedPush distributor before registering.';
       case 'server-unavailable':
         return 'Forward Email could not be reached. Check your connection and try again.';
-      case 'registration-timeout':
-        return 'The native notification service did not respond. Check system notification settings and try again.';
       case 'deregistration-failed':
         return 'The registration could not be removed completely. Refresh the status and try again.';
       case 'unsupported':
