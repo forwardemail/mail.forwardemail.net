@@ -86,7 +86,7 @@ vi.mock('tauri-plugin-mobile-push-api', () => ({
 }));
 
 const ALIAS_AUTH = 'user@example.com:app-password';
-const APNS_TOKEN = 'AABBCCDDEEFF00112233445566778899';
+const APNS_TOKEN = 'AB'.repeat(32);
 const FCM_TOKEN = 'fcm-token-abcdefghijklmnopqrstuvwxyz';
 const OLD_FCM_TOKEN = 'old-fcm-token-abcdefghijklmnopqrstuvwxyz';
 
