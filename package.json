@@ -1,6 +1,6 @@
 {
   "name": "forwardemail-webmail-client",
-  "version": "0.12.18",
+  "version": "0.12.19",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@9.15.9",
