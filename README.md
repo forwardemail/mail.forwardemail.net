@@ -101,96 +101,96 @@ These screenshots are captured automatically from the production Demo Account af
 <details>
 <summary><strong>Dark mode — Desktop</strong></summary>
 
-| View | Screenshot |
-| :--- | :---: |
-| login page | ![Dark mode login page](docs/screenshots/desktop/login-dark.jpg) |
-| mail view | ![Dark mode mail view](docs/screenshots/desktop/mail-dark.jpg) |
-| message view | ![Dark mode message view](docs/screenshots/desktop/message-dark.jpg) |
-| compose window | ![Dark mode compose window](docs/screenshots/desktop/compose-dark.jpg) |
-| contacts page | ![Dark mode contacts page](docs/screenshots/desktop/contacts-dark.jpg) |
-| calendar page | ![Dark mode calendar page](docs/screenshots/desktop/calendar-dark.jpg) |
-| profile page | ![Dark mode profile page](docs/screenshots/desktop/profile-dark.jpg) |
-| diagnostics page | ![Dark mode diagnostics page](docs/screenshots/desktop/diagnostics-dark.jpg) |
-| general settings page | ![Dark mode general settings page](docs/screenshots/desktop/settings-general-dark.jpg) |
-| appearance settings page | ![Dark mode appearance settings page](docs/screenshots/desktop/settings-appearance-dark.jpg) |
-| privacy and security page | ![Dark mode privacy and security page](docs/screenshots/desktop/settings-privacy-dark.jpg) |
+| View                             |                                            Screenshot                                             |
+| :------------------------------- | :-----------------------------------------------------------------------------------------------: |
+| login page                       |                 ![Dark mode login page](docs/screenshots/desktop/login-dark.jpg)                  |
+| mail view                        |                  ![Dark mode mail view](docs/screenshots/desktop/mail-dark.jpg)                   |
+| message view                     |               ![Dark mode message view](docs/screenshots/desktop/message-dark.jpg)                |
+| compose window                   |              ![Dark mode compose window](docs/screenshots/desktop/compose-dark.jpg)               |
+| contacts page                    |              ![Dark mode contacts page](docs/screenshots/desktop/contacts-dark.jpg)               |
+| calendar page                    |              ![Dark mode calendar page](docs/screenshots/desktop/calendar-dark.jpg)               |
+| profile page                     |               ![Dark mode profile page](docs/screenshots/desktop/profile-dark.jpg)                |
+| diagnostics page                 |           ![Dark mode diagnostics page](docs/screenshots/desktop/diagnostics-dark.jpg)            |
+| general settings page            |      ![Dark mode general settings page](docs/screenshots/desktop/settings-general-dark.jpg)       |
+| appearance settings page         |   ![Dark mode appearance settings page](docs/screenshots/desktop/settings-appearance-dark.jpg)    |
+| privacy and security page        |    ![Dark mode privacy and security page](docs/screenshots/desktop/settings-privacy-dark.jpg)     |
 | folders and labels settings page | ![Dark mode folders and labels settings page](docs/screenshots/desktop/settings-folders-dark.jpg) |
-| search settings page | ![Dark mode search settings page](docs/screenshots/desktop/settings-search-dark.jpg) |
-| advanced settings page | ![Dark mode advanced settings page](docs/screenshots/desktop/settings-advanced-dark.jpg) |
-| keyboard shortcuts page | ![Dark mode keyboard shortcuts page](docs/screenshots/desktop/settings-shortcuts-dark.jpg) |
-| about and help page | ![Dark mode about and help page](docs/screenshots/desktop/settings-help-dark.jpg) |
+| search settings page             |       ![Dark mode search settings page](docs/screenshots/desktop/settings-search-dark.jpg)        |
+| advanced settings page           |     ![Dark mode advanced settings page](docs/screenshots/desktop/settings-advanced-dark.jpg)      |
+| keyboard shortcuts page          |    ![Dark mode keyboard shortcuts page](docs/screenshots/desktop/settings-shortcuts-dark.jpg)     |
+| about and help page              |         ![Dark mode about and help page](docs/screenshots/desktop/settings-help-dark.jpg)         |
 
 </details>
 
 <details>
 <summary><strong>Dark mode — Mobile</strong></summary>
 
-| View | Screenshot |
-| :--- | :---: |
-| login page | ![Dark mode mobile login page](docs/screenshots/mobile/login-dark.jpg) |
-| mail view | ![Dark mode mobile mail view](docs/screenshots/mobile/mail-dark.jpg) |
-| message view | ![Dark mode mobile message view](docs/screenshots/mobile/message-dark.jpg) |
-| compose window | ![Dark mode mobile compose window](docs/screenshots/mobile/compose-dark.jpg) |
-| contacts page | ![Dark mode mobile contacts page](docs/screenshots/mobile/contacts-dark.jpg) |
-| calendar page | ![Dark mode mobile calendar page](docs/screenshots/mobile/calendar-dark.jpg) |
-| profile page | ![Dark mode mobile profile page](docs/screenshots/mobile/profile-dark.jpg) |
-| diagnostics page | ![Dark mode mobile diagnostics page](docs/screenshots/mobile/diagnostics-dark.jpg) |
-| general settings page | ![Dark mode mobile general settings page](docs/screenshots/mobile/settings-general-dark.jpg) |
-| appearance settings page | ![Dark mode mobile appearance settings page](docs/screenshots/mobile/settings-appearance-dark.jpg) |
-| privacy and security page | ![Dark mode mobile privacy and security page](docs/screenshots/mobile/settings-privacy-dark.jpg) |
+| View                             |                                               Screenshot                                                |
+| :------------------------------- | :-----------------------------------------------------------------------------------------------------: |
+| login page                       |                 ![Dark mode mobile login page](docs/screenshots/mobile/login-dark.jpg)                  |
+| mail view                        |                  ![Dark mode mobile mail view](docs/screenshots/mobile/mail-dark.jpg)                   |
+| message view                     |               ![Dark mode mobile message view](docs/screenshots/mobile/message-dark.jpg)                |
+| compose window                   |              ![Dark mode mobile compose window](docs/screenshots/mobile/compose-dark.jpg)               |
+| contacts page                    |              ![Dark mode mobile contacts page](docs/screenshots/mobile/contacts-dark.jpg)               |
+| calendar page                    |              ![Dark mode mobile calendar page](docs/screenshots/mobile/calendar-dark.jpg)               |
+| profile page                     |               ![Dark mode mobile profile page](docs/screenshots/mobile/profile-dark.jpg)                |
+| diagnostics page                 |           ![Dark mode mobile diagnostics page](docs/screenshots/mobile/diagnostics-dark.jpg)            |
+| general settings page            |      ![Dark mode mobile general settings page](docs/screenshots/mobile/settings-general-dark.jpg)       |
+| appearance settings page         |   ![Dark mode mobile appearance settings page](docs/screenshots/mobile/settings-appearance-dark.jpg)    |
+| privacy and security page        |    ![Dark mode mobile privacy and security page](docs/screenshots/mobile/settings-privacy-dark.jpg)     |
 | folders and labels settings page | ![Dark mode mobile folders and labels settings page](docs/screenshots/mobile/settings-folders-dark.jpg) |
-| search settings page | ![Dark mode mobile search settings page](docs/screenshots/mobile/settings-search-dark.jpg) |
-| advanced settings page | ![Dark mode mobile advanced settings page](docs/screenshots/mobile/settings-advanced-dark.jpg) |
-| keyboard shortcuts page | ![Dark mode mobile keyboard shortcuts page](docs/screenshots/mobile/settings-shortcuts-dark.jpg) |
-| about and help page | ![Dark mode mobile about and help page](docs/screenshots/mobile/settings-help-dark.jpg) |
+| search settings page             |       ![Dark mode mobile search settings page](docs/screenshots/mobile/settings-search-dark.jpg)        |
+| advanced settings page           |     ![Dark mode mobile advanced settings page](docs/screenshots/mobile/settings-advanced-dark.jpg)      |
+| keyboard shortcuts page          |    ![Dark mode mobile keyboard shortcuts page](docs/screenshots/mobile/settings-shortcuts-dark.jpg)     |
+| about and help page              |         ![Dark mode mobile about and help page](docs/screenshots/mobile/settings-help-dark.jpg)         |
 
 </details>
 
 <details>
 <summary><strong>Light mode — Desktop</strong></summary>
 
-| View | Screenshot |
-| :--- | :---: |
-| login page | ![Light mode login page](docs/screenshots/desktop/login-light.jpg) |
-| mail view | ![Light mode mail view](docs/screenshots/desktop/mail-light.jpg) |
-| message view | ![Light mode message view](docs/screenshots/desktop/message-light.jpg) |
-| compose window | ![Light mode compose window](docs/screenshots/desktop/compose-light.jpg) |
-| contacts page | ![Light mode contacts page](docs/screenshots/desktop/contacts-light.jpg) |
-| calendar page | ![Light mode calendar page](docs/screenshots/desktop/calendar-light.jpg) |
-| profile page | ![Light mode profile page](docs/screenshots/desktop/profile-light.jpg) |
-| diagnostics page | ![Light mode diagnostics page](docs/screenshots/desktop/diagnostics-light.jpg) |
-| general settings page | ![Light mode general settings page](docs/screenshots/desktop/settings-general-light.jpg) |
-| appearance settings page | ![Light mode appearance settings page](docs/screenshots/desktop/settings-appearance-light.jpg) |
-| privacy and security page | ![Light mode privacy and security page](docs/screenshots/desktop/settings-privacy-light.jpg) |
+| View                             |                                             Screenshot                                              |
+| :------------------------------- | :-------------------------------------------------------------------------------------------------: |
+| login page                       |                 ![Light mode login page](docs/screenshots/desktop/login-light.jpg)                  |
+| mail view                        |                  ![Light mode mail view](docs/screenshots/desktop/mail-light.jpg)                   |
+| message view                     |               ![Light mode message view](docs/screenshots/desktop/message-light.jpg)                |
+| compose window                   |              ![Light mode compose window](docs/screenshots/desktop/compose-light.jpg)               |
+| contacts page                    |              ![Light mode contacts page](docs/screenshots/desktop/contacts-light.jpg)               |
+| calendar page                    |              ![Light mode calendar page](docs/screenshots/desktop/calendar-light.jpg)               |
+| profile page                     |               ![Light mode profile page](docs/screenshots/desktop/profile-light.jpg)                |
+| diagnostics page                 |           ![Light mode diagnostics page](docs/screenshots/desktop/diagnostics-light.jpg)            |
+| general settings page            |      ![Light mode general settings page](docs/screenshots/desktop/settings-general-light.jpg)       |
+| appearance settings page         |   ![Light mode appearance settings page](docs/screenshots/desktop/settings-appearance-light.jpg)    |
+| privacy and security page        |    ![Light mode privacy and security page](docs/screenshots/desktop/settings-privacy-light.jpg)     |
 | folders and labels settings page | ![Light mode folders and labels settings page](docs/screenshots/desktop/settings-folders-light.jpg) |
-| search settings page | ![Light mode search settings page](docs/screenshots/desktop/settings-search-light.jpg) |
-| advanced settings page | ![Light mode advanced settings page](docs/screenshots/desktop/settings-advanced-light.jpg) |
-| keyboard shortcuts page | ![Light mode keyboard shortcuts page](docs/screenshots/desktop/settings-shortcuts-light.jpg) |
-| about and help page | ![Light mode about and help page](docs/screenshots/desktop/settings-help-light.jpg) |
+| search settings page             |       ![Light mode search settings page](docs/screenshots/desktop/settings-search-light.jpg)        |
+| advanced settings page           |     ![Light mode advanced settings page](docs/screenshots/desktop/settings-advanced-light.jpg)      |
+| keyboard shortcuts page          |    ![Light mode keyboard shortcuts page](docs/screenshots/desktop/settings-shortcuts-light.jpg)     |
+| about and help page              |         ![Light mode about and help page](docs/screenshots/desktop/settings-help-light.jpg)         |
 
 </details>
 
 <details>
 <summary><strong>Light mode — Mobile</strong></summary>
 
-| View | Screenshot |
-| :--- | :---: |
-| login page | ![Light mode mobile login page](docs/screenshots/mobile/login-light.jpg) |
-| mail view | ![Light mode mobile mail view](docs/screenshots/mobile/mail-light.jpg) |
-| message view | ![Light mode mobile message view](docs/screenshots/mobile/message-light.jpg) |
-| compose window | ![Light mode mobile compose window](docs/screenshots/mobile/compose-light.jpg) |
-| contacts page | ![Light mode mobile contacts page](docs/screenshots/mobile/contacts-light.jpg) |
-| calendar page | ![Light mode mobile calendar page](docs/screenshots/mobile/calendar-light.jpg) |
-| profile page | ![Light mode mobile profile page](docs/screenshots/mobile/profile-light.jpg) |
-| diagnostics page | ![Light mode mobile diagnostics page](docs/screenshots/mobile/diagnostics-light.jpg) |
-| general settings page | ![Light mode mobile general settings page](docs/screenshots/mobile/settings-general-light.jpg) |
-| appearance settings page | ![Light mode mobile appearance settings page](docs/screenshots/mobile/settings-appearance-light.jpg) |
-| privacy and security page | ![Light mode mobile privacy and security page](docs/screenshots/mobile/settings-privacy-light.jpg) |
+| View                             |                                                Screenshot                                                 |
+| :------------------------------- | :-------------------------------------------------------------------------------------------------------: |
+| login page                       |                 ![Light mode mobile login page](docs/screenshots/mobile/login-light.jpg)                  |
+| mail view                        |                  ![Light mode mobile mail view](docs/screenshots/mobile/mail-light.jpg)                   |
+| message view                     |               ![Light mode mobile message view](docs/screenshots/mobile/message-light.jpg)                |
+| compose window                   |              ![Light mode mobile compose window](docs/screenshots/mobile/compose-light.jpg)               |
+| contacts page                    |              ![Light mode mobile contacts page](docs/screenshots/mobile/contacts-light.jpg)               |
+| calendar page                    |              ![Light mode mobile calendar page](docs/screenshots/mobile/calendar-light.jpg)               |
+| profile page                     |               ![Light mode mobile profile page](docs/screenshots/mobile/profile-light.jpg)                |
+| diagnostics page                 |           ![Light mode mobile diagnostics page](docs/screenshots/mobile/diagnostics-light.jpg)            |
+| general settings page            |      ![Light mode mobile general settings page](docs/screenshots/mobile/settings-general-light.jpg)       |
+| appearance settings page         |   ![Light mode mobile appearance settings page](docs/screenshots/mobile/settings-appearance-light.jpg)    |
+| privacy and security page        |    ![Light mode mobile privacy and security page](docs/screenshots/mobile/settings-privacy-light.jpg)     |
 | folders and labels settings page | ![Light mode mobile folders and labels settings page](docs/screenshots/mobile/settings-folders-light.jpg) |
-| search settings page | ![Light mode mobile search settings page](docs/screenshots/mobile/settings-search-light.jpg) |
-| advanced settings page | ![Light mode mobile advanced settings page](docs/screenshots/mobile/settings-advanced-light.jpg) |
-| keyboard shortcuts page | ![Light mode mobile keyboard shortcuts page](docs/screenshots/mobile/settings-shortcuts-light.jpg) |
-| about and help page | ![Light mode mobile about and help page](docs/screenshots/mobile/settings-help-light.jpg) |
+| search settings page             |       ![Light mode mobile search settings page](docs/screenshots/mobile/settings-search-light.jpg)        |
+| advanced settings page           |     ![Light mode mobile advanced settings page](docs/screenshots/mobile/settings-advanced-light.jpg)      |
+| keyboard shortcuts page          |    ![Light mode mobile keyboard shortcuts page](docs/screenshots/mobile/settings-shortcuts-light.jpg)     |
+| about and help page              |         ![Light mode mobile about and help page](docs/screenshots/mobile/settings-help-light.jpg)         |
 
 </details>
 
