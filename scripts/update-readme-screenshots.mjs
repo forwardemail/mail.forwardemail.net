@@ -225,56 +225,8 @@ async function probeDeployment(baseUrl, attempts, delayMilliseconds) {
   throw new Error(`Deployment health check failed: ${lastError?.message || 'unknown error'}`);
 }
 
-const runtimeErrorsByPage = new WeakMap();
-const sandboxedMessageFrameAccessError =
-  /Failed to read the '[^']+' property from '(?:Navigator|Window)': .*\b(?:context|document) is sandboxed and lacks the 'allow-same-origin' flag\.?/i;
-
-export function isIgnorableScreenshotRuntimeError(error) {
-  return sandboxedMessageFrameAccessError.test(error?.message || String(error));
-}
-
-function monitorPageRuntimeErrors(page) {
-  const runtimeErrors = [];
-  runtimeErrorsByPage.set(page, runtimeErrors);
-  page.on('pageerror', (error) => {
-    if (isIgnorableScreenshotRuntimeError(error)) return;
-    runtimeErrors.push(error?.message || String(error));
-  });
-}
-
-function throwPageRuntimeError(page, label) {
-  const runtimeErrors = runtimeErrorsByPage.get(page) || [];
-  if (runtimeErrors.length === 0) return;
-
-  throw new Error(`${label} encountered a runtime error: ${runtimeErrors[0]}`);
-}
-
-async function waitForVisibleTarget(page, locator, label) {
-  throwPageRuntimeError(page, label);
-
-  let pageErrorHandler;
-  const pageErrorPromise = new Promise((_, reject) => {
-    pageErrorHandler = (error) => {
-      if (isIgnorableScreenshotRuntimeError(error)) return;
-      reject(new Error(`${label} encountered a runtime error: ${error?.message || String(error)}`));
-    };
-    page.on('pageerror', pageErrorHandler);
-  });
-
-  try {
-    await Promise.race([
-      locator.waitFor({ state: 'visible', timeout: DEFAULT_TIMEOUT }),
-      pageErrorPromise,
-    ]);
-  } finally {
-    page.off('pageerror', pageErrorHandler);
-  }
-}
-
 async function assertPageIsHealthy(page, label) {
-  throwPageRuntimeError(page, label);
   await page.locator('body').waitFor({ state: 'visible', timeout: DEFAULT_TIMEOUT });
-  throwPageRuntimeError(page, label);
 
   const state = await page.evaluate(() => ({
     bodyText: document.body?.innerText?.slice(0, 4_000) || '',
@@ -318,7 +270,10 @@ async function navigate(page, baseUrl, pathname, label) {
     }
 
     if (pathname === '/') {
-      await waitForVisibleTarget(page, page.getByTestId('try-demo-btn'), label);
+      await page.getByTestId('try-demo-btn').waitFor({
+        state: 'visible',
+        timeout: DEFAULT_TIMEOUT,
+      });
       await assertPageIsHealthy(page, label);
       return;
     }
@@ -583,7 +538,6 @@ async function captureProfileTheme(browser, options, profile, theme, imageRoot) 
 
   const page = await context.newPage();
   page.setDefaultTimeout(DEFAULT_TIMEOUT);
-  monitorPageRuntimeErrors(page);
 
   try {
     await navigate(page, options.baseUrl, '/', 'login page');

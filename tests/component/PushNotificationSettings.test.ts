@@ -147,44 +147,6 @@ describe('<PushNotificationSettings />', () => {
     expect(screen.getByText('Active')).toBeInTheDocument();
   });
 
-  it('restores the registration control after a native-service timeout', async () => {
-    const toasts = { show: vi.fn() };
-    const permissionNeeded = makeStatus({
-      platform: 'android',
-      provider: 'fcm',
-      providerLabel: 'Firebase Cloud Messaging',
-      androidProviderMode: 'auto',
-      providerPreference: 'fcm',
-      permission: 'not-granted',
-      initialized: false,
-      localTokenPresent: false,
-      localTokenFingerprint: null,
-      currentRegistration: null,
-      health: 'permission-not-granted',
-    });
-    push.getStatus.mockResolvedValue(permissionNeeded);
-    push.register.mockResolvedValue({
-      ok: false,
-      code: 'registration-timeout',
-      status: permissionNeeded,
-    });
-
-    render(PushNotificationSettings, {
-      props: { toasts, openExternal: vi.fn() },
-    });
-
-    const button = await screen.findByRole('button', {
-      name: 'Allow & register this device',
-    });
-    await fireEvent.click(button);
-
-    const message =
-      'The native notification service did not respond. Check system notification settings and try again.';
-    expect(await screen.findByText(message)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Allow & register this device' })).toBeEnabled();
-    expect(toasts.show).toHaveBeenCalledWith(message, 'error');
-  });
-
   it('supports Android FCM and switches to an installed UnifiedPush distributor', async () => {
     const fcm = makeStatus({
       platform: 'android',

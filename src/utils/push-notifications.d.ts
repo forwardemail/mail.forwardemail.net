@@ -68,7 +68,6 @@ export type PushManagementCode =
   | 'distributor-required'
   | 'server-unavailable'
   | 'registration-failed'
-  | 'registration-timeout'
   | 'deregistration-failed';
 
 export interface PushManagementResult {
