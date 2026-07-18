@@ -31,12 +31,40 @@ const TOKEN_PLATFORM_KEY = 'push_notification_platform';
 const REGISTRATION_ID_STORAGE_KEY = 'push_notification_registration_id';
 const ANDROID_PREFERRED_PROVIDER_KEY = 'push_notification_preferred_provider';
 const ANDROID_PROVIDER = (import.meta.env.VITE_ANDROID_PUSH_PROVIDER || 'auto').toLowerCase();
+const NATIVE_PERMISSION_TIMEOUT_MS = 30_000;
+const NATIVE_OPERATION_TIMEOUT_MS = 15_000;
+const NATIVE_STATUS_TIMEOUT_MS = 5_000;
+
+class PushOperationTimeoutError extends Error {
+  constructor(operation) {
+    super(`${operation} timed out`);
+    this.name = 'PushOperationTimeoutError';
+  }
+}
+
+function withPushOperationTimeout(promise, operation, timeoutMs = NATIVE_OPERATION_TIMEOUT_MS) {
+  let timeoutId;
+  const timeout = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => reject(new PushOperationTimeoutError(operation)), timeoutMs);
+  });
+
+  return Promise.race([Promise.resolve(promise), timeout]).finally(() => clearTimeout(timeoutId));
+}
+
+function isPushOperationTimeout(error) {
+  return error instanceof PushOperationTimeoutError;
+}
+
+function normalizeNativeToken(token) {
+  return typeof token === 'string' ? token : token?.token;
+}
 
 let initialized = false;
 let initializationPromise = null;
 let activeNativeProvider = null;
 let nativeListenerCleanups = [];
 let managementPromise = null;
+let lastInitializationFailureCode = null;
 const pushStatusListeners = new Set();
 
 function getMobilePlatform() {
@@ -161,10 +189,21 @@ async function getNotificationPermissionStatus() {
 
   try {
     const { isPermissionGranted } = await import('@tauri-apps/plugin-notification');
-    return (await isPermissionGranted()) ? 'granted' : 'not-granted';
+    const granted = await withPushOperationTimeout(
+      isPermissionGranted(),
+      'Notification permission status check',
+      NATIVE_STATUS_TIMEOUT_MS,
+    );
+    return granted ? 'granted' : 'not-granted';
   } catch {
     return 'unknown';
   }
+}
+
+async function isAndroidNotificationPermissionGranted(permissionResult) {
+  if (typeof permissionResult === 'boolean') return permissionResult;
+  if (typeof permissionResult?.granted === 'boolean') return permissionResult.granted;
+  return (await getNotificationPermissionStatus()) === 'granted';
 }
 
 function dispatchPushPayload(notification, tapped = false, displayedBySystem = false) {
@@ -193,6 +232,15 @@ async function removeNativeListeners() {
   );
 }
 
+async function registerNativeListener(listenerPromise, operation) {
+  try {
+    return await withPushOperationTimeout(listenerPromise, operation);
+  } catch (error) {
+    console.warn(`[push] ${operation} unavailable:`, error);
+    return null;
+  }
+}
+
 async function replaceServerRegistration(token, platform) {
   const previousRegistrationId = Local.get(REGISTRATION_ID_STORAGE_KEY);
   const registrationId = await registerPushToken(token, platform);
@@ -210,8 +258,8 @@ async function replaceServerRegistration(token, platform) {
   return true;
 }
 
-async function registerNativeToken(getToken, platform) {
-  const token = await getToken();
+async function registerNativeToken(getToken, platform, operation = 'Native push token retrieval') {
+  const token = normalizeNativeToken(await withPushOperationTimeout(getToken(), operation));
   if (!isValidNativeToken(token)) {
     console.warn('[push] Native push provider returned an invalid token');
     return false;
@@ -229,34 +277,47 @@ async function initializeIosPush() {
     requestPermission,
   } = await import('tauri-plugin-mobile-push-api');
 
-  const permission = await requestPermission();
+  const permission = await withPushOperationTimeout(
+    requestPermission(),
+    'iOS notification permission request',
+    NATIVE_PERMISSION_TIMEOUT_MS,
+  );
   if (!permission?.granted) {
     console.info('[push] iOS notification permission was not granted');
     return false;
   }
 
-  if (!(await registerNativeToken(getToken, 'ios'))) return false;
+  if (!(await registerNativeToken(getToken, 'ios', 'APNS token retrieval'))) return false;
 
-  const tokenRefreshListener = await onTokenRefresh(async ({ token }) => {
-    if (!isValidNativeToken(token)) {
-      console.warn('[push] Ignoring invalid refreshed APNs token');
-      return;
-    }
+  const tokenRefreshListener = await registerNativeListener(
+    onTokenRefresh(async ({ token }) => {
+      if (!isValidNativeToken(token)) {
+        console.warn('[push] Ignoring invalid refreshed APNs token');
+        return;
+      }
 
-    if (await replaceServerRegistration(token, 'ios')) {
-      console.info('[push] Refreshed APNs token registration');
-    }
-  });
-  const receivedListener = await onNotificationReceived((notification) => {
-    dispatchPushPayload(notification, false);
-  });
-  const tappedListener = await onNotificationTapped((notification) => {
-    // A tap can only follow a notification already rendered by the OS. Preserve
-    // navigation/state delivery while preventing a second foreground visual.
-    dispatchPushPayload(notification, true, true);
-  });
+      if (await replaceServerRegistration(token, 'ios')) {
+        console.info('[push] Refreshed APNs token registration');
+      }
+    }),
+    'APNS token refresh listener',
+  );
+  const receivedListener = await registerNativeListener(
+    onNotificationReceived((notification) => {
+      dispatchPushPayload(notification, false);
+    }),
+    'APNS notification listener',
+  );
+  const tappedListener = await registerNativeListener(
+    onNotificationTapped((notification) => {
+      // A tap can only follow a notification already rendered by the OS. Preserve
+      // navigation/state delivery while preventing a second foreground visual.
+      dispatchPushPayload(notification, true, true);
+    }),
+    'APNS notification-tap listener',
+  );
 
-  nativeListenerCleanups = [tokenRefreshListener, receivedListener, tappedListener];
+  nativeListenerCleanups = [tokenRefreshListener, receivedListener, tappedListener].filter(Boolean);
   return true;
 }
 
@@ -269,34 +330,48 @@ async function initializeAndroidFcmPush() {
     requestPermission,
   } = await import('tauri-plugin-remote-push-api');
 
-  const permission = await requestPermission();
-  if (!permission?.granted) {
+  const permission = await withPushOperationTimeout(
+    requestPermission(),
+    'Android notification permission request',
+    NATIVE_PERMISSION_TIMEOUT_MS,
+  );
+  if (!(await isAndroidNotificationPermissionGranted(permission))) {
     console.info('[push] Android notification permission was not granted');
     return false;
   }
 
-  if (!(await registerNativeToken(getToken, 'android'))) return false;
+  if (!(await registerNativeToken(getToken, 'android', 'FCM token retrieval'))) return false;
 
-  const tokenRefreshListener = await onTokenRefresh(async (token) => {
-    if (!isValidNativeToken(token)) {
-      console.warn('[push] Ignoring invalid refreshed FCM token');
-      return;
-    }
+  const tokenRefreshListener = await registerNativeListener(
+    onTokenRefresh(async (tokenResult) => {
+      const token = normalizeNativeToken(tokenResult);
+      if (!isValidNativeToken(token)) {
+        console.warn('[push] Ignoring invalid refreshed FCM token');
+        return;
+      }
 
-    if (await replaceServerRegistration(token, 'android')) {
-      console.info('[push] Refreshed FCM token registration');
-    }
-  });
-  const receivedListener = await onNotificationReceived((notification) => {
-    dispatchPushPayload(notification, false);
-  });
-  const tappedListener = await onNotificationTapped((notification) => {
-    // A tap can only follow a notification already rendered by the OS. Preserve
-    // navigation/state delivery while preventing a second foreground visual.
-    dispatchPushPayload(notification, true, true);
-  });
+      if (await replaceServerRegistration(token, 'android')) {
+        console.info('[push] Refreshed FCM token registration');
+      }
+    }),
+    'FCM token refresh listener',
+  );
+  const receivedListener = await registerNativeListener(
+    onNotificationReceived((notification) => {
+      dispatchPushPayload(notification, false);
+    }),
+    'FCM notification listener',
+  );
+  const tappedListener = await registerNativeListener(
+    onNotificationTapped((notification) => {
+      // A tap can only follow a notification already rendered by the OS. Preserve
+      // navigation/state delivery while preventing a second foreground visual.
+      dispatchPushPayload(notification, true, true);
+    }),
+    'FCM notification-tap listener',
+  );
 
-  nativeListenerCleanups = [tokenRefreshListener, receivedListener, tappedListener];
+  nativeListenerCleanups = [tokenRefreshListener, receivedListener, tappedListener].filter(Boolean);
   activeNativeProvider = 'fcm';
   return true;
 }
@@ -349,28 +424,35 @@ async function initializeUnifiedPush() {
     return false;
   }
 
-  const permission = await requestNotificationPermission();
+  const permission = await withPushOperationTimeout(
+    requestNotificationPermission(),
+    'UnifiedPush notification permission request',
+    NATIVE_PERMISSION_TIMEOUT_MS,
+  );
   if (permission !== 'granted') {
     // Keep the subscription active even when display permission is declined:
     // queued data messages can still refresh the app when it is opened.
     console.info('[push] Android notification permission was not granted');
   }
 
-  await initializeUnifiedPushListeners();
-  const state = await getUnifiedPushState();
+  await withPushOperationTimeout(initializeUnifiedPushListeners(), 'UnifiedPush listener setup');
+  const state = await withPushOperationTimeout(getUnifiedPushState(), 'UnifiedPush state check');
   let registered = false;
 
   if (state?.subscription) {
     registered = await registerUnifiedPushSubscription(state.subscription);
   }
 
-  const queuedMessages = await drainUnifiedPushMessages();
+  const queuedMessages = await withPushOperationTimeout(
+    drainUnifiedPushMessages(),
+    'UnifiedPush queued-message retrieval',
+  );
   for (const message of queuedMessages) {
     dispatchPushPayload({ data: message.payload }, false, message.displayedBySystem === true);
   }
 
   try {
-    await registerUnifiedPush();
+    await withPushOperationTimeout(registerUnifiedPush(), 'UnifiedPush registration');
   } catch (error) {
     const reason = String(error?.message || error);
     if (reason.includes('distributor_selection_required')) {
@@ -400,6 +482,7 @@ async function initializeAndroidPush() {
     try {
       if (await initializeUnifiedPush()) return true;
     } catch (error) {
+      if (isPushOperationTimeout(error)) throw error;
       console.info('[push] Preferred UnifiedPush unavailable; trying FCM:', error);
     }
 
@@ -409,6 +492,7 @@ async function initializeAndroidPush() {
   try {
     if (await initializeAndroidFcmPush()) return true;
   } catch (error) {
+    if (isPushOperationTimeout(error)) throw error;
     console.info('[push] FCM unavailable; trying UnifiedPush:', error);
   }
 
@@ -416,16 +500,18 @@ async function initializeAndroidPush() {
 }
 
 async function initializePushNotifications() {
-  await removeNativeListeners();
-  await removeUnifiedPushListeners();
-
-  const platform = getMobilePlatform();
-  if (!platform) {
-    console.warn('[push] Unable to determine mobile platform');
-    return false;
-  }
+  lastInitializationFailureCode = null;
 
   try {
+    await withPushOperationTimeout(removeNativeListeners(), 'Native push listener cleanup');
+    await withPushOperationTimeout(removeUnifiedPushListeners(), 'UnifiedPush listener cleanup');
+
+    const platform = getMobilePlatform();
+    if (!platform) {
+      console.warn('[push] Unable to determine mobile platform');
+      return false;
+    }
+
     const initializedNative =
       platform === 'ios' ? await initializeIosPush() : await initializeAndroidPush();
     if (initializedNative) {
@@ -435,6 +521,7 @@ async function initializePushNotifications() {
       return true;
     }
   } catch (error) {
+    if (isPushOperationTimeout(error)) lastInitializationFailureCode = 'registration-timeout';
     console.warn('[push] Native push initialization failed:', error);
   }
 
@@ -477,8 +564,8 @@ export async function cleanupPushNotifications() {
   const pendingInitialization = initializationPromise;
   if (pendingInitialization) await pendingInitialization.catch(() => {});
 
-  await removeNativeListeners();
-  await removeUnifiedPushListeners();
+  await withPushOperationTimeout(removeNativeListeners(), 'Native push listener cleanup');
+  await withPushOperationTimeout(removeUnifiedPushListeners(), 'UnifiedPush listener cleanup');
 
   const registrationId = Local.get(REGISTRATION_ID_STORAGE_KEY);
   const serverRegistrationRemoved = registrationId
@@ -487,7 +574,7 @@ export async function cleanupPushNotifications() {
 
   if (activeNativeProvider === 'unified-push') {
     try {
-      await unregisterUnifiedPush();
+      await withPushOperationTimeout(unregisterUnifiedPush(), 'UnifiedPush deregistration');
     } catch (error) {
       console.warn('[push] UnifiedPush distributor cleanup failed:', error);
     }
@@ -550,7 +637,11 @@ export async function getPushNotificationStatus() {
 
   if (status.platform === 'android' && isUnifiedPushSupported()) {
     try {
-      status.unifiedPush = await getUnifiedPushState();
+      status.unifiedPush = await withPushOperationTimeout(
+        getUnifiedPushState(),
+        'UnifiedPush state check',
+        NATIVE_STATUS_TIMEOUT_MS,
+      );
     } catch {
       status.unifiedPush = null;
     }
@@ -622,6 +713,7 @@ function getManagementGuardCode(status) {
 }
 
 function getRegistrationFailureCode(status) {
+  if (lastInitializationFailureCode) return lastInitializationFailureCode;
   if (status.health === 'needs-distributor') return 'distributor-required';
   if (status.provider !== 'unified-push' && status.permission === 'not-granted') {
     return 'permission-denied';
@@ -758,8 +850,12 @@ export function getAndroidPushProviderPreference() {
 export async function selectUnifiedPushDistributor() {
   if (!isUnifiedPushSupported()) return false;
   await cleanupPushNotifications();
-  await initializeUnifiedPushListeners();
-  await pickUnifiedPushDistributor();
+  await withPushOperationTimeout(initializeUnifiedPushListeners(), 'UnifiedPush listener setup');
+  await withPushOperationTimeout(
+    pickUnifiedPushDistributor(),
+    'UnifiedPush distributor selection',
+    NATIVE_PERMISSION_TIMEOUT_MS,
+  );
   Local.set(ANDROID_PREFERRED_PROVIDER_KEY, 'unified-push');
   activeNativeProvider = 'unified-push';
   notifyPushStatusChanged();
@@ -775,7 +871,11 @@ export async function selectFcmPushProvider() {
 }
 
 export async function getUnifiedPushProviderState() {
-  return getUnifiedPushState();
+  return withPushOperationTimeout(
+    getUnifiedPushState(),
+    'UnifiedPush state check',
+    NATIVE_STATUS_TIMEOUT_MS,
+  );
 }
 
 /**

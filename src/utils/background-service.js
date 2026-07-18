@@ -47,8 +47,16 @@ import { isTauri, isTauriDesktop, isTauriMobile, getPlatform } from './platform.
 // ── Constants ──────────────────────────────────────────────────────────────
 
 const PUSH_TOKEN_ENDPOINT = 'https://api.forwardemail.net/v1/push-tokens';
+const PUSH_TOKEN_REQUEST_TIMEOUT_MS = 15_000;
 const RESUME_DEBOUNCE_MS = 500;
 const TOKEN_MAX_LENGTH = 4096;
+
+function fetchPushTokenEndpoint(url, options) {
+  return fetch(url, {
+    ...options,
+    signal: AbortSignal.timeout(PUSH_TOKEN_REQUEST_TIMEOUT_MS),
+  });
+}
 
 // ── State ──────────────────────────────────────────────────────────────────
 
@@ -111,7 +119,7 @@ export async function registerPushToken(token, platform) {
 
   try {
     const authorization = getAuthHeader({ allowApiKey: false, required: true });
-    const response = await fetch(PUSH_TOKEN_ENDPOINT, {
+    const response = await fetchPushTokenEndpoint(PUSH_TOKEN_ENDPOINT, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -155,7 +163,7 @@ export async function registerPushToken(token, platform) {
 export async function listPushTokens() {
   try {
     const authorization = getAuthHeader({ allowApiKey: false, required: true });
-    const response = await fetch(PUSH_TOKEN_ENDPOINT, {
+    const response = await fetchPushTokenEndpoint(PUSH_TOKEN_ENDPOINT, {
       method: 'GET',
       headers: {
         Authorization: authorization,
@@ -191,12 +199,15 @@ export async function unregisterPushToken(registrationId = pushRegistrationId) {
 
   try {
     const authorization = getAuthHeader({ allowApiKey: false, required: true });
-    const response = await fetch(`${PUSH_TOKEN_ENDPOINT}/${encodeURIComponent(registrationId)}`, {
-      method: 'DELETE',
-      headers: {
-        Authorization: authorization,
+    const response = await fetchPushTokenEndpoint(
+      `${PUSH_TOKEN_ENDPOINT}/${encodeURIComponent(registrationId)}`,
+      {
+        method: 'DELETE',
+        headers: {
+          Authorization: authorization,
+        },
       },
-    });
+    );
 
     if (!response.ok && response.status !== 404) {
       console.warn('[background-service] Token deletion failed:', response.status);
