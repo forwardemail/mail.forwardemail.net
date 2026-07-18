@@ -51,6 +51,27 @@ describe('release screenshot workflow', () => {
     expect(screenshotScript).not.toContain('pnpm screenshots:readme -- [options]');
   });
 
+  it('formats generated README Markdown before validation and commit', () => {
+    const generationIndex = screenshotWorkflow.indexOf('pnpm screenshots:readme "${args[@]}"');
+    const formattingIndex = screenshotWorkflow.indexOf('pnpm exec prettier README.md --write');
+    const validationIndex = screenshotWorkflow.indexOf(
+      '- name: Validate the complete README screenshot set',
+    );
+    const changeDetectionIndex = screenshotWorkflow.indexOf(
+      'git status --porcelain -- README.md docs/screenshots',
+    );
+    const stagingIndex = screenshotWorkflow.indexOf('git add README.md docs/screenshots');
+
+    expect(screenshotWorkflow).toContain(
+      '- name: Format generated README Markdown\n        if: ${{ !inputs.dry_run }}',
+    );
+    expect(generationIndex).toBeGreaterThanOrEqual(0);
+    expect(formattingIndex).toBeGreaterThan(generationIndex);
+    expect(validationIndex).toBeGreaterThan(formattingIndex);
+    expect(changeDetectionIndex).toBeGreaterThan(formattingIndex);
+    expect(stagingIndex).toBeGreaterThan(changeDetectionIndex);
+  });
+
   it('does not publish screenshots as Actions or GitHub Release assets', () => {
     expect(screenshotWorkflow).not.toContain('actions/upload-artifact');
     expect(screenshotWorkflow).not.toContain('gh release');

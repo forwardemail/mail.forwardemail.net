@@ -145,6 +145,42 @@ export async function registerPushToken(token, platform) {
 }
 
 /**
+ * List the active push-token resources owned by the authenticated alias.
+ *
+ * A null result means the server could not be checked. An empty array means
+ * the authenticated alias has no active registrations.
+ *
+ * @returns {Promise<Array<object>|null>}
+ */
+export async function listPushTokens() {
+  try {
+    const authorization = getAuthHeader({ allowApiKey: false, required: true });
+    const response = await fetch(PUSH_TOKEN_ENDPOINT, {
+      method: 'GET',
+      headers: {
+        Authorization: authorization,
+      },
+    });
+
+    if (!response.ok) {
+      console.warn('[background-service] Token listing failed:', response.status);
+      return null;
+    }
+
+    const registrations = await response.json();
+    if (!Array.isArray(registrations)) {
+      console.warn('[background-service] Token listing returned an invalid response');
+      return null;
+    }
+
+    return registrations;
+  } catch (err) {
+    console.warn('[background-service] Token listing error:', err);
+    return null;
+  }
+}
+
+/**
  * Unregister a push-token resource from the server.
  *
  * @param {string|null} registrationId - ID returned by POST /v1/push-tokens

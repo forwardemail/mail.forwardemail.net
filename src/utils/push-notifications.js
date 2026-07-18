@@ -8,9 +8,10 @@
  * notifications through notification-manager.js.
  */
 
+import { isDemoMode } from './demo-mode.js';
 import { isTauriMobile } from './platform.js';
 import { Local } from './storage';
-import { registerPushToken, unregisterPushToken } from './background-service.js';
+import { listPushTokens, registerPushToken, unregisterPushToken } from './background-service.js';
 import { requestPermission as requestNotificationPermission } from './notification-bridge.js';
 import {
   drainUnifiedPushMessages,
@@ -32,8 +33,11 @@ const ANDROID_PREFERRED_PROVIDER_KEY = 'push_notification_preferred_provider';
 const ANDROID_PROVIDER = (import.meta.env.VITE_ANDROID_PUSH_PROVIDER || 'auto').toLowerCase();
 
 let initialized = false;
+let initializationPromise = null;
 let activeNativeProvider = null;
 let nativeListenerCleanups = [];
+let managementPromise = null;
+const pushStatusListeners = new Set();
 
 function getMobilePlatform() {
   const userAgent = navigator.userAgent.toLowerCase();
@@ -44,6 +48,123 @@ function getMobilePlatform() {
 
 function isValidNativeToken(token) {
   return typeof token === 'string' && token.length >= 16 && token.length <= 4096;
+}
+
+function normalizePushProvider(platform) {
+  if (platform === 'ios' || platform === 'apns') return 'apns';
+  if (platform === 'android' || platform === 'fcm') return 'fcm';
+  if (platform === 'unified-push') return 'unified-push';
+  return null;
+}
+
+function getPushProviderLabel(provider) {
+  if (provider === 'apns') return 'Apple Push Notification Service';
+  if (provider === 'fcm') return 'Firebase Cloud Messaging';
+  if (provider === 'unified-push') return 'UnifiedPush';
+  return 'Not selected';
+}
+
+function notifyPushStatusChanged() {
+  for (const listener of pushStatusListeners) {
+    try {
+      listener();
+    } catch {
+      // A Settings subscriber must not interrupt native push processing.
+    }
+  }
+}
+
+export function subscribePushStatus(listener) {
+  if (typeof listener !== 'function') return () => {};
+  pushStatusListeners.add(listener);
+  return () => pushStatusListeners.delete(listener);
+}
+
+function normalizePushTokenForComparison(provider, token) {
+  if (typeof token !== 'string') return '';
+  return provider === 'apns' ? token.toLowerCase() : token;
+}
+
+async function getTokenFingerprint(provider, token) {
+  const normalizedToken = normalizePushTokenForComparison(provider, token);
+  if (!normalizedToken || typeof TextEncoder === 'undefined' || !globalThis.crypto?.subtle) {
+    return null;
+  }
+
+  try {
+    const input = new TextEncoder().encode(`${provider || 'unknown'}:${normalizedToken}`);
+    const digest = await globalThis.crypto.subtle.digest('SHA-256', input);
+    const prefix = [...new Uint8Array(digest)]
+      .slice(0, 4)
+      .map((byte) => byte.toString(16).padStart(2, '0'))
+      .join('')
+      .toUpperCase();
+    return `${prefix.slice(0, 4)}-${prefix.slice(4)}`;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeIsoDate(value) {
+  if (typeof value !== 'string' || !value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+async function sanitizePushRegistration(record, localRegistrationId, localProvider, localToken) {
+  if (!record || typeof record !== 'object') return null;
+
+  const id = typeof record.id === 'string' ? record.id.trim() : '';
+  const provider = normalizePushProvider(record.platform);
+  const token = typeof record.token === 'string' ? record.token : '';
+  if (!id || !provider || !token) return null;
+
+  const isCurrentDevice =
+    id === localRegistrationId ||
+    (provider === localProvider &&
+      normalizePushTokenForComparison(provider, token) ===
+        normalizePushTokenForComparison(localProvider, localToken));
+  const failureCount = Number(record.failure_count);
+
+  return {
+    id,
+    platform: provider,
+    providerLabel: getPushProviderLabel(provider),
+    deviceName:
+      typeof record.device_name === 'string' && record.device_name.trim()
+        ? record.device_name.trim().slice(0, 255)
+        : 'Unnamed device',
+    tokenFingerprint: (await getTokenFingerprint(provider, token)) || 'Unavailable',
+    lastUsedAt: normalizeIsoDate(record.last_used_at),
+    failureCount: Number.isFinite(failureCount) && failureCount > 0 ? Math.floor(failureCount) : 0,
+    expiresAt: normalizeIsoDate(record.expires_at),
+    createdAt: normalizeIsoDate(record.created_at),
+    updatedAt: normalizeIsoDate(record.updated_at),
+    isCurrentDevice,
+  };
+}
+
+function getCurrentPushProvider() {
+  const storedProvider = normalizePushProvider(Local.get(TOKEN_PLATFORM_KEY));
+  if (storedProvider) return storedProvider;
+  if (activeNativeProvider) return activeNativeProvider;
+
+  const platform = getMobilePlatform();
+  if (platform === 'ios') return 'apns';
+  if (platform !== 'android') return null;
+  if (ANDROID_PROVIDER === 'fcm' || ANDROID_PROVIDER === 'unified-push') return ANDROID_PROVIDER;
+  return getAndroidPushProviderPreference();
+}
+
+async function getNotificationPermissionStatus() {
+  if (!isTauriMobile) return 'unsupported';
+
+  try {
+    const { isPermissionGranted } = await import('@tauri-apps/plugin-notification');
+    return (await isPermissionGranted()) ? 'granted' : 'not-granted';
+  } catch {
+    return 'unknown';
+  }
 }
 
 function dispatchPushPayload(notification, tapped = false, displayedBySystem = false) {
@@ -85,6 +206,7 @@ async function replaceServerRegistration(token, platform) {
     await unregisterPushToken(previousRegistrationId);
   }
 
+  notifyPushStatusChanged();
   return true;
 }
 
@@ -212,6 +334,7 @@ async function initializeUnifiedPushListeners() {
       Local.remove(REGISTRATION_ID_STORAGE_KEY);
       initialized = false;
       activeNativeProvider = null;
+      notifyPushStatusChanged();
     },
     onTemporaryUnavailable: () => {
       console.info('[push] UnifiedPush distributor is temporarily unavailable');
@@ -292,14 +415,9 @@ async function initializeAndroidPush() {
   return initializeUnifiedPush();
 }
 
-/**
- * Initialize remote push for the active mobile account.
- *
- * @returns {Promise<boolean>} true when APNs or FCM registered
- */
-export async function initPushNotifications() {
-  if (!isTauriMobile) return false;
-  if (initialized) return true;
+async function initializePushNotifications() {
+  await removeNativeListeners();
+  await removeUnifiedPushListeners();
 
   const platform = getMobilePlatform();
   if (!platform) {
@@ -324,15 +442,48 @@ export async function initPushNotifications() {
 }
 
 /**
+ * Initialize remote push for the active mobile account.
+ * Concurrent lifecycle triggers share one native registration attempt.
+ *
+ * @returns {Promise<boolean>} true when APNs, FCM, or UnifiedPush registered
+ */
+export async function initPushNotifications() {
+  if (!isTauriMobile) return false;
+  if (initialized) return true;
+  if (initializationPromise) return initializationPromise;
+
+  initializationPromise = initializePushNotifications();
+  try {
+    return await initializationPromise;
+  } finally {
+    initializationPromise = null;
+  }
+}
+
+/**
+ * Synchronize remote push when a real alias-authenticated mobile account is active.
+ * Safe to invoke after login, during bootstrap, and whenever the app resumes.
+ */
+export async function syncPushNotifications() {
+  if (!isTauriMobile || isDemoMode() || !Local.get('alias_auth')) return false;
+  return initPushNotifications();
+}
+
+/**
  * Remove provider listeners and the active account's server registration.
  * Must run before sign-out clears credentials.
  */
 export async function cleanupPushNotifications() {
+  const pendingInitialization = initializationPromise;
+  if (pendingInitialization) await pendingInitialization.catch(() => {});
+
   await removeNativeListeners();
   await removeUnifiedPushListeners();
 
   const registrationId = Local.get(REGISTRATION_ID_STORAGE_KEY);
-  if (registrationId) await unregisterPushToken(registrationId);
+  const serverRegistrationRemoved = registrationId
+    ? await unregisterPushToken(registrationId)
+    : true;
 
   if (activeNativeProvider === 'unified-push') {
     try {
@@ -347,6 +498,242 @@ export async function cleanupPushNotifications() {
   Local.remove(REGISTRATION_ID_STORAGE_KEY);
   initialized = false;
   activeNativeProvider = null;
+  notifyPushStatusChanged();
+  return serverRegistrationRemoved;
+}
+
+function createBasePushStatus() {
+  const platform = getMobilePlatform();
+  const supported = isTauriMobile && (platform === 'ios' || platform === 'android');
+  const authenticated = Boolean(Local.get('alias_auth'));
+  const demo = isDemoMode();
+  const provider = supported ? getCurrentPushProvider() : null;
+
+  return {
+    supported,
+    authenticated,
+    demo,
+    platform: supported ? platform : null,
+    provider,
+    providerLabel: getPushProviderLabel(provider),
+    androidProviderMode: supported && platform === 'android' ? ANDROID_PROVIDER : null,
+    providerPreference:
+      supported && platform === 'android' ? getAndroidPushProviderPreference() : null,
+    permission: supported ? 'unknown' : 'unsupported',
+    initialized,
+    localTokenPresent: false,
+    localTokenFingerprint: null,
+    serverReachable: false,
+    currentRegistration: null,
+    otherRegistrations: [],
+    unifiedPush: null,
+    health: 'unsupported',
+  };
+}
+
+/**
+ * Return a side-effect-free, privacy-preserving push status snapshot for Settings.
+ * This function never requests permission or starts native registration.
+ */
+export async function getPushNotificationStatus() {
+  const status = createBasePushStatus();
+  if (!status.supported) return status;
+
+  const localToken = Local.get(TOKEN_STORAGE_KEY);
+  const localRegistrationId = Local.get(REGISTRATION_ID_STORAGE_KEY);
+  const localProvider = normalizePushProvider(Local.get(TOKEN_PLATFORM_KEY)) || status.provider;
+  status.localTokenPresent = typeof localToken === 'string' && Boolean(localToken);
+  status.localTokenFingerprint = status.localTokenPresent
+    ? await getTokenFingerprint(localProvider, localToken)
+    : null;
+  status.permission = await getNotificationPermissionStatus();
+
+  if (status.platform === 'android' && isUnifiedPushSupported()) {
+    try {
+      status.unifiedPush = await getUnifiedPushState();
+    } catch {
+      status.unifiedPush = null;
+    }
+  }
+
+  if (!status.authenticated || status.demo) {
+    status.health = 'not-registered';
+    return status;
+  }
+
+  const serverRecords = await listPushTokens();
+  if (!serverRecords) {
+    status.health = 'server-unavailable';
+    return status;
+  }
+
+  status.serverReachable = true;
+  const registrations = (
+    await Promise.all(
+      serverRecords.map((record) =>
+        sanitizePushRegistration(record, localRegistrationId, localProvider, localToken),
+      ),
+    )
+  ).filter(Boolean);
+  status.currentRegistration =
+    registrations.find((registration) => registration.isCurrentDevice) || null;
+  status.otherRegistrations = registrations.filter(
+    (registration) => registration.id !== status.currentRegistration?.id,
+  );
+
+  if (
+    status.provider === 'unified-push' &&
+    (!status.unifiedPush?.distributor || status.unifiedPush?.selectionRequired)
+  ) {
+    status.health = 'needs-distributor';
+  } else if (status.provider !== 'unified-push' && status.permission === 'not-granted') {
+    status.health = 'permission-not-granted';
+  } else if (
+    status.currentRegistration &&
+    status.localTokenPresent &&
+    status.currentRegistration.failureCount < 3
+  ) {
+    status.health = 'active';
+  } else if (status.currentRegistration || status.localTokenPresent || initialized) {
+    status.health = 'needs-repair';
+  } else {
+    status.health = 'not-registered';
+  }
+
+  return status;
+}
+
+function runPushManagement(operation) {
+  if (managementPromise) return managementPromise;
+
+  managementPromise = Promise.resolve()
+    .then(operation)
+    .finally(() => {
+      managementPromise = null;
+    });
+  return managementPromise;
+}
+
+function getManagementGuardCode(status) {
+  if (!status.supported) return 'unsupported';
+  if (!status.authenticated) return 'authentication-required';
+  if (status.demo) return 'demo-mode';
+  return null;
+}
+
+function getRegistrationFailureCode(status) {
+  if (status.health === 'needs-distributor') return 'distributor-required';
+  if (status.provider !== 'unified-push' && status.permission === 'not-granted') {
+    return 'permission-denied';
+  }
+
+  if (!status.serverReachable) return 'server-unavailable';
+  return 'registration-failed';
+}
+
+async function removeCurrentPushRegistration(initialStatus) {
+  const localRegistrationId = Local.get(REGISTRATION_ID_STORAGE_KEY);
+  let removed = await cleanupPushNotifications();
+  const matchedRegistrationId = initialStatus.currentRegistration?.id;
+
+  if (matchedRegistrationId && matchedRegistrationId !== localRegistrationId) {
+    removed = (await unregisterPushToken(matchedRegistrationId)) && removed;
+  }
+
+  return removed;
+}
+
+export function registerCurrentDevicePush() {
+  return runPushManagement(async () => {
+    const initialStatus = await getPushNotificationStatus();
+    const guardCode = getManagementGuardCode(initialStatus);
+    if (guardCode) return { ok: false, code: guardCode, status: initialStatus };
+
+    await syncPushNotifications();
+    const status = await getPushNotificationStatus();
+    const ok = status.health === 'active';
+    return {
+      ok,
+      code: ok ? 'registered' : getRegistrationFailureCode(status),
+      status,
+    };
+  });
+}
+
+export function deregisterCurrentDevicePush() {
+  return runPushManagement(async () => {
+    const initialStatus = await getPushNotificationStatus();
+    const guardCode = getManagementGuardCode(initialStatus);
+    if (guardCode) return { ok: false, code: guardCode, status: initialStatus };
+
+    const removed = await removeCurrentPushRegistration(initialStatus);
+    const status = await getPushNotificationStatus();
+    const ok = removed && status.serverReachable && !status.currentRegistration;
+    return {
+      ok,
+      code: ok
+        ? 'deregistered'
+        : status.serverReachable
+          ? 'deregistration-failed'
+          : 'server-unavailable',
+      status,
+    };
+  });
+}
+
+export function reregisterCurrentDevicePush() {
+  return runPushManagement(async () => {
+    const initialStatus = await getPushNotificationStatus();
+    const guardCode = getManagementGuardCode(initialStatus);
+    if (guardCode) return { ok: false, code: guardCode, status: initialStatus };
+
+    if (!(await removeCurrentPushRegistration(initialStatus))) {
+      const status = await getPushNotificationStatus();
+      return { ok: false, code: 'deregistration-failed', status };
+    }
+
+    await syncPushNotifications();
+    const status = await getPushNotificationStatus();
+    const ok = status.health === 'active';
+    return {
+      ok,
+      code: ok ? 'reregistered' : getRegistrationFailureCode(status),
+      status,
+    };
+  });
+}
+
+export function removePushRegistration(registrationId) {
+  return runPushManagement(async () => {
+    const initialStatus = await getPushNotificationStatus();
+    const guardCode = getManagementGuardCode(initialStatus);
+    if (guardCode) return { ok: false, code: guardCode, status: initialStatus };
+
+    const id = typeof registrationId === 'string' ? registrationId.trim() : '';
+    if (!id) return { ok: false, code: 'deregistration-failed', status: initialStatus };
+
+    const isCurrentRegistration =
+      id === Local.get(REGISTRATION_ID_STORAGE_KEY) || id === initialStatus.currentRegistration?.id;
+    const removed = isCurrentRegistration
+      ? await removeCurrentPushRegistration(initialStatus)
+      : await unregisterPushToken(id);
+    if (removed) notifyPushStatusChanged();
+
+    const status = await getPushNotificationStatus();
+    const registrationStillExists =
+      status.currentRegistration?.id === id ||
+      status.otherRegistrations.some((registration) => registration.id === id);
+    const ok = removed && status.serverReachable && !registrationStillExists;
+    return {
+      ok,
+      code: ok
+        ? 'removed'
+        : status.serverReachable
+          ? 'deregistration-failed'
+          : 'server-unavailable',
+      status,
+    };
+  });
 }
 
 export function getStoredPushToken() {
@@ -375,6 +762,7 @@ export async function selectUnifiedPushDistributor() {
   await pickUnifiedPushDistributor();
   Local.set(ANDROID_PREFERRED_PROVIDER_KEY, 'unified-push');
   activeNativeProvider = 'unified-push';
+  notifyPushStatusChanged();
   return true;
 }
 
@@ -382,6 +770,7 @@ export async function selectFcmPushProvider() {
   if (!isUnifiedPushSupported()) return false;
   Local.remove(ANDROID_PREFERRED_PROVIDER_KEY);
   await cleanupPushNotifications();
+  notifyPushStatusChanged();
   return initPushNotifications();
 }
 

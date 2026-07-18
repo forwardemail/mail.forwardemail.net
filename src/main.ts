@@ -413,6 +413,16 @@ setNotificationToasts(toasts);
 viewModel.toasts = toasts;
 viewModel.mailboxView.toasts = toasts;
 
+const syncPushForActiveAccount = () => {
+  if (!isTauriMobile) return;
+
+  import('./utils/push-notifications.js')
+    .then(({ syncPushNotifications }) => syncPushNotifications())
+    .catch((error) => {
+      console.warn('[main] Push notification sync failed:', error);
+    });
+};
+
 const loginRoot = document.querySelector('#login-root');
 const loginWrapper = document.querySelector('.fe-login-shell');
 if (loginRoot) {
@@ -421,6 +431,7 @@ if (loginRoot) {
     props: {
       onSuccess(path = '/mailbox') {
         mailboxActions.resetSessionState?.();
+        syncPushForActiveAccount();
         if (viewModel.navigate) {
           // Replace the login history entry so users cannot swipe back to it
           viewModel.navigate(path, { replace: true });
@@ -2574,19 +2585,12 @@ async function bootstrap() {
           onResume(() => {
             processMutationQueue();
             import('./utils/sync-controller.js').then(({ resumeSync }) => resumeSync());
+            syncPushForActiveAccount();
             globalThis.dispatchEvent(new CustomEvent('fe:force-reconnect'));
           });
         }
       });
-      // The push-token API is alias-scoped. Initialize only when alias Basic
-      // credentials identify the active alias unambiguously.
-      if (isTauriMobile && Local.get('alias_auth')) {
-        import('./utils/push-notifications.js').then(({ initPushNotifications }) => {
-          initPushNotifications().catch((error) => {
-            console.warn('[main] Push notification init failed:', error);
-          });
-        });
-      }
+      syncPushForActiveAccount();
     }
 
     if (canUseServiceWorker() && import.meta.env.PROD) {

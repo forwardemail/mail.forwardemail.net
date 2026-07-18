@@ -42,7 +42,7 @@
   import Download from '@lucide/svelte/icons/download';
   import ChevronDown from '@lucide/svelte/icons/chevron-down';
   import ExternalLink from '@lucide/svelte/icons/external-link';
-  import { isTauri, isTauriDesktop } from '../utils/platform.js';
+  import { isTauri, isTauriDesktop, isTauriMobile } from '../utils/platform.js';
   import { openExternalUrl, supportsExternalBrowserOverride } from '../utils/external-links.js';
 
   const openExternal = async (url: string) => {
@@ -109,6 +109,7 @@
   import { LABEL_PALETTE, pickLabelColor as pickLabelColorFromPalette } from '../utils/labels.js';
   import FeedbackModal from './FeedbackModal.svelte';
   import LabelModal from './components/LabelModal.svelte';
+  import PushNotificationSettings from './components/PushNotificationSettings.svelte';
 
   interface ToastApi {
     show?: (message: string, type?: string) => void;
@@ -215,20 +216,6 @@
   >([]);
   const isMac =
     typeof navigator !== 'undefined' && navigator.platform.toUpperCase().includes('MAC');
-  const isTauriAndroid =
-    isTauri &&
-    typeof navigator !== 'undefined' &&
-    navigator.userAgent.toLowerCase().includes('android');
-  let unifiedPushState = $state<{
-    availableDistributors: string[];
-    distributor: string | null;
-    selectionRequired: boolean;
-    subscription: { endpoint: string } | null;
-  } | null>(null);
-  let androidPushProvider = $state<'fcm' | 'unified-push'>('fcm');
-  let unifiedPushLoading = $state(false);
-  let unifiedPushError = $state('');
-
   const buildAvailableFolders = (
     list: { path?: string; name?: string; fullName?: string; fullname?: string }[] = [],
   ) => {
@@ -576,59 +563,10 @@
 
   let subscriptions: Unsubscriber[] = [];
 
-  const refreshUnifiedPushState = async () => {
-    if (!isTauriAndroid) return;
-    unifiedPushLoading = true;
-    try {
-      const { getAndroidPushProviderPreference, getUnifiedPushProviderState } =
-        await import('../utils/push-notifications.js');
-      androidPushProvider = getAndroidPushProviderPreference();
-      unifiedPushState = await getUnifiedPushProviderState();
-      unifiedPushError = '';
-    } catch (err) {
-      unifiedPushError = err instanceof Error ? err.message : String(err);
-    } finally {
-      unifiedPushLoading = false;
-    }
-  };
-
-  const chooseUnifiedPushDistributor = async () => {
-    unifiedPushLoading = true;
-    unifiedPushError = '';
-    try {
-      const { selectUnifiedPushDistributor } = await import('../utils/push-notifications.js');
-      await selectUnifiedPushDistributor();
-      toasts?.show?.('UnifiedPush distributor selected. Registration is completing.', 'success');
-      await refreshUnifiedPushState();
-    } catch (err) {
-      unifiedPushError = err instanceof Error ? err.message : String(err);
-      toasts?.show?.('Unable to select a UnifiedPush distributor.', 'error');
-    } finally {
-      unifiedPushLoading = false;
-    }
-  };
-
-  const chooseFcmPushProvider = async () => {
-    unifiedPushLoading = true;
-    unifiedPushError = '';
-    try {
-      const { selectFcmPushProvider } = await import('../utils/push-notifications.js');
-      if (!(await selectFcmPushProvider())) throw new Error('fcm_unavailable');
-      toasts?.show?.('Firebase Cloud Messaging selected.', 'success');
-      await refreshUnifiedPushState();
-    } catch (err) {
-      unifiedPushError = err instanceof Error ? err.message : String(err);
-      toasts?.show?.('Unable to switch to Firebase Cloud Messaging.', 'error');
-    } finally {
-      unifiedPushLoading = false;
-    }
-  };
-
   onMount(() => {
     loadFromStorage();
     loadShortcuts();
     loadDatabaseInfo();
-    if (isTauriAndroid) void refreshUnifiedPushState();
 
     const hash = window.location.hash?.slice(1) || '';
     if (hash === 'security' || hash === 'accounts') {
@@ -1838,76 +1776,8 @@
           </Card.Content>
         </Card.Root>
 
-        {#if isTauriAndroid}
-          <Card.Root>
-            <Card.Header>
-              <Card.Title>Android push provider</Card.Title>
-              <Card.Description>
-                Use Firebase Cloud Messaging or choose a UnifiedPush distributor without Google Play
-                Services. Your explicit provider choice persists across restarts.
-              </Card.Description>
-            </Card.Header>
-            <Card.Content class="space-y-3">
-              {#if unifiedPushLoading && !unifiedPushState}
-                <p class="text-sm text-muted-foreground">Checking UnifiedPush distributors…</p>
-              {:else}
-                <div class="text-sm">
-                  <div>
-                    Preferred provider:
-                    <strong>{androidPushProvider === 'unified-push' ? 'UnifiedPush' : 'FCM'}</strong
-                    >
-                  </div>
-                  <div>
-                    Selected distributor:
-                    <strong>{unifiedPushState?.distributor || 'None'}</strong>
-                  </div>
-                  <div class="text-muted-foreground">
-                    {unifiedPushState?.availableDistributors?.length || 0} compatible distributor(s) installed.
-                  </div>
-                  <div class="text-muted-foreground">
-                    Server registration:
-                    {unifiedPushState?.subscription ? 'active' : 'not active'}
-                  </div>
-                </div>
-              {/if}
-
-              {#if unifiedPushError}
-                <Alert.Root variant="destructive">
-                  <AlertCircle class="h-4 w-4" />
-                  <Alert.Description>{unifiedPushError}</Alert.Description>
-                </Alert.Root>
-              {/if}
-
-              <div class="flex flex-wrap gap-2">
-                <Button
-                  variant="outline"
-                  onclick={chooseUnifiedPushDistributor}
-                  disabled={unifiedPushLoading}
-                >
-                  {unifiedPushLoading ? 'Working…' : 'Choose UnifiedPush distributor'}
-                </Button>
-                <Button
-                  variant="outline"
-                  onclick={chooseFcmPushProvider}
-                  disabled={unifiedPushLoading || androidPushProvider === 'fcm'}
-                >
-                  Use Firebase Cloud Messaging
-                </Button>
-                <Button
-                  variant="ghost"
-                  onclick={() => openExternal('https://unifiedpush.org/users/distributors/')}
-                >
-                  <ExternalLink class="mr-2 h-4 w-4" />
-                  Find a distributor
-                </Button>
-              </div>
-              <p class="text-xs text-muted-foreground">
-                UnifiedPush uses standards-based, VAPID-authenticated Web Push payloads. Selecting a
-                distributor safely unregisters the previous provider before future notifications use
-                your new choice.
-              </p>
-            </Card.Content>
-          </Card.Root>
+        {#if isTauriMobile}
+          <PushNotificationSettings {toasts} {openExternal} />
         {/if}
 
         <!-- In-app account deletion (App Store 5.1.1(v) / Google Play). Distinct

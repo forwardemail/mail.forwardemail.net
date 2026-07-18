@@ -1961,10 +1961,10 @@ const performAccountSwitch = async (email) => {
   // above and load() -> syncSettings() will refresh from network in the background.
   await load();
 
-  if (isTauriMobile && Local.get('alias_auth')) {
+  if (isTauriMobile) {
     try {
-      const { initPushNotifications } = await import('../utils/push-notifications.js');
-      await initPushNotifications();
+      const { syncPushNotifications } = await import('../utils/push-notifications.js');
+      await syncPushNotifications();
     } catch (err) {
       warn('Failed to register push for the active account', err);
     }

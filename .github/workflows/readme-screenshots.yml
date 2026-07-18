@@ -84,6 +84,10 @@ jobs:
           fi
           pnpm screenshots:readme "${args[@]}"
 
+      - name: Format generated README Markdown
+        if: ${{ !inputs.dry_run }}
+        run: pnpm exec prettier README.md --write
+
       - name: Validate the complete README screenshot set
         run: |
           set -euo pipefail
