@@ -35,8 +35,7 @@ const TAURI_BARE_MODULES = [
 ];
 
 // Matches top-level static import statements (not dynamic import())
-const STATIC_IMPORT_RE =
-  /^import\s+(?:[\s\S]*?\s+from\s+)?['"]([^'"]+)['"]/gm;
+const STATIC_IMPORT_RE = /^import\s+(?:[\s\S]*?\s+from\s+)?['"]([^'"]+)['"]/gm;
 
 function getStaticImports(filePath) {
   const content = fs.readFileSync(filePath, 'utf8');
@@ -106,9 +105,7 @@ describe('static import graph from web entry points', () => {
     const content = fs.readFileSync(filePath, 'utf8');
 
     // Must NOT have a static import of @tauri-apps/api/core
-    expect(content).not.toMatch(
-      /^import\s+.*from\s+['"]@tauri-apps\/api\/core['"]/m,
-    );
+    expect(content).not.toMatch(/^import\s+.*from\s+['"]@tauri-apps\/api\/core['"]/m);
 
     // MUST have a dynamic import of @tauri-apps/api/core
     expect(content).toMatch(/import\(['"]@tauri-apps\/api\/core['"]\)/);
