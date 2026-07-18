@@ -1,5 +1,3 @@
-import { addPluginListener, invoke } from '@tauri-apps/api/core';
-
 import { config } from '../config.js';
 import { isTauriMobile } from './platform.js';
 
@@ -10,6 +8,15 @@ const P256_PUBLIC_KEY_PATTERN = /^B[A-Za-z0-9_-]{86}$/;
 const AUTH_SECRET_PATTERN = /^[A-Za-z0-9_-]{22}$/;
 
 let listenerCleanups = [];
+let tauriCorePromise = null;
+
+// Loaded lazily so this module can sit in the web entry graph. A top-level
+// import of @tauri-apps/api/core is external in web builds and crashes the
+// page with an unresolvable bare module specifier.
+function getTauriCore() {
+  tauriCorePromise ||= import('@tauri-apps/api/core');
+  return tauriCorePromise;
+}
 
 export function isUnifiedPushSupported() {
   return (
@@ -46,7 +53,8 @@ export function serializeUnifiedPushSubscription(subscription) {
   });
 }
 
-function invokeUnifiedPush(command, args = {}) {
+async function invokeUnifiedPush(command, args = {}) {
+  const { invoke } = await getTauriCore();
   return invoke(`plugin:${PLUGIN_NAME}|${command}`, args);
 }
 
@@ -108,6 +116,7 @@ export async function listenForUnifiedPush({
   if (!isUnifiedPushSupported()) return false;
   await removeUnifiedPushListeners();
 
+  const { addPluginListener } = await getTauriCore();
   const registrations = await Promise.all([
     addPluginListener(PLUGIN_NAME, 'subscription-changed', (event) => {
       if (event?.instance === INSTANCE) onSubscription?.(event.subscription);

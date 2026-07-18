@@ -15,6 +15,11 @@ import { mount } from 'svelte';
 import Compose from './svelte/Compose.svelte';
 import { createToastHost } from './svelte/toastsHost';
 import { getEffectiveSettingValue } from './stores/settingsStore';
+import { installPasteNormalizer } from './utils/paste-normalizer';
+
+// Undo WebKit's percent-encoded uri-list paste for text copied out of the
+// editor. See paste-normalizer.ts for details.
+installPasteNormalizer();
 
 // Block <input type="file"> — WebKit's runOpenPanel crashes Tauri on macOS.
 // File picking uses Tauri's dialog plugin instead (see file-picker.ts).

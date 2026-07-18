@@ -74,6 +74,7 @@ import { setDemoToasts } from './utils/demo-mode';
 import { setNotificationToasts } from './utils/notification-manager';
 import { bindExternalLinkInterceptor } from './utils/external-links.js';
 import { bindEdgeSwipeBack } from './utils/mobile-edge-swipe';
+import { installPasteNormalizer } from './utils/paste-normalizer';
 // Database initialization with recovery support
 import {
   initializeDatabase,
@@ -1101,6 +1102,12 @@ bindEdgeSwipeBack({
 });
 
 viewModel.pgpPassphraseModal = passphraseApi;
+
+// WebKit synthesizes a percent-encoded text/uri-list clipboard entry from
+// JS-written copies that look like "scheme:value" text. Without this, copying
+// "foo: bar" from the compose body and pasting into the subject inserts
+// "foo:%20bar". See paste-normalizer.ts for details.
+installPasteNormalizer();
 
 // Block <input type="file"> clicks on Tauri desktop — WebKit's runOpenPanel
 // delegate panics in WKWebView, crashing the app. All file picking is handled
