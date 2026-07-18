@@ -231,7 +231,7 @@ const createMailboxStore = () => {
         try {
           const res = await Remote.request(
             'MessageList',
-            { folder: sentFolder, limit: 200 },
+            { folder: sentFolder, limit: 200, lightweight: true },
             { method: 'GET', pathOverride: '/v1/messages' },
           );
           const items = Array.isArray(res) ? res : res?.data || res?.messages || [];

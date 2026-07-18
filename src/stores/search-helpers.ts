@@ -34,6 +34,7 @@ interface ServerSearchParams {
   page?: number;
   raw?: boolean;
   attachments?: boolean;
+  lightweight?: boolean;
 }
 
 /**
@@ -52,6 +53,8 @@ export const buildServerSearchParams = (
     page: 1,
     raw: false,
     attachments: false,
+    // Skip expensive MIME rebuild — search results only need metadata
+    lightweight: true,
   };
 
   // Free-text goes to the general `search` parameter which searches

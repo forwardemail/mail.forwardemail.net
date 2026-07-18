@@ -25,6 +25,7 @@ describe('buildServerSearchParams', () => {
     expect(buildServerSearchParams('hello', makeFilters(), null, 50)).toEqual({
       limit: 50,
       page: 1,
+      lightweight: true,
       raw: false,
       attachments: false,
       search: 'hello',

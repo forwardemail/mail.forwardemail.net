@@ -385,6 +385,9 @@
     url.searchParams.set('folder', folder);
     url.searchParams.set('page', page);
     url.searchParams.set('limit', limit);
+    // Use lightweight mode to skip expensive MIME rebuild + attachment fetching.
+    // Bodies are fetched separately in the fetchBodiesForMessages() pass.
+    url.searchParams.set('lightweight', 'true');
     return fetchJson(url.toString(), headers);
   };
 

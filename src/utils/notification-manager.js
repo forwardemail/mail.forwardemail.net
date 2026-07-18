@@ -642,7 +642,7 @@ async function handleNewMessage(data, { suppressVisual = false } = {}) {
     try {
       const res = await Remote.request(
         'MessageList',
-        { folder: mailbox, page: 1, limit: 1 },
+        { folder: mailbox, page: 1, limit: 1, lightweight: true },
         { method: 'GET', pathOverride: '/v1/messages' },
       );
       const list = res?.Result?.List || res?.Result || res || [];

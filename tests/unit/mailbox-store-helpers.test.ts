@@ -539,6 +539,7 @@ describe('buildMessageListParams', () => {
       folder: 'INBOX',
       page: 1,
       limit: 50,
+      lightweight: true,
       raw: false,
       attachments: false,
     });

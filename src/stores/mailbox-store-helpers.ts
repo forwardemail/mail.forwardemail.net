@@ -374,6 +374,9 @@ export const buildMessageListParams = ({
   limit,
   raw: false,
   attachments: false,
+  // Use lightweight mode to skip expensive MIME rebuild + attachment fetching
+  // on the server. Bodies/snippets are fetched on-demand when a message is opened.
+  lightweight: true,
   ...(query ? { search: query } : {}),
   ...(unreadOnly ? { is_unread: true } : {}),
   ...(hasAttachmentsOnly ? { has_attachments: true } : {}),
