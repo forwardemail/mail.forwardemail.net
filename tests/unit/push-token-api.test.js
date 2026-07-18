@@ -47,6 +47,7 @@ describe('push-token API', () => {
     expect(url).toBe('https://api.forwardemail.net/v1/push-tokens');
     expect(request).toMatchObject({
       method: 'POST',
+      signal: expect.any(AbortSignal),
       headers: {
         Authorization: 'Basic alias-credentials',
         'Content-Type': 'application/json',
@@ -75,12 +76,16 @@ describe('push-token API', () => {
     await expect(listPushTokens()).resolves.toEqual(registrations);
 
     expect(getAuthHeaderMock).toHaveBeenCalledWith({ allowApiKey: false, required: true });
-    expect(fetchMock).toHaveBeenCalledWith('https://api.forwardemail.net/v1/push-tokens', {
-      method: 'GET',
-      headers: {
-        Authorization: 'Basic alias-credentials',
-      },
-    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://api.forwardemail.net/v1/push-tokens',
+      expect.objectContaining({
+        method: 'GET',
+        headers: {
+          Authorization: 'Basic alias-credentials',
+        },
+        signal: expect.any(AbortSignal),
+      }),
+    );
   });
 
   it.each([
@@ -111,12 +116,13 @@ describe('push-token API', () => {
     expect(getAuthHeaderMock).toHaveBeenCalledWith({ allowApiKey: false, required: true });
     expect(fetchMock).toHaveBeenCalledWith(
       'https://api.forwardemail.net/v1/push-tokens/registration%2Fwith%20spaces',
-      {
+      expect.objectContaining({
         method: 'DELETE',
         headers: {
           Authorization: 'Basic alias-credentials',
         },
-      },
+        signal: expect.any(AbortSignal),
+      }),
     );
   });
 

@@ -17,6 +17,17 @@ const enableAnalyzer = process.env.ANALYZE === 'true';
 // they're available in the packaged app. For web builds they stay
 // external (dynamic imports fall back to no-ops).
 const isTauriBuild = Boolean(process.env.TAURI_ENV_PLATFORM);
+const WEB_EXTERNAL_TAURI_MODULES = [
+  '@tauri-apps/api/core',
+  '@tauri-apps/api/event',
+  '@tauri-apps/api/window',
+  '@tauri-apps/plugin-notification',
+  '@tauri-apps/plugin-updater',
+  '@tauri-apps/plugin-os',
+  '@tauri-apps/plugin-deep-link',
+  '@tauri-apps/plugin-process',
+  'tauri-plugin-remote-push-api',
+];
 
 // Generate build hash for version tracking
 const BUILD_HASH = createHash('md5')
@@ -90,6 +101,47 @@ function libsodiumResolverPlugin() {
         return LIBSODIUM_CORE_ESM;
       }
       return null;
+    },
+  };
+}
+
+function rejectStaticTauriWebImportsPlugin() {
+  return {
+    name: 'reject-static-tauri-web-imports',
+    generateBundle(_options, bundle) {
+      if (isTauriBuild) return;
+
+      const chunks = new Map(
+        Object.values(bundle)
+          .filter((output) => output.type === 'chunk')
+          .map((output) => [output.fileName, output]),
+      );
+      const visited = new Set();
+
+      const visitStaticImports = (chunk) => {
+        if (visited.has(chunk.fileName)) return;
+        visited.add(chunk.fileName);
+
+        const staticTauriImports = chunk.imports.filter((specifier) =>
+          WEB_EXTERNAL_TAURI_MODULES.includes(specifier),
+        );
+        if (staticTauriImports.length > 0) {
+          this.error(
+            `Web entry graph chunk ${chunk.fileName} statically imports external Tauri modules: ${staticTauriImports.join(
+              ', ',
+            )}. Use a platform-guarded dynamic import instead.`,
+          );
+        }
+
+        for (const specifier of chunk.imports) {
+          const importedChunk = chunks.get(specifier);
+          if (importedChunk) visitStaticImports(importedChunk);
+        }
+      };
+
+      for (const chunk of chunks.values()) {
+        if (chunk.isEntry) visitStaticImports(chunk);
+      }
     },
   };
 }
@@ -171,17 +223,7 @@ export default defineConfig({
       ...(isTauriBuild
         ? {}
         : {
-            external: [
-              '@tauri-apps/api/core',
-              '@tauri-apps/api/event',
-              '@tauri-apps/api/window',
-              '@tauri-apps/plugin-notification',
-              '@tauri-apps/plugin-updater',
-              '@tauri-apps/plugin-os',
-              '@tauri-apps/plugin-deep-link',
-              '@tauri-apps/plugin-process',
-              'tauri-plugin-remote-push-api',
-            ],
+            external: WEB_EXTERNAL_TAURI_MODULES,
           }),
       input: {
         main: './index.html',
@@ -208,6 +250,7 @@ export default defineConfig({
   },
   plugins: [
     libsodiumResolverPlugin(),
+    rejectStaticTauriWebImportsPlugin(),
     // Tauri injects IPC bootstrap scripts into the webview and adds the
     // correct nonces/hashes to the CSP configured in tauri.conf.json.
     // However, it does NOT modify CSP <meta> tags in the HTML.  If both

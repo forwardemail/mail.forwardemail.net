@@ -2,7 +2,10 @@ const {
   apnsGetTokenMock,
   apnsPermissionMock,
   fcmGetTokenMock,
+  fcmNotificationReceivedMock,
+  fcmNotificationTappedMock,
   fcmPermissionMock,
+  fcmTokenRefreshMock,
   isDemoModeMock,
   isPermissionGrantedMock,
   isUnifiedPushSupportedMock,
@@ -15,7 +18,10 @@ const {
   apnsGetTokenMock: vi.fn(),
   apnsPermissionMock: vi.fn(),
   fcmGetTokenMock: vi.fn(),
+  fcmNotificationReceivedMock: vi.fn(),
+  fcmNotificationTappedMock: vi.fn(),
   fcmPermissionMock: vi.fn(),
+  fcmTokenRefreshMock: vi.fn(),
   isDemoModeMock: vi.fn(),
   isPermissionGrantedMock: vi.fn(),
   isUnifiedPushSupportedMock: vi.fn(),
@@ -71,9 +77,9 @@ vi.mock('../../src/utils/unified-push.js', () => ({
 
 vi.mock('tauri-plugin-remote-push-api', () => ({
   getToken: fcmGetTokenMock,
-  onNotificationReceived: vi.fn().mockResolvedValue({ unregister: vi.fn() }),
-  onNotificationTapped: vi.fn().mockResolvedValue({ unregister: vi.fn() }),
-  onTokenRefresh: vi.fn().mockResolvedValue({ unregister: vi.fn() }),
+  onNotificationReceived: fcmNotificationReceivedMock,
+  onNotificationTapped: fcmNotificationTappedMock,
+  onTokenRefresh: fcmTokenRefreshMock,
   requestPermission: fcmPermissionMock,
 }));
 
@@ -145,8 +151,11 @@ describe('push notification status and management', () => {
     unifiedPushStateMock.mockResolvedValue({});
     apnsPermissionMock.mockResolvedValue({ granted: true });
     apnsGetTokenMock.mockResolvedValue(APNS_TOKEN);
-    fcmPermissionMock.mockResolvedValue({ granted: true });
+    fcmPermissionMock.mockResolvedValue(undefined);
     fcmGetTokenMock.mockResolvedValue(FCM_TOKEN);
+    fcmNotificationReceivedMock.mockResolvedValue({ unregister: vi.fn() });
+    fcmNotificationTappedMock.mockResolvedValue({ unregister: vi.fn() });
+    fcmTokenRefreshMock.mockResolvedValue({ unregister: vi.fn() });
     listServerMock.mockResolvedValue([]);
     registerServerMock.mockResolvedValue('registration-1');
     unregisterServerMock.mockResolvedValue(true);
@@ -296,16 +305,86 @@ describe('push notification status and management', () => {
     expect(registerServerMock).toHaveBeenCalledWith(FCM_TOKEN, 'android');
   });
 
+  it('accepts the Android bridge void permission result and wrapped token without listener commands', async () => {
+    localStore.set('alias_auth', ALIAS_AUTH);
+    fcmGetTokenMock.mockResolvedValue({ token: FCM_TOKEN });
+    fcmNotificationReceivedMock.mockRejectedValue(new Error('command not found'));
+    fcmNotificationTappedMock.mockRejectedValue(new Error('command not found'));
+    fcmTokenRefreshMock.mockRejectedValue(new Error('command not found'));
+    listServerMock
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([createRegistration({ id: 'registration-new' })]);
+    registerServerMock.mockResolvedValue('registration-new');
+    const { registerCurrentDevicePush } = await import('../../src/utils/push-notifications.js');
+
+    const result = await registerCurrentDevicePush();
+
+    expect(result).toMatchObject({ ok: true, code: 'registered' });
+    expect(registerServerMock).toHaveBeenCalledWith(FCM_TOKEN, 'android');
+  });
+
   it('returns permission-denied when native registration remains unavailable', async () => {
     localStore.set('alias_auth', ALIAS_AUTH);
     isPermissionGrantedMock.mockResolvedValue(false);
-    fcmPermissionMock.mockResolvedValue({ granted: false });
     const { registerCurrentDevicePush } = await import('../../src/utils/push-notifications.js');
 
     const result = await registerCurrentDevicePush();
 
     expect(result).toMatchObject({ ok: false, code: 'permission-denied' });
     expect(registerServerMock).not.toHaveBeenCalled();
+  });
+
+  it('bounds an unresponsive UnifiedPush status probe before FCM registration', async () => {
+    vi.useFakeTimers();
+    localStore.set('alias_auth', ALIAS_AUTH);
+    isUnifiedPushSupportedMock.mockReturnValue(true);
+    unifiedPushStateMock.mockImplementationOnce(() => new Promise(() => {}));
+    listServerMock
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([createRegistration({ id: 'registration-new' })]);
+    registerServerMock.mockResolvedValue('registration-new');
+    const { registerCurrentDevicePush } = await import('../../src/utils/push-notifications.js');
+
+    try {
+      const registration = registerCurrentDevicePush();
+      await vi.waitFor(() => expect(unifiedPushStateMock).toHaveBeenCalledOnce());
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      await expect(registration).resolves.toMatchObject({ ok: true, code: 'registered' });
+      expect(fcmPermissionMock).toHaveBeenCalledOnce();
+      expect(registerServerMock).toHaveBeenCalledWith(FCM_TOKEN, 'android');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('times out an unresponsive native token request and allows a successful retry', async () => {
+    vi.useFakeTimers();
+    localStore.set('alias_auth', ALIAS_AUTH);
+    fcmGetTokenMock.mockImplementationOnce(() => new Promise(() => {}));
+    listServerMock
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([createRegistration({ id: 'registration-new' })]);
+    registerServerMock.mockResolvedValue('registration-new');
+    const { registerCurrentDevicePush } = await import('../../src/utils/push-notifications.js');
+
+    try {
+      const first = registerCurrentDevicePush();
+      await vi.waitFor(() => expect(fcmGetTokenMock).toHaveBeenCalledOnce());
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      await expect(first).resolves.toMatchObject({ ok: false, code: 'registration-timeout' });
+      expect(registerServerMock).not.toHaveBeenCalled();
+
+      const retry = await registerCurrentDevicePush();
+      expect(retry).toMatchObject({ ok: true, code: 'registered' });
+      expect(fcmGetTokenMock).toHaveBeenCalledTimes(2);
+      expect(registerServerMock).toHaveBeenCalledWith(FCM_TOKEN, 'android');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('deregisters the current device locally and through the owned server resource', async () => {

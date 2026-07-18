@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   buildScreenshotGallery,
+  isIgnorableScreenshotRuntimeError,
   replaceScreenshotGallery,
 } from '../../scripts/update-readme-screenshots.mjs';
 import { buildTableOfContents, updateTableOfContents } from '../../scripts/update-readme-toc.mjs';
@@ -37,6 +38,28 @@ describe('README screenshot automation', () => {
     expect(gallery).toContain('docs/screenshots/mobile/login-light.jpg');
     expect(gallery).toContain('**Screenshots as of July 14, 2026.**');
     expect(gallery).not.toContain('### Screenshots as of');
+  });
+
+  it('ignores only the expected sandboxed message-frame service-worker exception', () => {
+    expect(
+      isIgnorableScreenshotRuntimeError(
+        new Error(
+          "Failed to read the 'serviceWorker' property from 'Navigator': Service worker is disabled because the context is sandboxed and lacks the 'allow-same-origin' flag.",
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      isIgnorableScreenshotRuntimeError(
+        new Error(
+          "Failed to read the 'localStorage' property from 'Window': The document is sandboxed and lacks the 'allow-same-origin' flag.",
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      isIgnorableScreenshotRuntimeError(
+        new TypeError('Failed to resolve module specifier "@tauri-apps/api/core".'),
+      ),
+    ).toBe(false);
   });
 
   it('replaces only the generated screenshot marker block', () => {
