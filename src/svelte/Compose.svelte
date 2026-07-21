@@ -88,6 +88,7 @@
     deleteDraft,
     listDrafts,
     createAutosaveTimer,
+    draftHasContent,
   } from '../utils/draft-service';
   import { shouldShowAttachmentReminder } from '../utils/attachment-reminder';
   import { isOnline as checkIsOnline } from '../utils/network-status';
@@ -1213,11 +1214,43 @@
     );
   };
 
+  // Called when a save request comes in for a draft with nothing in it, for
+  // example the user typed something and then deleted it all before closing.
+  // Instead of persisting a blank draft, remove anything saved earlier so no
+  // empty draft lingers in the Drafts folder.
+  const discardEmptyDraft = async () => {
+    const msgIdToDelete = sourceMessageId;
+    const serverIdToDelete = currentDraftServerId;
+    if (currentDraftId) {
+      try {
+        await deleteDraft(currentDraftId);
+      } catch {
+        // Ignore deletion errors
+      }
+    }
+    await deleteSourceMessage(msgIdToDelete);
+    if (serverIdToDelete && serverIdToDelete !== msgIdToDelete) {
+      await deleteSourceMessage(serverIdToDelete);
+    }
+    currentDraftId = null;
+    currentDraftServerId = null;
+    currentDraftSyncedAt = null;
+    sourceMessageId = null;
+    lastSavedAt = null;
+    draftStatus = 'idle';
+    draftStatusDetail = '';
+    draftDirty = false;
+  };
+
   const saveCurrentDraft = async () => {
+    const data = getDraftData();
+    if (!draftHasContent(data)) {
+      await discardEmptyDraft();
+      return;
+    }
     draftStatus = 'saving';
     draftStatusDetail = '';
     try {
-      const data = getDraftData();
       const saved = await saveDraft(data, { sync: true });
       currentDraftId = saved.id;
       currentDraftServerId = saved.serverId || currentDraftServerId;

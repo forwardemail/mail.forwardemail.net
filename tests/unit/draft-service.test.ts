@@ -62,6 +62,7 @@ import {
   clearDrafts,
   syncPendingDrafts,
   createAutosaveTimer,
+  draftHasContent,
 } from '../../src/utils/draft-service.js';
 
 beforeEach(() => {
@@ -165,6 +166,36 @@ describe('list/delete/clear', () => {
   });
 });
 
+describe('draftHasContent', () => {
+  it('treats a blank draft as empty', () => {
+    expect(draftHasContent({ to: [], cc: [], bcc: [], subject: '', body: '' })).toBe(false);
+  });
+
+  it('treats empty rich-text markup as empty', () => {
+    // TipTap reports an empty document as wrapper markup, not an empty string.
+    for (const body of ['<p></p>', '<p><br></p>', '<p>&nbsp;</p>', '<p> </p><p></p>']) {
+      expect(draftHasContent({ to: [], subject: '', body, isPlainText: false })).toBe(false);
+    }
+  });
+
+  it('counts real body text, even inside markup', () => {
+    expect(draftHasContent({ to: [], subject: '', body: '<p>hi</p>' })).toBe(true);
+    expect(draftHasContent({ to: [], subject: '', body: 'hi', isPlainText: true })).toBe(true);
+  });
+
+  it('counts an image-only rich body as content', () => {
+    expect(draftHasContent({ to: [], subject: '', body: '<p><img src="x.png"></p>' })).toBe(true);
+  });
+
+  it('counts recipients, subject, or attachments alone as content', () => {
+    expect(draftHasContent({ to: ['a@b.com'], subject: '', body: '' })).toBe(true);
+    expect(draftHasContent({ to: [], subject: 'Hi', body: '' })).toBe(true);
+    expect(draftHasContent({ to: [], subject: '', body: '', attachments: [{ name: 'f' }] })).toBe(
+      true,
+    );
+  });
+});
+
 describe('createAutosaveTimer', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
@@ -175,6 +206,31 @@ describe('createAutosaveTimer', () => {
     t.markDirty();
     await vi.advanceTimersByTimeAsync(3000);
     expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it('does not save a rich-text body that is only empty markup', async () => {
+    // Typing a character and deleting it leaves "<p></p>" in the body, which
+    // used to slip past the emptiness check and persist a blank draft.
+    const onSave = vi.fn();
+    const t = createAutosaveTimer(
+      () => ({ to: [], subject: '', body: '<p></p>', isPlainText: false }),
+      { onSave },
+    );
+    t.markDirty();
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it('saves an attachment-only draft', async () => {
+    h.online = false;
+    const onSave = vi.fn();
+    const t = createAutosaveTimer(
+      () => ({ to: [], subject: '', body: '', attachments: [{ name: 'f.txt', size: 1 }] }),
+      { onSave },
+    );
+    t.markDirty();
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(onSave).toHaveBeenCalledTimes(1);
   });
 
   it('saves once after the debounce window when content is meaningful', async () => {

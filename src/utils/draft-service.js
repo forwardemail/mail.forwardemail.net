@@ -170,17 +170,37 @@ function computeHash(data) {
 }
 
 /**
+ * Check if a draft body has any real content. Rich text bodies are HTML from
+ * the editor, so an empty document still arrives as markup like "<p></p>".
+ * Strip tags and non-breaking spaces before checking, but treat embedded
+ * media as content since an image-only body is a real draft.
+ * @param {string} body - Draft body
+ * @param {boolean} isPlainText - Whether the body is plain text
+ * @returns {boolean} True if the body has content
+ */
+function bodyHasContent(body, isPlainText) {
+  if (!body || !body.trim()) return false;
+  if (isPlainText) return true;
+  if (/<(img|video|audio)\b/i.test(body)) return true;
+  return !!body
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&(nbsp|#160);/gi, ' ')
+    .trim();
+}
+
+/**
  * Check if draft has meaningful content worth saving
  * @param {Object} data - Draft data
  * @returns {boolean} True if draft has content
  */
-function hasMeaningfulContent(data) {
+export function draftHasContent(data) {
   return !!(
     (data.to && data.to.length > 0) ||
     (data.cc && data.cc.length > 0) ||
     (data.bcc && data.bcc.length > 0) ||
     (data.subject && data.subject.trim()) ||
-    (data.body && data.body.trim())
+    (data.attachments && data.attachments.length > 0) ||
+    bodyHasContent(data.body, data.isPlainText)
   );
 }
 
@@ -276,7 +296,7 @@ export function createAutosaveTimer(getDraftData, handlers = {}) {
       const hash = computeHash(data);
 
       // Only save if content changed and there's actual content
-      if (hash !== lastSaveHash && hasMeaningfulContent(data)) {
+      if (hash !== lastSaveHash && draftHasContent(data)) {
         onStart?.();
         lastSaveHash = hash;
         dirty = false;
