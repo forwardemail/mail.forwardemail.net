@@ -2031,18 +2031,28 @@
     const fallback = nextCandidate();
 
     const releaseReaderHold = isProductivityLayout && fallback ? holdReaderTransition() : null;
-    const result = await deleteMessages([msg]);
-    if (result?.blocked) {
+    if (isDemoMode()) {
+      // Demo mutations are preflighted by the store and can be blocked, so
+      // keep the current message until the delete is confirmed.
+      const result = await deleteMessages([msg]);
+      if (!result?.blocked && fallback) {
+        if ($threadingEnabled) selectConversation(fallback);
+        else selectMessage(fallback);
+      }
       releaseReaderHold?.();
       return;
     }
-
-    // Select the next message
-    if (fallback) {
-      if ($threadingEnabled) selectConversation(fallback);
-      else selectMessage(fallback);
+    try {
+      // Select the next message immediately, same as archive, so the reader
+      // moves on while the delete syncs in the background.
+      if (fallback) {
+        if ($threadingEnabled) selectConversation(fallback);
+        else selectMessage(fallback);
+      }
+      await deleteMessages([msg]);
+    } finally {
+      releaseReaderHold?.();
     }
-    releaseReaderHold?.();
   };
 
   const markNotSpam = async () => {
@@ -3593,7 +3603,11 @@
         const result = await mailboxStore.actions.bulkDeleteMessages(targets);
         if (result?.blocked) return result;
         const { failed } = result;
-        await reloadMessages();
+        // Reconcile with the server in the background, matching archive.
+        // Deleted ids are held out of incoming responses by the pending
+        // delete tracker, so the reload cannot resurrect them. Awaiting a
+        // full list reload here kept the delete on the critical path.
+        void reloadMessages();
         // Remote.request already surfaces the actionable demo warning. Avoid
         // replacing it immediately with a generic failure toast: the toast host
         // intentionally displays only one item at a time.
