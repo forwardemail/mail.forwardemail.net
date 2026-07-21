@@ -395,4 +395,22 @@ describe('push notification status and management', () => {
     expect(registerServerMock).toHaveBeenCalledOnce();
     expect(listServerMock).toHaveBeenCalledTimes(2);
   });
+
+  it('returns registration-timeout when native token retrieval hangs', async () => {
+    localStore.set('alias_auth', ALIAS_AUTH);
+    fcmGetTokenMock.mockImplementationOnce(
+      () => new Promise(() => {}), // never resolves
+    );
+    listServerMock.mockResolvedValueOnce([]);
+    const { registerCurrentDevicePush } = await import('../../src/utils/push-notifications.js');
+
+    vi.useFakeTimers();
+    const resultPromise = registerCurrentDevicePush();
+    await vi.advanceTimersByTimeAsync(15_000);
+    const result = await resultPromise;
+    vi.useRealTimers();
+
+    expect(result.ok).toBe(false);
+    expect(result.code).toBe('registration-timeout');
+  });
 });

@@ -116,4 +116,19 @@ describe('static import graph from web entry points', () => {
     const content = fs.readFileSync(filePath, 'utf8');
     expect(content).toContain('rejectStaticTauriWebImportsPlugin');
   });
+
+  it('vite.config.js must include stubTauriModulesPlugin for defense-in-depth', () => {
+    const filePath = path.join(ROOT, 'vite.config.js');
+    const content = fs.readFileSync(filePath, 'utf8');
+    expect(content).toContain('stubTauriModulesPlugin');
+  });
+
+  it('vite.config.js must NOT use rollupOptions.external for Tauri modules', () => {
+    const filePath = path.join(ROOT, 'vite.config.js');
+    const content = fs.readFileSync(filePath, 'utf8');
+    // The external approach leaves bare specifiers in the output which crash browsers.
+    // The stubTauriModulesPlugin resolves them to empty stubs instead.
+    const externalBlock = content.match(/rollupOptions[\s\S]*?external\s*:/)?.[0] || '';
+    expect(externalBlock).not.toContain('@tauri-apps');
+  });
 });

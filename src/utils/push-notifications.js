@@ -26,6 +26,23 @@ import {
   unregisterUnifiedPush,
 } from './unified-push.js';
 
+// Timeout for native push operations (permission, token retrieval, listeners).
+// If a native bridge call hangs (common on Android when Google Play Services is
+// unavailable), the UI should recover gracefully instead of freezing.
+const NATIVE_PUSH_TIMEOUT_MS = 15_000;
+
+function withTimeout(promise, ms, operation = 'Operation') {
+  let timeoutId;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(new Error(`${operation} timed out after ${ms}ms`));
+    }, ms);
+  });
+  return Promise.race([promise, timeoutPromise]).finally(() => {
+    clearTimeout(timeoutId);
+  });
+}
+
 const TOKEN_STORAGE_KEY = 'push_notification_token';
 const TOKEN_PLATFORM_KEY = 'push_notification_platform';
 const REGISTRATION_ID_STORAGE_KEY = 'push_notification_registration_id';
@@ -211,7 +228,7 @@ async function replaceServerRegistration(token, platform) {
 }
 
 async function registerNativeToken(getToken, platform) {
-  const token = await getToken();
+  const token = await withTimeout(getToken(), NATIVE_PUSH_TIMEOUT_MS, 'getToken');
   if (!isValidNativeToken(token)) {
     console.warn('[push] Native push provider returned an invalid token');
     return false;
@@ -229,7 +246,11 @@ async function initializeIosPush() {
     requestPermission,
   } = await import('tauri-plugin-mobile-push-api');
 
-  const permission = await requestPermission();
+  const permission = await withTimeout(
+    requestPermission(),
+    NATIVE_PUSH_TIMEOUT_MS,
+    'iOS requestPermission',
+  );
   if (!permission?.granted) {
     console.info('[push] iOS notification permission was not granted');
     return false;
@@ -269,7 +290,11 @@ async function initializeAndroidFcmPush() {
     requestPermission,
   } = await import('tauri-plugin-remote-push-api');
 
-  const permission = await requestPermission();
+  const permission = await withTimeout(
+    requestPermission(),
+    NATIVE_PUSH_TIMEOUT_MS,
+    'Android requestPermission',
+  );
   if (!permission?.granted) {
     console.info('[push] Android notification permission was not granted');
     return false;
@@ -435,7 +460,11 @@ async function initializePushNotifications() {
       return true;
     }
   } catch (error) {
-    console.warn('[push] Native push initialization failed:', error);
+    const isTimeout = error?.message?.includes('timed out');
+    console.warn(`[push] Native push initialization ${isTimeout ? 'timed out' : 'failed'}:`, error);
+    // Re-throw timeouts so callers (e.g. registerCurrentDevicePush) can surface
+    // a specific 'registration-timeout' code to the UI for retry guidance.
+    if (isTimeout) throw error;
   }
 
   return false;
@@ -649,7 +678,17 @@ export function registerCurrentDevicePush() {
     const guardCode = getManagementGuardCode(initialStatus);
     if (guardCode) return { ok: false, code: guardCode, status: initialStatus };
 
-    await syncPushNotifications();
+    try {
+      await syncPushNotifications();
+    } catch (error) {
+      if (error?.message?.includes('timed out')) {
+        const status = await getPushNotificationStatus();
+        return { ok: false, code: 'registration-timeout', status };
+      }
+
+      throw error;
+    }
+
     const status = await getPushNotificationStatus();
     const ok = status.health === 'active';
     return {
@@ -692,7 +731,17 @@ export function reregisterCurrentDevicePush() {
       return { ok: false, code: 'deregistration-failed', status };
     }
 
-    await syncPushNotifications();
+    try {
+      await syncPushNotifications();
+    } catch (error) {
+      if (error?.message?.includes('timed out')) {
+        const status = await getPushNotificationStatus();
+        return { ok: false, code: 'registration-timeout', status };
+      }
+
+      throw error;
+    }
+
     const status = await getPushNotificationStatus();
     const ok = status.health === 'active';
     return {

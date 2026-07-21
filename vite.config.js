@@ -14,8 +14,10 @@ const enableAnalyzer = process.env.ANALYZE === 'true';
 
 // Tauri sets TAURI_ENV_PLATFORM during `tauri build` / `tauri dev`.
 // When building for Tauri, @tauri-apps/* packages must be bundled so
-// they're available in the packaged app. For web builds they stay
-// external (dynamic imports fall back to no-ops).
+// they're available in the packaged app. For web builds the
+// stubTauriModulesPlugin resolves them to empty no-op stubs so that no
+// bare module specifiers ever appear in the output (which would crash
+// browsers with "Failed to resolve module specifier").
 const isTauriBuild = Boolean(process.env.TAURI_ENV_PLATFORM);
 const WEB_EXTERNAL_TAURI_MODULES = [
   '@tauri-apps/api/core',
@@ -101,6 +103,57 @@ function libsodiumResolverPlugin() {
         return LIBSODIUM_CORE_ESM;
       }
       return null;
+    },
+  };
+}
+
+// Resolves @tauri-apps/* and tauri-plugin-* bare modules to empty stub
+// modules in web builds. This is the primary defense against the blank-page
+// crash — even if a developer accidentally adds a static import, the browser
+// will never see a bare specifier it cannot resolve.
+function stubTauriModulesPlugin() {
+  const STUB_PREFIX = '\0tauri-stub:';
+  return {
+    name: 'stub-tauri-modules-for-web',
+    enforce: 'pre',
+    resolveId(source) {
+      if (isTauriBuild) return null;
+      if (
+        WEB_EXTERNAL_TAURI_MODULES.includes(source) ||
+        WEB_EXTERNAL_TAURI_MODULES.some((m) => source.startsWith(m + '/'))
+      ) {
+        return STUB_PREFIX + source;
+      }
+      return null;
+    },
+    load(id) {
+      if (!id.startsWith(STUB_PREFIX)) return null;
+      // Return an empty module that exports common symbols as no-ops.
+      // Named exports are auto-discovered by Rollup from the import sites,
+      // but we provide the most common ones explicitly to avoid warnings.
+      return [
+        'export const invoke = async () => {};',
+        'export const addPluginListener = async () => ({ remove: () => {} });',
+        'export const listen = async () => () => {};',
+        'export const emit = async () => {};',
+        'export const emitTo = async () => {};',
+        'export const getCurrentWindow = () => ({ listen: async () => () => {}, onCloseRequested: async () => () => {} });',
+        'export const Resource = class {};',
+        'export const Channel = class {};',
+        'export class BaseDirectory {}',
+        'export const join = async (...args) => args.join("/");',
+        'export const appDir = async () => "/";',
+        'export const isPermissionGranted = async () => false;',
+        'export const sendNotification = () => {};',
+        'export const requestPermission = async () => "denied";',
+        'export const check = async () => null;',
+        'export const relaunch = async () => {};',
+        'export const arch = async () => "unknown";',
+        'export const platform = async () => "web";',
+        'export const onOpenUrl = async () => () => {};',
+        'export const exit = async () => {};',
+        'export default {};',
+      ].join('\n');
     },
   };
 }
@@ -216,15 +269,10 @@ export default defineConfig({
     emptyOutDir: true,
     sourcemap: false,
     rollupOptions: {
-      // Tauri APIs are only available in the Tauri runtime; exclude from web builds.
-      // Dynamic imports in the code already guard against calling them on web.
-      // When building for Tauri (TAURI_ENV_PLATFORM is set), these must be
-      // bundled so they resolve in the packaged webview.
-      ...(isTauriBuild
-        ? {}
-        : {
-            external: WEB_EXTERNAL_TAURI_MODULES,
-          }),
+      // NOTE: Do NOT use `external: WEB_EXTERNAL_TAURI_MODULES` here.
+      // That approach leaves bare module specifiers in the output which
+      // browsers cannot resolve, causing a blank page. Instead,
+      // stubTauriModulesPlugin resolves them to inline no-op stubs.
       input: {
         main: './index.html',
         compose: './compose.html',
@@ -250,6 +298,7 @@ export default defineConfig({
   },
   plugins: [
     libsodiumResolverPlugin(),
+    stubTauriModulesPlugin(),
     rejectStaticTauriWebImportsPlugin(),
     // Tauri injects IPC bootstrap scripts into the webview and adds the
     // correct nonces/hashes to the CSP configured in tauri.conf.json.
