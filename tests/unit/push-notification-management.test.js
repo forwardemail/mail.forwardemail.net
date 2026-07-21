@@ -405,12 +405,48 @@ describe('push notification status and management', () => {
     const { registerCurrentDevicePush } = await import('../../src/utils/push-notifications.js');
 
     vi.useFakeTimers();
-    const resultPromise = registerCurrentDevicePush();
-    await vi.advanceTimersByTimeAsync(15_000);
-    const result = await resultPromise;
-    vi.useRealTimers();
+    try {
+      const resultPromise = registerCurrentDevicePush();
+      await vi.advanceTimersByTimeAsync(15_000);
+      const result = await resultPromise;
 
-    expect(result.ok).toBe(false);
-    expect(result.code).toBe('registration-timeout');
+      expect(result.ok).toBe(false);
+      expect(result.code).toBe('registration-timeout');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not time out a permission prompt the user answers slowly', async () => {
+    localStore.set('alias_auth', ALIAS_AUTH);
+    // The user takes 90 seconds to answer the system dialog. That is past the
+    // 15s bridge timeout but within the permission prompt budget, so
+    // registration must still succeed.
+    let grantPermission;
+    fcmPermissionMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          grantPermission = () => resolve({ granted: true });
+        }),
+    );
+    listServerMock
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([createRegistration({ id: 'registration-new' })]);
+    registerServerMock.mockResolvedValue('registration-new');
+    const { registerCurrentDevicePush } = await import('../../src/utils/push-notifications.js');
+
+    vi.useFakeTimers();
+    try {
+      const resultPromise = registerCurrentDevicePush();
+      await vi.advanceTimersByTimeAsync(90_000);
+      grantPermission();
+      await vi.runAllTimersAsync();
+      const result = await resultPromise;
+
+      expect(result.ok).toBe(true);
+      expect(result.code).toBe('registered');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

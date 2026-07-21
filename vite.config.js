@@ -128,16 +128,21 @@ function stubTauriModulesPlugin() {
     },
     load(id) {
       if (!id.startsWith(STUB_PREFIX)) return null;
-      // Return an empty module that exports common symbols as no-ops.
-      // Named exports are auto-discovered by Rollup from the import sites,
-      // but we provide the most common ones explicitly to avoid warnings.
+      // Return a module that exports the symbols web code destructures from
+      // these packages as no-ops. A name missing from this list comes through
+      // as undefined and triggers a Rollup export warning, so keep it in sync
+      // with the import sites.
       return [
         'export const invoke = async () => {};',
         'export const addPluginListener = async () => ({ remove: () => {} });',
         'export const listen = async () => () => {};',
         'export const emit = async () => {};',
         'export const emitTo = async () => {};',
-        'export const getCurrentWindow = () => ({ listen: async () => () => {}, onCloseRequested: async () => () => {} });',
+        'export const getCurrentWindow = () => ({ listen: async () => () => {}, onCloseRequested: async () => () => {}, onFocusChanged: async () => () => {}, close: async () => {} });',
+        'export const getToken = async () => null;',
+        'export const onNotificationReceived = async () => ({ unregister: () => {} });',
+        'export const onNotificationTapped = async () => ({ unregister: () => {} });',
+        'export const onTokenRefresh = async () => ({ unregister: () => {} });',
         'export const Resource = class {};',
         'export const Channel = class {};',
         'export class BaseDirectory {}',
@@ -269,10 +274,11 @@ export default defineConfig({
     emptyOutDir: true,
     sourcemap: false,
     rollupOptions: {
-      // NOTE: Do NOT use `external: WEB_EXTERNAL_TAURI_MODULES` here.
+      // NOTE: Do NOT mark the Tauri module list as rollup externals here.
       // That approach leaves bare module specifiers in the output which
       // browsers cannot resolve, causing a blank page. Instead,
       // stubTauriModulesPlugin resolves them to inline no-op stubs.
+      // A guard test in web-build-no-static-tauri-imports.test.js enforces this.
       input: {
         main: './index.html',
         compose: './compose.html',

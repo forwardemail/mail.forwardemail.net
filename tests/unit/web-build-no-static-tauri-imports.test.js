@@ -128,7 +128,13 @@ describe('static import graph from web entry points', () => {
     const content = fs.readFileSync(filePath, 'utf8');
     // The external approach leaves bare specifiers in the output which crash browsers.
     // The stubTauriModulesPlugin resolves them to empty stubs instead.
-    const externalBlock = content.match(/rollupOptions[\s\S]*?external\s*:/)?.[0] || '';
-    expect(externalBlock).not.toContain('@tauri-apps');
+    // Check what each `external:` is assigned, with a window after the colon
+    // so both a WEB_EXTERNAL_TAURI_MODULES reference and a multiline inline
+    // array of @tauri-apps names are caught.
+    const externalAssignments = [...content.matchAll(/\bexternal\s*:\s*([\s\S]{0,400})/g)];
+    for (const [, assigned] of externalAssignments) {
+      expect(assigned).not.toContain('WEB_EXTERNAL_TAURI_MODULES');
+      expect(assigned).not.toContain('@tauri-apps');
+    }
   });
 });

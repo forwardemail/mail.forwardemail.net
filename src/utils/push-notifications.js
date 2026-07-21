@@ -26,16 +26,28 @@ import {
   unregisterUnifiedPush,
 } from './unified-push.js';
 
-// Timeout for native push operations (permission, token retrieval, listeners).
-// If a native bridge call hangs (common on Android when Google Play Services is
+// Timeout for native push bridge calls such as token retrieval and listener
+// setup. If one hangs (common on Android when Google Play Services is
 // unavailable), the UI should recover gracefully instead of freezing.
 const NATIVE_PUSH_TIMEOUT_MS = 15_000;
+
+// Permission prompts show a system dialog and wait on a human decision, so
+// they get a much longer budget. This only guards against a hung bridge call,
+// not against a user taking their time with the dialog.
+const PERMISSION_PROMPT_TIMEOUT_MS = 120_000;
+
+class PushTimeoutError extends Error {
+  constructor(operation, ms) {
+    super(`${operation} timed out after ${ms}ms`);
+    this.name = 'PushTimeoutError';
+  }
+}
 
 function withTimeout(promise, ms, operation = 'Operation') {
   let timeoutId;
   const timeoutPromise = new Promise((_, reject) => {
     timeoutId = setTimeout(() => {
-      reject(new Error(`${operation} timed out after ${ms}ms`));
+      reject(new PushTimeoutError(operation, ms));
     }, ms);
   });
   return Promise.race([promise, timeoutPromise]).finally(() => {
@@ -248,7 +260,7 @@ async function initializeIosPush() {
 
   const permission = await withTimeout(
     requestPermission(),
-    NATIVE_PUSH_TIMEOUT_MS,
+    PERMISSION_PROMPT_TIMEOUT_MS,
     'iOS requestPermission',
   );
   if (!permission?.granted) {
@@ -292,7 +304,7 @@ async function initializeAndroidFcmPush() {
 
   const permission = await withTimeout(
     requestPermission(),
-    NATIVE_PUSH_TIMEOUT_MS,
+    PERMISSION_PROMPT_TIMEOUT_MS,
     'Android requestPermission',
   );
   if (!permission?.granted) {
@@ -460,7 +472,7 @@ async function initializePushNotifications() {
       return true;
     }
   } catch (error) {
-    const isTimeout = error?.message?.includes('timed out');
+    const isTimeout = error instanceof PushTimeoutError;
     console.warn(`[push] Native push initialization ${isTimeout ? 'timed out' : 'failed'}:`, error);
     // Re-throw timeouts so callers (e.g. registerCurrentDevicePush) can surface
     // a specific 'registration-timeout' code to the UI for retry guidance.
@@ -681,7 +693,7 @@ export function registerCurrentDevicePush() {
     try {
       await syncPushNotifications();
     } catch (error) {
-      if (error?.message?.includes('timed out')) {
+      if (error instanceof PushTimeoutError) {
         const status = await getPushNotificationStatus();
         return { ok: false, code: 'registration-timeout', status };
       }
@@ -734,7 +746,7 @@ export function reregisterCurrentDevicePush() {
     try {
       await syncPushNotifications();
     } catch (error) {
-      if (error?.message?.includes('timed out')) {
+      if (error instanceof PushTimeoutError) {
         const status = await getPushNotificationStatus();
         return { ok: false, code: 'registration-timeout', status };
       }
