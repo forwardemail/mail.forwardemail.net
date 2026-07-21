@@ -529,7 +529,7 @@ export const archiveMessage = async (msg) => {
 /**
  * Delete a message
  */
-export const deleteMessage = async (msg, options) => {
+export const deleteMessage = async (msg, options = {}) => {
   return mailboxStore.actions.deleteMessage(msg, options);
 };
 

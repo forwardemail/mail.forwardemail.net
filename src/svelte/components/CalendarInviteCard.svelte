@@ -291,36 +291,53 @@
       error = 'No matching event found on your calendar.';
       return;
     }
-    saving = true;
+    const target = cachedEventMatch;
+    const persistId = String(target.id);
+    const calendarId = (target.calendarId as string) || (target.calendar_id as string) || '';
+    const cacheKey = `calendar_events_${accountKey()}_all`;
+
+    // Flip the card and prune the cache right away. The server delete runs
+    // below and reverts both if it fails.
     error = '';
+    cachedEventMatch = null;
+    removed = true;
+    let previousCache: Array<Record<string, unknown>> | null = null;
     try {
-      const persistId = String(cachedEventMatch.id);
-      const calendarId =
-        (cachedEventMatch.calendarId as string) || (cachedEventMatch.calendar_id as string) || '';
+      const cached = await db.meta.get(cacheKey);
+      previousCache = (cached?.value as Array<Record<string, unknown>>) || [];
+      const list = previousCache.filter(
+        (ev) => String(ev.id || '') !== persistId && String(ev.uid || '') !== invite.uid,
+      );
+      await db.meta.put({ key: cacheKey, value: list, updatedAt: Date.now() });
+    } catch {
+      // cache update failure is non-fatal
+    }
+
+    try {
       await Remote.request(
         'CalendarEventDelete',
         { calendar_id: calendarId },
         { method: 'DELETE', pathOverride: `/v1/calendar-events/${persistId}` },
       );
-      try {
-        const cacheKey = `calendar_events_${accountKey()}_all`;
-        const cached = await db.meta.get(cacheKey);
-        const list = ((cached?.value as Array<Record<string, unknown>>) || []).filter(
-          (ev) => String(ev.id || '') !== persistId && String(ev.uid || '') !== invite.uid,
-        );
-        await db.meta.put({ key: cacheKey, value: list, updatedAt: Date.now() });
-      } catch {
-        // cache update failure is non-fatal
-      }
-      cachedEventMatch = null;
-      removed = true;
+      // Notify the calendar view only after the server confirms, so a
+      // triggered refetch cannot re-surface the not-yet-deleted event.
       dispatchCalendarChange('deleted');
     } catch (err) {
+      const httpStatus =
+        (err as { status?: number })?.status || (err as { statusCode?: number })?.statusCode;
+      // Already gone server side counts as a successful delete.
+      if (httpStatus === 404) {
+        dispatchCalendarChange('deleted');
+        return;
+      }
+      removed = false;
+      cachedEventMatch = target;
+      if (previousCache) {
+        db.meta.put({ key: cacheKey, value: previousCache, updatedAt: Date.now() }).catch(() => {});
+      }
       if (!isDemoBlockedError(err)) {
         error = (err as Error)?.message || 'Failed to remove event.';
       }
-    } finally {
-      saving = false;
     }
   };
 

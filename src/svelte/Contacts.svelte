@@ -1161,28 +1161,57 @@
 
   const deleteContact = async () => {
     if (!confirmTarget?.id) return;
+    const targetId = confirmTarget.id;
+    const target = confirmTarget;
+    const removedIndex = contacts.findIndex((c) => c.id === targetId);
+    const wasSelected = selectedContact?.id === target.id;
+    const previousDraft = draft;
+
+    // Remove locally and close the confirm right away. The server delete
+    // runs below and restores the contact if it fails.
+    contacts = contacts.filter((c) => c.id !== targetId);
+    if (wasSelected) {
+      selectedContact = null;
+      draft = null;
+    }
+    applyFilter();
+    // Surgically remove the deleted contact from cache
+    removeContactFromCache(targetId).catch(() => {});
+    toasts?.show?.('Contact deleted', 'success');
+    cancelDelete();
+
     try {
       await Remote.request(
         'ContactsDelete',
         {},
-        { method: 'DELETE', pathOverride: `/v1/contacts/${encodeURIComponent(confirmTarget.id)}` },
+        { method: 'DELETE', pathOverride: `/v1/contacts/${encodeURIComponent(targetId)}` },
       );
-      contacts = contacts.filter((c) => c.id !== confirmTarget?.id);
-      if (selectedContact?.id === confirmTarget.id) {
-        selectedContact = null;
-        draft = null;
+    } catch (err) {
+      const httpStatus =
+        (err as { status?: number })?.status || (err as { statusCode?: number })?.statusCode;
+      // Already gone server side counts as a successful delete.
+      if (httpStatus === 404) return;
+      // Put the contact back where it was.
+      const restored = [...contacts.filter((c) => c.id !== targetId)];
+      restored.splice(Math.min(Math.max(removedIndex, 0), restored.length), 0, target);
+      contacts = restored;
+      if (wasSelected && !selectedContact) {
+        selectedContact = target;
+        draft = previousDraft;
       }
       applyFilter();
-      // Surgically remove the deleted contact from cache
-      removeContactFromCache(confirmTarget.id).catch(() => {});
-      toasts?.show?.('Contact deleted', 'success');
-    } catch (err) {
+      upsertContactInCache({
+        id: targetId,
+        email: target.email,
+        name: target.name,
+        avatar: target.photo || '',
+        company: target.company || '',
+      }).catch(() => {});
       if (!isDemoBlockedError(err)) {
         error = (err as Error)?.message || 'Unable to delete contact.';
         toasts?.show?.(error, 'error');
       }
     }
-    cancelDelete();
   };
 
   onMount(() => {

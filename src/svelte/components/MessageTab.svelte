@@ -50,6 +50,7 @@
     addReplyPrefix,
     addForwardPrefix,
     stripQuoteCollapseMarkup,
+    deleteMessage,
   } from '../../stores/mailboxActions';
   import type { Message, Attachment } from '../../types';
 
@@ -259,25 +260,17 @@
     });
   }
 
-  async function handleDelete() {
+  function handleDelete() {
     if (!message) return;
-    const apiId = getMessageApiId(message as Parameters<typeof getMessageApiId>[0]) || message?.id;
-    if (!apiId) return;
-    try {
-      await Remote.request(
-        'MessageDelete',
-        {},
-        {
-          method: 'DELETE',
-          pathOverride: `/v1/messages/${encodeURIComponent(String(apiId))}`,
-        },
-      );
-      closeTab(tabId);
-    } catch (err) {
-      if (!isDemoBlockedError(err)) {
-        error = (err as Error)?.message || 'Failed to delete message';
-      }
-    }
+    // Close the tab right away. deleteMessage handles the rest optimistically:
+    // it removes the message from the list and cache first, then syncs to the
+    // server and queues a retry if that call fails, so there is nothing left
+    // to surface in this (now closed) tab.
+    const target = { ...message, folder: message.folder || folder };
+    closeTab(tabId);
+    deleteMessage(target).catch((err) => {
+      console.warn('Failed to delete message from tab', err);
+    });
   }
 
   async function handleArchive() {

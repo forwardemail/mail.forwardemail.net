@@ -2300,39 +2300,57 @@ const createMailboxStore = () => {
 
     const account = Local.get('email') || 'default';
 
+    // Find folder ID
+    const folderList = get(folders);
+    const folder = folderList.find((f) => f.path === folderPath);
+    if (!folder?.id) {
+      throw new Error('Folder not found');
+    }
+
+    // Remove the folder locally first so the sidebar updates instantly.
+    // A failed server delete reloads the folder list to restore it.
+    folders.set(folderList.filter((f) => f.path !== folderPath));
+    invalidateFolderInMemCache(account, folderPath);
+    const current = get(expandedFolders);
+    const next = new Set(current);
+    next.delete(folderPath);
+    expandedFolders.set(next);
+    saveExpandedState(next);
+    await db.folders
+      .where('[account+path]')
+      .equals([account, folderPath])
+      .delete()
+      .catch(() => {});
+
     folderOperationInProgress.set(true);
     try {
-      // Find folder ID
-      const folderList = get(folders);
-      const folder = folderList.find((f) => f.path === folderPath);
-      if (!folder?.id) {
-        throw new Error('Folder not found');
-      }
-
       await Remote.request(
         'FolderDelete',
         {},
         { method: 'DELETE', pathOverride: `/v1/folders/${encodeURIComponent(folder.id)}` },
       );
 
-      // Clean up IndexedDB
-      await db.folders.where('[account+path]').equals([account, folderPath]).delete();
-      await db.messages.where('[account+folder]').equals([account, folderPath]).delete();
-      await db.messageBodies.where('[account+folder]').equals([account, folderPath]).delete();
+      // Purge cached messages only after the server confirms, so a failed
+      // delete has nothing to restore beyond the folder list.
+      await db.messages
+        .where('[account+folder]')
+        .equals([account, folderPath])
+        .delete()
+        .catch(() => {});
+      await db.messageBodies
+        .where('[account+folder]')
+        .equals([account, folderPath])
+        .delete()
+        .catch(() => {});
 
-      // Remove from expanded state
-      const current = get(expandedFolders);
-      const next = new Set(current);
-      next.delete(folderPath);
-      expandedFolders.set(next);
-      saveExpandedState(next);
-
-      // Reload folders
-      await loadFolders({ force: true });
+      // Reconcile with the server in the background.
+      loadFolders({ force: true }).catch(() => {});
 
       return { success: true };
     } catch (err) {
       console.error('deleteFolder failed', err);
+      // Refetch restores the folder we removed above.
+      await loadFolders({ force: true }).catch(() => {});
       throw err;
     } finally {
       folderOperationInProgress.set(false);

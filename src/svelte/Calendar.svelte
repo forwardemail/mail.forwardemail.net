@@ -325,7 +325,6 @@
   let deleteCalendarId = $state('');
   let deleteCalendarLabel = $state('');
   let deleteCalendarConfirmName = $state('');
-  let deletingCalendar = $state(false);
   let modalDirty = $state(false);
   let savingEvent = $state(false);
   let descriptionRef = $state<HTMLTextAreaElement | null>(null);
@@ -2006,8 +2005,36 @@
       return;
     }
 
-    deletingCalendar = true;
     const removedCalendarId = deleteCalendarId;
+    const wasSelected = selectedCalendarIds.includes(removedCalendarId);
+    const wasActive = activeCalendarId === removedCalendarId;
+
+    // Remove the calendar and its events locally and close the modal right
+    // away. The server delete runs below; a failure refetches to restore
+    // everything that was removed.
+    calendars = calendars.filter((cal) => getCalendarId(cal) !== removedCalendarId);
+    selectedCalendarIds = selectedCalendarIds.filter((id) => id !== removedCalendarId);
+    if (wasActive) activeCalendarId = '';
+    allEvents = allEvents.filter(
+      (ev) =>
+        ((ev as Record<string, unknown>).calendarId ||
+          (ev as Record<string, unknown>).calendar_id) !== removedCalendarId,
+    );
+    applySelectedEvents();
+
+    deleteCalendarModal = false;
+    deleteCalendarId = '';
+    deleteCalendarLabel = '';
+    deleteCalendarConfirmName = '';
+    toasts?.show?.('Calendar deleted', 'success');
+
+    db.meta
+      .put({ key: getCalendarsCacheKey(getAccountKey()), value: calendars, updatedAt: Date.now() })
+      .catch((e: unknown) => console.warn('[Calendar] Failed to cache calendars:', e));
+    db.meta.delete(getEventsCacheKey(getAccountKey(), removedCalendarId)).catch(() => {});
+    persistEventsCache(removedCalendarId);
+    persistCalendarPrefs(getAccountKey(), selectedCalendarIds).catch(() => {});
+
     try {
       await Remote.request(
         'CalendarDelete',
@@ -2017,26 +2044,24 @@
           pathOverride: `/v1/calendars/${encodeURIComponent(removedCalendarId)}`,
         },
       );
-
-      selectedCalendarIds = selectedCalendarIds.filter((id) => id !== removedCalendarId);
-      if (activeCalendarId === removedCalendarId) activeCalendarId = '';
-
-      deleteCalendarModal = false;
-      deleteCalendarId = '';
-      deleteCalendarLabel = '';
-      deleteCalendarConfirmName = '';
-
+      // Reconcile with the server in the background.
+      fetchCalendars().catch(() => {});
+    } catch (err: unknown) {
+      const httpStatus =
+        (err as { status?: number })?.status || (err as { statusCode?: number })?.statusCode;
+      // Already gone server side counts as a successful delete.
+      if (httpStatus === 404) return;
+      // Restore the previous selection, then refetch so the calendar and
+      // its events come back.
+      if (wasSelected && !selectedCalendarIds.includes(removedCalendarId)) {
+        selectedCalendarIds = [...selectedCalendarIds, removedCalendarId];
+      }
+      if (wasActive && !activeCalendarId) activeCalendarId = removedCalendarId;
       await fetchCalendars();
       await loadEventsForSelection(true);
-      toasts?.show?.('Calendar deleted', 'success');
-    } catch (err: unknown) {
-      if (isDemoBlockedError(err)) {
-        deleteCalendarModal = false;
-        return;
+      if (!isDemoBlockedError(err)) {
+        toasts?.show?.((err as Error)?.message || 'Failed to delete calendar', 'error');
       }
-      toasts?.show?.((err as Error)?.message || 'Failed to delete calendar', 'error');
-    } finally {
-      deletingCalendar = false;
     }
   };
 
@@ -3677,29 +3702,57 @@
       setError('Could not resolve recurring event context.');
       return;
     }
+    let newIcal: string;
     try {
-      const newIcal = addExdateToMaster(ctx.masterIcal, ctx.occurrence);
-      await Remote.request(
-        'CalendarEventUpdate',
-        { id: ctx.masterId, calendar_id: ctx.calendarId, ical: newIcal },
-        { method: 'PUT', pathOverride: `/v1/calendar-events/${ctx.masterId}` },
-      );
-      // Replace the master in allEvents with the updated ICS so re-expansion
-      // sees the new EXDATE. Strip the deleted occurrence from the visible
-      // events list as an immediate optimistic update.
-      allEvents = (allEvents || []).map((ev) => {
-        const e = ev as Record<string, unknown>;
-        if (String(e.id || e.uid || '') !== ctx.masterId) return ev;
-        const raw = (e.raw as Record<string, unknown> | undefined) || {};
-        return { ...e, raw: { ...raw, ical: newIcal } };
-      });
-      applySelectedEvents();
-      setError('');
-      setSuccess('Occurrence deleted');
-      editEventModal = false;
-      showDeleteConfirm = false;
-      recurrenceEditPrompt = { open: false, action: null };
+      newIcal = addExdateToMaster(ctx.masterIcal, ctx.occurrence);
     } catch (err) {
+      setError((err as Error)?.message || 'Unable to delete occurrence.');
+      return;
+    }
+
+    // Replace the master in allEvents with the updated ICS so re-expansion
+    // sees the new EXDATE, and close the modal right away. The server
+    // write runs below and rolls back if it fails.
+    const previousRaw = (ctx.master.raw as Record<string, unknown> | undefined) || {};
+    const patchedRaw = { ...previousRaw, ical: newIcal };
+    const token = ++pendingMutationToken;
+    pendingEventMutations.set(ctx.masterId, { token, patch: { raw: patchedRaw } });
+    allEvents = (allEvents || []).map((ev) => {
+      const e = ev as Record<string, unknown>;
+      if (String(e.id || e.uid || '') !== ctx.masterId) return ev;
+      return { ...e, raw: patchedRaw };
+    });
+    applySelectedEvents();
+    setError('');
+    setSuccess('Occurrence deleted');
+    editEventModal = false;
+    showDeleteConfirm = false;
+    recurrenceEditPrompt = { open: false, action: null };
+    persistEventsCache(ctx.calendarId);
+
+    try {
+      await serializeEventWrite(ctx.masterId, () =>
+        Remote.request(
+          'CalendarEventUpdate',
+          { id: ctx.masterId, calendar_id: ctx.calendarId, ical: newIcal },
+          { method: 'PUT', pathOverride: `/v1/calendar-events/${ctx.masterId}` },
+        ),
+      );
+      if (pendingEventMutations.get(ctx.masterId)?.token === token) {
+        pendingEventMutations.delete(ctx.masterId);
+      }
+    } catch (err) {
+      // Roll back only if no newer change superseded this one.
+      if (pendingEventMutations.get(ctx.masterId)?.token === token) {
+        pendingEventMutations.delete(ctx.masterId);
+        allEvents = (allEvents || []).map((ev) => {
+          const e = ev as Record<string, unknown>;
+          if (String(e.id || e.uid || '') !== ctx.masterId) return ev;
+          return { ...e, raw: previousRaw };
+        });
+        applySelectedEvents();
+        persistEventsCache(ctx.calendarId);
+      }
       if (!isDemoBlockedError(err)) {
         setError((err as Error)?.message || 'Unable to delete occurrence.');
       }
@@ -5656,11 +5709,10 @@
         </Button>
         <Button
           variant="destructive"
-          disabled={deleteCalendarConfirmName.trim() !== deleteCalendarLabel.trim() ||
-            deletingCalendar}
+          disabled={deleteCalendarConfirmName.trim() !== deleteCalendarLabel.trim()}
           onclick={deleteCalendar}
         >
-          {deletingCalendar ? 'Deleting...' : 'Delete Calendar'}
+          Delete Calendar
         </Button>
       </Dialog.Footer>
     </Dialog.Content>
