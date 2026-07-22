@@ -521,6 +521,76 @@ async function resolveMailbox(identifier) {
 }
 
 /**
+ * Find a specific message in a MessageList response by id/uid or Message-ID.
+ * Returns null when the message isn't queryable yet (indexer lag).
+ */
+function findMessageInList(res, { id, messageId }) {
+  const list = res?.Result?.List || res?.Result || res || [];
+  if (!Array.isArray(list)) return null;
+  return (
+    list.find((m) => {
+      if (id != null && String(m?.id ?? m?.uid ?? m?.Uid) === String(id)) return true;
+      if (messageId && (m?.message_id || m?.MessageId) === messageId) return true;
+      return false;
+    }) || null
+  );
+}
+
+const SENDER_RECONCILE_DELAYS_MS = [5000, 15000, 30000];
+
+/**
+ * When a delivery arrives with no usable sender in the WS payload, the
+ * optimistic row renders as "Unknown" and stays that way: the backend indexer
+ * lags delivery by 10-30s, so the immediate refresh comes back without this
+ * message and nothing later corrects the row until the user leaves and
+ * reopens the folder. Poll a few times until the indexer catches up, then
+ * patch the row in place. Stops early if the row is gone or already shows a
+ * real sender (a full reload replaced it with server data).
+ */
+function scheduleSenderReconcile({ id, mailbox, messageId, account }) {
+  (async () => {
+    for (const delay of SENDER_RECONCILE_DELAYS_MS) {
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      if ((Local.get('email') || 'default') !== account) return;
+      try {
+        const { get } = await import('svelte/store');
+        const { mailboxStore } = await import('../stores/mailboxStore');
+        const current = get(mailboxStore.state.messages) || [];
+        const row = current.find((m) => String(m.id) === String(id));
+        if (!row) return;
+        if (row.from && row.from !== 'Unknown') return;
+
+        const res = await Remote.request(
+          'MessageList',
+          { folder: mailbox, page: 1, limit: 10, lightweight: true },
+          { method: 'GET', pathOverride: '/v1/messages' },
+        );
+        const match = findMessageInList(res, { id, messageId });
+        if (!match) continue;
+        const from = extractFromField(match);
+        if (!from) continue;
+
+        // Re-read the list: the fetch awaited above may have raced a reload.
+        const latest = get(mailboxStore.state.messages) || [];
+        const idx = latest.findIndex((m) => String(m.id) === String(id));
+        if (idx === -1) return;
+        if (latest[idx].from && latest[idx].from !== 'Unknown') return;
+        const updated = [...latest];
+        updated[idx] = {
+          ...updated[idx],
+          from,
+          snippet: updated[idx].snippet || match.snippet || match.preview || '',
+        };
+        mailboxStore.state.messages.set(updated);
+        return;
+      } catch {
+        // Transient failure, try again on the next delay.
+      }
+    }
+  })().catch(() => {});
+}
+
+/**
  * Insert a freshly delivered message into the in-memory mailboxStore when the
  * user is currently viewing the destination folder. The shape mirrors what
  * `normalizeMessage` in sync-helpers.ts produces so the row renders correctly
@@ -627,7 +697,12 @@ async function handleNewMessage(data, { suppressVisual = false } = {}) {
     msg.from?.text ||
     msg.from?.name ||
     msg.from?.address ||
-    (typeof msg.from === 'string' ? msg.from : null);
+    (typeof msg.from === 'string' ? msg.from : null) ||
+    // Covers payload shapes the chain above misses: mailparser {value:[...]},
+    // address arrays, capitalized From, sender, plus header and envelope
+    // fallbacks. Real deliveries were landing here as "Unknown".
+    extractFromField(msg) ||
+    null;
   let subject = msg.subject || msg.Subject;
 
   // WS payload includes raw EML — parse From/Subject directly from headers
@@ -637,19 +712,24 @@ async function handleNewMessage(data, { suppressVisual = false } = {}) {
     subject = subject || headers.subject;
   }
 
-  // Fallback: fetch from API if we still don't have sender info
+  // Fallback: fetch from API if we still don't have sender info. Only trust
+  // a result that is verifiably THIS message. The WS broadcast usually beats
+  // the backend indexer, so the newest queryable message is often the
+  // previous one and blindly reading list[0] would show the wrong sender.
   if (!from) {
     try {
       const res = await Remote.request(
         'MessageList',
-        { folder: mailbox, page: 1, limit: 1, lightweight: true },
+        { folder: mailbox, page: 1, limit: 5, lightweight: true },
         { method: 'GET', pathOverride: '/v1/messages' },
       );
-      const list = res?.Result?.List || res?.Result || res || [];
-      const latest = Array.isArray(list) ? list[0] : null;
-      if (latest) {
-        from = extractFromField(latest) || null;
-        subject = subject || latest.subject || latest.Subject;
+      const match = findMessageInList(res, {
+        id: msg?.id ?? msg?.Uid ?? msg?.uid ?? uid,
+        messageId: msg?.message_id || msg?.MessageId || msg?.['Message-ID'] || null,
+      });
+      if (match) {
+        from = extractFromField(match) || null;
+        subject = subject || match.subject || match.Subject;
       }
     } catch {
       // API fetch failed — show notification with whatever we have
@@ -669,6 +749,18 @@ async function handleNewMessage(data, { suppressVisual = false } = {}) {
     // Failure here only affects the in-place refresh — refreshFolder() runs
     // separately in websocket-updater and will eventually catch up.
   });
+
+  // Sender still unknown: the row above renders as "Unknown" until some
+  // later reload happens to replace it. Patch it as soon as the backend
+  // indexer can answer for this message.
+  if (!from) {
+    scheduleSenderReconcile({
+      id: String(msg?.id ?? msg?.Uid ?? msg?.uid ?? uid),
+      mailbox,
+      messageId: msg?.message_id || msg?.MessageId || msg?.['Message-ID'] || null,
+      account: Local.get('email') || 'default',
+    });
+  }
 
   if (!suppressVisual) {
     showNotification({

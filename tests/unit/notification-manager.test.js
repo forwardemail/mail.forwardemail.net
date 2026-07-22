@@ -68,6 +68,8 @@ vi.mock('../../src/utils/websocket-client', () => ({
 }));
 
 import { notify } from '../../src/utils/notification-bridge.js';
+import { Remote } from '../../src/utils/remote.js';
+import { extractFromField } from '../../src/utils/sync-helpers.ts';
 import {
   connectNotifications,
   requestNotificationPermission,
@@ -313,5 +315,59 @@ describe('notification-manager new message routing payloads', () => {
     expect(call.data.path).toBe('#inbox/4242');
     expect(call.data.url).toBe('forwardemail://mailbox#inbox/4242');
     expect(call.title).toContain('Alice Example');
+  });
+});
+
+describe('notification-manager new message sender resolution', () => {
+  let wsClient;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    await requestNotificationPermission();
+    wsClient = createMockWsClient();
+    connectNotifications(wsClient);
+  });
+
+  afterEach(() => {
+    vi.mocked(extractFromField).mockImplementation(() => '');
+  });
+
+  it('falls back to extractFromField for payload shapes the simple chain misses', async () => {
+    // Real payloads can carry the mailparser shape {value: [{name, address}]},
+    // which has none of .text/.name/.address at the top level. The old chain
+    // returned null here and the notification said "Unknown sender".
+    vi.mocked(extractFromField).mockImplementation((m) =>
+      m?.from?.value?.[0] ? `${m.from.value[0].name} <${m.from.value[0].address}>` : '',
+    );
+    wsClient.emit('newMessage', {
+      mailbox: 'INBOX',
+      message: {
+        id: 7001,
+        uid: 7001,
+        subject: 'Hello',
+        from: { value: [{ name: 'Carol Vega', address: 'carol@example.com' }] },
+      },
+    });
+
+    await vi.waitFor(() => expect(notify).toHaveBeenCalled());
+    expect(vi.mocked(notify).mock.calls[0][0].title).toContain('Carol Vega');
+  });
+
+  it('does not attribute the previous newest message when the indexer lags', async () => {
+    vi.mocked(extractFromField).mockImplementation((m) => m?.from?.text || '');
+    // The WS broadcast beats the indexer: the API still returns only the
+    // older message. The fallback must not blindly read list[0].
+    vi.mocked(Remote.request).mockResolvedValue([
+      { id: 6999, subject: 'Old news', from: { text: 'Wrong Sender <wrong@example.com>' } },
+    ]);
+    wsClient.emit('newMessage', {
+      mailbox: 'INBOX',
+      message: { id: 7002, uid: 7002, subject: 'Fresh' },
+    });
+
+    await vi.waitFor(() => expect(notify).toHaveBeenCalled());
+    const call = vi.mocked(notify).mock.calls[0][0];
+    expect(call.title).not.toContain('Wrong Sender');
+    expect(call.title).toContain('Unknown sender');
   });
 });
