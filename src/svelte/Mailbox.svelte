@@ -9142,6 +9142,17 @@
   .fe-msg-row {
     content-visibility: auto;
     contain-intrinsic-size: auto 48px;
+    /* Even if inner nowrap/ellipsis truncation fails, never let row content
+       bleed outside the card. */
+    overflow: hidden;
+  }
+
+  /* WebView2 mis-renders nowrap/ellipsis truncation inside content-visibility
+     subtrees, so long card-view subjects were not cut off on Windows. WebKit
+     ignores content-visibility, which is why only Windows showed it. Disable
+     the off-screen rendering optimization there until the engine behaves. */
+  :global(html[data-os='windows']) .fe-msg-row {
+    content-visibility: visible;
   }
 
   /* Shared list layout tokens */

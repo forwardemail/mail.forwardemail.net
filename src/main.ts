@@ -43,7 +43,13 @@ import './styles/main.css';
 // Initialize error logger for feedback system
 import './utils/error-logger';
 import { sendSyncTask, terminateSyncWorker } from './utils/sync-worker-client.js';
-import { canUseServiceWorker, isTauri, isTauriDesktop, isTauriMobile } from './utils/platform.js';
+import {
+  canUseServiceWorker,
+  getOS,
+  isTauri,
+  isTauriDesktop,
+  isTauriMobile,
+} from './utils/platform.js';
 import { openComposeWindow, initComposeWindowListener } from './utils/compose-window';
 import {
   isLockEnabled,
@@ -1108,6 +1114,10 @@ viewModel.pgpPassphraseModal = passphraseApi;
 // "foo: bar" from the compose body and pasting into the subject inserts
 // "foo:%20bar". See paste-normalizer.ts for details.
 installPasteNormalizer();
+
+// Let CSS scope OS-specific workarounds, e.g. disabling content-visibility on
+// message rows where WebView2 breaks subject truncation (see Mailbox.svelte).
+document.documentElement.dataset.os = getOS();
 
 // Block <input type="file"> clicks on Tauri desktop — WebKit's runOpenPanel
 // delegate panics in WKWebView, crashing the app. All file picking is handled

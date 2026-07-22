@@ -45,6 +45,24 @@ export function getPlatform() {
 }
 
 /**
+ * Returns the operating system the webview is running on.
+ *   'windows' | 'macos' | 'linux' | 'android' | 'ios' | 'unknown'
+ *
+ * Exposed on <html data-os="..."> at startup so CSS can scope
+ * engine-specific workarounds (e.g. WebView2 rendering bugs on Windows).
+ */
+export function getOS() {
+  if (typeof navigator === 'undefined') return 'unknown';
+  const ua = navigator.userAgent || '';
+  if (/android/i.test(ua)) return 'android';
+  if (/iphone|ipad|ipod/i.test(ua)) return 'ios';
+  if (/windows/i.test(ua)) return 'windows';
+  if (/macintosh|mac os x/i.test(ua)) return 'macos';
+  if (/linux/i.test(ua)) return 'linux';
+  return 'unknown';
+}
+
+/**
  * Whether the current platform can register a service worker.
  * False on Tauri (WRY webview uses custom scheme where SW fails).
  */
