@@ -93,6 +93,32 @@ describe('mobile edge-back integration contract', () => {
     expect(main).toContain('history.back()');
   });
 
+  it('routes edge gesture and Android native back through a shared mailbox fallback', () => {
+    const main = readSource('src/main.ts');
+
+    expect(main).toContain("import { onBackButton } from './utils/tauri-bridge.js';");
+    expect(main).toContain('const navigateMobileBack = () =>');
+    expect(main).toContain("viewModel.navigate('/mailbox', { replace: true })");
+    expect(main).toContain('onBackButton(() =>');
+    expect(main).toContain("if (currentRoute() !== 'mailbox') navigateMobileBack();");
+  });
+
+  it('keeps the Mailbox native back handler scoped to the mailbox route', () => {
+    const mailbox = readSource('src/svelte/Mailbox.svelte');
+
+    expect(mailbox).toContain(
+      'if (!/^\\/mailbox\\/?$/.test(globalThis.location.pathname)) return;',
+    );
+    expect(mailbox).toContain('if (mobileBackUnlisten) mobileBackUnlisten();');
+  });
+
+  it('uses the SPA navigator for the Settings back control instead of history-only navigation', () => {
+    const settings = readSource('src/svelte/Settings.svelte');
+
+    expect(settings).toContain("onclick={() => navigate('/mailbox')}");
+    expect(settings).not.toContain('onclick={() => window.history.back()}');
+  });
+
   it('gives the left-edge gesture precedence over pull, row, reader, and iframe swipes', () => {
     const mailbox = readSource('src/svelte/Mailbox.svelte');
 

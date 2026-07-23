@@ -69,6 +69,13 @@ let managementPromise = null;
 const pushStatusListeners = new Set();
 
 function getMobilePlatform() {
+  // Prefer the authoritative platform injected by @tauri-apps/plugin-os over
+  // user-agent sniffing, which iPadOS and custom Tauri user agents break. Read
+  // the global directly instead of importing platform.js so this stays correct
+  // in contexts (and tests) that mock the platform module.
+  const nativePlatform = globalThis.window?.__TAURI_OS_PLUGIN_INTERNALS__?.platform;
+  if (nativePlatform === 'android' || nativePlatform === 'ios') return nativePlatform;
+
   const userAgent = navigator.userAgent.toLowerCase();
   if (userAgent.includes('android')) return 'android';
   if (/iphone|ipad|ipod/.test(userAgent)) return 'ios';

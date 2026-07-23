@@ -291,6 +291,7 @@
     window.removeEventListener('draft-message-deleted', handleDraftMessageDeleted as EventListener);
     if (menuUnlisten) menuUnlisten();
     if (checkMailUnlisten) checkMailUnlisten();
+    if (mobileBackUnlisten) mobileBackUnlisten();
   });
   let actionMenuOpen = $state(false);
   let showEmailDetails = $state(false);
@@ -1061,6 +1062,7 @@
   let infiniteScrollSentinel = $state<HTMLElement | undefined>();
   let menuUnlisten: (() => void) | null = null;
   let checkMailUnlisten: (() => void) | null = null;
+  let mobileBackUnlisten: (() => void) | null = null;
 
   // Unified breakpoint constants for consistent responsive behavior
   const BREAKPOINT_MOBILE = 640; // phones
@@ -5210,6 +5212,11 @@
     // Android back button navigation stack
     if (isTauriMobile) {
       onBackButton(() => {
+        // Mailbox stays mounted while sibling routes (settings, profile, etc.)
+        // are visible. Let the shared app listener in main.ts own native back
+        // navigation outside the mailbox route so it does not exit the app.
+        if (!/^\/mailbox\/?$/.test(globalThis.location.pathname)) return;
+
         // 0. Close the full-screen search overlay first (it's the topmost screen)
         if (mobileSearchOpen) {
           closeMobileSearch();
@@ -5239,7 +5246,13 @@
         }
         // 5. Default: minimize the app
         import('@tauri-apps/plugin-process').then(({ exit }) => exit(0)).catch(() => {});
-      });
+      })
+        .then((unlisten) => {
+          mobileBackUnlisten = unlisten;
+        })
+        .catch((error) => {
+          console.warn('[Mailbox] Native back-button listener failed:', error);
+        });
     }
 
     // Infinite scroll is wired reactively below via $effect (see

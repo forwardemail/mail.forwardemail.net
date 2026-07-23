@@ -13,20 +13,38 @@
 export const isTauri = typeof window !== 'undefined' && Boolean(window.__TAURI_INTERNALS__);
 
 /**
+ * The native OS reported by @tauri-apps/plugin-os. The plugin injects this
+ * value into the webview before any JS runs, so it is authoritative and does
+ * not depend on the user-agent string. A custom Tauri user-agent, an Android
+ * WebView UA, or iPadOS (which reports a desktop "Macintosh" UA) all make
+ * navigator.userAgent unreliable for platform branching.
+ *   'windows' | 'macos' | 'linux' | 'android' | 'ios', or null outside Tauri.
+ */
+function readNativePlatform() {
+  if (!isTauri || typeof window === 'undefined') return null;
+
+  const pluginPlatform = window.__TAURI_OS_PLUGIN_INTERNALS__?.platform;
+  if (typeof pluginPlatform === 'string') return pluginPlatform;
+
+  // Older builds may not have initialized the OS plugin global yet. Keep
+  // user-agent detection as a fallback for the two mobile targets we branch on.
+  if (typeof navigator === 'undefined') return null;
+  if (/android/i.test(navigator.userAgent)) return 'android';
+  if (/iphone|ipad|ipod/i.test(navigator.userAgent)) return 'ios';
+  return null;
+}
+
+export const nativePlatform = readNativePlatform();
+
+/**
  * True when running inside a Tauri desktop webview.
  */
-export const isTauriDesktop =
-  isTauri &&
-  typeof navigator !== 'undefined' &&
-  !/android|iphone|ipad|ipod/i.test(navigator.userAgent);
+export const isTauriDesktop = isTauri && nativePlatform !== 'android' && nativePlatform !== 'ios';
 
 /**
  * True when running inside a Tauri mobile webview (Android or iOS).
  */
-export const isTauriMobile =
-  isTauri &&
-  typeof navigator !== 'undefined' &&
-  /android|iphone|ipad|ipod/i.test(navigator.userAgent);
+export const isTauriMobile = isTauri && (nativePlatform === 'android' || nativePlatform === 'ios');
 
 export const isServiceWorkerSupported =
   typeof navigator !== 'undefined' && 'serviceWorker' in navigator;
@@ -52,6 +70,14 @@ export function getPlatform() {
  * engine-specific workarounds (e.g. WebView2 rendering bugs on Windows).
  */
 export function getOS() {
+  // Prefer the authoritative native platform inside Tauri. The OS plugin
+  // reports the same tags this function returns, plus BSD variants that the
+  // allowlist below collapses to 'unknown'. Outside Tauri nativePlatform is
+  // null, so fall back to the user agent, which is reliable in real browsers.
+  if (nativePlatform && ['windows', 'macos', 'linux', 'android', 'ios'].includes(nativePlatform)) {
+    return nativePlatform;
+  }
+
   if (typeof navigator === 'undefined') return 'unknown';
   const ua = navigator.userAgent || '';
   if (/android/i.test(ua)) return 'android';

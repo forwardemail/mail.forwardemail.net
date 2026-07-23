@@ -1645,7 +1645,7 @@
   style="padding-top: env(safe-area-inset-top, 0px); box-sizing: content-box;"
   data-testid="settings-header"
 >
-  <Button variant="ghost" size="icon" onclick={() => window.history.back()} aria-label="Back">
+  <Button variant="ghost" size="icon" onclick={() => navigate('/mailbox')} aria-label="Back">
     <ChevronLeft class="h-5 w-5" />
   </Button>
   <div class="flex flex-col">

@@ -80,6 +80,7 @@ import { setDemoToasts } from './utils/demo-mode';
 import { setNotificationToasts } from './utils/notification-manager';
 import { bindExternalLinkInterceptor } from './utils/external-links.js';
 import { bindEdgeSwipeBack } from './utils/mobile-edge-swipe';
+import { onBackButton } from './utils/tauri-bridge.js';
 import { installPasteNormalizer } from './utils/paste-normalizer';
 // Database initialization with recovery support
 import {
@@ -1100,12 +1101,42 @@ viewModel.mailboxView.navigate = viewModel.navigate;
 viewModel.settingsModal.navigate = viewModel.navigate;
 mailboxActions.setNavigate(viewModel.navigate);
 
-// Mobile iOS/Android: mirror the native left-edge back gesture while keeping
-// the existing History API as the single source of route and reader state.
+// Mobile iOS/Android: mirror the native left-edge back gesture and Android's
+// system back button. Tauri webviews can launch with a single history entry,
+// so authenticated child routes need an app-owned mailbox fallback instead of
+// relying on history.length.
+const navigateMobileBack = () => {
+  const route = currentRoute();
+  if (route === 'login') return;
+
+  if (history.length > 1) {
+    history.back();
+    return;
+  }
+
+  if (route !== 'mailbox') viewModel.navigate('/mailbox', { replace: true });
+};
+
 bindEdgeSwipeBack({
-  isEnabled: () => currentRoute() !== 'login' && history.length > 1,
-  onBack: () => history.back(),
+  isEnabled: () => {
+    const route = currentRoute();
+    if (route === 'login') return false;
+    if (route === 'mailbox') return history.length > 1;
+    return isTauriMobile || history.length > 1;
+  },
+  onBack: navigateMobileBack,
 });
+
+// Android's system back gesture/button arrives via the native bridge. Mailbox
+// owns its own overlay-aware stack, so this shared listener only handles the
+// other authenticated screens that stay mounted beside it.
+if (isTauriMobile) {
+  onBackButton(() => {
+    if (currentRoute() !== 'mailbox') navigateMobileBack();
+  }).catch((error) => {
+    console.warn('[main] Native back-button listener failed:', error);
+  });
+}
 
 viewModel.pgpPassphraseModal = passphraseApi;
 
