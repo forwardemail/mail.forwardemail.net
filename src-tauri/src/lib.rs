@@ -928,6 +928,71 @@ pub fn run() {
                 });
             }
 
+            // Size the webview inside the iOS safe areas (status bar, notch,
+            // home indicator). Mirrors scripts/android/MainActivity.kt, where
+            // the activity root view is padded with system-bar insets: the
+            // native layer is the source of truth for inset safety, and CSS
+            // env(safe-area-inset-*) correctly reports 0 inside the already
+            // inset webview. Without this WRY lays the WKWebView over the
+            // full screen and the web UI renders under the top/bottom trays.
+            #[cfg(target_os = "ios")]
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.with_webview(|webview| unsafe {
+                    use objc2::msg_send;
+                    use objc2::runtime::AnyObject;
+
+                    let wk: *mut AnyObject = webview.inner().cast();
+                    if wk.is_null() {
+                        return;
+                    }
+                    let superview: *mut AnyObject = msg_send![wk, superview];
+                    if superview.is_null() {
+                        return;
+                    }
+
+                    // Paint the exposed strips in the app shell background so
+                    // the trays read as chrome rather than a rendering gap.
+                    let bg: *mut AnyObject = msg_send![
+                        objc2::class!(UIColor),
+                        colorWithRed: 0.0392_f64,
+                        green: 0.0392_f64,
+                        blue: 0.0392_f64,
+                        alpha: 1.0_f64
+                    ];
+                    let _: () = msg_send![superview, setBackgroundColor: bg];
+
+                    // Replace WRY's full-screen autoresizing frame with
+                    // constraints against the safe area layout guide. Rotation
+                    // and inset changes then re-layout automatically.
+                    let _: () = msg_send![wk, setTranslatesAutoresizingMaskIntoConstraints: false];
+                    let guide: *mut AnyObject = msg_send![superview, safeAreaLayoutGuide];
+
+                    let wk_anchor: *mut AnyObject = msg_send![wk, topAnchor];
+                    let guide_anchor: *mut AnyObject = msg_send![guide, topAnchor];
+                    let constraint: *mut AnyObject =
+                        msg_send![wk_anchor, constraintEqualToAnchor: guide_anchor];
+                    let _: () = msg_send![constraint, setActive: true];
+
+                    let wk_anchor: *mut AnyObject = msg_send![wk, bottomAnchor];
+                    let guide_anchor: *mut AnyObject = msg_send![guide, bottomAnchor];
+                    let constraint: *mut AnyObject =
+                        msg_send![wk_anchor, constraintEqualToAnchor: guide_anchor];
+                    let _: () = msg_send![constraint, setActive: true];
+
+                    let wk_anchor: *mut AnyObject = msg_send![wk, leadingAnchor];
+                    let guide_anchor: *mut AnyObject = msg_send![guide, leadingAnchor];
+                    let constraint: *mut AnyObject =
+                        msg_send![wk_anchor, constraintEqualToAnchor: guide_anchor];
+                    let _: () = msg_send![constraint, setActive: true];
+
+                    let wk_anchor: *mut AnyObject = msg_send![wk, trailingAnchor];
+                    let guide_anchor: *mut AnyObject = msg_send![guide, trailingAnchor];
+                    let constraint: *mut AnyObject =
+                        msg_send![wk_anchor, constraintEqualToAnchor: guide_anchor];
+                    let _: () = msg_send![constraint, setActive: true];
+                });
+            }
+
             // ── Cold-start deep-link capture ────────────────────────────
             // On cold start the OS delivers the URL before the webview JS
             // is ready.  We capture it here and the frontend drains it via

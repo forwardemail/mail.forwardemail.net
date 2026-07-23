@@ -10,11 +10,12 @@
 
 /*
  * Unified safe-area source.
- * iOS WKWebView populates env(safe-area-inset-*) natively when the HTML
- * meta viewport includes viewport-fit=cover (it does).
- * Android WebView returns 0 for env() — MainActivity.kt overrides these
- * same vars as inline styles on :root using WindowInsets values, which
- * win over this stylesheet declaration.
+ * On both mobile platforms the NATIVE layer sizes the webview inside the
+ * system trays, so env(safe-area-inset-*) correctly resolves to 0 there:
+ * Android pads the activity root view (scripts/android/MainActivity.kt),
+ * iOS pins the WKWebView to the safe area layout guide (src-tauri lib.rs).
+ * env() still matters for plain mobile browsers, where the page really
+ * does extend under the trays with viewport-fit=cover.
  */
 :root {
   --safe-area-inset-top: env(safe-area-inset-top, 0px);
