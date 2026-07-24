@@ -42,7 +42,7 @@
   import { openComposeWindow } from '../../utils/compose-window';
   import { closeTab } from '../../stores/tabStore';
   import { normalizeEmail, extractAddressList } from '../../utils/address.ts';
-  import { getMessageApiId } from '../../utils/sync-helpers';
+  import { getMessageApiId, extractRecipientsField } from '../../utils/sync-helpers';
   import { getEffectiveSettingValue, localSettingsVersion } from '../../stores/settingsStore';
   import {
     buildReplyQuotedBody,
@@ -103,17 +103,22 @@
   // ─── Derived ────────────────────────────────────────────────────────
 
   const fromDisplay = $derived(message?.from ? extractDisplayName(message.from) : '');
+  // Normalized cache messages store recipients as a display string, so use it
+  // directly. Messages that reach the reader still in a raw API shape (e.g.
+  // opened from a search result) carry object/array-of-object values that the
+  // old string/array-join path rendered as empty — reuse the same recipient
+  // formatter the cache normalizer uses so the To/Cc lines stay populated.
   const toDisplay = $derived(() => {
-    const to = message?.to || message?.envelope_to || '';
-    if (typeof to === 'string') return to;
-    if (Array.isArray(to)) return to.join(', ');
-    return '';
+    const to = message?.to;
+    if (typeof to === 'string' && to) return to;
+    if (to) return extractRecipientsField(message as never, 'to');
+    const env = message?.envelope_to;
+    return typeof env === 'string' ? env : '';
   });
   const ccDisplay = $derived(() => {
-    const cc = message?.cc || '';
+    const cc = message?.cc;
     if (typeof cc === 'string') return cc;
-    if (Array.isArray(cc)) return cc.join(', ');
-    return '';
+    return cc ? extractRecipientsField(message as never, 'cc') : '';
   });
   const dateDisplay = $derived(
     message?.date || message?.created_at

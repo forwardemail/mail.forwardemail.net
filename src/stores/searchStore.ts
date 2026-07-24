@@ -10,6 +10,7 @@ import { connectSearchWorker } from '../utils/sync-controller';
 import { indexProgress } from './mailboxActions';
 import { resolveSearchBodyIndexing } from '../utils/search-body-indexing.js';
 import { Remote } from '../utils/remote';
+import { extractFromField, extractRecipientsField } from '../utils/sync-helpers';
 import { isDemoMode } from '../utils/demo-mode';
 import type { Message, SearchStats, SearchResult } from '../types';
 import { warn } from '../utils/logger.ts';
@@ -366,6 +367,14 @@ const serverSearch = async (
         ...msg,
         folder: msg.folder || msg.folder_path || folder || 'INBOX',
         dateMs: dateMs ?? msg.date ?? null,
+        // The lightweight /v1/messages search response returns from/to/cc in
+        // raw API shapes; unlike the inbox load it never passes through
+        // normalizeMessageForCache. Normalize the display fields the same way
+        // so result rows show the sender and the reader shows recipients
+        // instead of an empty field.
+        from: extractFromField(msg as never),
+        to: extractRecipientsField(msg as never, 'to') || undefined,
+        cc: extractRecipientsField(msg as never, 'cc') || undefined,
       } as SearchResult;
     });
   } catch (err) {

@@ -147,6 +147,35 @@ describe('Server-side search integration', () => {
       expect(results.some((r) => r.id === 'server-1')).toBe(true);
     });
 
+    it('normalizes raw from/to shapes from the server search response (regression)', async () => {
+      const { searchStore } = await import('../../src/stores/searchStore');
+
+      // The lightweight /v1/messages search response can return from/to as
+      // structured objects rather than display strings, and unlike the inbox
+      // load it does not pass through normalizeMessageForCache. Without
+      // normalization the result row renders an empty sender and the reader
+      // shows an empty To. Assert the display fields come back as strings.
+      mockRequest.mockResolvedValue([
+        {
+          id: 'raw-from-1',
+          subject: 'Outbound SMTP is now pending admin approval',
+          from: { value: [{ name: 'Forward Email', address: 'no-reply@forwardemail.net' }] },
+          to: { value: [{ name: 'Shaun', address: 'shaun@example.com' }] },
+          folder: 'INBOX',
+          date: '2026-07-22T21:00:00Z',
+        },
+      ]);
+
+      const results = await searchStore.actions.search('approval', { folder: 'INBOX' });
+      const row = results.find((r) => r.id === 'raw-from-1');
+
+      expect(row).toBeDefined();
+      expect(typeof row.from).toBe('string');
+      expect(row.from).toContain('Forward Email');
+      expect(typeof row.to).toBe('string');
+      expect(row.to).toContain('Shaun');
+    });
+
     it('should skip server search in demo mode', async () => {
       _demoMode = true;
       const { searchStore } = await import('../../src/stores/searchStore');

@@ -136,8 +136,12 @@
     height: 18px;
     padding: 0 4px;
     border-radius: 9px;
-    background: var(--color-destructive, hsl(var(--destructive)));
-    color: var(--color-destructive-foreground, #fff);
+    /* Reference the raw :root HSL tokens directly. The `--color-*` names come
+     * from `@theme inline`, so they are not runtime custom properties here; an
+     * unwrapped triplet is an invalid color, which made the count inherit the
+     * active tab's blue instead of the intended white. */
+    background: hsl(var(--destructive));
+    color: hsl(var(--destructive-foreground));
     font-size: 11px;
     font-weight: 600;
     line-height: 18px;
