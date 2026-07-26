@@ -1,0 +1,16 @@
+[default]
+description = "Default permissions for the remote-push plugin"
+permissions = [
+  "allow-get-token",
+  "allow-request-permission"
+]
+
+[[permission]]
+identifier = "allow-get-token"
+description = "Allows retrieving the push notification token"
+commands.allow = ["get_token"]
+
+[[permission]]
+identifier = "allow-request-permission"
+description = "Allows requesting user permission for notifications"
+commands.allow = ["request_permission"]

@@ -67,8 +67,12 @@ objc2 = "0.6"
 
 # UnifiedPush is always available on Android and does not depend on Google Play
 # Services. The FCM plugin is optional and enabled only for Play builds.
+# Vendored fork of tauri-plugin-remote-push 1.0.10. Upstream discards the
+# permission result (request_permission returns ()) and deserializes getToken's
+# { token } object into a bare String, so FCM registration always looked denied
+# and never fetched a token. See plugins/tauri-plugin-remote-push.
 [target.'cfg(target_os = "android")'.dependencies]
-tauri-plugin-remote-push = { version = "1.0.10", optional = true }
+tauri-plugin-remote-push = { path = "plugins/tauri-plugin-remote-push", optional = true }
 tauri-plugin-unified-push = { path = "plugins/tauri-plugin-unified-push" }
 
 # macOS-only: Objective-C bindings for dock badge + the custom NSOpenPanel
