@@ -705,7 +705,7 @@ async function handleNewMessage(data, { suppressVisual = false } = {}) {
     null;
   let subject = msg.subject || msg.Subject;
 
-  // WS payload includes raw EML — parse From/Subject directly from headers
+  // Legacy fallback: older servers may still include raw EML in WS payload
   if (!from && typeof msg.eml === 'string') {
     const headers = parseEmlHeaders(msg.eml);
     from = headers.from || null;

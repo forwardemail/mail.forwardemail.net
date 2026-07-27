@@ -70,7 +70,7 @@ If the client does not respond with `pong`, the server will close the connection
 
 | Event              | Key Payload Fields                                                   |
 | ------------------ | -------------------------------------------------------------------- |
-| `newMessage`       | `mailbox`, `message` (includes `eml`)                                |
+| `newMessage`       | `mailbox`, `message` (includes `from`, `subject`, metadata flags)    |
 | `messagesMoved`    | `sourceMailbox`, `destinationMailbox`, `sourceUid`, `destinationUid` |
 | `messagesCopied`   | `sourceMailbox`, `destinationMailbox`, `sourceUid`, `destinationUid` |
 | `flagsUpdated`     | `mailbox`, `action`, `flags`, `uid`                                  |
