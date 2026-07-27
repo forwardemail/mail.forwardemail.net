@@ -422,6 +422,9 @@ setNotificationToasts(toasts);
 viewModel.toasts = toasts;
 viewModel.mailboxView.toasts = toasts;
 
+// Reconcile push registrations for ALL signed-in accounts.
+// Despite the name kept for call-site compatibility, syncPushNotifications()
+// now registers the device token for every account, not just the active one.
 const syncPushForActiveAccount = () => {
   if (!isTauriMobile) return;
 

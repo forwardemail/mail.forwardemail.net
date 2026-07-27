@@ -6,12 +6,37 @@
  * Desktop builds intentionally do not initialize a mobile remote-push plugin;
  * they receive real-time events over WebSocket and may display local system
  * notifications through notification-manager.js.
+ *
+ * ## Per-Account Push Registration Model
+ *
+ * Each signed-in account independently maintains its own server-side push
+ * registration. The device token (APNs/FCM) is shared (one physical device),
+ * but every account gets its own registration so push notifications arrive
+ * regardless of which account is currently "active" in the UI.
+ *
+ * Storage layout:
+ *   push_registrations = JSON { [email]: { regId, token, platform } }
+ *   push_notification_token = current device token (shared)
+ *   push_notification_platform = current platform (shared)
+ *
+ * Lifecycle:
+ *   - On boot/resume: reconcile ALL signed-in accounts against current token
+ *   - On account add: automatically register push for the new account
+ *   - On account switch: NO push teardown (all registrations stay alive)
+ *   - On sign-out: remove ONLY that account's registration
+ *   - On token refresh: update ALL accounts with the new token
  */
 
 import { isDemoMode } from './demo-mode.js';
 import { isTauriMobile } from './platform.js';
-import { Local } from './storage';
-import { listPushTokens, registerPushToken, unregisterPushToken } from './background-service.js';
+import { Local, Accounts } from './storage';
+import {
+  listPushTokens,
+  registerPushToken,
+  registerPushTokenForAccount,
+  unregisterPushToken,
+  unregisterPushTokenForAccount,
+} from './background-service.js';
 import { requestPermission as requestNotificationPermission } from './notification-bridge.js';
 import {
   drainUnifiedPushMessages,
@@ -57,9 +82,13 @@ function withTimeout(promise, ms, operation = 'Operation') {
 
 const TOKEN_STORAGE_KEY = 'push_notification_token';
 const TOKEN_PLATFORM_KEY = 'push_notification_platform';
-const REGISTRATION_ID_STORAGE_KEY = 'push_notification_registration_id';
+const REGISTRATIONS_KEY = 'push_registrations';
 const ANDROID_PREFERRED_PROVIDER_KEY = 'push_notification_preferred_provider';
 const ANDROID_PROVIDER = (import.meta.env.VITE_ANDROID_PUSH_PROVIDER || 'auto').toLowerCase();
+
+// Legacy key — read during migration, then removed
+const LEGACY_REGISTRATION_ID_KEY = 'push_notification_registration_id';
+const LEGACY_MULTI_ACCOUNT_KEY = 'push_notification_multi_account';
 
 let initialized = false;
 let initializationPromise = null;
@@ -68,11 +97,110 @@ let nativeListenerCleanups = [];
 let managementPromise = null;
 const pushStatusListeners = new Set();
 
+// ── Per-Account Registration Storage ──────────────────────────────────────
+
+/**
+ * Get the per-account registrations map.
+ * Returns { [email]: { regId, token, platform } }
+ */
+function getAccountRegistrations() {
+  try {
+    const raw = Local.get(REGISTRATIONS_KEY);
+    if (!raw) {
+      // Migrate from legacy single-registration storage
+      return migrateLegacyRegistrations();
+    }
+
+    return JSON.parse(raw);
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Migrate from the old single-registration model to per-account.
+ */
+function migrateLegacyRegistrations() {
+  const registrations = {};
+  const legacyRegId = Local.get(LEGACY_REGISTRATION_ID_KEY);
+  const legacyMulti = Local.get(LEGACY_MULTI_ACCOUNT_KEY);
+  const activeEmail = Local.get('email');
+  const token = Local.get(TOKEN_STORAGE_KEY);
+  const platform = Local.get(TOKEN_PLATFORM_KEY);
+
+  // Migrate the active account's registration
+  if (legacyRegId && activeEmail) {
+    registrations[activeEmail] = { regId: legacyRegId, token: token || '', platform: platform || '' };
+  }
+
+  // Migrate multi-account registrations
+  if (legacyMulti) {
+    try {
+      const multi = JSON.parse(legacyMulti);
+      for (const [email, regId] of Object.entries(multi)) {
+        if (regId && typeof regId === 'string') {
+          registrations[email] = { regId, token: token || '', platform: platform || '' };
+        }
+      }
+    } catch {
+      // ignore corrupt data
+    }
+  }
+
+  // Clean up legacy keys
+  Local.remove(LEGACY_REGISTRATION_ID_KEY);
+  Local.remove(LEGACY_MULTI_ACCOUNT_KEY);
+
+  if (Object.keys(registrations).length > 0) {
+    setAccountRegistrations(registrations);
+  }
+
+  return registrations;
+}
+
+function setAccountRegistrations(registrations) {
+  Local.set(REGISTRATIONS_KEY, JSON.stringify(registrations));
+}
+
+/**
+ * Get the registration for a specific account.
+ */
+function getAccountRegistration(email) {
+  const registrations = getAccountRegistrations();
+  return registrations[email] || null;
+}
+
+/**
+ * Set the registration for a specific account.
+ */
+function setAccountRegistration(email, regId, token, platform) {
+  const registrations = getAccountRegistrations();
+  registrations[email] = { regId, token, platform };
+  setAccountRegistrations(registrations);
+}
+
+/**
+ * Remove the registration for a specific account.
+ */
+function removeAccountRegistration(email) {
+  const registrations = getAccountRegistrations();
+  delete registrations[email];
+  setAccountRegistrations(registrations);
+}
+
+/**
+ * Get the active account's registration ID (for status/health checks).
+ */
+function getActiveRegistrationId() {
+  const email = Local.get('email');
+  if (!email) return null;
+  const reg = getAccountRegistration(email);
+  return reg?.regId || null;
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────
+
 function getMobilePlatform() {
-  // Prefer the authoritative platform injected by @tauri-apps/plugin-os over
-  // user-agent sniffing, which iPadOS and custom Tauri user agents break. Read
-  // the global directly instead of importing platform.js so this stays correct
-  // in contexts (and tests) that mock the platform module.
   const nativePlatform = globalThis.window?.__TAURI_OS_PLUGIN_INTERNALS__?.platform;
   if (nativePlatform === 'android' || nativePlatform === 'ios') return nativePlatform;
 
@@ -229,22 +357,174 @@ async function removeNativeListeners() {
   );
 }
 
-async function replaceServerRegistration(token, platform) {
-  const previousRegistrationId = Local.get(REGISTRATION_ID_STORAGE_KEY);
-  const registrationId = await registerPushToken(token, platform);
-  if (!registrationId) return false;
+// ── Per-Account Registration Logic ────────────────────────────────────────
 
-  Local.set(TOKEN_STORAGE_KEY, token);
-  Local.set(TOKEN_PLATFORM_KEY, platform);
-  Local.set(REGISTRATION_ID_STORAGE_KEY, registrationId);
+/**
+ * Register the device token with the server for a specific account.
+ * If the account already has a registration with the same token, skip it.
+ * If the token changed (refresh), unregister the old one and register the new one.
+ *
+ * @param {string} email - Account email
+ * @param {string} aliasAuth - Account credentials (email:password)
+ * @param {string} token - Device token
+ * @param {string} platform - 'ios' | 'android' | 'unified-push'
+ * @returns {Promise<boolean>} true if registration succeeded or was already current
+ */
+async function registerForAccount(email, aliasAuth, token, platform) {
+  const existing = getAccountRegistration(email);
 
-  if (previousRegistrationId && previousRegistrationId !== registrationId) {
-    await unregisterPushToken(previousRegistrationId);
+  // If already registered with the same token, no action needed
+  if (existing && existing.regId && existing.token === token && existing.platform === platform) {
+    return true;
   }
 
-  notifyPushStatusChanged();
-  return true;
+  // If token changed, unregister the old registration first
+  if (existing && existing.regId && existing.token !== token) {
+    try {
+      await unregisterPushTokenForAccount(existing.regId, aliasAuth);
+    } catch {
+      // Best effort — old registration may already be expired
+    }
+  }
+
+  // Register with the new token
+  const regId = await registerPushTokenForAccount(token, platform, aliasAuth);
+  if (regId) {
+    setAccountRegistration(email, regId, token, platform);
+    return true;
+  }
+
+  return false;
 }
+
+/**
+ * Register the device token for the active account using the active session auth.
+ * This is the "primary" registration that uses getAuthHeader().
+ */
+async function registerForActiveAccount(token, platform) {
+  const email = Local.get('email');
+  if (!email) return false;
+
+  const existing = getAccountRegistration(email);
+
+  // If already registered with the same token, no action needed
+  if (existing && existing.regId && existing.token === token && existing.platform === platform) {
+    return true;
+  }
+
+  // If token changed, unregister the old registration first
+  if (existing && existing.regId && existing.token !== token) {
+    await unregisterPushToken(existing.regId);
+  }
+
+  const regId = await registerPushToken(token, platform);
+  if (regId) {
+    setAccountRegistration(email, regId, token, platform);
+    Local.set(TOKEN_STORAGE_KEY, token);
+    Local.set(TOKEN_PLATFORM_KEY, platform);
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Reconcile push registrations for ALL signed-in accounts.
+ * Called on boot, resume, and token refresh. This is the core of the
+ * "dummy-proof" design: it ensures every account is registered with
+ * the current device token, regardless of which account is active.
+ *
+ * @param {string} token - Current device token
+ * @param {string} platform - 'ios' | 'android' | 'unified-push'
+ */
+async function reconcileAllAccounts(token, platform) {
+  const accounts = Accounts.getAll();
+  const activeEmail = Local.get('email');
+
+  // Fallback: if no multi-account list exists but we have active session auth,
+  // register using the active session (legacy/single-account mode).
+  if ((!accounts || accounts.length === 0) && !activeEmail) {
+    // No accounts and no active email — register via active session auth
+    // (registerPushToken uses getAuthHeader which reads alias_auth directly)
+    const existing = getAccountRegistration('__active_session__');
+    // If already registered with the same token, no action needed
+    if (existing && existing.regId && existing.token === token && existing.platform === platform) {
+      return;
+    }
+    // If token changed, unregister the old registration first
+    if (existing && existing.regId && existing.token !== token) {
+      await unregisterPushToken(existing.regId);
+    }
+    const regId = await registerPushToken(token, platform);
+    if (regId) {
+      Local.set(TOKEN_STORAGE_KEY, token);
+      Local.set(TOKEN_PLATFORM_KEY, platform);
+      // Store under a sentinel key so cleanup can find it
+      setAccountRegistration('__active_session__', regId, token, platform);
+    }
+    return;
+  }
+
+  if ((!accounts || accounts.length === 0) && activeEmail) {
+    // Active email set but Accounts list empty — register for active session
+    await registerForActiveAccount(token, platform);
+    return;
+  }
+
+  // Register for the active account first (uses session auth)
+  if (activeEmail) {
+    await registerForActiveAccount(token, platform);
+  } else {
+    // No active email but accounts exist — register via session auth fallback
+    const regId = await registerPushToken(token, platform);
+    if (regId) {
+      Local.set(TOKEN_STORAGE_KEY, token);
+      Local.set(TOKEN_PLATFORM_KEY, platform);
+    }
+  }
+
+  // Register for all other accounts using their stored credentials
+  const otherAccounts = accounts.filter(
+    (account) => account.email !== activeEmail && account.aliasAuth,
+  );
+
+  if (otherAccounts.length > 0) {
+    await Promise.allSettled(
+      otherAccounts.map(async (account) => {
+        try {
+          await registerForAccount(account.email, account.aliasAuth, token, platform);
+        } catch (err) {
+          console.warn(`[push] Registration failed for ${account.email}:`, err);
+        }
+      }),
+    );
+  }
+
+  // Clean up registrations for accounts that are no longer signed in
+  pruneStaleRegistrations(accounts);
+
+  notifyPushStatusChanged();
+}
+
+/**
+ * Remove stored registrations for accounts that are no longer in the accounts list.
+ */
+function pruneStaleRegistrations(currentAccounts) {
+  const registrations = getAccountRegistrations();
+  const activeEmails = new Set(currentAccounts.map((a) => a.email));
+  let changed = false;
+
+  for (const email of Object.keys(registrations)) {
+    if (!activeEmails.has(email)) {
+      delete registrations[email];
+      changed = true;
+    }
+  }
+
+  if (changed) setAccountRegistrations(registrations);
+}
+
+// ── Token Acquisition & Registration ──────────────────────────────────────
 
 async function registerNativeToken(getToken, platform) {
   const token = await withTimeout(getToken(), NATIVE_PUSH_TIMEOUT_MS, 'getToken');
@@ -253,7 +533,22 @@ async function registerNativeToken(getToken, platform) {
     return false;
   }
 
-  return replaceServerRegistration(token, platform);
+  // Register for ALL accounts, not just the active one
+  await reconcileAllAccounts(token, platform);
+
+  // Consider registration successful if the token was stored (at least one account registered)
+  return Local.get(TOKEN_STORAGE_KEY) === token;
+}
+
+async function handleTokenRefresh(token, platform) {
+  if (!isValidNativeToken(token)) {
+    console.warn(`[push] Ignoring invalid refreshed ${platform} token`);
+    return;
+  }
+
+  // Token changed — update ALL accounts
+  await reconcileAllAccounts(token, platform);
+  console.info(`[push] Refreshed ${platform} token for all accounts`);
 }
 
 async function initializeIosPush() {
@@ -278,21 +573,12 @@ async function initializeIosPush() {
   if (!(await registerNativeToken(getToken, 'ios'))) return false;
 
   const tokenRefreshListener = await onTokenRefresh(async ({ token }) => {
-    if (!isValidNativeToken(token)) {
-      console.warn('[push] Ignoring invalid refreshed APNs token');
-      return;
-    }
-
-    if (await replaceServerRegistration(token, 'ios')) {
-      console.info('[push] Refreshed APNs token registration');
-    }
+    await handleTokenRefresh(token, 'ios');
   });
   const receivedListener = await onNotificationReceived((notification) => {
     dispatchPushPayload(notification, false);
   });
   const tappedListener = await onNotificationTapped((notification) => {
-    // A tap can only follow a notification already rendered by the OS. Preserve
-    // navigation/state delivery while preventing a second foreground visual.
     dispatchPushPayload(notification, true, true);
   });
 
@@ -322,21 +608,12 @@ async function initializeAndroidFcmPush() {
   if (!(await registerNativeToken(getToken, 'android'))) return false;
 
   const tokenRefreshListener = await onTokenRefresh(async (token) => {
-    if (!isValidNativeToken(token)) {
-      console.warn('[push] Ignoring invalid refreshed FCM token');
-      return;
-    }
-
-    if (await replaceServerRegistration(token, 'android')) {
-      console.info('[push] Refreshed FCM token registration');
-    }
+    await handleTokenRefresh(token, 'android');
   });
   const receivedListener = await onNotificationReceived((notification) => {
     dispatchPushPayload(notification, false);
   });
   const tappedListener = await onNotificationTapped((notification) => {
-    // A tap can only follow a notification already rendered by the OS. Preserve
-    // navigation/state delivery while preventing a second foreground visual.
     dispatchPushPayload(notification, true, true);
   });
 
@@ -352,7 +629,8 @@ async function registerUnifiedPushSubscription(subscription) {
     return false;
   }
 
-  return replaceServerRegistration(serialized, 'unified-push');
+  await reconcileAllAccounts(serialized, 'unified-push');
+  return true;
 }
 
 async function initializeUnifiedPushListeners() {
@@ -371,11 +649,14 @@ async function initializeUnifiedPushListeners() {
       console.warn('[push] UnifiedPush registration failed:', reason);
     },
     onUnregistered: async () => {
-      const registrationId = Local.get(REGISTRATION_ID_STORAGE_KEY);
-      if (registrationId) await unregisterPushToken(registrationId);
+      // UnifiedPush distributor revoked — clear all registrations
+      const registrations = getAccountRegistrations();
+      for (const email of Object.keys(registrations)) {
+        removeAccountRegistration(email);
+      }
+
       Local.remove(TOKEN_STORAGE_KEY);
       Local.remove(TOKEN_PLATFORM_KEY);
-      Local.remove(REGISTRATION_ID_STORAGE_KEY);
       initialized = false;
       activeNativeProvider = null;
       notifyPushStatusChanged();
@@ -395,8 +676,6 @@ async function initializeUnifiedPush() {
 
   const permission = await requestNotificationPermission();
   if (permission !== 'granted') {
-    // Keep the subscription active even when display permission is declined:
-    // queued data messages can still refresh the app when it is opened.
     console.info('[push] Android notification permission was not granted');
   }
 
@@ -438,8 +717,6 @@ async function initializeAndroidPush() {
   if (ANDROID_PROVIDER === 'unified-push') return initializeUnifiedPush();
   if (ANDROID_PROVIDER === 'fcm') return initializeAndroidFcmPush();
 
-  // A dual-provider build defaults to FCM, but an explicit UnifiedPush
-  // distributor choice is a durable device preference and must survive restarts.
   if (Local.get(ANDROID_PREFERRED_PROVIDER_KEY) === 'unified-push') {
     try {
       if (await initializeUnifiedPush()) return true;
@@ -481,8 +758,6 @@ async function initializePushNotifications() {
   } catch (error) {
     const isTimeout = error instanceof PushTimeoutError;
     console.warn(`[push] Native push initialization ${isTimeout ? 'timed out' : 'failed'}:`, error);
-    // Re-throw timeouts so callers (e.g. registerCurrentDevicePush) can surface
-    // a specific 'registration-timeout' code to the UI for retry guidance.
     if (isTimeout) throw error;
   }
 
@@ -490,7 +765,7 @@ async function initializePushNotifications() {
 }
 
 /**
- * Initialize remote push for the active mobile account.
+ * Initialize remote push for all signed-in accounts.
  * Concurrent lifecycle triggers share one native registration attempt.
  *
  * @returns {Promise<boolean>} true when APNs, FCM, or UnifiedPush registered
@@ -511,6 +786,7 @@ export async function initPushNotifications() {
 /**
  * Synchronize remote push when a real alias-authenticated mobile account is active.
  * Safe to invoke after login, during bootstrap, and whenever the app resumes.
+ * Registers push for ALL signed-in accounts, not just the active one.
  */
 export async function syncPushNotifications() {
   if (!isTauriMobile || isDemoMode() || !Local.get('alias_auth')) return false;
@@ -518,8 +794,41 @@ export async function syncPushNotifications() {
 }
 
 /**
- * Remove provider listeners and the active account's server registration.
- * Must run before sign-out clears credentials.
+ * Remove push registration for a SINGLE account (used during sign-out).
+ * Does NOT tear down native listeners or affect other accounts.
+ *
+ * @param {string} email - The account email to deregister
+ * @param {string} [aliasAuth] - Account credentials for server-side DELETE
+ */
+export async function deregisterAccountPush(email, aliasAuth) {
+  if (!email) return true;
+
+  const reg = getAccountRegistration(email);
+  if (!reg || !reg.regId) {
+    removeAccountRegistration(email);
+    return true;
+  }
+
+  let removed = false;
+  try {
+    if (aliasAuth) {
+      removed = await unregisterPushTokenForAccount(reg.regId, aliasAuth);
+    } else {
+      // Fall back to active session auth (works if this IS the active account)
+      removed = await unregisterPushToken(reg.regId);
+    }
+  } catch {
+    // Best effort
+  }
+
+  removeAccountRegistration(email);
+  notifyPushStatusChanged();
+  return removed;
+}
+
+/**
+ * Full cleanup: remove ALL registrations and native listeners.
+ * Used only when the LAST account signs out (full app reset).
  */
 export async function cleanupPushNotifications() {
   const pendingInitialization = initializationPromise;
@@ -528,10 +837,26 @@ export async function cleanupPushNotifications() {
   await removeNativeListeners();
   await removeUnifiedPushListeners();
 
-  const registrationId = Local.get(REGISTRATION_ID_STORAGE_KEY);
-  const serverRegistrationRemoved = registrationId
-    ? await unregisterPushToken(registrationId)
-    : true;
+  // Unregister all per-account registrations
+  const registrations = getAccountRegistrations();
+  const accounts = Accounts.getAll();
+  const accountMap = new Map(accounts.map((a) => [a.email, a]));
+
+  await Promise.allSettled(
+    Object.entries(registrations).map(async ([email, reg]) => {
+      if (!reg.regId) return;
+      try {
+        const account = accountMap.get(email);
+        if (account?.aliasAuth) {
+          await unregisterPushTokenForAccount(reg.regId, account.aliasAuth);
+        } else {
+          await unregisterPushToken(reg.regId);
+        }
+      } catch {
+        // Best effort
+      }
+    }),
+  );
 
   if (activeNativeProvider === 'unified-push') {
     try {
@@ -541,14 +866,16 @@ export async function cleanupPushNotifications() {
     }
   }
 
+  // Clear all push storage
+  Local.remove(REGISTRATIONS_KEY);
   Local.remove(TOKEN_STORAGE_KEY);
   Local.remove(TOKEN_PLATFORM_KEY);
-  Local.remove(REGISTRATION_ID_STORAGE_KEY);
   initialized = false;
   activeNativeProvider = null;
   notifyPushStatusChanged();
-  return serverRegistrationRemoved;
 }
+
+// ── Status & Health ───────────────────────────────────────────────────────
 
 function createBasePushStatus() {
   const platform = getMobilePlatform();
@@ -574,6 +901,7 @@ function createBasePushStatus() {
     serverReachable: false,
     currentRegistration: null,
     otherRegistrations: [],
+    registeredAccounts: [],
     unifiedPush: null,
     health: 'unsupported',
   };
@@ -588,13 +916,19 @@ export async function getPushNotificationStatus() {
   if (!status.supported) return status;
 
   const localToken = Local.get(TOKEN_STORAGE_KEY);
-  const localRegistrationId = Local.get(REGISTRATION_ID_STORAGE_KEY);
+  const localRegistrationId = getActiveRegistrationId();
   const localProvider = normalizePushProvider(Local.get(TOKEN_PLATFORM_KEY)) || status.provider;
   status.localTokenPresent = typeof localToken === 'string' && Boolean(localToken);
   status.localTokenFingerprint = status.localTokenPresent
     ? await getTokenFingerprint(localProvider, localToken)
     : null;
   status.permission = await getNotificationPermissionStatus();
+
+  // Show which accounts have active registrations
+  const registrations = getAccountRegistrations();
+  status.registeredAccounts = Object.keys(registrations).filter(
+    (email) => registrations[email]?.regId,
+  );
 
   if (status.platform === 'android' && isUnifiedPushSupported()) {
     try {
@@ -616,7 +950,7 @@ export async function getPushNotificationStatus() {
   }
 
   status.serverReachable = true;
-  const registrations = (
+  const sanitized = (
     await Promise.all(
       serverRecords.map((record) =>
         sanitizePushRegistration(record, localRegistrationId, localProvider, localToken),
@@ -624,8 +958,8 @@ export async function getPushNotificationStatus() {
     )
   ).filter(Boolean);
   status.currentRegistration =
-    registrations.find((registration) => registration.isCurrentDevice) || null;
-  status.otherRegistrations = registrations.filter(
+    sanitized.find((registration) => registration.isCurrentDevice) || null;
+  status.otherRegistrations = sanitized.filter(
     (registration) => registration.id !== status.currentRegistration?.id,
   );
 
@@ -650,6 +984,8 @@ export async function getPushNotificationStatus() {
 
   return status;
 }
+
+// ── Management Actions ────────────────────────────────────────────────────
 
 function runPushManagement(operation) {
   if (managementPromise) return managementPromise;
@@ -680,13 +1016,27 @@ function getRegistrationFailureCode(status) {
 }
 
 async function removeCurrentPushRegistration(initialStatus) {
-  const localRegistrationId = Local.get(REGISTRATION_ID_STORAGE_KEY);
-  let removed = await cleanupPushNotifications();
-  const matchedRegistrationId = initialStatus.currentRegistration?.id;
+  const activeEmail = Local.get('email');
+  const localRegistrationId = getActiveRegistrationId();
+  let removed = false;
 
+  // Remove the active account's registration
+  if (activeEmail) {
+    removed = await deregisterAccountPush(activeEmail);
+  } else if (localRegistrationId) {
+    removed = await unregisterPushToken(localRegistrationId);
+  }
+
+  const matchedRegistrationId = initialStatus.currentRegistration?.id;
   if (matchedRegistrationId && matchedRegistrationId !== localRegistrationId) {
     removed = (await unregisterPushToken(matchedRegistrationId)) && removed;
   }
+
+  // Clear local token state so status reports 'not-registered' instead of 'needs-repair'
+  Local.remove(TOKEN_STORAGE_KEY);
+  Local.remove(TOKEN_PLATFORM_KEY);
+  initialized = false;
+  notifyPushStatusChanged();
 
   return removed;
 }
@@ -781,7 +1131,7 @@ export function removePushRegistration(registrationId) {
     if (!id) return { ok: false, code: 'deregistration-failed', status: initialStatus };
 
     const isCurrentRegistration =
-      id === Local.get(REGISTRATION_ID_STORAGE_KEY) || id === initialStatus.currentRegistration?.id;
+      id === getActiveRegistrationId() || id === initialStatus.currentRegistration?.id;
     const removed = isCurrentRegistration
       ? await removeCurrentPushRegistration(initialStatus)
       : await unregisterPushToken(id);
@@ -804,6 +1154,8 @@ export function removePushRegistration(registrationId) {
   });
 }
 
+// ── Public Getters ────────────────────────────────────────────────────────
+
 export function getStoredPushToken() {
   return Local.get(TOKEN_STORAGE_KEY) || null;
 }
@@ -816,9 +1168,6 @@ export function isPushInitialized() {
   return initialized;
 }
 
-/**
- * Open the UnifiedPush distributor picker after an explicit settings action.
- */
 export function getAndroidPushProviderPreference() {
   return Local.get(ANDROID_PREFERRED_PROVIDER_KEY) === 'unified-push' ? 'unified-push' : 'fcm';
 }
@@ -875,7 +1224,7 @@ export function handlePushPayload(payload) {
 
     case 'calendar-event':
     case 'calendar-task': {
-      const itemId = firstNonEmpty(payload.id, payload.uid, data.id, data.uid, data.event_id);
+      const itemId = firstNonEmpty(payload.id, payload.uid, data.id, data.uid, data.item_id);
       const hash = itemId
         ? `${type === 'calendar-task' ? '#task=' : '#event='}${encodeURIComponent(itemId)}`
         : '';

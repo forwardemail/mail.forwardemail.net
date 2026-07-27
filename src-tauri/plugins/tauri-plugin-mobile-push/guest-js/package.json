@@ -1,0 +1,50 @@
+{
+  "name": "tauri-plugin-mobile-push-api",
+  "version": "0.1.4",
+  "description": "TypeScript API for tauri-plugin-mobile-push — push notifications for iOS (APNs) and Android (FCM)",
+  "license": "(MIT OR Apache-2.0)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yanqianglu/tauri-plugin-mobile-push.git"
+  },
+  "type": "module",
+  "main": "dist/index.cjs",
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup index.ts --format esm,cjs --dts --clean",
+    "prepublishOnly": "npm run build"
+  },
+  "peerDependencies": {
+    "@tauri-apps/api": ">=2.0.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/api": "^2.10.1",
+    "tsup": "^8.5.1",
+    "typescript": "^5.9.3"
+  },
+  "keywords": [
+    "tauri",
+    "tauri-plugin",
+    "push-notifications",
+    "apns",
+    "fcm",
+    "ios",
+    "android",
+    "mobile",
+    "remote-push",
+    "firebase",
+    "apple-push"
+  ]
+}

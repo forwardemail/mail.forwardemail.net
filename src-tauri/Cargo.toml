@@ -62,7 +62,7 @@ tauri-plugin-haptics = "2"
 # The published mobile-push crate provides direct APNs device tokens on iOS.
 # objc2 drives the UIKit calls that pin the WKWebView inside the safe areas.
 [target.'cfg(target_os = "ios")'.dependencies]
-tauri-plugin-mobile-push = "0.1.4"
+tauri-plugin-mobile-push = { path = "plugins/tauri-plugin-mobile-push" }
 objc2 = "0.6"
 
 # UnifiedPush is always available on Android and does not depend on Google Play

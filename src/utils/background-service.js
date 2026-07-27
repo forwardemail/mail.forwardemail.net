@@ -41,7 +41,7 @@
  *   - App state transitions are debounced to prevent rapid cycling.
  */
 
-import { getAuthHeader } from './auth.ts';
+import { getAuthHeader, buildAliasAuthHeader } from './auth.ts';
 import { isTauri, isTauriDesktop, isTauriMobile, getPlatform } from './platform.js';
 
 // ── Constants ──────────────────────────────────────────────────────────────
@@ -142,6 +142,89 @@ export async function registerPushToken(token, platform) {
     console.warn('[background-service] Token registration error:', err);
     return null;
   }
+}
+
+/**
+ * Register a push token for a specific account (used for multi-account push).
+ * Unlike registerPushToken, this accepts explicit aliasAuth credentials
+ * instead of reading from the active session.
+ *
+ * @param {string} token - Device token or serialized UnifiedPush subscription
+ * @param {string} platform - 'ios' | 'android' | 'apns' | 'fcm' | 'unified-push'
+ * @param {string} aliasAuth - The alias auth credential (email:password format)
+ * @returns {Promise<string|null>} the server-side registration ID
+ */
+export async function registerPushTokenForAccount(token, platform, aliasAuth) {
+  const provider = platform === 'ios' ? 'apns' : platform === 'android' ? 'fcm' : platform;
+  if (!['apns', 'fcm', 'unified-push'].includes(provider)) {
+    console.warn('[background-service] Invalid push provider:', platform);
+    return null;
+  }
+  if (!isValidToken(token, provider)) {
+    console.warn('[background-service] Invalid push token or subscription');
+    return null;
+  }
+  try {
+    const authorization = buildAliasAuthHeader(aliasAuth, { required: true });
+    const response = await fetch(PUSH_TOKEN_ENDPOINT, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: authorization,
+      },
+      body: JSON.stringify({
+        token,
+        platform: provider,
+        device_name: `${provider} (${navigator.userAgent})`.slice(0, 255),
+      }),
+    });
+    if (!response.ok) {
+      console.warn('[background-service] Token registration failed for account:', response.status);
+      return null;
+    }
+    const registration = await response.json();
+    if (!registration || typeof registration.id !== 'string' || !registration.id) {
+      console.warn('[background-service] Token registration returned no ID for account');
+      return null;
+    }
+    return registration.id;
+  } catch (err) {
+    console.warn('[background-service] Token registration error for account:', err);
+    return null;
+  }
+}
+
+/**
+ * Unregister a push-token resource using explicit account credentials.
+ * Used for per-account cleanup during sign-out without requiring the
+ * account to be the active session.
+ *
+ * @param {string} registrationId - ID returned by POST /v1/push-tokens
+ * @param {string} aliasAuth - The alias auth credential (email:password format)
+ * @returns {Promise<boolean>} true when the registration is absent afterward
+ */
+export async function unregisterPushTokenForAccount(registrationId, aliasAuth) {
+  if (typeof registrationId !== 'string' || !registrationId) return true;
+  try {
+    const authorization = buildAliasAuthHeader(aliasAuth, { required: true });
+    const response = await fetch(
+      `${PUSH_TOKEN_ENDPOINT}/${encodeURIComponent(registrationId)}`,
+      {
+        method: 'DELETE',
+        headers: {
+          Authorization: authorization,
+        },
+      },
+    );
+    if (!response.ok && response.status !== 404) {
+      console.warn('[background-service] Token deletion failed for account:', response.status);
+      return false;
+    }
+  } catch (err) {
+    console.warn('[background-service] Token deletion error for account:', err);
+    return false;
+  }
+  return true;
 }
 
 /**

@@ -1644,13 +1644,24 @@ export const signOut = async () => {
     // demo-mode module may not be loaded
   }
 
-  // Delete this account's server-side push resources while its credentials
-  // are still present. The helper is a no-op on non-mobile builds.
-  try {
-    const { cleanupPushNotifications } = await import('../utils/push-notifications.js');
-    await cleanupPushNotifications();
-  } catch (err) {
-    warn('Failed to clean up push registration during sign out', err);
+  // Remove only THIS account's push registration (other accounts keep theirs).
+  // If this is the LAST account, cleanupPushNotifications() tears down everything.
+  if (isTauriMobile && currentEmail) {
+    try {
+      const remainingBeforeRemove = Accounts.getAll().filter((a) => a.email !== currentEmail);
+      if (remainingBeforeRemove.length > 0) {
+        // Other accounts remain — only deregister this one account
+        const currentAccount = Accounts.getAll().find((a) => a.email === currentEmail);
+        const { deregisterAccountPush } = await import('../utils/push-notifications.js');
+        await deregisterAccountPush(currentEmail, currentAccount?.aliasAuth);
+      } else {
+        // Last account — full cleanup (native listeners, all registrations)
+        const { cleanupPushNotifications } = await import('../utils/push-notifications.js');
+        await cleanupPushNotifications();
+      }
+    } catch (err) {
+      warn('Failed to clean up push registration during sign out', err);
+    }
   }
 
   clearSensitiveClientStorage(currentEmail);
@@ -1859,15 +1870,8 @@ const preloadAccountCache = async (account) => {
 };
 
 const performAccountSwitch = async (email) => {
-  // Remove the previous account's token while its credentials are still active.
-  if (isTauriMobile) {
-    try {
-      const { cleanupPushNotifications } = await import('../utils/push-notifications.js');
-      await cleanupPushNotifications();
-    } catch (err) {
-      warn('Failed to clean up push registration before account switch', err);
-    }
-  }
+  // Per-account push: NO teardown on switch. All accounts keep their
+  // registrations alive so push notifications arrive for every account.
 
   // Use Accounts.setActive to properly switch account credentials
   const switched = Accounts.setActive(email);
@@ -1965,12 +1969,15 @@ const performAccountSwitch = async (email) => {
   // above and load() -> syncSettings() will refresh from network in the background.
   await load();
 
+  // Per-account push: syncPushNotifications reconciles ALL accounts,
+  // so after switching we just ensure the new active account is covered.
+  // This is a no-op if the account was already registered with the current token.
   if (isTauriMobile) {
     try {
       const { syncPushNotifications } = await import('../utils/push-notifications.js');
       await syncPushNotifications();
     } catch (err) {
-      warn('Failed to register push for the active account', err);
+      warn('Failed to sync push after account switch', err);
     }
   }
 };

@@ -95,7 +95,10 @@ test.describe('Desktop — Message Actions', () => {
     // with { folder }. Assert the network mutation actually fires (demo mode
     // blocks this) — not just the optimistic UI removal.
     const moveReq = page.waitForRequest(
-      (r) => /\/v1\/messages\//.test(r.url()) && r.method() === 'PUT',
+      (r) =>
+        /\/v1\/messages\//.test(r.url()) &&
+        r.method() === 'PUT' &&
+        Boolean(r.postDataJSON()?.folder),
       { timeout: 8000 },
     );
     await clickDeleteInReader(page);
@@ -115,7 +118,10 @@ test.describe('Desktop — Message Actions', () => {
     await expect(reader).toBeVisible();
 
     const moveReq = page.waitForRequest(
-      (r) => /\/v1\/messages\//.test(r.url()) && r.method() === 'PUT',
+      (r) =>
+        /\/v1\/messages\//.test(r.url()) &&
+        r.method() === 'PUT' &&
+        Boolean(r.postDataJSON()?.folder),
       { timeout: 8000 },
     );
     await clickArchiveInReader(page);

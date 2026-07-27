@@ -73,7 +73,7 @@ export async function mockApi(page, overrides = {}) {
         ...postData,
       };
       contacts.push(newContact);
-      return jsonResponse(route, { Result: newContact }, 201);
+      return jsonResponse(route, newContact, 201);
     }
 
     if (method === 'PUT' && contactId !== 'contacts') {
@@ -81,7 +81,7 @@ export async function mockApi(page, overrides = {}) {
       const index = contacts.findIndex((c) => c.id === contactId);
       if (index >= 0) {
         contacts[index] = { ...contacts[index], ...updateData };
-        return jsonResponse(route, { Result: contacts[index] });
+        return jsonResponse(route, contacts[index]);
       }
       return jsonResponse(route, { error: 'Contact not found' }, 404);
     }
