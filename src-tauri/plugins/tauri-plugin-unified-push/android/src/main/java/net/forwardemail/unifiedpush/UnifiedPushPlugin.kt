@@ -294,8 +294,12 @@ class ForwardEmailPushService : PushService() {
       Notification.Builder(this)
     }
 
+    // Use dedicated monochrome notification icon; fall back to app icon if missing
+    val notifIconRes = resources.getIdentifier("ic_notification", "drawable", packageName)
+    val smallIcon = if (notifIconRes != 0) notifIconRes else applicationInfo.icon
+
     builder
-      .setSmallIcon(applicationInfo.icon)
+      .setSmallIcon(smallIcon)
       .setContentTitle(title)
       .setContentText(body)
       .setStyle(Notification.BigTextStyle().bigText(body))

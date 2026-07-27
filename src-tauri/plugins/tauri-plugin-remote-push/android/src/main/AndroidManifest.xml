@@ -1,2 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" /> 
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <application>
+    <!-- Default notification icon for FCM messages displayed by the system
+         when the app is in the background. Must be a monochrome drawable. -->
+    <meta-data
+      android:name="com.google.firebase.messaging.default_notification_icon"
+      android:resource="@drawable/ic_notification" />
+    <!-- Default notification channel for FCM -->
+    <meta-data
+      android:name="com.google.firebase.messaging.default_notification_channel_id"
+      android:value="new-mail" />
+  </application>
+</manifest>
