@@ -51,9 +51,8 @@ describe('notification click → account switch', () => {
   });
 
   it('dispatches app:switch-account when notification account differs from active', async () => {
-    const { initTauriNotificationClickHandler } = await import(
-      '../../src/utils/notification-bridge.js'
-    );
+    const { initTauriNotificationClickHandler } =
+      await import('../../src/utils/notification-bridge.js');
     await initTauriNotificationClickHandler();
     expect(typeof actionHandler).toBe('function');
 
@@ -82,9 +81,8 @@ describe('notification click → account switch', () => {
   });
 
   it('does NOT dispatch app:switch-account when notification account matches active', async () => {
-    const { initTauriNotificationClickHandler } = await import(
-      '../../src/utils/notification-bridge.js'
-    );
+    const { initTauriNotificationClickHandler } =
+      await import('../../src/utils/notification-bridge.js');
     await initTauriNotificationClickHandler();
 
     const switchEvents = [];
@@ -108,9 +106,8 @@ describe('notification click → account switch', () => {
   });
 
   it('navigates after account switch with a short delay', async () => {
-    const { initTauriNotificationClickHandler } = await import(
-      '../../src/utils/notification-bridge.js'
-    );
+    const { initTauriNotificationClickHandler } =
+      await import('../../src/utils/notification-bridge.js');
     await initTauriNotificationClickHandler();
 
     // Simulate clicking a notification for a different account
@@ -130,9 +127,8 @@ describe('notification click → account switch', () => {
   });
 
   it('navigates immediately when no account field is present in notification data', async () => {
-    const { initTauriNotificationClickHandler } = await import(
-      '../../src/utils/notification-bridge.js'
-    );
+    const { initTauriNotificationClickHandler } =
+      await import('../../src/utils/notification-bridge.js');
     await initTauriNotificationClickHandler();
 
     // Simulate clicking a notification without account info (legacy behavior)
@@ -148,9 +144,8 @@ describe('notification click → account switch', () => {
 
   it('handles case-insensitive account comparison', async () => {
     localStore.set('email', 'Alice@Example.COM');
-    const { initTauriNotificationClickHandler } = await import(
-      '../../src/utils/notification-bridge.js'
-    );
+    const { initTauriNotificationClickHandler } =
+      await import('../../src/utils/notification-bridge.js');
     await initTauriNotificationClickHandler();
 
     const switchEvents = [];

@@ -22,7 +22,10 @@ import { mailboxStore } from '../stores/mailboxStore';
 import { Local } from './storage';
 import { startInitialSync } from './sync-controller';
 import { createReleaseWatcher, WS_EVENTS } from './websocket-client';
-import { connectMultiAccountNotifications, requestNotificationPermission } from './notification-manager';
+import {
+  connectMultiAccountNotifications,
+  requestNotificationPermission,
+} from './notification-manager';
 import { isDemoMode } from './demo-mode.js';
 import { fetchLabels } from '../stores/settingsStore';
 import { getWebSocketManager, destroyWebSocketManager } from './websocket-manager.js';
@@ -319,9 +322,11 @@ function createWebSocketUpdater() {
         // Dispatch auth failure to the app
         wsUnsubs.push(
           wsManager.on('_authFailed', (data) => {
-            window.dispatchEvent(new CustomEvent('fe:auth-failed', {
-              detail: { account: data?._account },
-            }));
+            window.dispatchEvent(
+              new CustomEvent('fe:auth-failed', {
+                detail: { account: data?._account },
+              }),
+            );
           }),
         );
 

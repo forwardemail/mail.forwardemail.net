@@ -159,9 +159,7 @@ export const Local = {
       if (!hasLocalStorage) return null;
       if (TAB_SCOPED_KEYS.has(key)) {
         const prefixedKey = `${PREFIX}${key}`;
-        const sessionValue = hasSessionStorage
-          ? sessionStorage.getItem(prefixedKey)
-          : null;
+        const sessionValue = hasSessionStorage ? sessionStorage.getItem(prefixedKey) : null;
         if (sessionValue !== null) {
           // Guard: if sessionStorage somehow contains an encrypted blob,
           // treat it as missing so getAuthHeader() can throw properly.
@@ -432,9 +430,7 @@ export const Accounts = {
     try {
       if (!hasLocalStorage && !hasSessionStorage) return null;
       // Check sessionStorage first (for session accounts), then localStorage
-      const sessionVal = hasSessionStorage
-        ? sessionStorage.getItem(ACTIVE_ACCOUNT_KEY)
-        : null;
+      const sessionVal = hasSessionStorage ? sessionStorage.getItem(ACTIVE_ACCOUNT_KEY) : null;
       return sessionVal || (hasLocalStorage ? localStorage.getItem(ACTIVE_ACCOUNT_KEY) : null);
     } catch (error) {
       console.error('Failed to get active account:', error);

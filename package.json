@@ -22,7 +22,7 @@
     "lhci:collect": "lhci collect --config=./lighthouserc.cjs",
     "lhci:assert": "lhci assert --config=./lighthouserc.cjs",
     "lhci": "pnpm build && pnpm lhci:collect && pnpm lhci:assert",
-    "test": "vitest run",
+    "test": "pnpm run lint:fix && pnpm run format:fix && vitest run",
     "test:unit": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",

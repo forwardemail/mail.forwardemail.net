@@ -65,10 +65,7 @@ vi.mock('../../src/utils/storage', () => ({
 }));
 
 // ── Import after mocks ────────────────────────────────────────────────────
-import {
-  getWebSocketManager,
-  destroyWebSocketManager,
-} from '../../src/utils/websocket-manager.js';
+import { getWebSocketManager, destroyWebSocketManager } from '../../src/utils/websocket-manager.js';
 import { Accounts, Local } from '../../src/utils/storage';
 import { createWebSocketClient } from '../../src/utils/websocket-client.js';
 
@@ -232,15 +229,15 @@ describe('WebSocket Manager – Multi-Account', () => {
       mgr.on('newMessage', handler);
 
       // Simulate event from Alice
-      const aliceWildcard = mockClients.get('alice@example.com').on.mock.calls.find(
-        (c) => c[0] === '*',
-      )[1];
+      const aliceWildcard = mockClients
+        .get('alice@example.com')
+        .on.mock.calls.find((c) => c[0] === '*')[1];
       aliceWildcard('newMessage', { uid: 1 });
 
       // Simulate event from Bob
-      const bobWildcard = mockClients.get('bob@example.com').on.mock.calls.find(
-        (c) => c[0] === '*',
-      )[1];
+      const bobWildcard = mockClients
+        .get('bob@example.com')
+        .on.mock.calls.find((c) => c[0] === '*')[1];
       bobWildcard('newMessage', { uid: 2 });
 
       expect(handler).toHaveBeenCalledTimes(2);
@@ -261,9 +258,9 @@ describe('WebSocket Manager – Multi-Account', () => {
       mgr.on('_authenticated', handler);
 
       // The wildcard handler should skip _-prefixed events
-      const aliceWildcard = mockClients.get('alice@example.com').on.mock.calls.find(
-        (c) => c[0] === '*',
-      )[1];
+      const aliceWildcard = mockClients
+        .get('alice@example.com')
+        .on.mock.calls.find((c) => c[0] === '*')[1];
       aliceWildcard('_authenticated', {});
 
       // Should NOT be dispatched via wildcard (internal events use dedicated handlers)
@@ -283,9 +280,9 @@ describe('WebSocket Manager – Multi-Account', () => {
       mgr.on('_authenticated', handler);
 
       // Find the dedicated _authenticated handler
-      const authCall = mockClients.get('alice@example.com').on.mock.calls.find(
-        (c) => c[0] === '_authenticated',
-      );
+      const authCall = mockClients
+        .get('alice@example.com')
+        .on.mock.calls.find((c) => c[0] === '_authenticated');
       expect(authCall).toBeTruthy();
       authCall[1](); // Fire it
 
@@ -335,9 +332,9 @@ describe('WebSocket Manager – Multi-Account', () => {
       Local.get.mockReturnValue(null);
       mgr.reconcile();
 
-      const aliceWildcard = mockClients.get('alice@example.com').on.mock.calls.find(
-        (c) => c[0] === '*',
-      )[1];
+      const aliceWildcard = mockClients
+        .get('alice@example.com')
+        .on.mock.calls.find((c) => c[0] === '*')[1];
       aliceWildcard('newMessage', { uid: 1 });
 
       expect(handler).not.toHaveBeenCalled();
@@ -355,9 +352,9 @@ describe('WebSocket Manager – Multi-Account', () => {
       Local.get.mockReturnValue(null);
       mgr.reconcile();
 
-      const aliceWildcard = mockClients.get('alice@example.com').on.mock.calls.find(
-        (c) => c[0] === '*',
-      )[1];
+      const aliceWildcard = mockClients
+        .get('alice@example.com')
+        .on.mock.calls.find((c) => c[0] === '*')[1];
       aliceWildcard('newMessage', { uid: 1 });
 
       expect(handler).not.toHaveBeenCalled();

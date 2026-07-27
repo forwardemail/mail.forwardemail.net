@@ -130,7 +130,11 @@ function migrateLegacyRegistrations() {
 
   // Migrate the active account's registration
   if (legacyRegId && activeEmail) {
-    registrations[activeEmail] = { regId: legacyRegId, token: token || '', platform: platform || '' };
+    registrations[activeEmail] = {
+      regId: legacyRegId,
+      token: token || '',
+      platform: platform || '',
+    };
   }
 
   // Migrate multi-account registrations

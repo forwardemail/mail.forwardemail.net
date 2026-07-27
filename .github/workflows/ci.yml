@@ -107,7 +107,7 @@ jobs:
       #   run: pnpm check
 
       - name: Unit tests
-        run: pnpm test -- --run
+        run: pnpm test:unit
 
       - name: Build
         run: pnpm build

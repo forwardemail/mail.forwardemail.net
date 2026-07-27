@@ -813,25 +813,22 @@ async function handleNewMessage(data, { suppressVisual = false } = {}) {
     // In-app toast (visible when the app window is focused)
     // Include a 'View' action that switches to the correct account and navigates
     const toastAccount = data?._account || Local.get('email') || '';
-    _toasts?.show?.(
-      `New email from ${displayName}: ${safeSubject}`,
-      'info',
-      5000,
-      {
-        label: 'View',
-        callback() {
-          const active = (Local.get('email') || '').toLowerCase();
-          if (toastAccount && toastAccount.toLowerCase() !== active) {
-            globalThis.dispatchEvent(
-              new CustomEvent('app:switch-account', { detail: { email: toastAccount } }),
-            );
-            setTimeout(() => { globalThis.location.hash = `inbox/${uid}`; }, 150);
-          } else {
+    _toasts?.show?.(`New email from ${displayName}: ${safeSubject}`, 'info', 5000, {
+      label: 'View',
+      callback() {
+        const active = (Local.get('email') || '').toLowerCase();
+        if (toastAccount && toastAccount.toLowerCase() !== active) {
+          globalThis.dispatchEvent(
+            new CustomEvent('app:switch-account', { detail: { email: toastAccount } }),
+          );
+          setTimeout(() => {
             globalThis.location.hash = `inbox/${uid}`;
-          }
-        },
+          }, 150);
+        } else {
+          globalThis.location.hash = `inbox/${uid}`;
+        }
       },
-    );
+    });
   }
 }
 

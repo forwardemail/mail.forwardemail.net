@@ -22,11 +22,11 @@ A Tauri v2 plugin that provides native remote push notification support using Ap
 
 ## Platform Support
 
-| Platform | Push Token | Foreground Notifications | Notification Tap | Token Refresh |
-|----------|-----------|--------------------------|------------------|---------------|
-| iOS 13+  | APNs device token (hex) | Yes | Yes | Yes |
-| Android 7+ (API 24) | FCM registration token | Yes | Yes | Yes |
-| Desktop  | No-op (stub values) | N/A | N/A | N/A |
+| Platform            | Push Token              | Foreground Notifications | Notification Tap | Token Refresh |
+| ------------------- | ----------------------- | ------------------------ | ---------------- | ------------- |
+| iOS 13+             | APNs device token (hex) | Yes                      | Yes              | Yes           |
+| Android 7+ (API 24) | FCM registration token  | Yes                      | Yes              | Yes           |
+| Desktop             | No-op (stub values)     | N/A                      | N/A              | N/A           |
 
 ## Why This Plugin?
 
@@ -159,11 +159,11 @@ This registers the plugin's `FCMService` which forwards incoming messages and to
 Shows the system permission dialog on iOS. On Android 13+ (API 33), requests the `POST_NOTIFICATIONS` runtime permission. Earlier Android versions return `{ granted: true }` immediately.
 
 ```typescript
-import { requestPermission } from "tauri-plugin-mobile-push-api";
+import { requestPermission } from 'tauri-plugin-mobile-push-api';
 
 const { granted } = await requestPermission();
 if (!granted) {
-  console.warn("Push notification permission denied");
+  console.warn('Push notification permission denied');
 }
 ```
 
@@ -172,10 +172,10 @@ if (!granted) {
 Returns the APNs device token (hex string) on iOS or the FCM registration token on Android. On iOS, this triggers `registerForRemoteNotifications()` and resolves when the OS delivers the token.
 
 ```typescript
-import { getToken } from "tauri-plugin-mobile-push-api";
+import { getToken } from 'tauri-plugin-mobile-push-api';
 
 const token = await getToken();
-console.log("Device push token:", token);
+console.log('Device push token:', token);
 // Send this token to your backend for server-side push delivery
 ```
 
@@ -190,12 +190,12 @@ import {
   onNotificationReceived,
   onNotificationTapped,
   onTokenRefresh,
-} from "tauri-plugin-mobile-push-api";
+} from 'tauri-plugin-mobile-push-api';
 
 // 1. Request permission
 const { granted } = await requestPermission();
 if (!granted) {
-  console.warn("Push permission denied");
+  console.warn('Push permission denied');
   return;
 }
 
@@ -203,27 +203,27 @@ if (!granted) {
 const token = await getToken();
 
 // 3. Send token to your backend
-await fetch("https://your-api.com/push/register", {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ token, platform: "ios" }),
+await fetch('https://your-api.com/push/register', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ token, platform: 'ios' }),
 });
 
 // 4. Listen for foreground notifications
 const unsubReceived = await onNotificationReceived((notification) => {
-  console.log("Received:", notification.title, notification.body);
-  console.log("Custom data:", notification.data);
+  console.log('Received:', notification.title, notification.body);
+  console.log('Custom data:', notification.data);
 });
 
 // 5. Listen for notification taps (user opened app from notification)
 const unsubTapped = await onNotificationTapped((notification) => {
-  console.log("Tapped:", notification.data);
+  console.log('Tapped:', notification.data);
   // Navigate to the relevant screen based on notification.data
 });
 
 // 6. Listen for token refreshes (re-register with your backend)
 const unsubToken = await onTokenRefresh(({ token }) => {
-  console.log("Token refreshed:", token);
+  console.log('Token refreshed:', token);
   // Send new token to your backend
 });
 
@@ -289,9 +289,7 @@ Fires when the user **taps** a push notification to open the app. Use this for d
 #### `onTokenRefresh(handler)`
 
 ```typescript
-function onTokenRefresh(
-  handler: (payload: { token: string }) => void,
-): Promise<PluginListener>;
+function onTokenRefresh(handler: (payload: { token: string }) => void): Promise<PluginListener>;
 ```
 
 Fires when the OS issues a new push token (APNs token refresh on iOS, FCM token rotation on Android). Send the new token to your backend whenever this fires.

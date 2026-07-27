@@ -71,7 +71,8 @@ pnpm format:fix           # Auto-format code
 pnpm check                # Run svelte-check (type diagnostics)
 
 # Testing
-pnpm test                 # Run unit tests (Vitest)
+pnpm test                 # Auto-fix lint+format, then run unit tests
+pnpm test:unit            # Run unit tests only (fast, no lint/format)
 pnpm test:watch           # Watch mode
 pnpm test:coverage        # Generate coverage report
 pnpm test:e2e             # Run e2e tests (Playwright)
@@ -120,8 +121,9 @@ Examples from history:
 - Include clear description of changes
 - Link related issues if applicable
 - Add screenshots for UI changes
-- Note which test commands were run
-- Ensure CI passes (lint, build)
+- Run `pnpm test` locally before pushing (auto-fixes lint+format, then runs unit tests)
+- For fast TDD loops use `pnpm test:unit` (skips lint/format)
+- Ensure CI passes (lint, format, test:unit, build)
 
 ## Configuration
 

@@ -1,8 +1,4 @@
-import {
-  invoke,
-  addPluginListener,
-  type PluginListener,
-} from "@tauri-apps/api/core";
+import { invoke, addPluginListener, type PluginListener } from '@tauri-apps/api/core';
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -25,7 +21,7 @@ export interface PushNotification {
  * Earlier Android versions return `{ granted: true }` immediately.
  */
 export async function requestPermission(): Promise<{ granted: boolean }> {
-  return invoke("plugin:mobile-push|request_permission");
+  return invoke('plugin:mobile-push|request_permission');
 }
 
 /**
@@ -38,9 +34,7 @@ export async function requestPermission(): Promise<{ granted: boolean }> {
  * {@link onTokenRefresh} to stay up-to-date.
  */
 export async function getToken(): Promise<string> {
-  const result = await invoke<{ token: string }>(
-    "plugin:mobile-push|get_token",
-  );
+  const result = await invoke<{ token: string }>('plugin:mobile-push|get_token');
   return result.token;
 }
 
@@ -53,11 +47,7 @@ export async function getToken(): Promise<string> {
 export async function onNotificationReceived(
   handler: (notification: PushNotification) => void,
 ): Promise<PluginListener> {
-  return addPluginListener(
-    "mobile-push",
-    "notification-received",
-    handler,
-  );
+  return addPluginListener('mobile-push', 'notification-received', handler);
 }
 
 /**
@@ -66,11 +56,7 @@ export async function onNotificationReceived(
 export async function onNotificationTapped(
   handler: (notification: PushNotification) => void,
 ): Promise<PluginListener> {
-  return addPluginListener(
-    "mobile-push",
-    "notification-tapped",
-    handler,
-  );
+  return addPluginListener('mobile-push', 'notification-tapped', handler);
 }
 
 /**
@@ -81,9 +67,5 @@ export async function onNotificationTapped(
 export async function onTokenRefresh(
   handler: (payload: { token: string }) => void,
 ): Promise<PluginListener> {
-  return addPluginListener(
-    "mobile-push",
-    "token-received",
-    handler,
-  );
+  return addPluginListener('mobile-push', 'token-received', handler);
 }

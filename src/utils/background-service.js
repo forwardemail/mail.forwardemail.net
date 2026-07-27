@@ -207,15 +207,12 @@ export async function unregisterPushTokenForAccount(registrationId, aliasAuth) {
   if (typeof registrationId !== 'string' || !registrationId) return true;
   try {
     const authorization = buildAliasAuthHeader(aliasAuth, { required: true });
-    const response = await fetch(
-      `${PUSH_TOKEN_ENDPOINT}/${encodeURIComponent(registrationId)}`,
-      {
-        method: 'DELETE',
-        headers: {
-          Authorization: authorization,
-        },
+    const response = await fetch(`${PUSH_TOKEN_ENDPOINT}/${encodeURIComponent(registrationId)}`, {
+      method: 'DELETE',
+      headers: {
+        Authorization: authorization,
       },
-    );
+    });
     if (!response.ok && response.status !== 404) {
       console.warn('[background-service] Token deletion failed for account:', response.status);
       return false;
