@@ -16,6 +16,7 @@
  */
 
 import { isTauri, isTauriMobile } from './platform.js';
+import { Local } from './storage.js';
 
 // Android-specific detection. tauri-plugin-notification @ 2.3.x has known
 // breakage on Android (tauri-apps/plugins-workspace#2341): cancelAll throws,
@@ -76,6 +77,23 @@ function trackNotification(data) {
 }
 
 function navigateToNotification(data) {
+  // If the notification is for a different account, switch first
+  const targetAccount = data?.account;
+  if (targetAccount && typeof targetAccount === 'string') {
+    const activeAccount = (Local.get('email') || '').toLowerCase();
+    if (activeAccount && targetAccount.toLowerCase() !== activeAccount) {
+      window.dispatchEvent(
+        new CustomEvent('app:switch-account', { detail: { email: targetAccount } }),
+      );
+      // Give the account switch a moment to settle before navigating
+      setTimeout(() => _performNavigation(data), 150);
+      return;
+    }
+  }
+  _performNavigation(data);
+}
+
+function _performNavigation(data) {
   const url = data?.url;
   if (typeof url === 'string' && url.toLowerCase().startsWith('forwardemail://')) {
     window.dispatchEvent(new CustomEvent('app:deep-link', { detail: { url } }));
@@ -278,6 +296,7 @@ async function _notifyTauri({ title, body, channelId, data, number }) {
       if (data.path) extra.path = String(data.path);
       if (data.uid) extra.uid = String(data.uid);
       if (data.url) extra.url = String(data.url);
+      if (data.account) extra.account = String(data.account);
       if (Object.keys(extra).length) payload.extra = extra;
     }
     mod.sendNotification(payload);

@@ -1,19 +1,16 @@
 /**
- * Forward Email – WebSocket-based Inbox Updater
+ * Forward Email – WebSocket-based Inbox Updater (Multi-Account)
  *
- * Drop-in replacement for the polling-based createPollingUpdater().
- * Implements the same InboxUpdater interface (start/stop/destroy) but uses
- * the WebSocket real-time API instead of polling on a 5-minute interval.
+ * Uses the WebSocket manager to maintain real-time connections for ALL
+ * signed-in accounts simultaneously.  Events from any account trigger
+ * appropriate UI updates:
+ *   - Active account events → immediate folder refresh + notifications
+ *   - Non-active account events → notifications + badge updates only
  *
- * When the WebSocket receives events, it calls the same store actions
- * (loadMessages, startInitialSync) that the poller used, ensuring
- * seamless integration with the existing Svelte stores.
- *
- * Falls back to polling if WebSocket connection fails repeatedly.
+ * Falls back to polling if all WebSocket connections fail repeatedly.
  *
  * Hardening:
- *   - Credentials are read from Local storage only at connect time and
- *     never stored as module-level variables.
+ *   - Credentials are never stored as module-level variables.
  *   - Event data payloads are type-checked before use.
  *   - CustomEvent detail objects are frozen to prevent mutation.
  *   - Fallback polling respects visibility and online state.
@@ -24,10 +21,11 @@ import { get } from 'svelte/store';
 import { mailboxStore } from '../stores/mailboxStore';
 import { Local } from './storage';
 import { startInitialSync } from './sync-controller';
-import { createWebSocketClient, createReleaseWatcher, WS_EVENTS } from './websocket-client';
-import { connectNotifications, requestNotificationPermission } from './notification-manager';
+import { createReleaseWatcher, WS_EVENTS } from './websocket-client';
+import { connectMultiAccountNotifications, requestNotificationPermission } from './notification-manager';
 import { isDemoMode } from './demo-mode.js';
 import { fetchLabels } from '../stores/settingsStore';
+import { getWebSocketManager, destroyWebSocketManager } from './websocket-manager.js';
 import { createRealtimeEventCoalescer } from './realtime-event-coalescer.js';
 
 // ── Constants ──────────────────────────────────────────────────────────────
@@ -62,7 +60,7 @@ function dispatchFrozen(eventName, detail) {
 
 /**
  * Factory — returns the active updater implementation.
- * Uses WebSocket when credentials are available, falls back to polling.
+ * Uses WebSocket manager for multi-account real-time updates.
  * @returns {InboxUpdater}
  */
 export function createInboxUpdater() {
@@ -70,11 +68,11 @@ export function createInboxUpdater() {
 }
 
 /**
- * WebSocket-based updater.
+ * WebSocket-based updater (multi-account).
  * @returns {InboxUpdater}
  */
 function createWebSocketUpdater() {
-  let wsClient = null;
+  let wsManager = null;
   let releaseWatcher = null;
   let notifCleanup = null;
   let fallbackTimer = null;
@@ -85,8 +83,19 @@ function createWebSocketUpdater() {
   let lastCaldavResync = 0;
   const wsUnsubs = [];
 
+  /**
+   * Check if an event is for the currently active account.
+   * Events for the active account trigger immediate UI refresh.
+   * Events for other accounts only trigger notifications/badges.
+   */
+  function isActiveAccount(eventData) {
+    const activeEmail = (Local.get('email') || '').toLowerCase();
+    const eventAccount = (eventData?._account || '').toLowerCase();
+    // If no account tag or matches active, treat as active
+    return !eventAccount || eventAccount === activeEmail;
+  }
+
   // Refresh the current folder — polls whatever the user is viewing, not just INBOX.
-  // Removed navigator.onLine guard (unreliable on Linux) — let fetch fail naturally.
   function refreshCurrentFolder() {
     if (document.visibilityState !== 'visible') return;
 
@@ -99,9 +108,7 @@ function createWebSocketUpdater() {
     if (typeof mailboxStore.actions.invalidateFolderInMemCache === 'function') {
       mailboxStore.actions.invalidateFolderInMemCache(account, currentFolder);
     }
-    // Skip loadMessages when search is active — search results use searchResults
-    // store, not messages. Calling loadMessages during search can cause the UI
-    // to briefly flash "no results" as the derived filteredMessages re-evaluates.
+    // Skip loadMessages when search is active
     if (!get(mailboxStore.state.searchActive)) {
       mailboxStore.actions.loadMessages();
     }
@@ -122,21 +129,13 @@ function createWebSocketUpdater() {
   /**
    * Refresh a specific folder — triggers both a background metadata sync
    * AND an immediate loadMessages() call so the UI updates right away.
-   *
-   * Previously this only called startInitialSync(), which fetches metadata
-   * in the background via the sync worker.  The sync worker completion
-   * eventually triggers scheduleSyncRefresh → loadMessages(), but ONLY if
-   * the sync worker is connected AND the task completes before the user
-   * navigates away.  For newly created aliases with no prior sync state,
-   * the sync worker may not have enough context to produce a taskComplete
-   * event, leaving the UI stale.
-   *
-   * The fix: always call loadMessages() directly when the WebSocket tells
-   * us something changed.  This ensures the API is queried immediately and
-   * the message list updates regardless of sync worker state.
+   * Only refreshes the UI if the event is for the active account.
    */
-  function refreshFolder(folderIdentifier) {
+  function refreshFolder(folderIdentifier, eventData) {
     if (!isNonEmptyString(folderIdentifier)) return;
+
+    // Only refresh the visible UI for the active account's events
+    if (!isActiveAccount(eventData)) return;
 
     const currentFolder = get(mailboxStore.state.selectedFolder);
     const account = Local.get('email') || 'default';
@@ -154,10 +153,6 @@ function createWebSocketUpdater() {
     }
 
     // Determine if the affected folder matches what the user is viewing.
-    // If we matched a folder, compare paths. If we couldn't match (e.g.,
-    // ObjectId not found in folders list), assume the current folder might
-    // be affected and refresh anyway — better to over-refresh than miss
-    // a new message.
     const folderPath = folder?.path;
     const affectsCurrentFolder = !currentFolder
       ? false
@@ -184,7 +179,7 @@ function createWebSocketUpdater() {
   function startFallbackPoll() {
     stopFallbackPoll();
     fallbackTimer = setInterval(() => {
-      if (!wsClient?.connected) {
+      if (!wsManager?.anyConnected) {
         refreshCurrentFolder();
       }
     }, FALLBACK_POLL_INTERVAL_MS);
@@ -202,18 +197,12 @@ function createWebSocketUpdater() {
       if (destroyed || started) return;
       started = true;
 
-      // Read credentials at connect time only — never store them.
-      // The app stores alias_auth as "email:password" (password may contain colons).
+      const demoMode = isDemoMode();
       const email = Local.get('email');
       const aliasAuth = Local.get('alias_auth') || '';
-      const colonIdx = aliasAuth.indexOf(':');
-      const password = colonIdx !== -1 ? aliasAuth.slice(colonIdx + 1) : '';
-      const demoMode = isDemoMode();
+      const hasCredentials = isNonEmptyString(email) && isNonEmptyString(aliasAuth);
 
       // Demo mode is intentionally offline and backed by local fake data.
-      // Skip realtime sockets and notification permission requests there so
-      // local browser QA stays quiet and the app does not try to reach the
-      // production websocket endpoint with demo credentials.
       if (!demoMode) {
         releaseWatcher = createReleaseWatcher();
         releaseWatcher.on(WS_EVENTS.NEW_RELEASE, (data) => {
@@ -224,14 +213,13 @@ function createWebSocketUpdater() {
         releaseWatcher.connect();
       }
 
-      // If we have credentials, start the authenticated WebSocket
-      if (!demoMode && isNonEmptyString(email) && isNonEmptyString(password)) {
-        wsClient = createWebSocketClient({ email, password });
+      // If we have credentials, start the multi-account WebSocket manager
+      if (!demoMode && hasCredentials) {
+        wsManager = getWebSocketManager();
+        wsManager.reconcile(); // Connect ALL signed-in accounts
 
         // WebSocket and native push carry the same logical events.  Register
-        // every data refresh behind one coalescer so each side effect runs once,
-        // while push remains a bounded fallback when the foreground socket is
-        // slow or disconnected.
+        // every data refresh behind one coalescer so each side effect runs once.
         const updateHandlers = new Map();
         const updateCoalescer = createRealtimeEventCoalescer({
           onEvent(eventName, data) {
@@ -241,21 +229,21 @@ function createWebSocketUpdater() {
         const registerUpdateHandler = (eventName, handler) => {
           updateHandlers.set(eventName, handler);
           wsUnsubs.push(
-            wsClient.on(eventName, (data) => updateCoalescer.handleWebSocket(eventName, data)),
+            wsManager.on(eventName, (data) => updateCoalescer.handleWebSocket(eventName, data)),
           );
         };
 
         registerUpdateHandler(WS_EVENTS.NEW_MESSAGE, (data) => {
-          refreshFolder(safeString(data?.mailbox, 'INBOX'));
+          refreshFolder(safeString(data?.mailbox, 'INBOX'), data);
         });
         registerUpdateHandler(WS_EVENTS.MESSAGES_MOVED, (data) => {
           if (!data || typeof data !== 'object') return;
-          refreshFolder(safeString(data.sourceMailbox));
-          refreshFolder(safeString(data.destinationMailbox));
+          refreshFolder(safeString(data.sourceMailbox), data);
+          refreshFolder(safeString(data.destinationMailbox), data);
         });
         registerUpdateHandler(WS_EVENTS.MESSAGES_COPIED, (data) => {
           if (data && typeof data === 'object') {
-            refreshFolder(safeString(data.destinationMailbox));
+            refreshFolder(safeString(data.destinationMailbox), data);
           }
         });
         for (const eventName of [
@@ -264,7 +252,7 @@ function createWebSocketUpdater() {
           WS_EVENTS.MESSAGES_EXPUNGED,
         ]) {
           registerUpdateHandler(eventName, (data) => {
-            if (data && typeof data === 'object') refreshFolder(safeString(data.mailbox));
+            if (data && typeof data === 'object') refreshFolder(safeString(data.mailbox), data);
           });
         }
 
@@ -273,7 +261,12 @@ function createWebSocketUpdater() {
           WS_EVENTS.MAILBOX_DELETED,
           WS_EVENTS.MAILBOX_RENAMED,
         ]) {
-          registerUpdateHandler(eventName, () => mailboxStore.actions.loadFolders?.());
+          registerUpdateHandler(eventName, (data) => {
+            // Only refresh folder list for active account events
+            if (isActiveAccount(data)) {
+              mailboxStore.actions.loadFolders?.();
+            }
+          });
         }
 
         for (const eventName of [
@@ -292,8 +285,6 @@ function createWebSocketUpdater() {
         ]) {
           registerUpdateHandler(eventName, (data) => {
             if (!data || typeof data !== 'object') return;
-            // Carry the transport event name forward so downstream handlers can
-            // apply granular merges without requiring a full calendar refetch.
             dispatchFrozen('fe:calendar-event-changed', { type: eventName, payload: data });
           });
         }
@@ -316,9 +307,6 @@ function createWebSocketUpdater() {
         const pushUpdateHandler = (event) => {
           const payload = event?.detail;
           if (!updateHandlers.has(payload?.event)) return;
-          // Native events already displayed while backgrounded are reconciled by
-          // the visibility handler below.  Replaying them here would duplicate
-          // the resume refresh before the WebSocket has a chance to reconnect.
           if (payload.displayedBySystem === true) return;
           updateCoalescer.handlePush(payload);
         };
@@ -328,46 +316,45 @@ function createWebSocketUpdater() {
           updateCoalescer.destroy();
         });
 
-        // Dispatch auth failure to the app so it can show a toast / prompt re-login
+        // Dispatch auth failure to the app
         wsUnsubs.push(
-          wsClient.on('_authFailed', () => {
-            window.dispatchEvent(new CustomEvent('fe:auth-failed'));
+          wsManager.on('_authFailed', (data) => {
+            window.dispatchEvent(new CustomEvent('fe:auth-failed', {
+              detail: { account: data?._account },
+            }));
           }),
         );
 
-        // Ensure fallback polling stays active if WS gives up reconnecting
+        // Ensure fallback polling stays active if all WS connections give up
         wsUnsubs.push(
-          wsClient.on('_maxReconnectsReached', () => {
+          wsManager.on('_maxReconnectsReached', () => {
             console.warn('[updater] WebSocket gave up reconnecting, relying on polling');
             startFallbackPoll();
           }),
         );
 
-        // Connect notification manager and request permission
-        notifCleanup = connectNotifications(wsClient);
+        // Connect notification manager for ALL accounts via the manager
+        notifCleanup = connectMultiAccountNotifications(wsManager);
         requestNotificationPermission();
 
-        wsClient.connect();
+        startFallbackPoll();
       }
 
       // When the app becomes visible: refresh messages, reconnect WS if needed,
-      // and re-sync labels/settings. Covers mobile background return, Linux
-      // suspend/resume, browser tab switch, and Wayland desktop switching.
+      // and re-sync labels/settings.
       visibilityHandler = () => {
         if (document.hidden || destroyed || !started) return;
 
         // 1. Always refresh the current folder when user returns
         refreshCurrentFolder();
 
-        // 2. If WS is disconnected, reset counter and reconnect immediately
-        if (wsClient && !wsClient.connected) {
-          wsClient.reconnect();
+        // 2. Reconnect any disconnected WebSocket clients
+        if (wsManager) {
+          wsManager.reconcile(); // Also picks up any newly added accounts
+          wsManager.reconnectAll();
         }
 
-        // 3. Reconcile calendar + contacts. Any CalDAV/CardDAV events that
-        // fired while the WS was paused (mobile background, desktop sleep)
-        // are lost — without this, calendar events/tasks created on another
-        // client only appear after a full app restart.
+        // 3. Reconcile calendar + contacts
         const now = Date.now();
         if (now - lastCaldavResync >= CALDAV_RESYNC_THROTTLE_MS) {
           lastCaldavResync = now;
@@ -381,20 +368,23 @@ function createWebSocketUpdater() {
         fetchLabels(true, { force: true }).catch(() => {});
       };
       document.addEventListener('visibilitychange', visibilityHandler);
-
-      // Start fallback polling whenever we have credentials,
-      // even if the WebSocket connection fails to establish.
-      if (!demoMode && isNonEmptyString(email) && isNonEmptyString(password)) {
-        startFallbackPoll();
-      }
     },
 
     /**
-     * Expose the authenticated WebSocket client so callers (e.g. the
-     * auto-updater or push notification manager) can subscribe to events.
+     * Expose the WebSocket manager so callers can subscribe to events.
+     */
+    getWsManager() {
+      return wsManager;
+    },
+
+    /**
+     * Legacy compatibility: expose a client for the active account.
+     * @deprecated Use getWsManager() instead.
      */
     getWsClient() {
-      return wsClient;
+      if (!wsManager) return null;
+      const email = Local.get('email');
+      return email ? wsManager.getClient(email) : null;
     },
 
     stop() {
@@ -404,14 +394,17 @@ function createWebSocketUpdater() {
         document.removeEventListener('visibilitychange', visibilityHandler);
         visibilityHandler = null;
       }
-      if (wsClient) {
-        // Unsubscribe all WS event listeners before destroying
-        for (const unsub of wsUnsubs) {
-          if (typeof unsub === 'function') unsub();
-        }
-        wsUnsubs.length = 0;
-        wsClient.destroy();
-        wsClient = null;
+
+      // Unsubscribe all event listeners
+      for (const unsub of wsUnsubs) {
+        if (typeof unsub === 'function') unsub();
+      }
+      wsUnsubs.length = 0;
+
+      // Destroy the WebSocket manager (disconnects all accounts)
+      if (wsManager) {
+        destroyWebSocketManager();
+        wsManager = null;
       }
 
       if (notifCleanup) {

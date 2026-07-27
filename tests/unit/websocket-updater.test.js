@@ -9,6 +9,9 @@ vi.mock('../../src/utils/storage', () => ({
     get: vi.fn(() => null),
     set: vi.fn(),
   },
+  Accounts: {
+    getAll: vi.fn(() => []),
+  },
 }));
 
 // Mock sync-controller
@@ -18,10 +21,11 @@ vi.mock('../../src/utils/sync-controller', () => ({
 }));
 
 // Mock notification-manager
-const mockConnectNotifications = vi.fn(() => vi.fn());
+const mockConnectMultiAccountNotifications = vi.fn(() => vi.fn());
 const mockRequestNotificationPermission = vi.fn();
 vi.mock('../../src/utils/notification-manager', () => ({
-  connectNotifications: (...args) => mockConnectNotifications(...args),
+  connectNotifications: vi.fn(() => vi.fn()),
+  connectMultiAccountNotifications: (...args) => mockConnectMultiAccountNotifications(...args),
   requestNotificationPermission: (...args) => mockRequestNotificationPermission(...args),
 }));
 
@@ -70,21 +74,45 @@ vi.mock('../../src/stores/mailboxStore', () => ({
   },
 }));
 
-// Mock websocket-client — capture event subscriptions
-const wsEventHandlers = new Map();
-const mockWsConnect = vi.fn();
-const mockWsDestroy = vi.fn();
-const mockWsOn = vi.fn((event, handler) => {
-  if (!wsEventHandlers.has(event)) wsEventHandlers.set(event, []);
-  wsEventHandlers.get(event).push(handler);
+// Mock websocket-manager — the updater now uses the manager, not raw clients
+const mgrEventHandlers = new Map();
+const mockMgrReconcile = vi.fn();
+const mockMgrReconnectAll = vi.fn();
+const mockMgrDestroy = vi.fn();
+const mockMgrOn = vi.fn((event, handler) => {
+  if (!mgrEventHandlers.has(event)) mgrEventHandlers.set(event, []);
+  mgrEventHandlers.get(event).push(handler);
   return vi.fn(); // unsub
 });
 
-const mockReleaseOn = vi.fn(() => {
-  return vi.fn();
-});
+const mockManager = {
+  reconcile: mockMgrReconcile,
+  reconnectAll: mockMgrReconnectAll,
+  destroy: mockMgrDestroy,
+  on: mockMgrOn,
+  off: vi.fn(),
+  removeAccount: vi.fn(),
+  getClients: vi.fn(() => new Map()),
+  getClient: vi.fn(() => null),
+  get anyConnected() {
+    return true;
+  },
+  get connectionCount() {
+    return 1;
+  },
+};
+
+const mockDestroyWebSocketManager = vi.fn();
+vi.mock('../../src/utils/websocket-manager.js', () => ({
+  getWebSocketManager: () => mockManager,
+  destroyWebSocketManager: (...args) => mockDestroyWebSocketManager(...args),
+}));
+
+// Mock websocket-client (still needed for createReleaseWatcher and WS_EVENTS)
+const mockReleaseOn = vi.fn(() => vi.fn());
 const mockReleaseConnect = vi.fn();
 const mockReleaseDestroy = vi.fn();
+const mockWsConnect = vi.fn();
 
 vi.mock('../../src/utils/websocket-client', () => ({
   WS_EVENTS: {
@@ -92,6 +120,7 @@ vi.mock('../../src/utils/websocket-client', () => ({
     MESSAGES_MOVED: 'messagesMoved',
     MESSAGES_COPIED: 'messagesCopied',
     FLAGS_UPDATED: 'flagsUpdated',
+    LABELS_UPDATED: 'labelsUpdated',
     MESSAGES_EXPUNGED: 'messagesExpunged',
     MAILBOX_CREATED: 'mailboxCreated',
     MAILBOX_DELETED: 'mailboxDeleted',
@@ -110,9 +139,9 @@ vi.mock('../../src/utils/websocket-client', () => ({
     NEW_RELEASE: 'newRelease',
   },
   createWebSocketClient: vi.fn(() => ({
-    on: mockWsOn,
+    on: vi.fn(() => vi.fn()),
     connect: mockWsConnect,
-    destroy: mockWsDestroy,
+    destroy: vi.fn(),
     connected: true,
   })),
   createReleaseWatcher: vi.fn(() => ({
@@ -137,8 +166,12 @@ function setupCredentials() {
   });
 }
 
+/**
+ * Simulate a WebSocket event coming through the manager.
+ * The manager dispatches events to handlers registered via mgr.on(eventName, handler).
+ */
 function simulateWsEvent(eventName, data) {
-  const handlers = wsEventHandlers.get(eventName) || [];
+  const handlers = mgrEventHandlers.get(eventName) || [];
   for (const handler of handlers) {
     handler(data);
   }
@@ -148,24 +181,25 @@ function simulateWsEvent(eventName, data) {
 
 describe('createInboxUpdater', () => {
   beforeEach(() => {
-    wsEventHandlers.clear();
+    mgrEventHandlers.clear();
     mockLoadMessages.mockReset();
     mockLoadFolders.mockReset();
     mockStartInitialSync.mockReset();
     mockInvalidateFolderInMemCache.mockReset();
     mockUpdateFolderUnreadCounts.mockReset();
-    mockWsOn.mockClear();
-    mockWsConnect.mockClear();
+    mockMgrOn.mockClear();
+    mockMgrReconcile.mockClear();
+    mockMgrReconnectAll.mockClear();
+    mockMgrDestroy.mockClear();
     mockReleaseOn.mockClear();
     mockReleaseConnect.mockClear();
     mockReleaseDestroy.mockClear();
-    mockConnectNotifications.mockClear();
+    mockConnectMultiAccountNotifications.mockClear();
     mockRequestNotificationPermission.mockClear();
     mockIsDemoMode.mockReset();
     mockIsDemoMode.mockReturnValue(false);
     vi.mocked(Local.get).mockReset();
     selectedFolderStore.set('INBOX');
-    // Ensure document is visible and online
     Object.defineProperty(document, 'visibilityState', {
       value: 'visible',
       writable: true,
@@ -192,19 +226,19 @@ describe('createInboxUpdater', () => {
     expect(typeof updater.destroy).toBe('function');
   });
 
-  it('connects WebSocket when credentials are available', () => {
+  it('calls manager.reconcile() when credentials are available', () => {
     setupCredentials();
     const updater = createInboxUpdater();
     updater.start();
-    expect(mockWsConnect).toHaveBeenCalled();
+    expect(mockMgrReconcile).toHaveBeenCalled();
     updater.destroy();
   });
 
-  it('does not connect authenticated WebSocket without credentials', () => {
+  it('does not call manager.reconcile() without credentials', () => {
     vi.mocked(Local.get).mockReturnValue(null);
     const updater = createInboxUpdater();
     updater.start();
-    expect(mockWsConnect).not.toHaveBeenCalled();
+    expect(mockMgrReconcile).not.toHaveBeenCalled();
     updater.destroy();
   });
 
@@ -221,19 +255,19 @@ describe('createInboxUpdater', () => {
     mockIsDemoMode.mockReturnValue(true);
     const updater = createInboxUpdater();
     updater.start();
-    expect(mockWsConnect).not.toHaveBeenCalled();
+    expect(mockMgrReconcile).not.toHaveBeenCalled();
     expect(mockReleaseConnect).not.toHaveBeenCalled();
-    expect(mockConnectNotifications).not.toHaveBeenCalled();
+    expect(mockConnectMultiAccountNotifications).not.toHaveBeenCalled();
     expect(mockRequestNotificationPermission).not.toHaveBeenCalled();
     updater.destroy();
   });
 
-  it('subscribes to all 8 IMAP events + _authFailed', () => {
+  it('subscribes to all 8 IMAP events + _authFailed via manager.on()', () => {
     setupCredentials();
     const updater = createInboxUpdater();
     updater.start();
 
-    const subscribedEvents = mockWsOn.mock.calls.map((call) => call[0]);
+    const subscribedEvents = mockMgrOn.mock.calls.map((call) => call[0]);
     expect(subscribedEvents).toContain('newMessage');
     expect(subscribedEvents).toContain('messagesMoved');
     expect(subscribedEvents).toContain('messagesCopied');
@@ -242,16 +276,17 @@ describe('createInboxUpdater', () => {
     expect(subscribedEvents).toContain('mailboxCreated');
     expect(subscribedEvents).toContain('mailboxDeleted');
     expect(subscribedEvents).toContain('mailboxRenamed');
+    expect(subscribedEvents).toContain('_authFailed');
 
     updater.destroy();
   });
 
-  it('subscribes to all 6 CalDAV events', () => {
+  it('subscribes to all 6 CalDAV events via manager.on()', () => {
     setupCredentials();
     const updater = createInboxUpdater();
     updater.start();
 
-    const subscribedEvents = mockWsOn.mock.calls.map((call) => call[0]);
+    const subscribedEvents = mockMgrOn.mock.calls.map((call) => call[0]);
     expect(subscribedEvents).toContain('calendarCreated');
     expect(subscribedEvents).toContain('calendarUpdated');
     expect(subscribedEvents).toContain('calendarDeleted');
@@ -262,18 +297,26 @@ describe('createInboxUpdater', () => {
     updater.destroy();
   });
 
-  it('subscribes to all 5 CardDAV events', () => {
+  it('subscribes to all 5 CardDAV events via manager.on()', () => {
     setupCredentials();
     const updater = createInboxUpdater();
     updater.start();
 
-    const subscribedEvents = mockWsOn.mock.calls.map((call) => call[0]);
+    const subscribedEvents = mockMgrOn.mock.calls.map((call) => call[0]);
     expect(subscribedEvents).toContain('addressBookCreated');
     expect(subscribedEvents).toContain('addressBookDeleted');
     expect(subscribedEvents).toContain('contactCreated');
     expect(subscribedEvents).toContain('contactUpdated');
     expect(subscribedEvents).toContain('contactDeleted');
 
+    updater.destroy();
+  });
+
+  it('connects multi-account notifications to the manager', () => {
+    setupCredentials();
+    const updater = createInboxUpdater();
+    updater.start();
+    expect(mockConnectMultiAccountNotifications).toHaveBeenCalledWith(mockManager);
     updater.destroy();
   });
 });
@@ -284,17 +327,18 @@ describe('refreshFolder (core sync bug fix)', () => {
   let updater;
 
   beforeEach(() => {
-    wsEventHandlers.clear();
+    mgrEventHandlers.clear();
     mockLoadMessages.mockReset();
     mockLoadFolders.mockReset();
     mockStartInitialSync.mockReset();
     mockInvalidateFolderInMemCache.mockReset();
     mockUpdateFolderUnreadCounts.mockReset();
-    mockWsOn.mockClear();
+    mockMgrOn.mockClear();
+    mockMgrReconcile.mockClear();
     mockReleaseOn.mockClear();
     mockReleaseConnect.mockClear();
     mockReleaseDestroy.mockClear();
-    mockConnectNotifications.mockClear();
+    mockConnectMultiAccountNotifications.mockClear();
     mockRequestNotificationPermission.mockClear();
     mockIsDemoMode.mockReset();
     mockIsDemoMode.mockReturnValue(false);
@@ -324,32 +368,27 @@ describe('refreshFolder (core sync bug fix)', () => {
 
   it('calls loadMessages() when newMessage arrives for the current folder', () => {
     simulateWsEvent('newMessage', { mailbox: 'INBOX' });
-
     expect(mockLoadMessages).toHaveBeenCalled();
   });
 
   it('calls startInitialSync() when newMessage arrives', () => {
     simulateWsEvent('newMessage', { mailbox: 'INBOX' });
-
     expect(mockStartInitialSync).toHaveBeenCalled();
   });
 
   it('calls invalidateFolderInMemCache() before loadMessages()', () => {
     simulateWsEvent('newMessage', { mailbox: 'INBOX' });
-
     expect(mockInvalidateFolderInMemCache).toHaveBeenCalled();
   });
 
   it('calls updateFolderUnreadCounts() on any folder event', () => {
     simulateWsEvent('newMessage', { mailbox: 'INBOX' });
-
     expect(mockUpdateFolderUnreadCounts).toHaveBeenCalled();
   });
 
   it('does NOT call loadMessages() when event is for a different folder', () => {
     selectedFolderStore.set('INBOX');
     simulateWsEvent('newMessage', { mailbox: 'Sent' });
-
     expect(mockLoadMessages).not.toHaveBeenCalled();
     // But sync should still run
     expect(mockStartInitialSync).toHaveBeenCalled();
@@ -357,13 +396,11 @@ describe('refreshFolder (core sync bug fix)', () => {
 
   it('calls loadMessages() for flagsUpdated on current folder', () => {
     simulateWsEvent('flagsUpdated', { mailbox: 'INBOX' });
-
     expect(mockLoadMessages).toHaveBeenCalled();
   });
 
   it('calls loadMessages() for messagesExpunged on current folder', () => {
     simulateWsEvent('messagesExpunged', { mailbox: 'INBOX' });
-
     expect(mockLoadMessages).toHaveBeenCalled();
   });
 
@@ -373,7 +410,6 @@ describe('refreshFolder (core sync bug fix)', () => {
       sourceMailbox: 'INBOX',
       destinationMailbox: 'Trash',
     });
-
     // loadMessages called for INBOX (current folder)
     expect(mockLoadMessages).toHaveBeenCalled();
     // startInitialSync called for both folders
@@ -385,39 +421,33 @@ describe('refreshFolder (core sync bug fix)', () => {
     simulateWsEvent('messagesCopied', {
       destinationMailbox: 'Sent',
     });
-
     expect(mockLoadMessages).toHaveBeenCalled();
   });
 
   it('calls loadFolders() for mailboxCreated', () => {
-    simulateWsEvent('mailboxCreated', {});
-
+    simulateWsEvent('mailboxCreated', { _account: 'user@example.com' });
     expect(mockLoadFolders).toHaveBeenCalled();
   });
 
   it('calls loadFolders() for mailboxDeleted', () => {
-    simulateWsEvent('mailboxDeleted', {});
-
+    simulateWsEvent('mailboxDeleted', { _account: 'user@example.com' });
     expect(mockLoadFolders).toHaveBeenCalled();
   });
 
   it('calls loadFolders() for mailboxRenamed', () => {
-    simulateWsEvent('mailboxRenamed', {});
-
+    simulateWsEvent('mailboxRenamed', { _account: 'user@example.com' });
     expect(mockLoadFolders).toHaveBeenCalled();
   });
 
   it('handles case-insensitive folder matching', () => {
     selectedFolderStore.set('inbox');
     simulateWsEvent('newMessage', { mailbox: 'INBOX' });
-
     expect(mockLoadMessages).toHaveBeenCalled();
   });
 
   it('defaults to INBOX when newMessage has no mailbox field', () => {
     selectedFolderStore.set('INBOX');
     simulateWsEvent('newMessage', {});
-
     expect(mockLoadMessages).toHaveBeenCalled();
   });
 
@@ -434,15 +464,14 @@ describe('refreshFolder (core sync bug fix)', () => {
         },
       }),
     );
-    expect(mockStartInitialSync).not.toHaveBeenCalled();
-
+    // Before coalesce window closes, the WS event arrives (same notification_id)
     simulateWsEvent('newMessage', {
-      notification_id: notificationId,
       mailbox: 'INBOX',
-      message: { uid: 100 },
+      uid: 100,
+      notification_id: notificationId,
     });
     await vi.advanceTimersByTimeAsync(PUSH_COALESCE_MS);
-
+    // Should only have triggered once (WS wins)
     expect(mockStartInitialSync).toHaveBeenCalledTimes(1);
     expect(mockLoadMessages).toHaveBeenCalledTimes(1);
   });
@@ -461,7 +490,6 @@ describe('refreshFolder (core sync bug fix)', () => {
     );
     await vi.advanceTimersByTimeAsync(PUSH_COALESCE_MS - 1);
     expect(mockStartInitialSync).not.toHaveBeenCalled();
-
     await vi.advanceTimersByTimeAsync(1);
     expect(mockStartInitialSync).toHaveBeenCalledTimes(1);
     expect(mockLoadMessages).toHaveBeenCalledTimes(1);
@@ -481,7 +509,6 @@ describe('refreshFolder (core sync bug fix)', () => {
       }),
     );
     await vi.advanceTimersByTimeAsync(PUSH_COALESCE_MS);
-
     expect(mockStartInitialSync).not.toHaveBeenCalled();
     expect(mockLoadMessages).not.toHaveBeenCalled();
   });
@@ -494,8 +521,8 @@ describe('CalDAV/CardDAV event dispatch', () => {
   let eventsSpy;
 
   beforeEach(() => {
-    wsEventHandlers.clear();
-    mockWsOn.mockClear();
+    mgrEventHandlers.clear();
+    mockMgrOn.mockClear();
     vi.mocked(Local.get).mockReset();
     eventsSpy = vi.fn();
     setupCredentials();
@@ -543,7 +570,6 @@ describe('CalDAV/CardDAV event dispatch', () => {
     window.addEventListener('fe:calendar-changed', handler);
     simulateWsEvent('calendarCreated', { id: 'cal-1' });
     window.removeEventListener('fe:calendar-changed', handler);
-
     expect(detail).not.toBeNull();
     expect(Object.isFrozen(detail)).toBe(true);
   });
@@ -584,11 +610,11 @@ describe('stop and destroy lifecycle', () => {
     setupCredentials();
     const updater = createInboxUpdater();
     updater.start();
-    const callsAfterFirstStart = mockWsConnect.mock.calls.length;
+    const callsAfterFirstStart = mockMgrReconcile.mock.calls.length;
     updater.destroy();
     // Second start should not throw or reconnect
     updater.start();
-    // connect should not have been called again after destroy
-    expect(mockWsConnect.mock.calls.length).toBe(callsAfterFirstStart);
+    // reconcile should not have been called again after destroy
+    expect(mockMgrReconcile.mock.calls.length).toBe(callsAfterFirstStart);
   });
 });

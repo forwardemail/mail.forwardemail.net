@@ -514,10 +514,12 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     // macOS template icons must be monochrome with a real alpha channel so
     // the OS can invert them for light/dark menu bars. The default 32x32.png
     // is opaque RGBA (full square) — using it as a template would render as
-    // a solid black block. The tray-template-32x32.png asset is a white-on-
-    // alpha silhouette derived from the brand mark.
+    // a solid black block. The tray-template-32x32@2x.png asset is a white-
+    // on-alpha silhouette at 64×64 px (the native @2x Retina resolution for
+    // a 32pt menu-bar icon). Using the @2x variant avoids blurry upscaling
+    // on HiDPI screens and ensures macOS correctly applies template tinting.
     #[cfg(target_os = "macos")]
-    let icon = Image::from_bytes(include_bytes!("../icons/tray-template-32x32.png"))?;
+    let icon = Image::from_bytes(include_bytes!("../icons/tray-template-32x32@2x.png"))?;
     #[cfg(not(target_os = "macos"))]
     let icon = Image::from_bytes(include_bytes!("../icons/32x32.png"))?;
 

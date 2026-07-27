@@ -147,17 +147,26 @@ const TAB_SCOPED_KEYS = new Set(['email', 'alias_auth', 'api_key', 'authToken'])
 // headers to the API, causing persistent 401 errors.
 const ENCRYPTED_PREFIX = '\x00ENC\x01';
 
+// Guard: in Web Worker contexts (sync.worker.ts) or when macOS firewall
+// blocks WebKit storage access, localStorage/sessionStorage may not exist.
+// Return safe defaults without logging noisy console errors.
+const hasLocalStorage = typeof localStorage !== 'undefined';
+const hasSessionStorage = typeof sessionStorage !== 'undefined';
+
 export const Local = {
   get(key) {
     try {
+      if (!hasLocalStorage) return null;
       if (TAB_SCOPED_KEYS.has(key)) {
         const prefixedKey = `${PREFIX}${key}`;
-        const sessionValue = sessionStorage.getItem(prefixedKey);
+        const sessionValue = hasSessionStorage
+          ? sessionStorage.getItem(prefixedKey)
+          : null;
         if (sessionValue !== null) {
           // Guard: if sessionStorage somehow contains an encrypted blob,
           // treat it as missing so getAuthHeader() can throw properly.
           if (sessionValue.startsWith(ENCRYPTED_PREFIX)) {
-            sessionStorage.removeItem(prefixedKey);
+            if (hasSessionStorage) sessionStorage.removeItem(prefixedKey);
             return null;
           }
           return sessionValue;
@@ -170,10 +179,10 @@ export const Local = {
             // unusable (returning it would send garbage auth headers → 401).
             const revealed = revealLocalValue(localValue);
             if (revealed === null) return null;
-            sessionStorage.setItem(prefixedKey, revealed);
+            if (hasSessionStorage) sessionStorage.setItem(prefixedKey, revealed);
             return revealed;
           }
-          sessionStorage.setItem(prefixedKey, localValue);
+          if (hasSessionStorage) sessionStorage.setItem(prefixedKey, localValue);
         }
         return localValue;
       }
@@ -190,12 +199,13 @@ export const Local = {
 
   set(key, value) {
     try {
+      if (!hasLocalStorage) return false;
       // Sensitive keys (credentials, PGP material, the accounts list) are
       // encrypted at rest whenever the App Lock vault is unlocked, not just
       // in the one-time setup sweep. Tab-scoped sessionStorage keeps the
       // plaintext copy (same model as restoreSessionCredentials).
       localStorage.setItem(`${PREFIX}${key}`, protectLocalValue(key, value));
-      if (TAB_SCOPED_KEYS.has(key)) {
+      if (TAB_SCOPED_KEYS.has(key) && hasSessionStorage) {
         sessionStorage.setItem(`${PREFIX}${key}`, value);
       }
       return true;
@@ -207,8 +217,9 @@ export const Local = {
 
   remove(key) {
     try {
+      if (!hasLocalStorage) return false;
       localStorage.removeItem(`${PREFIX}${key}`);
-      if (TAB_SCOPED_KEYS.has(key)) {
+      if (TAB_SCOPED_KEYS.has(key) && hasSessionStorage) {
         sessionStorage.removeItem(`${PREFIX}${key}`);
       }
       return true;
@@ -220,6 +231,7 @@ export const Local = {
 
   clear() {
     try {
+      if (!hasLocalStorage) return false;
       const keysToRemove = [];
       for (let i = 0; i < localStorage.length; i += 1) {
         const key = localStorage.key(i);
@@ -227,9 +239,11 @@ export const Local = {
       }
       keysToRemove.forEach((key) => localStorage.removeItem(key));
       // Also clear tab-scoped keys from sessionStorage
-      TAB_SCOPED_KEYS.forEach((key) => {
-        sessionStorage.removeItem(`${PREFIX}${key}`);
-      });
+      if (hasSessionStorage) {
+        TAB_SCOPED_KEYS.forEach((key) => {
+          sessionStorage.removeItem(`${PREFIX}${key}`);
+        });
+      }
       return true;
     } catch (error) {
       console.error('localStorage.clear failed:', error);
@@ -245,6 +259,7 @@ export const Local = {
 export const Session = {
   get(key) {
     try {
+      if (!hasSessionStorage) return null;
       return sessionStorage.getItem(`${PREFIX}${key}`);
     } catch (error) {
       console.error('sessionStorage.getItem failed:', error);
@@ -254,6 +269,7 @@ export const Session = {
 
   set(key, value) {
     try {
+      if (!hasSessionStorage) return false;
       sessionStorage.setItem(`${PREFIX}${key}`, value);
       return true;
     } catch (error) {
@@ -264,6 +280,7 @@ export const Session = {
 
   remove(key) {
     try {
+      if (!hasSessionStorage) return false;
       sessionStorage.removeItem(`${PREFIX}${key}`);
       return true;
     } catch (error) {
@@ -274,6 +291,7 @@ export const Session = {
 
   clear() {
     try {
+      if (!hasSessionStorage) return false;
       const keysToRemove = [];
       for (let i = 0; i < sessionStorage.length; i += 1) {
         const key = sessionStorage.key(i);
@@ -375,6 +393,7 @@ export const Accounts = {
    * Get persistent accounts from localStorage
    */
   getPersistent() {
+    if (!hasLocalStorage) return [];
     const list = readAccountsList(localStorage, ACCOUNTS_KEY);
     return list === null ? [] : list;
   },
@@ -384,6 +403,7 @@ export const Accounts = {
    */
   getSession() {
     try {
+      if (!hasSessionStorage) return [];
       const data = sessionStorage.getItem(SESSION_ACCOUNTS_KEY);
       return data ? JSON.parse(data) : [];
     } catch (error) {
@@ -410,8 +430,12 @@ export const Accounts = {
    */
   getActive() {
     try {
+      if (!hasLocalStorage && !hasSessionStorage) return null;
       // Check sessionStorage first (for session accounts), then localStorage
-      return sessionStorage.getItem(ACTIVE_ACCOUNT_KEY) || localStorage.getItem(ACTIVE_ACCOUNT_KEY);
+      const sessionVal = hasSessionStorage
+        ? sessionStorage.getItem(ACTIVE_ACCOUNT_KEY)
+        : null;
+      return sessionVal || (hasLocalStorage ? localStorage.getItem(ACTIVE_ACCOUNT_KEY) : null);
     } catch (error) {
       console.error('Failed to get active account:', error);
       return null;
@@ -431,8 +455,8 @@ export const Accounts = {
       }
 
       // Store active account in both storages for compatibility
-      localStorage.setItem(ACTIVE_ACCOUNT_KEY, email);
-      sessionStorage.setItem(ACTIVE_ACCOUNT_KEY, email);
+      if (hasLocalStorage) localStorage.setItem(ACTIVE_ACCOUNT_KEY, email);
+      if (hasSessionStorage) sessionStorage.setItem(ACTIVE_ACCOUNT_KEY, email);
 
       // Load account credentials into appropriate storage
       const storage = account.persistent ? Local : Session;
@@ -461,6 +485,8 @@ export const Accounts = {
    */
   add(email, credentials = {}, staySignedIn = true) {
     try {
+      if (staySignedIn && !hasLocalStorage) return false;
+      if (!staySignedIn && !hasSessionStorage) return false;
       const storage = staySignedIn ? localStorage : sessionStorage;
       const storageKey = staySignedIn ? ACCOUNTS_KEY : SESSION_ACCOUNTS_KEY;
 
@@ -492,9 +518,11 @@ export const Accounts = {
       writeAccountsList(storage, storageKey, accounts);
 
       // If moving from session to persistent (or vice versa), remove from the other storage
+      const otherAvailable = staySignedIn ? hasSessionStorage : hasLocalStorage;
       const otherStorage = staySignedIn ? sessionStorage : localStorage;
       const otherKey = staySignedIn ? SESSION_ACCOUNTS_KEY : ACCOUNTS_KEY;
       try {
+        if (!otherAvailable) throw new Error('skip');
         const otherAccounts = readAccountsList(otherStorage, otherKey);
         if (otherAccounts !== null && otherAccounts.length) {
           const filtered = otherAccounts.filter((a) => a.email !== email);
@@ -529,7 +557,7 @@ export const Accounts = {
 
       // Remove from persistent storage (refuse while the vault is locked;
       // getPersistent would read [] and the write would clobber the list)
-      if (isVaultLocked() && localStorage.getItem(ACCOUNTS_KEY)) {
+      if (hasLocalStorage && isVaultLocked() && localStorage.getItem(ACCOUNTS_KEY)) {
         warn('Cannot remove persistent account while the vault is locked');
         return false;
       }
@@ -537,10 +565,12 @@ export const Accounts = {
       const filteredPersistent = persistent.filter((a) => a.email !== email);
       if (filteredPersistent.length !== persistent.length) {
         found = true;
-        if (filteredPersistent.length > 0) {
-          writeAccountsList(localStorage, ACCOUNTS_KEY, filteredPersistent);
-        } else {
-          localStorage.removeItem(ACCOUNTS_KEY);
+        if (hasLocalStorage) {
+          if (filteredPersistent.length > 0) {
+            writeAccountsList(localStorage, ACCOUNTS_KEY, filteredPersistent);
+          } else {
+            localStorage.removeItem(ACCOUNTS_KEY);
+          }
         }
       }
 
@@ -549,9 +579,9 @@ export const Accounts = {
       const filteredSession = session.filter((a) => a.email !== email);
       if (filteredSession.length !== session.length) {
         found = true;
-        if (filteredSession.length > 0) {
+        if (filteredSession.length > 0 && hasSessionStorage) {
           sessionStorage.setItem(SESSION_ACCOUNTS_KEY, JSON.stringify(filteredSession));
-        } else {
+        } else if (hasSessionStorage) {
           sessionStorage.removeItem(SESSION_ACCOUNTS_KEY);
         }
       }
@@ -569,8 +599,8 @@ export const Accounts = {
         if (remaining.length > 0) {
           this.setActive(remaining[0].email);
         } else {
-          localStorage.removeItem(ACTIVE_ACCOUNT_KEY);
-          sessionStorage.removeItem(ACTIVE_ACCOUNT_KEY);
+          if (hasLocalStorage) localStorage.removeItem(ACTIVE_ACCOUNT_KEY);
+          if (hasSessionStorage) sessionStorage.removeItem(ACTIVE_ACCOUNT_KEY);
           Local.clear();
           Session.clear();
         }

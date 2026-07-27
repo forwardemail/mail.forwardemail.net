@@ -4971,8 +4971,6 @@ dependencies = [
 [[package]]
 name = "tauri-plugin-mobile-push"
 version = "0.1.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9ab15008b7d1b350e7021d8afe434b17d670cb54e9ff1baa0e4b55392d265aa3"
 dependencies = [
  "log",
  "serde",
@@ -5054,8 +5052,6 @@ dependencies = [
 [[package]]
 name = "tauri-plugin-remote-push"
 version = "1.0.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a02555daafbbab32d8efaf2dbd939af4bce67eae851cfe19d2c78c1d1cbe0427"
 dependencies = [
  "serde",
  "serde_json",

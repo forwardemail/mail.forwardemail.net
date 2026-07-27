@@ -197,6 +197,8 @@ function buildCalendarNotificationData(data, isTask = false) {
   const url = buildDeepLink(`/calendar${hash}`);
   if (url) payload.url = url;
   if (id) payload.itemId = String(id);
+  const account = data?._account || Local.get('email') || '';
+  if (account) payload.account = account;
   return payload;
 }
 
@@ -233,6 +235,8 @@ function buildContactNotificationData(data) {
   const url = buildDeepLink(`/contacts${hash}`);
   if (url) payload.url = url;
   if (id) payload.itemId = String(id);
+  const account = data?._account || Local.get('email') || '';
+  if (account) payload.account = account;
   return payload;
 }
 
@@ -651,7 +655,7 @@ async function prependNewMessageToStore({ msg, mailbox, from, subject, uid }) {
     const envelope = {
       id,
       uid: msg?.uid ?? msg?.Uid ?? null,
-      account: Local.get('email') || 'default',
+      account: msg?._account || Local.get('email') || 'default',
       folder: currentFolder,
       date: dateMs,
       dateMs,
@@ -711,7 +715,11 @@ async function handleNewMessage(data, { suppressVisual = false } = {}) {
   if (SILENT_FOLDERS.has(upperPath)) return;
 
   const fromAddr = (extractEmail(msg.from) || msg.from?.address || '').toLowerCase();
-  const accountEmail = (Local.get('email') || '').toLowerCase();
+  // Use the _account tag from the event (set by websocket-manager) so we
+  // correctly suppress self-sent notifications for ANY signed-in account,
+  // not just the currently active one.
+  const eventAccount = (data?._account || '').toLowerCase();
+  const accountEmail = eventAccount || (Local.get('email') || '').toLowerCase();
   if (accountEmail && fromAddr && fromAddr === accountEmail) return;
 
   incrementBadge(1);
@@ -784,7 +792,7 @@ async function handleNewMessage(data, { suppressVisual = false } = {}) {
       id: String(msg?.id ?? msg?.Uid ?? msg?.uid ?? uid),
       mailbox,
       messageId: msg?.message_id || msg?.MessageId || msg?.['Message-ID'] || null,
-      account: Local.get('email') || 'default',
+      account: data?._account || Local.get('email') || 'default',
     });
   }
 
@@ -798,11 +806,32 @@ async function handleNewMessage(data, { suppressVisual = false } = {}) {
         path: sanitizePath(`#inbox/${uid}`),
         url: `forwardemail://mailbox#inbox/${encodeURIComponent(String(uid))}`,
         uid,
+        account: data?._account || Local.get('email') || '',
       },
     });
 
     // In-app toast (visible when the app window is focused)
-    _toasts?.show?.(`New email from ${displayName}: ${safeSubject}`, 'info');
+    // Include a 'View' action that switches to the correct account and navigates
+    const toastAccount = data?._account || Local.get('email') || '';
+    _toasts?.show?.(
+      `New email from ${displayName}: ${safeSubject}`,
+      'info',
+      5000,
+      {
+        label: 'View',
+        callback() {
+          const active = (Local.get('email') || '').toLowerCase();
+          if (toastAccount && toastAccount.toLowerCase() !== active) {
+            globalThis.dispatchEvent(
+              new CustomEvent('app:switch-account', { detail: { email: toastAccount } }),
+            );
+            setTimeout(() => { globalThis.location.hash = `inbox/${uid}`; }, 150);
+          } else {
+            globalThis.location.hash = `inbox/${uid}`;
+          }
+        },
+      },
+    );
   }
 }
 
@@ -832,7 +861,7 @@ function handleMailboxCreated(data, { suppressVisual = false } = {}) {
     title: 'Folder Created',
     body: `New folder: ${path}`,
     tag: sanitize(`mailbox-created-${path}`, MAX_TAG_LEN),
-    data: { path: '#folders' },
+    data: { path: '#folders', account: data?._account || Local.get('email') || '' },
   });
 }
 
@@ -844,7 +873,7 @@ function handleMailboxDeleted(data, { suppressVisual = false } = {}) {
     title: 'Folder Deleted',
     body: `Folder removed: ${path}`,
     tag: sanitize(`mailbox-deleted-${path}`, MAX_TAG_LEN),
-    data: { path: '#folders' },
+    data: { path: '#folders', account: data?._account || Local.get('email') || '' },
   });
 }
 
@@ -857,7 +886,7 @@ function handleMailboxRenamed(data, { suppressVisual = false } = {}) {
     title: 'Folder Renamed',
     body: `"${oldPath}" -> "${newPath}"`,
     tag: sanitize(`mailbox-renamed-${newPath}`, MAX_TAG_LEN),
-    data: { path: '#folders' },
+    data: { path: '#folders', account: data?._account || Local.get('email') || '' },
   });
 }
 
@@ -1023,6 +1052,52 @@ export function connectNotifications(wsClient) {
   // lets a matching socket event win in the foreground and otherwise consumes
   // push after a bounded delay, while suppressing visuals already shown by the
   // operating system.
+  const pushHandler = (event) => {
+    const payload = event?.detail;
+    if (!ROUTED_NOTIFICATION_EVENTS.has(payload?.event)) return;
+    coalescer.handlePush(payload);
+  };
+  window.addEventListener('fe:push-notification', pushHandler);
+  unsubs.push(() => window.removeEventListener('fe:push-notification', pushHandler));
+
+  return () => {
+    coalescer.destroy();
+    for (const unsub of unsubs) {
+      if (typeof unsub === 'function') unsub();
+    }
+  };
+}
+
+/**
+ * Connect the multi-account WebSocket manager's events to the notification
+ * system.  Events from ALL accounts are routed through a single coalescer
+ * so notifications fire for any signed-in account — not just the active one.
+ *
+ * The manager tags every event with `_account` (the email that owns the
+ * connection), which downstream handlers use for self-suppression and
+ * account attribution.
+ *
+ * @param {Object} wsManager - A WebSocket manager instance (getWebSocketManager())
+ * @returns {Function} Cleanup function to remove all listeners
+ */
+export function connectMultiAccountNotifications(wsManager) {
+  if (!wsManager || typeof wsManager.on !== 'function') {
+    console.warn('[notification-manager] Invalid wsManager');
+    return () => {};
+  }
+
+  const unsubs = [];
+  const coalescer = createRealtimeEventCoalescer({
+    onEvent: routeNotificationEvent,
+  });
+
+  for (const eventName of ROUTED_NOTIFICATION_EVENTS) {
+    unsubs.push(
+      wsManager.on(eventName, (payload) => coalescer.handleWebSocket(eventName, payload)),
+    );
+  }
+
+  // APNs, FCM, and UnifiedPush all enter through one DOM event.
   const pushHandler = (event) => {
     const payload = event?.detail;
     if (!ROUTED_NOTIFICATION_EVENTS.has(payload?.event)) return;

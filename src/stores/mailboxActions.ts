@@ -43,6 +43,7 @@ import { isHiddenLabel } from '../utils/label-filters';
 import { queueMutation } from '../utils/mutation-queue';
 import { config } from '../config';
 import { createInboxUpdater } from '../utils/websocket-updater';
+import { getWebSocketManager } from '../utils/websocket-manager.js';
 import { i18n } from '../utils/i18n';
 import { isTauri, isTauriDesktop, isTauriMobile, swReadyWithTimeout } from '../utils/platform.js';
 import { downloadFile } from '../utils/download';
@@ -288,10 +289,17 @@ export const load = async () => {
       queueBodiesForFolder('INBOX', nextAccount, { bodyLimit: 100 });
     }
 
-    // Start polling for INBOX updates (replaces commented-out AUTO_SYNC_INTERVAL)
-    if (inboxUpdater) inboxUpdater.destroy();
-    inboxUpdater = createInboxUpdater();
-    inboxUpdater.start();
+    // Start the multi-account WebSocket updater if not already running.
+    // Unlike the old single-account model, we do NOT destroy and recreate
+    // on every load() — the manager keeps connections for all accounts alive.
+    if (!inboxUpdater) {
+      inboxUpdater = createInboxUpdater();
+      inboxUpdater.start();
+    } else {
+      // Reconcile connections in case accounts changed
+      const mgr = getWebSocketManager();
+      mgr.reconcile();
+    }
 
     // Show this account's last-known storage immediately, then refresh live.
     seedStorageStats(nextAccount);
@@ -1624,9 +1632,18 @@ export const signOut = async () => {
   const currentEmail = Local.get('email');
   accountMenuOpen.set(false);
 
-  // Stop inbox polling
-  if (inboxUpdater) inboxUpdater.destroy();
-  inboxUpdater = null;
+  // Remove only THIS account's WebSocket connection (other accounts keep theirs).
+  // If this is the LAST account, destroy the entire updater.
+  if (currentEmail) {
+    const mgr = getWebSocketManager();
+    mgr.removeAccount(currentEmail);
+  }
+  const remainingWsAccounts = Accounts.getAll().filter((a) => a.email !== currentEmail);
+  if (remainingWsAccounts.length === 0) {
+    // Last account — full teardown
+    if (inboxUpdater) inboxUpdater.destroy();
+    inboxUpdater = null;
+  }
 
   // Clean up custom event listeners from main.ts
   try {
@@ -1888,9 +1905,13 @@ const performAccountSwitch = async (email) => {
   // This allows an atomic swap from Account A → Account B with no blank state.
   const cached = await preloadAccountCache(email);
 
-  // Stop inbox polling before switching (load() will start a new one)
-  if (inboxUpdater) inboxUpdater.destroy();
-  inboxUpdater = null;
+  // Multi-account WebSocket: do NOT destroy the updater on account switch.
+  // All accounts keep their WebSocket connections alive. Just reconcile
+  // in case the account list changed.
+  if (inboxUpdater) {
+    const mgr = getWebSocketManager();
+    mgr.reconcile();
+  }
 
   // PHASE 2: Reset workers and internal tracking (no visible effect)
   resetSyncWorkerReady();

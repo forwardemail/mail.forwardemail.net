@@ -2541,6 +2541,16 @@ async function bootstrap() {
       handleAuthRecovery('http-401');
     });
 
+    // Register account-switch handler for notification click routing.
+    // When a notification for a non-active account is clicked, the
+    // notification-bridge dispatches this event to switch accounts first.
+    globalThis.addEventListener('app:switch-account', (event: Event) => {
+      const email = (event as CustomEvent)?.detail?.email;
+      if (email && typeof email === 'string') {
+        mailboxActions.switchAccount(email);
+      }
+    });
+
     // Register deep-link and single-instance event handlers BEFORE
     // initTauriBridge() so they are ready when pending cold-start URLs
     // are drained.  The tauri-bridge dispatches 'app:deep-link' and
