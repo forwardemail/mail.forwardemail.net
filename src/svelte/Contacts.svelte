@@ -933,8 +933,8 @@
       const vCardContent = generateVCard(contactData);
       const payload = {
         full_name: name,
-        emails: email ? [{ value: email }] : undefined,
-        phone_numbers: draft.phone ? [{ value: draft.phone }] : undefined,
+        emails: email ? [{ value: email }] : [],
+        phone_numbers: draft.phone ? [{ value: draft.phone }] : [],
         content: vCardContent,
       };
       if (draft.id) {
@@ -1052,8 +1052,8 @@
       const vCardContent = generateVCard(contactData);
       const payload = {
         full_name: name,
-        emails: email ? [{ value: email }] : undefined,
-        phone_numbers: modalContact.phone ? [{ value: modalContact.phone }] : undefined,
+        emails: email ? [{ value: email }] : [],
+        phone_numbers: modalContact.phone ? [{ value: modalContact.phone }] : [],
         content: vCardContent,
       };
       if (modalMode === 'edit' && modalContact.id) {
