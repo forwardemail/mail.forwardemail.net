@@ -66,12 +66,13 @@ import { warn } from '../utils/logger.ts';
 import { folderMessageCache } from './folder-message-cache';
 import { isOnline } from '../utils/network-status';
 import { getAuthHeader } from '../utils/auth';
+import { noteLightweightListResponse, lightweightListSupported } from '../utils/api-capabilities';
 import {
   isValidDexieKeyFallback,
   coerceLabelList,
   mergeMessagePages,
   mergeMissingLabels,
-  mergeMissingFrom,
+  mergeMissingAddressFields,
   resolveHasMoreAfterFetch,
   isNoContentResponse,
   extractMessageList,
@@ -229,9 +230,16 @@ const createMailboxStore = () => {
       // works even if the user has never opened the Sent folder.
       if (!sentMessages.length) {
         try {
+          // These records are persisted to db.messages, so they must carry
+          // recipients. Gate lightweight on this server returning address
+          // fields, otherwise the reply index is seeded from empty envelopes.
           const res = await Remote.request(
             'MessageList',
-            { folder: sentFolder, limit: 200, lightweight: true },
+            {
+              folder: sentFolder,
+              limit: 200,
+              ...(lightweightListSupported() ? { lightweight: true } : {}),
+            },
             { method: 'GET', pathOverride: '/v1/messages' },
           );
           const items = Array.isArray(res) ? res : res?.data || res?.messages || [];
@@ -1014,6 +1022,15 @@ const createMailboxStore = () => {
       }
       tracer.stage('map_end', { count: mapped.length });
 
+      // Probe before the cache backfill below fills senders in from IndexedDB.
+      // Afterwards a stripped response is indistinguishable from a good one.
+      // A page of real mail always has at least one sender, so "none at all"
+      // means this server drops addresses from lightweight responses; stop
+      // asking for it (this request already paid the price, later ones won't).
+      if (noteLightweightListResponse(mapped)) {
+        folderMessageCache.clear();
+      }
+
       // If the active account changed while this request was in flight,
       // still write to IDB for this account's cache.
       if (activeNow !== account) {
@@ -1023,7 +1040,7 @@ const createMailboxStore = () => {
       let merged = mapped;
       if (mapped.length) {
         merged = await mergeMissingLabels(bulkGetMessages, account, mapped, labelPresence);
-        merged = await mergeMissingFrom(bulkGetMessages, account, merged);
+        merged = await mergeMissingAddressFields(bulkGetMessages, account, merged);
       }
 
       // Server-confirmed-empty: when the folder's own metadata reports zero

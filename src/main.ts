@@ -50,6 +50,7 @@ import {
   isTauriDesktop,
   isTauriMobile,
 } from './utils/platform.js';
+import { initOsTextScale } from './utils/os-text-scale';
 import { openComposeWindow, initComposeWindowListener } from './utils/compose-window';
 import {
   isLockEnabled,
@@ -2028,6 +2029,14 @@ async function bootstrap() {
 
   // Mark as ready early to avoid blank screen if async init stalls.
   root.classList.add('ready');
+
+  // Follow the OS text size before the first paint of real content, so text
+  // does not visibly resize a moment after the app appears. No-op off iOS.
+  try {
+    initOsTextScale();
+  } catch {
+    /* text stays at the default scale */
+  }
 
   // Request durable IndexedDB storage (best-effort, non-blocking). Without this,
   // some engines — notably Linux WebKitGTK under the tauri:// origin — can evict

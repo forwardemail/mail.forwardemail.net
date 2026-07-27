@@ -201,39 +201,41 @@ body.light-mode:not(.mailbox-mode) {
    Increase font sizes for better readability on mobile
    ============================================ */
 @media (max-width: 640px) {
-  /* Scale up base font sizes on mobile for readability */
+  /* Scale up base font sizes on mobile for readability. Each keeps the
+   * --fe-text-scale multiplier from tokens.css so the OS text size setting
+   * still applies on top of the mobile bump. */
   :root {
-    --text-2xs: 11px;
-    --text-xs: 12px;
-    --text-sm: 13px;
-    --text-base: 14px;
-    --text-md: 15px;
-    --text-lg: 16px;
-    --text-xl: 18px;
-    --text-2xl: 20px;
-    --text-3xl: 22px;
+    --text-2xs: calc(11px * var(--fe-text-scale));
+    --text-xs: calc(12px * var(--fe-text-scale));
+    --text-sm: calc(13px * var(--fe-text-scale));
+    --text-base: calc(14px * var(--fe-text-scale));
+    --text-md: calc(15px * var(--fe-text-scale));
+    --text-lg: calc(16px * var(--fe-text-scale));
+    --text-xl: calc(18px * var(--fe-text-scale));
+    --text-2xl: calc(20px * var(--fe-text-scale));
+    --text-3xl: calc(22px * var(--fe-text-scale));
   }
 
   /* Ensure body text is at least 14px for readability */
   body {
-    font-size: 14px;
+    font-size: calc(14px * var(--fe-text-scale));
     line-height: 1.5;
   }
 
   /* Message content should be comfortable to read */
   .fe-message-subject {
-    font-size: 15px;
+    font-size: calc(15px * var(--fe-text-scale));
   }
 
   .fe-message-from,
   .fe-message-snippet,
   .fe-message-date {
-    font-size: 13px;
+    font-size: calc(13px * var(--fe-text-scale));
   }
 
   /* Folder list items */
   .fe-folder {
-    font-size: 15px;
+    font-size: calc(15px * var(--fe-text-scale));
   }
 }
 

@@ -10,6 +10,11 @@ import { isDemoMode } from './demo-mode';
 let worker = null;
 let workerReady = false;
 let dbConnected = false;
+// Account whose credentials were last handed to the worker. Tracked separately
+// from `workerReady` so an account change re-inits even on a code path that
+// forgot to call resetSyncWorkerReady(). Without credentials for the account a
+// task names, the worker refuses the task rather than fetching as someone else.
+let initializedAccount = null;
 
 const pendingTasks = createPendingRequests();
 const pendingRequests = createPendingRequests();
@@ -120,7 +125,8 @@ async function connectToDbWorker() {
 
 export async function ensureSyncWorkerReady() {
   if (isDemoMode()) return; // Don't spawn worker in demo mode
-  if (workerReady && worker) return worker;
+  const activeAccount = Local.get('email') || 'default';
+  if (workerReady && worker && initializedAccount === activeAccount) return worker;
   if (!worker) {
     worker = createWorker();
     worker.onmessage = handleMessage;
@@ -131,13 +137,18 @@ export async function ensureSyncWorkerReady() {
   if (!authHeader) {
     throw new Error('Missing auth header for sync worker');
   }
+  // Send the account this header belongs to. The worker files credentials per
+  // account rather than keeping one "current" header, so a sync still running
+  // for a switched-away account cannot start fetching as the new one.
   worker.postMessage({
     type: 'init',
     config: {
       apiBase: config.apiBase,
+      account: activeAccount,
       authHeader,
     },
   });
+  initializedAccount = activeAccount;
   const pgpPayload = getPgpPayload();
   worker.postMessage({
     type: 'pgpKeys',
@@ -154,11 +165,24 @@ export async function ensureSyncWorkerReady() {
 export function resetSyncWorkerReady() {
   workerReady = false;
   dbConnected = false;
+  initializedAccount = null;
   // Reject all pending tasks/requests from the previous account
   // so in-flight operations don't resolve after an account switch
   const error = new Error('Account switched');
   pendingTasks.clear(error);
   pendingRequests.clear(error);
+}
+
+/**
+ * Drop an account's credentials from the worker. Call on sign-out/account
+ * removal: the worker keeps auth per account so in-flight syncs finish under
+ * their own identity, which means a signed-out account's header would otherwise
+ * stay usable for the worker's lifetime.
+ */
+export function revokeSyncWorkerAuth(account) {
+  if (!worker || !account) return;
+  worker.postMessage({ type: 'revokeAuth', account });
+  if (initializedAccount === account) initializedAccount = null;
 }
 
 // Default timeout for sync tasks (2 minutes)

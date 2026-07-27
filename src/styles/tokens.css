@@ -286,18 +286,28 @@
     ui-monospace, SFMono-Regular, 'SF Mono', Monaco, Consolas, 'Liberation Mono', 'Courier New',
     monospace;
 
+  /* Multiplier applied to every font size below. Defaults to 1 and is set at
+   * runtime from the operating system's preferred text size (see
+   * src/utils/os-text-scale.ts). Font sizes are the only thing scaled, so a
+   * larger system text size does not stretch spacing or break layout.
+   *
+   * These tokens ARE Tailwind v4's font-size theme variables, so every
+   * `text-sm` / `text-xs` / etc. utility in the app resolves through them and
+   * scales from this one value. */
+  --fe-text-scale: 1;
+
   /* Font Sizes */
-  --text-2xs: 10px;
-  --text-xs: 11px;
-  --text-sm: 12px;
-  --text-base: 13px;
-  --text-md: 14px;
-  --text-lg: 15px;
-  --text-xl: 16px;
-  --text-2xl: 18px;
-  --text-3xl: 20px;
-  --text-4xl: 24px;
-  --text-5xl: 28px;
+  --text-2xs: calc(10px * var(--fe-text-scale));
+  --text-xs: calc(11px * var(--fe-text-scale));
+  --text-sm: calc(12px * var(--fe-text-scale));
+  --text-base: calc(13px * var(--fe-text-scale));
+  --text-md: calc(14px * var(--fe-text-scale));
+  --text-lg: calc(15px * var(--fe-text-scale));
+  --text-xl: calc(16px * var(--fe-text-scale));
+  --text-2xl: calc(18px * var(--fe-text-scale));
+  --text-3xl: calc(20px * var(--fe-text-scale));
+  --text-4xl: calc(24px * var(--fe-text-scale));
+  --text-5xl: calc(28px * var(--fe-text-scale));
 
   /* Line Heights */
   --leading-none: 1;

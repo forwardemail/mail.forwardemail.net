@@ -523,17 +523,37 @@ async function resolveMailbox(identifier) {
 /**
  * Find a specific message in a MessageList response by id/uid or Message-ID.
  * Returns null when the message isn't queryable yet (indexer lag).
+ *
+ * `subject` is a fallback identity, used only when the event carried no id at
+ * all. Deliveries that land in temporary storage are announced without one (the
+ * message has no id until it is synced into the alias database), so an
+ * id-only match can never resolve those, which is what left them showing
+ * "Unknown sender" permanently. Matching on subject is narrower than it looks
+ * here: the caller only reaches this path when the sender is missing, the list
+ * is a handful of the newest messages in one folder, and the alternative is
+ * displaying nothing. Deliberately NOT falling back to list[0]: during indexer
+ * lag the newest queryable message is usually the *previous* one, so that would
+ * attribute the notification to the wrong sender.
  */
-function findMessageInList(res, { id, messageId }) {
+function findMessageInList(res, { id, messageId, subject }) {
   const list = res?.Result?.List || res?.Result || res || [];
   if (!Array.isArray(list)) return null;
-  return (
-    list.find((m) => {
-      if (id != null && String(m?.id ?? m?.uid ?? m?.Uid) === String(id)) return true;
-      if (messageId && (m?.message_id || m?.MessageId) === messageId) return true;
-      return false;
-    }) || null
-  );
+
+  const identityMatch = list.find((m) => {
+    if (id != null && String(m?.id ?? m?.uid ?? m?.Uid) === String(id)) return true;
+    if (messageId && (m?.message_id || m?.MessageId) === messageId) return true;
+    return false;
+  });
+  if (identityMatch) return identityMatch;
+
+  // Only when there was no identifier to match on in the first place, never as
+  // a consolation prize for an identifier that simply didn't match yet.
+  if (id == null && !messageId && typeof subject === 'string' && subject.trim()) {
+    const wanted = subject.trim();
+    return list.find((m) => String(m?.subject ?? m?.Subject ?? '').trim() === wanted) || null;
+  }
+
+  return null;
 }
 
 const SENDER_RECONCILE_DELAYS_MS = [5000, 15000, 30000];
@@ -560,9 +580,12 @@ function scheduleSenderReconcile({ id, mailbox, messageId, account }) {
         if (!row) return;
         if (row.from && row.from !== 'Unknown') return;
 
+        // Deliberately NOT lightweight: resolving the sender is the entire
+        // point of this request, and lightweight responses may omit From
+        // (see api-capabilities). Ten messages is a cheap enough full fetch.
         const res = await Remote.request(
           'MessageList',
-          { folder: mailbox, page: 1, limit: 10, lightweight: true },
+          { folder: mailbox, page: 1, limit: 10 },
           { method: 'GET', pathOverride: '/v1/messages' },
         );
         const match = findMessageInList(res, { id, messageId });
@@ -718,14 +741,17 @@ async function handleNewMessage(data, { suppressVisual = false } = {}) {
   // previous one and blindly reading list[0] would show the wrong sender.
   if (!from) {
     try {
+      // Deliberately NOT lightweight: this fetch exists only to recover the
+      // sender, which lightweight responses may omit (see api-capabilities).
       const res = await Remote.request(
         'MessageList',
-        { folder: mailbox, page: 1, limit: 5, lightweight: true },
+        { folder: mailbox, page: 1, limit: 5 },
         { method: 'GET', pathOverride: '/v1/messages' },
       );
       const match = findMessageInList(res, {
         id: msg?.id ?? msg?.Uid ?? msg?.uid ?? uid,
         messageId: msg?.message_id || msg?.MessageId || msg?.['Message-ID'] || null,
+        subject,
       });
       if (match) {
         from = extractFromField(match) || null;

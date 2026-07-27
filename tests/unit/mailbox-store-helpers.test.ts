@@ -6,7 +6,7 @@ import {
   getMessageKey,
   mergeMessagePages,
   mergeMissingLabels,
-  mergeMissingFrom,
+  mergeMissingAddressFields,
   resolveHasMoreAfterFetch,
   isNoContentResponse,
   extractMessageList,
@@ -248,32 +248,70 @@ describe('mergeMissingLabels', () => {
   });
 });
 
-describe('mergeMissingFrom', () => {
-  it('does not hit the cache when every message has a from', async () => {
+describe('mergeMissingAddressFields', () => {
+  it('does not hit the cache when every address field is present', async () => {
     const bulkGet = mockBulkGet({});
-    const list = [{ id: '1', from: 'a@b.com' }];
-    const out = await mergeMissingFrom(bulkGet, 'acct', list);
+    const list = [{ id: '1', from: 'a@b.com', to: 'me@x.com', cc: 'c@x.com' }];
+    const out = await mergeMissingAddressFields(bulkGet, 'acct', list);
     expect(out).toBe(list);
     expect(bulkGet).not.toHaveBeenCalled();
   });
 
   it('backfills from from the cached record', async () => {
     const bulkGet = mockBulkGet({ '1': { from: 'alice@x.com' } });
-    const out = await mergeMissingFrom(bulkGet, 'acct', [{ id: '1', from: '' }]);
+    const out = await mergeMissingAddressFields(bulkGet, 'acct', [{ id: '1', from: '' }]);
     expect(out).toEqual([{ id: '1', from: 'alice@x.com' }]);
   });
 
   it('falls back to an alternate identifier when the id record has no from', async () => {
     const bulkGet = mockBulkGet({ '1': { from: '   ' }, M1: { from: 'bob@x.com' } });
-    const out = await mergeMissingFrom(bulkGet, 'acct', [{ id: '1', message_id: 'M1' }]);
+    const out = await mergeMissingAddressFields(bulkGet, 'acct', [{ id: '1', message_id: 'M1' }]);
     expect(out).toEqual([{ id: '1', message_id: 'M1', from: 'bob@x.com' }]);
   });
 
   it('returns the original list on a bulkGet error', async () => {
     const bulkGet = vi.fn(() => Promise.reject(new Error('db dead')));
     const list = [{ id: '1', from: '' }];
-    const out = await mergeMissingFrom(bulkGet, 'acct', list);
+    const out = await mergeMissingAddressFields(bulkGet, 'acct', list);
     expect(out).toBe(list);
+  });
+
+  // A list response that omits recipients is the case that left the reader
+  // rendering "To:" with nothing after it, so to/cc must heal like from does.
+  it('backfills to and cc, not just from', async () => {
+    const bulkGet = mockBulkGet({
+      '1': { from: 'alice@x.com', to: 'me@x.com', cc: 'team@x.com' },
+    });
+    const out = await mergeMissingAddressFields(bulkGet, 'acct', [{ id: '1' }]);
+    expect(out).toEqual([{ id: '1', from: 'alice@x.com', to: 'me@x.com', cc: 'team@x.com' }]);
+  });
+
+  it('looks up a message that has a from but no recipients', async () => {
+    const bulkGet = mockBulkGet({ '1': { to: 'me@x.com' } });
+    const out = await mergeMissingAddressFields(bulkGet, 'acct', [
+      { id: '1', from: 'alice@x.com' },
+    ]);
+    expect(bulkGet).toHaveBeenCalledWith([['acct', '1']]);
+    expect(out).toEqual([{ id: '1', from: 'alice@x.com', to: 'me@x.com' }]);
+  });
+
+  it('never overwrites a value the response already carried', async () => {
+    const bulkGet = mockBulkGet({ '1': { from: 'stale@x.com', to: 'me@x.com' } });
+    const out = await mergeMissingAddressFields(bulkGet, 'acct', [
+      { id: '1', from: 'fresh@x.com' },
+    ]);
+    expect(out).toEqual([{ id: '1', from: 'fresh@x.com', to: 'me@x.com' }]);
+  });
+
+  it('fills each field from whichever record has it', async () => {
+    const bulkGet = mockBulkGet({
+      '1': { from: 'alice@x.com' },
+      M1: { to: 'me@x.com', cc: 'team@x.com' },
+    });
+    const out = await mergeMissingAddressFields(bulkGet, 'acct', [{ id: '1', message_id: 'M1' }]);
+    expect(out).toEqual([
+      { id: '1', message_id: 'M1', from: 'alice@x.com', to: 'me@x.com', cc: 'team@x.com' },
+    ]);
   });
 });
 

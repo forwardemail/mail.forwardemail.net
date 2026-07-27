@@ -116,10 +116,34 @@ const db = {
 // ============================================================================
 
 let apiBase = '';
-let authHeader = '';
+
+// Auth is keyed BY ACCOUNT, never held as a single "current" header. The worker
+// outlives account switches: a metadata/backfill loop for account A keeps
+// fetching pages after the user switches to B, and B's `init` used to overwrite
+// one shared `authHeader`. A's still-running loop then fetched B's mailbox with
+// B's credentials and wrote the results under `account: A`, so B's mail appeared
+// date-interleaved in A's folders and persisted in IndexedDB across reloads.
+// Keying by account makes that mismatch structurally impossible: whatever
+// account a task names is the account its requests authenticate as, or the
+// request does not go out at all.
+const authHeaders = new Map<string, string>();
+
 let unlockedPgpKeys = [];
 let pgpPassphrases = {};
 let searchPort = null;
+
+const authFor = (account: string): string => authHeaders.get(account) || '';
+
+// A task naming an account we hold no credentials for is a stale task from a
+// previous session (its account was switched away and its auth evicted). Fail
+// it loudly rather than letting it fetch as somebody else.
+function requireAuth(account: string): string {
+  const header = authFor(account);
+  if (!header) {
+    throw new Error(`No credentials for account ${account || '(none)'}: account switched`);
+  }
+  return header;
+}
 
 const DEFAULT_LIMIT = 100;
 const DEFAULT_BODY_LIMIT = 50;
@@ -185,7 +209,7 @@ async function updateManifest(account, folder, updates = {}) {
 // Utilities
 // ============================================================================
 
-async function syncDraftRecord(draft) {
+async function syncDraftRecord(draft, account) {
   const payload = buildDraftPayload(draft);
   const url = draft.serverId
     ? `${apiBase.replace(/\/$/, '')}/v1/messages/${encodeURIComponent(draft.serverId)}`
@@ -194,7 +218,7 @@ async function syncDraftRecord(draft) {
     method: draft.serverId ? 'PUT' : 'POST',
     headers: {
       Accept: 'application/json',
-      Authorization: authHeader,
+      Authorization: requireAuth(account),
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(payload),
@@ -327,7 +351,10 @@ async function writeMessages(account, folder, normalized, pendingDeleteIds: stri
 // API Operations
 // ============================================================================
 
-async function fetchMessageList(params = {}) {
+// `account` is required, not optional: it selects the credentials this list is
+// fetched with, so it must be the same account the caller will file the results
+// under. Never default it to a "current" account.
+async function fetchMessageList(account, params = {}) {
   const url = new URL(`${apiBase.replace(/\/$/, '')}/v1/messages`);
   Object.entries(params).forEach(([k, v]) => {
     if (v !== undefined && v !== null && v !== '') url.searchParams.set(k, v);
@@ -336,7 +363,7 @@ async function fetchMessageList(params = {}) {
     method: 'GET',
     headers: {
       Accept: 'application/json',
-      Authorization: authHeader,
+      Authorization: requireAuth(account),
       'Content-Type': 'application/json',
     },
   });
@@ -378,7 +405,7 @@ async function runMetadataTask(task, postProgress) {
       attachments: false,
     };
 
-    const res = await fetchMessageList(params);
+    const res = await fetchMessageList(account, params);
     const rawList = parseResultList(res);
     if (!Array.isArray(rawList) || !rawList.length) break;
 
@@ -490,7 +517,7 @@ async function runBackfillTask(task, postProgress) {
   // thrown/zero-progress batch as transient and re-queues, so an unconfigured
   // worker (e.g. a backfill that runs before the init message lands, common in
   // dev) would spin "Syncing <folder>" forever with no network activity.
-  if (!apiBase || !authHeader) {
+  if (!apiBase || !authFor(account)) {
     return { done: true, reason: 'not_configured' };
   }
 
@@ -527,7 +554,7 @@ async function runBackfillTask(task, postProgress) {
 
     let res;
     try {
-      res = await fetchMessageList(params);
+      res = await fetchMessageList(account, params);
     } catch (err) {
       // Network/auth hiccup — return partial progress; the controller
       // will retry on the next batch.
@@ -636,7 +663,7 @@ async function runHealFromFieldPass(account, folder, limit = 25) {
   let healed = 0;
   for (const msg of scoped) {
     try {
-      const fixedFrom = await refetchAndExtractFrom(msg);
+      const fixedFrom = await refetchAndExtractFrom(msg, account);
       if (fixedFrom && fixedFrom !== msg.from) {
         await db.messages.bulkPut([{ ...msg, from: fixedFrom }]);
         healed += 1;
@@ -648,7 +675,7 @@ async function runHealFromFieldPass(account, folder, limit = 25) {
   return { healed, scanned: scoped.length };
 }
 
-async function refetchAndExtractFrom(msg) {
+async function refetchAndExtractFrom(msg, account) {
   if (!msg?.id) return '';
   const url = new URL(`${apiBase.replace(/\/$/, '')}/v1/messages/${encodeURIComponent(msg.id)}`);
   if (msg.folder) url.searchParams.set('folder', msg.folder);
@@ -656,7 +683,7 @@ async function refetchAndExtractFrom(msg) {
     method: 'GET',
     headers: {
       Accept: 'application/json',
-      Authorization: authHeader,
+      Authorization: requireAuth(account),
     },
   });
   if (!res.ok) return '';
@@ -993,7 +1020,7 @@ async function fetchAndCacheBodyWithOptions(account, folder, msg, options = {}) 
       method: 'GET',
       headers: {
         Accept: 'application/json',
-        Authorization: authHeader,
+        Authorization: requireAuth(account),
         'Content-Type': 'application/json',
       },
     });
@@ -1334,7 +1361,11 @@ async function handleParseRawTask(task) {
 
 async function handleTask(taskId, task) {
   try {
-    if (!apiBase || !authHeader) {
+    // Auth is checked per task account, not against a shared header, so a task
+    // left over from a switched-away account fails here instead of borrowing
+    // the live account's credentials. PGP tasks are local-only (no fetch).
+    const isLocalOnlyTask = task?.type === 'decryptMessage' || task?.type === 'parseRaw';
+    if (!apiBase || (!isLocalOnlyTask && !authFor(accountKey(task?.account)))) {
       throw new Error('Worker not initialized');
     }
     if (!task?.type) throw new Error('Missing task type');
@@ -1392,7 +1423,7 @@ async function fetchFolders(account) {
     method: 'GET',
     headers: {
       Accept: 'application/json',
-      Authorization: authHeader,
+      Authorization: requireAuth(account),
       'Content-Type': 'application/json',
     },
   });
@@ -1429,6 +1460,12 @@ async function fetchMessagePage(payload = {}) {
     limit,
     raw: false,
     attachments: false,
+    // Forward the caller's lightweight choice. This used to be dropped here, so
+    // the worker path silently fetched the full shape while the main-thread
+    // fallback fetched lightweight: the same list request returned senders or
+    // not depending on which path served it. The caller decides (see
+    // api-capabilities), and both paths must honour the same decision.
+    ...(payload.lightweight ? { lightweight: true } : {}),
     ...(payload.fields ? { fields: payload.fields } : {}),
     ...(payload.sort ? { sort: payload.sort } : {}),
     ...(payload.search ? { search: payload.search } : {}),
@@ -1436,7 +1473,7 @@ async function fetchMessagePage(payload = {}) {
     ...(payload.has_attachments || payload.has_attachment ? { has_attachments: true } : {}),
   };
 
-  const res = await fetchMessageList(params);
+  const res = await fetchMessageList(account, params);
   if (res?.__noContent) {
     return { messages: null, hasNextPage: false, noContent: true };
   }
@@ -1603,7 +1640,7 @@ async function runDraftSyncTask(task, postProgress) {
   });
   for (const draft of candidates) {
     try {
-      await syncDraftRecord(draft);
+      await syncDraftRecord(draft, account);
       synced += 1;
     } catch (err) {
       failed += 1;
@@ -1628,7 +1665,9 @@ async function runDraftSyncTask(task, postProgress) {
 
 async function handleRequest(requestId, action, payload) {
   try {
-    if (!apiBase || !authHeader) {
+    // unlockPgpKey is local-only; every other action fetches as payload.account.
+    const isLocalOnlyAction = action === 'unlockPgpKey';
+    if (!apiBase || (!isLocalOnlyAction && !authFor(accountKey(payload?.account)))) {
       throw new Error('Worker not initialized');
     }
     let result = null;
@@ -1835,7 +1874,20 @@ self.onmessage = (event) => {
 
   if (data.type === 'init') {
     apiBase = data.config?.apiBase || '';
-    authHeader = data.config?.authHeader || '';
+    const account = accountKey(data.config?.account);
+    const header = data.config?.authHeader || '';
+    // Register (don't replace) so work still running for a previously active
+    // account keeps authenticating as that account until it finishes. Switching
+    // A -> B -> A also reuses A's entry rather than racing a re-init.
+    if (header) authHeaders.set(account, header);
+    else authHeaders.delete(account);
+    return;
+  }
+
+  // An account was signed out: drop its credentials so any task still naming it
+  // fails instead of running under whoever is active now.
+  if (data.type === 'revokeAuth') {
+    authHeaders.delete(accountKey(data.account));
     return;
   }
   if (data.type === 'task') {

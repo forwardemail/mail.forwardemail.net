@@ -2,7 +2,7 @@
 // without loading the store's I/O graph (Dexie/db, sync worker, Remote, other
 // stores). These are message-identity / list-merge / value-coercion helpers
 // with no module state and no side effects. Anything touching db/Remote/stores
-// (e.g. mergeMissingLabels/mergeMissingFrom) stays in mailboxStore.ts.
+// (e.g. mergeMissingLabels/mergeMissingAddressFields) stays in mailboxStore.ts.
 //
 // Params are intentionally left loosely typed to match the originals verbatim
 // (mailboxStore.ts is pervasively untyped) — this is a behavior-preserving
@@ -10,6 +10,7 @@
 // response/record params below are left untyped (implicit any) like the rest.
 
 import { normalizeMessageForCache } from '../utils/sync-helpers';
+import { lightweightListSupported } from '../utils/api-capabilities';
 
 // Validate a value the way Dexie validates a primary key, used as a fallback
 // guard before writing to IndexedDB. Strings, finite numbers, Dates, and
@@ -203,16 +204,25 @@ export const mergeMissingLabels = async (
   }
 };
 
-// Backfill the `from` address onto list messages that arrived without one,
-// same cache-lookup strategy as mergeMissingLabels.
-export const mergeMissingFrom = async (bulkGet: MessageBulkGet, account, list = []) => {
+// Address fields backfilled from the cache, in the order the reader needs them.
+// `from` drives the list row; `to`/`cc` drive the reader's recipient lines,
+// which read straight off the list record (MessageTab's toDisplay/ccDisplay), so
+// a record missing them renders "To:" with nothing after it.
+const BACKFILLED_ADDRESS_FIELDS = ['from', 'to', 'cc'] as const;
+
+// Backfill missing address fields onto list messages by reading the cached copy
+// from IndexedDB, same cache-lookup strategy as mergeMissingLabels. A message
+// is looked up when ANY of the address fields is absent, and each field is
+// filled independently, so a response that carries `from` but no `to` still
+// gets its recipients back.
+export const mergeMissingAddressFields = async (bulkGet: MessageBulkGet, account, list = []) => {
   try {
     const lookup = [];
     const indices = [];
     const fallbackKeys = [];
     const fallbackIndex = new Map();
     list.forEach((msg, idx) => {
-      if (!hasFromValue(msg?.from)) {
+      if (BACKFILLED_ADDRESS_FIELDS.some((field) => !hasFromValue(msg?.[field]))) {
         lookup.push([account, msg.id]);
         indices.push(idx);
       }
@@ -235,21 +245,37 @@ export const mergeMissingFrom = async (bulkGet: MessageBulkGet, account, list = 
     existing.forEach((record, i) => {
       const idx = indices[i];
       if (idx === undefined) return;
-      if (hasFromValue(record?.from)) {
-        next[idx] = { ...next[idx], from: record.from };
-        return;
-      }
       const msg = list[idx] || {};
-      const candidates = [msg?.uid, msg?.message_id, msg?.header_message_id].filter(Boolean);
-      for (const candidate of candidates) {
-        const key = `${idx}:${candidate}`;
-        if (!fallbackIndex.has(key)) continue;
-        const fallback = fallbackRecords[fallbackIndex.get(key)];
-        if (hasFromValue(fallback?.from)) {
-          next[idx] = { ...next[idx], from: fallback.from };
-          break;
+      // Alternate-identifier record, resolved lazily: only messages whose
+      // primary-key lookup came up short need it.
+      let fallbackRecord;
+      const readFallback = () => {
+        if (fallbackRecord !== undefined) return fallbackRecord;
+        fallbackRecord = null;
+        const candidates = [msg?.uid, msg?.message_id, msg?.header_message_id].filter(Boolean);
+        for (const candidate of candidates) {
+          const key = `${idx}:${candidate}`;
+          if (!fallbackIndex.has(key)) continue;
+          const found = fallbackRecords[fallbackIndex.get(key)];
+          if (found) {
+            fallbackRecord = found;
+            break;
+          }
         }
+        return fallbackRecord;
+      };
+
+      const patch = {};
+      for (const field of BACKFILLED_ADDRESS_FIELDS) {
+        if (hasFromValue(next[idx]?.[field])) continue;
+        if (hasFromValue(record?.[field])) {
+          patch[field] = record[field];
+          continue;
+        }
+        const fallback = readFallback();
+        if (hasFromValue(fallback?.[field])) patch[field] = fallback[field];
       }
+      if (Object.keys(patch).length) next[idx] = { ...next[idx], ...patch };
     });
     return next;
   } catch {
@@ -375,8 +401,10 @@ export const buildMessageListParams = ({
   raw: false,
   attachments: false,
   // Use lightweight mode to skip expensive MIME rebuild + attachment fetching
-  // on the server. Bodies/snippets are fetched on-demand when a message is opened.
-  lightweight: true,
+  // on the server. Bodies/snippets are fetched on-demand when a message is
+  // opened. Only sent while this server is known to include From/To/Cc on
+  // lightweight responses, since otherwise every row renders without a sender.
+  ...(lightweightListSupported() ? { lightweight: true } : {}),
   ...(query ? { search: query } : {}),
   ...(unreadOnly ? { is_unread: true } : {}),
   ...(hasAttachmentsOnly ? { has_attachments: true } : {}),

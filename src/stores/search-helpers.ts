@@ -4,6 +4,7 @@
 // and merging local (FlexSearch) hits with server hits. Side-effect-free.
 
 import type { SearchResult } from '../types';
+import { lightweightListSupported } from '../utils/api-capabilities';
 
 // The subset of parseSearchQuery()'s `filters` output that the server query
 // builder consumes. parseSearchQuery lives in untyped JS, so spelling this out
@@ -53,8 +54,10 @@ export const buildServerSearchParams = (
     page: 1,
     raw: false,
     attachments: false,
-    // Skip expensive MIME rebuild — search results only need metadata
-    lightweight: true,
+    // Skip expensive MIME rebuild, since search results only need metadata.
+    // Gated on this server actually returning From/To/Cc on lightweight
+    // responses: a result row with no sender is worse than a slower search.
+    ...(lightweightListSupported() ? { lightweight: true } : {}),
   };
 
   // Free-text goes to the general `search` parameter which searches

@@ -32,7 +32,7 @@ import {
   pickOriginalContent,
 } from './mailbox-actions-helpers';
 import { startInitialSync, queueBodiesForFolder } from '../utils/sync-controller';
-import { resetSyncWorkerReady } from '../utils/sync-worker-client.js';
+import { resetSyncWorkerReady, revokeSyncWorkerAuth } from '../utils/sync-worker-client.js';
 import { isDemoBlockedError, isDemoMode } from '../utils/demo-mode';
 import { clearMailServiceState } from './mailService';
 import { normalizeEmail, dedupeAddresses, extractAddressList } from '../utils/address.ts';
@@ -1656,6 +1656,10 @@ export const signOut = async () => {
   clearSensitiveClientStorage(currentEmail);
 
   if (currentEmail) {
+    // The sync worker holds credentials per account so in-flight syncs can
+    // finish under their own identity; a signed-out account's header must be
+    // dropped explicitly or it stays usable for the worker's lifetime.
+    revokeSyncWorkerAuth(currentEmail);
     try {
       await Accounts.remove(currentEmail, true);
     } catch (err) {

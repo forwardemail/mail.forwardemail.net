@@ -103,23 +103,34 @@
   // ─── Derived ────────────────────────────────────────────────────────
 
   const fromDisplay = $derived(message?.from ? extractDisplayName(message.from) : '');
-  // Normalized cache messages store recipients as a display string, so use it
-  // directly. Messages that reach the reader still in a raw API shape (e.g.
-  // opened from a search result) carry object/array-of-object values that the
-  // old string/array-join path rendered as empty — reuse the same recipient
-  // formatter the cache normalizer uses so the To/Cc lines stay populated.
+  // Recipient lines resolve in three steps, because a list record is not
+  // guaranteed to carry recipients at all:
+  //   1. the normalized cache string, which is already display-ready
+  //   2. the message itself, via the same recipient formatter the cache
+  //      normalizer uses. This covers records still in a raw API shape (opened
+  //      from a search result) and records enriched by onMeta with the parsed
+  //      `nodemailer` object once the body loads.
+  //   3. the detail metadata, as a last resort.
+  //
+  // Step 2 is the one that matters. A message-list response can omit `to`/`cc`
+  // entirely, and the old code only called extractRecipientsField when `to` was
+  // already truthy, so an absent `to` skipped straight past the parsed headers
+  // it needed and rendered "To:" with nothing after it, even after the full
+  // message had loaded.
+  const resolveRecipients = (field: 'to' | 'cc'): string => {
+    const direct = message?.[field];
+    if (typeof direct === 'string' && direct.trim()) return direct;
+    const fromMessage = message ? extractRecipientsField(message as never, field) : '';
+    if (fromMessage) return fromMessage;
+    return messageMeta ? extractRecipientsField(messageMeta as never, field) : '';
+  };
   const toDisplay = $derived(() => {
-    const to = message?.to;
-    if (typeof to === 'string' && to) return to;
-    if (to) return extractRecipientsField(message as never, 'to');
+    const resolved = resolveRecipients('to');
+    if (resolved) return resolved;
     const env = message?.envelope_to;
     return typeof env === 'string' ? env : '';
   });
-  const ccDisplay = $derived(() => {
-    const cc = message?.cc;
-    if (typeof cc === 'string') return cc;
-    return cc ? extractRecipientsField(message as never, 'cc') : '';
-  });
+  const ccDisplay = $derived(() => resolveRecipients('cc'));
   const dateDisplay = $derived(
     message?.date || message?.created_at
       ? formatFriendlyDate(message?.date || message?.created_at)
