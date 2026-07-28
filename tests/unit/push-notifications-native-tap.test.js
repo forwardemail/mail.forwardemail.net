@@ -86,7 +86,7 @@ describe('native push tap normalization', () => {
     vi.restoreAllMocks();
   });
 
-  it('marks tapped OS notifications as system-displayed without suppressing foreground receipts', async () => {
+  it('marks both received and tapped OS notifications as system-displayed', async () => {
     await expect(initPushNotifications()).resolves.toBe(true);
     expect(callbacks.received).toBeTypeOf('function');
     expect(callbacks.tapped).toBeTypeOf('function');
@@ -107,7 +107,10 @@ describe('native push tap normalization', () => {
 
     globalThis.removeEventListener('fe:push-notification', listener);
     expect(delivered).toEqual([
-      notification.data,
+      {
+        ...notification.data,
+        displayedBySystem: true,
+      },
       {
         ...notification.data,
         notificationTapped: true,

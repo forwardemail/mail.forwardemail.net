@@ -579,8 +579,10 @@ async function initializeIosPush() {
   const tokenRefreshListener = await onTokenRefresh(async ({ token }) => {
     await handleTokenRefresh(token, 'ios');
   });
+  // displayedBySystem=true: APNs alert field causes iOS to auto-display
+  // the notification, so the client must not show a duplicate.
   const receivedListener = await onNotificationReceived((notification) => {
-    dispatchPushPayload(notification, false);
+    dispatchPushPayload(notification, false, true);
   });
   const tappedListener = await onNotificationTapped((notification) => {
     dispatchPushPayload(notification, true, true);
@@ -614,8 +616,10 @@ async function initializeAndroidFcmPush() {
   const tokenRefreshListener = await onTokenRefresh(async (token) => {
     await handleTokenRefresh(token, 'android');
   });
+  // displayedBySystem=true: FCM notification field causes Android to
+  // auto-display the notification, so the client must not show a duplicate.
   const receivedListener = await onNotificationReceived((notification) => {
-    dispatchPushPayload(notification, false);
+    dispatchPushPayload(notification, false, true);
   });
   const tappedListener = await onNotificationTapped((notification) => {
     dispatchPushPayload(notification, true, true);

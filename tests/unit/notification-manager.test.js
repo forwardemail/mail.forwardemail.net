@@ -289,9 +289,23 @@ describe('notification-manager new message routing payloads', () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    // Simulate background so handleNewMessage fires OS notification (not toast)
+    Object.defineProperty(document, 'visibilityState', {
+      value: 'hidden',
+      writable: true,
+      configurable: true,
+    });
     await requestNotificationPermission();
     wsClient = createMockWsClient();
     connectNotifications(wsClient);
+  });
+
+  afterEach(() => {
+    Object.defineProperty(document, 'visibilityState', {
+      value: 'visible',
+      writable: true,
+      configurable: true,
+    });
   });
 
   it('includes both a mailbox hash path and a Forward Email deep-link URL', async () => {
@@ -323,12 +337,23 @@ describe('notification-manager new message sender resolution', () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    // Simulate background so handleNewMessage fires OS notification (not toast)
+    Object.defineProperty(document, 'visibilityState', {
+      value: 'hidden',
+      writable: true,
+      configurable: true,
+    });
     await requestNotificationPermission();
     wsClient = createMockWsClient();
     connectNotifications(wsClient);
   });
 
   afterEach(() => {
+    Object.defineProperty(document, 'visibilityState', {
+      value: 'visible',
+      writable: true,
+      configurable: true,
+    });
     vi.mocked(extractFromField).mockImplementation(() => '');
   });
 

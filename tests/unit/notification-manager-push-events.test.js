@@ -90,6 +90,12 @@ describe('notification-manager push event listener', () => {
   beforeEach(async () => {
     vi.useFakeTimers();
     vi.clearAllMocks();
+    // Simulate background so handleNewMessage fires OS notification (not toast)
+    Object.defineProperty(document, 'visibilityState', {
+      value: 'hidden',
+      writable: true,
+      configurable: true,
+    });
     await setBadgeCount(0);
     await requestNotificationPermission();
     wsClient = createMockWsClient();
@@ -98,6 +104,11 @@ describe('notification-manager push event listener', () => {
 
   afterEach(() => {
     if (cleanup) cleanup();
+    Object.defineProperty(document, 'visibilityState', {
+      value: 'visible',
+      writable: true,
+      configurable: true,
+    });
     vi.useRealTimers();
   });
 

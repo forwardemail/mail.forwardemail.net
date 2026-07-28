@@ -165,12 +165,13 @@ export function getRealtimeEventKey(eventName, data) {
 /**
  * @param {Object} options
  * @param {(eventName: string, data: Object, context: Object) => void} options.onEvent
- * @param {() => boolean} [options.isVisible]
+ * @param {() => boolean} [options.isVisible] Deprecated — no longer used internally.
  * @param {number} [options.pushCoalesceMs]
  * @returns {{handleWebSocket: Function, handlePush: Function, destroy: Function}}
  */
 export function createRealtimeEventCoalescer({
   onEvent,
+  // eslint-disable-next-line no-unused-vars
   isVisible = () => document.visibilityState === 'visible',
   pushCoalesceMs = PUSH_COALESCE_MS,
 }) {
@@ -220,6 +221,11 @@ export function createRealtimeEventCoalescer({
     if (pendingPush) {
       clearTimeout(pendingPush.timer);
       pendingPushEvents.delete(key);
+      // The OS already showed this notification via push (FCM/APNs).
+      // Suppress the client-side visual to avoid a duplicate.
+      if (pendingPush.displayedBySystem) {
+        return consume('websocket', eventName, data, true);
+      }
     }
     return consume('websocket', eventName, data);
   };
@@ -232,20 +238,21 @@ export function createRealtimeEventCoalescer({
     const key = getRealtimeEventKey(eventName, data);
     if (hasSeen(key) || (key && pendingPushEvents.has(key))) return false;
 
-    const visible = isVisible();
-    const suppressVisual = data.displayedBySystem === true || !visible;
+    // suppressVisual only when the OS already displayed this notification
+    // (FCM notification field / APNs alert). The notification-manager handles
+    // the foreground-vs-background visual split (toast vs OS notification).
+    const suppressVisual = data.displayedBySystem === true;
     const consumePush = () => {
       if (key) pendingPushEvents.delete(key);
       consume('push', eventName, data, suppressVisual);
     };
 
-    if (visible) {
-      const timer = setTimeout(consumePush, pushCoalesceMs);
-      if (key) pendingPushEvents.set(key, { timer });
-      return true;
-    }
-
-    return consume('push', eventName, data, suppressVisual);
+    // Always wait for WS to arrive (it carries richer data). If WS doesn't
+    // arrive within the coalesce window, the push event is consumed as-is.
+    const timer = setTimeout(consumePush, pushCoalesceMs);
+    if (key)
+      pendingPushEvents.set(key, { timer, displayedBySystem: data.displayedBySystem === true });
+    return true;
   };
 
   const destroy = () => {

@@ -97,15 +97,18 @@ describe('realtime event transport coalescer', () => {
     });
   });
 
-  it('consumes hidden push immediately and suppresses a second visual notification', () => {
+  it('queues hidden push with timer and does not suppress visual unless displayedBySystem', () => {
     const onEvent = vi.fn();
     const coalescer = createRealtimeEventCoalescer({ onEvent, isVisible: () => false });
     const payload = { event: 'newMessage', notification_id: 'event-4', message: { uid: 4 } };
 
     expect(coalescer.handlePush(payload)).toBe(true);
+    // Not called immediately — waits for coalesce timer
+    expect(onEvent).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(PUSH_COALESCE_MS);
     expect(onEvent).toHaveBeenCalledWith('newMessage', payload, {
       source: 'push',
-      suppressVisual: true,
+      suppressVisual: false,
     });
   });
 
@@ -154,6 +157,10 @@ describe('realtime event transport coalescer', () => {
 
     expect(coalescer.handlePush(payload)).toBe(true);
     expect(coalescer.handlePush(payload)).toBe(false);
+    // Let the coalesce timer fire so the first push is consumed and remembered
+    vi.advanceTimersByTime(PUSH_COALESCE_MS);
+    expect(onEvent).toHaveBeenCalledTimes(1);
+    // TTL is measured from when remember() was called (at PUSH_COALESCE_MS)
     vi.advanceTimersByTime(TRANSPORT_DEDUP_TTL_MS - 1);
     expect(coalescer.handleWebSocket('mailboxCreated', payload)).toBe(false);
 

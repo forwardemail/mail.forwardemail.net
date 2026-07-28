@@ -693,6 +693,21 @@ async function prependNewMessageToStore({ msg, mailbox, from, subject, uid, acco
 async function handleNewMessage(data, { suppressVisual = false } = {}) {
   if (!data || typeof data !== 'object') return;
 
+  // Reconstruct a message-like object from flat push data fields when
+  // data.message is missing (push-only scenario, e.g. WS disconnected).
+  // The server includes from/subject/snippet in the push data payload.
+  if (!data.message && (data.from || data.subject)) {
+    data.message = {
+      from: data.from || '',
+      subject: data.subject || '',
+      snippet: data.snippet || '',
+      id: data.message_id || '',
+      uid: data.message_id || '',
+      folder_path: data.mailbox || 'INBOX',
+      object: 'message',
+    };
+  }
+
   const msg = data.message || data;
   const uid = msg.uid || msg.id;
   // The mailbox identifier lives at the top level of the WS payload
@@ -816,22 +831,15 @@ async function handleNewMessage(data, { suppressVisual = false } = {}) {
     });
   }
 
-  if (!suppressVisual) {
-    showNotification({
-      title: `New email from ${displayName}`,
-      body: safeSubject,
-      tag: safeTag,
-      channelId: 'new-mail',
-      data: {
-        path: sanitizePath(`#inbox/${uid}`),
-        url: `forwardemail://mailbox#inbox/${encodeURIComponent(String(uid))}`,
-        uid,
-        account: data?._account || Local.get('email') || '',
-      },
-    });
+  // Foreground: show in-app toast only (seamless, non-intrusive).
+  // Background: show OS notification only (user sees it in notification shade).
+  // suppressVisual=true: OS already displayed via push — do nothing visual.
+  const appVisible = typeof document !== 'undefined' && document.visibilityState === 'visible';
 
-    // In-app toast (visible when the app window is focused)
-    // Include a 'View' action that switches to the correct account and navigates
+  if (suppressVisual) {
+    // OS already showed this notification via push (FCM/APNs) — skip all visuals.
+  } else if (appVisible) {
+    // Foreground: in-app toast only — no OS notification interruption.
     const toastAccount = data?._account || Local.get('email') || '';
     _toasts?.show?.(`New email from ${displayName}: ${safeSubject}`, 'info', 5000, {
       label: 'View',
@@ -847,6 +855,20 @@ async function handleNewMessage(data, { suppressVisual = false } = {}) {
         } else {
           globalThis.location.hash = `inbox/${uid}`;
         }
+      },
+    });
+  } else {
+    // Background: show OS notification (no toast — user won't see it).
+    showNotification({
+      title: `New email from ${displayName}`,
+      body: safeSubject,
+      tag: safeTag,
+      channelId: 'new-mail',
+      data: {
+        path: sanitizePath(`#inbox/${uid}`),
+        url: `forwardemail://mailbox#inbox/${encodeURIComponent(String(uid))}`,
+        uid,
+        account: data?._account || Local.get('email') || '',
       },
     });
   }

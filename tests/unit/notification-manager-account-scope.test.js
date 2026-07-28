@@ -152,11 +152,25 @@ describe('notification-manager multi-account store scoping', () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    // Simulate background so handleNewMessage fires OS notification (not toast)
+    Object.defineProperty(document, 'visibilityState', {
+      value: 'hidden',
+      writable: true,
+      configurable: true,
+    });
     messagesStore.set([]);
     selectedFolderStore.set('INBOX');
     await requestNotificationPermission();
     wsClient = createMockWsClient();
     connectNotifications(wsClient);
+  });
+
+  afterEach(() => {
+    Object.defineProperty(document, 'visibilityState', {
+      value: 'visible',
+      writable: true,
+      configurable: true,
+    });
   });
 
   it("does NOT prepend another account's delivery into the visible list", async () => {
