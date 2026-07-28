@@ -626,8 +626,18 @@ function scheduleSenderReconcile({ id, mailbox, messageId, account }) {
  * No-op when the affected folder isn't the active one — refreshFolder() in
  * websocket-updater handles cache invalidation for the non-active case.
  */
-async function prependNewMessageToStore({ msg, mailbox, from, subject, uid }) {
+async function prependNewMessageToStore({ msg, mailbox, from, subject, uid, account }) {
   if (!uid && !msg?.id) return;
+  // The multi-account WS manager routes every signed-in account's events
+  // through this handler, but the on-screen message list belongs to the
+  // active account only. The folder-name check below is not enough on its
+  // own: INBOX matches INBOX for every account, so without this gate a
+  // delivery for another account gets inserted into (and stamped as) the
+  // active account's list. Events with no account tag are treated as active,
+  // matching isActiveAccount() in websocket-updater.
+  const activeEmail = (Local.get('email') || '').toLowerCase();
+  const eventEmail = (account || '').toLowerCase();
+  if (eventEmail && eventEmail !== activeEmail) return;
   try {
     const { get } = await import('svelte/store');
     const { mailboxStore } = await import('../stores/mailboxStore');
@@ -655,7 +665,10 @@ async function prependNewMessageToStore({ msg, mailbox, from, subject, uid }) {
     const envelope = {
       id,
       uid: msg?.uid ?? msg?.Uid ?? null,
-      account: msg?._account || Local.get('email') || 'default',
+      // The account tag lives on the top-level WS event, not on data.message,
+      // so it is threaded in as a parameter. Reading msg._account here always
+      // came back undefined and mis-stamped rows with the active account.
+      account: account || Local.get('email') || 'default',
       folder: currentFolder,
       date: dateMs,
       dateMs,
@@ -747,7 +760,12 @@ async function handleNewMessage(data, { suppressVisual = false } = {}) {
   // a result that is verifiably THIS message. The WS broadcast usually beats
   // the backend indexer, so the newest queryable message is often the
   // previous one and blindly reading list[0] would show the wrong sender.
-  if (!from) {
+  // Skipped for other accounts' events: Remote.request runs under the active
+  // session auth, so it would search the wrong account's mailbox and the
+  // subject-match fallback could attribute someone else's sender.
+  const isActiveAccountEvent =
+    !eventAccount || eventAccount === (Local.get('email') || '').toLowerCase();
+  if (!from && isActiveAccountEvent) {
     try {
       // Deliberately NOT lightweight: this fetch exists only to recover the
       // sender, which lightweight responses may omit (see api-capabilities).
@@ -779,10 +797,12 @@ async function handleNewMessage(data, { suppressVisual = false } = {}) {
   // arrives before the backend indexer makes the message queryable, so the
   // subsequent refreshFolder()→loadMessages() returns the old list and the
   // user only sees the new mail after folder-switch (10-30s later).
-  prependNewMessageToStore({ msg, mailbox, from, subject, uid }).catch(() => {
-    // Failure here only affects the in-place refresh — refreshFolder() runs
-    // separately in websocket-updater and will eventually catch up.
-  });
+  prependNewMessageToStore({ msg, mailbox, from, subject, uid, account: data?._account }).catch(
+    () => {
+      // Failure here only affects the in-place refresh — refreshFolder() runs
+      // separately in websocket-updater and will eventually catch up.
+    },
+  );
 
   // Sender still unknown: the row above renders as "Unknown" until some
   // later reload happens to replace it. Patch it as soon as the backend
