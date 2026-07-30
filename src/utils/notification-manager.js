@@ -384,14 +384,21 @@ export async function requestNotificationPermission() {
 // ── Show Notification ───────────────────────────────────────────────────────
 
 async function showNotification({ title, body, tag, icon, data, channelId }) {
-  if (!permissionGranted) {
-    const granted = await requestNotificationPermission();
-    if (!granted) return;
+  try {
+    if (!permissionGranted) {
+      const granted = await requestNotificationPermission();
+      if (!granted) return;
+    }
+
+    if (isDuplicate(tag)) return;
+
+    await notify({ title, body, tag, icon, data, channelId });
+  } catch (err) {
+    // Swallow errors to prevent unhandled rejections from crashing iOS
+    // WKWebView.  Callers (handleMailboxCreated, handleNewRelease, etc.)
+    // invoke this without await, so any rejection would be unhandled.
+    console.warn('[notification-manager] showNotification failed:', err);
   }
-
-  if (isDuplicate(tag)) return;
-
-  await notify({ title, body, tag, icon, data, channelId });
 }
 
 // ── Badge Count ─────────────────────────────────────────────────────────────
@@ -694,6 +701,17 @@ async function prependNewMessageToStore({ msg, mailbox, from, subject, uid, acco
 async function handleNewMessage(data, { suppressVisual = false } = {}) {
   if (!data || typeof data !== 'object') return;
 
+  // Belt-and-suspenders: wrap the entire handler so that no unhandled
+  // rejection can escape.  On iOS WKWebView an unhandled rejection during
+  // cold start terminates the webview process (instant crash on app open).
+  try {
+    await _handleNewMessageInner(data, { suppressVisual });
+  } catch (err) {
+    console.warn('[notification-manager] handleNewMessage error:', err);
+  }
+}
+
+async function _handleNewMessageInner(data, { suppressVisual = false } = {}) {
   // Reconstruct a message-like object from flat push data fields when
   // data.message is missing (push-only scenario, e.g. WS disconnected).
   // The server includes from/subject/snippet in the push data payload.
@@ -1036,61 +1054,72 @@ const ROUTED_NOTIFICATION_EVENTS = new Set([
 const ACCOUNT_AGNOSTIC_EVENTS = new Set([WS_EVENTS.NEW_RELEASE]);
 
 function routeNotificationEvent(eventName, data, options) {
-  // The multi-account WebSocket manager and the per-account push registrations
-  // both deliver events for EVERY signed-in account. Notifications, toasts and
-  // the badge describe the mailbox the user is looking at, so anything that
-  // names another account stops here.
-  //
-  // An event with no account tag is treated as active. That covers a
-  // single-account install and a device whose push registrations predate alias
-  // capture; a push that names an alias we know is not ours never reaches this
-  // point (see dispatchPushPayload).
-  if (
-    !ACCOUNT_AGNOSTIC_EVENTS.has(eventName) &&
-    !isActiveAccount(data?._account, { treatUnknownAsActive: true })
-  ) {
-    // Returning true marks the event consumed: it was routed and deliberately
-    // produced nothing. Returning false would let a caller treat it as
-    // unhandled and look for another home for it.
-    return true;
-  }
+  // Wrap the entire routing in a try/catch to prevent unhandled exceptions
+  // from crashing iOS WKWebView.  Async handlers (handleNewMessage) return
+  // promises whose rejections MUST be caught — on iOS an unhandled rejection
+  // terminates the webview process immediately on cold start.
+  try {
+    // The multi-account WebSocket manager and the per-account push registrations
+    // both deliver events for EVERY signed-in account. Notifications, toasts and
+    // the badge describe the mailbox the user is looking at, so anything that
+    // names another account stops here.
+    //
+    // An event with no account tag is treated as active. That covers a
+    // single-account install and a device whose push registrations predate alias
+    // capture; a push that names an alias we know is not ours never reaches this
+    // point (see dispatchPushPayload).
+    if (
+      !ACCOUNT_AGNOSTIC_EVENTS.has(eventName) &&
+      !isActiveAccount(data?._account, { treatUnknownAsActive: true })
+    ) {
+      // Returning true marks the event consumed: it was routed and deliberately
+      // produced nothing. Returning false would let a caller treat it as
+      // unhandled and look for another home for it.
+      return true;
+    }
 
-  switch (eventName) {
-    case WS_EVENTS.NEW_MESSAGE:
-      handleNewMessage(data, options);
-      return true;
-    case WS_EVENTS.FLAGS_UPDATED:
-      handleFlagsUpdated(data);
-      return true;
-    case WS_EVENTS.MESSAGES_EXPUNGED:
-      handleMessagesExpunged(data);
-      return true;
-    case WS_EVENTS.MAILBOX_CREATED:
-      handleMailboxCreated(data, options);
-      return true;
-    case WS_EVENTS.MAILBOX_DELETED:
-      handleMailboxDeleted(data, options);
-      return true;
-    case WS_EVENTS.MAILBOX_RENAMED:
-      handleMailboxRenamed(data, options);
-      return true;
-    case WS_EVENTS.CALENDAR_EVENT_CREATED:
-      handleCalendarEventCreated(data, options);
-      return true;
-    case WS_EVENTS.CALENDAR_EVENT_UPDATED:
-      handleCalendarEventUpdated(data, options);
-      return true;
-    case WS_EVENTS.CONTACT_CREATED:
-      handleContactCreated(data, options);
-      return true;
-    case WS_EVENTS.CONTACT_UPDATED:
-      handleContactUpdated(data, options);
-      return true;
-    case WS_EVENTS.NEW_RELEASE:
-      handleNewRelease(data, options);
-      return true;
-    default:
-      return false;
+    switch (eventName) {
+      case WS_EVENTS.NEW_MESSAGE:
+        handleNewMessage(data, options).catch((err) => {
+          console.warn('[notification-manager] handleNewMessage failed:', err);
+        });
+        return true;
+      case WS_EVENTS.FLAGS_UPDATED:
+        handleFlagsUpdated(data);
+        return true;
+      case WS_EVENTS.MESSAGES_EXPUNGED:
+        handleMessagesExpunged(data);
+        return true;
+      case WS_EVENTS.MAILBOX_CREATED:
+        handleMailboxCreated(data, options);
+        return true;
+      case WS_EVENTS.MAILBOX_DELETED:
+        handleMailboxDeleted(data, options);
+        return true;
+      case WS_EVENTS.MAILBOX_RENAMED:
+        handleMailboxRenamed(data, options);
+        return true;
+      case WS_EVENTS.CALENDAR_EVENT_CREATED:
+        handleCalendarEventCreated(data, options);
+        return true;
+      case WS_EVENTS.CALENDAR_EVENT_UPDATED:
+        handleCalendarEventUpdated(data, options);
+        return true;
+      case WS_EVENTS.CONTACT_CREATED:
+        handleContactCreated(data, options);
+        return true;
+      case WS_EVENTS.CONTACT_UPDATED:
+        handleContactUpdated(data, options);
+        return true;
+      case WS_EVENTS.NEW_RELEASE:
+        handleNewRelease(data, options);
+        return true;
+      default:
+        return false;
+    }
+  } catch (err) {
+    console.warn('[notification-manager] routeNotificationEvent error:', err);
+    return false;
   }
 }
 
