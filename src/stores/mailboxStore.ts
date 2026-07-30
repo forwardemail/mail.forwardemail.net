@@ -81,6 +81,7 @@ import {
   sortParamForOrder,
   buildMessageListRequestKey,
   buildMessageListParams,
+  getNonLightweightRetryParams,
   shouldKeepCacheOnEmpty,
   computePrunedIds,
   isStaleListRequest,
@@ -914,6 +915,24 @@ const createMailboxStore = () => {
       return { source: 'main', res };
     };
 
+    const fetchAddressSafePage = async (params: Record<string, unknown>, stageLabel: string) => {
+      const result = await fetchWithFallback(params, stageLabel);
+      const initialList = extractMessageList(result.source, result.res);
+      const retryParams = getNonLightweightRetryParams(params, initialList);
+      if (!retryParams) return result;
+
+      // The first response proved this API strips sender/recipient fields from
+      // lightweight pages. Persist the capability verdict, discard any cached
+      // list envelope, and repair this same page before it reaches the UI.
+      noteLightweightListResponse(initialList);
+      folderMessageCache.clear();
+      tracer.stage('lightweight_retry', {
+        source: result.source,
+        count: initialList.length,
+      });
+      return fetchWithFallback(retryParams, `${stageLabel}_full`);
+    };
+
     // Note: label filtering is done client-side in filteredMessages derived store
     const requestParams = buildMessageListParams({
       folder,
@@ -932,7 +951,7 @@ const createMailboxStore = () => {
 
     const previewLimit = Math.min(20, limit);
     if (!cachedPage.length && limit > previewLimit) {
-      fetchWithFallback({ ...requestParams, limit: previewLimit }, 'preview_start')
+      fetchAddressSafePage({ ...requestParams, limit: previewLimit }, 'preview_start')
         .then(({ source, res }) => {
           if (inFlightMessageListRequest?.key !== requestKey) return;
           if (isNoContentResponse(source, res)) return;
@@ -964,7 +983,7 @@ const createMailboxStore = () => {
     }
 
     // Track this request (inFlightMessageListRequest already set eagerly above)
-    const requestPromise = fetchWithFallback(requestParams, 'request_start');
+    const requestPromise = fetchAddressSafePage(requestParams, 'request_start');
 
     try {
       const { source, res } = await requestPromise;
@@ -1023,14 +1042,10 @@ const createMailboxStore = () => {
       }
       tracer.stage('map_end', { count: mapped.length });
 
-      // Probe before the cache backfill below fills senders in from IndexedDB.
-      // Afterwards a stripped response is indistinguishable from a good one.
-      // A page of real mail always has at least one sender, so "none at all"
-      // means this server drops addresses from lightweight responses; stop
-      // asking for it (this request already paid the price, later ones won't).
-      if (noteLightweightListResponse(mapped)) {
-        folderMessageCache.clear();
-      }
+      // Defensive probe for list sources that were already normalized or
+      // cache-filled before reaching fetchAddressSafePage. The raw stripped-page
+      // path above retries immediately, so a known-bad envelope never renders.
+      if (noteLightweightListResponse(mapped)) folderMessageCache.clear();
 
       // If the active account changed while this request was in flight,
       // still write to IDB for this account's cache.

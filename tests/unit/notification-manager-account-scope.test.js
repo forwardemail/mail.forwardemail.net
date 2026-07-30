@@ -128,7 +128,7 @@ function createMockWsClient() {
   };
 }
 
-function newMessageEvent({ account, uid, from = 'Sender <sender@other.com>' }) {
+function newMessageEvent({ account, uid, from = 'Sender <sender@other.com>', message = {} }) {
   return {
     ...(account ? { _account: account } : {}),
     mailbox: 'INBOX',
@@ -138,6 +138,7 @@ function newMessageEvent({ account, uid, from = 'Sender <sender@other.com>' }) {
       from,
       subject: `Subject ${uid}`,
       flags: [],
+      ...message,
     },
   };
 }
@@ -232,5 +233,40 @@ describe('notification-manager multi-account store scoping', () => {
     });
 
     expect(messagesStore.value[0].account).toBe('a@example.com');
+  });
+
+  it('preserves address and parsed-header fields supplied by the WebSocket payload', async () => {
+    const nodemailer = {
+      from: { value: [{ name: 'Shaun Warman', address: 'shaunw.dev@gmail.com' }] },
+      to: { value: [{ address: 'shaun@warman.life' }] },
+    };
+    wsClient.emit(
+      'newMessage',
+      newMessageEvent({
+        account: 'a@example.com',
+        uid: 104,
+        message: {
+          to: 'shaun@warman.life',
+          cc: 'team@example.com',
+          replyTo: 'replies@example.com',
+          nodemailer,
+        },
+      }),
+    );
+
+    await vi.waitFor(() => {
+      expect(messagesStore.value).toHaveLength(1);
+    });
+
+    expect(messagesStore.value[0]).toEqual(
+      expect.objectContaining({
+        from: 'Sender <sender@other.com>',
+        subject: 'Subject 104',
+        to: 'shaun@warman.life',
+        cc: 'team@example.com',
+        replyTo: 'replies@example.com',
+        nodemailer,
+      }),
+    );
   });
 });

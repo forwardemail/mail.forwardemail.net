@@ -922,6 +922,7 @@ export const mailService = {
         );
 
         onPgpStatus?.({ locked: false });
+        onMeta?.(cached.meta);
         tracer.stage('cache_hit', { fresh: true, cacheAge: 0, debounced: skipBodyRender });
 
         if (skipBodyRender) {
@@ -946,7 +947,6 @@ export const mailService = {
           blockedRemoteImageCount: cached.blockedRemoteImageCount || 0,
         });
         onAttachments?.(sanitizeAttachments(cached.attachments || []));
-        onMeta?.(cached.meta);
         onLoading?.(false);
         const needsMetaRefresh =
           !cached.meta || !(cached.meta as { nodemailer?: unknown }).nodemailer;
@@ -999,6 +999,7 @@ export const mailService = {
               blockedRemoteImageCount: freshCached.blockedRemoteImageCount || 0,
             });
             onAttachments?.(sanitizeAttachments(freshCached.attachments || []));
+            onMeta?.(freshCached.meta);
             onLoading?.(false);
             tracer.end({ status: 'cache_after_inflight' });
             return;
@@ -1029,6 +1030,7 @@ export const mailService = {
         let workerResult: {
           body?: string;
           attachments?: Attachment[];
+          meta?: Record<string, unknown>;
           pgpLocked?: boolean;
           raw?: string;
         } | null = null;
@@ -1052,7 +1054,11 @@ export const mailService = {
 
         // If worker returned raw PGP data, skip network fetch — main thread can attempt decryption
         if (workerResult?.pgpLocked && workerResult?.raw) {
-          return { source: 'main', detailRes: { raw: workerResult.raw }, workerResult };
+          return {
+            source: 'main',
+            detailRes: workerResult.meta || { raw: workerResult.raw },
+            workerResult,
+          };
         }
 
         abortIfNeeded(compositeSignal);
@@ -1077,6 +1083,7 @@ export const mailService = {
       let workerResult: {
         body?: string;
         attachments?: Attachment[];
+        meta?: Record<string, unknown>;
         pgpLocked?: boolean;
         raw?: string;
       } | null = null;
@@ -1094,6 +1101,8 @@ export const mailService = {
       }
       if (source === 'worker' && workerResult?.body) {
         onPgpStatus?.({ locked: false });
+        const workerMeta = workerResult.meta || null;
+        onMeta?.(workerMeta);
         const workerAttachments = sanitizeAttachments(workerResult.attachments || []);
         const hydrated = applyInlineAttachments(workerResult.body, workerAttachments);
         abortIfNeeded(compositeSignal);
@@ -1120,9 +1129,18 @@ export const mailService = {
           workerAttachments,
           workerResult.body,
           '',
-          null,
+          workerMeta,
           account,
         ).catch(() => {});
+        if (!workerMeta?.nodemailer) {
+          mailService.loadMessageDetailNetwork?.({
+            message,
+            folder: folder || '',
+            onMeta,
+            metaOnly: true,
+            signal: compositeSignal,
+          });
+        }
         tracer.end({ status: 'worker_rendered' });
         return;
       }

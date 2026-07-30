@@ -948,7 +948,7 @@ async function fetchAndCacheBodyWithOptions(account, folder, msg, options = {}) 
   if (!apiId) return;
 
   const requestKey = `${account}::${apiId}`;
-  const persistBody = async (body, textContent, attachments = []) => {
+  const persistBody = async (body, textContent, attachments = [], meta = null) => {
     if (dbPort) {
       await db.messageBodies.put({
         id: apiId,
@@ -957,6 +957,7 @@ async function fetchAndCacheBodyWithOptions(account, folder, msg, options = {}) 
         body,
         textContent,
         attachments,
+        meta,
         updatedAt: Date.now(),
       });
     }
@@ -987,6 +988,7 @@ async function fetchAndCacheBodyWithOptions(account, folder, msg, options = {}) 
       body,
       textContent,
       attachments,
+      meta,
     };
   };
   if (dbPort) {
@@ -1003,6 +1005,7 @@ async function fetchAndCacheBodyWithOptions(account, folder, msg, options = {}) 
             body: cached.body,
             textContent: cached.textContent || '',
             attachments: cached.attachments || [],
+            meta: (cached as { meta?: Record<string, unknown> }).meta || null,
           };
         }
         return;
@@ -1048,7 +1051,7 @@ async function fetchAndCacheBodyWithOptions(account, folder, msg, options = {}) 
         const decrypted = await decryptPgp(raw);
         if (!decrypted) {
           // Return raw data so main thread can attempt PGP decryption without re-fetching
-          return { id: apiId, folder, pgpLocked: true, raw };
+          return { id: apiId, folder, pgpLocked: true, raw, meta: result };
         }
         const parsed = await parseRawMessage(decrypted);
         if (parsed) {
@@ -1125,7 +1128,7 @@ async function fetchAndCacheBodyWithOptions(account, folder, msg, options = {}) 
       textContent = serverText || extractTextContent(inlined);
     }
 
-    return await persistBody(body, textContent, attachments);
+    return await persistBody(body, textContent, attachments, result);
   })();
 
   inFlightBodyRequests.set(requestKey, requestPromise);

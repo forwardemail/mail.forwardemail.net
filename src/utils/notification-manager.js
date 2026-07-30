@@ -26,7 +26,7 @@ import { isDemoMode } from './demo-mode.js';
 import { updateFaviconBadge } from './favicon-badge.js';
 import { Remote } from './remote.js';
 import { decodeMimeHeader } from './mime-utils.js';
-import { extractFromField } from './sync-helpers.ts';
+import { extractFromField, extractRecipientsField } from './sync-helpers.ts';
 import { extractEmail } from './address.ts';
 import { Local } from './storage.js';
 import { isActiveAccount, sameAccount } from './account-scope.ts';
@@ -670,6 +670,11 @@ async function prependNewMessageToStore({ msg, mailbox, from, subject, uid, acco
     const dateMs =
       parsedDate && Number.isFinite(parsedDate.getTime()) ? parsedDate.getTime() : Date.now();
 
+    const to = extractRecipientsField(msg, 'to');
+    const cc = extractRecipientsField(msg, 'cc');
+    const bcc = extractRecipientsField(msg, 'bcc');
+    const replyTo = extractRecipientsField(msg, 'replyTo');
+
     const envelope = {
       id,
       uid: msg?.uid ?? msg?.Uid ?? null,
@@ -681,6 +686,12 @@ async function prependNewMessageToStore({ msg, mailbox, from, subject, uid, acco
       date: dateMs,
       dateMs,
       from: from || 'Unknown',
+      to,
+      cc,
+      bcc,
+      replyTo,
+      reply_to: replyTo,
+      nodemailer: msg?.nodemailer || null,
       subject: subject || '(No subject)',
       normalizedSubject: subject || '',
       snippet: msg?.snippet || msg?.preview || '',

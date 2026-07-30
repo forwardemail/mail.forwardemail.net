@@ -14,6 +14,7 @@ import {
   sortParamForOrder,
   buildMessageListRequestKey,
   buildMessageListParams,
+  getNonLightweightRetryParams,
   shouldKeepCacheOnEmpty,
   computePrunedIds,
   isStaleListRequest,
@@ -598,6 +599,48 @@ describe('buildMessageListParams', () => {
     const plain = buildMessageListParams(base);
     expect('is_unread' in plain).toBe(false);
     expect('has_attachments' in plain).toBe(false);
+  });
+});
+
+describe('getNonLightweightRetryParams', () => {
+  const lightweightParams = {
+    folder: 'INBOX',
+    page: 1,
+    limit: 50,
+    lightweight: true,
+    raw: false,
+    attachments: false,
+  };
+
+  it('retries the current stripped page without lightweight mode', () => {
+    expect(
+      getNonLightweightRetryParams(lightweightParams, [
+        { id: 'msg-1', subject: 'Delivered without an envelope' },
+      ]),
+    ).toEqual({
+      folder: 'INBOX',
+      page: 1,
+      limit: 50,
+      raw: false,
+      attachments: false,
+    });
+  });
+
+  it('does not retry a lightweight page that includes a sender', () => {
+    expect(
+      getNonLightweightRetryParams(lightweightParams, [
+        { id: 'msg-1', from: 'Sender <sender@example.com>' },
+      ]),
+    ).toBeNull();
+  });
+
+  it('does not retry empty pages or requests already made without lightweight mode', () => {
+    expect(getNonLightweightRetryParams(lightweightParams, [])).toBeNull();
+    expect(
+      getNonLightweightRetryParams({ ...lightweightParams, lightweight: undefined }, [
+        { id: 'msg-1' },
+      ]),
+    ).toBeNull();
   });
 });
 

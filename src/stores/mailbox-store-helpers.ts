@@ -410,6 +410,23 @@ export const buildMessageListParams = ({
   ...(hasAttachmentsOnly ? { has_attachments: true } : {}),
 });
 
+// A capability verdict can only be learned after the first lightweight page
+// returns. Do not commit that known-bad page to the store and wait for a later
+// refresh: retry the same request immediately without the query option. Because
+// the returned params no longer include `lightweight`, this cannot recurse.
+export const getNonLightweightRetryParams = (
+  params: Record<string, unknown>,
+  messages: Array<{ from?: unknown }> = [],
+) => {
+  if (params.lightweight !== true || messages.length === 0) {
+    return null;
+  }
+  if (messages.some((message) => hasFromValue(message?.from))) return null;
+  const retryParams = { ...params };
+  delete retryParams.lightweight;
+  return retryParams;
+};
+
 // --- loadMessages keep/prune predicates + stale guard (#3 extraction, slices b+c) ---
 
 // Whether to KEEP the cached messages instead of clearing them when the server
