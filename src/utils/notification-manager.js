@@ -725,10 +725,12 @@ async function handleNewMessage(data, { suppressVisual = false } = {}) {
 async function _handleNewMessageInner(data, { suppressVisual = false } = {}) {
   // Reconstruct a message-like object from flat push data fields when
   // data.message is missing (push-only scenario, e.g. WS disconnected).
-  // The server includes from/subject/snippet in the push data payload.
-  if (!data.message && (data.from || data.subject)) {
+  // The server includes sender/subject/snippet in the push data payload.
+  // The key is "sender" because "from" is a reserved word in FCM data
+  // payloads; older backends may still send "from" so accept both.
+  if (!data.message && (data.sender || data.from || data.subject)) {
     data.message = {
-      from: data.from || '',
+      from: data.sender || data.from || '',
       subject: data.subject || '',
       snippet: data.snippet || '',
       id: data.message_id || '',
