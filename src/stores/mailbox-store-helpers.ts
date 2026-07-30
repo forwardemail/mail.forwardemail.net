@@ -45,7 +45,9 @@ export const coerceLabelList = (value) => {
   return [];
 };
 
-export const hasFromValue = (value) => typeof value === 'string' && value.trim().length > 0;
+export const hasFromValue = (value) =>
+  (typeof value === 'string' && value.trim().length > 0) ||
+  (Array.isArray(value) && value.length > 0);
 
 // Derive a stable, collision-safe identity for a message used to dedup list
 // pages. Prefer the server-assigned id/uid; fall back to the Message-ID header

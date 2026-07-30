@@ -195,7 +195,8 @@ var __swNormalize = function(exports) {
     }
     const altField = field ? `${field[0].toUpperCase()}${field.slice(1)}` : field;
     const upperField = field ? field.toUpperCase() : field;
-    const directValue = msg?.[field] ?? (altField ? msg?.[altField] : void 0) ?? (upperField ? msg?.[upperField] : void 0);
+    const snakeField = field === "replyTo" ? "reply_to" : void 0;
+    const directValue = msg?.[field] ?? (altField ? msg?.[altField] : void 0) ?? (upperField ? msg?.[upperField] : void 0) ?? (snakeField ? msg?.[snakeField] : void 0);
     if (directValue) return normalizeHeaderValue(directValue);
     const alt = msg?.[`${field}_address`];
     if (Array.isArray(alt)) return alt;

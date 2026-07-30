@@ -233,10 +233,12 @@ export const extractAddressList = (
 
   const altField = field ? `${field[0].toUpperCase()}${field.slice(1)}` : field;
   const upperField = field ? field.toUpperCase() : field;
+  const snakeField = field === 'replyTo' ? 'reply_to' : undefined;
   const directValue =
     msg?.[field] ??
     (altField ? msg?.[altField] : undefined) ??
-    (upperField ? msg?.[upperField] : undefined);
+    (upperField ? msg?.[upperField] : undefined) ??
+    (snakeField ? msg?.[snakeField] : undefined);
   if (directValue) return normalizeHeaderValue(directValue);
 
   const alt = msg?.[`${field}_address`];

@@ -28,6 +28,19 @@ const stripVolatile = (m: MsgRecord): MsgRecord => {
 const ACCOUNT = 'user@example.com';
 const FOLDER = 'INBOX';
 
+const LIGHTWEIGHT_API_RAW: RawArg = {
+  id: 'srv-lightweight',
+  folder_path: 'INBOX',
+  internal_date: '2026-07-30T03:43:35.707Z',
+  subject: 'Lightweight Identity Metadata',
+  flags: [],
+  from: [{ address: 'sender@example.com', name: 'Sender Name' }],
+  to: [{ address: 'to@example.com', name: '' }],
+  cc: [{ address: 'cc@example.com', name: '' }],
+  bcc: [{ address: 'bcc@example.com', name: '' }],
+  reply_to: [{ address: 'replies@example.com', name: '' }],
+};
+
 // Raw API records exercising the known divergences (id priority, date-field
 // ordering, label extraction, attachment-by-array, header-derived ids, etc.).
 const FIXTURES: Array<{ name: string; raw: RawArg }> = [
@@ -105,6 +118,10 @@ const FIXTURES: Array<{ name: string; raw: RawArg }> = [
     },
   },
   {
+    name: 'captured lightweight API identity shape without MIME data',
+    raw: LIGHTWEIGHT_API_RAW,
+  },
+  {
     name: 'mixed visible + hidden labels (hidden-label filtering)',
     raw: {
       id: 'srv-6',
@@ -119,6 +136,19 @@ const FIXTURES: Array<{ name: string; raw: RawArg }> = [
 describe('message normalization contract: SW bundle === canonical', () => {
   it('exposes the service-worker normalizer as a global', () => {
     expect(typeof swNormalize).toBe('function');
+  });
+
+  it('normalizes every identity field from the lightweight API response', () => {
+    const normalized = normalizeMessageForCache(LIGHTWEIGHT_API_RAW, FOLDER, ACCOUNT);
+
+    expect(normalized).toMatchObject({
+      from: 'Sender Name <sender@example.com>',
+      to: 'to@example.com',
+      cc: 'cc@example.com',
+      bcc: 'bcc@example.com',
+      reply_to: 'replies@example.com',
+      subject: 'Lightweight Identity Metadata',
+    });
   });
 
   for (const { name, raw } of FIXTURES) {

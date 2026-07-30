@@ -235,6 +235,40 @@ describe('notification-manager multi-account store scoping', () => {
     expect(messagesStore.value[0].account).toBe('a@example.com');
   });
 
+  it('preserves the production WebSocket identity fields in the optimistic row', async () => {
+    wsClient.emit(
+      'newMessage',
+      newMessageEvent({
+        account: 'a@example.com',
+        uid: 106,
+        message: {
+          from: [{ address: 'sender@other.com', name: 'API Sender' }],
+          to: [{ address: 'recipient@example.com', name: '' }],
+          cc: [{ address: 'cc@example.com', name: '' }],
+          bcc: [{ address: 'bcc@example.com', name: '' }],
+          reply_to: [{ address: 'replies@example.com', name: '' }],
+          subject: 'Production WebSocket Contract',
+        },
+      }),
+    );
+
+    await vi.waitFor(() => {
+      expect(messagesStore.value).toHaveLength(1);
+    });
+
+    expect(messagesStore.value[0]).toEqual(
+      expect.objectContaining({
+        from: 'API Sender <sender@other.com>',
+        subject: 'Production WebSocket Contract',
+        to: 'recipient@example.com',
+        cc: 'cc@example.com',
+        bcc: 'bcc@example.com',
+        replyTo: 'replies@example.com',
+        reply_to: 'replies@example.com',
+      }),
+    );
+  });
+
   it('preserves address and parsed-header fields supplied by the WebSocket payload', async () => {
     const nodemailer = {
       from: { value: [{ name: 'Shaun Warman', address: 'shaunw.dev@gmail.com' }] },

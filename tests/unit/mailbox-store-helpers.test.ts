@@ -632,6 +632,14 @@ describe('getNonLightweightRetryParams', () => {
         { id: 'msg-1', from: 'Sender <sender@example.com>' },
       ]),
     ).toBeNull();
+    expect(
+      getNonLightweightRetryParams(lightweightParams, [
+        {
+          id: 'msg-1',
+          from: [{ address: 'sender@example.com', name: 'Sender' }],
+        },
+      ]),
+    ).toBeNull();
   });
 
   it('does not retry empty pages or requests already made without lightweight mode', () => {
