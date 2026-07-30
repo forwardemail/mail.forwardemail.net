@@ -16,6 +16,7 @@ Default permissions for the mobile-push plugin
 <th>Description</th>
 </tr>
 
+
 <tr>
 <td>
 

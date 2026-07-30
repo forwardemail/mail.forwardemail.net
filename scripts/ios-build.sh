@@ -77,5 +77,8 @@ if [[ "$TARGET" != *-sim ]]; then
     node scripts/inject-ios-signing.cjs
 fi
 
+# Schedule-X/Signals assigns inherited prototype methods during module startup.
+# Force the final mobile config merge so a stale native build cannot freeze them.
+TAURI_IOS_SECURITY_CONFIG='{"app":{"security":{"freezePrototype":false}}}'
 # shellcheck disable=SC2086
-exec npx tauri ios build $TARGET_FLAG "$@"
+exec npx tauri ios build --config "$TAURI_IOS_SECURITY_CONFIG" $TARGET_FLAG "$@"

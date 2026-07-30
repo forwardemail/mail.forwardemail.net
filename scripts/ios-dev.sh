@@ -121,8 +121,11 @@ fi
 
 echo "   🚀 Starting tauri ios dev..."
 echo ""
+# Schedule-X/Signals assigns inherited prototype methods during module startup.
+# Force the final mobile config merge so a stale native build cannot freeze them.
+TAURI_IOS_SECURITY_CONFIG='{"app":{"security":{"freezePrototype":false}}}'
 if [ -n "$DEVICE_ARG" ]; then
-  exec npx tauri ios dev "$DEVICE_ARG" "$@"
+  exec npx tauri ios dev --config "$TAURI_IOS_SECURITY_CONFIG" "$DEVICE_ARG" "$@"
 else
-  exec npx tauri ios dev "$@"
+  exec npx tauri ios dev --config "$TAURI_IOS_SECURITY_CONFIG" "$@"
 fi
