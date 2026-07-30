@@ -34,6 +34,66 @@ describe('realtime event transport coalescer', () => {
     );
   });
 
+  it('scopes legacy keys by account so identical UIDs across mailboxes stay distinct', () => {
+    // A UID is a per-mailbox counter and a mailbox path is "INBOX" everywhere,
+    // so with several accounts connected at once these identities collide by
+    // construction, not by coincidence.
+    const a = getRealtimeEventKey('newMessage', {
+      _account: 'alice@example.com',
+      message: { uid: 42 },
+    });
+    const b = getRealtimeEventKey('newMessage', {
+      _account: 'bob@example.com',
+      message: { uid: 42 },
+    });
+
+    expect(a).not.toBe(b);
+    expect(a).toContain('alice@example.com');
+  });
+
+  it('matches the WebSocket and push copies of one account event', () => {
+    // Both transports carry `_account` by the time they reach the coalescer —
+    // the manager tags WebSocket events, and push has it resolved from
+    // alias_id — so cross-transport dedup still works after scoping.
+    expect(
+      getRealtimeEventKey('flagsUpdated', {
+        _account: 'Alice@Example.com',
+        mailbox: 'INBOX',
+        uids: [5],
+        flags: ['\\Seen'],
+        action: 'add',
+      }),
+    ).toBe(
+      getRealtimeEventKey('flagsUpdated', {
+        _account: 'alice@example.com',
+        mailbox: 'INBOX',
+        uids: [5],
+        flags: ['\\Seen'],
+        action: 'add',
+      }),
+    );
+  });
+
+  it('delivers the same flag change for two accounts instead of deduping one away', () => {
+    const onEvent = vi.fn();
+    const coalescer = createRealtimeEventCoalescer({ onEvent, isVisible: () => true });
+    const flagChange = (account) => ({
+      _account: account,
+      mailbox: 'INBOX',
+      uids: [5],
+      flags: ['\\Seen'],
+      action: 'add',
+    });
+
+    expect(coalescer.handleWebSocket('flagsUpdated', flagChange('alice@example.com'))).toBe(true);
+    expect(coalescer.handleWebSocket('flagsUpdated', flagChange('bob@example.com'))).toBe(true);
+    expect(onEvent).toHaveBeenCalledTimes(2);
+
+    // The genuine repeat is still suppressed.
+    expect(coalescer.handleWebSocket('flagsUpdated', flagChange('alice@example.com'))).toBe(false);
+    expect(onEvent).toHaveBeenCalledTimes(2);
+  });
+
   it('processes WebSocket first and suppresses the matching push copy', () => {
     const onEvent = vi.fn();
     const coalescer = createRealtimeEventCoalescer({ onEvent, isVisible: () => true });

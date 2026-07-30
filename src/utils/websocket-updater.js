@@ -2,10 +2,11 @@
  * Forward Email – WebSocket-based Inbox Updater (Multi-Account)
  *
  * Uses the WebSocket manager to maintain real-time connections for ALL
- * signed-in accounts simultaneously.  Events from any account trigger
- * appropriate UI updates:
+ * signed-in accounts simultaneously, but only the account on screen affects
+ * what the user sees:
  *   - Active account events → immediate folder refresh + notifications
- *   - Non-active account events → notifications + badge updates only
+ *   - Non-active account events → nothing; that mailbox refreshes when the
+ *     user switches to it
  *
  * Falls back to polling if all WebSocket connections fail repeatedly.
  *
@@ -20,6 +21,7 @@
 import { get } from 'svelte/store';
 import { mailboxStore } from '../stores/mailboxStore';
 import { Local } from './storage';
+import { isActiveAccount } from './account-scope.ts';
 import { startInitialSync } from './sync-controller';
 import { createReleaseWatcher, WS_EVENTS } from './websocket-client';
 import {
@@ -88,14 +90,16 @@ function createWebSocketUpdater() {
 
   /**
    * Check if an event is for the currently active account.
-   * Events for the active account trigger immediate UI refresh.
-   * Events for other accounts only trigger notifications/badges.
+   * Only the active account's events touch the visible UI; another account's
+   * data is refreshed the next time the user switches to it.
+   *
+   * Push payloads have their `_account` resolved from `alias_id` before they
+   * reach here (see dispatchPushPayload), so an untagged event now means a
+   * single-account install or a legacy registration — treated as active so
+   * those installs keep updating.
    */
-  function isActiveAccount(eventData) {
-    const activeEmail = (Local.get('email') || '').toLowerCase();
-    const eventAccount = (eventData?._account || '').toLowerCase();
-    // If no account tag or matches active, treat as active
-    return !eventAccount || eventAccount === activeEmail;
+  function isActiveAccountEvent(eventData) {
+    return isActiveAccount(eventData?._account, { treatUnknownAsActive: true });
   }
 
   // Refresh the current folder — polls whatever the user is viewing, not just INBOX.
@@ -138,7 +142,7 @@ function createWebSocketUpdater() {
     if (!isNonEmptyString(folderIdentifier)) return;
 
     // Only refresh the visible UI for the active account's events
-    if (!isActiveAccount(eventData)) return;
+    if (!isActiveAccountEvent(eventData)) return;
 
     const currentFolder = get(mailboxStore.state.selectedFolder);
     const account = Local.get('email') || 'default';
@@ -266,7 +270,7 @@ function createWebSocketUpdater() {
         ]) {
           registerUpdateHandler(eventName, (data) => {
             // Only refresh folder list for active account events
-            if (isActiveAccount(data)) {
+            if (isActiveAccountEvent(data)) {
               mailboxStore.actions.loadFolders?.();
             }
           });

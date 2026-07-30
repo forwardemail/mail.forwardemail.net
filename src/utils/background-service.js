@@ -92,9 +92,14 @@ function isValidToken(token, provider) {
  * The native APNs/FCM plugins name platforms by operating system, while
  * UnifiedPush is already named by delivery provider.
  *
+ * The alias ID in the response is what makes inbound push payloads
+ * attributable: the server stamps notifications with `alias_id` and no email,
+ * so this response is the only place the device learns which of its signed-in
+ * accounts an `alias_id` belongs to.
+ *
  * @param {string} token - Device token or serialized UnifiedPush subscription
  * @param {string} platform - 'ios' | 'android' | 'apns' | 'fcm' | 'unified-push'
- * @returns {Promise<string|null>} the server-side registration ID
+ * @returns {Promise<{id: string, aliasId: string}|null>} the registration
  */
 export async function registerPushToken(token, platform) {
   const provider = platform === 'ios' ? 'apns' : platform === 'android' ? 'fcm' : platform;
@@ -137,11 +142,21 @@ export async function registerPushToken(token, platform) {
 
     pushToken = token;
     pushRegistrationId = registration.id;
-    return registration.id;
+    return { id: registration.id, aliasId: readAliasId(registration) };
   } catch (err) {
     console.warn('[background-service] Token registration error:', err);
     return null;
   }
+}
+
+/**
+ * Pull the alias ID out of a push-token API response. Older servers omit it,
+ * in which case callers fall back to treating the account as unresolvable
+ * rather than guessing.
+ */
+function readAliasId(registration) {
+  const alias = registration?.alias;
+  return typeof alias === 'string' ? alias : '';
 }
 
 /**
@@ -152,7 +167,7 @@ export async function registerPushToken(token, platform) {
  * @param {string} token - Device token or serialized UnifiedPush subscription
  * @param {string} platform - 'ios' | 'android' | 'apns' | 'fcm' | 'unified-push'
  * @param {string} aliasAuth - The alias auth credential (email:password format)
- * @returns {Promise<string|null>} the server-side registration ID
+ * @returns {Promise<{id: string, aliasId: string}|null>} the registration
  */
 export async function registerPushTokenForAccount(token, platform, aliasAuth) {
   const provider = platform === 'ios' ? 'apns' : platform === 'android' ? 'fcm' : platform;
@@ -187,7 +202,7 @@ export async function registerPushTokenForAccount(token, platform, aliasAuth) {
       console.warn('[background-service] Token registration returned no ID for account');
       return null;
     }
-    return registration.id;
+    return { id: registration.id, aliasId: readAliasId(registration) };
   } catch (err) {
     console.warn('[background-service] Token registration error for account:', err);
     return null;

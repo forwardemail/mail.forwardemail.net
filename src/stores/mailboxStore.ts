@@ -10,6 +10,7 @@ import { cacheManager } from '../utils/cache-manager';
 import { normalizeSubject, parseReferences } from '../utils/threading';
 import { formatFriendlyDate } from '../utils/date';
 import { normalizeMessageForCache, getMessageApiId } from '../utils/sync-helpers';
+import { assertAccountScoped } from '../utils/account-scope';
 import { getSyncSettings } from '../utils/sync-settings';
 import { sendSyncRequest, onSyncTaskComplete } from '../utils/sync-worker-client.js';
 import { createPerfTracer } from '../utils/perf-logger.ts';
@@ -1169,6 +1170,12 @@ const createMailboxStore = () => {
             queueReadFailed = true;
           }
         }
+        // `merged` came from a response fetched under `account`'s credentials,
+        // and mapServerMessage passes a cached record straight through when it
+        // already carries an account. Verify the two agree before this batch
+        // becomes durable: a mismatch here files one account's mail under
+        // another's partition, which survives reloads and does not self-heal.
+        assertAccountScoped('mailboxStore.loadMessages', account, merged);
         await db.transaction('rw', db.messages, db.messageBodies, async () => {
           if (merged.length) {
             await db.messages.bulkPut(
@@ -1307,6 +1314,12 @@ const createMailboxStore = () => {
     inFlightMessageListRequest = null;
     pendingDeleteTracker.clear();
     pendingFlagTracker.clear();
+    // The insert tracker holds a fully-formed envelope, not just an id, and
+    // apply() re-injects it into any Sent load for the next 60 seconds. Left
+    // uncleared, a message just sent from one account reappears inside a
+    // different account's Sent folder — the only tracker of the three that can
+    // put another mailbox's mail on screen, and the one that was missing here.
+    pendingInsertTracker.clear();
     // Clear folder TTL cache so the next loadFolders() does a fresh fetch
     // instead of returning stale/empty data from a previous session.
     folderLoadState.clear();

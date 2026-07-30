@@ -46,7 +46,9 @@ vi.mock('../../src/utils/storage', () => ({
 vi.mock('../../src/utils/background-service.js', () => ({
   listPushTokens: vi.fn().mockResolvedValue([]),
   registerPushToken: registerServerMock,
-  registerPushTokenForAccount: vi.fn().mockResolvedValue('multi-reg-1'),
+  registerPushTokenForAccount: vi
+    .fn()
+    .mockResolvedValue({ id: 'multi-reg-1', aliasId: 'alias-multi-1' }),
   unregisterPushToken: unregisterServerMock,
   unregisterPushTokenForAccount: unregisterServerMock,
 }));
@@ -115,7 +117,7 @@ describe('UnifiedPush provider lifecycle in the native push manager', () => {
     removeListenersMock.mockResolvedValue(undefined);
     unregisterUnifiedMock.mockResolvedValue(undefined);
     requestNotificationPermissionMock.mockResolvedValue('granted');
-    registerServerMock.mockResolvedValue('registration-1');
+    registerServerMock.mockResolvedValue({ id: 'registration-1', aliasId: 'alias-1' });
     unregisterServerMock.mockResolvedValue(true);
     serializeMock.mockReturnValue(SERIALIZED_SUBSCRIPTION);
 
@@ -173,7 +175,7 @@ describe('UnifiedPush provider lifecycle in the native push manager', () => {
 
   it('rotates a changed subscription and deletes the superseded server resource', async () => {
     await pushManager.initPushNotifications();
-    registerServerMock.mockResolvedValueOnce('registration-2');
+    registerServerMock.mockResolvedValueOnce({ id: 'registration-2', aliasId: 'alias-1' });
     const rotatedSerialized = JSON.stringify({
       endpoint: 'https://push.example.test/message/rotated',
       keys: { p256dh: SUBSCRIPTION.p256dh, auth: SUBSCRIPTION.auth },

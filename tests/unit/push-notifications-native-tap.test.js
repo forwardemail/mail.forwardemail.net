@@ -7,7 +7,9 @@ const { callbacks, listenerCleanup, registerPushTokenMock, unregisterPushTokenMo
   () => ({
     callbacks: {},
     listenerCleanup: { unregister: vi.fn(() => Promise.resolve()) },
-    registerPushTokenMock: vi.fn(() => Promise.resolve('registration-id')),
+    registerPushTokenMock: vi.fn(() =>
+      Promise.resolve({ id: 'registration-id', aliasId: 'alias-1' }),
+    ),
     unregisterPushTokenMock: vi.fn(() => Promise.resolve()),
   }),
 );
@@ -19,7 +21,9 @@ vi.mock('../../src/utils/platform.js', () => ({
 vi.mock('../../src/utils/background-service.js', () => ({
   listPushTokens: vi.fn().mockResolvedValue([]),
   registerPushToken: registerPushTokenMock,
-  registerPushTokenForAccount: vi.fn(() => Promise.resolve('multi-reg-1')),
+  registerPushTokenForAccount: vi.fn(() =>
+    Promise.resolve({ id: 'multi-reg-1', aliasId: 'alias-multi-1' }),
+  ),
   unregisterPushToken: unregisterPushTokenMock,
 }));
 

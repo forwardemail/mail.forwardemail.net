@@ -29,6 +29,7 @@ import { decodeMimeHeader } from './mime-utils.js';
 import { extractFromField } from './sync-helpers.ts';
 import { extractEmail } from './address.ts';
 import { Local } from './storage.js';
+import { isActiveAccount, sameAccount } from './account-scope.ts';
 import { createRealtimeEventCoalescer } from './realtime-event-coalescer.js';
 
 // ── In-app toast reference ─────────────────────────────────────────────────
@@ -634,10 +635,10 @@ async function prependNewMessageToStore({ msg, mailbox, from, subject, uid, acco
   // own: INBOX matches INBOX for every account, so without this gate a
   // delivery for another account gets inserted into (and stamped as) the
   // active account's list. Events with no account tag are treated as active,
-  // matching isActiveAccount() in websocket-updater.
-  const activeEmail = (Local.get('email') || '').toLowerCase();
-  const eventEmail = (account || '').toLowerCase();
-  if (eventEmail && eventEmail !== activeEmail) return;
+  // matching isActiveAccount() in websocket-updater. routeNotificationEvent
+  // applies the same gate one level up; this stays as a local invariant so the
+  // function is safe to call from anywhere, not only from that one caller.
+  if (!isActiveAccount(account, { treatUnknownAsActive: true })) return;
   try {
     const { get } = await import('svelte/store');
     const { mailboxStore } = await import('../stores/mailboxStore');
@@ -748,7 +749,7 @@ async function handleNewMessage(data, { suppressVisual = false } = {}) {
   // not just the currently active one.
   const eventAccount = (data?._account || '').toLowerCase();
   const accountEmail = eventAccount || (Local.get('email') || '').toLowerCase();
-  if (accountEmail && fromAddr && fromAddr === accountEmail) return;
+  if (sameAccount(fromAddr, accountEmail)) return;
 
   incrementBadge(1);
 
@@ -778,8 +779,7 @@ async function handleNewMessage(data, { suppressVisual = false } = {}) {
   // Skipped for other accounts' events: Remote.request runs under the active
   // session auth, so it would search the wrong account's mailbox and the
   // subject-match fallback could attribute someone else's sender.
-  const isActiveAccountEvent =
-    !eventAccount || eventAccount === (Local.get('email') || '').toLowerCase();
+  const isActiveAccountEvent = isActiveAccount(eventAccount, { treatUnknownAsActive: true });
   if (!from && isActiveAccountEvent) {
     try {
       // Deliberately NOT lightweight: this fetch exists only to recover the
@@ -805,7 +805,11 @@ async function handleNewMessage(data, { suppressVisual = false } = {}) {
 
   const displayName = sanitizePlain(extractDisplayName(from) || 'Unknown sender', MAX_TITLE_LEN);
   const safeSubject = sanitizePlain(subject || '(No subject)', MAX_BODY_LEN);
-  const safeTag = sanitize(`new-message-${uid || Date.now()}`, MAX_TAG_LEN);
+  // The dedup map is persisted for three days and survives account switches, so
+  // the tag has to name the account too. A UID is per-mailbox, not global:
+  // without the prefix, account A's message 5 permanently suppresses account
+  // B's message 5.
+  const safeTag = sanitize(`new-message-${accountEmail}-${uid || Date.now()}`, MAX_TAG_LEN);
 
   // Optimistically inject the envelope into the message list if the user is
   // currently viewing the affected folder. Without this, the WS broadcast
@@ -844,8 +848,10 @@ async function handleNewMessage(data, { suppressVisual = false } = {}) {
     _toasts?.show?.(`New email from ${displayName}: ${safeSubject}`, 'info', 5000, {
       label: 'View',
       callback() {
-        const active = (Local.get('email') || '').toLowerCase();
-        if (toastAccount && toastAccount.toLowerCase() !== active) {
+        // The gate above means this is normally the active account already, so
+        // the switch is a no-op — kept for the case where the user switches
+        // accounts during the toast's five-second lifetime.
+        if (toastAccount && !isActiveAccount(toastAccount)) {
           globalThis.dispatchEvent(
             new CustomEvent('app:switch-account', { detail: { email: toastAccount } }),
           );
@@ -1024,7 +1030,31 @@ const ROUTED_NOTIFICATION_EVENTS = new Set([
   WS_EVENTS.NEW_RELEASE,
 ]);
 
+// Events that are about the application rather than a mailbox. A release
+// announcement is the same for every signed-in account, so it is not subject to
+// the active-account gate below.
+const ACCOUNT_AGNOSTIC_EVENTS = new Set([WS_EVENTS.NEW_RELEASE]);
+
 function routeNotificationEvent(eventName, data, options) {
+  // The multi-account WebSocket manager and the per-account push registrations
+  // both deliver events for EVERY signed-in account. Notifications, toasts and
+  // the badge describe the mailbox the user is looking at, so anything that
+  // names another account stops here.
+  //
+  // An event with no account tag is treated as active. That covers a
+  // single-account install and a device whose push registrations predate alias
+  // capture; a push that names an alias we know is not ours never reaches this
+  // point (see dispatchPushPayload).
+  if (
+    !ACCOUNT_AGNOSTIC_EVENTS.has(eventName) &&
+    !isActiveAccount(data?._account, { treatUnknownAsActive: true })
+  ) {
+    // Returning true marks the event consumed: it was routed and deliberately
+    // produced nothing. Returning false would let a caller treat it as
+    // unhandled and look for another home for it.
+    return true;
+  }
+
   switch (eventName) {
     case WS_EVENTS.NEW_MESSAGE:
       handleNewMessage(data, options);

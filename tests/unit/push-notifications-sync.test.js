@@ -101,7 +101,7 @@ describe('authenticated mobile push synchronization', () => {
     apnsGetTokenMock.mockResolvedValue(APNS_TOKEN);
     fcmPermissionMock.mockResolvedValue({ granted: true });
     fcmGetTokenMock.mockResolvedValue(FCM_TOKEN);
-    registerServerMock.mockResolvedValue('registration-1');
+    registerServerMock.mockResolvedValue({ id: 'registration-1', aliasId: 'alias-1' });
     unregisterServerMock.mockResolvedValue(undefined);
     setUserAgent('ForwardEmail/1.0 (Android 15)');
   });
@@ -176,7 +176,9 @@ describe('authenticated mobile push synchronization', () => {
 
   it('retries on the next lifecycle trigger after server registration fails', async () => {
     localStore.set('alias_auth', ALIAS_AUTH);
-    registerServerMock.mockResolvedValueOnce(null).mockResolvedValueOnce('registration-2');
+    registerServerMock
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ id: 'registration-2', aliasId: 'alias-1' });
     const { isPushInitialized, syncPushNotifications } =
       await import('../../src/utils/push-notifications.js');
 

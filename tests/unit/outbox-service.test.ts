@@ -11,13 +11,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({
   online: true,
   demo: false,
+  activeEmail: 'me@test.com',
   outbox: new Map<string, Record<string, unknown>>(),
   remoteRequest: vi.fn().mockResolvedValue({}),
   saveSentCopy: vi.fn().mockResolvedValue(undefined),
   blockedToast: vi.fn(),
 }));
 
-vi.mock('../../src/utils/storage', () => ({ Local: { get: vi.fn(() => 'me@test.com') } }));
+vi.mock('../../src/utils/storage', () => ({
+  Local: { get: vi.fn(() => h.activeEmail) },
+}));
 vi.mock('../../src/utils/remote', () => ({
   Remote: { request: (...a: unknown[]) => h.remoteRequest(...a) },
 }));
@@ -62,6 +65,7 @@ const email = { to: ['x@y.com'], subject: 'Hi', html: '<p>hello</p>' };
 beforeEach(() => {
   h.online = true;
   h.demo = false;
+  h.activeEmail = 'me@test.com';
   h.outbox.clear();
   h.remoteRequest.mockReset().mockResolvedValue({});
   h.saveSentCopy.mockClear();
@@ -195,5 +199,53 @@ describe('processOutbox', () => {
     await p;
     const item = await getOutboxItem('a');
     expect(item).toMatchObject({ status: 'failed', retryCount: 5, lastError: 'perma-fail' });
+  });
+});
+
+describe('processOutbox account binding', () => {
+  // The drain loop awaits a network send plus a 500ms pause per item, so the
+  // user can switch accounts part-way through it. Sending is authenticated by
+  // the ACTIVE session, so an item belonging to another account must not go
+  // out here: it would be sent from the wrong alias and its Sent copy filed
+  // into the wrong mailbox.
+  it('refuses to send an item whose account is no longer active', async () => {
+    vi.useFakeTimers();
+    h.outbox.set('a', {
+      account: 'other@test.com',
+      id: 'a',
+      status: 'pending',
+      retryCount: 0,
+      nextRetryAt: 0,
+      emailData: email,
+    });
+
+    const p = processOutbox();
+    await vi.runAllTimersAsync();
+    const result = await p;
+
+    expect(h.remoteRequest).not.toHaveBeenCalled();
+    expect(h.saveSentCopy).not.toHaveBeenCalled();
+    // Deferred, not failed: no retry was spent and the item is untouched, so it
+    // still sends when that account becomes active again.
+    expect(result).toMatchObject({ sent: 0, failed: 0 });
+    expect(await getOutboxItem('a')).toMatchObject({ status: 'pending', retryCount: 0 });
+  });
+
+  it("files the Sent copy under the item's own account", async () => {
+    vi.useFakeTimers();
+    h.outbox.set('a', {
+      account: 'me@test.com',
+      id: 'a',
+      status: 'pending',
+      retryCount: 0,
+      nextRetryAt: 0,
+      emailData: email,
+    });
+
+    const p = processOutbox();
+    await vi.runAllTimersAsync();
+    await p;
+
+    expect(h.saveSentCopy).toHaveBeenCalledWith(email, 'me@test.com', null);
   });
 });

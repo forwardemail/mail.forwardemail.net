@@ -176,11 +176,63 @@ function getAccountRegistration(email) {
 
 /**
  * Set the registration for a specific account.
+ *
+ * `aliasId` is the server-side alias this account maps to. Inbound push
+ * payloads identify their account only by `alias_id`, so without this stored
+ * association the device cannot tell which mailbox a notification is for and
+ * has to assume it is the one on screen.
  */
-function setAccountRegistration(email, regId, token, platform) {
+function setAccountRegistration(email, regId, token, platform, aliasId = '') {
   const registrations = getAccountRegistrations();
-  registrations[email] = { regId, token, platform };
+  registrations[email] = { regId, token, platform, aliasId };
   setAccountRegistrations(registrations);
+}
+
+/**
+ * Resolve the account email that owns a server-side alias ID.
+ *
+ * Returns '' when no signed-in account claims it. That is a meaningful answer,
+ * not a failure: it means the notification belongs to an account this device is
+ * no longer signed into (a registration the server has not pruned yet), and the
+ * caller should drop it rather than attribute it to the active account.
+ */
+export function resolveAccountForAliasId(aliasId) {
+  if (typeof aliasId !== 'string' || !aliasId) return '';
+  const registrations = getAccountRegistrations();
+  for (const [email, reg] of Object.entries(registrations || {})) {
+    // The signed-out sentinel is a registration, not an account: returning it
+    // as an "email" would feed a non-address into every _account comparison
+    // downstream, all of which would then read as "not the active account" and
+    // drop the notification.
+    if (email === '__active_session__') continue;
+    if (reg?.aliasId && reg.aliasId === aliasId) return email;
+  }
+  return '';
+}
+
+/**
+ * Whether EVERY signed-in account has a known alias ID.
+ *
+ * This is what makes "I do not recognise this alias" a safe conclusion. A
+ * partial map cannot support it: if one account's re-registration failed on a
+ * flaky network, its pushes carry an alias nothing matches, and dropping them
+ * would silently suppress that mailbox's notifications until the next
+ * reconcile. Requiring completeness means an unknown alias can only be a
+ * registration for an account this device is no longer signed into.
+ */
+export function hasCompleteAliasIdMap() {
+  const registrations = getAccountRegistrations() || {};
+
+  const accounts = Accounts.getAll() || [];
+  if (accounts.length) {
+    return accounts.every((account) => Boolean(registrations[account.email]?.aliasId));
+  }
+
+  // No accounts list means only the signed-out sentinel can be registered, and
+  // the sentinel is excluded from attribution (see resolveAccountForAliasId).
+  // With nothing to resolve against, "unknown alias" proves nothing — stay
+  // permissive rather than dropping a signed-out session's own notifications.
+  return false;
 }
 
 /**
@@ -339,8 +391,27 @@ function dispatchPushPayload(notification, tapped = false, displayedBySystem = f
   const data = notification?.data;
   if (!data || typeof data !== 'object') return;
 
+  // Push payloads name their account with `alias_id` and nothing else, while
+  // every downstream consumer scopes on `_account` (the email the WebSocket
+  // manager tags). Resolve it here, at the single point where push enters the
+  // app, so the rest of the pipeline sees one shape regardless of transport.
+  //
+  // An alias we cannot resolve is dropped rather than passed through untagged.
+  // Untagged used to mean "assume active", which let another mailbox's delivery
+  // drive the on-screen account's refresh and notification. Dropping is only
+  // sound once every signed-in account is mapped — see hasCompleteAliasIdMap —
+  // so a legacy install, or one mid-way through filling the map in, keeps the
+  // old permissive behaviour rather than losing notifications.
+  const aliasId = typeof data.alias_id === 'string' ? data.alias_id : '';
+  const account = resolveAccountForAliasId(aliasId);
+  if (!account && aliasId && hasCompleteAliasIdMap()) {
+    console.warn('[push] Dropping notification for unknown alias:', aliasId);
+    return;
+  }
+
   const detail = {
     ...data,
+    ...(account ? { _account: account } : {}),
     ...(tapped ? { notificationTapped: true } : {}),
     ...(displayedBySystem ? { displayedBySystem: true } : {}),
   };
@@ -377,8 +448,17 @@ async function removeNativeListeners() {
 async function registerForAccount(email, aliasAuth, token, platform) {
   const existing = getAccountRegistration(email);
 
-  // If already registered with the same token, no action needed
-  if (existing && existing.regId && existing.token === token && existing.platform === platform) {
+  // If already registered with the same token, no action needed — unless the
+  // stored record predates alias-ID capture. POST /v1/push-tokens upserts on
+  // (alias, platform, token), so re-registering is idempotent and is the only
+  // way an install upgraded from an older build learns its alias mapping.
+  if (
+    existing &&
+    existing.regId &&
+    existing.token === token &&
+    existing.platform === platform &&
+    existing.aliasId
+  ) {
     return true;
   }
 
@@ -392,9 +472,9 @@ async function registerForAccount(email, aliasAuth, token, platform) {
   }
 
   // Register with the new token
-  const regId = await registerPushTokenForAccount(token, platform, aliasAuth);
-  if (regId) {
-    setAccountRegistration(email, regId, token, platform);
+  const registration = await registerPushTokenForAccount(token, platform, aliasAuth);
+  if (registration?.id) {
+    setAccountRegistration(email, registration.id, token, platform, registration.aliasId);
     return true;
   }
 
@@ -411,8 +491,16 @@ async function registerForActiveAccount(token, platform) {
 
   const existing = getAccountRegistration(email);
 
-  // If already registered with the same token, no action needed
-  if (existing && existing.regId && existing.token === token && existing.platform === platform) {
+  // Same token AND a known alias ID means nothing to do. A record without the
+  // alias ID is re-registered so the account becomes attributable — see
+  // registerForAccount for why that POST is safe to repeat.
+  if (
+    existing &&
+    existing.regId &&
+    existing.token === token &&
+    existing.platform === platform &&
+    existing.aliasId
+  ) {
     return true;
   }
 
@@ -421,9 +509,9 @@ async function registerForActiveAccount(token, platform) {
     await unregisterPushToken(existing.regId);
   }
 
-  const regId = await registerPushToken(token, platform);
-  if (regId) {
-    setAccountRegistration(email, regId, token, platform);
+  const registration = await registerPushToken(token, platform);
+  if (registration?.id) {
+    setAccountRegistration(email, registration.id, token, platform, registration.aliasId);
     Local.set(TOKEN_STORAGE_KEY, token);
     Local.set(TOKEN_PLATFORM_KEY, platform);
     return true;
@@ -459,12 +547,18 @@ async function reconcileAllAccounts(token, platform) {
     if (existing && existing.regId && existing.token !== token) {
       await unregisterPushToken(existing.regId);
     }
-    const regId = await registerPushToken(token, platform);
-    if (regId) {
+    const registration = await registerPushToken(token, platform);
+    if (registration?.id) {
       Local.set(TOKEN_STORAGE_KEY, token);
       Local.set(TOKEN_PLATFORM_KEY, platform);
       // Store under a sentinel key so cleanup can find it
-      setAccountRegistration('__active_session__', regId, token, platform);
+      setAccountRegistration(
+        '__active_session__',
+        registration.id,
+        token,
+        platform,
+        registration.aliasId,
+      );
     }
     return;
   }
@@ -480,8 +574,8 @@ async function reconcileAllAccounts(token, platform) {
     await registerForActiveAccount(token, platform);
   } else {
     // No active email but accounts exist — register via session auth fallback
-    const regId = await registerPushToken(token, platform);
-    if (regId) {
+    const registration = await registerPushToken(token, platform);
+    if (registration?.id) {
       Local.set(TOKEN_STORAGE_KEY, token);
       Local.set(TOKEN_PLATFORM_KEY, platform);
     }

@@ -48,7 +48,9 @@ vi.mock('../../src/utils/storage', () => ({
 vi.mock('../../src/utils/background-service.js', () => ({
   listPushTokens: listServerMock,
   registerPushToken: registerServerMock,
-  registerPushTokenForAccount: vi.fn().mockResolvedValue('multi-reg-1'),
+  registerPushTokenForAccount: vi
+    .fn()
+    .mockResolvedValue({ id: 'multi-reg-1', aliasId: 'alias-multi-1' }),
   unregisterPushToken: unregisterServerMock,
   unregisterPushTokenForAccount: unregisterServerMock,
 }));
@@ -156,7 +158,7 @@ describe('push notification status and management', () => {
     fcmPermissionMock.mockResolvedValue({ granted: true });
     fcmGetTokenMock.mockResolvedValue(FCM_TOKEN);
     listServerMock.mockResolvedValue([]);
-    registerServerMock.mockResolvedValue('registration-1');
+    registerServerMock.mockResolvedValue({ id: 'registration-1', aliasId: 'alias-1' });
     unregisterServerMock.mockResolvedValue(true);
     setUserAgent('ForwardEmail/1.0 (Android 15)');
   });
@@ -289,7 +291,7 @@ describe('push notification status and management', () => {
     listServerMock
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([createRegistration({ id: 'registration-new' })]);
-    registerServerMock.mockResolvedValue('registration-new');
+    registerServerMock.mockResolvedValue({ id: 'registration-new', aliasId: 'alias-1' });
     const { registerCurrentDevicePush } = await import('../../src/utils/push-notifications.js');
 
     const result = await registerCurrentDevicePush();
@@ -342,7 +344,7 @@ describe('push notification status and management', () => {
     listServerMock
       .mockResolvedValueOnce([createRegistration({ token: OLD_FCM_TOKEN })])
       .mockResolvedValueOnce([createRegistration({ id: 'registration-new' })]);
-    registerServerMock.mockResolvedValue('registration-new');
+    registerServerMock.mockResolvedValue({ id: 'registration-new', aliasId: 'alias-1' });
     const { reregisterCurrentDevicePush } = await import('../../src/utils/push-notifications.js');
 
     const result = await reregisterCurrentDevicePush();
@@ -446,7 +448,7 @@ describe('push notification status and management', () => {
     listServerMock
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([createRegistration({ id: 'registration-new' })]);
-    registerServerMock.mockResolvedValue('registration-new');
+    registerServerMock.mockResolvedValue({ id: 'registration-new', aliasId: 'alias-1' });
     const { registerCurrentDevicePush } = await import('../../src/utils/push-notifications.js');
 
     vi.useFakeTimers();

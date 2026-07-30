@@ -44,7 +44,9 @@ vi.mock('../../src/utils/storage', () => ({
 vi.mock('../../src/utils/background-service.js', () => ({
   listPushTokens: vi.fn().mockResolvedValue([]),
   registerPushToken: registerServerMock,
-  registerPushTokenForAccount: vi.fn().mockResolvedValue('multi-reg-1'),
+  registerPushTokenForAccount: vi
+    .fn()
+    .mockResolvedValue({ id: 'multi-reg-1', aliasId: 'alias-multi-1' }),
   unregisterPushToken: unregisterServerMock,
 }));
 
@@ -117,7 +119,7 @@ describe('dual-provider Android push preference', () => {
     });
     drainMessagesMock.mockResolvedValue([]);
     registerUnifiedMock.mockResolvedValue(undefined);
-    registerServerMock.mockResolvedValue('registration-1');
+    registerServerMock.mockResolvedValue({ id: 'registration-1', aliasId: 'alias-1' });
     serializeMock.mockReturnValue(SERIALIZED_SUBSCRIPTION);
   });
 

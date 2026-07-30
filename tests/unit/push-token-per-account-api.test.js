@@ -37,7 +37,7 @@ describe('registerPushTokenForAccount API', () => {
     buildAliasAuthHeaderMock.mockReturnValue('Basic account-credentials');
     fetchMock.mockResolvedValue({
       ok: true,
-      json: vi.fn().mockResolvedValue({ id: 'account-reg-1' }),
+      json: vi.fn().mockResolvedValue({ id: 'account-reg-1', alias: 'alias-account-a' }),
     });
     vi.stubGlobal('fetch', fetchMock);
   });
@@ -51,7 +51,7 @@ describe('registerPushTokenForAccount API', () => {
 
     const result = await registerPushTokenForAccount(APNS_TOKEN, 'ios', ACCOUNT_A_AUTH);
 
-    expect(result).toBe('account-reg-1');
+    expect(result).toEqual({ id: 'account-reg-1', aliasId: 'alias-account-a' });
     expect(buildAliasAuthHeaderMock).toHaveBeenCalledWith(ACCOUNT_A_AUTH, { required: true });
     expect(fetchMock).toHaveBeenCalledOnce();
     const [url, request] = fetchMock.mock.calls[0];

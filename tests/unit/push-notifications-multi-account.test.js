@@ -107,8 +107,8 @@ describe('multi-account push registration flow', () => {
     vi.stubEnv('VITE_ANDROID_PUSH_PROVIDER', 'fcm');
     localStore.clear();
     accountsGetAllMock.mockReturnValue([]);
-    registerServerMock.mockResolvedValue('primary-reg-1');
-    registerForAccountMock.mockResolvedValue('account-reg-1');
+    registerServerMock.mockResolvedValue({ id: 'primary-reg-1', aliasId: 'alias-primary-1' });
+    registerForAccountMock.mockResolvedValue({ id: 'account-reg-1', aliasId: 'alias-account-1' });
     unregisterServerMock.mockResolvedValue(true);
     unregisterForAccountMock.mockResolvedValue(true);
     setUserAgent('ForwardEmail/1.0 (Android 15)');
@@ -169,7 +169,9 @@ describe('multi-account push registration flow', () => {
   it('persists per-account registration IDs in push_registrations storage', async () => {
     localStore.set('alias_auth', ACCOUNT_A_AUTH);
     localStore.set('email', 'alice@example.com');
-    registerForAccountMock.mockResolvedValueOnce('bob-reg-1').mockResolvedValueOnce('carol-reg-1');
+    registerForAccountMock
+      .mockResolvedValueOnce({ id: 'bob-reg-1', aliasId: 'alias-bob' })
+      .mockResolvedValueOnce({ id: 'carol-reg-1', aliasId: 'alias-carol' });
     accountsGetAllMock.mockReturnValue([
       { email: 'alice@example.com', aliasAuth: ACCOUNT_A_AUTH },
       { email: 'bob@example.com', aliasAuth: ACCOUNT_B_AUTH },
@@ -183,6 +185,12 @@ describe('multi-account push registration flow', () => {
     expect(stored['alice@example.com']?.regId).toBe('primary-reg-1');
     expect(stored['bob@example.com']?.regId).toBe('bob-reg-1');
     expect(stored['carol@example.com']?.regId).toBe('carol-reg-1');
+
+    // Each account's alias ID is stored alongside its registration. This is the
+    // map that lets an inbound push — which names its account only by alias_id
+    // — be attributed to the right mailbox instead of the active one.
+    expect(stored['bob@example.com']?.aliasId).toBe('alias-bob');
+    expect(stored['carol@example.com']?.aliasId).toBe('alias-carol');
   });
 
   it('rotates previous per-account registration when token changes', async () => {

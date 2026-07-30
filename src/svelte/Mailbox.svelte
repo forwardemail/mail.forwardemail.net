@@ -3414,7 +3414,14 @@
 
   const getFolderMessageCount = async (folderPath) => {
     try {
-      const count = await db.messages.where('folder').equals(folderPath).count();
+      // Scoped to the active account: folder paths are not unique across
+      // accounts, so an unscoped count told the delete-folder confirmation how
+      // many messages EVERY signed-in account has cached under that path.
+      const account = $currentAccount || Local.get('email') || 'default';
+      const count = await db.messages
+        .where('[account+folder]')
+        .equals([account, folderPath])
+        .count();
       return count;
     } catch (err) {
       console.error('getFolderMessageCount error:', err);

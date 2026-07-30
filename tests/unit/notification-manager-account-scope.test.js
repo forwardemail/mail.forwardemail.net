@@ -173,16 +173,37 @@ describe('notification-manager multi-account store scoping', () => {
     });
   });
 
-  it("does NOT prepend another account's delivery into the visible list", async () => {
+  it("ignores another account's delivery entirely — no row, no notification", async () => {
     wsClient.emit('newMessage', newMessageEvent({ account: 'b@example.com', uid: 101 }));
+    await settle();
 
-    // The notification itself still fires for the other account.
+    // Notifications describe the mailbox on screen. An account the user is not
+    // looking at gets no OS notification, no toast and no row: it refreshes
+    // when they switch to it.
+    expect(notify).not.toHaveBeenCalled();
+    expect(messagesStore.value).toHaveLength(0);
+  });
+
+  it("still notifies for the active account's delivery", async () => {
+    wsClient.emit('newMessage', newMessageEvent({ account: 'a@example.com', uid: 104 }));
+
     await vi.waitFor(() => {
       expect(notify).toHaveBeenCalled();
     });
-    await settle();
+  });
 
-    expect(messagesStore.value).toHaveLength(0);
+  it('scopes the notification dedup tag by account so UIDs cannot collide', async () => {
+    // UIDs are per-mailbox counters, so two accounts routinely hold the same
+    // one. The tag has to carry the account or the first account to see UID 105
+    // permanently suppresses the second account's UID 105.
+    wsClient.emit('newMessage', newMessageEvent({ account: 'a@example.com', uid: 105 }));
+    await vi.waitFor(() => {
+      expect(notify).toHaveBeenCalled();
+    });
+
+    const tag = notify.mock.calls[0][0]?.tag;
+    expect(tag).toContain('a@example.com');
+    expect(tag).toContain('105');
   });
 
   it("prepends the active account's delivery and stamps the event account", async () => {
@@ -198,7 +219,12 @@ describe('notification-manager multi-account store scoping', () => {
     expect(row.from).toContain('sender@other.com');
   });
 
-  it('treats an untagged event as active (single-account and push payloads)', async () => {
+  // Push payloads used to arrive untagged, which is why "untagged means active"
+  // exists at all. They now carry `_account`, resolved from `alias_id` at the
+  // point push enters the app, so this fallback covers only a single-account
+  // install or a registration made before alias IDs were captured. Dropping
+  // those would silently stop their notifications, so they stay permissive.
+  it('treats an untagged event as active (single-account and legacy installs)', async () => {
     wsClient.emit('newMessage', newMessageEvent({ uid: 103 }));
 
     await vi.waitFor(() => {

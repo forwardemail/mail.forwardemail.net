@@ -1,5 +1,6 @@
 import { db } from './db';
 import { Local } from './storage';
+import { isActiveAccount } from './account-scope.ts';
 import { Remote } from './remote';
 import { writable } from 'svelte/store';
 import { saveSentCopy } from './sent-copy.js';
@@ -179,8 +180,8 @@ async function updateOutboxCount() {
  * Save a copy of sent message to Sent folder (client-side workaround)
  * Similar to saveSentCopy in Compose.svelte
  */
-async function saveSentCopyToFolder(emailPayload) {
-  return saveSentCopy(emailPayload, getAccount(), null);
+async function saveSentCopyToFolder(emailPayload, account) {
+  return saveSentCopy(emailPayload, account || getAccount(), null);
 }
 
 /**
@@ -188,8 +189,22 @@ async function saveSentCopyToFolder(emailPayload) {
  * @returns {Promise<{success: boolean, error?: string}>}
  */
 async function sendOutboxItem(item) {
-  const account = getAccount();
+  // Bind to the account that OWNS this item, not to whatever is active now.
+  // processOutbox awaits a network send plus a 500ms pause between items, so
+  // the user can switch accounts mid-drain. Reading the active account here
+  // meant the rest of this function operated on the wrong one: the outbox
+  // status writes silently missed their compound key (leaving the item stuck
+  // in 'sending' forever), the email went out over the newly active account's
+  // session, and the Sent copy was filed into that account's Sent folder.
+  const account = item?.account || getAccount();
   const now = Date.now();
+
+  // Sending authenticates as the active session, so an item belonging to
+  // another account cannot be sent right now. Leave it queued rather than
+  // sending it as somebody else — it drains when that account is active again.
+  if (!isActiveAccount(account)) {
+    return { success: false, deferred: true, error: 'Account not active' };
+  }
 
   // If this item was already scheduled on the server, do not send it again.
   if (item.status === 'scheduled' && item.serverId && item.sendAt && item.sendAt <= now) {
@@ -239,7 +254,7 @@ async function sendOutboxItem(item) {
 
     // Save copy to Sent folder (client-side workaround)
     try {
-      await saveSentCopyToFolder(item.emailData);
+      await saveSentCopyToFolder(item.emailData, account);
     } catch (sentErr) {
       console.error('[Outbox] Failed to save sent copy:', sentErr);
       // Don't fail the overall send if saving to Sent fails
@@ -357,6 +372,10 @@ export async function processOutbox() {
 
         if (result.success) {
           results.sent++;
+        } else if (result.deferred) {
+          // Its account stopped being active mid-drain. Not a failure: no
+          // retry count was spent and the item is untouched.
+          results.processed--;
         } else {
           results.failed++;
         }

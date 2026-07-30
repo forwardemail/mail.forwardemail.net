@@ -24,7 +24,7 @@ describe('push-token API', () => {
     getAuthHeaderMock.mockReturnValue('Basic alias-credentials');
     fetchMock.mockResolvedValue({
       ok: true,
-      json: vi.fn().mockResolvedValue({ id: 'registration-1' }),
+      json: vi.fn().mockResolvedValue({ id: 'registration-1', alias: 'alias-abc' }),
     });
     vi.stubGlobal('fetch', fetchMock);
   });
@@ -39,7 +39,13 @@ describe('push-token API', () => {
   ])('posts a %s token with its normalized provider', async (platform, token, provider) => {
     const { registerPushToken } = await import('../../src/utils/background-service.js');
 
-    await expect(registerPushToken(token, platform)).resolves.toBe('registration-1');
+    // The alias ID comes back with the registration and is the only way the
+    // device can later tell which account an inbound push belongs to — push
+    // payloads carry alias_id and no email.
+    await expect(registerPushToken(token, platform)).resolves.toEqual({
+      id: 'registration-1',
+      aliasId: 'alias-abc',
+    });
 
     expect(getAuthHeaderMock).toHaveBeenCalledWith({ allowApiKey: false, required: true });
     expect(fetchMock).toHaveBeenCalledOnce();

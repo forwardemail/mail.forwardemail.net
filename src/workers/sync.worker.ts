@@ -32,6 +32,7 @@ import {
   backfillBatchDone,
 } from './sync-pure.ts';
 import { createCircuitBreaker, parseRetryAfterMs } from '../utils/circuit-breaker.js';
+import { assertAccountScoped } from '../utils/account-scope.ts';
 
 // ============================================================================
 // Database Client via MessageChannel
@@ -301,6 +302,12 @@ async function writeMessages(account, folder, normalized, pendingDeleteIds: stri
     console.warn('[sync.worker] No db connection for writeMessages');
     return { inserted: 0, updated: 0 };
   }
+
+  // The worker outlives account switches and holds credentials for several
+  // accounts at once, so "which account did this batch come from" is a live
+  // question here, not a formality. Fail loudly rather than persisting a batch
+  // whose records disagree with the partition they are headed for.
+  assertAccountScoped('sync.worker.writeMessages', account, normalized);
 
   const keys = normalized.map((m) => [account, m.id]);
   const existingRecords = await db.messages.bulkGet(keys);

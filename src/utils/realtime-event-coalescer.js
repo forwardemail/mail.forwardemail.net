@@ -57,6 +57,25 @@ function getContactIdentity(data) {
 }
 
 /**
+ * Every identity below is drawn from values that are only unique WITHIN one
+ * mailbox: an IMAP UID is a per-mailbox counter, and a mailbox path is
+ * "INBOX" for every account there is. With several accounts connected at once,
+ * `flagsUpdated:INBOX>5>\Seen` is byte-identical for account A and account B,
+ * so the second account's event looked like a duplicate of the first and was
+ * dropped for the whole five-minute dedup window — silently, and for both the
+ * notification and the data-refresh coalescer.
+ *
+ * Prefixing with the account makes the key mean "this event, for this mailbox".
+ * WebSocket events are tagged by the connection manager and push events have
+ * `_account` resolved from `alias_id` before dispatch, so both transports
+ * produce the same prefix and still coalesce against each other.
+ */
+function accountPrefix(data) {
+  const account = typeof data?._account === 'string' ? data._account.trim().toLowerCase() : '';
+  return account ? `${account.slice(0, MAX_KEY_PART_LENGTH)}|` : '';
+}
+
+/**
  * Return the stable identifier shared by the WebSocket and push copies.
  * The legacy identities keep mixed-version deployments usable while rolling
  * out notification_id; they intentionally avoid display text, which may cause
@@ -65,6 +84,8 @@ function getContactIdentity(data) {
 export function getRealtimeEventKey(eventName, data) {
   if (typeof eventName !== 'string' || !data || typeof data !== 'object') return '';
 
+  // notification_id is minted per delivery by the server, so it is already
+  // globally unique and needs no account scoping.
   const notificationId = firstNonEmpty(data.notification_id, data.notificationId);
   if (notificationId) return `id:${notificationId.slice(0, MAX_KEY_PART_LENGTH)}`;
 
@@ -158,7 +179,7 @@ export function getRealtimeEventKey(eventName, data) {
 
   const normalizedIdentity = identity.replace(/^>+|>+$/g, '');
   return normalizedIdentity
-    ? `legacy:${eventName}:${normalizedIdentity.slice(0, MAX_KEY_PART_LENGTH)}`
+    ? `${accountPrefix(data)}legacy:${eventName}:${normalizedIdentity.slice(0, MAX_KEY_PART_LENGTH)}`
     : '';
 }
 

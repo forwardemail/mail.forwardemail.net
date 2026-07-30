@@ -462,9 +462,19 @@ export const Accounts = {
       if (account.aliasAuth) storage.set('alias_auth', account.aliasAuth);
       else storage.remove('alias_auth');
 
-      // Also set in Local for API compatibility (Remote.js reads from Local)
+      // Also set in Local for API compatibility (Remote.js reads from Local).
+      //
+      // Every credential key is written unconditionally — set when the incoming
+      // account has one, REMOVED when it does not. Only writing the keys the
+      // new account happens to own leaves the previous account's credentials
+      // behind: getAuthHeader() falls back from alias_auth to api_key, so an
+      // account that authenticates by API key would inherit the alias password
+      // of whoever was active before it and issue every request as them.
       Local.set('email', account.email);
       if (account.aliasAuth) Local.set('alias_auth', account.aliasAuth);
+      else Local.remove('alias_auth');
+      if (account.apiKey) Local.set('api_key', account.apiKey);
+      else Local.remove('api_key');
 
       return true;
     } catch (error) {
