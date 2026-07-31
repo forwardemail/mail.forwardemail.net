@@ -836,6 +836,12 @@ async function _handleNewMessageInner(data, { suppressVisual = false } = {}) {
 
   const displayName = sanitizePlain(extractDisplayName(from) || 'Unknown sender', MAX_TITLE_LEN);
   const safeSubject = sanitizePlain(subject || '(No subject)', MAX_BODY_LEN);
+  // Plain-text preview for the OS notification body. Matches the server-side
+  // push format: sender as title, subject plus snippet as body.
+  const safeSnippet = sanitizePlain(
+    typeof msg.snippet === 'string' ? msg.snippet : '',
+    MAX_BODY_LEN,
+  );
   // The dedup map is persisted for three days and survives account switches, so
   // the tag has to name the account too. A UID is per-mailbox, not global:
   // without the prefix, account A's message 5 permanently suppresses account
@@ -896,9 +902,10 @@ async function _handleNewMessageInner(data, { suppressVisual = false } = {}) {
     });
   } else {
     // Background: show OS notification (no toast — user won't see it).
+    // Gmail-style format: sender name as title, subject plus preview as body.
     showNotification({
-      title: `New email from ${displayName}`,
-      body: safeSubject,
+      title: displayName,
+      body: safeSnippet ? `${safeSubject}\n${safeSnippet}` : safeSubject,
       tag: safeTag,
       channelId: 'new-mail',
       data: {

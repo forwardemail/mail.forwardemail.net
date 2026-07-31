@@ -2024,9 +2024,10 @@ async function getMessageContent(msg) {
 
 function openInNewTab(content, mime = 'text/html') {
   if (isTauri) {
-    openInNewTabTauri(content, mime).catch((err) =>
-      console.warn('[openInNewTab] Tauri open failed:', err),
-    );
+    openInNewTabTauri(content, mime).catch((err) => {
+      console.warn('[openInNewTab] Tauri open failed:', err);
+      toastsRef?.show?.('Unable to open original message', 'error');
+    });
     return true;
   }
 
@@ -2045,7 +2046,7 @@ function openInNewTab(content, mime = 'text/html') {
 async function openInNewTabTauri(content, mime) {
   const { writeFile } = await import('@tauri-apps/plugin-fs');
   const { tempDir, join } = await import('@tauri-apps/api/path');
-  const { open } = await import('@tauri-apps/plugin-opener');
+  const { openPath } = await import('@tauri-apps/plugin-opener');
 
   // Filename pattern must stay in sync with the opener scope in
   // src-tauri/capabilities/default.json — the Tauri opener plugin only
@@ -2060,7 +2061,7 @@ async function openInNewTabTauri(content, mime) {
   const data =
     typeof content === 'string' ? new TextEncoder().encode(content) : new Uint8Array(content);
   await writeFile(filePath, data);
-  await open(filePath);
+  await openPath(filePath);
 }
 
 const resetMailboxStateForAccount = () => {
