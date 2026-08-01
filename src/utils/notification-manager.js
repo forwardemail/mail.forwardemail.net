@@ -1035,6 +1035,17 @@ function handleContactUpdated(data, { suppressVisual = false } = {}) {
 function handleNewRelease(data, { suppressVisual = false } = {}) {
   if (!data || typeof data !== 'object') return;
 
+  // Users can turn off app update notifications without giving up new mail
+  // notifications. The 'notify_app_updates' setting is device scoped and
+  // stored by the settings registry as the string 'false' when disabled.
+  // Read it through Local directly so this module stays free of the
+  // settings-store dependency (it runs on the cold start path).
+  try {
+    if (Local.get('notify_app_updates') === 'false') return;
+  } catch {
+    // Fall through and show the notification.
+  }
+
   // Unwrap the nested release object if present (server sends
   // { release: { tagName, name, body, htmlUrl, ... } } after
   // protocol fields are stripped by websocket-client.js)

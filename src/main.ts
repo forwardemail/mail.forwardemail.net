@@ -2718,14 +2718,18 @@ async function bootstrap() {
           // Toast system may not be ready
         }
 
-        // 3. Send push notification so the user sees it even if the tab is in the background
+        // 3. Send push notification so the user sees it even if the tab is in
+        // the background. Skipped when the user turned off app update
+        // notifications; new mail notifications are unaffected.
         try {
-          const { notify } = await import('./utils/notification-bridge.js');
-          await notify({
-            title: 'Forward Email Updated',
-            body: `App updated to ${label}. Reloading…`,
-            tag: 'app-update',
-          });
+          if (getEffectiveSettingValue('notify_app_updates') !== false) {
+            const { notify } = await import('./utils/notification-bridge.js');
+            await notify({
+              title: 'Forward Email Updated',
+              body: `App updated to ${label}. Reloading…`,
+              tag: 'app-update',
+            });
+          }
         } catch {
           // Notification permission may not be granted — that's fine
         }

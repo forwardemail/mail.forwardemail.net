@@ -104,6 +104,7 @@
   const { folders: foldersStore } = mailboxStore.state;
   const { loadFolders } = mailboxStore.actions;
   import { validateLabelName } from '../utils/label-validation.ts';
+  import { DEFAULT_SPAM_REPORT_ADDRESS, isValidReportAddress } from '../utils/spam-report.js';
   import { config } from '../config.js';
   import { getFonts, loadFont, getFontFamily } from '../utils/font-loader.js';
   import { LABEL_PALETTE, pickLabelColor as pickLabelColorFromPalette } from '../utils/labels.js';
@@ -195,6 +196,8 @@
   let editingKeyValue = $state('');
   let editingKeyPassphrase = $state('');
   let blockRemoteImages = $state(false);
+  let spamReportAddress = $state('');
+  let notifyAppUpdates = $state(true);
   let blockTrackingPixels = $state(true);
   let viewPlainText = $state(false);
   let hideCompletedTodosValue = $state(false);
@@ -686,6 +689,11 @@
     blockRemoteImages = Boolean(
       getEffectiveSettingValue('block_remote_images', { account: currentAcct }),
     );
+    spamReportAddress =
+      String(
+        getEffectiveSettingValue('spam_report_address', { account: currentAcct }) || '',
+      ).trim() || DEFAULT_SPAM_REPORT_ADDRESS;
+    notifyAppUpdates = getEffectiveSettingValue('notify_app_updates') !== false;
     blockTrackingPixels = Boolean(
       getEffectiveSettingValue('block_tracking_pixels', { account: currentAcct }),
     );
@@ -1048,6 +1056,28 @@
     await saveExternalBrowserOverride();
   };
 
+  const saveSpamReportAddress = async () => {
+    const trimmed = spamReportAddress.trim();
+    if (!isValidReportAddress(trimmed)) {
+      toasts?.show?.('Enter a valid email address for spam reports', 'error');
+      return;
+    }
+    try {
+      // Store the default as empty so future default changes apply automatically.
+      const stored = trimmed === DEFAULT_SPAM_REPORT_ADDRESS ? '' : trimmed;
+      await setSettingValue('spam_report_address', stored, { account: getAccountId() });
+      spamReportAddress = trimmed;
+      toasts?.show?.(`Spam reports will be sent to ${trimmed}`, 'success');
+    } catch (err) {
+      showMutationError(err, 'Failed to save spam report address');
+    }
+  };
+
+  const resetSpamReportAddress = async () => {
+    spamReportAddress = DEFAULT_SPAM_REPORT_ADDRESS;
+    await saveSpamReportAddress();
+  };
+
   const saveSignatureEnabled = () => {
     LocalSettings.setSignature({ enabled: signatureEnabled });
     toasts?.show?.(`Signature ${signatureEnabled ? 'enabled' : 'disabled'}`, 'success');
@@ -1117,6 +1147,20 @@
       );
     } catch (err) {
       showMutationError(err, 'Failed to save send default');
+    }
+  };
+
+  const toggleNotifyAppUpdates = () => {
+    try {
+      setSettingValue('notify_app_updates', notifyAppUpdates, { account: getAccountId() });
+      toasts?.show?.(
+        notifyAppUpdates
+          ? 'You will be notified when the app updates'
+          : 'App update notifications turned off',
+        'success',
+      );
+    } catch (err) {
+      showMutationError(err, 'Failed to update notification setting');
     }
   };
 
@@ -1780,6 +1824,23 @@
           <PushNotificationSettings {toasts} {openExternal} />
         {/if}
 
+        <Card.Root>
+          <Card.Header>
+            <Card.Title>Notifications</Card.Title>
+            <Card.Description>Choose which system notifications this app shows.</Card.Description>
+          </Card.Header>
+          <Card.Content class="space-y-4">
+            <label class="flex items-center gap-3">
+              <Checkbox bind:checked={notifyAppUpdates} onCheckedChange={toggleNotifyAppUpdates} />
+              <span>Notify when the app updates</span>
+            </label>
+            <p class="text-sm text-muted-foreground">
+              Shows a system notification when a new version of the app is available or installed.
+              Turning this off does not affect new mail notifications.
+            </p>
+          </Card.Content>
+        </Card.Root>
+
         <!-- In-app account deletion (App Store 5.1.1(v) / Google Play). Distinct
              from "Sign out", which only removes the account from this device. -->
         <Card.Root>
@@ -2200,6 +2261,32 @@
             <p class="text-sm text-muted-foreground">
               Strip HTML, CSS, and remote content from incoming emails and render them as plain
               text. Links and image alt text are preserved.
+            </p>
+          </Card.Content>
+        </Card.Root>
+
+        <Card.Root>
+          <Card.Header>
+            <Card.Title>Spam reporting</Card.Title>
+            <Card.Description>Where the Report spam action sends reported emails.</Card.Description>
+          </Card.Header>
+          <Card.Content class="space-y-4">
+            <div class="flex gap-2">
+              <Input
+                type="email"
+                placeholder={DEFAULT_SPAM_REPORT_ADDRESS}
+                bind:value={spamReportAddress}
+              />
+              <Button variant="ghost" onclick={saveSpamReportAddress}>Save</Button>
+              {#if spamReportAddress.trim() !== DEFAULT_SPAM_REPORT_ADDRESS}
+                <Button variant="ghost" onclick={resetSpamReportAddress}>Reset</Button>
+              {/if}
+            </div>
+            <p class="text-sm text-muted-foreground">
+              Choosing <strong>Report spam</strong> on a message forwards the original email
+              (including full headers) as an attachment to this address, then deletes the message
+              from your mailbox. Reports go to {DEFAULT_SPAM_REPORT_ADDRESS} by default, which helps Forward
+              Email improve spam detection for everyone. No copy is kept in your Sent folder.
             </p>
           </Card.Content>
         </Card.Root>
