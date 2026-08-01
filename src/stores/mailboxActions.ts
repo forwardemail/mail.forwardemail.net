@@ -21,7 +21,9 @@ import {
   fetchAccountData,
   effectiveLayoutMode,
   setSettingValue,
+  getEffectiveSettingValue,
 } from './settingsStore';
+import { resolveSpamReportAddress, buildSpamReportEmail } from '../utils/spam-report.js';
 import { normalizeLayoutMode } from './settingsRegistry';
 import { getMessageApiId } from '../utils/sync-helpers';
 import {
@@ -2217,6 +2219,66 @@ export const downloadOriginal = async (msg) => {
   if (!success) {
     toastsRef?.show?.('Unable to download original message', 'error');
   }
+};
+
+export const getSpamReportAddress = () =>
+  resolveSpamReportAddress(getEffectiveSettingValue('spam_report_address'));
+
+/**
+ * Forwards a message to the configured spam report address as an .eml
+ * attachment and queues it through the outbox. The caller is responsible
+ * for deleting the message afterwards so it can reuse the existing delete
+ * flow (selection advance, toasts, reload).
+ *
+ * Returns { address } on success, throws when the report cannot be built.
+ */
+export const reportSpamMessage = async (msg) => {
+  const target = msg || get(mailboxStore.state.selectedMessage);
+  if (!target) return null;
+
+  const address = getSpamReportAddress();
+
+  // Prefer the raw RFC822 source so the report keeps full headers.
+  const content = await getMessageContent(target).catch(() => null);
+  const meta = content?.meta || {};
+  let emlPayload =
+    meta.eml ||
+    meta.rawEml ||
+    meta.raw ||
+    meta.Raw ||
+    meta.rawBody ||
+    meta.original ||
+    meta.originalMessage ||
+    meta.rawMessage ||
+    null;
+  if (!emlPayload || looksLikeHtml(emlPayload)) {
+    const emlRes = await fetchEmlOriginal(target);
+    if (typeof emlRes === 'string' && emlRes) emlPayload = emlRes;
+    else if (emlRes?.eml || emlRes?.raw) emlPayload = emlRes.eml || emlRes.raw;
+  }
+
+  const fallbackText =
+    content?.textContent ||
+    (typeof content?.body === 'string' && !looksLikeHtml(content.body) ? content.body : '') ||
+    pickOriginalContent(content) ||
+    target?.preview ||
+    '';
+
+  if (!emlPayload && !fallbackText) {
+    throw new Error('Original message is not available to report');
+  }
+
+  const payload = buildSpamReportEmail({
+    reportAddress: address,
+    fromAddress: Local.get('email') || '',
+    message: target,
+    eml: typeof emlPayload === 'string' ? emlPayload : null,
+    fallbackText,
+  });
+
+  const { queueEmail } = await import('../utils/outbox-service.js');
+  await queueEmail(payload);
+  return { address };
 };
 
 export const viewOriginal = async (msg) => {

@@ -12,6 +12,7 @@ interface ContextMenuActions {
   onForward: () => void;
   onArchive: () => void;
   onDelete: () => void;
+  onReportSpam?: () => void;
   onMoveTo: (path: string) => void;
   onToggleStar?: () => void;
   onToggleLabel?: (id: string) => void;
@@ -94,6 +95,11 @@ export async function showNativeContextMenu(options: ContextMenuOptions): Promis
 
     // Delete
     items.push(await MenuItem.new({ text: 'Delete', action: actions.onDelete }));
+
+    // Report spam (not in spam/drafts)
+    if (actions.onReportSpam && !options.isSpamFolder && !options.isDraftFolder) {
+      items.push(await MenuItem.new({ text: 'Report spam', action: actions.onReportSpam }));
+    }
 
     // Move to folder submenu
     if (folders.length > 0) {

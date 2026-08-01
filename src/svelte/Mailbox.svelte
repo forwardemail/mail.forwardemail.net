@@ -80,7 +80,7 @@
     cancelScheduledEmail,
     getOutboxStats,
   } from '../utils/outbox-service';
-  import { syncProgress, indexProgress } from '../stores/mailboxActions';
+  import { syncProgress, indexProgress, reportSpamMessage } from '../stores/mailboxActions';
   import {
     profileName,
     profileImage,
@@ -294,6 +294,9 @@
     if (mobileBackUnlisten) mobileBackUnlisten();
   });
   let actionMenuOpen = $state(false);
+  // On small screens the reader menu submenus render inline (accordion)
+  // instead of as side flyouts, which would overflow the viewport.
+  let actionMenuMobile = $state(false);
   let showEmailDetails = $state(false);
   let showAllRecipients = $state(false);
   let showAllCc = $state(false);
@@ -765,6 +768,9 @@
   let contextMoveOpen = $state(false);
   let contextLabelOpen = $state(false);
   let contextSubmenusEnabled = $state(true);
+  // Mobile renders context submenus inline (accordion) instead of side
+  // flyouts, which cut off at the viewport edge on small screens.
+  let contextMenuIsMobile = $state(false);
   let contextSubmenuFlipX = $state(false);
   let contextSubmenuFlipY = $state(false);
   let contextSubmenuShiftY = $state(0);
@@ -2055,6 +2061,24 @@
     } finally {
       releaseReaderHold?.();
     }
+  };
+
+  const reportSpamSelected = async () => {
+    const msg = getActiveMessage();
+    if (!msg) return;
+    let address;
+    try {
+      const result = await reportSpamMessage(msg);
+      if (!result) return;
+      address = result.address;
+    } catch (err) {
+      showMutationError(err, 'Failed to report spam');
+      return;
+    }
+    // Reuse the standard delete flow so selection advance and demo-mode
+    // preflight behave exactly like a normal delete.
+    await deleteSelected();
+    showToast(`Reported to ${address} and deleted`, 'success');
   };
 
   const markNotSpam = async () => {
@@ -4052,6 +4076,10 @@
           onForward: contextForward,
           onArchive: contextArchive,
           onDelete: contextDelete,
+          onReportSpam:
+            !listIsSpamOrJunk && !listIsSentFolder && !isDraftMessage(msg)
+              ? contextReportSpam
+              : undefined,
           onMoveTo: contextMoveTo,
           onToggleStar: () => {
             if (!contextMenuMessage) return;
@@ -4097,7 +4125,8 @@
     contextMenuVisible = true;
     contextMoveOpen = false;
     contextLabelOpen = false;
-    contextSubmenusEnabled = !isMobileViewport();
+    contextMenuIsMobile = isMobileViewport();
+    contextSubmenusEnabled = true;
     contextSubmenuFlipX = contextMenuX + menuW + submenuW > vw;
     contextSubmenuMaxHeight = Math.max(160, vh - padding * 2);
     contextSubmenuShiftY = 0;
@@ -4154,7 +4183,7 @@
     contextMoveOpen = !contextMoveOpen;
     if (contextMoveOpen) {
       contextLabelOpen = false;
-      updateContextSubmenuPosition(() => contextMoveSubmenuEl);
+      if (!contextMenuIsMobile) updateContextSubmenuPosition(() => contextMoveSubmenuEl);
     }
   };
 
@@ -4163,7 +4192,7 @@
     contextLabelOpen = !contextLabelOpen;
     if (contextLabelOpen) {
       contextMoveOpen = false;
-      updateContextSubmenuPosition(() => contextLabelSubmenuEl);
+      if (!contextMenuIsMobile) updateContextSubmenuPosition(() => contextLabelSubmenuEl);
     }
   };
 
@@ -4225,6 +4254,25 @@
       await reloadMessages();
     } catch (err) {
       showMutationError(err, 'Failed to delete');
+    }
+  };
+
+  const contextReportSpam = async () => {
+    if (!contextMenuMessage) return;
+    const messageToReport = contextMenuMessage;
+    closeContextMenu();
+    try {
+      const result = await reportSpamMessage(messageToReport);
+      if (!result) return;
+      let delRes;
+      if (mailboxStore?.actions?.deleteMessage)
+        delRes = await mailboxStore.actions.deleteMessage(messageToReport);
+      else delRes = await mailboxView?.deleteMessage?.(messageToReport);
+      if (delRes?.blocked) return;
+      showToast(`Reported to ${result.address} and deleted`, 'success');
+      await reloadMessages();
+    } catch (err) {
+      showMutationError(err, 'Failed to report spam');
     }
   };
 
@@ -4442,6 +4490,9 @@
   const canViewOriginal = $derived(!readerIsDraftFolder);
   const canEditDraft = $derived($selectedMessage && isDraftMessage($selectedMessage));
   const canNotSpam = $derived(readerIsSpamOrJunk);
+  const canReportSpam = $derived(
+    !readerIsSpamOrJunk && !readerIsDraftFolder && !readerIsSentFolder,
+  );
   const showReaderMenuDivider = $derived(canReply || canForward || canEditDraft || canToggleRead);
 
   // ── Bulk-action bar folder awareness ─────────────────────────────────────
@@ -7460,7 +7511,7 @@
               tabindex="-1"
             ></div>
             <div
-              class={`fixed z-[100] min-w-[200px] border border-border bg-popover p-1 shadow-lg touch-manipulation ${contextMenuFlipX ? 'origin-top-right' : 'origin-top-left'} ${contextMenuFlipY ? 'origin-bottom' : 'origin-top'}`}
+              class={`fixed z-[100] min-w-[200px] border border-border bg-popover p-1 shadow-lg touch-manipulation ${contextMenuFlipX ? 'origin-top-right' : 'origin-top-left'} ${contextMenuFlipY ? 'origin-bottom' : 'origin-top'} ${contextMenuIsMobile ? 'max-h-[70vh] overflow-y-auto overscroll-contain' : ''}`}
               style={`top:${contextMenuY}px; left:${contextMenuX}px; ${contextMenuFlipX ? 'transform: translateX(-100%);' : ''} ${contextMenuFlipY ? 'transform: translateY(-100%);' : ''}`}
               role="menu"
               tabindex="0"
@@ -7526,6 +7577,16 @@
                 <Trash2 class="h-4.5 w-4.5 mr-2" />
                 <span>Delete</span>
               </button>
+              {#if !listIsSpamOrJunk && !listIsDraftFolder && !listIsSentFolder && !isDraftMessage(contextMenuMessage)}
+                <button
+                  type="button"
+                  class="flex items-center w-full px-2 py-1.5 text-sm hover:bg-accent cursor-pointer"
+                  onclick={contextReportSpam}
+                >
+                  <ShieldAlert class="h-4.5 w-4.5 mr-2" />
+                  <span>Report spam</span>
+                </button>
+              {/if}
               <div class="relative">
                 <button
                   type="button"
@@ -7542,8 +7603,12 @@
                 </button>
                 {#if contextSubmenusEnabled && contextMoveOpen}
                   <div
-                    class={`absolute z-[101] min-w-[160px] border border-border bg-popover p-1 shadow-lg overflow-y-auto ${contextSubmenuFlipX ? 'right-full mr-1' : 'left-full ml-1'} ${contextSubmenuFlipY ? 'bottom-0' : 'top-0'}`}
-                    style={`max-height: ${contextSubmenuMaxHeight}px; transform: translateY(${contextSubmenuShiftY}px);`}
+                    class={contextMenuIsMobile
+                      ? 'ml-4 my-1 border-l border-border max-h-[40vh] overflow-y-auto overscroll-contain'
+                      : `absolute z-[101] min-w-[160px] border border-border bg-popover p-1 shadow-lg overflow-y-auto ${contextSubmenuFlipX ? 'right-full mr-1' : 'left-full ml-1'} ${contextSubmenuFlipY ? 'bottom-0' : 'top-0'}`}
+                    style={contextMenuIsMobile
+                      ? ''
+                      : `max-height: ${contextSubmenuMaxHeight}px; transform: translateY(${contextSubmenuShiftY}px);`}
                     bind:this={contextMoveSubmenuEl}
                   >
                     {#each availableMoveTargetsFromStore as folder}
@@ -7574,8 +7639,12 @@
                 </button>
                 {#if contextSubmenusEnabled && contextLabelOpen}
                   <div
-                    class={`absolute z-[101] min-w-[160px] border border-border bg-popover p-1 shadow-lg overflow-y-auto ${contextSubmenuFlipX ? 'right-full mr-1' : 'left-full ml-1'} ${contextSubmenuFlipY ? 'bottom-0' : 'top-0'}`}
-                    style={`max-height: ${contextSubmenuMaxHeight}px; transform: translateY(${contextSubmenuShiftY}px);`}
+                    class={contextMenuIsMobile
+                      ? 'ml-4 my-1 border-l border-border max-h-[40vh] overflow-y-auto overscroll-contain'
+                      : `absolute z-[101] min-w-[160px] border border-border bg-popover p-1 shadow-lg overflow-y-auto ${contextSubmenuFlipX ? 'right-full mr-1' : 'left-full ml-1'} ${contextSubmenuFlipY ? 'bottom-0' : 'top-0'}`}
+                    style={contextMenuIsMobile
+                      ? ''
+                      : `max-height: ${contextSubmenuMaxHeight}px; transform: translateY(${contextSubmenuShiftY}px);`}
                     data-labels-dropdown
                     bind:this={contextLabelSubmenuEl}
                   >
@@ -7980,6 +8049,7 @@
                           data-tooltip="Message actions"
                           data-tooltip-position="bottom"
                           onclick={() => {
+                            actionMenuMobile = isMobileViewport();
                             actionMenuOpen = !actionMenuOpen;
                           }}
                         >
@@ -7993,7 +8063,7 @@
                             tabindex="-1"
                           ></div>
                           <div
-                            class="absolute right-0 z-[100] mt-1 min-w-[180px] border border-border bg-popover p-1 shadow-lg touch-manipulation"
+                            class={`absolute right-0 z-[100] mt-1 min-w-[180px] border border-border bg-popover p-1 shadow-lg touch-manipulation ${actionMenuMobile ? 'max-h-[70vh] overflow-y-auto overscroll-contain min-w-[220px]' : ''}`}
                             role="menu"
                             tabindex="-1"
                             onpointerdown={(e) => e.stopPropagation()}
@@ -8084,6 +8154,20 @@
                                 <span>Not spam</span>
                               </button>
                             {/if}
+                            {#if canReportSpam}
+                              <button
+                                type="button"
+                                class="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground cursor-pointer active:bg-accent"
+                                onclick={() => {
+                                  actionMenuOpen = false;
+                                  reportSpamSelected();
+                                }}
+                                data-testid="action-menu-report-spam"
+                              >
+                                <ShieldAlert class="h-4 w-4" />
+                                <span>Report spam</span>
+                              </button>
+                            {/if}
                             {#if canArchive}
                               <button
                                 type="button"
@@ -8141,7 +8225,7 @@
                                 class="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground cursor-pointer active:bg-accent"
                                 onclick={(e) => {
                                   e.stopPropagation();
-                                  if (!readerMoveOpen && readerMoveBtnEl) {
+                                  if (!actionMenuMobile && !readerMoveOpen && readerMoveBtnEl) {
                                     const rect = readerMoveBtnEl.getBoundingClientRect();
                                     const spaceRight = window.innerWidth - rect.right;
                                     readerMoveMenuFlip = spaceRight < 180;
@@ -8152,17 +8236,15 @@
                                 <FolderInput class="h-4 w-4" />
                                 <span class="flex-1 text-left">Move to…</span>
                                 <ChevronRight
-                                  class={`h-4 w-4 transition-transform ${readerMoveMenuFlip ? 'rotate-180' : ''}`}
+                                  class={`h-4 w-4 transition-transform ${actionMenuMobile ? (readerMoveOpen ? 'rotate-90' : '') : readerMoveMenuFlip ? 'rotate-180' : ''}`}
                                 />
                               </button>
                               {#if readerMoveOpen}
                                 <div
-                                  class="absolute z-[101] min-w-[160px] border border-border bg-popover p-1 shadow-lg overflow-y-auto max-h-[300px]"
-                                  class:left-full={!readerMoveMenuFlip}
-                                  class:ml-1={!readerMoveMenuFlip}
-                                  class:right-full={readerMoveMenuFlip}
-                                  class:mr-1={readerMoveMenuFlip}
-                                  style="top: 0;"
+                                  class={actionMenuMobile
+                                    ? 'ml-4 my-1 border-l border-border max-h-[40vh] overflow-y-auto overscroll-contain'
+                                    : `absolute z-[101] min-w-[160px] border border-border bg-popover p-1 shadow-lg overflow-y-auto max-h-[300px] ${readerMoveMenuFlip ? 'right-full mr-1' : 'left-full ml-1'}`}
+                                  style={actionMenuMobile ? '' : 'top: 0;'}
                                 >
                                   {#each availableMoveTargetsFromStore as folder}
                                     <button
@@ -8186,7 +8268,11 @@
                                 class="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground cursor-pointer active:bg-accent"
                                 onclick={(e) => {
                                   e.stopPropagation();
-                                  if (!readerLabelMenuOpen && readerLabelBtnEl) {
+                                  if (
+                                    !actionMenuMobile &&
+                                    !readerLabelMenuOpen &&
+                                    readerLabelBtnEl
+                                  ) {
                                     const rect = readerLabelBtnEl.getBoundingClientRect();
                                     const spaceRight = window.innerWidth - rect.right;
                                     readerLabelMenuFlip = spaceRight < 180;
@@ -8197,17 +8283,15 @@
                                 <Tag class="h-4 w-4" />
                                 <span class="flex-1 text-left">Label as…</span>
                                 <ChevronRight
-                                  class={`h-4 w-4 transition-transform ${readerLabelMenuFlip ? 'rotate-180' : ''}`}
+                                  class={`h-4 w-4 transition-transform ${actionMenuMobile ? (readerLabelMenuOpen ? 'rotate-90' : '') : readerLabelMenuFlip ? 'rotate-180' : ''}`}
                                 />
                               </button>
                               {#if readerLabelMenuOpen}
                                 <div
-                                  class="absolute z-[101] min-w-[160px] border border-border bg-popover p-1 shadow-lg overflow-y-auto max-h-[300px]"
-                                  class:left-full={!readerLabelMenuFlip}
-                                  class:ml-1={!readerLabelMenuFlip}
-                                  class:right-full={readerLabelMenuFlip}
-                                  class:mr-1={readerLabelMenuFlip}
-                                  style="top: 0;"
+                                  class={actionMenuMobile
+                                    ? 'ml-4 my-1 border-l border-border max-h-[40vh] overflow-y-auto overscroll-contain'
+                                    : `absolute z-[101] min-w-[160px] border border-border bg-popover p-1 shadow-lg overflow-y-auto max-h-[300px] ${readerLabelMenuFlip ? 'right-full mr-1' : 'left-full ml-1'}`}
+                                  style={actionMenuMobile ? '' : 'top: 0;'}
                                 >
                                   {#each availableLabelsFromStore as label}
                                     <button

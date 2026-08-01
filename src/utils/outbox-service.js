@@ -252,12 +252,15 @@ async function sendOutboxItem(item) {
 
     await Remote.request('Emails', payload, { method: 'POST' });
 
-    // Save copy to Sent folder (client-side workaround)
-    try {
-      await saveSentCopyToFolder(item.emailData, account);
-    } catch (sentErr) {
-      console.error('[Outbox] Failed to save sent copy:', sentErr);
-      // Don't fail the overall send if saving to Sent fails
+    // Save copy to Sent folder (client-side workaround). Skipped when the
+    // payload opts out, e.g. spam reports that would put spam back in Sent.
+    if (item.emailData?.save_sent !== false) {
+      try {
+        await saveSentCopyToFolder(item.emailData, account);
+      } catch (sentErr) {
+        console.error('[Outbox] Failed to save sent copy:', sentErr);
+        // Don't fail the overall send if saving to Sent fails
+      }
     }
 
     // Mark original message as \Answered if this was a reply
