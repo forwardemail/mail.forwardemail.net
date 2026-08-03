@@ -181,14 +181,6 @@ export const prefetchConfig: Readable<{ enabled: boolean; folders: string[]; mod
     folders: (getEffectiveSettingValue('prefetch_folders', { remote: $remote }) as string[]) || [],
     mode: 'recent',
   }));
-export const shortcuts: Readable<Record<string, string>> = derived(
-  [remoteSettings, localSettingsVersion],
-  ([$remote]) =>
-    (getEffectiveSettingValue('keyboard_shortcuts', { remote: $remote }) as Record<
-      string,
-      string
-    >) || {},
-);
 export const aliasDefaults: Readable<Record<string, unknown>> = derived(
   remoteSettings,
   ($s) => $s.aliases?.defaults || {},
@@ -756,16 +748,6 @@ export const settingsActions = {
     return results.every(Boolean);
   },
 
-  async setShortcuts(shortcuts: Record<string, string>): Promise<boolean> {
-    return setSettingValue('keyboard_shortcuts', shortcuts);
-  },
-
-  async setShortcut(action: string, key: string): Promise<boolean> {
-    const current =
-      (getEffectiveSettingValue('keyboard_shortcuts') as Record<string, string>) || {};
-    return setSettingValue('keyboard_shortcuts', { ...current, [action]: key });
-  },
-
   async setAliasDefaults(defaults: Record<string, unknown>): Promise<boolean> {
     return updateSettings({
       aliases: { defaults },
@@ -1079,7 +1061,6 @@ export const settingsStore = {
   archiveFolder,
   bodyIndexing,
   prefetchConfig,
-  shortcuts,
   aliasDefaults,
   rememberPassphrase,
   attachmentReminder,

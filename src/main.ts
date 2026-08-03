@@ -2,11 +2,7 @@ import './polyfills';
 import * as mailboxActions from './stores/mailboxActions';
 import { createStarfield } from './utils/starfield';
 import { Local, Accounts, reconcileOrphanedAccountData } from './utils/storage';
-import {
-  keyboardShortcuts,
-  showKeyboardShortcutsHelp,
-  TAB_SHORTCUTS,
-} from './utils/keyboard-shortcuts';
+import { keyboardShortcuts, TAB_SHORTCUTS } from './utils/keyboard-shortcuts';
 import { i18n } from './utils/i18n';
 import { createToastHost } from './svelte/toastsHost';
 import Login from './svelte/Login.svelte';
@@ -1670,7 +1666,11 @@ function initKeyboardShortcuts() {
   });
 
   keyboardShortcuts.on('mark-folder-read', () => {
-    viewModel.mailboxView.toasts?.show?.('Mark folder read not yet implemented', 'info');
+    if (currentRoute() !== 'mailbox') return;
+    const folderPath = get(selectedFolder);
+    if (folderPath) {
+      mailboxStore.actions.markFolderAsRead(folderPath);
+    }
   });
 
   keyboardShortcuts.on('mark-date-read', () => {
@@ -1678,15 +1678,20 @@ function initKeyboardShortcuts() {
   });
 
   keyboardShortcuts.on('mark-junk', () => {
-    viewModel.mailboxView.toasts?.show?.('Mark as junk not yet implemented', 'info');
+    if (currentRoute() !== 'mailbox') return;
+    mailboxApi?.markJunkSelected?.();
   });
 
   keyboardShortcuts.on('mark-not-junk', () => {
-    viewModel.mailboxView.toasts?.show?.('Mark as not junk not yet implemented', 'info');
+    if (currentRoute() !== 'mailbox') return;
+    mailboxApi?.markNotJunkSelected?.();
   });
 
   keyboardShortcuts.on('star', () => {
-    viewModel.mailboxView.toasts?.show?.('Star not yet implemented', 'info');
+    const message = get(viewModel.mailboxView.selectedMessage);
+    if (message) {
+      viewModel.mailboxView.toggleStar(message);
+    }
   });
 
   keyboardShortcuts.on('archive', () => {
@@ -1814,10 +1819,8 @@ function initKeyboardShortcuts() {
 }
 
 function showShortcutsHelp() {
-  showKeyboardShortcutsHelp();
-
-  // Show in modal (you'll need to create a modal for this)
-  viewModel.mailboxView.toasts?.show?.('Press ? to see keyboard shortcuts', 'info');
+  if (currentRoute() !== 'mailbox') return;
+  mailboxApi?.showShortcutsHelp?.();
 }
 
 function applyTheme(pref) {

@@ -130,6 +130,7 @@
   import FolderContextMenu from './components/FolderContextMenu.svelte';
   import FolderActionModal from './components/FolderActionModal.svelte';
   import LabelModal from './components/LabelModal.svelte';
+  import KeyboardShortcutsModal from './components/KeyboardShortcutsModal.svelte';
 
   // shadcn components
   import { Button } from '$lib/components/ui/button';
@@ -960,6 +961,7 @@
   let labelModalError = $state('');
   let labelFormName = $state('');
   let labelFormColor = $state('');
+  let shortcutsHelpOpen = $state(false);
 
   $effect(() => {
     if (sortMenuOpen) {
@@ -2096,6 +2098,21 @@
     await moveReaderTo(inboxFolderPath);
   };
 
+  const markJunkSelected = async () => {
+    if (!spamFolderPath) {
+      showToast('Spam folder not found', 'error');
+      return;
+    }
+    const selectedMessages = getSelectedMessagesFromConversations();
+    if (selectedMessages.length) {
+      await bulkMoveTo(spamFolderPath);
+      return;
+    }
+    const msg = getActiveMessage();
+    if (!msg) return;
+    await moveReaderTo(spamFolderPath);
+  };
+
   onMount(() => {
     updateThemeState();
 
@@ -2454,6 +2471,11 @@
       markSelectedThreadRead: () => {
         const conv = get(selectedConversation);
         return markConversationRead(conv);
+      },
+      markJunkSelected,
+      markNotJunkSelected: markNotSpam,
+      showShortcutsHelp: () => {
+        shortcutsHelpOpen = true;
       },
       selectMessageById: (messageId: string) => {
         const currentMessages = get(messagesStore);
@@ -9118,6 +9140,10 @@
           onClose={closeLabelModal}
           onSave={saveLabelModal}
           onClearError={clearLabelModalError}
+        />
+        <KeyboardShortcutsModal
+          bind:visible={shortcutsHelpOpen}
+          onClose={() => (shortcutsHelpOpen = false)}
         />
 
         <!-- Confirmation Dialog -->

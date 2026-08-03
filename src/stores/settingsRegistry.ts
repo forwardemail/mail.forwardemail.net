@@ -404,16 +404,6 @@ export const SETTINGS_REGISTRY: Record<string, SettingDefinition> = {
     scope: SETTING_SCOPES.DEVICE,
     storage: 'indexeddb',
   },
-  keyboard_shortcuts: {
-    id: 'keyboard_shortcuts',
-    label: 'Keyboard Shortcuts',
-    scope: SETTING_SCOPES.DEVICE,
-    localKey: 'keyboard_shortcuts',
-    valueType: 'json',
-    defaultValue: {},
-    localParse: (raw) => parseJson(raw, {}),
-    localSerialize: (value) => serializeJson(value || {}),
-  },
   pgp_keys: {
     id: 'pgp_keys',
     label: 'PGP Keys',

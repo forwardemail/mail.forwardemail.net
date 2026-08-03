@@ -24,6 +24,10 @@ const DEFAULT_SHORTCUTS = {
 
   // Receiving / Reading / Navigation
   f5: { action: 'refresh', label: 'Get new messages (current account)' },
+  // F5-only is awkward on Mac keyboards (needs a dedicated key or Fn+F5),
+  // and unlike refresh-all, refresh has no ctrl-based alternate that would
+  // auto-gain a cmd+ variant on Mac, so give it one explicitly.
+  'ctrl+shift+u': { action: 'refresh', label: 'Get new messages (current account)' },
   'shift+f5': { action: 'refresh-all', label: 'Get new messages (all accounts)' },
   'ctrl+shift+y': { action: 'refresh-all', label: 'Get new messages (all accounts)' },
   arrowright: { action: 'expand-thread', label: 'Expand collapsed thread' },
@@ -52,7 +56,40 @@ const DEFAULT_SHORTCUTS = {
 
   // Other useful
   'ctrl+y': { action: 'redo', label: 'Redo' },
-  '?': { action: 'help', label: 'Show keyboard shortcuts' },
+  // Bound as shift+/ rather than the literal '?' character: hotkeys-js
+  // resolves a bare '?' binding to a fallback char code that never matches
+  // what an actual Shift+/ keypress dispatches, so it would never fire.
+  // formatKey() below displays this back as "?".
+  'shift+/': { action: 'help', label: 'Show keyboard shortcuts' },
+};
+
+// US-layout shifted symbol -> the physical/base key that produces it.
+// hotkeys-js resolves bindings by physical key + modifier flags, not by the
+// shifted character itself, so a captured combo must use the base key here
+// (with "shift" added as a modifier) or the binding silently never fires —
+// the same bug that affected the default '?' (shift+/) shortcut above.
+const SHIFTED_SYMBOL_TO_BASE = {
+  '~': '`',
+  '!': '1',
+  '@': '2',
+  '#': '3',
+  $: '4',
+  '%': '5',
+  '^': '6',
+  '&': '7',
+  '*': '8',
+  '(': '9',
+  ')': '0',
+  _: '-',
+  '+': '=',
+  '{': '[',
+  '}': ']',
+  '|': '\\',
+  ':': ';',
+  '"': "'",
+  '<': ',',
+  '>': '.',
+  '?': '/',
 };
 
 class KeyboardShortcutManager {
@@ -310,12 +347,24 @@ class KeyboardShortcutManager {
   }
 
   /**
+   * Bare function-key combos (f1-f19) require a dedicated key or holding Fn
+   * on most Mac keyboards, so they're hidden from the Mac shortcuts list —
+   * the binding itself still works (Fn+key, or with standard F-keys
+   * enabled in System Settings), this only affects what's displayed.
+   */
+  isFunctionKeyCombo(key) {
+    const parts = String(key).split('+');
+    return /^f\d{1,2}$/.test(parts[parts.length - 1]);
+  }
+
+  /**
    * Get all shortcuts as a list (for help dialog)
    */
   getShortcutsList() {
     const list = [];
 
     for (const [key, shortcut] of Object.entries(this.shortcuts)) {
+      if (this.isMac && this.isFunctionKeyCombo(key)) continue;
       list.push({
         key: this.formatKey(key),
         originalKey: key,
@@ -336,6 +385,8 @@ class KeyboardShortcutManager {
   formatKey(key) {
     if (!key) return '';
     let formatted = String(key).toLowerCase();
+
+    if (formatted === 'shift+/') return '?';
 
     if (this.isMac) {
       formatted = formatted
@@ -414,17 +465,62 @@ class KeyboardShortcutManager {
   }
 
   /**
+   * Map a raw KeyboardEvent.key to the token used in DEFAULT_SHORTCUTS
+   * (e.g. "ArrowRight" -> "arrowright", " " -> "space", "?" -> "/").
+   * Shifted symbols resolve to their base key here; the caller is
+   * responsible for adding "shift" to the modifier list (event.shiftKey
+   * is already true whenever a shifted symbol was produced).
+   */
+  eventKeyToComboToken(rawKey) {
+    if (!rawKey) return '';
+    if (SHIFTED_SYMBOL_TO_BASE[rawKey]) return SHIFTED_SYMBOL_TO_BASE[rawKey];
+    const key = rawKey.toLowerCase();
+    const named = {
+      ' ': 'space',
+      spacebar: 'space',
+      escape: 'esc',
+      del: 'delete',
+    };
+    return named[key] || key;
+  }
+
+  /**
    * Capture the next shortcut entered by the user via hotkeys-js.
+   * Waits for a non-modifier key so a bare Ctrl/Shift/Alt/Meta press
+   * (held before the real key lands) doesn't get captured on its own.
+   * Builds the combo directly from the raw event's modifier flags and
+   * `event.key` rather than the wildcard handler's own `key` (which is
+   * always the literal bound string "*", not the key(s) actually pressed)
+   * or hotkeys-js's internal modifier names (which resolve to ambiguous
+   * glyphs like "⌃"/"⇧" that wouldn't match the "ctrl+"/"shift+" tokens
+   * already used throughout DEFAULT_SHORTCUTS).
    */
   startCapture(onCapture) {
     if (typeof onCapture !== 'function') return;
     this.stopCapture();
     this.captureInProgress = true;
 
-    this.captureHandler = (event, handler) => {
+    this.captureHandler = (event) => {
       event.preventDefault();
       event.stopPropagation();
-      const captured = this.normalizeShortcut(handler?.key || '');
+
+      const rawKey = event.key || '';
+      const lowerKey = rawKey.toLowerCase();
+      if (['control', 'shift', 'alt', 'meta', 'os'].includes(lowerKey)) {
+        return; // wait for the real key while a bare modifier is held
+      }
+
+      const mainKey = this.eventKeyToComboToken(rawKey);
+      if (!mainKey) return;
+
+      const modifiers = [];
+      if (event.ctrlKey || event.metaKey) modifiers.push('ctrl');
+      if (event.altKey) modifiers.push('alt');
+      if (event.shiftKey) modifiers.push('shift');
+
+      const captured = this.normalizeShortcut([...modifiers, mainKey].join('+'));
+      if (!captured) return;
+
       onCapture(captured);
     };
 

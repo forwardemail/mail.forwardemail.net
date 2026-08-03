@@ -217,6 +217,7 @@
   let shortcutsList = $state<
     { label: string; key?: string; keys?: string[]; originalKey?: string }[]
   >([]);
+  let capturingKey = $state<string | null>(null);
   const isMac =
     typeof navigator !== 'undefined' && navigator.platform.toUpperCase().includes('MAC');
   const buildAvailableFolders = (
@@ -1564,6 +1565,7 @@
 
   const resetShortcuts = () => {
     clearAlerts();
+    if (capturingKey) cancelRebind();
     try {
       keyboardShortcuts.resetToDefaults();
       loadShortcuts();
@@ -1573,6 +1575,40 @@
       setError((err as Error)?.message || 'Failed to reset shortcuts.');
       toasts?.show?.((err as Error)?.message || 'Failed to reset shortcuts.', 'error');
     }
+  };
+
+  const cancelRebind = () => {
+    keyboardShortcuts.stopCapture();
+    capturingKey = null;
+  };
+
+  const startRebind = (shortcut: { originalKey?: string }) => {
+    if (!shortcut.originalKey) return;
+    clearAlerts();
+    capturingKey = shortcut.originalKey;
+    keyboardShortcuts.startCapture((captured: string) => {
+      keyboardShortcuts.stopCapture();
+
+      if (!capturingKey) return; // rebind was cancelled before the key landed
+      const originalKey = capturingKey;
+
+      if (captured === 'esc') {
+        capturingKey = null;
+        return;
+      }
+
+      try {
+        keyboardShortcuts.updateShortcut(originalKey, captured);
+        loadShortcuts();
+        capturingKey = null;
+        setSuccess('Shortcut updated.');
+        toasts?.show?.('Shortcut updated', 'success');
+      } catch (err) {
+        capturingKey = null;
+        setError((err as Error)?.message || 'Failed to update shortcut.');
+        toasts?.show?.((err as Error)?.message || 'Failed to update shortcut.', 'error');
+      }
+    });
   };
 
   let clearingCache = $state(false);
@@ -2825,11 +2861,14 @@
 
       {#if section === 'shortcuts'}
         <Card.Root class="hidden md:block">
-          <Card.Header>
-            <Card.Title>Keyboard shortcuts</Card.Title>
-            <Card.Description
-              >Customize or review the shortcuts available throughout the app.</Card.Description
-            >
+          <Card.Header class="flex flex-row items-start justify-between gap-4">
+            <div>
+              <Card.Title>Keyboard shortcuts</Card.Title>
+              <Card.Description
+                >Customize or review the shortcuts available throughout the app.</Card.Description
+              >
+            </div>
+            <Button variant="outline" size="sm" onclick={resetShortcuts}>Reset to defaults</Button>
           </Card.Header>
           <Card.Content>
             <div class="max-h-[600px] overflow-y-auto border border-border">
@@ -2841,12 +2880,29 @@
               </div>
               {#each shortcutsList as shortcut}
                 <div
-                  class="grid grid-cols-[1fr_auto] gap-4 border-b border-border p-3 last:border-b-0"
+                  class="grid grid-cols-[1fr_auto] items-center gap-4 border-b border-border p-3 last:border-b-0"
                 >
                   <span>{shortcut.label}</span>
-                  <code class="bg-muted px-2 py-1 text-sm">
-                    {formatKey(shortcut.key || shortcut.keys || shortcut.originalKey) || '—'}
-                  </code>
+                  {#if capturingKey === shortcut.originalKey}
+                    <div class="flex items-center gap-2">
+                      <code class="animate-pulse bg-muted px-2 py-1 text-sm"
+                        >Press a key… (Esc to cancel)</code
+                      >
+                      <Button variant="ghost" size="sm" onclick={cancelRebind}>Cancel</Button>
+                    </div>
+                  {:else}
+                    <div class="flex items-center gap-2">
+                      <code class="bg-muted px-2 py-1 text-sm">
+                        {formatKey(shortcut.key || shortcut.keys || shortcut.originalKey) || '—'}
+                      </code>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        disabled={capturingKey !== null}
+                        onclick={() => startRebind(shortcut)}>Edit</Button
+                      >
+                    </div>
+                  {/if}
                 </div>
               {/each}
             </div>
