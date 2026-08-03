@@ -9547,6 +9547,18 @@
     min-height: 0;
   }
 
+  /* Remove all padding on mobile — messages should be flush edge-to-edge */
+  @media (max-width: 820px) {
+    :global(.fe-layout-productivity .fe-messages),
+    :global(.fe-messages) {
+      padding: 0 !important;
+      border: none !important;
+    }
+    :global(.fe-layout-productivity .fe-mailbox-wrapper) {
+      padding-top: 0 !important;
+    }
+  }
+
   /* The reader toolbar is sticky (top:0) inside the padded, scrolling
      .fe-reader. Pull it full-bleed sideways (margins mirror .fe-reader padding:
      14px base, 10px productivity) so it spans edge to edge, and restore equal
@@ -9598,6 +9610,14 @@
 
   :global(.fe-layout-productivity .fe-mailbox-wrapper) {
     padding-top: 6px;
+  }
+
+  /* Remove wrapper padding-top on mobile */
+  @media (max-width: 820px) {
+    :global(.fe-layout-productivity .fe-mailbox-wrapper),
+    :global(.fe-mailbox-wrapper) {
+      padding-top: 0 !important;
+    }
   }
 
   /* Conversation, thread, message, and reader styles moved to Tailwind */

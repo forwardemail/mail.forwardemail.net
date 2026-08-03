@@ -27,6 +27,7 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "test:e2e": "playwright test",
+    "test:ios": "vitest run tests/unit/ios-scene-delegate-inject.test.ts",
     "docs:toc": "node scripts/update-readme-toc.mjs",
     "docs:toc:check": "node scripts/update-readme-toc.mjs --check",
     "screenshots:readme": "node scripts/update-readme-screenshots.mjs",

@@ -153,6 +153,36 @@ body.light-mode:not(.mailbox-mode) {
  * or navigation bar. iOS uses env() directly. CSS vars are kept available
  * for components that want to extend into the safe area intentionally. */
 
+/* On mobile, hide the starfield and make the login shell fill the viewport.
+ * The dark space-themed background doesn't work well on small screens where
+ * the login card can't float freely. Instead, let the card fill edge-to-edge. */
+@media (max-width: 640px) {
+  .fe-stars {
+    display: none !important;
+  }
+
+  body:not(.mailbox-mode)#rl-app {
+    justify-content: flex-start;
+    background: var(--color-bg, #ffffff);
+  }
+
+  .fe-login-shell {
+    width: 100%;
+    height: 100%;
+    flex: 1;
+    justify-content: center;
+  }
+
+  /* Make login card fill full width on mobile */
+  .fe-login-shell [data-slot='card'] {
+    width: 100% !important;
+    max-width: none !important;
+    border-radius: 0 !important;
+    border: none !important;
+    box-shadow: none !important;
+  }
+}
+
 /* Ensure inputs don't trigger zoom on iOS */
 @media (max-width: 640px) {
   input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='button']):not(

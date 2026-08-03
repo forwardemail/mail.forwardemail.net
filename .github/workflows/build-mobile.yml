@@ -138,6 +138,9 @@ jobs:
           CI: 'true'
         run: pnpm tauri ios init
 
+      - name: Inject iOS 26 scene delegate
+        run: node scripts/inject-ios-scene-delegate.cjs
+
       - name: Build iOS (debug, simulator)
         run: pnpm tauri ios build --debug --target aarch64-sim
 

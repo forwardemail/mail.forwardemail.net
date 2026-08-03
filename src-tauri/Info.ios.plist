@@ -32,5 +32,30 @@
   -->
   <key>NSPhotoLibraryUsageDescription</key>
   <string>Forward Email uses your photo library so you can attach photos to emails and set profile pictures.</string>
+
+  <!--
+    UIScene lifecycle manifest (iOS 26+). Declares TaoSceneDelegate as the
+    window scene delegate so the system routes scene lifecycle events to our
+    class. Without this, iOS 26 never calls scene:willConnectTo: and the app
+    renders a permanent black screen because tao 0.34.x does not natively
+    support the UIScene lifecycle.
+  -->
+  <key>UIApplicationSceneManifest</key>
+  <dict>
+    <key>UIApplicationSupportsMultipleScenes</key>
+    <false/>
+    <key>UISceneConfigurations</key>
+    <dict>
+      <key>UIWindowSceneSessionRoleApplication</key>
+      <array>
+        <dict>
+          <key>UISceneConfigurationName</key>
+          <string>Default Configuration</string>
+          <key>UISceneDelegateClassName</key>
+          <string>TaoSceneDelegate</string>
+        </dict>
+      </array>
+    </dict>
+  </dict>
 </dict>
 </plist>

@@ -62,6 +62,8 @@ echo ""
 if [ ! -d src-tauri/gen/apple ]; then
   npx tauri ios init --ci
 fi
+# Inject iOS 26 scene delegate (fixes black screen + viewport sizing)
+node scripts/inject-ios-scene-delegate.cjs
 node scripts/configure-mobile-display-name.cjs
 
 # Simulator builds cannot register with APNs and do not need signing. Device

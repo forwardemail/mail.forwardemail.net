@@ -231,10 +231,17 @@ func getDeviceTokenDirect(_ buffer: UnsafeMutablePointer<CChar>, _ bufferLen: In
     let fetcher = TokenFetcher()
     activeTokenFetcher = fetcher
 
-    // Register for remote notifications (must be on main thread)
+    // Register for remote notifications (must be on main thread).
+    // Skip on simulator — registerForRemoteNotifications crashes on iOS 26
+    // simulator because APNs is unavailable and the call triggers a fatal
+    // exception rather than a graceful failure.
     DispatchQueue.main.async {
         NSLog("[mobile-push] Calling registerForRemoteNotifications...")
+        #if !targetEnvironment(simulator)
         UIApplication.shared.registerForRemoteNotifications()
+        #else
+        NSLog("[mobile-push] Skipping registerForRemoteNotifications (simulator)")
+        #endif
     }
 
     // Wait for the token
@@ -301,7 +308,11 @@ public class MobilePushPlugin: Plugin {
     @objc public func getToken(_ invoke: Invoke) {
         NSLog("[mobile-push] getToken via PluginManager")
         DispatchQueue.main.async {
+            #if !targetEnvironment(simulator)
             UIApplication.shared.registerForRemoteNotifications()
+            #else
+            NSLog("[mobile-push] Skipping registerForRemoteNotifications (simulator)")
+            #endif
         }
         // Token arrives via handleToken() callback from AppDelegate
     }

@@ -107,6 +107,8 @@ if [ ! -d src-tauri/gen/apple ]; then
   echo "   🏗️  Initializing generated iOS project..."
   npx tauri ios init --ci
 fi
+# Inject iOS 26 scene delegate (fixes black screen + viewport sizing)
+node scripts/inject-ios-scene-delegate.cjs
 node scripts/configure-mobile-display-name.cjs
 
 # ── Launch ─────────────────────────────────────────────────────────────────
