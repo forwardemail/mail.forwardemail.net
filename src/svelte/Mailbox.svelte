@@ -80,7 +80,12 @@
     cancelScheduledEmail,
     getOutboxStats,
   } from '../utils/outbox-service';
-  import { syncProgress, indexProgress, reportSpamMessage } from '../stores/mailboxActions';
+  import {
+    syncProgress,
+    indexProgress,
+    reportSpamMessage,
+    toggleStar,
+  } from '../stores/mailboxActions';
   import {
     profileName,
     profileImage,
@@ -1158,6 +1163,16 @@
     if (item.latestHasAttachments) return true;
     if (Array.isArray(item.messages)) {
       return item.messages.some((m) => hasAttachments(m));
+    }
+    return false;
+  };
+
+  const isMessageStarred = (item) => {
+    if (!item) return false;
+    if (item.is_starred) return true;
+    if (Array.isArray(item.flags) && item.flags.includes('\\Flagged')) return true;
+    if (Array.isArray(item.messages)) {
+      return item.messages.some((m) => isMessageStarred(m));
     }
     return false;
   };
@@ -2476,6 +2491,9 @@
       markNotJunkSelected: markNotSpam,
       showShortcutsHelp: () => {
         shortcutsHelpOpen = true;
+      },
+      focusSearch: () => {
+        searchInputEl?.focus?.();
       },
       selectMessageById: (messageId: string) => {
         const currentMessages = get(messagesStore);
@@ -3857,119 +3875,6 @@
     }
   };
 
-  const markMessageStarred = async (msg) => {
-    if (!msg) return;
-    const list = source.state?.messages ? get(messagesStore) || [] : [];
-    const current = list.find((m) => m.id === msg.id) || msg;
-    if (current.is_starred || (Array.isArray(current.flags) && current.flags.includes('\\Flagged')))
-      return; // already starred
-    const previousList = list;
-    const currentFlags = Array.isArray(current.flags) ? current.flags : [];
-    const newFlags = [...new Set([...currentFlags, '\\Flagged'])];
-    const updated = {
-      ...current,
-      is_starred: true,
-      is_flagged: true,
-      flags: newFlags,
-    };
-    if (source.state?.messages?.set) {
-      mailboxStore.state.messages.set(list.map((m) => (m.id === updated.id ? updated : m)));
-    }
-    mailboxStore?.actions?.addPendingFlagMutation?.(updated.id, {
-      is_starred: true,
-      is_flagged: true,
-      flags: updated.flags,
-    });
-    try {
-      const apiId = getMessageApiId(updated);
-      if (!apiId) {
-        console.warn('markMessageStarred failed: missing message id');
-        showMissingMessageIdToast('star');
-        reloadMessages();
-        return;
-      }
-      await Remote.request(
-        'MessageUpdate',
-        { flags: updated.flags },
-        {
-          method: 'PUT',
-          pathOverride: `/v1/messages/${encodeURIComponent(apiId)}`,
-        },
-      );
-      const account = Local.get('email') || 'default';
-      const changes = { is_starred: true, is_flagged: true, flags: updated.flags };
-      await db.messages.where('[account+id]').equals([account, updated.id]).modify(changes);
-      mailboxStore.actions.updateFolderUnreadCounts();
-      const folder = get(selectedFolder);
-      if (account && folder) {
-        mailboxStore.actions.invalidateFolderInMemCache(account, folder);
-      }
-    } catch (err) {
-      console.warn('markMessageStarred failed', err);
-      if (source.state?.messages?.set && previousList) {
-        mailboxStore.state.messages.set(previousList);
-      }
-    }
-  };
-
-  const markMessageUnstarred = async (msg) => {
-    if (!msg) return;
-    const list = source.state?.messages ? get(messagesStore) || [] : [];
-    const current = list.find((m) => m.id === msg.id) || msg;
-    if (
-      !current.is_starred &&
-      !(Array.isArray(current.flags) && current.flags.includes('\\Flagged'))
-    )
-      return; // already unstarred
-    const previousList = list;
-    const currentFlags = Array.isArray(current.flags) ? current.flags : [];
-    const newFlags = currentFlags.filter((f) => f !== '\\Flagged');
-    const updated = {
-      ...current,
-      is_starred: false,
-      is_flagged: false,
-      flags: newFlags,
-    };
-    if (source.state?.messages?.set) {
-      mailboxStore.state.messages.set(list.map((m) => (m.id === updated.id ? updated : m)));
-    }
-    mailboxStore?.actions?.addPendingFlagMutation?.(updated.id, {
-      is_starred: false,
-      is_flagged: false,
-      flags: updated.flags,
-    });
-    try {
-      const apiId = getMessageApiId(updated);
-      if (!apiId) {
-        console.warn('markMessageUnstarred failed: missing message id');
-        showMissingMessageIdToast('unstar');
-        reloadMessages();
-        return;
-      }
-      await Remote.request(
-        'MessageUpdate',
-        { flags: updated.flags },
-        {
-          method: 'PUT',
-          pathOverride: `/v1/messages/${encodeURIComponent(apiId)}`,
-        },
-      );
-      const account = Local.get('email') || 'default';
-      const changes = { is_starred: false, is_flagged: false, flags: updated.flags };
-      await db.messages.where('[account+id]').equals([account, updated.id]).modify(changes);
-      mailboxStore.actions.updateFolderUnreadCounts();
-      const folder = get(selectedFolder);
-      if (account && folder) {
-        mailboxStore.actions.invalidateFolderInMemCache(account, folder);
-      }
-    } catch (err) {
-      console.warn('markMessageUnstarred failed', err);
-      if (source.state?.messages?.set && previousList) {
-        mailboxStore.state.messages.set(previousList);
-      }
-    }
-  };
-
   // ── Bulk action wrappers ────────────────────────────────────────────
   // Process messages sequentially so each iteration re-reads the store
   // for fresh flags (avoids the race condition where parallel API calls
@@ -4017,50 +3922,6 @@
     }
   };
 
-  const bulkStar = async () => {
-    const messages = getSelectedMessagesFromConversations();
-    if (!messages.length) return;
-    let updatedCount = 0;
-    for (const msg of messages) {
-      const current =
-        (source.state?.messages ? get(messagesStore) || [] : []).find((m) => m.id === msg.id) ||
-        msg;
-      if (
-        current.is_starred ||
-        (Array.isArray(current.flags) && current.flags.includes('\\Flagged'))
-      )
-        continue;
-      await markMessageStarred(current);
-      updatedCount++;
-    }
-    clearSelection();
-    if (updatedCount > 0) {
-      showToast(`Starred ${updatedCount} message${updatedCount === 1 ? '' : 's'}`, 'success');
-    }
-  };
-
-  const bulkUnstar = async () => {
-    const messages = getSelectedMessagesFromConversations();
-    if (!messages.length) return;
-    let updatedCount = 0;
-    for (const msg of messages) {
-      const current =
-        (source.state?.messages ? get(messagesStore) || [] : []).find((m) => m.id === msg.id) ||
-        msg;
-      if (
-        !current.is_starred &&
-        !(Array.isArray(current.flags) && current.flags.includes('\\Flagged'))
-      )
-        continue;
-      await markMessageUnstarred(current);
-      updatedCount++;
-    }
-    clearSelection();
-    if (updatedCount > 0) {
-      showToast(`Unstarred ${updatedCount} message${updatedCount === 1 ? '' : 's'}`, 'success');
-    }
-  };
-
   const bulkSpam = async () => {
     const path = spamFolderPath;
     if (!path) {
@@ -4103,11 +3964,7 @@
               ? contextReportSpam
               : undefined,
           onMoveTo: contextMoveTo,
-          onToggleStar: () => {
-            if (!contextMenuMessage) return;
-            toggleStarMessage(contextMenuMessage);
-            closeContextMenu();
-          },
+          onToggleStar: contextToggleStar,
           onToggleLabel: (id) => contextLabel(id),
           onNewLabel: () => {
             closeContextMenu();
@@ -4225,6 +4082,16 @@
       markConversationRead(contextMenuConversation);
     } else {
       toggleReadMessage(contextMenuMessage);
+    }
+    closeContextMenu();
+  };
+
+  const contextToggleStar = () => {
+    if (!contextMenuMessage) return;
+    if (contextMenuConversation) {
+      toggleStarConversation(contextMenuConversation);
+    } else {
+      toggleStarMessage(contextMenuMessage);
     }
     closeContextMenu();
   };
@@ -4786,6 +4653,16 @@
       const target = storeMsg || message;
       if (!target.is_unread) continue;
       await markMessageRead(target);
+    }
+  };
+
+  const toggleStarMessage = (msg) => toggleStar(msg);
+
+  const toggleStarConversation = async (conv) => {
+    if (!conv?.messages?.length) return;
+    const shouldStar = !conv.messages.some((m) => isMessageStarred(m));
+    for (const m of conv.messages) {
+      if (isMessageStarred(m) !== shouldStar) await toggleStar(m);
     }
   };
 
@@ -6882,11 +6759,21 @@
                                       </span>
                                     {/if}
                                   </div>
-                                  {#if conv.flagged}
-                                    <Star
-                                      class="h-4 w-4 text-yellow-400 fill-yellow-400 shrink-0"
-                                    />
-                                  {/if}
+                                  <button
+                                    type="button"
+                                    class="shrink-0"
+                                    aria-label={isMessageStarred(conv) ? 'Unstar' : 'Star'}
+                                    onclick={(e) => {
+                                      e.stopPropagation();
+                                      toggleStarConversation(conv);
+                                    }}
+                                  >
+                                    {#if isMessageStarred(conv)}
+                                      <Star class="h-4 w-4 text-yellow-400 fill-yellow-400" />
+                                    {:else}
+                                      <StarOff class="h-4 w-4 text-muted-foreground" />
+                                    {/if}
+                                  </button>
                                   {#if hasAttachments(conv)}
                                     <svg
                                       viewBox="0 0 24 24"
@@ -6983,9 +6870,21 @@
                                           ></path>
                                         </svg>
                                       {/if}
-                                      {#if conv.starred}
-                                        <Star class="h-3 w-3 fill-yellow-400 text-yellow-400" />
-                                      {/if}
+                                      <button
+                                        type="button"
+                                        class="shrink-0"
+                                        aria-label={isMessageStarred(conv) ? 'Unstar' : 'Star'}
+                                        onclick={(e) => {
+                                          e.stopPropagation();
+                                          toggleStarConversation(conv);
+                                        }}
+                                      >
+                                        {#if isMessageStarred(conv)}
+                                          <Star class="h-3 w-3 fill-yellow-400 text-yellow-400" />
+                                        {:else}
+                                          <StarOff class="h-3 w-3" />
+                                        {/if}
+                                      </button>
                                       <span class="text-[11px] whitespace-nowrap">
                                         {#if conv.latestDate}
                                           {formatCompactDate(conv.latestDate)}
@@ -7120,6 +7019,21 @@
                                           ></path>
                                         </svg>
                                       {/if}
+                                      <button
+                                        type="button"
+                                        class="shrink-0"
+                                        aria-label={isMessageStarred(conv) ? 'Unstar' : 'Star'}
+                                        onclick={(e) => {
+                                          e.stopPropagation();
+                                          toggleStarConversation(conv);
+                                        }}
+                                      >
+                                        {#if isMessageStarred(conv)}
+                                          <Star class="h-3 w-3 fill-yellow-400 text-yellow-400" />
+                                        {:else}
+                                          <StarOff class="h-3 w-3" />
+                                        {/if}
+                                      </button>
                                       <span class="text-[11px] whitespace-nowrap">
                                         {#if conv.latestDate}
                                           {formatCompactDate(conv.latestDate)}
@@ -7254,9 +7168,21 @@
                                       ></path>
                                     </svg>
                                   {/if}
-                                  {#if msg.starred}
-                                    <Star class="h-3 w-3 fill-yellow-400 text-yellow-400" />
-                                  {/if}
+                                  <button
+                                    type="button"
+                                    class="shrink-0"
+                                    aria-label={isMessageStarred(msg) ? 'Unstar' : 'Star'}
+                                    onclick={(e) => {
+                                      e.stopPropagation();
+                                      toggleStarMessage(msg);
+                                    }}
+                                  >
+                                    {#if isMessageStarred(msg)}
+                                      <Star class="h-3 w-3 fill-yellow-400 text-yellow-400" />
+                                    {:else}
+                                      <StarOff class="h-3 w-3" />
+                                    {/if}
+                                  </button>
                                   <span class="text-[11px] whitespace-nowrap">
                                     {formatCompactDate(msg.date)}
                                   </span>
@@ -7351,6 +7277,21 @@
                                       ></path>
                                     </svg>
                                   {/if}
+                                  <button
+                                    type="button"
+                                    class="shrink-0"
+                                    aria-label={isMessageStarred(msg) ? 'Unstar' : 'Star'}
+                                    onclick={(e) => {
+                                      e.stopPropagation();
+                                      toggleStarMessage(msg);
+                                    }}
+                                  >
+                                    {#if isMessageStarred(msg)}
+                                      <Star class="h-3 w-3 fill-yellow-400 text-yellow-400" />
+                                    {:else}
+                                      <StarOff class="h-3 w-3" />
+                                    {/if}
+                                  </button>
                                   <span class="text-[11px] whitespace-nowrap">
                                     {formatCompactDate(msg.date)}
                                   </span>
@@ -7553,6 +7494,22 @@
               >
                 <Eye class="h-4.5 w-4.5 mr-2" />
                 <span>{contextMenuMessage.is_unread ? 'Mark Read' : 'Mark Unread'}</span>
+              </button>
+              <button
+                type="button"
+                class="flex items-center w-full px-2 py-1.5 text-sm hover:bg-accent cursor-pointer"
+                onclick={contextToggleStar}
+              >
+                {#if isMessageStarred(contextMenuConversation || contextMenuMessage)}
+                  <Star class="h-4.5 w-4.5 mr-2 fill-yellow-400 text-yellow-400" />
+                {:else}
+                  <StarOff class="h-4.5 w-4.5 mr-2" />
+                {/if}
+                <span
+                  >{isMessageStarred(contextMenuConversation || contextMenuMessage)
+                    ? 'Unstar'
+                    : 'Star'}</span
+                >
               </button>
               <div class="my-1 h-px bg-border"></div>
               <button
@@ -7899,6 +7856,20 @@
                       <ChevronLeft class="h-5 w-5" />
                     </button>
                     <div class="flex items-center gap-1">
+                      <button
+                        class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                        type="button"
+                        aria-label={isMessageStarred($selectedMessage) ? 'Unstar' : 'Star'}
+                        data-tooltip={isMessageStarred($selectedMessage) ? 'Unstar' : 'Star'}
+                        data-tooltip-position="bottom"
+                        onclick={() => toggleStarMessage($selectedMessage)}
+                      >
+                        {#if isMessageStarred($selectedMessage)}
+                          <Star class="h-5 w-5 fill-yellow-400 text-yellow-400" />
+                        {:else}
+                          <StarOff class="h-5 w-5" />
+                        {/if}
+                      </button>
                       {#if canArchive}
                         <button
                           class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
@@ -8160,6 +8131,21 @@
                                 >
                               </button>
                             {/if}
+                            <button
+                              type="button"
+                              class="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground cursor-pointer active:bg-accent"
+                              onclick={() => {
+                                actionMenuOpen = false;
+                                toggleStarMessage($selectedMessage);
+                              }}
+                            >
+                              {#if isMessageStarred($selectedMessage)}
+                                <Star class="h-4 w-4 fill-yellow-400 text-yellow-400" />
+                              {:else}
+                                <StarOff class="h-4 w-4" />
+                              {/if}
+                              <span>{isMessageStarred($selectedMessage) ? 'Unstar' : 'Star'}</span>
+                            </button>
                             {#if showReaderMenuDivider}
                               <div class="my-1 h-px bg-border"></div>
                             {/if}

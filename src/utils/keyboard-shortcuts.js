@@ -18,7 +18,6 @@ const DEFAULT_SHORTCUTS = {
   a: { action: 'reply-all', label: 'Reply All' },
   'shift+r': { action: 'reply-list', label: 'Reply to list' },
   f: { action: 'forward', label: 'Forward message' },
-  'ctrl+e': { action: 'edit-as-new', label: 'Edit message as new' },
   'ctrl+s': { action: 'save-draft', label: 'Save draft' },
   'ctrl+p': { action: 'print', label: 'Print message or draft' },
 
@@ -39,23 +38,19 @@ const DEFAULT_SHORTCUTS = {
   m: { action: 'toggle-read', label: 'Mark message read/unread' },
   'shift+i': { action: 'mark-thread-read', label: 'Mark thread as read' },
   'shift+c': { action: 'mark-folder-read', label: 'Mark all messages read in folder' },
-  c: { action: 'mark-date-read', label: 'Mark as read by date' },
   j: { action: 'mark-junk', label: 'Mark as Junk' },
   'shift+j': { action: 'mark-not-junk', label: 'Mark as Not Junk' },
   s: { action: 'star', label: 'Add / remove star' },
   e: { action: 'archive', label: 'Archive message' },
   delete: { action: 'delete', label: 'Delete message' },
   'shift+delete': { action: 'delete-permanent', label: 'Delete bypassing Trash' },
-  'ctrl+alt+m': { action: 'move-copy', label: 'Move / copy to folder' },
 
   // Search & Filter
   'ctrl+k': { action: 'quick-filter', label: 'Quick Filter / folder search' },
   'ctrl+f': { action: 'find-in-message', label: 'Find text in current message' },
-  'ctrl+shift+f': { action: 'advanced-search', label: 'Advanced search in folder' },
   'ctrl+shift+k': { action: 'quick-filter-advanced', label: 'Quick-filter messages in folder' },
 
   // Other useful
-  'ctrl+y': { action: 'redo', label: 'Redo' },
   // Bound as shift+/ rather than the literal '?' character: hotkeys-js
   // resolves a bare '?' binding to a fallback char code that never matches
   // what an actual Shift+/ keypress dispatches, so it would never fire.
@@ -592,7 +587,6 @@ export function showKeyboardShortcutsHelp() {
         'reply-all',
         'reply-list',
         'forward',
-        'edit-as-new',
         'save-draft',
         'print',
       ].includes(shortcut.action)
@@ -620,9 +614,7 @@ export function showKeyboardShortcutsHelp() {
 
     if (
       shortcut.action.includes('mark') ||
-      ['toggle-read', 'archive', 'delete', 'delete-permanent', 'star', 'move-copy'].includes(
-        shortcut.action,
-      ) ||
+      ['toggle-read', 'archive', 'delete', 'delete-permanent', 'star'].includes(shortcut.action) ||
       shortcut.action.startsWith('tag-') ||
       shortcut.action === 'clear-tags'
     ) {

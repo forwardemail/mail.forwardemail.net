@@ -1585,13 +1585,6 @@ function initKeyboardShortcuts() {
     }
   });
 
-  keyboardShortcuts.on('edit-as-new', () => {
-    const message = get(viewModel.mailboxView.selectedMessage);
-    if (message) {
-      viewModel.mailboxView.toasts?.show?.('Edit as new not yet implemented', 'info');
-    }
-  });
-
   keyboardShortcuts.on('save-draft', async () => {
     if (!composeApi?.isVisible?.()) {
       viewModel.mailboxView.toasts?.show?.('Open compose to save a draft first', 'info');
@@ -1617,10 +1610,6 @@ function initKeyboardShortcuts() {
         );
       }
     }
-  });
-
-  keyboardShortcuts.on('send-now', () => {
-    viewModel.mailboxView.toasts?.show?.('Send now shortcut not yet implemented', 'info');
   });
 
   // Receiving / navigation
@@ -1671,10 +1660,6 @@ function initKeyboardShortcuts() {
     if (folderPath) {
       mailboxStore.actions.markFolderAsRead(folderPath);
     }
-  });
-
-  keyboardShortcuts.on('mark-date-read', () => {
-    viewModel.mailboxView.toasts?.show?.('Mark as read by date not yet implemented', 'info');
   });
 
   keyboardShortcuts.on('mark-junk', () => {
@@ -1741,43 +1726,30 @@ function initKeyboardShortcuts() {
     mailboxApi?.selectPrevious?.();
   });
 
-  keyboardShortcuts.on('move-copy', () => {
-    viewModel.mailboxView.toasts?.show?.('Move / copy not yet implemented', 'info');
-  });
-
   // Search
+  // Note: these previously used document.querySelector('.fe-search'), a
+  // class that no longer exists anywhere in the rendered markup (leftover
+  // from a pre-shadcn refactor) — the selector always returned null, so
+  // these silently did nothing. mailboxApi.focusSearch() uses the search
+  // input's live component ref instead.
   keyboardShortcuts.on('quick-filter', () => {
-    const searchInput = document.querySelector('.fe-search');
-    if (searchInput) {
-      searchInput.focus();
-    }
+    if (currentRoute() !== 'mailbox') return;
+    mailboxApi?.focusSearch?.();
   });
 
   keyboardShortcuts.on('find-in-message', () => {
-    const searchInput = document.querySelector('.fe-search');
-    if (searchInput) {
-      searchInput.focus();
-    }
-  });
-
-  keyboardShortcuts.on('advanced-search', () => {
-    viewModel.mailboxView.toasts?.show?.('Advanced search not yet implemented', 'info');
+    if (currentRoute() !== 'mailbox') return;
+    mailboxApi?.focusSearch?.();
   });
 
   keyboardShortcuts.on('quick-filter-advanced', () => {
-    const searchInput = document.querySelector('.fe-search');
-    if (searchInput) {
-      searchInput.focus();
-    }
+    if (currentRoute() !== 'mailbox') return;
+    mailboxApi?.focusSearch?.();
   });
 
   // Help
   keyboardShortcuts.on('help', () => {
     showShortcutsHelp();
-  });
-
-  keyboardShortcuts.on('redo', () => {
-    viewModel.mailboxView.toasts?.show?.('Redo not yet implemented', 'info');
   });
 
   // Tab shortcut handlers (desktop only — shortcuts registered at module init, handlers bound here)
