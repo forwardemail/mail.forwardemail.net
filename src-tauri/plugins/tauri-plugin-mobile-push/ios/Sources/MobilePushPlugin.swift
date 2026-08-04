@@ -116,9 +116,18 @@ private func setupApnsDelegateInternal() {
     // (which is always the case — Tao sets it at launch, we inject lazily on
     // first getToken call), UIApplication won't know about our new methods
     // unless we re-assign the delegate.
-    UIApplication.shared.delegate = nil
-    UIApplication.shared.delegate = delegate
-    NSLog("[mobile-push] Re-assigned UIApplication.delegate to flush respondsToSelector cache")
+    //
+    // On iOS 26+, setting delegate=nil tears down the scene lifecycle and
+    // causes a crash when registerForRemoteNotifications is called afterwards.
+    // Skip the reassignment on iOS 26+ — the runtime will re-query
+    // respondsToSelector: when registerForRemoteNotifications is called.
+    if #available(iOS 26, *) {
+        NSLog("[mobile-push] iOS 26+: skipping delegate reassignment (scene lifecycle)")
+    } else {
+        UIApplication.shared.delegate = nil
+        UIApplication.shared.delegate = delegate
+        NSLog("[mobile-push] Re-assigned UIApplication.delegate to flush respondsToSelector cache")
+    }
 
     // Set UNUserNotificationCenter delegate for foreground handling + tap handling
     UNUserNotificationCenter.current().delegate = PushNotificationHandler.shared
