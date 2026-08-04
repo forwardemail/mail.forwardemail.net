@@ -66,8 +66,18 @@ private class PushNotificationHandler: NSObject, UNUserNotificationCenterDelegat
     }
 }
 
-/// Injects APNs callback methods into the Tao-generated dynamic AppDelegate class
-/// and sets UNUserNotificationCenter.delegate for foreground notifications.
+/// Sets up APNs delegate methods and notification observers.
+///
+/// APNs callback methods (didRegisterForRemoteNotificationsWithDeviceToken: etc.)
+/// are now injected by TaoWindowCapture.m at +load time via a setDelegate: swizzle.
+/// This ensures the methods exist BEFORE UIApplication builds its respondsToSelector:
+/// cache — eliminating the need for any delegate reassignment (which crashes on iOS 26
+/// because setting delegate=nil tears down the scene lifecycle).
+///
+/// This function only sets up the NotificationCenter observers and UNUserNotificationCenter
+/// delegate. The actual APNs methods are in ObjC (TaoWindowCapture.m) and post
+/// NSNotifications that we observe here.
+///
 /// Must be called on the main thread.
 private func setupApnsDelegateInternal() {
     guard !apnsDelegateSetUp else { return }
@@ -78,55 +88,50 @@ private func setupApnsDelegateInternal() {
     }
 
     let cls: AnyClass = type(of: delegate)
-    NSLog("[mobile-push] Injecting APNs methods into %@", NSStringFromClass(cls))
+    NSLog("[mobile-push] setupApnsDelegate: delegate class = %@", NSStringFromClass(cls))
 
-    // application:didRegisterForRemoteNotificationsWithDeviceToken:
+    // Verify that TaoWindowCapture.m already injected the APNs methods at +load time.
+    // If not (e.g., inject script didn't run), fall back to adding them here + reassign.
     let didRegisterSel = sel_registerName("application:didRegisterForRemoteNotificationsWithDeviceToken:")
-    let didRegisterBlock: @convention(block) (AnyObject, UIApplication, NSData) -> Void = { _, _, tokenNSData in
-        let tokenData = tokenNSData as Data
-        let tokenString = tokenData.map { String(format: "%02.2hhx", $0) }.joined()
-        NSLog("[mobile-push] APNs token received: %@...", String(tokenString.prefix(16)))
-        activeTokenFetcher?.resolve(tokenString)
-        MobilePushPlugin.instance?.handleToken(tokenData)
-    }
-    let didRegisterImp = imp_implementationWithBlock(didRegisterBlock as Any)
-    if class_addMethod(cls, didRegisterSel, didRegisterImp, "v@:@@") {
-        NSLog("[mobile-push] Added didRegisterForRemoteNotifications to AppDelegate")
-    } else {
-        NSLog("[mobile-push] didRegisterForRemoteNotifications already exists on AppDelegate")
-    }
+    let methodsAlreadyInjected = class_respondsToSelector(cls, didRegisterSel)
 
-    // application:didFailToRegisterForRemoteNotificationsWithError:
-    let didFailSel = sel_registerName("application:didFailToRegisterForRemoteNotificationsWithError:")
-    let didFailBlock: @convention(block) (AnyObject, UIApplication, NSError) -> Void = { _, _, error in
-        NSLog("[mobile-push] APNs registration failed: %@", error.localizedDescription)
-        activeTokenFetcher?.reject(error.localizedDescription)
-        MobilePushPlugin.instance?.handleTokenError(error as Error)
-    }
-    let didFailImp = imp_implementationWithBlock(didFailBlock as Any)
-    if class_addMethod(cls, didFailSel, didFailImp, "v@:@@") {
-        NSLog("[mobile-push] Added didFailToRegisterForRemoteNotifications to AppDelegate")
+    if methodsAlreadyInjected {
+        NSLog("[mobile-push] APNs methods already present on %@ (injected by TaoWindowCapture +load)", NSStringFromClass(cls))
     } else {
-        NSLog("[mobile-push] didFailToRegisterForRemoteNotifications already exists on AppDelegate")
-    }
+        NSLog("[mobile-push] APNs methods NOT found — injecting as fallback")
 
-    // Force UIApplication to re-check respondsToSelector: for the delegate.
-    // UIApplication caches which optional UIApplicationDelegate methods the
-    // delegate responds to. If we add methods after the delegate was set
-    // (which is always the case — Tao sets it at launch, we inject lazily on
-    // first getToken call), UIApplication won't know about our new methods
-    // unless we re-assign the delegate.
-    //
-    // On iOS 26+, setting delegate=nil tears down the scene lifecycle and
-    // causes a crash when registerForRemoteNotifications is called afterwards.
-    // Skip the reassignment on iOS 26+ — the runtime will re-query
-    // respondsToSelector: when registerForRemoteNotifications is called.
-    if #available(iOS 26, *) {
-        NSLog("[mobile-push] iOS 26+: skipping delegate reassignment (scene lifecycle)")
-    } else {
-        UIApplication.shared.delegate = nil
-        UIApplication.shared.delegate = delegate
-        NSLog("[mobile-push] Re-assigned UIApplication.delegate to flush respondsToSelector cache")
+        // Fallback: inject methods here (same as before)
+        let didRegisterBlock: @convention(block) (AnyObject, UIApplication, NSData) -> Void = { _, _, tokenNSData in
+            let tokenData = tokenNSData as Data
+            let tokenString = tokenData.map { String(format: "%02.2hhx", $0) }.joined()
+            NSLog("[mobile-push] APNs token received: %@...", String(tokenString.prefix(16)))
+            activeTokenFetcher?.resolve(tokenString)
+            MobilePushPlugin.instance?.handleToken(tokenData)
+        }
+        let didRegisterImp = imp_implementationWithBlock(didRegisterBlock as Any)
+        class_addMethod(cls, didRegisterSel, didRegisterImp, "v@:@@")
+
+        let didFailSel = sel_registerName("application:didFailToRegisterForRemoteNotificationsWithError:")
+        let didFailBlock: @convention(block) (AnyObject, UIApplication, NSError) -> Void = { _, _, error in
+            NSLog("[mobile-push] APNs registration failed: %@", error.localizedDescription)
+            activeTokenFetcher?.reject(error.localizedDescription)
+            MobilePushPlugin.instance?.handleTokenError(error as Error)
+        }
+        let didFailImp = imp_implementationWithBlock(didFailBlock as Any)
+        class_addMethod(cls, didFailSel, didFailImp, "v@:@@")
+
+        // Must reassign delegate to flush UIApplication's cache.
+        // On iOS 26+ this is risky but we have no choice in fallback mode.
+        if #available(iOS 26, *) {
+            // On iOS 26, re-assign same object (not nil) — this MAY flush the cache
+            // depending on Apple's implementation. It's our best effort fallback.
+            UIApplication.shared.delegate = delegate
+            NSLog("[mobile-push] iOS 26 fallback: re-assigned delegate (same object)")
+        } else {
+            UIApplication.shared.delegate = nil
+            UIApplication.shared.delegate = delegate
+            NSLog("[mobile-push] Re-assigned UIApplication.delegate to flush cache")
+        }
     }
 
     // Set UNUserNotificationCenter delegate for foreground handling + tap handling
