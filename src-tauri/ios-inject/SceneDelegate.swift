@@ -229,15 +229,53 @@ class TaoSceneDelegate: UIResponder, UIWindowSceneDelegate {
         return nil
     }
 
+    // MARK: - Scene Lifecycle (app foreground/background)
+
     func sceneDidBecomeActive(_ scene: UIScene) {
         NSLog("[SceneDelegate] sceneDidBecomeActive")
+        // Dispatch a custom event to JS so the inactivity timer knows the app
+        // returned to foreground. This is more reliable than visibilitychange
+        // on iOS because WKWebView may not always fire it during scene transitions.
+        dispatchLifecycleEvent(name: "fe:app-foreground")
     }
 
     func sceneWillResignActive(_ scene: UIScene) {
         NSLog("[SceneDelegate] sceneWillResignActive")
+        // Dispatch a custom event to JS so the inactivity timer can start the
+        // lock-on-minimize grace period immediately.
+        dispatchLifecycleEvent(name: "fe:app-background")
+    }
+
+    func sceneDidEnterBackground(_ scene: UIScene) {
+        NSLog("[SceneDelegate] sceneDidEnterBackground")
+        // Belt-and-suspenders: also fire on full background entry
+        dispatchLifecycleEvent(name: "fe:app-background")
+    }
+
+    func sceneWillEnterForeground(_ scene: UIScene) {
+        NSLog("[SceneDelegate] sceneWillEnterForeground")
+        // Belt-and-suspenders: also fire on foreground entry
+        dispatchLifecycleEvent(name: "fe:app-foreground")
     }
 
     func sceneDidDisconnect(_ scene: UIScene) {
         NSLog("[SceneDelegate] sceneDidDisconnect")
+    }
+
+    /// Dispatch a custom DOM event to the WKWebView so JavaScript can react
+    /// to native app lifecycle changes (background/foreground).
+    private func dispatchLifecycleEvent(name: String) {
+        guard let window = self.window,
+              let rootVC = window.rootViewController,
+              let webView = findWKWebView(in: rootVC.view) else {
+            return
+        }
+
+        let js = "window.dispatchEvent(new CustomEvent('\(name)',{detail:{ts:Date.now()}}))"
+        webView.evaluateJavaScript(js) { _, error in
+            if let error = error {
+                NSLog("[SceneDelegate] Failed to dispatch %@: %@", name, error.localizedDescription)
+            }
+        }
     }
 }

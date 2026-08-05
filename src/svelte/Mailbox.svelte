@@ -5704,6 +5704,18 @@
               </div>
             {/if}
             <div class="inline-flex items-center gap-2.5">
+              {#if !showHeaderShortcuts && isLockEnabled() && isVaultConfigured()}
+                <button
+                  class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                  type="button"
+                  data-tooltip="Lock app"
+                  data-tooltip-position="bottom"
+                  aria-label="Lock app"
+                  onclick={() => window.dispatchEvent(new CustomEvent('fe:lock-app'))}
+                >
+                  <Lock class="h-4.5 w-4.5" />
+                </button>
+              {/if}
               <button
                 class="inline-flex items-center justify-center p-1.5 hover:bg-accent transition-colors"
                 type="button"
