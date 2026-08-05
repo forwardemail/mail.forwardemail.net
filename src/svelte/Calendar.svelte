@@ -4444,7 +4444,10 @@
                   type="date"
                   class="flex-1"
                   bind:value={newEvent.date}
-                  onchange={() => (modalDirty = true)}
+                  onchange={(e) => {
+                    newEvent.date = e.currentTarget.value;
+                    modalDirty = true;
+                  }}
                 />
                 <button
                   type="button"
@@ -4489,12 +4492,23 @@
                 id="event-date"
                 type="date"
                 bind:value={newEvent.date}
-                onchange={() => {
+                onchange={(e) => {
+                  const oldDate = newEvent.date;
+                  const nextDate = e.currentTarget.value;
+                  newEvent.date = nextDate;
                   modalDirty = true;
-                  // Keep end date >= start date when the user edits start.
-                  // Don't auto-advance end if user already set it later.
-                  if (!newEvent.endDate || newEvent.endDate < newEvent.date) {
-                    newEvent.endDate = newEvent.date;
+                  // Mirror start into end when they were in sync (single-day
+                  // event, the common case) so editing start doesn't silently
+                  // stretch the event into a multi-day span. Once the user
+                  // has deliberately picked a later end date, only clamp end
+                  // forward if start now moves past it — never overwrite an
+                  // intentional multi-day range.
+                  if (
+                    !newEvent.endDate ||
+                    newEvent.endDate === oldDate ||
+                    newEvent.endDate < nextDate
+                  ) {
+                    newEvent.endDate = nextDate;
                   }
                 }}
               />
@@ -4510,7 +4524,8 @@
                 type="date"
                 min={newEvent.date}
                 bind:value={newEvent.endDate}
-                onchange={() => {
+                onchange={(e) => {
+                  newEvent.endDate = e.currentTarget.value;
                   modalDirty = true;
                   // When recurring, the End date input means UNTIL (the
                   // recurrence stops here). Sync the spec so buildRrule
@@ -5049,7 +5064,15 @@
             <div class="space-y-2">
               <Label>Due date</Label>
               <div class="flex items-center gap-2">
-                <Input type="date" class="flex-1" bind:value={editEvent.date} />
+                <Input
+                  type="date"
+                  class="flex-1"
+                  bind:value={editEvent.date}
+                  onchange={(e) => {
+                    editEvent.date = e.currentTarget.value;
+                    modalDirty = true;
+                  }}
+                />
                 <button
                   type="button"
                   class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
@@ -5199,10 +5222,23 @@
               <Input
                 type="date"
                 bind:value={editEvent.date}
-                onchange={() => {
+                onchange={(e) => {
+                  const oldDate = editEvent.date;
+                  const nextDate = e.currentTarget.value;
+                  editEvent.date = nextDate;
                   modalDirty = true;
-                  if (!editEvent.endDate || editEvent.endDate < editEvent.date) {
-                    editEvent.endDate = editEvent.date;
+                  // Mirror start into end when they were in sync (single-day
+                  // event, the common case) so editing start doesn't silently
+                  // stretch the event into a multi-day span. Once the user
+                  // has deliberately picked a later end date, only clamp end
+                  // forward if start now moves past it — never overwrite an
+                  // intentional multi-day range.
+                  if (
+                    !editEvent.endDate ||
+                    editEvent.endDate === oldDate ||
+                    editEvent.endDate < nextDate
+                  ) {
+                    editEvent.endDate = nextDate;
                   }
                 }}
               />
@@ -5217,7 +5253,8 @@
                 type="date"
                 min={editEvent.date}
                 bind:value={editEvent.endDate}
-                onchange={() => {
+                onchange={(e) => {
+                  editEvent.endDate = e.currentTarget.value;
                   modalDirty = true;
                   syncRecurrenceUntilFromEndDate(editEvent);
                 }}
