@@ -242,6 +242,16 @@ function setLockPrefs(prefs) {
   } catch (err) {
     console.error('[crypto-store] Failed to save lock prefs:', err);
   }
+  // Nudge mounted views to re-read lock state. isLockEnabled() and
+  // isVaultConfigured() are plain localStorage reads with no reactive backing,
+  // and routes are hidden with display:none rather than unmounted, so a view
+  // can outlive several preference changes without ever re-evaluating them.
+  // disableLock() also routes through here, so this covers enable and disable.
+  try {
+    globalThis.dispatchEvent?.(new CustomEvent('fe:lock-state-changed'));
+  } catch {
+    // No DOM (worker or test context) — nothing is listening anyway.
+  }
 }
 
 // =========================================================================

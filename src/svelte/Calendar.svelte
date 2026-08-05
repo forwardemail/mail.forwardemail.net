@@ -1495,7 +1495,7 @@
     eventsScope = 'none';
     eventsScopeCalendarId = '';
     calendarInstance = null;
-    lastEventCount = -1;
+    lastEventSignature = null;
     calendarCreated = false;
     calendarsLoaded = false;
     loading = false;
@@ -2113,7 +2113,7 @@
         eventsScope = 'none';
         eventsScopeCalendarId = '';
         calendarInstance = null;
-        lastEventCount = -1;
+        lastEventSignature = null;
         calendarCreated = false;
         filterMenuOpen = false;
         await persistCalendarPrefs(accountKey, []);
@@ -2395,7 +2395,7 @@
     return resolveCalendarColor(calendars[idx], idx);
   };
 
-  let lastEventCount = -1;
+  let lastEventSignature: string | null = null;
   let calendarCreated = false;
   // Refresh local task reminders whenever the events list changes.
   // Schedules setTimeout-driven notifications via notification-bridge
@@ -2418,16 +2418,13 @@
     if (sunday !== lastWeekStartSunday) {
       lastWeekStartSunday = sunday;
       calendarCreated = false;
-      lastEventCount = -1;
+      lastEventSignature = null;
       calendarInstance = null;
     }
   });
 
   $effect(() => {
     if (isActive && visibleEvents && calendars.length) {
-      const eventCount = visibleEvents?.length || 0;
-      if (eventCount === lastEventCount && calendarCreated) return;
-      lastEventCount = eventCount;
       const mapped = visibleEvents
         .map((ev) => {
           const e = ev as Record<string, unknown>;
@@ -2442,12 +2439,28 @@
         })
         .filter((ev) => ev.start && ev.end);
       const safeEvents = mapped.length ? mapped : [];
+      // Fingerprint the full mapped payload rather than just the count. Both
+      // create and edit patch allEvents in place: create swaps the temp id for
+      // the server id, and edits merge title/time/calendar onto the existing
+      // item. The array length never changes in either case, so a length-only
+      // check skipped the push into schedule-x and left its internal list
+      // stale. The rendered element kept the old id, so onEventClick resolved
+      // to nothing and the edit modal silently failed to open for a new event,
+      // and an edited title kept rendering its old value, until a reload
+      // rebuilt the calendar. Stringify so every field schedule-x renders is
+      // covered.
+      const signature = JSON.stringify(safeEvents);
+      if (signature === lastEventSignature && calendarCreated) return;
+      lastEventSignature = signature;
 
       if (calendarInstance?.events) {
         try {
           calendarInstance.events.set(safeEvents);
         } catch (err) {
           console.warn('Failed to update calendar events:', err);
+          // Let the next run retry rather than recording a failed push as
+          // applied, otherwise an unchanged payload early-returns forever.
+          lastEventSignature = null;
         }
       } else {
         ensureSafeMutationObserver();
@@ -2739,6 +2752,29 @@
   // with whatever's typed into the End date input. Called from the chip
   // click handlers and the End date input's onchange so the live preview
   // and saved RRULE always agree.
+  // Shared by the create and edit modals' Start date inputs. Writes the value
+  // the DOM actually committed: Svelte's bind:value only syncs on the input
+  // event, which Android's native date picker dialog does not reliably fire.
+  const applyStartDateChange = (
+    target: { date: string; endDate: string; recurrence: RecurrenceSpec },
+    nextDate: string,
+  ) => {
+    const previousDate = target.date;
+    target.date = nextDate;
+    modalDirty = true;
+    // While recurring, the End date input means UNTIL (when the series stops)
+    // rather than the event's span, so mirroring start into it would move or
+    // silently clear the recurrence end the user configured. Leave it alone.
+    if (target.recurrence.mode !== 'none' && target.recurrence.mode !== 'custom') return;
+    // Mirror start into end while the two are in sync (a single-day event, the
+    // common case) so moving start does not silently stretch the event across
+    // multiple days. Once the user has deliberately set a later end date, only
+    // clamp end forward when start moves past it.
+    if (!target.endDate || target.endDate === previousDate || target.endDate < nextDate) {
+      target.endDate = nextDate;
+    }
+  };
+
   const syncRecurrenceUntilFromEndDate = (target: {
     date: string;
     endDate: string;
@@ -4492,25 +4528,7 @@
                 id="event-date"
                 type="date"
                 bind:value={newEvent.date}
-                onchange={(e) => {
-                  const oldDate = newEvent.date;
-                  const nextDate = e.currentTarget.value;
-                  newEvent.date = nextDate;
-                  modalDirty = true;
-                  // Mirror start into end when they were in sync (single-day
-                  // event, the common case) so editing start doesn't silently
-                  // stretch the event into a multi-day span. Once the user
-                  // has deliberately picked a later end date, only clamp end
-                  // forward if start now moves past it — never overwrite an
-                  // intentional multi-day range.
-                  if (
-                    !newEvent.endDate ||
-                    newEvent.endDate === oldDate ||
-                    newEvent.endDate < nextDate
-                  ) {
-                    newEvent.endDate = nextDate;
-                  }
-                }}
+                onchange={(e) => applyStartDateChange(newEvent, e.currentTarget.value)}
               />
             </div>
             <div class="space-y-2">
@@ -5222,25 +5240,7 @@
               <Input
                 type="date"
                 bind:value={editEvent.date}
-                onchange={(e) => {
-                  const oldDate = editEvent.date;
-                  const nextDate = e.currentTarget.value;
-                  editEvent.date = nextDate;
-                  modalDirty = true;
-                  // Mirror start into end when they were in sync (single-day
-                  // event, the common case) so editing start doesn't silently
-                  // stretch the event into a multi-day span. Once the user
-                  // has deliberately picked a later end date, only clamp end
-                  // forward if start now moves past it — never overwrite an
-                  // intentional multi-day range.
-                  if (
-                    !editEvent.endDate ||
-                    editEvent.endDate === oldDate ||
-                    editEvent.endDate < nextDate
-                  ) {
-                    editEvent.endDate = nextDate;
-                  }
-                }}
+                onchange={(e) => applyStartDateChange(editEvent, e.currentTarget.value)}
               />
             </div>
             <div class="space-y-2">

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { readable, get, writable } from 'svelte/store';
   import type { Readable, Unsubscriber } from 'svelte/store';
+  import type { Message } from '../types/message';
   import { tick, onMount, onDestroy } from 'svelte';
 
   // Store subscriptions managed in onMount/onDestroy to avoid $effect loops
@@ -1207,6 +1208,64 @@
     return ext ? PREVIEWABLE_EXTENSIONS.has(ext) : false;
   };
 
+  // Full-size image preview. Renders att.href, which is already a data: URL on
+  // every path that sets it, so nothing is fetched or decoded to open this and
+  // there is no object URL to revoke. Attachments that arrive without an href
+  // (the message-detail path marks those needsDownload) keep the old
+  // click-to-download behavior rather than showing a broken frame.
+  // Structural, not the declared Attachment interface: the runtime objects that
+  // sanitizeAttachments produces carry name/href, which that interface does not
+  // yet describe.
+  type PreviewAttachment = {
+    name?: string;
+    filename?: string;
+    href?: string;
+    size?: number;
+    contentType?: string;
+    mimeType?: string;
+    type?: string;
+  };
+
+  let previewImages = $state<PreviewAttachment[]>([]);
+  let previewIndex = $state(0);
+  let previewMessage = $state<Message | null>(null);
+  let previewOpen = $state(false);
+  const previewCurrent = $derived<PreviewAttachment | null>(previewImages[previewIndex] || null);
+
+  const openImagePreview = (
+    list: PreviewAttachment[],
+    att: PreviewAttachment,
+    message: Message | null,
+  ) => {
+    const images = (list || []).filter((a) => isPreviewableImage(a) && a.href);
+    const idx = images.indexOf(att);
+    if (idx === -1) return;
+    previewImages = images;
+    previewIndex = idx;
+    previewMessage = message;
+    previewOpen = true;
+  };
+
+  const downloadPreviewImage = () => {
+    if (!previewCurrent || !previewMessage) return;
+    mailService.downloadAttachment(previewCurrent, previewMessage);
+  };
+
+  const stepImagePreview = (delta: number) => {
+    if (previewImages.length < 2) return;
+    previewIndex = (previewIndex + delta + previewImages.length) % previewImages.length;
+  };
+
+  const handlePreviewKeydown = (e: KeyboardEvent) => {
+    if (e.key === 'ArrowLeft') {
+      e.preventDefault();
+      stepImagePreview(-1);
+    } else if (e.key === 'ArrowRight') {
+      e.preventDefault();
+      stepImagePreview(1);
+    }
+  };
+
   /**
    * Sanitize outbox HTML preview to prevent XSS.
    * Outbox items may contain user-composed HTML that has not been
@@ -1304,6 +1363,21 @@
 
   const profileInitials = $derived(getProfileInitials($profileNameStore));
   let showHeaderShortcuts = $state(typeof window !== 'undefined' ? window.innerWidth > 900 : true);
+
+  // Whether to show the lock button. isLockEnabled()/isVaultConfigured() read
+  // localStorage directly, so calling them inline in the markup would evaluate
+  // once at mount and never again — and this component stays mounted while the
+  // user is in Settings turning app lock on. Mirror them into state instead and
+  // refresh when crypto-store reports a change.
+  let lockUiVisible = $state(isLockEnabled() && isVaultConfigured());
+  $effect(() => {
+    const refreshLockUi = () => {
+      lockUiVisible = isLockEnabled() && isVaultConfigured();
+    };
+    refreshLockUi();
+    globalThis.addEventListener('fe:lock-state-changed', refreshLockUi);
+    return () => globalThis.removeEventListener('fe:lock-state-changed', refreshLockUi);
+  });
   // Profile loading moved to onMount subscription
 
   // Track next page prefetch status for smart pagination
@@ -5689,7 +5763,7 @@
                     <Moon class="h-4.5 w-4.5" />
                   {/if}
                 </button>
-                {#if isLockEnabled() && isVaultConfigured()}
+                {#if lockUiVisible}
                   <button
                     class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
                     type="button"
@@ -5704,7 +5778,7 @@
               </div>
             {/if}
             <div class="inline-flex items-center gap-2.5">
-              {#if !showHeaderShortcuts && isLockEnabled() && isVaultConfigured()}
+              {#if !showHeaderShortcuts && lockUiVisible}
                 <button
                   class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
                   type="button"
@@ -6018,7 +6092,7 @@
                     <SettingsIcon class="h-4 w-4" />
                     <span>Settings</span>
                   </button>
-                  {#if isLockEnabled() && isVaultConfigured()}
+                  {#if lockUiVisible}
                     <button
                       type="button"
                       class="flex items-center gap-2 px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
@@ -8877,8 +8951,9 @@
                                 <button
                                   type="button"
                                   class="cursor-pointer rounded border border-border overflow-hidden hover:opacity-90 transition-opacity"
-                                  onclick={() => mailService.downloadAttachment(att, group.message)}
-                                  title="Download {att.name || att.filename}"
+                                  onclick={() =>
+                                    openImagePreview(group.attachments, att, group.message)}
+                                  title="Preview {att.name || att.filename}"
                                 >
                                   <img
                                     src={att.href}
@@ -9051,8 +9126,12 @@
                                 type="button"
                                 class="cursor-pointer rounded border border-border overflow-hidden hover:opacity-90 transition-opacity"
                                 onclick={() =>
-                                  mailService.downloadAttachment(att, $selectedMessage)}
-                                title="Download {att.name || att.filename}"
+                                  openImagePreview(
+                                    filterDownloadableAttachments($attachments),
+                                    att,
+                                    $selectedMessage,
+                                  )}
+                                title="Preview {att.name || att.filename}"
                               >
                                 <img
                                   src={att.href}
@@ -9193,6 +9272,72 @@
         {/if}
 
         <AboutDialog bind:open={aboutDialogOpen} />
+
+        <!-- Full-size image attachment preview. Arrow keys step through the
+             other images on the same message; Escape and the close button come
+             from Dialog itself. -->
+        <Dialog.Root bind:open={previewOpen}>
+          <Dialog.Content
+            class="max-w-[92vw] sm:max-w-3xl"
+            onkeydown={handlePreviewKeydown}
+            data-testid="attachment-preview"
+          >
+            <Dialog.Header>
+              <Dialog.Title class="truncate pr-6 text-base">
+                {previewCurrent?.name || previewCurrent?.filename || 'Attachment'}
+              </Dialog.Title>
+            </Dialog.Header>
+            {#if previewCurrent}
+              <div class="flex items-center gap-2">
+                {#if previewImages.length > 1}
+                  <button
+                    type="button"
+                    class="shrink-0 rounded p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+                    onclick={() => stepImagePreview(-1)}
+                    aria-label="Previous image"
+                  >
+                    <ChevronLeft class="h-5 w-5" />
+                  </button>
+                {/if}
+                <div class="flex min-w-0 flex-1 justify-center">
+                  <img
+                    src={previewCurrent.href}
+                    alt={previewCurrent.name || previewCurrent.filename}
+                    class="max-h-[70vh] max-w-full object-contain"
+                  />
+                </div>
+                {#if previewImages.length > 1}
+                  <button
+                    type="button"
+                    class="shrink-0 rounded p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+                    onclick={() => stepImagePreview(1)}
+                    aria-label="Next image"
+                  >
+                    <ChevronRight class="h-5 w-5" />
+                  </button>
+                {/if}
+              </div>
+              <Dialog.Footer class="flex-row items-center justify-between gap-2 sm:justify-between">
+                <span class="text-xs text-muted-foreground">
+                  {#if previewImages.length > 1}
+                    {previewIndex + 1} of {previewImages.length}
+                  {/if}
+                  {#if previewCurrent.size}
+                    <span class="ml-2">{formatAttachmentSize(previewCurrent.size)}</span>
+                  {/if}
+                </span>
+                <button
+                  type="button"
+                  class="inline-flex items-center gap-1.5 rounded bg-secondary px-3 py-1.5 text-sm transition-colors hover:bg-secondary/80"
+                  onclick={downloadPreviewImage}
+                >
+                  <Download class="h-3.5 w-3.5" />
+                  Download
+                </button>
+              </Dialog.Footer>
+            {/if}
+          </Dialog.Content>
+        </Dialog.Root>
 
         <!-- Mobile bottom tab bar — native primary navigation. Hidden while the
              full-screen reader or search overlay is open (those are their own

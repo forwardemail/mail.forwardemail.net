@@ -188,15 +188,19 @@ function start(onLock) {
 
 /**
  * Set up Tauri-specific window event listeners.
- * Uses the event API (tauri://focus, tauri://blur) which works on both
- * desktop and mobile, plus onFocusChanged as a belt-and-suspenders approach.
+ * Listens for tauri://focus and tauri://blur, which fire on both desktop and
+ * mobile. Scoped to the current window: the bare listen() from the event API
+ * defaults to a target of Any, so this window would also receive focus/blur
+ * from the separate compose windows (see utils/compose-window.ts) and arm the
+ * lock timer while the user is typing in one of them.
  */
 async function setupTauriListeners() {
   try {
-    const { listen } = await import('@tauri-apps/api/event');
+    const { getCurrentWindow } = await import('@tauri-apps/api/window');
+    const appWindow = getCurrentWindow();
 
     // Listen for tauri://blur (app loses focus / goes to background)
-    const unlistenBlur = await listen('tauri://blur', () => {
+    const unlistenBlur = await appWindow.listen('tauri://blur', () => {
       if (!_started || _paused) return;
 
       // Record the timestamp (same as visibilitychange hidden)
@@ -218,7 +222,7 @@ async function setupTauriListeners() {
     _tauriUnlisteners.push(unlistenBlur);
 
     // Listen for tauri://focus (app gains focus / returns to foreground)
-    const unlistenFocus = await listen('tauri://focus', () => {
+    const unlistenFocus = await appWindow.listen('tauri://focus', () => {
       if (!_started || _paused) return;
 
       // Check if the grace period elapsed while the app was suspended
