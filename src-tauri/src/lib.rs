@@ -992,6 +992,15 @@ pub fn run() {
                     let constraint: *mut AnyObject =
                         msg_send![wk_anchor, constraintEqualToAnchor: guide_anchor];
                     let _: () = msg_send![constraint, setActive: true];
+
+                    // Disable native scroll-view bounce so the JS-based
+                    // pull-to-refresh gesture is not consumed by iOS rubber-
+                    // banding. The CSS overscroll-behavior-y: none handles
+                    // the web layer; this disables it at the UIKit level.
+                    let scroll_view: *mut AnyObject = msg_send![wk, scrollView];
+                    if !scroll_view.is_null() {
+                        let _: () = msg_send![scroll_view, setBounces: false];
+                    }
                 });
             }
 

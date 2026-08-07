@@ -9542,6 +9542,10 @@
   @media (max-width: 640px) {
     :global(.fe-mailbox-wrapper .fe-message-list-wrapper) {
       padding-bottom: calc(56px + env(safe-area-inset-bottom, 0px));
+      /* Prevent native rubber-banding from consuming the pull-to-refresh
+         gesture on iOS WKWebView. Without this, the browser's built-in
+         overscroll bounce intercepts the touch before our JS handler fires. */
+      overscroll-behavior-y: none;
     }
   }
 

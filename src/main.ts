@@ -2373,6 +2373,14 @@ async function bootstrap() {
       await showLockScreen();
       // OpenVault() already calls restoreSessionCredentials() after
       // successful unlock, so credentials are ready now.
+      // Re-check auth: on cold start the route was set to 'login' because
+      // encrypted credentials couldn't be read before unlock. Now that the
+      // vault is open, credentials are in sessionStorage — redirect to mailbox.
+      if (route === 'login' && (Local.get('authToken') || Local.get('alias_auth'))) {
+        route = 'mailbox';
+        routeStore.set('mailbox');
+        history.replaceState({ route: 'mailbox' }, '', '/mailbox');
+      }
     } else if (isLockEnabled() && isVaultConfigured() && wasUnlockedThisSession()) {
       // Session was previously unlocked but the in-memory DEK is gone (page
       // reload). Restore it from the session stash so the encrypted cache
@@ -2386,6 +2394,12 @@ async function bootstrap() {
       // restoreSessionDek/openVault handle restoreSessionCredentials(); keep
       // this as a belt-and-braces fallback for pre-encryption sessions.
       restoreSessionCredentials();
+      // Same cold-start redirect as above — credentials are now decrypted.
+      if (route === 'login' && (Local.get('authToken') || Local.get('alias_auth'))) {
+        route = 'mailbox';
+        routeStore.set('mailbox');
+        history.replaceState({ route: 'mailbox' }, '', '/mailbox');
+      }
     } else if (!isLockEnabled()) {
       // No app lock — credentials are stored as plaintext in localStorage.
       // Ensure sessionStorage has a copy of each tab-scoped key.  The browser

@@ -34,6 +34,18 @@
   <string>Forward Email uses your photo library so you can attach photos to emails and set profile pictures.</string>
 
   <!--
+    Background modes. remote-notification enables the app to receive and
+    process push notifications delivered by APNs while backgrounded or
+    suspended. Without this key, registerForRemoteNotifications() may fail
+    on some device/OS combinations, and silent/background push payloads
+    are never delivered to the app.
+  -->
+  <key>UIBackgroundModes</key>
+  <array>
+    <string>remote-notification</string>
+  </array>
+
+  <!--
     UIScene lifecycle manifest (iOS 26+). Declares TaoSceneDelegate as the
     window scene delegate so the system routes scene lifecycle events to our
     class. Without this, iOS 26 never calls scene:willConnectTo: and the app

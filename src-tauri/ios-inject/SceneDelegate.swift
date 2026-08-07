@@ -265,9 +265,27 @@ class TaoSceneDelegate: UIResponder, UIWindowSceneDelegate {
     /// Dispatch a custom DOM event to the WKWebView so JavaScript can react
     /// to native app lifecycle changes (background/foreground).
     private func dispatchLifecycleEvent(name: String) {
-        guard let window = self.window,
-              let rootVC = window.rootViewController,
-              let webView = findWKWebView(in: rootVC.view) else {
+        // Try self.window first, then fall back to finding any visible window.
+        // self.window may be nil if the poll timer hasn't resolved yet.
+        let webView: WKWebView? = {
+            if let w = self.window, let vc = w.rootViewController {
+                return findWKWebView(in: vc.view)
+            }
+            // Fallback: search all connected scenes for a window with a webview
+            for scene in UIApplication.shared.connectedScenes {
+                guard let windowScene = scene as? UIWindowScene else { continue }
+                for window in windowScene.windows {
+                    if let vc = window.rootViewController,
+                       let wv = findWKWebView(in: vc.view) {
+                        return wv
+                    }
+                }
+            }
+            return nil
+        }()
+
+        guard let webView = webView else {
+            NSLog("[SceneDelegate] dispatchLifecycleEvent(%@): no WKWebView found", name)
             return
         }
 

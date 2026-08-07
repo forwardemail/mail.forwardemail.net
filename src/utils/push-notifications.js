@@ -670,19 +670,57 @@ async function initializeIosPush() {
 
   if (!(await registerNativeToken(getToken, 'ios'))) return false;
 
-  const tokenRefreshListener = await onTokenRefresh(async ({ token }) => {
-    await handleTokenRefresh(token, 'ios');
-  });
-  // displayedBySystem=true: APNs alert field causes iOS to auto-display
-  // the notification, so the client must not show a duplicate.
-  const receivedListener = await onNotificationReceived((notification) => {
-    dispatchPushPayload(notification, false, true);
-  });
-  const tappedListener = await onNotificationTapped((notification) => {
-    dispatchPushPayload(notification, true, true);
-  });
+  // The Tauri Plugin listener registry is broken on iOS: the register_listener
+  // command is a no-op (returns Ok(()) without populating the Swift-side
+  // listener map), so Plugin.trigger() never delivers events. As a workaround,
+  // MobilePushPlugin.swift dispatches custom DOM events directly via
+  // evaluateJavaScript. Listen for those here.
+  const handleReceived = (e) => {
+    dispatchPushPayload(e.detail, false, true);
+  };
+  const handleTapped = (e) => {
+    dispatchPushPayload(e.detail, true, true);
+  };
+  const handleTokenEvent = (e) => {
+    const token = e.detail?.token;
+    if (token) handleTokenRefresh(token, 'ios');
+  };
+  window.addEventListener('mobile-push:notification-received', handleReceived);
+  window.addEventListener('mobile-push:notification-tapped', handleTapped);
+  window.addEventListener('mobile-push:token-received', handleTokenEvent);
 
-  nativeListenerCleanups = [tokenRefreshListener, receivedListener, tappedListener];
+  // Also try the standard addPluginListener path (will work if Tauri fixes
+  // the listener registry in a future version).
+  let tokenRefreshListener, receivedListener, tappedListener;
+  try {
+    tokenRefreshListener = await onTokenRefresh(async ({ token }) => {
+      await handleTokenRefresh(token, 'ios');
+    });
+    // displayedBySystem=true: APNs alert field causes iOS to auto-display
+    // the notification, so the client must not show a duplicate.
+    receivedListener = await onNotificationReceived((notification) => {
+      dispatchPushPayload(notification, false, true);
+    });
+    tappedListener = await onNotificationTapped((notification) => {
+      dispatchPushPayload(notification, true, true);
+    });
+  } catch {
+    // Expected to fail silently due to register_listener no-op
+  }
+
+  nativeListenerCleanups = [
+    tokenRefreshListener,
+    receivedListener,
+    tappedListener,
+    // DOM event cleanup
+    {
+      unregister() {
+        window.removeEventListener('mobile-push:notification-received', handleReceived);
+        window.removeEventListener('mobile-push:notification-tapped', handleTapped);
+        window.removeEventListener('mobile-push:token-received', handleTokenEvent);
+      },
+    },
+  ].filter(Boolean);
   return true;
 }
 

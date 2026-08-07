@@ -294,20 +294,18 @@ func getDeviceTokenDirect(_ buffer: UnsafeMutablePointer<CChar>, _ bufferLen: In
 }
 
 // MARK: - Plugin class (kept for event system + lifecycle)
-
 @objc(MobilePushPlugin)
 public class MobilePushPlugin: Plugin {
     public static var instance: MobilePushPlugin?
-
+    private weak var pluginWebView: WKWebView?
     override public func load(webview: WKWebView) {
         MobilePushPlugin.instance = self
+        self.pluginWebView = webview
         NSLog("[mobile-push] Plugin loaded (webview ready)")
     }
-
     // MARK: - PluginManager command handlers (kept as fallback)
     // These handle commands routed through run_mobile_plugin / PluginManager.
     // Currently bypassed by the direct FFI functions above.
-
     @objc override public func requestPermissions(_ invoke: Invoke) {
         NSLog("[mobile-push] requestPermissions via PluginManager")
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound]) { granted, error in
@@ -318,7 +316,6 @@ public class MobilePushPlugin: Plugin {
             invoke.resolve(["granted": granted])
         }
     }
-
     @objc public func getToken(_ invoke: Invoke) {
         NSLog("[mobile-push] getToken via PluginManager")
         DispatchQueue.main.async {
@@ -330,22 +327,26 @@ public class MobilePushPlugin: Plugin {
         }
         // Token arrives via handleToken() callback from AppDelegate
     }
-
     // MARK: - Callbacks from AppDelegate injection
-
     public func handleToken(_ token: Data) {
         let tokenString = token.map { String(format: "%02.2hhx", $0) }.joined()
         NSLog("[mobile-push] handleToken: %@...", String(tokenString.prefix(16)))
         activeTokenFetcher?.resolve(tokenString)
+        // Plugin.trigger() is broken (register_listener no-op prevents Swift
+        // listener registry from being populated). Dispatch via JS directly.
+        emitToWebView("mobile-push:token-received", json: "{\"token\":\"\(tokenString)\"}")
         self.trigger("token-received", data: ["token": tokenString])
     }
-
     public func handleTokenError(_ error: Error) {
         NSLog("[mobile-push] handleTokenError: %@", error.localizedDescription)
         activeTokenFetcher?.reject(error.localizedDescription)
     }
-
     public func handleNotification(_ userInfo: [AnyHashable: Any]) {
+        // Wrap in {data: ...} to match Android shape. The JS dispatchPushPayload
+        // reads notification.data — without this wrapper iOS payloads are dropped.
+        let jsonPayload = serializeUserInfo(userInfo)
+        emitToWebView("mobile-push:notification-received", json: "{\"data\":\(jsonPayload)}")
+        // Keep legacy trigger for any future fix to Plugin listener registry
         var data: JSObject = [:]
         for (key, value) in userInfo {
             guard let stringKey = key as? String else { continue }
@@ -357,8 +358,10 @@ public class MobilePushPlugin: Plugin {
         }
         self.trigger("notification-received", data: data)
     }
-
     public func handleNotificationTap(_ userInfo: [AnyHashable: Any]) {
+        let jsonPayload = serializeUserInfo(userInfo)
+        emitToWebView("mobile-push:notification-tapped", json: "{\"data\":\(jsonPayload)}")
+        // Keep legacy trigger
         var data: JSObject = [:]
         for (key, value) in userInfo {
             guard let stringKey = key as? String else { continue }
@@ -369,6 +372,38 @@ public class MobilePushPlugin: Plugin {
             }
         }
         self.trigger("notification-tapped", data: data)
+    }
+    // MARK: - Direct JS event dispatch (bypasses broken Plugin.trigger)
+    /// Dispatch a custom DOM event to the webview. This bypasses the Tauri
+    /// Plugin listener registry which is broken because register_listener
+    /// is a no-op (see commands.rs).
+    private func emitToWebView(_ eventName: String, json: String) {
+        guard let webView = self.pluginWebView else {
+            NSLog("[mobile-push] emitToWebView: no webview reference")
+            return
+        }
+        let js = "window.dispatchEvent(new CustomEvent('\(eventName)',{detail:\(json)}))"
+        DispatchQueue.main.async {
+            webView.evaluateJavaScript(js) { _, error in
+                if let error = error {
+                    NSLog("[mobile-push] emitToWebView failed: %@", error.localizedDescription)
+                }
+            }
+        }
+    }
+    /// Serialize APNs userInfo to a JSON string, handling nested objects,
+    /// arrays, booleans — not just String/NSNumber like the old code.
+    private func serializeUserInfo(_ userInfo: [AnyHashable: Any]) -> String {
+        var filtered: [String: Any] = [:]
+        for (key, value) in userInfo {
+            guard let stringKey = key as? String else { continue }
+            filtered[stringKey] = value
+        }
+        guard let jsonData = try? JSONSerialization.data(withJSONObject: filtered, options: []),
+              let jsonString = String(data: jsonData, encoding: .utf8) else {
+            return "{}"
+        }
+        return jsonString
     }
 }
 

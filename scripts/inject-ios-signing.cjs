@@ -54,16 +54,19 @@ if (!fs.existsSync(baseEntitlementsPath)) {
   process.exit(1);
 }
 
-let iosEntitlements = fs.readFileSync(baseEntitlementsPath, 'utf8');
-const apsBlock = `  <key>aps-environment</key>\n  <string>${apsEnvironment}</string>\n`;
-if (/<key>aps-environment<\/key>/.test(iosEntitlements)) {
-  iosEntitlements = iosEntitlements.replace(
-    /<key>aps-environment<\/key>\s*<string>[^<]*<\/string>\n?/,
-    apsBlock,
-  );
-} else {
-  iosEntitlements = iosEntitlements.replace(/<\/dict>(\s*<\/plist>\s*)$/m, `${apsBlock}</dict>$1`);
-}
+// Write iOS-only entitlements from scratch. Previously this copied from the
+// macOS Entitlements.plist which dragged in macOS-only keys (allow-jit,
+// allow-unsigned-executable-memory, network.client) that aren't valid in iOS
+// provisioning profiles and cause export/entitlement-mismatch failures.
+const iosEntitlements = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>aps-environment</key>
+  <string>${apsEnvironment}</string>
+</dict>
+</plist>
+`;
 fs.writeFileSync(iosEntitlementsPath, iosEntitlements);
 console.log(`Generated ${iosEntitlementsName} with aps-environment="${apsEnvironment}"`);
 
@@ -123,6 +126,20 @@ if (/^\s*CODE_SIGN_ENTITLEMENTS:/m.test(projYml)) {
 } else if (projYml.includes('CODE_SIGN_STYLE')) {
   projYml = projYml.replace(/(^\s*CODE_SIGN_STYLE:.*$)/m, `$1\n${entitlementsSetting}`);
   modified = true;
+}
+
+// CRITICAL: xcodegen's target-level `entitlements.path` property overrides
+// settings.base CODE_SIGN_ENTITLEMENTS. Tauri generates this pointing to an
+// empty .entitlements file, so our aps-environment never reaches the binary.
+// Rewrite it to point to our ForwardEmail-iOS.entitlements file.
+const entitlementsPathRegex = /(\bentitlements:\s*\n\s*path:\s*).+\.entitlements/m;
+if (entitlementsPathRegex.test(projYml)) {
+  const rewritten = projYml.replace(entitlementsPathRegex, `$1${iosEntitlementsName}`);
+  if (rewritten !== projYml) {
+    projYml = rewritten;
+    modified = true;
+    console.log(`Rewrote entitlements.path to ${iosEntitlementsName} in project.yml`);
+  }
 }
 
 if (modified) {
