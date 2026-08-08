@@ -70,15 +70,19 @@
 
   // Measure iframe content height directly via contentDocument.
   // Returns 0 if cross-origin restrictions prevent access.
+  //
+  // Measure .fe-email-viewport, not .fe-email-content: when the runtime
+  // scales a desktop-width email down to fit, the viewport carries the
+  // painted height while the content keeps its unscaled layout height.
   function measureIframeHeight(): number {
     if (!iframeRef) return 0;
     try {
       const doc = iframeRef.contentDocument;
       if (!doc) return 0;
-      const content = doc.querySelector('.fe-email-content');
-      const contentHeight = content ? content.getBoundingClientRect().height : 0;
+      const box = doc.querySelector('.fe-email-viewport') || doc.querySelector('.fe-email-content');
+      const boxHeight = box ? box.getBoundingClientRect().height : 0;
       return Math.max(
-        Math.ceil(contentHeight),
+        Math.ceil(boxHeight),
         doc.body?.scrollHeight || 0,
         doc.body?.offsetHeight || 0,
         doc.documentElement?.scrollHeight || 0,

@@ -9,6 +9,7 @@
  * Responsibilities:
  *   - Strip inline color/background styles that would collide with the app
  *     theme and hide text.
+ *   - Scale desktop-width email layouts down to fit narrow viewports.
  *   - Report measured body height to the parent via postMessage.
  *   - Intercept link clicks and forward them to the parent (which opens via
  *     the system browser / compose window instead of navigating the iframe).
@@ -98,11 +99,60 @@
 
   window.addEventListener('load', ensureStylesStripped);
 
-  function reportHeight() {
+  // Shrink-to-fit.
+  //
+  // Marketing email is authored at a fixed desktop width: 600-800px tables,
+  // columns pinned with `min-width`, images sized to the template. None of
+  // that reflows, so on a phone the body lays out at its authored width and
+  // overflows sideways, and the height we measure belongs to that wide
+  // layout. The reader then scrolls through a very tall email of which only
+  // the left slice is visible. Scaling the whole body down to the viewport
+  // width is what native mail clients do and it leaves the design intact.
+  //
+  // A transform does not affect layout, so the scaled content keeps its
+  // unscaled height in the flow. .fe-email-viewport gets an explicit height
+  // so the document, and the height we report, match what is painted.
+
+  // Below this, text would be too small to read; let the email scroll
+  // sideways instead of shrinking it into illegibility.
+  var FIT_MIN_SCALE = 0.35;
+  // Sub-pixel rounding should not trigger a scale.
+  var FIT_SLACK_PX = 2;
+
+  function fitToViewport() {
+    var viewport = document.querySelector('.fe-email-viewport');
     var content = document.querySelector('.fe-email-content');
-    var contentHeight = content ? content.getBoundingClientRect().height : 0;
+    if (!viewport || !content) return;
+
+    // Measure the natural layout, free of any scale applied on a prior pass.
+    content.style.transform = '';
+    content.style.width = '';
+    content.style.maxWidth = '';
+    viewport.style.height = '';
+
+    var available = document.documentElement.clientWidth || viewport.clientWidth || 0;
+    var natural = Math.max(content.scrollWidth, content.offsetWidth);
+    if (available <= 0 || natural <= 0) return;
+    if (natural <= available + FIT_SLACK_PX) return;
+
+    var scale = Math.max(available / natural, FIT_MIN_SCALE);
+
+    // Pin the width so the scale is measured against a stable layout rather
+    // than against .fe-email-content's own max-width clamp.
+    content.style.width = natural + 'px';
+    content.style.maxWidth = 'none';
+    content.style.transformOrigin = '0 0';
+    content.style.transform = 'scale(' + scale + ')';
+    viewport.style.height = Math.ceil(content.offsetHeight * scale) + 'px';
+  }
+
+  function reportHeight() {
+    fitToViewport();
+    var box =
+      document.querySelector('.fe-email-viewport') || document.querySelector('.fe-email-content');
+    var boxHeight = box ? box.getBoundingClientRect().height : 0;
     var height = Math.max(
-      contentHeight,
+      boxHeight,
       document.body.scrollHeight,
       document.body.offsetHeight,
       document.documentElement.scrollHeight,
@@ -129,9 +179,27 @@
     ro.observe(document.body);
     var content = document.querySelector('.fe-email-content');
     if (content) ro.observe(content);
+    var viewport = document.querySelector('.fe-email-viewport');
+    if (viewport) ro.observe(viewport);
   } else {
     setInterval(reportHeight, 500);
   }
+
+  // Rotation and reader-pane resizes change the width we fit against. Each
+  // pass forces a reflow, so coalesce the burst a drag or a rotation emits.
+  var resizeTimeout = null;
+  function reportHeightSoon(delay) {
+    clearTimeout(resizeTimeout);
+    resizeTimeout = setTimeout(reportHeight, delay);
+  }
+
+  window.addEventListener('resize', function () {
+    reportHeightSoon(100);
+  });
+  window.addEventListener('orientationchange', function () {
+    // The viewport reports its new width a frame or two after the event.
+    reportHeightSoon(250);
+  });
 
   document.querySelectorAll('img').forEach(function (img) {
     if (!img.complete) {

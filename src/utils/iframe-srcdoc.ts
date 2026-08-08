@@ -57,8 +57,10 @@ export function buildIframeSrcdoc(
   </style>
 </head>
 <body class="${bodyClass}">
-  <div class="fe-email-content">
-    ${content}
+  <div class="fe-email-viewport">
+    <div class="fe-email-content">
+      ${content}
+    </div>
   </div>
   <script src="${scriptSrc}"></script>
 </body>
@@ -101,6 +103,30 @@ function getResetStyles(): string {
       padding: 0;
       overflow-x: auto;
       overflow-y: auto;
+    }
+
+    /*
+     * Shrink-to-fit host.
+     *
+     * Marketing email is authored at a fixed desktop width (600-800px
+     * tables, min-width columns). Those layouts cannot reflow, so on a phone
+     * they overflow sideways and the document height is measured against the
+     * wide layout. email-iframe.js scales .fe-email-content down to the
+     * viewport width; a CSS transform does not change layout, so the scaled
+     * content would still occupy its unscaled height in the flow. The runtime
+     * pins an explicit height here so the document height, and the height we
+     * report to the parent, match what is actually painted.
+     */
+    .fe-email-viewport {
+      width: 100%;
+      /* Vertical clip keeps the taller unscaled layout box from contributing
+         to the document's scroll height. The horizontal axis stays visible so
+         an email too wide to scale (see FIT_MIN_SCALE) can still be reached
+         through the body's own horizontal scroll. Engines without
+         overflow: clip ignore this and fall back to visible, which is
+         correct too: the transformed box already fits the pinned height. */
+      overflow-x: visible;
+      overflow-y: clip;
     }
 
     .fe-email-content {

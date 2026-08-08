@@ -51,6 +51,140 @@ function isTrackingPixel(attributes) {
 }
 
 /**
+ * Marker left in place of a CSS url() we refused to load, so the same
+ * declaration can be put back when the reader unblocks remote images.
+ */
+const CSS_BLOCKED_URL_MARKER = 'fe-blocked-url:';
+
+/**
+ * Sanitize the contents of an email <style> block.
+ *
+ * Email templates ship their own responsive stylesheet: the inline
+ * `min-width: 720px` a builder writes for Outlook is meant to be overridden by
+ * an `@media (max-width: 480px)` rule in <style>. Dropping the stylesheet
+ * leaves only the desktop half, which is why desktop-width email used to
+ * overflow on a phone. Keeping it lets the message reflow the way its sender
+ * designed, at full text size.
+ *
+ * What has to come out first:
+ *   - "</" — the only way a <style> body can break back out into markup once
+ *     it is re-serialized. No valid CSS contains it.
+ *   - Comments — they can hide the two items above from these checks.
+ *   - @import — the iframe CSP refuses remote stylesheets anyway; dropping the
+ *     rule avoids a failed request on every message.
+ *   - expression() / behavior: — inert in the engines we ship, free to drop.
+ *   - position: fixed — leaves the flow, so it contributes nothing to the
+ *     height we measure and can leave an invisible layer over the message.
+ *   - color / background-color / background — the reader forces its own theme
+ *     colors, and email-iframe.js already strips these three from inline
+ *     styles. A sheet rule with !important can out-specify the theme and leave
+ *     white text on white, so the stylesheet plays by the same rule. Layout is
+ *     what we keep it for; background-image and the rest survive.
+ *
+ * @param {string} css - Raw stylesheet text
+ * @param {object} options
+ * @param {boolean} options.blockRemoteUrls - Neutralize remote url() references
+ * @returns {{ css: string, blockedCount: number }}
+ */
+export function sanitizeEmailCss(css, { blockRemoteUrls = false } = {}) {
+  if (!css || typeof css !== 'string') return { css: '', blockedCount: 0 };
+
+  let out = css
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/<\//g, '')
+    .replace(/@import\b[^;}]*;?/gi, '')
+    .replace(/expression\s*\(/gi, '(')
+    .replace(/behavior\s*:[^;}]*/gi, '')
+    .replace(/position\s*:\s*fixed/gi, 'position: static')
+    // Anchored to a declaration start so border-color and background-image,
+    // which merely contain these names, are left alone.
+    .replace(/(^|[;{])\s*(color|background-color|background)\s*:[^;}]*/gi, '$1');
+
+  let blockedCount = 0;
+  if (blockRemoteUrls) {
+    // Comments are already gone, so the marker inserted here is the only one
+    // in the sheet and cannot be forged by the email.
+    out = out.replace(/url\(\s*(['"]?)(https?:\/\/[^'")\s]+)\1\s*\)/gi, (match, _quote, url) => {
+      // A url() that could close the marker comment early would let the rest
+      // of the declaration escape; leave those blocked outright.
+      if (url.includes('*/') || url.includes('<')) return 'none';
+      blockedCount++;
+      return `/*${CSS_BLOCKED_URL_MARKER}${url}*/none`;
+    });
+  }
+
+  return { css: out, blockedCount };
+}
+
+/**
+ * Prepare email HTML so its <style> blocks survive sanitization.
+ *
+ * The HTML parser puts <style> in <head>, and DOMPurify returns only <body>,
+ * so a stylesheet declared before any body content is lost to parsing before
+ * the allow-list ever sees it. That is exactly where email templates put the
+ * media queries that make them responsive.
+ *
+ * Handing the parsed <body> element back rather than a string is the point:
+ * DOMPurify re-parses a string, which would hoist the stylesheet into <head>
+ * a second time. It accepts a BODY node directly and skips the re-parse.
+ *
+ * @param {string} html - Raw HTML
+ * @returns {string|HTMLElement} A body element when a stylesheet was moved,
+ *   otherwise the input string unchanged
+ */
+function withHoistedStyles(html) {
+  if (typeof DOMParser === 'undefined' || !/<style/i.test(html)) return html;
+
+  try {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const headStyles = doc.head ? doc.head.querySelectorAll('style') : [];
+    if (!headStyles.length || !doc.body) return html;
+
+    // Prepend in reverse so the sheets keep their original relative order and
+    // still precede the markup they target.
+    for (let i = headStyles.length - 1; i >= 0; i--) {
+      doc.body.insertBefore(headStyles[i], doc.body.firstChild);
+    }
+    return doc.body;
+  } catch {
+    // Malformed enough to break the parser — let DOMPurify handle it as-is.
+    return html;
+  }
+}
+
+/**
+ * Dedicated DOMPurify instance.
+ *
+ * The <style> hook has to be registered exactly once, and it must not leak
+ * into the app's other DOMPurify callers (Compose, Calendar) the way a hook on
+ * the shared default export would.
+ */
+const emailPurify = DOMPurify();
+
+// Handoff for the sanitize call in flight. DOMPurify runs synchronously, so a
+// module-level slot is safe.
+let activeCssContext = null;
+
+emailPurify.addHook('afterSanitizeElements', (node) => {
+  if (node.nodeName !== 'STYLE') return;
+  const result = sanitizeEmailCss(node.textContent || '', {
+    blockRemoteUrls: activeCssContext?.blockRemoteUrls === true,
+  });
+  if (activeCssContext) activeCssContext.blockedCount += result.blockedCount;
+  node.textContent = result.css;
+});
+
+emailPurify.addHook('afterSanitizeAttributes', (node) => {
+  // Links are intercepted by the iframe runtime and never navigate in place,
+  // but keep the attributes correct for any consumer that renders this HTML
+  // outside the iframe.
+  if (node.tagName === 'A') {
+    node.setAttribute('target', '_blank');
+    node.setAttribute('rel', 'noopener noreferrer');
+  }
+});
+
+/**
  * Sanitize HTML email content with optional image blocking
  * @param {string} html - Raw HTML to sanitize
  * @param {object} options - Sanitization options
@@ -82,7 +216,7 @@ export function sanitizeHtml(html, { blockRemoteImages, blockTrackingPixels } = 
 
     // Process images to detect and block tracking pixels or remote images
     if (blockRemoteImages || blockTrackingPixels) {
-      processedHtml = html.replace(/<img([^>]*)>/gi, (match, attributes) => {
+      processedHtml = processedHtml.replace(/<img([^>]*)>/gi, (match, attributes) => {
         // Extract src attribute (handles both single and double quotes, and no quotes)
         const srcMatch = attributes.match(/\ssrc\s*=\s*["']?([^"'\s>]+)["']?/i);
         if (!srcMatch) return match; // No src, keep as-is
@@ -147,20 +281,24 @@ export function sanitizeHtml(html, { blockRemoteImages, blockTrackingPixels } = 
       });
     }
 
-    const sanitized = DOMPurify.sanitize(processedHtml, {
-      USE_PROFILES: { html: true },
-      ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto|tel|ftp):|[^a-z]|[a-z+.-]+(?:[^a-z+.-:]|$))/i,
-      ADD_ATTR: ['data-original-src', 'data-tracking-pixel'],
-      HOOKS: {
-        afterSanitizeAttributes: (node) => {
-          // Ensure links open in new tab and are safe
-          if (node.tagName === 'A') {
-            node.setAttribute('target', '_blank');
-            node.setAttribute('rel', 'noopener noreferrer');
-          }
-        },
-      },
-    });
+    // <style> carries the email's own responsive rules, so it is allowed
+    // through and its contents run past sanitizeEmailCss via the hook above.
+    activeCssContext = { blockRemoteUrls: blockRemoteImages === true, blockedCount: 0 };
+    let sanitized;
+    try {
+      sanitized = emailPurify.sanitize(withHoistedStyles(processedHtml), {
+        USE_PROFILES: { html: true },
+        ADD_TAGS: ['style'],
+        ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto|tel|ftp):|[^a-z]|[a-z+.-]+(?:[^a-z+.-:]|$))/i,
+        ADD_ATTR: ['data-original-src', 'data-tracking-pixel'],
+      });
+      if (activeCssContext.blockedCount > 0) {
+        hasBlockedImages = true;
+        blockedRemoteImageCount += activeCssContext.blockedCount;
+      }
+    } finally {
+      activeCssContext = null;
+    }
 
     return { html: sanitized, hasBlockedImages, trackingPixelCount, blockedRemoteImageCount };
   } catch (error) {
@@ -303,7 +441,14 @@ export function restoreBlockedImages(html, { includeTrackingPixels = false } = {
       return `<img${cleanBefore}src="${safeSrc}"${cleanAfter}>`;
     });
 
-    return restoredHtml;
+    // Put back the CSS backgrounds sanitizeEmailCss neutralized, so unblocking
+    // restores a <style> sheet's imagery too and not just <img> tags.
+    const withCssUrls = restoredHtml.replace(
+      new RegExp(`/\\*${CSS_BLOCKED_URL_MARKER}([^*]+)\\*/\\s*none`, 'g'),
+      (match, originalUrl) => (isSafeImageUrl(originalUrl) ? `url("${originalUrl}")` : match),
+    );
+
+    return withCssUrls;
   } catch (error) {
     console.error('Failed to restore images:', error);
     return html;

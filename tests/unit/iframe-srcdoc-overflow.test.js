@@ -31,3 +31,28 @@ describe('iframe-srcdoc overflow CSS', () => {
     expect(html).toMatch(/overflow-wrap:\s*break-word/);
   });
 });
+
+describe('iframe-srcdoc shrink-to-fit host', () => {
+  // public/email-iframe.js scales .fe-email-content and pins the resulting
+  // painted height on .fe-email-viewport. Both selectors are a contract
+  // between the two files; the runtime silently no-ops if either is missing.
+  it('wraps the email content in the viewport host the runtime scales against', () => {
+    const html = buildIframeSrcdoc('<p>Hello</p>', false);
+    expect(html).toMatch(/<div class="fe-email-viewport">\s*<div class="fe-email-content">/);
+  });
+
+  it('clips the host vertically so the unscaled layout box cannot inflate the document', () => {
+    const html = buildIframeSrcdoc('<p>Hello</p>', false);
+    const host = /\.fe-email-viewport \{([^}]*)\}/.exec(html);
+    expect(host).not.toBeNull();
+    expect(host[1]).toMatch(/overflow-y:\s*clip/);
+    // Horizontal stays reachable for emails too wide to scale legibly.
+    expect(host[1]).toMatch(/overflow-x:\s*visible/);
+  });
+
+  it('applies the same host in plain-text mode', () => {
+    const html = buildIframeSrcdoc('hello', false, true);
+    expect(html).toMatch(/<div class="fe-email-viewport">/);
+    expect(html).toMatch(/fe-email-plaintext/);
+  });
+});
