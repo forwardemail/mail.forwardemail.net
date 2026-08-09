@@ -57,6 +57,7 @@ import {
   restoreSessionCredentials,
   restoreSessionDek,
 } from './utils/crypto-store.js';
+import { createAuthRecoveryPolicy, type AuthFailureSource } from './utils/auth-recovery';
 import { initDbCryptoBridge } from './utils/db-crypto-bridge.js';
 import {
   start as startInactivityTimer,
@@ -395,6 +396,15 @@ globalThis.addEventListener('outbox-sent', (event) => {
 
 globalThis.addEventListener('mutation-queue-failed', () => {
   toasts.show("Some changes couldn't be synced. Please try again.", 'error');
+});
+
+// Decides whether an auth failure is real or just the vault being locked.
+// Shared by the failure handlers and the mobile resume gate so both agree on
+// when the app can authenticate at all.
+const authRecoveryPolicy = createAuthRecoveryPolicy({
+  isLockEnabled,
+  isVaultConfigured,
+  isUnlocked,
 });
 
 // Manual lock button — dispatched from Mailbox.svelte sidebar
@@ -2483,11 +2493,14 @@ async function bootstrap() {
       console.warn(`[auth] Forced re-auth triggered (${reason})`);
       toasts?.show?.('Session expired. Redirecting to login\u2026', 'error', 4000);
 
-      // Clear stale credentials so the auth guard redirects to login
+      // Both copies have to go. Local.get() re-copies from localStorage into
+      // sessionStorage on the next read (see storage.js), so clearing only the
+      // session copy would leave the auth guard seeing valid credentials and
+      // no redirect would happen. Because this is destructive, the callers
+      // below must be sure the failure is real before getting here.
       Local.remove('alias_auth');
       Local.remove('api_key');
       Local.remove('authToken');
-      // Clear session-scoped copies too
       try {
         sessionStorage.removeItem('webmail_alias_auth');
         sessionStorage.removeItem('webmail_api_key');
@@ -2509,12 +2522,17 @@ async function bootstrap() {
       }, 1500);
     };
 
-    globalThis.addEventListener('fe:auth-failed', () => {
-      handleAuthRecovery('websocket');
-    });
-    globalThis.addEventListener('fe:auth-expired', () => {
-      handleAuthRecovery('http-401');
-    });
+    const onAuthFailure = (source: AuthFailureSource) => {
+      const verdict = authRecoveryPolicy.evaluate(source);
+      if (verdict === 'recover') {
+        handleAuthRecovery(source);
+        return;
+      }
+      console.warn(`[auth] Auth failure from ${source} not acted on: ${verdict}`);
+    };
+
+    globalThis.addEventListener('fe:auth-failed', () => onAuthFailure('websocket'));
+    globalThis.addEventListener('fe:auth-expired', () => onAuthFailure('http-401'));
 
     // Register account-switch handler for notification click routing.
     // When a notification for a non-active account is clicked, the
@@ -2628,6 +2646,11 @@ async function bootstrap() {
         // On mobile, sync and process queued mutations when the app resumes
         if (isTauriMobile) {
           onResume(() => {
+            // Nothing here can authenticate while the vault is locked, and the
+            // screen coming back on is exactly when it is. Firing anyway sends
+            // a burst of unauthenticated requests from behind the lock screen.
+            // The unlock path re-syncs on its own, so skipping is safe.
+            if (!authRecoveryPolicy.canAuthenticate()) return;
             processMutationQueue();
             import('./utils/sync-controller.js').then(({ resumeSync }) => resumeSync());
             syncPushForActiveAccount();
