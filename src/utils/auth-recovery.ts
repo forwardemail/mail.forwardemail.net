@@ -27,6 +27,43 @@
 
 export type AuthFailureSource = 'http-401' | 'websocket';
 
+/** What the stored credentials can tell us about the session right now. */
+export type SessionStatus = 'signed-in' | 'signed-out' | 'unknown-while-locked';
+
+/**
+ * Classify the session for routing.
+ *
+ * The route guard used to ask only "did a credential read come back empty?",
+ * which is the same question the recovery path got wrong: while the vault is
+ * locked the answer is empty for a session that is perfectly intact. On mobile
+ * that is the state after the screen has been off — the webview was reclaimed,
+ * sessionStorage went with it, and localStorage holds ciphertext the app has no
+ * key for yet. Answering that with the login page is a sign-out in the user's
+ * eyes, and the credentials it discards are still sitting on disk.
+ *
+ * So there are three answers, not two, and the caller is expected to hold the
+ * session on the third and ask again once the vault opens.
+ */
+export function readSessionStatus(deps: {
+  hasReadableCredentials: () => boolean;
+  isVaultLocked: () => boolean;
+}): SessionStatus {
+  if (deps.hasReadableCredentials()) return 'signed-in';
+  return deps.isVaultLocked() ? 'unknown-while-locked' : 'signed-out';
+}
+
+/**
+ * Whether routing may treat the session as signed in. An unknown answer counts
+ * as signed in on purpose: the lock screen is about to cover the UI anyway, and
+ * guessing the other way is the bug this exists to prevent.
+ */
+export function canRouteAsSignedIn(deps: {
+  hasReadableCredentials: () => boolean;
+  isVaultLocked: () => boolean;
+}): boolean {
+  return readSessionStatus(deps) !== 'signed-out';
+}
+
 /** Recover, or the reason we declined to. */
 export type AuthRecoveryVerdict = 'recover' | 'locked' | 'awaiting-corroboration';
 

@@ -9,7 +9,12 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { createAuthRecoveryPolicy, WS_AUTH_FAILURE_WINDOW_MS } from '../../src/utils/auth-recovery';
+import {
+  canRouteAsSignedIn,
+  createAuthRecoveryPolicy,
+  readSessionStatus,
+  WS_AUTH_FAILURE_WINDOW_MS,
+} from '../../src/utils/auth-recovery';
 
 /** Defaults describe an unlocked vault with app lock switched on. */
 function makePolicy(overrides = {}) {
@@ -128,5 +133,33 @@ describe('canAuthenticate', () => {
     expect(policy.canAuthenticate()).toBe(false);
     state.unlocked = true;
     expect(policy.canAuthenticate()).toBe(true);
+  });
+});
+
+// The route guard's half of the same problem. Recovery decides whether to
+// destroy credentials; routing decides whether to show the login page. Both
+// used to read "no credential" straight off a locked vault, and both were wrong
+// for the same reason.
+describe('readSessionStatus', () => {
+  const deps = (hasCreds: boolean, locked: boolean) => ({
+    hasReadableCredentials: () => hasCreds,
+    isVaultLocked: () => locked,
+  });
+
+  it('reads credentials it can see as signed in', () => {
+    expect(readSessionStatus(deps(true, false))).toBe('signed-in');
+    expect(canRouteAsSignedIn(deps(true, false))).toBe(true);
+  });
+
+  it('reads an empty unlocked session as signed out', () => {
+    expect(readSessionStatus(deps(false, false))).toBe('signed-out');
+    expect(canRouteAsSignedIn(deps(false, false))).toBe(false);
+  });
+
+  // The case that sent people to the login page after their phone slept: the
+  // credentials exist, they are simply sealed. Routing has to wait, not decide.
+  it('refuses to call a locked vault signed out', () => {
+    expect(readSessionStatus(deps(false, true))).toBe('unknown-while-locked');
+    expect(canRouteAsSignedIn(deps(false, true))).toBe(true);
   });
 });

@@ -327,6 +327,7 @@ export const Remote = {
       LabelsCreate: { path: '/v1/labels', method: 'POST' },
       LabelsUpdate: { path: '/v1/labels', method: 'PUT' },
       Emails: { path: '/v1/emails', method: 'POST' },
+      EmailStatus: { path: '/v1/emails/:id', method: 'GET' },
       EmailCancel: { path: '/v1/emails/:id', method: 'DELETE' },
       Account: { path: '/v1/account', method: 'GET' },
       AccountUpdate: { path: '/v1/account', method: 'PUT' },

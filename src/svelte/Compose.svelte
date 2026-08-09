@@ -79,7 +79,7 @@
   import { db } from '../utils/db';
   import { getMessageApiId } from '../utils/sync-helpers';
   import { extractDisplayName, isValidEmail } from '../utils/address.ts';
-  import { queueEmail } from '../utils/outbox-service';
+  import { MAX_SCHEDULE_LEAD_MS, queueEmail, scheduleEmail } from '../utils/outbox-service';
   import { saveSentCopy, buildOptimisticSentSource } from '../utils/sent-copy.js';
   import { parseMailto, mailtoToPrefill } from '../utils/mailto';
   import {
@@ -537,20 +537,18 @@
     return dt.getTime();
   };
 
-  const formatRfc3339 = (value: Date | number) => {
-    const date = value instanceof Date ? value : new Date(value);
-    if (!Number.isFinite(date.getTime())) return null;
-    return date.toISOString().replace(/\.\d{3}Z$/, 'Z');
+  const toDateInputValue = (date: Date) => {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
   };
 
   const initScheduleDefaults = () => {
     const tomorrow = new Date();
     tomorrow.setDate(tomorrow.getDate() + 1);
     tomorrow.setHours(9, 0, 0, 0);
-    const year = tomorrow.getFullYear();
-    const month = String(tomorrow.getMonth() + 1).padStart(2, '0');
-    const day = String(tomorrow.getDate()).padStart(2, '0');
-    scheduleDate = `${year}-${month}-${day}`;
+    scheduleDate = toDateInputValue(tomorrow);
     scheduleTime = '09:00';
     scheduleMeridiem = 'AM';
   };
@@ -671,6 +669,12 @@
       error = 'Please select a future date and time.';
       return;
     }
+    // The API refuses a Date header further out than this, and it is what holds
+    // the message until the send time, so a later pick cannot be scheduled.
+    if (sendAt > Date.now() + MAX_SCHEDULE_LEAD_MS) {
+      error = 'Emails can only be scheduled up to 30 days ahead.';
+      return;
+    }
     error = '';
     showScheduleConfirm = true;
   };
@@ -679,13 +683,12 @@
     showScheduleConfirm = false;
   };
 
-  const getTodayDateString = () => {
-    const today = new Date();
-    const year = today.getFullYear();
-    const month = String(today.getMonth() + 1).padStart(2, '0');
-    const day = String(today.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
-  };
+  const getTodayDateString = () => toDateInputValue(new Date());
+
+  // The API will not hold a message dated further ahead than this, so the
+  // picker should not offer it.
+  const getMaxScheduleDateString = () =>
+    toDateInputValue(new Date(Date.now() + MAX_SCHEDULE_LEAD_MS));
 
   const normalizeContact = (contact: unknown) => {
     if (!contact) return null;
@@ -2352,7 +2355,7 @@
     sending = true;
     error = '';
     try {
-      await queueEmail(payload, { sendAt });
+      const { serverScheduled } = await scheduleEmail(payload, sendAt);
       const msgIdToDelete = sourceMessageId;
       const serverDraftIdToDelete = currentDraftServerId;
       if (currentDraftId) {
@@ -2375,7 +2378,12 @@
         hour: 'numeric',
         minute: '2-digit',
       });
-      const scheduledMsg = `Email scheduled for ${formattedDate}`;
+      // When the handover to the server did not happen the send falls back to
+      // this device, which only happens while the app is running. Say so rather
+      // than promising a delivery we cannot make on our own.
+      const scheduledMsg = serverScheduled
+        ? `Email scheduled for ${formattedDate}`
+        : `Email scheduled for ${formattedDate}, and will send the next time the app is open`;
       // In the native compose window the toast is shown by the main window
       // after we close (see the compose:sent handler in main.ts) — showing it
       // here would just flash and vanish with the closing window.
@@ -3991,6 +3999,7 @@
               type="date"
               bind:value={scheduleDate}
               min={getTodayDateString()}
+              max={getMaxScheduleDateString()}
             />
           </div>
           <div class="space-y-2">

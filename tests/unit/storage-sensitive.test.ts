@@ -33,6 +33,7 @@ vi.mock('../../src/utils/crypto-store.js', () => {
     isLockEnabled: () => vault.enabled,
     isVaultConfigured: () => vault.configured,
     isUnlocked: () => vault.unlocked,
+    isVaultLocked: () => vault.enabled && vault.configured && !vault.unlocked,
     protectLocalValue: (key: string, value: string) =>
       vault.unlocked && sensitive(key) ? ENC_PREFIX + btoa(value) : value,
     revealLocalValue: (value: string) => {

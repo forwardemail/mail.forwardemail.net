@@ -20,7 +20,12 @@ import { markMessageAnsweredInStore } from '../stores/messageStore';
  * On failure: retries with exponential backoff up to MAX_RETRIES
  * After MAX_RETRIES: status becomes 'failed' and requires manual retry
  *
- * Scheduled emails: queued with sendAt timestamp, processed when time arrives
+ * Scheduled emails are handed to the server at schedule time (see
+ * scheduleEmail): the API holds any message whose Date header is in the future
+ * and releases it itself, so delivery does not depend on this client running.
+ * The local row is then only a receipt used for display, cancellation and the
+ * Sent copy. If the handoff cannot happen (offline, server error) the row falls
+ * back to the older client-side behaviour of sending when the time arrives.
  */
 
 // Configuration
@@ -29,11 +34,41 @@ const BASE_BACKOFF_MS = 5000; // 5 seconds
 const MAX_BACKOFF_MS = 5 * 60 * 1000; // 5 minutes
 const OUTBOX_PREFIX = 'outbox_';
 
+// How long to wait before asking the server again about a scheduled email it
+// has accepted but not released yet.
+const SERVER_SCHEDULE_RECHECK_MS = 60 * 1000;
+
+/**
+ * Longest lead time the API accepts for a future Date header. The server
+ * rejects anything beyond this, so the composer checks it before we bother the
+ * network.
+ */
+export const MAX_SCHEDULE_LEAD_MS = 30 * 24 * 60 * 60 * 1000;
+
 const formatRfc3339 = (value) => {
   const date = value instanceof Date ? value : new Date(value);
   if (!Number.isFinite(date.getTime())) return null;
   return date.toISOString().replace(/\.\d{3}Z$/, 'Z');
 };
+
+/**
+ * Build the /v1/emails request body from a stored email payload.
+ *
+ * The Date header doubles as the delivery time: the API holds anything dated in
+ * the future and releases it then, so sendAt goes out as `date`. Fields we
+ * prefixed with an underscore are internal bookkeeping and must not leave the
+ * client.
+ */
+function buildSendPayload(emailData, sendAt) {
+  const payload = { ...emailData };
+  delete payload._replyToMessageId;
+  delete payload._replyToMessageFolder;
+  if (sendAt) {
+    const scheduledDate = formatRfc3339(sendAt);
+    if (scheduledDate && !payload.date) payload.date = scheduledDate;
+  }
+  return payload;
+}
 
 // Outbox state store
 export const outboxCount = writable(0);
@@ -61,6 +96,7 @@ function calculateBackoff(retryCount) {
  * @param {boolean} options.skipProcess - Skip immediate processing
  * @param {number} options.sendAt - Timestamp for scheduled send (optional)
  * @param {string} options.serverId - Server ID for scheduled emails already submitted to server
+ * @param {boolean} options.serverScheduled - The server already holds this email and will send it
  * @returns {Promise<Object>} The queued outbox record
  */
 export async function queueEmail(emailData, options = {}) {
@@ -73,7 +109,12 @@ export async function queueEmail(emailData, options = {}) {
   }
 
   const account = getAccount();
-  const { skipProcess = false, sendAt = null, serverId = null } = options || {};
+  const {
+    skipProcess = false,
+    sendAt = null,
+    serverId = null,
+    serverScheduled = false,
+  } = options || {};
   const id = `${OUTBOX_PREFIX}${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const now = Date.now();
 
@@ -88,6 +129,10 @@ export async function queueEmail(emailData, options = {}) {
     nextRetryAt: isScheduled ? sendAt : now, // Ready to send immediately or at scheduled time
     sendAt: sendAt || null, // Store the scheduled timestamp
     serverId: serverId || null, // Store server ID for scheduled emails
+    // True once the server has accepted the email and owns its delivery. This
+    // must never be re-sent, so it is tracked separately from serverId, which
+    // we might not get back.
+    serverScheduled: Boolean(serverScheduled),
     lastError: null,
     emailData,
     createdAt: now,
@@ -103,6 +148,66 @@ export async function queueEmail(emailData, options = {}) {
   }
 
   return record;
+}
+
+/**
+ * Schedule an email for delivery at a future time.
+ *
+ * The API holds any message whose Date header is in the future and releases it
+ * on its own schedule, so we hand the email over immediately instead of
+ * keeping it here and racing a timer. That is what makes a scheduled send
+ * arrive on time even when the app is closed or the phone is asleep.
+ *
+ * The local outbox row is kept as a receipt: it drives the Outbox list, carries
+ * the server id so the send can be cancelled, and saves the Sent copy once the
+ * server confirms delivery.
+ *
+ * When the handover cannot happen (offline, server error) we keep the email
+ * locally with the old client-side behaviour rather than lose it.
+ *
+ * @param {Object} emailData - Email payload from the composer
+ * @param {number} sendAt - Delivery time in ms since epoch
+ * @returns {Promise<{record: Object, serverScheduled: boolean, error?: string}>}
+ */
+export async function scheduleEmail(emailData, sendAt) {
+  if (isDemoMode()) {
+    showDemoBlockedToast('schedule email');
+    const err = new Error('Demo mode: sending is disabled');
+    err.isDemo = true;
+    throw err;
+  }
+
+  const scheduledDate = formatRfc3339(sendAt);
+  if (!scheduledDate) throw new Error('Invalid schedule time');
+
+  if (!isOnline()) {
+    return { record: await queueEmail(emailData, { sendAt }), serverScheduled: false };
+  }
+
+  try {
+    const payload = buildSendPayload(emailData, sendAt);
+    const response = await Remote.request('Emails', payload, { method: 'POST' });
+    // The email is on the server now. Even if the response was not what we
+    // expected, record that it is out of our hands — sending it again would
+    // deliver a duplicate, which is worse than an entry we cannot cancel.
+    const record = await queueEmail(emailData, {
+      sendAt,
+      serverId: response?.id || null,
+      serverScheduled: true,
+      skipProcess: true,
+    });
+    if (!response?.id) {
+      warn('[Outbox] Scheduled email accepted without an id; it cannot be cancelled from here');
+    }
+    return { record, serverScheduled: true };
+  } catch (err) {
+    warn('[Outbox] Could not schedule on the server, falling back to local scheduling', err);
+    return {
+      record: await queueEmail(emailData, { sendAt }),
+      serverScheduled: false,
+      error: err?.message || 'Scheduling failed',
+    };
+  }
 }
 
 /**
@@ -143,9 +248,11 @@ export async function getPendingOutbox() {
       if (item.status === 'pending' && (item.nextRetryAt || 0) <= now) {
         return true;
       }
-      // Include scheduled items whose time has come
+      // Include scheduled items whose time has come. nextRetryAt is set to
+      // sendAt when queued, and pushed forward while the server still has the
+      // email queued, so this also paces the status re-checks.
       if (item.status === 'scheduled' && item.sendAt && item.sendAt <= now) {
-        return true;
+        return (item.nextRetryAt || 0) <= now;
       }
       return false;
     })
@@ -185,6 +292,153 @@ async function saveSentCopyToFolder(emailPayload, account) {
 }
 
 /**
+ * True once the server has taken ownership of an email's delivery. Such an item
+ * must never be POSTed again — that would deliver a duplicate.
+ */
+function isServerScheduled(item) {
+  return Boolean(item?.serverScheduled || item?.serverId);
+}
+
+/**
+ * Everything that has to happen locally once an email has actually gone out:
+ * file the Sent copy, and flag the message it was a reply to.
+ */
+async function recordSentSideEffects(item, account) {
+  // Save copy to Sent folder (client-side workaround). Skipped when the
+  // payload opts out, e.g. spam reports that would put spam back in Sent.
+  if (item.emailData?.save_sent !== false) {
+    try {
+      await saveSentCopyToFolder(item.emailData, account);
+    } catch (sentErr) {
+      console.error('[Outbox] Failed to save sent copy:', sentErr);
+      // Don't fail the overall send if saving to Sent fails
+    }
+  }
+
+  // Mark original message as \Answered if this was a reply
+  const origMsgId = item.emailData?._replyToMessageId;
+  if (!origMsgId) return;
+
+  // Reflect it in the visible list immediately (the sends below persist it).
+  markMessageAnsweredInStore(origMsgId);
+  try {
+    const records = await db.messages.where('[account+id]').equals([account, origMsgId]).toArray();
+    const msg = records?.[0];
+    if (msg) {
+      const currentFlags = Array.isArray(msg.flags) ? msg.flags : [];
+      if (!currentFlags.includes('\\Answered')) {
+        const newFlags = [...currentFlags, '\\Answered'];
+        await db.messages
+          .where('[account+id]')
+          .equals([account, origMsgId])
+          .modify({ flags: newFlags });
+        await Remote.request(
+          'MessageUpdate',
+          { flags: newFlags, folder: item.emailData._replyToMessageFolder || msg.folder },
+          { method: 'PUT', pathOverride: `/v1/messages/${encodeURIComponent(origMsgId)}` },
+        );
+      }
+    }
+  } catch (flagErr) {
+    warn('[Outbox] Failed to set \\Answered flag on original message:', flagErr);
+  }
+}
+
+/**
+ * Flip an outbox row to sent and tell the app about it.
+ */
+async function markOutboxSent(item, account) {
+  await db.outbox.update([account, item.id], {
+    status: 'sent',
+    lastError: null,
+    updatedAt: Date.now(),
+  });
+
+  try {
+    window.dispatchEvent(
+      new CustomEvent('outbox-sent', {
+        detail: {
+          id: item.id,
+          subject: item?.emailData?.subject || '(No subject)',
+        },
+      }),
+    );
+  } catch (err) {
+    warn('[Outbox] Failed to dispatch send notification', err);
+  }
+}
+
+// Server-side statuses meaning the message has left the outbound queue.
+const SERVER_STATUS_DELIVERED = new Set(['sent', 'partially_sent']);
+// Still waiting its turn, so there is nothing to conclude yet.
+const SERVER_STATUS_WAITING = new Set(['pending', 'queued', 'deferred']);
+
+/**
+ * Reconcile a scheduled email whose delivery the server owns.
+ *
+ * Its send time has passed, so ask what actually became of it instead of
+ * assuming success. Anything still queued is left alone and re-checked later; a
+ * bounce or rejection is surfaced as a failure the user can act on.
+ */
+async function settleServerScheduledItem(item, account) {
+  const now = Date.now();
+
+  // With no id there is nothing to ask about. The server has the email and its
+  // time has passed, so take it as delivered.
+  if (!item.serverId) {
+    await recordSentSideEffects(item, account);
+    await markOutboxSent(item, account);
+    return { success: true };
+  }
+
+  let status = null;
+  try {
+    const email = await Remote.request(
+      'EmailStatus',
+      {},
+      { method: 'GET', pathOverride: `/v1/emails/${encodeURIComponent(item.serverId)}` },
+    );
+    status = email?.status || null;
+  } catch (err) {
+    // A 404 after the send time means the record is gone — delivered and pruned,
+    // or cancelled from somewhere else. Either way there is nothing to wait for.
+    if (err?.status !== 404) {
+      warn('[Outbox] Could not read scheduled email status', err);
+      await db.outbox.update([account, item.id], {
+        nextRetryAt: now + SERVER_SCHEDULE_RECHECK_MS,
+        updatedAt: now,
+      });
+      return { success: false, deferred: true, error: 'Scheduled email status unavailable' };
+    }
+  }
+
+  if (status && SERVER_STATUS_WAITING.has(status)) {
+    await db.outbox.update([account, item.id], {
+      nextRetryAt: now + SERVER_SCHEDULE_RECHECK_MS,
+      updatedAt: now,
+    });
+    return { success: false, deferred: true, error: `Scheduled email is ${status}` };
+  }
+
+  if (status && !SERVER_STATUS_DELIVERED.has(status)) {
+    // Bounced or rejected: that server record is finished and will never send.
+    // Drop the ownership marks so a manual retry sends a fresh copy.
+    await db.outbox.update([account, item.id], {
+      status: 'failed',
+      serverScheduled: false,
+      serverId: null,
+      lastError: `Delivery ${status}`,
+      updatedAt: now,
+    });
+    return { success: false, error: `Delivery ${status}` };
+  }
+
+  await recordSentSideEffects(item, account);
+  await markOutboxSent(item, account);
+  return { success: true };
+}
+
+/**
  * Send a single email from outbox
  * @returns {Promise<{success: boolean, error?: string}>}
  */
@@ -206,28 +460,10 @@ async function sendOutboxItem(item) {
     return { success: false, deferred: true, error: 'Account not active' };
   }
 
-  // If this item was already scheduled on the server, do not send it again.
-  if (item.status === 'scheduled' && item.serverId && item.sendAt && item.sendAt <= now) {
-    await db.outbox.update([account, item.id], {
-      status: 'sent',
-      lastError: null,
-      updatedAt: now,
-    });
-
-    try {
-      window.dispatchEvent(
-        new CustomEvent('outbox-sent', {
-          detail: {
-            id: item.id,
-            subject: item?.emailData?.subject || '(No subject)',
-          },
-        }),
-      );
-    } catch (err) {
-      warn('[Outbox] Failed to dispatch send notification', err);
-    }
-
-    return { success: true, skipped: true };
+  // The server already holds this one and sends it on its own schedule, so all
+  // that is left is to find out what it did with it.
+  if (isServerScheduled(item) && item.sendAt && item.sendAt <= now) {
+    return settleServerScheduledItem(item, account);
   }
 
   // Mark as sending
@@ -237,82 +473,12 @@ async function sendOutboxItem(item) {
   });
 
   try {
-    // Build payload - include send_at if this was a scheduled email
-    const payload = { ...item.emailData };
-    // Strip internal fields before sending to API
-    delete payload._replyToMessageId;
-    delete payload._replyToMessageFolder;
-    if (item.sendAt) {
-      const scheduledDate = formatRfc3339(item.sendAt);
-      if (scheduledDate) {
-        payload.send_at = scheduledDate;
-        payload.date = payload.date || scheduledDate;
-      }
-    }
+    const payload = buildSendPayload(item.emailData, item.sendAt);
 
     await Remote.request('Emails', payload, { method: 'POST' });
 
-    // Save copy to Sent folder (client-side workaround). Skipped when the
-    // payload opts out, e.g. spam reports that would put spam back in Sent.
-    if (item.emailData?.save_sent !== false) {
-      try {
-        await saveSentCopyToFolder(item.emailData, account);
-      } catch (sentErr) {
-        console.error('[Outbox] Failed to save sent copy:', sentErr);
-        // Don't fail the overall send if saving to Sent fails
-      }
-    }
-
-    // Mark original message as \Answered if this was a reply
-    const origMsgId = item.emailData?._replyToMessageId;
-    if (origMsgId) {
-      // Reflect it in the visible list immediately (the sends below persist it).
-      markMessageAnsweredInStore(origMsgId);
-      try {
-        const records = await db.messages
-          .where('[account+id]')
-          .equals([account, origMsgId])
-          .toArray();
-        const msg = records?.[0];
-        if (msg) {
-          const currentFlags = Array.isArray(msg.flags) ? msg.flags : [];
-          if (!currentFlags.includes('\\Answered')) {
-            const newFlags = [...currentFlags, '\\Answered'];
-            await db.messages
-              .where('[account+id]')
-              .equals([account, origMsgId])
-              .modify({ flags: newFlags });
-            await Remote.request(
-              'MessageUpdate',
-              { flags: newFlags, folder: item.emailData._replyToMessageFolder || msg.folder },
-              { method: 'PUT', pathOverride: `/v1/messages/${encodeURIComponent(origMsgId)}` },
-            );
-          }
-        }
-      } catch (flagErr) {
-        warn('[Outbox] Failed to set \\Answered flag on original message:', flagErr);
-      }
-    }
-
-    // Success - mark as sent
-    await db.outbox.update([account, item.id], {
-      status: 'sent',
-      lastError: null,
-      updatedAt: Date.now(),
-    });
-
-    try {
-      window.dispatchEvent(
-        new CustomEvent('outbox-sent', {
-          detail: {
-            id: item.id,
-            subject: item?.emailData?.subject || '(No subject)',
-          },
-        }),
-      );
-    } catch (err) {
-      warn('[Outbox] Failed to dispatch send notification', err);
-    }
+    await recordSentSideEffects(item, account);
+    await markOutboxSent(item, account);
 
     return { success: true };
   } catch (err) {
@@ -493,12 +659,16 @@ export async function cancelScheduledEmail(id) {
         },
       );
     } catch (err) {
-      console.error('[OutboxService] Failed to cancel on server:', err);
-      // Do NOT remove from local if server cancellation fails - the email may still be sent
-      return {
-        success: false,
-        error: `Failed to cancel on server: ${err.message || 'Unknown error'}. The scheduled email may still be sent.`,
-      };
+      // A 404 means the server has no such email any more, so there is nothing
+      // left to cancel and the local row should go.
+      if (err?.status !== 404) {
+        console.error('[OutboxService] Failed to cancel on server:', err);
+        // Do NOT remove from local if server cancellation fails - the email may still be sent
+        return {
+          success: false,
+          error: `Failed to cancel on server: ${err.message || 'Unknown error'}. The scheduled email may still be sent.`,
+        };
+      }
     }
   }
 

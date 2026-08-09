@@ -87,6 +87,11 @@ const PLAINTEXT_FIELDS: Record<string, Set<string>> = {
     'retryCount',
     'nextRetryAt',
     'sendAt',
+    // Delivery ownership has to stay readable even when the vault is locked:
+    // if we could not tell that the server already holds a scheduled email we
+    // would send it a second time. Both are opaque bookkeeping, not content.
+    'serverId',
+    'serverScheduled',
     'createdAt',
     'updatedAt',
   ]),

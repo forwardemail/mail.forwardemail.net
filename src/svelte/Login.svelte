@@ -303,7 +303,7 @@
       <div class="flex justify-center mb-4" aria-hidden="true">
         <img src="/icons/favicon.svg" alt="Forward Email logo" class="h-20 w-20" />
       </div>
-      <Card.Title class="text-3xl font-bold">Webmail</Card.Title>
+      <Card.Title class="text-3xl font-bold">Forward Email</Card.Title>
     </Card.Header>
 
     <Card.Content>

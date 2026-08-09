@@ -8,7 +8,7 @@ import { expect, test } from '@playwright/test';
 test.describe('smoke: login loads', () => {
   test('renders the login view', async ({ page }) => {
     await page.goto('/');
-    await expect(page.getByText('Webmail', { exact: true })).toBeVisible();
+    await expect(page.getByText('Forward Email', { exact: true })).toBeVisible();
     await expect(page.getByPlaceholder('you@example.com')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Sign In' })).toBeEnabled();
   });
@@ -16,7 +16,7 @@ test.describe('smoke: login loads', () => {
   test('unauthenticated /mailbox redirects to login', async ({ page }) => {
     await page.goto('/mailbox');
     await expect(page).toHaveURL(/\/$/);
-    await expect(page.getByText('Webmail', { exact: true })).toBeVisible();
+    await expect(page.getByText('Forward Email', { exact: true })).toBeVisible();
   });
 
   test('no console errors at boot', async ({ page }) => {

@@ -2,9 +2,7 @@ import { db } from './db';
 import { warn } from './logger.ts';
 import {
   isSensitiveLocalKey,
-  isLockEnabled,
-  isVaultConfigured,
-  isUnlocked,
+  isVaultLocked,
   protectLocalValue,
   revealLocalValue,
 } from './crypto-store.js';
@@ -323,6 +321,13 @@ export async function cleanupPendingAccountDeletes() {
  * Orphaned account data is scheduled for cleanup.
  */
 export async function reconcileOrphanedAccountData() {
+  // While the vault is locked the account list decrypts to nothing, so every
+  // account except the active one would look orphaned and have its whole
+  // cached mailbox deleted. Wait until the list can actually be read.
+  if (isVaultLocked()) {
+    return { orphans: [], cleaned: [], remaining: [] };
+  }
+
   const knownAccounts = new Set(
     Accounts.getAll()
       .map((account) => account?.email)
@@ -351,11 +356,6 @@ export async function reconcileOrphanedAccountData() {
  * Handles multiple logged-in accounts with account-scoped storage
  * Supports both persistent (localStorage) and session-only (sessionStorage) accounts
  */
-// The vault is configured+enabled but the DEK is not in memory: encrypted
-// values are unreadable, so account-list writes must be refused to avoid
-// clobbering the (unreadable) stored list.
-const isVaultLocked = () => isLockEnabled() && isVaultConfigured() && !isUnlocked();
-
 /**
  * Read an accounts list, transparently decrypting the localStorage copy.
  * Returns null when the value is encrypted and the vault is locked,

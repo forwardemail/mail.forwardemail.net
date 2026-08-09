@@ -141,6 +141,8 @@ interface OutboxItem {
   retryCount?: number;
   nextRetryAt?: number;
   sendAt?: number;
+  serverId?: string | null;
+  serverScheduled?: boolean;
   createdAt?: number;
   updatedAt?: number;
 }

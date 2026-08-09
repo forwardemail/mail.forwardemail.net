@@ -44,6 +44,9 @@ vi.mock('../../src/utils/db', () => {
           const cur = h.outbox.get(key(id));
           if (cur) h.outbox.set(key(id), { ...cur, ...changes });
         }),
+        delete: vi.fn(async ([, id]: [string, string]) => {
+          h.outbox.delete(key(id));
+        }),
         where: () => ({ between: () => ({ toArray: async () => [...h.outbox.values()] }) }),
       },
       messages: {
@@ -55,6 +58,8 @@ vi.mock('../../src/utils/db', () => {
 
 import {
   queueEmail,
+  scheduleEmail,
+  cancelScheduledEmail,
   getPendingOutbox,
   processOutbox,
   getOutboxItem,
@@ -247,5 +252,245 @@ describe('processOutbox account binding', () => {
     await p;
 
     expect(h.saveSentCopy).toHaveBeenCalledWith(email, 'me@test.com', null);
+  });
+});
+
+// Scheduled sends are handed to the API at schedule time, because the server
+// releases anything with a future Date header on its own. The two things that
+// must never break: the email is POSTed once and only once, and a handover that
+// fails still leaves a locally-sendable copy behind.
+describe('scheduleEmail', () => {
+  const sendAt = () => Date.now() + 6 * 60 * 60 * 1000;
+
+  it('hands the email to the server with the send time as its Date header', async () => {
+    const at = sendAt();
+    h.remoteRequest.mockResolvedValue({ id: 'srv_1', status: 'queued' });
+
+    const result = await scheduleEmail(email, at);
+
+    expect(result.serverScheduled).toBe(true);
+    const [action, payload, options] = h.remoteRequest.mock.calls[0];
+    expect(action).toBe('Emails');
+    expect(options).toEqual({ method: 'POST' });
+    expect(new Date((payload as { date: string }).date).getTime()).toBe(
+      at - (at % 1000), // formatRfc3339 drops milliseconds
+    );
+    expect(await getOutboxItem(result.record.id)).toMatchObject({
+      status: 'scheduled',
+      serverId: 'srv_1',
+      serverScheduled: true,
+    });
+  });
+
+  it('strips internal reply bookkeeping from the payload', async () => {
+    h.remoteRequest.mockResolvedValue({ id: 'srv_1' });
+
+    await scheduleEmail(
+      { ...email, _replyToMessageId: 'm1', _replyToMessageFolder: 'INBOX' },
+      sendAt(),
+    );
+
+    const payload = h.remoteRequest.mock.calls[0][1] as Record<string, unknown>;
+    expect(payload).not.toHaveProperty('_replyToMessageId');
+    expect(payload).not.toHaveProperty('_replyToMessageFolder');
+  });
+
+  it('keeps the email locally when offline, without claiming a server hand-off', async () => {
+    h.online = false;
+
+    const result = await scheduleEmail(email, sendAt());
+
+    expect(h.remoteRequest).not.toHaveBeenCalled();
+    expect(result.serverScheduled).toBe(false);
+    expect(await getOutboxItem(result.record.id)).toMatchObject({
+      status: 'scheduled',
+      serverScheduled: false,
+      serverId: null,
+    });
+  });
+
+  it('falls back to a local schedule when the hand-off is rejected', async () => {
+    h.remoteRequest.mockRejectedValue(new Error('502 bad gateway'));
+
+    const result = await scheduleEmail(email, sendAt());
+
+    expect(result.serverScheduled).toBe(false);
+    expect(result.error).toBe('502 bad gateway');
+    expect(await getOutboxItem(result.record.id)).toMatchObject({ serverScheduled: false });
+  });
+
+  // A response we cannot read is still a delivered POST. Re-sending it would
+  // duplicate the email, which is worse than an entry we cannot cancel.
+  it('treats an id-less acceptance as server-owned rather than re-sending', async () => {
+    h.remoteRequest.mockResolvedValue({});
+
+    const result = await scheduleEmail(email, sendAt());
+
+    expect(result.serverScheduled).toBe(true);
+    expect(await getOutboxItem(result.record.id)).toMatchObject({
+      serverScheduled: true,
+      serverId: null,
+    });
+  });
+
+  it('is blocked in demo mode before anything reaches the network', async () => {
+    h.demo = true;
+    await expect(scheduleEmail(email, sendAt())).rejects.toMatchObject({ isDemo: true });
+    expect(h.remoteRequest).not.toHaveBeenCalled();
+    expect(h.outbox.size).toBe(0);
+  });
+});
+
+describe('processOutbox with server-scheduled items', () => {
+  const serverItem = (over: Record<string, unknown> = {}) => ({
+    account: 'me@test.com',
+    id: 'a',
+    status: 'scheduled',
+    retryCount: 0,
+    sendAt: Date.now() - 1000,
+    nextRetryAt: Date.now() - 1000,
+    serverId: 'srv_1',
+    serverScheduled: true,
+    emailData: email,
+    ...over,
+  });
+
+  const statusReplies = (status: string | null) =>
+    h.remoteRequest.mockImplementation(async (action: unknown) =>
+      action === 'EmailStatus' ? { id: 'srv_1', status } : {},
+    );
+
+  it('never POSTs the email again once the server owns it', async () => {
+    vi.useFakeTimers();
+    statusReplies('sent');
+    h.outbox.set('a', serverItem());
+
+    const p = processOutbox();
+    await vi.runAllTimersAsync();
+    await p;
+
+    const actions = h.remoteRequest.mock.calls.map((c) => c[0]);
+    expect(actions).not.toContain('Emails');
+    expect((await getOutboxItem('a'))?.status).toBe('sent');
+    // The Sent copy waits for the server to confirm, so it lands now and not
+    // back when the email was scheduled.
+    expect(h.saveSentCopy).toHaveBeenCalled();
+  });
+
+  it('leaves an email the server has not released yet alone, and re-checks later', async () => {
+    vi.useFakeTimers();
+    statusReplies('queued');
+    const before = Date.now();
+    h.outbox.set('a', serverItem());
+
+    const p = processOutbox();
+    await vi.runAllTimersAsync();
+    await p;
+
+    const item = await getOutboxItem('a');
+    expect(item?.status).toBe('scheduled');
+    expect(item!.nextRetryAt as number).toBeGreaterThan(before);
+    expect(h.saveSentCopy).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a bounce as a failure the user can retry from scratch', async () => {
+    vi.useFakeTimers();
+    statusReplies('bounced');
+    h.outbox.set('a', serverItem());
+
+    const p = processOutbox();
+    await vi.runAllTimersAsync();
+    await p;
+
+    // Ownership is dropped along with the dead server record, so a manual retry
+    // sends a fresh copy instead of re-reading a status that will never change.
+    expect(await getOutboxItem('a')).toMatchObject({
+      status: 'failed',
+      lastError: 'Delivery bounced',
+      serverScheduled: false,
+      serverId: null,
+    });
+    expect(h.saveSentCopy).not.toHaveBeenCalled();
+  });
+
+  it('holds off when the status cannot be read, rather than guessing', async () => {
+    vi.useFakeTimers();
+    h.remoteRequest.mockRejectedValue(Object.assign(new Error('offline'), { status: 0 }));
+    h.outbox.set('a', serverItem());
+
+    const p = processOutbox();
+    await vi.runAllTimersAsync();
+    const result = await p;
+
+    expect((await getOutboxItem('a'))?.status).toBe('scheduled');
+    expect(h.saveSentCopy).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ sent: 0, failed: 0 });
+  });
+
+  it('treats a vanished server record as delivered', async () => {
+    vi.useFakeTimers();
+    h.remoteRequest.mockRejectedValue(Object.assign(new Error('not found'), { status: 404 }));
+    h.outbox.set('a', serverItem());
+
+    const p = processOutbox();
+    await vi.runAllTimersAsync();
+    await p;
+
+    expect((await getOutboxItem('a'))?.status).toBe('sent');
+  });
+});
+
+describe('cancelScheduledEmail', () => {
+  it('cancels on the server before dropping the local row', async () => {
+    h.remoteRequest.mockResolvedValue({});
+    h.outbox.set('a', {
+      account: 'me@test.com',
+      id: 'a',
+      status: 'scheduled',
+      serverId: 'srv_1',
+      serverScheduled: true,
+      emailData: email,
+    });
+
+    expect(await cancelScheduledEmail('a')).toEqual({ success: true });
+    expect(h.remoteRequest).toHaveBeenCalledWith(
+      'EmailCancel',
+      {},
+      {
+        method: 'DELETE',
+        pathOverride: '/v1/emails/srv_1',
+      },
+    );
+    expect(h.outbox.has('a')).toBe(false);
+  });
+
+  it('keeps the local row when the server refuses, since the email may still go out', async () => {
+    h.remoteRequest.mockRejectedValue(Object.assign(new Error('boom'), { status: 500 }));
+    h.outbox.set('a', {
+      account: 'me@test.com',
+      id: 'a',
+      status: 'scheduled',
+      serverId: 'srv_1',
+      serverScheduled: true,
+      emailData: email,
+    });
+
+    expect((await cancelScheduledEmail('a')).success).toBe(false);
+    expect(h.outbox.has('a')).toBe(true);
+  });
+
+  it('drops the local row when the server no longer has the email', async () => {
+    h.remoteRequest.mockRejectedValue(Object.assign(new Error('gone'), { status: 404 }));
+    h.outbox.set('a', {
+      account: 'me@test.com',
+      id: 'a',
+      status: 'scheduled',
+      serverId: 'srv_1',
+      serverScheduled: true,
+      emailData: email,
+    });
+
+    expect(await cancelScheduledEmail('a')).toEqual({ success: true });
+    expect(h.outbox.has('a')).toBe(false);
   });
 });

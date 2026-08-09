@@ -21,6 +21,7 @@
 import { get } from 'svelte/store';
 import { mailboxStore } from '../stores/mailboxStore';
 import { Local } from './storage';
+import { isVaultLocked } from './crypto-store.js';
 import { isActiveAccount } from './account-scope.ts';
 import { startInitialSync } from './sync-controller';
 import { createReleaseWatcher, WS_EVENTS } from './websocket-client';
@@ -84,6 +85,7 @@ function createWebSocketUpdater() {
   let destroyed = false;
   let started = false;
   let visibilityHandler = null;
+  let forceReconnectHandler = null;
   let lastSettingsSync = 0;
   let lastCaldavResync = 0;
   const wsUnsubs = [];
@@ -354,6 +356,12 @@ function createWebSocketUpdater() {
       visibilityHandler = () => {
         if (document.hidden || destroyed || !started) return;
 
+        // Coming back to a locked app is the one case where none of this can
+        // work: the account list and credentials are sealed, so reconcile()
+        // would see nobody to connect and tear down every live socket instead.
+        // The unlock path re-runs this via fe:force-reconnect.
+        if (isVaultLocked()) return;
+
         // 1. Always refresh the current folder when user returns
         refreshCurrentFolder();
 
@@ -377,6 +385,19 @@ function createWebSocketUpdater() {
         fetchLabels(true, { force: true }).catch(() => {});
       };
       document.addEventListener('visibilitychange', visibilityHandler);
+
+      // Explicit "the app can authenticate again" signal, sent by the mobile
+      // resume path and after an app-lock unlock. Both are moments when the
+      // sockets are down and no visibilitychange is coming to revive them.
+      forceReconnectHandler = () => {
+        if (destroyed || !started || isVaultLocked()) return;
+        refreshCurrentFolder();
+        if (wsManager) {
+          wsManager.reconcile();
+          wsManager.reconnectAll();
+        }
+      };
+      globalThis.addEventListener('fe:force-reconnect', forceReconnectHandler);
     },
 
     /**
@@ -402,6 +423,10 @@ function createWebSocketUpdater() {
       if (visibilityHandler) {
         document.removeEventListener('visibilitychange', visibilityHandler);
         visibilityHandler = null;
+      }
+      if (forceReconnectHandler) {
+        globalThis.removeEventListener('fe:force-reconnect', forceReconnectHandler);
+        forceReconnectHandler = null;
       }
 
       // Unsubscribe all event listeners

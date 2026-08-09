@@ -81,6 +81,10 @@ const INDEX_FIELDS_BY_TABLE = {
     'retryCount',
     'nextRetryAt',
     'sendAt',
+    // See the matching note in db-crypto.ts: these guard against sending a
+    // server-scheduled email twice, so they must survive a locked read.
+    'serverId',
+    'serverScheduled',
     'createdAt',
     'updatedAt',
   ]),
@@ -470,6 +474,21 @@ function lock() {
  */
 function isUnlocked() {
   return _dek !== null && _enabled;
+}
+
+/**
+ * Whether the vault is holding everything shut: app lock is on, a vault exists,
+ * and the DEK is not in memory.
+ *
+ * This is the state in which no credential can be read back. The plaintext
+ * copies live in sessionStorage, which the OS drops when it reclaims a
+ * backgrounded webview, and the localStorage copies are ciphertext until the
+ * DEK returns. Callers must treat a null read during this window as "unknown",
+ * never as "signed out" — the difference is what keeps a sleeping phone from
+ * looking like a sign-out.
+ */
+function isVaultLocked() {
+  return isLockEnabled() && isVaultConfigured() && !isUnlocked();
 }
 
 /**
@@ -1148,6 +1167,7 @@ export {
   isVaultConfigured,
   isLockEnabled,
   isUnlocked,
+  isVaultLocked,
   wasUnlockedThisSession,
   isEnabled,
   getSodium,

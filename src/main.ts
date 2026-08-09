@@ -52,12 +52,17 @@ import {
   isLockEnabled,
   isUnlocked,
   isVaultConfigured,
+  isVaultLocked,
   wasUnlockedThisSession,
   lock as lockCryptoStore,
   restoreSessionCredentials,
   restoreSessionDek,
 } from './utils/crypto-store.js';
-import { createAuthRecoveryPolicy, type AuthFailureSource } from './utils/auth-recovery';
+import {
+  canRouteAsSignedIn,
+  createAuthRecoveryPolicy,
+  type AuthFailureSource,
+} from './utils/auth-recovery';
 import { initDbCryptoBridge } from './utils/db-crypto-bridge.js';
 import {
   start as startInactivityTimer,
@@ -217,12 +222,20 @@ function detectRoute() {
       return 'login';
     }
 
-    const hasAuth = Local.get('authToken') || Local.get('alias_auth');
-    return hasAuth ? 'mailbox' : 'login';
+    return isSignedIn() ? 'mailbox' : 'login';
   }
 
   return 'login';
 }
+
+const PROTECTED_ROUTES = new Set(['mailbox', 'settings', 'profile', 'calendar', 'contacts']);
+
+const hasReadableCredentials = () => Boolean(Local.get('authToken') || Local.get('alias_auth'));
+
+// A locked vault cannot answer "is this session signed in?", and treating that
+// silence as a no is what made an app-locked phone look signed out after it
+// slept. See readSessionStatus in auth-recovery.
+const isSignedIn = () => canRouteAsSignedIn({ hasReadableCredentials, isVaultLocked });
 
 const routeStore = writable(detectRoute());
 const currentRoute = () => get(routeStore);
@@ -1981,6 +1994,21 @@ async function showLockScreen(): Promise<void> {
             } catch {
               // Refresh is best-effort; re-selecting the folder recovers too.
             }
+
+            // Everything that could not authenticate while the vault was shut.
+            // The mobile resume burst skips itself when it lands on a locked
+            // app, and the visibility handler that normally revives the
+            // WebSockets has already been and gone, so unlocking is the only
+            // point left to run this. Without it the app sits unlocked with
+            // dead sockets and a queue that has not drained.
+            try {
+              processMutationQueue();
+              syncPushForActiveAccount();
+              globalThis.dispatchEvent(new CustomEvent('fe:force-reconnect'));
+            } catch (err) {
+              console.warn('[app-lock] post-unlock resume failed:', err);
+            }
+
             resolve();
           },
           { once: true },
@@ -2224,16 +2252,9 @@ async function bootstrap() {
     const parameters = new URLSearchParams(globalThis.location.search);
     const isAddingAccount = parameters.get('add_account') === 'true';
 
-    // Check auth before showing anything
-    if (
-      (route === 'mailbox' ||
-        route === 'settings' ||
-        route === 'profile' ||
-        route === 'calendar' ||
-        route === 'contacts') &&
-      !Local.get('authToken') &&
-      !Local.get('alias_auth')
-    ) {
+    // Check auth before showing anything. A locked vault is not an answer here,
+    // so the decision is deferred until after the lock screen below.
+    if (PROTECTED_ROUTES.has(route) && !isSignedIn()) {
       // Use navigate instead of full page reload to prevent flicker
       routeStore.set('login');
       history.replaceState({ route: 'login' }, '', '/');
@@ -2249,9 +2270,15 @@ async function bootstrap() {
       history.replaceState({ ...existingState, route: 'mailbox' }, '', '/mailbox' + currentHash);
     }
 
-    // Handle ?email= query parameter for account switching
-    const emailParameter = parameters.get('email');
-    if (emailParameter && route !== 'login') {
+    // Handle ?email= query parameter for account switching.
+    //
+    // Deferred while the vault is locked: the account list decrypts to nothing
+    // then, so every account looks unknown and this would send the user to the
+    // add-account form for an account they are already signed into.
+    const applyEmailParameter = () => {
+      const emailParameter = parameters.get('email');
+      if (!emailParameter || route === 'login') return;
+
       const allAccounts = Accounts.getAll();
       const activeEmail = Accounts.getActive();
       const normalizedEmail = emailParameter.trim().toLowerCase();
@@ -2280,7 +2307,10 @@ async function bootstrap() {
           new CustomEvent('login-prefill-email', { detail: emailParameter }),
         );
       }
-    }
+    };
+
+    const vaultWasLocked = isVaultLocked();
+    if (!vaultWasLocked) applyEmailParameter();
 
     const mailboxMode =
       route === 'mailbox' ||
@@ -2332,6 +2362,23 @@ async function bootstrap() {
         } catch {
           // ignore
         }
+      }
+    }
+
+    // The vault was shut when the guards above ran, so "is this session signed
+    // in?" and "which account is this?" had no readable answer. Unlocking has
+    // put the credentials back, so settle both now. Doing it here rather than
+    // guessing earlier is what stops a phone waking from sleep on the sign-in
+    // page with perfectly good credentials sitting on disk.
+    if (vaultWasLocked) {
+      applyEmailParameter();
+
+      if (PROTECTED_ROUTES.has(route) && !hasReadableCredentials()) {
+        routeStore.set('login');
+        history.replaceState({ route: 'login' }, '', '/');
+        route = 'login';
+        document.body.classList.remove('mailbox-mode');
+        updateRouteVisibility('login');
       }
     }
 
@@ -2958,13 +3005,11 @@ if (document.readyState === 'loading') {
 
 globalThis.addEventListener('popstate', () => {
   const route = detectRoute();
-  const hasAuth = Boolean(Local.get('authToken') || Local.get('alias_auth'));
-  const isProtected =
-    route === 'mailbox' ||
-    route === 'settings' ||
-    route === 'profile' ||
-    route === 'calendar' ||
-    route === 'contacts';
+  // Same rule as the bootstrap guard: a locked vault cannot tell us whether the
+  // user is signed in, and a back gesture over the lock screen must not be
+  // answered with a sign-out.
+  const hasAuth = isSignedIn();
+  const isProtected = PROTECTED_ROUTES.has(route);
 
   if (isProtected && !hasAuth) {
     // User pressed back into a protected route after signing out — redirect to login
