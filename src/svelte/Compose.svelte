@@ -2283,11 +2283,15 @@
     if (attachments.length) {
       payload.attachments = attachments.map((att) => {
         const a = att as Record<string, unknown>;
+        const cid = a.cid || a.contentId;
         return {
           filename: a.name || a.filename,
           contentType: a.contentType || a.mimeType || 'application/octet-stream',
           content: a.content,
           encoding: 'base64',
+          // Forwarded parts keep the Content-ID they arrived with so a quoted
+          // body that references them by cid: still renders for the recipient.
+          ...(cid ? { cid } : {}),
         };
       });
       payload.has_attachment = true;
@@ -2844,6 +2848,12 @@
     }
     if (resolvedPrefill.subject) subject = resolvedPrefill.subject as string;
     if (resolvedPrefill.from) fromAddress = resolvedPrefill.from as string;
+    // Forwards arrive with the original's files already decoded (see
+    // getForwardAttachments). Appended rather than assigned so a draft reopened
+    // with attachments keeps them.
+    if (Array.isArray(resolvedPrefill.attachments) && resolvedPrefill.attachments.length) {
+      attachments = [...attachments, ...(resolvedPrefill.attachments as unknown[])];
+    }
     if (isPlainText && resolvedPrefill.text) {
       body = resolvedPrefill.text as string;
     } else if (resolvedPrefill.body) {

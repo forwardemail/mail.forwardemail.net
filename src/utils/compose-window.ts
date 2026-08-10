@@ -50,6 +50,28 @@ export interface ComposeWindowOptions {
   prefill?: Record<string, unknown>;
 }
 
+// The prefill crosses the Tauri IPC bridge as JSON. Forwarded attachments ride
+// along as base64, and an oversized one would stall or fail that hand-off with
+// nothing to tell the user why. Past this point, drop them and say so.
+const MAX_PREFILL_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+
+function withinPrefillBudget(prefill: Record<string, unknown>): Record<string, unknown> {
+  const attachments = prefill?.attachments;
+  if (!Array.isArray(attachments) || !attachments.length) return prefill;
+
+  const total = attachments.reduce(
+    (sum: number, att) => sum + ((att as { content?: string })?.content?.length || 0),
+    0,
+  );
+  if (total <= MAX_PREFILL_ATTACHMENT_BYTES) return prefill;
+
+  console.warn('[compose-window] Forwarded attachments too large for the window hand-off', total);
+  globalThis.dispatchEvent(
+    new CustomEvent('fe:compose-attachments-dropped', { detail: { bytes: total } }),
+  );
+  return { ...prefill, attachments: [] };
+}
+
 /**
  * Start listening for compose:ready events from compose windows.
  * Must be called once at app startup (from main.ts).
@@ -90,7 +112,7 @@ export async function openComposeWindow(options?: ComposeWindowOptions): Promise
     // resolve this itself and would otherwise fall back to a bare "Sent".
     pendingInits.set(label, {
       action: options?.action || 'open',
-      prefill: options?.prefill || {},
+      prefill: withinPrefillBudget(options?.prefill || {}),
       auth: collectAuth(),
       sentFolder: resolveSentFolder(Local.get('email') || 'default', get(foldersStore)),
       // WebView2 isolates localStorage per webview, so the compose window can't

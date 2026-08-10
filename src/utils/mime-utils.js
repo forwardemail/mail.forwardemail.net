@@ -9,30 +9,39 @@ export function arrayBufferToBase64(uint8Array) {
   return btoa(binary);
 }
 
-export function bufferToDataUrl(attachment) {
+/**
+ * Extract an attachment's bytes as base64, whatever shape `content` arrived in:
+ * a base64 or plain string, an ArrayBuffer, a typed array, a serialized Node
+ * Buffer ({data: [...]}) or a plain byte array. Returns '' when there is
+ * nothing decodable. Used both for inline data URLs and for re-attaching an
+ * original's files when forwarding.
+ */
+export function attachmentToBase64(attachment) {
   try {
-    const { content, contentType, mimeType, type } = attachment || {};
+    const content = attachment?.content;
     if (!content) return '';
-    const mime = contentType || mimeType || type || 'application/octet-stream';
-    let base64;
     if (typeof content === 'string') {
       const isB64 = /^[A-Za-z0-9/+]+={0,2}$/.test(content.replace(/\s+/g, ''));
-      base64 = isB64 ? content.replace(/\s+/g, '') : btoa(unescape(encodeURIComponent(content)));
-    } else if (content instanceof ArrayBuffer) {
-      base64 = arrayBufferToBase64(new Uint8Array(content));
-    } else if (ArrayBuffer.isView(content)) {
-      base64 = arrayBufferToBase64(new Uint8Array(content.buffer || content));
-    } else if (content?.data) {
-      base64 = arrayBufferToBase64(new Uint8Array(content.data));
-    } else if (Array.isArray(content)) {
-      base64 = arrayBufferToBase64(new Uint8Array(content));
-    } else {
-      return '';
+      return isB64 ? content.replace(/\s+/g, '') : btoa(unescape(encodeURIComponent(content)));
     }
-    return `data:${mime};base64,${base64}`;
+    if (content instanceof ArrayBuffer) return arrayBufferToBase64(new Uint8Array(content));
+    if (ArrayBuffer.isView(content)) {
+      return arrayBufferToBase64(new Uint8Array(content.buffer || content));
+    }
+    if (content?.data) return arrayBufferToBase64(new Uint8Array(content.data));
+    if (Array.isArray(content)) return arrayBufferToBase64(new Uint8Array(content));
+    return '';
   } catch {
     return '';
   }
+}
+
+export function bufferToDataUrl(attachment) {
+  const base64 = attachmentToBase64(attachment);
+  if (!base64) return '';
+  const { contentType, mimeType, type } = attachment || {};
+  const mime = contentType || mimeType || type || 'application/octet-stream';
+  return `data:${mime};base64,${base64}`;
 }
 
 const normalizeCid = (value = '') => {

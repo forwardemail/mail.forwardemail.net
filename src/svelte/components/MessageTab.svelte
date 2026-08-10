@@ -51,6 +51,7 @@
     addForwardPrefix,
     stripQuoteCollapseMarkup,
     deleteMessage,
+    getForwardAttachments,
   } from '../../stores/mailboxActions';
   import type { Message, Attachment } from '../../types';
 
@@ -260,18 +261,23 @@
     });
   }
 
-  function handleForward() {
+  async function handleForward() {
     if (!message) return;
     const deliveredTo = getDeliveredToAddress();
     // Strip quote-collapse viewing markup before encoding for forward
     const cleanBody = stripQuoteCollapseMarkup(body);
     const quotedBody = buildForwardQuotedBody(message, cleanBody);
+    // A forward carries the original's files. The attachment list on screen is
+    // metadata only — the bytes have to be fetched before the compose window
+    // opens, because that window is seeded once and cannot be topped up after.
+    const forwardAttachments = hasAttachments ? await getForwardAttachments(message) : [];
     openComposeWindow({
       action: 'forward',
       prefill: {
         subject: addForwardPrefix(message.subject),
         from: deliveredTo,
         html: quotedBody,
+        attachments: forwardAttachments,
       },
     });
   }

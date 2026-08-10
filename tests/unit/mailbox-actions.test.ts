@@ -131,17 +131,6 @@ vi.mock('../../src/utils/labels.js', () => ({
   LABEL_PALETTE: ['#fff'],
 }));
 
-vi.mock('../../src/utils/address.ts', () => ({
-  normalizeEmail: (s: string) => String(s || '').toLowerCase(),
-  dedupeAddresses: (arr: string[]) => Array.from(new Set(arr)),
-  extractAddressList: (msg: Record<string, unknown>, field: string) => {
-    const v = msg[field];
-    if (!v) return [];
-    if (Array.isArray(v)) return v as string[];
-    return [v as string];
-  },
-}));
-
 vi.mock('../../src/utils/label-validation.ts', () => ({
   validateLabelName: vi.fn(() => ({ ok: true })),
 }));
@@ -317,6 +306,11 @@ import {
   switchAccount,
   addReplyPrefix,
   addForwardPrefix,
+  buildForwardQuotedBody,
+  buildReplyQuotedBody,
+  getForwardAttachments,
+  forwardMessage,
+  setComposeModal,
   stripQuoteCollapseMarkup,
   getMessageBodyForReply,
   loadLabels,
@@ -644,5 +638,228 @@ describe('loadLabels folder-flag fetch (#2 fan-out)', () => {
     expect(opts.pathOverride).toBe('/v1/folders/inbox-id');
     const labels = get(availableLabels);
     expect(labels.some((l) => l.id === 'ProjectX')).toBe(true);
+  });
+});
+
+// The quote header is built from whatever address shape the message happens to
+// carry, and those differ by source: a list payload, a detail fetch and a search
+// result all disagree. Joining them blind printed "To: [object Object]" into
+// every forwarded email.
+describe('quote headers', () => {
+  it('renders nodemailer-style address objects as readable addresses', () => {
+    const html = buildForwardQuotedBody(
+      {
+        from: [{ name: 'Alice', address: 'alice@example.com' }],
+        to: [
+          { name: 'Bob', address: 'bob@example.com' },
+          { name: '', address: 'carol@example.com' },
+        ],
+        subject: 'Quarterly report',
+      },
+      '<p>body</p>',
+    );
+
+    expect(html).not.toContain('[object Object]');
+    expect(html).toContain('From: Alice <alice@example.com>');
+    expect(html).toContain('To: Bob <bob@example.com>, carol@example.com');
+  });
+
+  it('unwraps the {value: [...]} header shape', () => {
+    const html = buildForwardQuotedBody(
+      {
+        from: { value: [{ name: 'Alice', address: 'alice@example.com' }] },
+        to: { value: [{ address: 'bob@example.com' }] },
+      },
+      '',
+    );
+
+    expect(html).not.toContain('[object Object]');
+    expect(html).toContain('To: bob@example.com');
+  });
+
+  it('still handles a plain comma-separated string', () => {
+    const html = buildForwardQuotedBody(
+      { from: 'alice@example.com', to: 'bob@example.com, carol@example.com' },
+      '',
+    );
+
+    expect(html).toContain('To: bob@example.com, carol@example.com');
+  });
+
+  it('renders the reply attribution from an address object', () => {
+    const html = buildReplyQuotedBody(
+      { from: [{ name: 'Alice', address: 'alice@example.com' }] },
+      '',
+    );
+
+    expect(html).not.toContain('[object Object]');
+    expect(html).toContain('Alice <alice@example.com> wrote:');
+  });
+});
+
+// Forwarding has to re-attach the original's files, and the body cache holds no
+// bytes for them (only inline parts get a data URL), so this goes to the server.
+describe('getForwardAttachments', () => {
+  const msg = { id: 'm1', apiId: 'srv-1', folder: 'INBOX' };
+
+  it('returns the original files as base64 compose attachments', async () => {
+    hoisted.remoteRequest.mockResolvedValueOnce({
+      nodemailer: {
+        attachments: [
+          {
+            filename: 'report.pdf',
+            contentType: 'application/pdf',
+            size: 5,
+            content: { type: 'Buffer', data: [72, 101, 108, 108, 111] },
+          },
+        ],
+      },
+    });
+
+    const out = await getForwardAttachments(msg);
+
+    expect(out).toEqual([
+      {
+        name: 'report.pdf',
+        filename: 'report.pdf',
+        size: 5,
+        contentType: 'application/pdf',
+        content: 'SGVsbG8=',
+      },
+    ]);
+  });
+
+  // A Content-ID does not mean "embedded image": Outlook and Apple Mail stamp
+  // one on ordinary attachments, so treating it as a skip signal dropped the
+  // very file the user was forwarding. Everything comes across, and the id is
+  // kept so a cid: reference in the quoted body still resolves.
+  it('carries attachments that happen to have a Content-ID, keeping the id', async () => {
+    hoisted.remoteRequest.mockResolvedValueOnce({
+      attachments: [
+        { filename: 'report.pdf', cid: '<doc@outlook>', content: 'SGVsbG8=' },
+        { filename: 'logo.png', contentDisposition: 'inline', cid: 'logo@x', content: 'SGVsbG8=' },
+        { filename: 'real.txt', contentType: 'text/plain', content: 'SGVsbG8=' },
+      ],
+    });
+
+    const out = await getForwardAttachments(msg);
+
+    expect(out.map((a) => a.filename)).toEqual(['report.pdf', 'logo.png', 'real.txt']);
+    // Angle brackets stripped so it matches the cid: form used in the body.
+    expect(out[0].cid).toBe('doc@outlook');
+    expect(out[2].cid).toBeUndefined();
+  });
+
+  it('drops parts whose bytes cannot be decoded rather than attaching empties', async () => {
+    hoisted.remoteRequest.mockResolvedValueOnce({
+      attachments: [{ filename: 'broken.bin', content: null }],
+    });
+
+    expect(await getForwardAttachments(msg)).toEqual([]);
+  });
+
+  // The forward is still worth opening without them; the user can re-attach.
+  it('returns nothing when the fetch fails instead of blocking the forward', async () => {
+    hoisted.remoteRequest.mockRejectedValueOnce(new Error('offline'));
+
+    expect(await getForwardAttachments(msg)).toEqual([]);
+  });
+});
+
+// A forward has to go out as whichever of the user's own addresses received the
+// original, not as the sender's, and it has to carry the original's files.
+describe('forwardMessage', () => {
+  const composeRef = { forward: vi.fn(), reply: vi.fn(), open: vi.fn(), updateReplyBody: vi.fn() };
+
+  beforeEach(() => {
+    composeRef.forward.mockClear();
+    setComposeModal(composeRef);
+    hoisted.localStore.set('email', 'user@example.com');
+  });
+
+  // Found via CC, so this really is scanning the original's recipients rather
+  // than just echoing the active account.
+  it('sends from the address of the user that received the original', async () => {
+    await forwardMessage({
+      id: 'm1',
+      apiId: 'srv-1',
+      folder: 'INBOX',
+      subject: 'Report',
+      from: [{ name: 'Alice', address: 'alice@example.com' }],
+      to: [{ address: 'someone@else.com' }],
+      cc: [{ address: 'user@example.com' }],
+    });
+
+    const prefill = composeRef.forward.mock.calls[0][0];
+    expect(prefill.from).toBe('user@example.com');
+    expect(prefill.subject).toBe('Fwd: Report');
+  });
+
+  it('carries the original attachments into the prefill', async () => {
+    hoisted.remoteRequest.mockResolvedValueOnce({
+      attachments: [
+        { filename: 'report.pdf', contentType: 'application/pdf', content: 'SGVsbG8=' },
+      ],
+    });
+
+    await forwardMessage({
+      id: 'm1',
+      apiId: 'srv-1',
+      folder: 'INBOX',
+      subject: 'Report',
+      has_attachment: true,
+      to: [{ address: 'user@example.com' }],
+    });
+
+    const prefill = composeRef.forward.mock.calls[0][0];
+    expect(prefill.attachments).toEqual([
+      {
+        name: 'report.pdf',
+        filename: 'report.pdf',
+        size: 0,
+        contentType: 'application/pdf',
+        content: 'SGVsbG8=',
+      },
+    ]);
+  });
+
+  // The flag is spelled differently depending on whether the record came from
+  // the normalized cache, a conversation row or a raw API payload. Missing one
+  // means silently forwarding without the files.
+  it.each(['has_attachment', 'has_attachments', 'hasAttachments'])(
+    'recognises the %s flag',
+    async (flag) => {
+      hoisted.remoteRequest.mockResolvedValueOnce({
+        attachments: [{ filename: 'a.txt', content: 'SGVsbG8=' }],
+      });
+
+      await forwardMessage({ id: 'm1', apiId: 'srv-1', folder: 'INBOX', [flag]: true });
+
+      expect(composeRef.forward.mock.calls[0][0].attachments).toHaveLength(1);
+    },
+  );
+
+  it('recognises a message that carries its attachment list inline', async () => {
+    hoisted.remoteRequest.mockResolvedValueOnce({
+      attachments: [{ filename: 'a.txt', content: 'SGVsbG8=' }],
+    });
+
+    await forwardMessage({
+      id: 'm1',
+      apiId: 'srv-1',
+      folder: 'INBOX',
+      attachments: [{ filename: 'a.txt' }],
+    });
+
+    expect(composeRef.forward.mock.calls[0][0].attachments).toHaveLength(1);
+  });
+
+  // The fetch is the whole message body, so a forward with nothing to carry
+  // must not pay for it.
+  it('does not fetch anything when the message has no attachments', async () => {
+    await forwardMessage({ id: 'm1', apiId: 'srv-1', folder: 'INBOX', subject: 'Hi' });
+
+    expect(hoisted.remoteRequest).not.toHaveBeenCalled();
+    expect(composeRef.forward.mock.calls[0][0].attachments).toEqual([]);
   });
 });

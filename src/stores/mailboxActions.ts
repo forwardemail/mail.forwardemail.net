@@ -26,6 +26,8 @@ import {
 import { resolveSpamReportAddress, buildSpamReportEmail } from '../utils/spam-report.js';
 import { normalizeLayoutMode } from './settingsRegistry';
 import { getMessageApiId } from '../utils/sync-helpers';
+import { attachmentToBase64 } from '../utils/mime-utils.js';
+import { generateAttachmentName } from './mail-service-helpers';
 import {
   getSafeFilename,
   looksLikeHtml,
@@ -37,7 +39,12 @@ import { startInitialSync, queueBodiesForFolder } from '../utils/sync-controller
 import { resetSyncWorkerReady, revokeSyncWorkerAuth } from '../utils/sync-worker-client.js';
 import { isDemoBlockedError, isDemoMode } from '../utils/demo-mode';
 import { clearMailServiceState } from './mailService';
-import { normalizeEmail, dedupeAddresses, extractAddressList } from '../utils/address.ts';
+import {
+  normalizeEmail,
+  dedupeAddresses,
+  displayAddresses,
+  extractAddressList,
+} from '../utils/address.ts';
 import { validateLabelName } from '../utils/label-validation.ts';
 import { resolveSearchBodyIndexing } from '../utils/search-body-indexing.js';
 import { LABEL_PALETTE, canonicalizeLabelKeyword } from '../utils/labels.js';
@@ -689,10 +696,116 @@ const encodeRawHtml = (value: string) => {
 };
 
 /**
+ * Fetch the original message's file attachments, ready to attach to a forward.
+ *
+ * This has to go to the network. The body cache deliberately keeps no bytes for
+ * ordinary attachments — loadMessageDetail stores them with needsDownload and
+ * only builds a data URL for inline parts — so there is nothing locally to
+ * re-attach. Callers should therefore only reach here for a message that
+ * actually reports an attachment.
+ *
+ * Inline parts are skipped on purpose: they are the images embedded in the
+ * quoted body, and attaching them again would list the sender's logo and
+ * signature graphics as files the user has to look at.
+ */
+export const getForwardAttachments = async (msg) => {
+  const msgId = getMessageApiId(msg);
+  if (!msgId) return [];
+
+  const folder = msg?.folder_path || msg?.folder || '';
+
+  // Compose cannot open until the bytes are in hand — on desktop it is a
+  // separate window that gets seeded once at creation. Most fetches are quick
+  // enough to pass unnoticed, so the notice waits a beat rather than flashing
+  // every time, but a slow one must not leave the click looking ignored.
+  let noticeId = null;
+  const noticeTimer = setTimeout(() => {
+    noticeId = toastsRef?.show?.('Preparing forward…', 'info', 0);
+  }, 600);
+  const clearNotice = () => {
+    clearTimeout(noticeTimer);
+    if (noticeId != null) toastsRef?.dismiss?.(noticeId);
+  };
+
+  try {
+    const detailRes = await Remote.request(
+      'Message',
+      {},
+      {
+        method: 'GET',
+        pathOverride: `/v1/messages/${encodeURIComponent(msgId)}?folder=${encodeURIComponent(folder)}&raw=false`,
+      },
+    );
+    const result = detailRes?.Result || detailRes;
+    const list = result?.nodemailer?.attachments || result?.attachments || [];
+    if (!Array.isArray(list)) return [];
+
+    // Carry everything the reader lists, which is every part the server sends.
+    // An earlier version skipped anything with a Content-ID on the assumption
+    // it was an embedded image, but plenty of clients stamp one on ordinary
+    // attachments too — that assumption is what silently dropped the file the
+    // user was trying to forward. The id is preserved instead, so parts the
+    // quoted body references by cid: still resolve.
+    const forwardable = list
+      .map((att) => {
+        const content = attachmentToBase64(att);
+        if (!content) return null;
+        const filename = att.filename || att.name || generateAttachmentName(att);
+        const cid = att.cid || att.contentId;
+        return {
+          name: filename,
+          filename,
+          size: att.size || 0,
+          contentType: att.contentType || att.mimeType || att.type || 'application/octet-stream',
+          content,
+          ...(cid ? { cid: String(cid).replace(/^<|>$/g, '') } : {}),
+        };
+      })
+      .filter(Boolean);
+
+    // Dev-only, and only on an explicit forward, so it is quiet in normal use.
+    // Every step that can silently produce an empty list is visible here.
+    warn('[forward] resolved attachments', {
+      msgId,
+      folder,
+      returnedByServer: list.length,
+      usable: forwardable.length,
+      shapes: list.map((att) => ({
+        filename: att?.filename || att?.name,
+        contentType: att?.contentType,
+        contentKind: Array.isArray(att?.content?.data)
+          ? 'buffer-json'
+          : typeof att?.content === 'string'
+            ? 'string'
+            : typeof att?.content,
+      })),
+    });
+
+    return forwardable;
+  } catch (err) {
+    warn('[forwardMessage] Failed to load the original attachments:', err);
+    return [];
+  } finally {
+    clearNotice();
+  }
+};
+
+/**
+ * Render one of a message's address fields for the quote header.
+ *
+ * These fields are not reliably strings: depending on where the message came
+ * from (list payload, detail fetch, search result) `to` can be an array of
+ * {name, address} objects or a {value: [...]} wrapper. Joining that directly
+ * printed "To: [object Object]" in every forwarded email.
+ */
+const formatQuoteAddresses = (msg, field) =>
+  displayAddresses(extractAddressList(msg, field)).join(', ');
+
+/**
  * Build quoted body HTML for reply
  */
 export const buildReplyQuotedBody = (msg, originalBody) => {
-  const fromName = msg?.from || 'Unknown';
+  const fromName = formatQuoteAddresses(msg, 'from') || 'Unknown';
   const dateStr = formatAttributionDate(msg?.date || msg?.dateMs);
   const attribution = dateStr ? `On ${dateStr}, ${fromName} wrote:` : `${fromName} wrote:`;
   const encoded = encodeRawHtml(originalBody);
@@ -704,8 +817,8 @@ export const buildReplyQuotedBody = (msg, originalBody) => {
  * Build quoted body HTML for forward
  */
 export const buildForwardQuotedBody = (msg, originalBody) => {
-  const from = msg?.from || '';
-  const to = Array.isArray(msg?.to) ? msg.to.join(', ') : msg?.to || '';
+  const from = formatQuoteAddresses(msg, 'from');
+  const to = formatQuoteAddresses(msg, 'to');
   const dateStr = formatAttributionDate(msg?.date || msg?.dateMs);
   const subject = msg?.subject || '';
 
@@ -854,6 +967,23 @@ export const forwardMessage = async (msg) => {
   const bodyToUse = messageBodyValue || msg?.snippet || msg?.textContent || '';
   const quotedBody = buildForwardQuotedBody(msg, bodyToUse);
 
+  // A forward carries the original's files. Only fetch when the message reports
+  // some — the request pulls the whole message body, so it is not worth making
+  // every plain forward wait on it. The flag is spelled differently depending
+  // on where the record came from, so accept any of them.
+  const hasAttachments =
+    Boolean(msg?.has_attachment || msg?.has_attachments || msg?.hasAttachments) ||
+    (Array.isArray(msg?.attachments) && msg.attachments.length > 0);
+  const attachments = hasAttachments ? await getForwardAttachments(msg) : [];
+  if (!hasAttachments) {
+    warn('[forward] skipped the attachment fetch — no attachment flag on the record', {
+      has_attachment: msg?.has_attachment,
+      has_attachments: msg?.has_attachments,
+      hasAttachments: msg?.hasAttachments,
+      attachments: Array.isArray(msg?.attachments) ? msg.attachments.length : undefined,
+    });
+  }
+
   // Determine which of the user's own accounts received this message.
   // Same logic as replyTo — the `from` field must be the user's address
   // that appeared in To/CC of the original message, not the sender's address.
@@ -877,6 +1007,7 @@ export const forwardMessage = async (msg) => {
     subject: addForwardPrefix(msg?.subject),
     from: forwardFromAddress,
     html: quotedBody,
+    attachments,
   });
 };
 

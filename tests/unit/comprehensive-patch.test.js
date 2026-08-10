@@ -3,7 +3,10 @@
  * 1. deferredWritable — global WebKit crash prevention
  * 2. Smart delete direction (nextCandidate)
  * 3. UX features: sidebar resize, collapsible bottom, card view, context-sensitive checkboxes
- * 4. forwardMessage from address fix
+ *
+ * forwardMessage's sending-identity resolution used to be checked here by
+ * scraping the source for "getUserEmails". It is exercised for real in
+ * mailbox-actions.test.ts now.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { get } from 'svelte/store';
@@ -438,26 +441,6 @@ describe('UX features — source code verification', () => {
       // Selection mode button should exist
       expect(mailboxSrc).toContain('selection');
     });
-  });
-});
-
-// ============================================================
-// 5. forwardMessage from address fix
-// ============================================================
-describe('forwardMessage from address fix', () => {
-  it('should resolve from address in forwardMessage like replyTo', () => {
-    const src = fs.readFileSync(
-      path.resolve(__dirname, '../../src/stores/mailboxActions.ts'),
-      'utf8',
-    );
-    // Find the forwardMessage function
-    const fwdIdx = src.indexOf('forwardMessage');
-    expect(fwdIdx).toBeGreaterThan(-1);
-    const fwdSection = src.slice(fwdIdx, fwdIdx + 2000);
-
-    // Should contain getUserEmails and from address resolution
-    expect(fwdSection).toContain('getUserEmails');
-    expect(fwdSection).toContain('from:');
   });
 });
 

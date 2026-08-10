@@ -1190,6 +1190,17 @@ if (isTauriDesktop) {
   );
 }
 
+// openComposeWindow drops forwarded attachments that are too large to survive
+// the IPC hand-off to a compose window; it says so here so the user knows to
+// re-attach them by hand rather than discovering the omission after sending.
+globalThis.addEventListener('fe:compose-attachments-dropped', () => {
+  toasts.show(
+    'The original attachments are too large to carry into a forward. Please attach them manually.',
+    'warning',
+    8000,
+  );
+});
+
 // Compose: Tauri desktop uses separate native windows, web/mobile uses in-app modal
 if (isTauriDesktop) {
   viewModel.mailboxView.composeModal = {
@@ -1212,7 +1223,9 @@ if (isTauriDesktop) {
         action: 'forward',
         prefill: {
           subject: prefill?.subject,
+          from: prefill?.from,
           html: quotedHtml,
+          attachments: prefill?.attachments,
         },
       });
     },
@@ -1445,7 +1458,13 @@ if (isTauriDesktop) {
     forward(prefill) {
       composeApi.forward({
         subject: prefill?.subject,
+        from: prefill?.from,
+        // forwardMessage already built the quoted body with its "Forwarded
+        // message" header; falling straight back to the raw message body would
+        // drop that header and the sending identity along with it.
+        html: prefill?.html,
         body: prefill?.body || get(messageBody),
+        attachments: prefill?.attachments,
       });
     },
     reply(prefill) {
