@@ -23,7 +23,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust toolchain (iOS simulator)
         uses: dtolnay/rust-toolchain@stable
@@ -37,13 +37,13 @@ jobs:
           shared-key: e2e-ios
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Setup pnpm
         # No `version:` — action-setup reads packageManager from package.json.
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6.0.10
 
       - name: Install root dependencies
         run: pnpm install --frozen-lockfile
@@ -131,7 +131,7 @@ jobs:
 
       - name: Upload Appium log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ios-appium-log
           path: appium.log
@@ -140,7 +140,7 @@ jobs:
 
       - name: Upload test reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ios-e2e-reports
           path: e2e-mobile/reports/
@@ -149,7 +149,7 @@ jobs:
 
       - name: Upload failure screenshots
         if: ${{ steps.ios-test.outcome == 'failure' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ios-e2e-screenshots
           path: e2e-mobile/screenshots/
