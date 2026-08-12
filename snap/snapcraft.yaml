@@ -41,10 +41,9 @@ parts:
       - librsvg2-dev
       - libssl-dev
       - libwebkit2gtk-4.1-dev
-      - nodejs
-      - npm
       - patchelf
       - pkg-config
+      - xz-utils
     stage-packages:
       - libayatana-appindicator3-1
       - librsvg2-2
@@ -53,14 +52,39 @@ parts:
     override-build: |
       set -eux
 
-      # Snapcraft's core24 build image does not guarantee the Rust or pnpm
-      # versions this Tauri project needs. Install project-pinned toolchains
-      # inside the build part; none are staged into the finished snap.
+      # Snapcraft's core24 build image does not guarantee the Rust, Node, or
+      # pnpm versions this Tauri project needs. Install project-pinned
+      # toolchains inside the build part; none are staged into the finished
+      # snap.
       export RUSTUP_HOME="$CRAFT_PART_BUILD/.rustup"
       export CARGO_HOME="$CRAFT_PART_BUILD/.cargo"
       export PATH="$CARGO_HOME/bin:$PATH"
       curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
 
+      # core24 apt ships Node 18, which is below the ">=20" engines floor in
+      # package.json, and its nodejs package carries no corepack shim. Install
+      # the same Node major the GitHub workflows pin and put it first on PATH.
+      node_version=22.14.0
+      case "$(uname -m)" in
+        x86_64) node_arch=x64 ;;
+        aarch64) node_arch=arm64 ;;
+        *) echo "unsupported build architecture: $(uname -m)" >&2; exit 1 ;;
+      esac
+      node_home="$CRAFT_PART_BUILD/.node"
+      node_tarball="$CRAFT_PART_BUILD/node.tar.xz"
+      mkdir -p "$node_home"
+      # Download to a file rather than piping into tar: this script may run
+      # under dash, where a failed curl in a pipeline is masked and tar would
+      # "succeed" on empty input.
+      curl --proto '=https' --tlsv1.2 -fsSL -o "$node_tarball" \
+        "https://nodejs.org/dist/v${node_version}/node-v${node_version}-linux-${node_arch}.tar.xz"
+      tar -xJf "$node_tarball" -C "$node_home" --strip-components=1
+      rm -f "$node_tarball"
+      export PATH="$node_home/bin:$PATH"
+      node --version
+
+      # Non-interactive builds have no TTY to answer corepack's download prompt.
+      export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
       corepack enable
       corepack prepare pnpm@9.15.9 --activate
       pnpm install --frozen-lockfile
