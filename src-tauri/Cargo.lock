@@ -1285,7 +1285,7 @@ dependencies = [
 
 [[package]]
 name = "forwardemail-desktop"
-version = "0.12.48"
+version = "0.12.49"
 dependencies = [
  "core-foundation",
  "log",
