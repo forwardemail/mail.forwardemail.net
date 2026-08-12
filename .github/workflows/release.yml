@@ -393,6 +393,13 @@ jobs:
       && needs.build-mobile.result == 'success'
       && (needs.publish.result == 'success' || needs.publish.result == 'skipped')
       && vars.PUBLISH_FDROID_REPOSITORY == 'true'
+    # A reusable workflow cannot elevate permissions beyond this caller. Keep
+    # these scoped to the F-Droid Pages publisher rather than granting Pages
+    # access to the complete release orchestrator.
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
     uses: ./.github/workflows/publish-fdroid-repo.yml
     with:
       tag: v${{ needs.create-release.outputs.version }}

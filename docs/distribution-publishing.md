@@ -214,22 +214,27 @@ workflow and the command above.
 ### Enable hosting and release automation
 
 1. In **Settings → Pages**, select **GitHub Actions** as the build and deployment
-   source. Do not configure a `gh-pages` branch; the workflow deploys a Pages
-   artifact with GitHub's supported Pages actions. [6]
-2. Set `FDROID_REPOSITORY_URL` to the final HTTPS repository path when using a
-   custom domain. For standard project Pages it can be omitted and defaults to:
+   source. Do not configure a `gh-pages` branch; the workflow uses GitHub's
+   supported `configure-pages`, artifact-upload, and deployment actions. The
+   first successful deployment creates the project Pages site. [6]
+2. The standard project Pages URL requires **no `CNAME` file and no DNS setup**.
+   Leave `FDROID_REPOSITORY_URL` unset to use this default:
 
    ```text
    https://forwardemail.github.io/mail.forwardemail.net/fdroid/repo
    ```
 
-3. Set `PUBLISH_FDROID_REPOSITORY=true`. A successful tagged release first
+3. Use a custom domain only when you have deliberately configured its DNS and
+   GitHub Pages custom-domain setting. Then set `FDROID_REPOSITORY_URL` to the
+   final HTTPS `/fdroid/repo` path. Do **not** add a `CNAME` file merely to make
+   the default `forwardemail.github.io` URL work.
+4. Set `PUBLISH_FDROID_REPOSITORY=true`. A successful tagged release first
    uploads the Google-free APK to GitHub Releases, then the reusable publisher
    downloads exactly that asset, creates signed `index-v1.jar` and
    `index-v2.json` files with [fdroidserver](https://gitlab.com/fdroid/fdroidserver),
    and deploys only `/fdroid/repo` to Pages. The private key and build metadata
    are not included in the Pages artifact.
-4. Publish the repository URL and the SHA-256 certificate fingerprint obtained
+5. Publish the repository URL and the SHA-256 certificate fingerprint obtained
    above in the website and README only after the first deployment succeeds.
    Users should add the repository through their F-Droid client and compare the
    displayed fingerprint with the independently published value. [7]
@@ -242,9 +247,12 @@ colons):
 https://forwardemail.github.io/mail.forwardemail.net/fdroid/repo?fingerprint=<SHA256_FINGERPRINT>
 ```
 
-After an initial release, test with a clean F-Droid-compatible client. Add the
-repository, confirm its displayed signing fingerprint, refresh repositories,
-install Forward Email, and then confirm that the installed package identifier is
+After the deployment job reports success, open the published fingerprint URL
+before sharing the repository. A 404 means that Pages has not yet been enabled
+or no deployment has completed; it does **not** mean a CNAME is needed for the
+default project-site URL. Then test with a clean F-Droid-compatible client: add
+the repository, confirm its displayed signing fingerprint, refresh repositories,
+install Forward Email, and confirm that the installed package identifier is
 `net.forwardemail.mail` and that notifications can be configured through an
 installed UnifiedPush distributor.
 

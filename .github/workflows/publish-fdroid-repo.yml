@@ -24,9 +24,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  publish:
+  build:
     runs-on: ubuntu-22.04
+    # F-Droid signing secrets are scoped to the protected release environment.
     environment: release
+    permissions:
+      contents: read
+      pages: write
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -112,11 +116,29 @@ jobs:
           test -f public/fdroid/repo/index-v2.json
           find public -type f \( -name '*.apk' -o -name 'index-v*.json' -o -name 'index-v*.jar' \) | sort
 
+      # This initializes GitHub Pages for a repository that has not previously
+      # hosted a Pages site and supplies the canonical project-site metadata.
+      - name: Configure GitHub Pages
+        id: pages
+        uses: actions/configure-pages@v5
+
       - name: Upload GitHub Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
           path: fdroid/public
 
+  deploy:
+    needs: build
+    runs-on: ubuntu-22.04
+    # GitHub Pages uses this environment for deployment protection and records
+    # the resulting project-site URL in the run summary.
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    permissions:
+      pages: write
+      id-token: write
+    steps:
       - name: Deploy GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4

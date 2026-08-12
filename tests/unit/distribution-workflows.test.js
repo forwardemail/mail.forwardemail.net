@@ -20,13 +20,26 @@ describe('distribution workflow contracts', () => {
   });
 
   it('publishes the F-Droid index only after the Google-free release APK exists', () => {
-    expect(releaseWorkflow).toContain('publish-fdroid-repository:');
-    expect(releaseWorkflow).toContain("vars.PUBLISH_FDROID_REPOSITORY == 'true'");
+    const fdroidCallerStart = releaseWorkflow.indexOf('  publish-fdroid-repository:');
+    const homebrewCallerStart = releaseWorkflow.indexOf(
+      '  publish-homebrew-tap:',
+      fdroidCallerStart,
+    );
+    const fdroidCaller = releaseWorkflow.slice(fdroidCallerStart, homebrewCallerStart);
+
+    expect(fdroidCallerStart).toBeGreaterThan(-1);
+    expect(homebrewCallerStart).toBeGreaterThan(fdroidCallerStart);
+    expect(fdroidCaller).toContain("vars.PUBLISH_FDROID_REPOSITORY == 'true'");
+    // Reusable workflows cannot elevate permissions beyond their caller.
+    expect(fdroidCaller).toMatch(/permissions:[\s\S]*pages: write[\s\S]*id-token: write/);
     expect(fdroidWorkflow).toContain('forwardemail-mail_*_fdroid.apk');
     expect(fdroidWorkflow).toContain('FDROID_KEYSTORE_BASE64');
     expect(fdroidWorkflow).toContain('FDROID_KEYSTORE_PASSWORD');
     expect(fdroidWorkflow).toContain('fdroid/public');
     expect(fdroidWorkflow).toContain('fingerprint.txt');
+    expect(fdroidWorkflow).toContain('actions/configure-pages@v5');
+    expect(fdroidWorkflow).toContain('needs: build');
+    expect(fdroidWorkflow).toContain('name: github-pages');
     expect(fdroidWorkflow).toContain('actions/deploy-pages@v4');
   });
 
