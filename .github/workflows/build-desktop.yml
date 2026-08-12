@@ -8,6 +8,11 @@ on:
       - 'src/**'
       - 'package.json'
       - 'pnpm-lock.yaml'
+      - 'snap/**'
+      - 'net.forwardemail.mail.yml'
+      - 'net.forwardemail.mail.desktop'
+      - 'net.forwardemail.mail.metainfo.xml'
+      - 'flatpak-*-sources.json'
   workflow_dispatch:
 
 # Minimal permissions — only what's needed for CI builds
@@ -104,4 +109,47 @@ jobs:
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.AppImage
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.msi
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.exe
+          retention-days: 7
+
+  flatpak:
+    name: Build (Flatpak)
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      # Builds the actual source-based, network-isolated bundle against the
+      # manifest that will be submitted to Flathub.
+      - name: Build Flatpak bundle
+        uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          bundle: forwardemail-mail.flatpak
+          manifest-path: net.forwardemail.mail.yml
+          cache-key: flatpak-${{ github.sha }}
+
+      - name: Upload Flatpak bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-flatpak
+          path: forwardemail-mail.flatpak
+          retention-days: 7
+
+  snap:
+    name: Build (Snap)
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Build strict-confinement Snap
+        id: snapcraft
+        uses: snapcore/action-build@v1
+        with:
+          path: snap
+
+      - name: Upload Snap package
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-snap
+          path: ${{ steps.snapcraft.outputs.snap }}
           retention-days: 7

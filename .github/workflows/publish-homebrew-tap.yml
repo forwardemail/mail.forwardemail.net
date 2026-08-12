@@ -1,0 +1,128 @@
+name: Update Homebrew tap
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: Published GitHub release tag, for example v0.12.46
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published GitHub release tag, for example v0.12.46
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-homebrew-tap
+  cancel-in-progress: false
+
+jobs:
+  update-cask:
+    # Resolve its cross-repository token and controls from the protected
+    # environment, matching the other release distribution lanes.
+    environment: release
+    # Keep current release automation unchanged until the separate tap and its
+    # fine-grained token have been configured. Once this opt-in is enabled, the
+    # workflow fails if it cannot create or update the cask pull request.
+    if: vars.PUBLISH_HOMEBREW_TAP == 'true'
+    runs-on: ubuntu-22.04
+    env:
+      TAG: ${{ inputs.tag || github.event.inputs.tag }}
+      TAP_REPOSITORY: ${{ vars.HOMEBREW_TAP_REPOSITORY || 'forwardemail/homebrew-forwardemail' }}
+      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+    steps:
+      - name: Checkout release source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Download and verify macOS release assets
+        id: dmg
+        run: |
+          set -euo pipefail
+          : "${HOMEBREW_TAP_TOKEN:?Set HOMEBREW_TAP_TOKEN in the release environment}"
+          version="${TAG#v}"
+          case "$version" in
+            *[!0-9.]* | '') echo "::error::Invalid release tag: $TAG"; exit 1 ;;
+          esac
+          base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}"
+          curl --fail --location --retry 3 --retry-all-errors \
+            --output Forward.Email_"$version"_aarch64.dmg \
+            "$base/Forward.Email_${version}_aarch64.dmg"
+          curl --fail --location --retry 3 --retry-all-errors \
+            --output Forward.Email_"$version"_x64.dmg \
+            "$base/Forward.Email_${version}_x64.dmg"
+          arm64_sha=$(sha256sum Forward.Email_"$version"_aarch64.dmg | cut -d ' ' -f 1)
+          intel_sha=$(sha256sum Forward.Email_"$version"_x64.dmg | cut -d ' ' -f 1)
+          {
+            echo "version=$version"
+            echo "arm64_sha=$arm64_sha"
+            echo "intel_sha=$intel_sha"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Checkout the first-party Homebrew tap
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: ${{ env.TAP_REPOSITORY }}
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+
+      - name: Write updated architecture-specific cask
+        env:
+          VERSION: ${{ steps.dmg.outputs.version }}
+          ARM64_SHA: ${{ steps.dmg.outputs.arm64_sha }}
+          INTEL_SHA: ${{ steps.dmg.outputs.intel_sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p tap/Casks
+          cat > tap/Casks/forward-email.rb <<EOF
+          cask "forward-email" do
+            version "$VERSION"
+
+            on_arm do
+              sha256 "$ARM64_SHA"
+
+              url "https://github.com/${GITHUB_REPOSITORY}/releases/download/v#{version}/Forward.Email_#{version}_aarch64.dmg"
+            end
+
+            on_intel do
+              sha256 "$INTEL_SHA"
+
+              url "https://github.com/${GITHUB_REPOSITORY}/releases/download/v#{version}/Forward.Email_#{version}_x64.dmg"
+            end
+
+            name "Forward Email"
+            desc "Private and secure email client"
+            homepage "https://forwardemail.net"
+
+            livecheck do
+              url :url
+              strategy :github_latest
+            end
+
+            auto_updates true
+
+            app "Forward Email.app"
+          end
+          EOF
+          ruby -c tap/Casks/forward-email.rb
+
+      - name: Create or update tap pull request
+        id: cpr
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+          branch: automation/forward-email-${{ steps.dmg.outputs.version }}
+          delete-branch: true
+          commit-message: 'chore(cask): update Forward Email to ${{ steps.dmg.outputs.version }}'
+          title: 'chore(cask): update Forward Email to ${{ steps.dmg.outputs.version }}'
+          body: |
+            Updates the first-party Forward Email cask from release `${{ env.TAG }}`.
+
+            Both DMGs were downloaded from the GitHub Release in this run and
+            SHA-256 values were calculated before this pull request was opened.
+          labels: automated

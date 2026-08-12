@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>net.forwardemail.mail</id>
+  <name>Forward Email</name>
+  <summary>Private and secure email client</summary>
+  <developer id="net.forwardemail">
+    <name>Forward Email LLC</name>
+  </developer>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>BUSL-1.1</project_license>
+  <description>
+    <p>
+      Forward Email is the official desktop email client for Forward Email
+      accounts. It keeps your mailbox available in a responsive native desktop
+      experience while preserving the privacy-focused features of the service.
+    </p>
+    <p>
+      The application supports multiple accounts, local encrypted storage,
+      fast search, folders, labels, contacts, calendars, message composition,
+      attachments, desktop notifications, and keyboard shortcuts.
+    </p>
+  </description>
+  <launchable type="desktop-id">net.forwardemail.mail.desktop</launchable>
+  <url type="homepage">https://forwardemail.net</url>
+  <url type="bugtracker">https://github.com/forwardemail/mail.forwardemail.net/issues</url>
+  <url type="vcs-browser">https://github.com/forwardemail/mail.forwardemail.net</url>
+  <screenshots>
+    <screenshot type="default">
+      <caption>Mailbox in dark mode</caption>
+      <image type="source">https://raw.githubusercontent.com/forwardemail/mail.forwardemail.net/v0.12.46/docs/screenshots/desktop/mail-dark.jpg</image>
+    </screenshot>
+    <screenshot>
+      <caption>Compose a new email</caption>
+      <image type="source">https://raw.githubusercontent.com/forwardemail/mail.forwardemail.net/v0.12.46/docs/screenshots/desktop/compose-light.jpg</image>
+    </screenshot>
+  </screenshots>
+  <releases>
+    <release version="0.12.46" date="2026-08-09"/>
+  </releases>
+  <content_rating type="oars-1.1"/>
+  <provides>
+    <binary>forwardemail-desktop</binary>
+    <mediatype>x-scheme-handler/mailto</mediatype>
+    <mediatype>x-scheme-handler/forwardemail</mediatype>
+  </provides>
+  <translation type="gettext">forwardemail-mail</translation>
+</component>

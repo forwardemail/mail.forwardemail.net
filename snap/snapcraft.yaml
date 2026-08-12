@@ -1,0 +1,81 @@
+name: forwardemail-mail
+base: core24
+adopt-info: forwardemail-mail
+summary: Private and secure email client
+license: BUSL-1.1
+contact: https://github.com/forwardemail/mail.forwardemail.net/issues
+issues: https://github.com/forwardemail/mail.forwardemail.net/issues
+source-code: https://github.com/forwardemail/mail.forwardemail.net
+donation: https://forwardemail.net/donate
+description: |
+  Forward Email is a privacy-focused desktop email client for Forward Email
+  accounts. It supports encrypted local storage, multiple accounts, search,
+  folders, contacts, calendars, and native desktop notifications.
+
+grade: stable
+confinement: strict
+
+platforms:
+  amd64:
+  arm64:
+
+apps:
+  forwardemail-mail:
+    command: usr/bin/forwardemail-desktop
+    desktop: usr/share/applications/Forward Email.desktop
+    plugs:
+      - home
+      - network
+      - network-status
+
+parts:
+  forwardemail-mail:
+    plugin: nil
+    source: ..
+    build-packages:
+      - build-essential
+      - ca-certificates
+      - curl
+      - file
+      - libayatana-appindicator3-dev
+      - librsvg2-dev
+      - libssl-dev
+      - libwebkit2gtk-4.1-dev
+      - nodejs
+      - npm
+      - patchelf
+      - pkg-config
+    stage-packages:
+      - libayatana-appindicator3-1
+      - librsvg2-2
+      - libwebkit2gtk-4.1-0
+      - xdg-utils
+    override-build: |
+      set -eux
+
+      # Snapcraft's core24 build image does not guarantee the Rust or pnpm
+      # versions this Tauri project needs. Install project-pinned toolchains
+      # inside the build part; none are staged into the finished snap.
+      export RUSTUP_HOME="$CRAFT_PART_BUILD/.rustup"
+      export CARGO_HOME="$CRAFT_PART_BUILD/.cargo"
+      export PATH="$CARGO_HOME/bin:$PATH"
+      curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
+
+      corepack enable
+      corepack prepare pnpm@9.15.9 --activate
+      pnpm install --frozen-lockfile
+      pnpm tauri build --bundles deb
+
+      deb=$(find src-tauri/target/release/bundle/deb -maxdepth 1 -name '*.deb' -type f | head -n 1)
+      test -n "$deb"
+      dpkg-deb --extract "$deb" "$CRAFT_PART_INSTALL"
+
+      # Keep the Snap package version exactly aligned with tauri.conf.json.
+      snapcraftctl set-version "$(node -p \"require('./src-tauri/tauri.conf.json').version\")"
+
+      # The desktop file comes from the Debian package. Under strict confinement
+      # its executable must be the Snap application wrapper, not the raw binary.
+      sed -i 's|^Exec=forwardemail-desktop|Exec=forwardemail-mail|' \
+        "$CRAFT_PART_INSTALL/usr/share/applications/Forward Email.desktop"
+      sed -i 's|^Icon=forwardemail-desktop|Icon=forwardemail-desktop|' \
+        "$CRAFT_PART_INSTALL/usr/share/applications/Forward Email.desktop"

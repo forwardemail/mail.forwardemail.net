@@ -72,6 +72,22 @@ Google Play Console; it is not used for FCM delivery and must not be embedded in
 When `GOOGLE_PLAY_SERVICE_ACCOUNT` is absent, the workflow still publishes the signed APK and AAB
 to the GitHub Release and skips only the Play upload.
 
+### Distribution store and repository inputs
+
+| Name                          | Type                             | Required                                                    | Purpose                                                                                               |
+| ----------------------------- | -------------------------------- | ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `SNAPCRAFT_STORE_CREDENTIALS` | `release` secret                 | Required only when Snap Store publishing is enabled         | Contents exported by `snapcraft export-login`, scoped to `forwardemail-mail`                          |
+| `PUBLISH_SNAP_STORE`          | Repository or `release` variable | No; set to `true` to enable                                 | Sends the release Snap to the Snap Store `stable` channel                                             |
+| `FDROID_KEYSTORE_BASE64`      | `release` secret                 | Required only when F-Droid repository publishing is enabled | Base64-encoded dedicated PKCS#12 key used to sign F-Droid repository indexes                          |
+| `FDROID_KEYSTORE_PASSWORD`    | `release` secret                 | Required only when F-Droid repository publishing is enabled | Password for the F-Droid keystore and `forwardemail-fdroid-repo` alias                                |
+| `FDROID_REPOSITORY_URL`       | Repository or `release` variable | Optional                                                    | Public HTTPS `/fdroid/repo` URL embedded in the generated index; defaults to project GitHub Pages     |
+| `PUBLISH_FDROID_REPOSITORY`   | Repository or `release` variable | No; set to `true` to enable                                 | Deploys the signed self-hosted F-Droid-compatible repository through GitHub Pages                     |
+| `HOMEBREW_TAP_TOKEN`          | `release` secret                 | Required only when Homebrew tap automation is enabled       | Fine-grained token or GitHub App token with write and pull-request access only to the first-party tap |
+| `HOMEBREW_TAP_REPOSITORY`     | Repository or `release` variable | Optional                                                    | Target tap; defaults to `forwardemail/homebrew-forwardemail`                                          |
+| `PUBLISH_HOMEBREW_TAP`        | Repository or `release` variable | No; set to `true` to enable                                 | Opens or refreshes the versioned cask pull request in the target tap                                  |
+
+The `PUBLISH_*` controls must stay unset until each channel's account, review process, and credentials are ready. When a control is `true`, the release summary treats a failed corresponding lane as a release failure. Flathub does not use a source-repository secret: after the initial submission is accepted, its External Data Checker operates in the separate `flathub/net.forwardemail.mail` repository.
+
 ### Deployment secrets and variables
 
 | Name                   | Type     | Required            | Purpose                                                       |
@@ -85,10 +101,13 @@ to the GitHub Release and skips only the Play upload.
 
 ### Release control and notification inputs
 
-| Name               | Type                | Required | Purpose                                                                                        |
-| ------------------ | ------------------- | -------- | ---------------------------------------------------------------------------------------------- |
-| `ALLOW_NO_UPDATER` | Repository variable | No       | Emergency override; `true` permits desktop release artifacts without Tauri updater signatures  |
-| `MATRIX_TOKEN`     | Repository secret   | No       | Matrix access token used by the release summary and repository-activity notification workflows |
+| Name                        | Type                             | Required | Purpose                                                                                        |
+| --------------------------- | -------------------------------- | -------- | ---------------------------------------------------------------------------------------------- |
+| `ALLOW_NO_UPDATER`          | Repository variable              | No       | Emergency override; `true` permits desktop release artifacts without Tauri updater signatures  |
+| `MATRIX_TOKEN`              | Repository secret                | No       | Matrix access token used by the release summary and repository-activity notification workflows |
+| `PUBLISH_SNAP_STORE`        | Repository or `release` variable | No       | Enables automated Snap Store stable-channel publication                                        |
+| `PUBLISH_FDROID_REPOSITORY` | Repository or `release` variable | No       | Enables signed F-Droid repository publication to GitHub Pages                                  |
+| `PUBLISH_HOMEBREW_TAP`      | Repository or `release` variable | No       | Enables first-party Homebrew tap pull-request automation                                       |
 
 Leave `ALLOW_NO_UPDATER` unset during normal operation. It exists only to unblock an intentional non-updatable desktop release when updater signing is unavailable. Because the Matrix jobs do not attach the `release` environment, `MATRIX_TOKEN` must be a repository Actions secret rather than an environment-only secret. When it is absent, release artifacts and deployment are unaffected; only Matrix delivery is skipped.
 
@@ -274,6 +293,46 @@ For the App Store Connect API key, do **not** base64-encode it. Paste the full m
 
 If your existing `APPLE_CERTIFICATE` export already contains both the macOS Developer ID certificate and an Apple Distribution certificate, the workflow can reuse `APPLE_CERTIFICATE` and `APPLE_CERTIFICATE_PASSWORD` and you may omit `IOS_CERTIFICATE_BASE64` and `IOS_CERTIFICATE_PASSWORD`.
 
+### Snap Store credentials
+
+Reserve `forwardemail-mail` under the approved publisher account before enabling automation. On a trusted workstation with [Snapcraft](https://github.com/canonical/snapcraft) installed and authenticated, export a restricted, expiring macaroon:
+
+```bash
+snapcraft export-login \
+  --snaps=forwardemail-mail \
+  --channels=stable \
+  --acls=package_access,package_push,package_update,package_release \
+  --expires=2027-08-12 \
+  forwardemail-snapcraft-login.txt
+```
+
+Paste the entire resulting file into the `release` environment secret `SNAPCRAFT_STORE_CREDENTIALS`, securely delete the local file, and then set `PUBLISH_SNAP_STORE=true`. Rotate the secret before its expiry with a newly exported, restricted credential. The public build job still uploads a `.snap` asset even while the store-publish variable is not enabled.
+
+### F-Droid repository signing inputs
+
+Create a dedicated repository-index key; it must not be the Android application signing key. The workflow has a fixed alias, so use this command exactly and keep an encrypted offline backup of the resulting `.p12` file:
+
+```bash
+keytool -genkeypair \
+  -keystore forwardemail-fdroid-repo.p12 \
+  -storetype PKCS12 \
+  -alias forwardemail-fdroid-repo \
+  -keyalg RSA -keysize 4096 -validity 3650 \
+  -dname "CN=Forward Email F-Droid Repository, O=Forward Email LLC, C=US"
+
+keytool -list -v -keystore forwardemail-fdroid-repo.p12 \
+  -alias forwardemail-fdroid-repo
+base64 -w 0 forwardemail-fdroid-repo.p12
+```
+
+Store the last command's one-line output as `FDROID_KEYSTORE_BASE64` and the chosen password as `FDROID_KEYSTORE_PASSWORD`, both in the `release` environment. Record the SHA-256 certificate fingerprint from the `keytool -list` output separately for public user verification. Enable **Settings → Pages → GitHub Actions** and then set `PUBLISH_FDROID_REPOSITORY=true`. `FDROID_REPOSITORY_URL` may be omitted for the default project Pages URL, or set to the final HTTPS `/fdroid/repo` URL before the first publication.
+
+### Homebrew tap automation credentials
+
+Create `forwardemail/homebrew-forwardemail` with `Casks/forward-email.rb` from the source repository's `homebrew/` directory. Then create a fine-grained personal access token or GitHub App installation token limited to the tap repository, with **Contents: read/write** and **Pull requests: read/write**. Store it as `HOMEBREW_TAP_TOKEN` in the `release` environment, set `HOMEBREW_TAP_REPOSITORY` if the non-default repository is used, and finally set `PUBLISH_HOMEBREW_TAP=true`.
+
+The token must be able to create a pull request, not merely push commits. This is why `GITHUB_TOKEN` is not used: it cannot independently authorize cross-repository writes to the tap. The updater downloads the release's two macOS DMGs and calculates their SHA-256 hashes itself before it opens the PR.
+
 ### Cloudflare and R2 deployment secrets
 
 The web deployment pipeline uses Cloudflare R2 for static assets and Cloudflare Workers for serving and cache management.
@@ -292,16 +351,19 @@ A full step-by-step walkthrough for the Cloudflare values is in [deployment-chec
 
 After populating the values above, verify the setup in the following order.
 
-| Check                                                                 | Expected result                                                                                           |
-| --------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| `Settings → Secrets and variables → Actions → Environments → release` | All required signing, store, and deployment secrets are present in the `release` environment              |
-| `Settings → Secrets and variables → Actions → Secrets`                | Optional `MATRIX_TOKEN` is a repository secret if Matrix delivery is enabled                              |
-| `Settings → Secrets and variables → Actions → Variables`              | `VAPID_PUBLIC_KEY`, `R2_BUCKET`, and any needed `PLAY_TRACK` or `IOS_SIGNING_IDENTITY` are present        |
-| Updater override                                                      | `ALLOW_NO_UPDATER` is absent or not `true` during normal production releases                              |
-| Desktop release workflow                                              | `.sig` updater files are created; a missing updater key fails unless the break-glass override is explicit |
-| iOS release workflow                                                  | The job does not skip, logs the active Xcode and iPhoneOS SDK, and uploads an IPA to TestFlight           |
-| Android release workflow                                              | Exactly one dual-provider APK and one matching AAB are produced; missing release inputs fail at preflight |
-| Android push configuration                                            | `VAPID_PUBLIC_KEY` equals the backend public key; the release decodes a valid `google-services.json`      |
+| Check                                                                 | Expected result                                                                                                                   |
+| --------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `Settings → Secrets and variables → Actions → Environments → release` | All required signing, store, and deployment secrets are present in the `release` environment                                      |
+| `Settings → Secrets and variables → Actions → Secrets`                | Optional `MATRIX_TOKEN` is a repository secret if Matrix delivery is enabled                                                      |
+| `Settings → Secrets and variables → Actions → Variables`              | `VAPID_PUBLIC_KEY`, `R2_BUCKET`, and any needed `PLAY_TRACK`, `IOS_SIGNING_IDENTITY`, or enabled `PUBLISH_*` controls are present |
+| Updater override                                                      | `ALLOW_NO_UPDATER` is absent or not `true` during normal production releases                                                      |
+| Desktop release workflow                                              | `.sig` updater files are created; a missing updater key fails unless the break-glass override is explicit                         |
+| iOS release workflow                                                  | The job does not skip, logs the active Xcode and iPhoneOS SDK, and uploads an IPA to TestFlight                                   |
+| Android release workflow                                              | Exactly one dual-provider APK and one matching AAB are produced; missing release inputs fail at preflight                         |
+| Android push configuration                                            | `VAPID_PUBLIC_KEY` equals the backend public key; the release decodes a valid `google-services.json`                              |
+| Enabled Snap Store lane                                               | The scoped credential is present and `snap info forwardemail-mail` reports the release version                                    |
+| Enabled F-Droid lane                                                  | GitHub Pages serves signed indexes at `/fdroid/repo` and the client fingerprint matches the recorded key                          |
+| Enabled Homebrew lane                                                 | The tap PR contains the release version and both newly calculated DMG SHA-256 values                                              |
 
 ## Related documentation
 
@@ -311,3 +373,4 @@ After populating the values above, verify the setup in the following order.
 - [desktop-ci-secrets.md](./desktop-ci-secrets.md) — Desktop-focused signing notes
 - [deployment-checklist.md](./deployment-checklist.md) — Full Cloudflare and R2 deployment setup
 - [SECURITY.md](./SECURITY.md) — Code-signing trust and supply-chain notes
+- [distribution-publishing.md](./distribution-publishing.md) — Step-by-step Snap, Flathub, F-Droid, Homebrew, and Obtainium setup

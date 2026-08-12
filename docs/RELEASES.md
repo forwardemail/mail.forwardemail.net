@@ -16,16 +16,16 @@ suite twice. GitHub therefore shows the nested `build-desktop / E2E webview (gat
 design. The six macOS, Windows, and Linux desktop build rows are still created; a skipped nested
 gate does not mean desktop CI was removed.
 
-| Platform | Architecture | Installer bundles                                                                                                     | Updater/signature assets                      |
-| -------- | ------------ | --------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
-| macOS    | arm64        | `Forward.Email_<version>_aarch64.dmg`                                                                                 | `Forward.Email_aarch64.app.tar.gz` and `.sig` |
-| macOS    | x64          | `Forward.Email_<version>_x64.dmg`                                                                                     | `Forward.Email_x64.app.tar.gz` and `.sig`     |
-| Windows  | x64          | `Forward.Email_<version>_x64_en-US.msi`, `Forward.Email_<version>_x64-setup.exe`                                      | matching `.sig` sidecars                      |
-| Windows  | arm64        | `Forward.Email_<version>_arm64-setup.exe`                                                                             | matching `.sig` sidecar                       |
-| Linux    | x64          | `Forward.Email_<version>_amd64.AppImage`, `Forward.Email_<version>_amd64.deb`, `Forward.Email-<version>-1.x86_64.rpm` | matching `.sig` sidecars                      |
-| Linux    | arm64        | `Forward.Email_<version>_arm64.deb`, `Forward.Email-<version>-1.aarch64.rpm`                                          | matching `.sig` sidecars                      |
+| Platform | Architecture | Installer bundles                                                                                                                                               | Updater/signature assets                      |
+| -------- | ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
+| macOS    | arm64        | `Forward.Email_<version>_aarch64.dmg`                                                                                                                           | `Forward.Email_aarch64.app.tar.gz` and `.sig` |
+| macOS    | x64          | `Forward.Email_<version>_x64.dmg`                                                                                                                               | `Forward.Email_x64.app.tar.gz` and `.sig`     |
+| Windows  | x64          | `Forward.Email_<version>_x64_en-US.msi`, `Forward.Email_<version>_x64-setup.exe`                                                                                | matching `.sig` sidecars                      |
+| Windows  | arm64        | `Forward.Email_<version>_arm64-setup.exe`                                                                                                                       | matching `.sig` sidecar                       |
+| Linux    | x64          | `Forward.Email_<version>_amd64.AppImage`, `Forward.Email_<version>_amd64.deb`, `Forward.Email-<version>-1.x86_64.rpm`, `forwardemail-mail_<version>_amd64.snap` | matching `.sig` sidecars                      |
+| Linux    | arm64        | `Forward.Email_<version>_arm64.deb`, `Forward.Email-<version>-1.aarch64.rpm`, `forwardemail-mail_<version>_arm64.snap`                                          | matching `.sig` sidecars                      |
 
-The workflow uses native GitHub-hosted runners for `macos-15`, `macos-15-intel`, `ubuntu-22.04`, `ubuntu-22.04-arm`, `windows-latest`, and `windows-11-arm`. Linux arm64 intentionally publishes Debian and RPM bundles only, because the broader Linux bundle set is not reliable on that ARM runner. Windows arm64 currently publishes the NSIS setup executable rather than MSI so the arm64 path stays aligned with the documented Windows installer support in Tauri.
+The workflow uses native GitHub-hosted runners for `macos-15`, `macos-15-intel`, `ubuntu-22.04`, `ubuntu-22.04-arm`, `windows-latest`, and `windows-11-arm`. Linux arm64 intentionally limits the native Tauri bundles to Debian and RPM because the broader Linux bundle set is not reliable on that ARM runner; it additionally builds the native arm64 Snap. Windows arm64 currently publishes the NSIS setup executable rather than MSI so the arm64 path stays aligned with the documented Windows installer support in Tauri.
 
 ```bash
 pnpm release:desktop patch
@@ -82,8 +82,23 @@ The exact desktop asset basenames are listed in the matrix above. Tauri also upl
 | ----------------------------------------- | ------------------------------------------------------------------------------------------------------- |
 | `forwardemail-mail_<version>_android.apk` | Signed sideloadable APK containing both FCM and UnifiedPush; users may select a UnifiedPush distributor |
 | `forwardemail-mail_<version>_android.aab` | The same dual-provider application as an Android App Bundle for Google Play                             |
+| `forwardemail-mail_<version>_fdroid.apk`  | Signed Google-free UnifiedPush-only APK for the self-hosted F-Droid repository and Obtainium            |
 
-Built by [`release-mobile.yml`](../.github/workflows/release-mobile.yml). The release job requires Android signing secrets, Firebase client configuration, and the matching VAPID public key before toolchain setup (see [SECRETS.md](./SECRETS.md#generating-the-android-keystore)). Google-free downstream and F-Droid builds remain available through the UnifiedPush-only build command, but the GitHub release intentionally publishes one APK rather than parallel provider-specific APKs.
+Built by [`release-mobile.yml`](../.github/workflows/release-mobile.yml). The dual-provider Android release job requires Android signing secrets, Firebase client configuration, and the matching VAPID public key before toolchain setup (see [SECRETS.md](./SECRETS.md#generating-the-android-keystore)). The separate `android-fdroid` job uses the same Android release certificate and `pnpm tauri:android:build:fdroid`, but excludes Firebase and Google Play Services.
+
+### Additional distribution channels
+
+The regular `v*` orchestrator invokes all configured downstream distribution lanes after the GitHub Release artifacts are ready. The table intentionally distinguishes **asset production** from **store publication**: each native Linux row attaches its architecture-matched Snap to the GitHub Release, while every store-facing action remains opt-in until its account and credentials are configured.
+
+| Channel            | Release behavior                                                                                                | Opt-in control                        | Operator action after a release                              |
+| ------------------ | --------------------------------------------------------------------------------------------------------------- | ------------------------------------- | ------------------------------------------------------------ |
+| Snap Store         | Builds a strict Snap and adds it to the GitHub Release; publishes it to the `stable` store channel when enabled | `PUBLISH_SNAP_STORE=true`             | Verify the stable listing and test `snap install`            |
+| Flathub            | Flathub rebuilds the submitted source manifest; the source workflow provides only PR verification               | Flathub application acceptance        | Review the External Data Checker update PR                   |
+| F-Droid repository | Downloads the signed Google-free APK, creates signed indexes, and deploys the repository to GitHub Pages        | `PUBLISH_FDROID_REPOSITORY=true`      | Check Pages, index signature/fingerprint, and client refresh |
+| Homebrew tap       | Downloads both macOS DMGs, calculates checksums, and opens/updates a cask pull request in the separate tap      | `PUBLISH_HOMEBREW_TAP=true`           | Review and merge the tap pull request                        |
+| Obtainium          | Tracks the Google-free GitHub Release APK directly                                                              | Always available after the APK exists | No publisher action required                                 |
+
+The full one-time setup, secret generation, installation commands, and failure handling are in [distribution-publishing.md](./distribution-publishing.md).
 
 ### iOS
 
@@ -234,3 +249,4 @@ drop back to `4.0` — it's no longer in Ubuntu 24 / Debian 13 repos
 - [DEVELOPMENT.md](./DEVELOPMENT.md) — Building for production locally
 - [Desktop CI Secrets](./desktop-ci-secrets.md) — Detailed desktop signing setup
 - [iOS Setup](./ios-setup.md) — Local iOS setup, CI signing, and TestFlight workflow
+- [Distribution Publishing Guide](./distribution-publishing.md) — Snap, Flathub, F-Droid, Homebrew, and Obtainium setup and operations

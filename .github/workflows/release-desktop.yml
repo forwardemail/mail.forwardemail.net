@@ -259,6 +259,49 @@ jobs:
           prerelease: false
           args: ${{ matrix.args }}
 
+      # Build strict-confinement Snaps from the same tagged source on both
+      # native Linux architectures. Snapcraft's LXD build supplies the isolated
+      # build environment and each resulting .snap is uploaded to this release.
+      - name: Build Snap package
+        if: matrix.target == 'x86_64-unknown-linux-gnu' || matrix.target == 'aarch64-unknown-linux-gnu'
+        id: snapcraft
+        uses: snapcore/action-build@v1
+        with:
+          path: snap
+
+      - name: Attest Snap build provenance
+        if: matrix.target == 'x86_64-unknown-linux-gnu' || matrix.target == 'aarch64-unknown-linux-gnu'
+        uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2
+        with:
+          subject-path: ${{ steps.snapcraft.outputs.snap }}
+
+      - name: Upload Snap package to release
+        if: matrix.target == 'x86_64-unknown-linux-gnu' || matrix.target == 'aarch64-unknown-linux-gnu'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_ID: ${{ steps.resolve_release.outputs.release_id }}
+          SNAP: ${{ steps.snapcraft.outputs.snap }}
+        run: |
+          set -euo pipefail
+          test -f "$SNAP"
+          name=$(basename "$SNAP")
+          existing_id=$(gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}/assets" --jq ".[] | select(.name==\"$name\") | .id" | head -n 1)
+          [ -z "$existing_id" ] || gh api -X DELETE "repos/${GITHUB_REPOSITORY}/releases/assets/${existing_id}"
+          gh api --method POST -H "Content-Type: application/octet-stream" \
+            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}/assets?name=${name}" --input "$SNAP"
+
+      # Publishing to the Snap Store is intentionally opt-in so existing
+      # releases are not blocked before the store name and scoped credentials
+      # have been configured. Once enabled, a missing credential fails closed.
+      - name: Publish Snap to stable channel
+        if: (matrix.target == 'x86_64-unknown-linux-gnu' || matrix.target == 'aarch64-unknown-linux-gnu') && vars.PUBLISH_SNAP_STORE == 'true'
+        uses: snapcore/action-publish@v1
+        env:
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
+        with:
+          snap: ${{ steps.snapcraft.outputs.snap }}
+          release: stable
+
       # Structural asserts on the macOS bundle BEFORE we publish it.
       # Catches the class of bug where codesign + notarization succeed at
       # build time but the kernel rejects the binary at exec time due to

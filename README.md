@@ -7,6 +7,8 @@ This is the official, open-source, and end-to-end encrypted webmail client for [
 <!-- readme-toc:start -->
 
 - [Downloads & Releases](#downloads--releases)
+  - [Linux package managers](#linux-package-managers)
+  - [Android without Google Play](#android-without-google-play)
   - [Ubuntu / Debian installation](#ubuntu--debian-installation)
 - [Screenshots](#screenshots)
 - [Security & Privacy](#security--privacy)
@@ -46,16 +48,66 @@ This is the official, open-source, and end-to-end encrypted webmail client for [
 
 Official desktop and Android artifacts are published on the [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases) page. Desktop builds are produced by the public [GitHub Actions](https://github.com/forwardemail/mail.forwardemail.net/actions) release workflows, and the desktop release matrix now targets **macOS arm64/x64**, **Windows x64/arm64**, and **Linux x64/arm64**.
 
-| Platform    | Architecture          | Download                                                                                                           | Store                     |
-| :---------- | :-------------------- | :----------------------------------------------------------------------------------------------------------------- | :------------------------ |
-| **Web**     | —                     | [mail.forwardemail.net](https://mail.forwardemail.net)                                                             | —                         |
-| **Windows** | x64                   | `.msi` / `.exe` on [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases)               | —                         |
-| **Windows** | arm64                 | `-setup.exe` on [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases)                  | —                         |
-| **macOS**   | Apple Silicon & Intel | `.dmg` on [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases)                        | App Store (Coming Soon)   |
-| **Linux**   | x64                   | `.deb` / `.AppImage` / `.rpm` on [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases) | —                         |
-| **Linux**   | arm64                 | `.deb` / `.rpm` on [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases)               | —                         |
-| **Android** | Universal             | `.apk` / `.aab` on [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases)               | Google Play (Coming Soon) |
-| **iOS**     | arm64                 | TestFlight / App Store distribution                                                                                | App Store (Coming Soon)   |
+[![Snap Store](https://snapcraft.io/forwardemail-mail/badge.svg)](https://snapcraft.io/forwardemail-mail) [![Flathub](https://img.shields.io/flathub/v/net.forwardemail.mail?label=Flathub)](https://flathub.org/apps/net.forwardemail.mail) [![GitHub Release](https://img.shields.io/github/v/release/forwardemail/mail.forwardemail.net?label=GitHub%20Release)](https://github.com/forwardemail/mail.forwardemail.net/releases/latest)
+
+| Platform    | Architecture          | Download                                                                                                                      | Store                                                     |
+| :---------- | :-------------------- | :---------------------------------------------------------------------------------------------------------------------------- | :-------------------------------------------------------- |
+| **Web**     | —                     | [mail.forwardemail.net](https://mail.forwardemail.net)                                                                        | —                                                         |
+| **Windows** | x64                   | `.msi` / `.exe` on [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases)                          | —                                                         |
+| **Windows** | arm64                 | `-setup.exe` on [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases)                             | —                                                         |
+| **macOS**   | Apple Silicon & Intel | `.dmg` on [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases)                                   | App Store (Coming Soon)                                   |
+| **Linux**   | x64                   | `.deb` / `.AppImage` / `.rpm` on [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases)            | —                                                         |
+| **Linux**   | arm64                 | `.deb` / `.rpm` on [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases)                          | —                                                         |
+| **Linux**   | x64 / arm64           | `snap install forwardemail-mail` after publication                                                                            | [Snap Store](https://snapcraft.io/forwardemail-mail)      |
+| **Linux**   | x64 / arm64           | `flatpak install flathub net.forwardemail.mail` after publication                                                             | [Flathub](https://flathub.org/apps/net.forwardemail.mail) |
+| **Android** | Universal             | Dual-provider `.apk` / `.aab` on [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases)            | Google Play (Coming Soon)                                 |
+| **Android** | Google-free           | `forwardemail-mail_<version>_fdroid.apk` on [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases) | Self-hosted F-Droid repository / Obtainium                |
+| **iOS**     | arm64                 | TestFlight / App Store distribution                                                                                           | App Store (Coming Soon)                                   |
+
+### Linux package managers
+
+#### Snap Store
+
+After the [Snap Store listing](https://snapcraft.io/forwardemail-mail) is live, install the strict-confinement package with:
+
+```bash
+sudo snap install forwardemail-mail
+```
+
+Snap updates are managed by the operating system. To inspect the installed channel and version, run `snap info forwardemail-mail`.
+
+#### Flathub
+
+After the [Flathub page](https://flathub.org/apps/net.forwardemail.mail) is live, install and run the sandboxed Flatpak with:
+
+```bash
+flatpak install flathub net.forwardemail.mail
+flatpak run net.forwardemail.mail
+```
+
+Flatpak manages updates for this installation; the in-app GitHub updater is intentionally disabled in the Flatpak build. If your system has not added Flathub yet, follow the [Flathub setup instructions](https://flathub.org/setup) first.
+
+### Android without Google Play
+
+#### F-Droid-compatible repository
+
+The official repository publishes the Google-free UnifiedPush-only APK. After the repository is live, add this URL to an F-Droid-compatible client:
+
+```text
+https://forwardemail.github.io/mail.forwardemail.net/fdroid/repo
+```
+
+Before trusting the repository, compare the fingerprint displayed by the client with the official value at [the published fingerprint file](https://forwardemail.github.io/mail.forwardemail.net/fdroid/fingerprint.txt). The URL and fingerprint are not interchangeable: verify both before installing. The repository is self-hosted and is not part of the public `f-droid.org` catalog.
+
+#### Obtainium
+
+[Obtainium](https://github.com/ImranR98/Obtainium) can track the Google-free APK directly from GitHub Releases. In Obtainium, choose **Add App**, enter the repository URL below, select the GitHub source if prompted, and choose the asset ending in `_fdroid.apk`:
+
+```text
+https://github.com/forwardemail/mail.forwardemail.net
+```
+
+Install a compatible UnifiedPush distributor before turning on background notifications. Obtainium will then discover future Google-free release assets automatically.
 
 ### Ubuntu / Debian installation
 
@@ -312,6 +364,7 @@ Detailed architecture documentation is available in the `docs/` directory:
 - [Desktop & Mobile Development](./docs/DEVELOPMENT.md) — Platform-specific development guide
 - [iOS Setup](./docs/ios-setup.md) — Local signing, CI, and TestFlight workflow
 - [Release Process](./docs/RELEASES.md) — How releases are managed
+- [Distribution Publishing](./docs/distribution-publishing.md) — Snap, Flathub, F-Droid, Homebrew, and Obtainium setup
 - [Security Hardening](./docs/SECURITY.md) — Security practices and hardening
 - [App Lock Architecture](docs/app-lock-architecture.md) — Client-side encryption and App Lock design
 - [Push Notifications](./docs/PUSH_NOTIFICATIONS.md) — Push notification setup
@@ -529,52 +582,58 @@ For exact secret generation, GitHub environment setup, and platform-specific sig
 
 **GitHub Secrets:**
 
-| Secret                               | Description                                                       |
-| ------------------------------------ | ----------------------------------------------------------------- |
-| `R2_ACCOUNT_ID`                      | Cloudflare account ID (also used for Workers)                     |
-| `R2_ACCESS_KEY_ID`                   | R2 API access key                                                 |
-| `R2_SECRET_ACCESS_KEY`               | R2 API secret key                                                 |
-| `CLOUDFLARE_ZONE_ID`                 | Zone ID for cache purge                                           |
-| `CLOUDFLARE_API_TOKEN`               | API token with R2 + Workers + cache-purge permissions             |
-| `TAURI_SIGNING_PRIVATE_KEY`          | Tauri updater Ed25519 signing key                                 |
-| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Password for the Tauri signing key                                |
-| `APPLE_CERTIFICATE`                  | Base64-encoded macOS `.p12` signing certificate                   |
-| `APPLE_CERTIFICATE_PASSWORD`         | Password used to export the macOS `.p12`                          |
-| `APPLE_SIGNING_IDENTITY`             | Apple Developer ID signing identity                               |
-| `APPLE_ID`                           | Apple ID for notarization                                         |
-| `APPLE_PASSWORD`                     | App-specific password for notarization                            |
-| `APPLE_TEAM_ID`                      | Apple Developer Team ID                                           |
-| `WINDOWS_CERTIFICATE`                | Base64-encoded exportable Windows `.pfx` code-signing certificate |
-| `WINDOWS_CERTIFICATE_PASSWORD`       | Password used to export the Windows `.pfx`                        |
-| `ANDROID_KEYSTORE_BASE64`            | Android signing keystore (base64)                                 |
-| `ANDROID_KEYSTORE_PASSWORD`          | Password for the Android keystore                                 |
-| `ANDROID_KEY_ALIAS`                  | Android signing key alias                                         |
-| `ANDROID_KEY_PASSWORD`               | Password for the Android signing key                              |
-| `IOS_CERTIFICATE_BASE64`             | Base64-encoded iOS Apple Distribution `.p12`                      |
-| `IOS_CERTIFICATE_PASSWORD`           | Password used to export the iOS `.p12`                            |
-| `IOS_PROVISIONING_PROFILE_BASE64`    | Base64-encoded App Store provisioning profile                     |
-| `APP_STORE_CONNECT_API_KEY`          | Full contents of the downloaded App Store Connect `.p8` key       |
-| `APP_STORE_CONNECT_KEY_ID`           | App Store Connect API key ID                                      |
-| `APP_STORE_CONNECT_ISSUER_ID`        | App Store Connect issuer ID                                       |
-| `GOOGLE_SERVICES_JSON_BASE64`        | Firebase Android client configuration for the dual-provider build |
-| `GOOGLE_PLAY_SERVICE_ACCOUNT`        | Optional Google Play publishing service-account JSON              |
-| `MATRIX_TOKEN`                       | Optional repository secret for release and activity notifications |
+| Secret                                                | Description                                                                             |
+| ----------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `R2_ACCOUNT_ID`                                       | Cloudflare account ID (also used for Workers)                                           |
+| `R2_ACCESS_KEY_ID`                                    | R2 API access key                                                                       |
+| `R2_SECRET_ACCESS_KEY`                                | R2 API secret key                                                                       |
+| `CLOUDFLARE_ZONE_ID`                                  | Zone ID for cache purge                                                                 |
+| `CLOUDFLARE_API_TOKEN`                                | API token with R2 + Workers + cache-purge permissions                                   |
+| `TAURI_SIGNING_PRIVATE_KEY`                           | Tauri updater Ed25519 signing key                                                       |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`                  | Password for the Tauri signing key                                                      |
+| `APPLE_CERTIFICATE`                                   | Base64-encoded macOS `.p12` signing certificate                                         |
+| `APPLE_CERTIFICATE_PASSWORD`                          | Password used to export the macOS `.p12`                                                |
+| `APPLE_SIGNING_IDENTITY`                              | Apple Developer ID signing identity                                                     |
+| `APPLE_ID`                                            | Apple ID for notarization                                                               |
+| `APPLE_PASSWORD`                                      | App-specific password for notarization                                                  |
+| `APPLE_TEAM_ID`                                       | Apple Developer Team ID                                                                 |
+| `WINDOWS_CERTIFICATE`                                 | Base64-encoded exportable Windows `.pfx` code-signing certificate                       |
+| `WINDOWS_CERTIFICATE_PASSWORD`                        | Password used to export the Windows `.pfx`                                              |
+| `ANDROID_KEYSTORE_BASE64`                             | Android signing keystore (base64)                                                       |
+| `ANDROID_KEYSTORE_PASSWORD`                           | Password for the Android keystore                                                       |
+| `ANDROID_KEY_ALIAS`                                   | Android signing key alias                                                               |
+| `ANDROID_KEY_PASSWORD`                                | Password for the Android signing key                                                    |
+| `IOS_CERTIFICATE_BASE64`                              | Base64-encoded iOS Apple Distribution `.p12`                                            |
+| `IOS_CERTIFICATE_PASSWORD`                            | Password used to export the iOS `.p12`                                                  |
+| `IOS_PROVISIONING_PROFILE_BASE64`                     | Base64-encoded App Store provisioning profile                                           |
+| `APP_STORE_CONNECT_API_KEY`                           | Full contents of the downloaded App Store Connect `.p8` key                             |
+| `APP_STORE_CONNECT_KEY_ID`                            | App Store Connect API key ID                                                            |
+| `APP_STORE_CONNECT_ISSUER_ID`                         | App Store Connect issuer ID                                                             |
+| `GOOGLE_SERVICES_JSON_BASE64`                         | Firebase Android client configuration for the dual-provider build                       |
+| `GOOGLE_PLAY_SERVICE_ACCOUNT`                         | Optional Google Play publishing service-account JSON                                    |
+| `MATRIX_TOKEN`                                        | Optional repository secret for release and activity notifications                       |
+| `SNAPCRAFT_STORE_CREDENTIALS`                         | Optional `release` secret enabling Snap Store stable-channel publishing                 |
+| `FDROID_KEYSTORE_BASE64` / `FDROID_KEYSTORE_PASSWORD` | Optional `release` secrets used to sign the self-hosted F-Droid repository index        |
+| `HOMEBREW_TAP_TOKEN`                                  | Optional `release` secret limited to creating cask pull requests in the first-party tap |
 
 All secrets above except `MATRIX_TOKEN` belong in the **`release`** environment. `MATRIX_TOKEN` is a repository Actions secret because the notification jobs do not attach the `release` environment. `GITHUB_TOKEN` is supplied automatically by GitHub Actions and must not be created manually.
 
 **GitHub Variables:**
 
-| Variable               | Description                                                                          |
-| ---------------------- | ------------------------------------------------------------------------------------ |
-| `R2_BUCKET`            | R2 bucket name for static assets                                                     |
-| `IOS_SIGNING_IDENTITY` | Optional iOS signing identity override; defaults to `Apple Distribution`             |
-| `VAPID_PUBLIC_KEY`     | Required public half of the backend VAPID pair embedded in Android release builds    |
-| `PLAY_TRACK`           | Optional Google Play track; defaults to `internal`                                   |
-| `ALLOW_NO_UPDATER`     | Emergency desktop override; `true` permits release artifacts without updater signing |
+| Variable                    | Description                                                                          |
+| --------------------------- | ------------------------------------------------------------------------------------ |
+| `R2_BUCKET`                 | R2 bucket name for static assets                                                     |
+| `IOS_SIGNING_IDENTITY`      | Optional iOS signing identity override; defaults to `Apple Distribution`             |
+| `VAPID_PUBLIC_KEY`          | Required public half of the backend VAPID pair embedded in Android release builds    |
+| `PLAY_TRACK`                | Optional Google Play track; defaults to `internal`                                   |
+| `ALLOW_NO_UPDATER`          | Emergency desktop override; `true` permits release artifacts without updater signing |
+| `PUBLISH_SNAP_STORE`        | Optional; set to `true` after Snap Store credentials and listing approval are ready  |
+| `PUBLISH_FDROID_REPOSITORY` | Optional; set to `true` after F-Droid key and GitHub Pages are configured            |
+| `PUBLISH_HOMEBREW_TAP`      | Optional; set to `true` after the separate Homebrew tap and token are configured     |
 
 `ALLOW_NO_UPDATER` is a break-glass repository variable, not a normal release setting. Leave it unset so desktop releases fail closed when `TAURI_SIGNING_PRIVATE_KEY` is missing.
 
-For generation steps, storage locations, required/optional status, and exact setup instructions, see [docs/SECRETS.md](./docs/SECRETS.md).
+For generation steps, storage locations, required/optional status, and exact setup instructions, see [docs/SECRETS.md](./docs/SECRETS.md) and the [distribution publishing guide](./docs/distribution-publishing.md).
 
 ### Cloudflare API Token Setup
 

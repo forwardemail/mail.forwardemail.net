@@ -1,0 +1,50 @@
+app-id: net.forwardemail.mail
+runtime: org.gnome.Platform
+runtime-version: '50'
+sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.node22
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: forwardemail-desktop
+
+finish-args:
+  - --share=ipc
+  - --share=network
+  - --socket=fallback-x11
+  - --socket=wayland
+  - --device=dri
+  - --talk-name=org.freedesktop.Notifications
+  - --talk-name=org.freedesktop.portal.Desktop
+  - --filesystem=xdg-download:rw
+  - --filesystem=xdg-documents:rw
+
+modules:
+  - name: forwardemail-mail
+    buildsystem: simple
+    build-options:
+      append-path: /usr/lib/sdk/node22/bin:/usr/lib/sdk/rust-stable/bin
+      env:
+        CARGO_HOME: /run/build/forwardemail-mail/cargo
+        CARGO_NET_OFFLINE: 'true'
+        PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+    build-commands:
+      - corepack enable
+      - pnpm --version
+      - pnpm install --offline --frozen-lockfile
+      - pnpm tauri build --no-bundle
+      - install -Dm755 src-tauri/target/release/forwardemail-desktop /app/bin/forwardemail-desktop
+      - install -Dm644 net.forwardemail.mail.desktop /app/share/applications/net.forwardemail.mail.desktop
+      - install -Dm644 net.forwardemail.mail.metainfo.xml /app/share/metainfo/net.forwardemail.mail.metainfo.xml
+      - install -Dm644 src-tauri/icons/128x128.png /app/share/icons/hicolor/128x128/apps/net.forwardemail.mail.png
+      - install -Dm644 src-tauri/icons/256x256.png /app/share/icons/hicolor/256x256/apps/net.forwardemail.mail.png
+    sources:
+      - type: git
+        url: https://github.com/forwardemail/mail.forwardemail.net.git
+        tag: v0.12.46
+        commit: 53393a70cf33548de1f2fc8d482edb3afdfb8159
+        x-checker-data:
+          type: git
+          tag-pattern: ^v(?P<version>[0-9]+\.[0-9]+\.[0-9]+)$
+          is-main-source: true
+      - flatpak-node-sources.json
+      - flatpak-cargo-sources.json

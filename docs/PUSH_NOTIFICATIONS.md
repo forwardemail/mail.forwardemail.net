@@ -178,9 +178,9 @@ GOOGLE_SERVICES_JSON=/absolute/path/google-services.json \
 
 Store `VAPID_PUBLIC_KEY` as a GitHub Actions **variable**. Its value must exactly equal backend `VAPID_PUBLIC_KEY`. Store `GOOGLE_SERVICES_JSON_BASE64` as a `release` environment **secret**. Both are required by the fail-fast preflight for the single dual-provider release.
 
-The release workflow creates exactly one signed dual-provider APK and one matching AAB. It uploads that AAB to Google Play when the Play service-account secret is configured. Routine Android CI and emulator E2E builds retain Google-free coverage so the first-party connector continuously compiles without Firebase or Google Play Services.
+The release workflow creates a signed dual-provider APK and matching AAB for GitHub Releases and optional Google Play upload. It also creates `forwardemail-mail_<version>_fdroid.apk`, a separately signed Google-free UnifiedPush-only APK, for the official self-hosted F-Droid-compatible repository and Obtainium. Routine Android CI and emulator E2E builds retain Google-free coverage so the first-party connector continuously compiles without Firebase or Google Play Services.
 
-For F-Droid metadata or other reproducible Google-free downstream builds, invoke the default or `:fdroid` command and set `VAPID_PUBLIC_KEY` in the controlled build environment. No proprietary Firebase artifact or Firebase secret is required for that profile, and it is intentionally not published as a second GitHub release APK.
+The Google-free release build invokes the `:fdroid` command with `VAPID_PUBLIC_KEY` in the controlled build environment. It needs neither a proprietary Firebase artifact nor a Firebase secret. See [distribution-publishing.md](./distribution-publishing.md) for publishing, repository installation, and Obtainium guidance.
 
 ## Authentication and token lifecycle
 

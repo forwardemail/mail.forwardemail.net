@@ -382,6 +382,38 @@ jobs:
             gh api --method PATCH "repos/${GH_REPO}/releases/${RELEASE_ID}" -f draft=false
           fi
 
+  # ── 4b. Publish the self-hosted F-Droid repository ─────────────────────
+  # GitHub prevents a release created by GITHUB_TOKEN from triggering a second
+  # release workflow. Invoke the publisher explicitly after the release is
+  # public and the Google-free APK upload has completed.
+  publish-fdroid-repository:
+    needs: [create-release, build-mobile, publish]
+    if: >-
+      !cancelled()
+      && needs.build-mobile.result == 'success'
+      && (needs.publish.result == 'success' || needs.publish.result == 'skipped')
+      && vars.PUBLISH_FDROID_REPOSITORY == 'true'
+    uses: ./.github/workflows/publish-fdroid-repo.yml
+    with:
+      tag: v${{ needs.create-release.outputs.version }}
+    secrets: inherit
+
+  # ── 4c. Open/update the first-party Homebrew tap pull request ──────────
+  # The source release is created with GITHUB_TOKEN, so invoke this reusable
+  # workflow directly instead of relying on a release event. It is opt-in until
+  # the separate tap repository and its least-privilege write token exist.
+  publish-homebrew-tap:
+    needs: [create-release, build-desktop, publish]
+    if: >-
+      !cancelled()
+      && needs.build-desktop.result == 'success'
+      && (needs.publish.result == 'success' || needs.publish.result == 'skipped')
+      && vars.PUBLISH_HOMEBREW_TAP == 'true'
+    uses: ./.github/workflows/publish-homebrew-tap.yml
+    with:
+      tag: v${{ needs.create-release.outputs.version }}
+    secrets: inherit
+
   # ── 5. Deploy web app ─────────────────────────────────────────────────
   # Inline deploy because GITHUB_TOKEN events don't trigger other workflows,
   # so deploy.yml's `on: release: [published]` never fires from the publish step.
@@ -522,6 +554,8 @@ jobs:
       - build-mobile
       - checksums
       - publish
+      - publish-fdroid-repository
+      - publish-homebrew-tap
       - deploy
       - release-screenshots
     if: always()
@@ -536,6 +570,8 @@ jobs:
           MOBILE: ${{ needs.build-mobile.result }}
           SUMS: ${{ needs.checksums.result }}
           PUB: ${{ needs.publish.result }}
+          FDROID: ${{ needs.publish-fdroid-repository.result }}
+          HOMEBREW: ${{ needs.publish-homebrew-tap.result }}
           DEPLOY: ${{ needs.deploy.result }}
           SHOTS: ${{ needs.release-screenshots.result }}
           TAG: v${{ needs.create-release.outputs.version }}
@@ -552,6 +588,8 @@ jobs:
             echo "| build-mobile   | \`$MOBILE\` |"
             echo "| checksums      | \`$SUMS\` |"
             echo "| publish        | \`$PUB\` |"
+            echo "| F-Droid repository | \`$FDROID\` |"
+            echo "| Homebrew tap PR | \`$HOMEBREW\` |"
             echo "| deploy         | \`$DEPLOY\` |"
             echo "| release-screenshots | \`$SHOTS\` |"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -593,6 +631,23 @@ jobs:
           # by the hard-required check above.
           if [ "$PUB" != "success" ] && [ "$PUB" != "skipped" ]; then
             echo "::error::publish result=$PUB (expected success or skipped)"
+            fail=1
+          fi
+
+          # F-Droid is an opt-in distribution lane. Once PUBLISH_FDROID_REPOSITORY
+          # is enabled it must succeed; otherwise an intentional skipped result
+          # keeps existing release setups working until the documented secrets
+          # and GitHub Pages settings are in place.
+          if [ "$FDROID" != "success" ] && [ "$FDROID" != "skipped" ]; then
+            echo "::error::publish-fdroid-repository result=$FDROID (expected success or skipped)"
+            fail=1
+          fi
+
+          # The Homebrew updater is also opt-in. When enabled, a workflow
+          # failure blocks the release summary so an unreviewed stale cask is
+          # never reported as successfully automated.
+          if [ "$HOMEBREW" != "success" ] && [ "$HOMEBREW" != "skipped" ]; then
+            echo "::error::publish-homebrew-tap result=$HOMEBREW (expected success or skipped)"
             fail=1
           fi
 

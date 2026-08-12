@@ -1,0 +1,122 @@
+name: Publish F-Droid repository
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: Published GitHub release tag, for example v0.12.46
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published GitHub release tag, for example v0.12.46
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: publish-fdroid-repo
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-22.04
+    environment: release
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+
+      - name: Install pinned F-Droid repository tools
+        run: python -m pip install --disable-pip-version-check 'fdroidserver==2.4.5'
+
+      - name: Download the signed Google-free release APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.event.inputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p fdroid/repo
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern 'forwardemail-mail_*_fdroid.apk' --dir fdroid/repo --clobber
+          mapfile -t apks < <(find fdroid/repo -maxdepth 1 -name 'forwardemail-mail_*_fdroid.apk' -type f)
+          if [ ${#apks[@]} -ne 1 ]; then
+            echo "::error::Expected one Google-free APK for $TAG; found ${#apks[@]}"
+            exit 1
+          fi
+          echo "Publishing ${apks[0]}"
+
+      - name: Configure the signed repository index
+        env:
+          FDROID_KEYSTORE_BASE64: ${{ secrets.FDROID_KEYSTORE_BASE64 }}
+          FDROID_KEYSTORE_PASSWORD: ${{ secrets.FDROID_KEYSTORE_PASSWORD }}
+          FDROID_REPOSITORY_URL: ${{ vars.FDROID_REPOSITORY_URL }}
+        run: |
+          set -euo pipefail
+          : "${FDROID_KEYSTORE_BASE64:?Set FDROID_KEYSTORE_BASE64 in the release environment}"
+          : "${FDROID_KEYSTORE_PASSWORD:?Set FDROID_KEYSTORE_PASSWORD in the release environment}"
+          printf '%s' "$FDROID_KEYSTORE_BASE64" | base64 --decode > fdroid/keystore.p12
+          test -s fdroid/keystore.p12
+          chmod 600 fdroid/keystore.p12
+
+          if [ -z "$FDROID_REPOSITORY_URL" ]; then
+            FDROID_REPOSITORY_URL="https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY#*/}/fdroid/repo"
+          fi
+          printf '%s\n' "$FDROID_REPOSITORY_URL" > fdroid/repository-url.txt
+          cp src-tauri/icons/256x256.png fdroid/fdroid-icon.png
+
+          cat > fdroid/config.yml <<EOF
+          repo_url: $FDROID_REPOSITORY_URL
+          repo_name: Forward Email F-Droid Repository
+          repo_icon: fdroid-icon.png
+          repo_description: Official Google-free Android releases for Forward Email.
+          archive_older: 0
+          keystore: keystore.p12
+          repo_keyalias: forwardemail-fdroid-repo
+          keystorepass: $FDROID_KEYSTORE_PASSWORD
+          keypass: $FDROID_KEYSTORE_PASSWORD
+          EOF
+          fingerprint=$(keytool -list -v -keystore fdroid/keystore.p12 \
+            -storepass "$FDROID_KEYSTORE_PASSWORD" \
+            -alias forwardemail-fdroid-repo | \
+            awk -F': ' '/SHA256:/{gsub(/:/, "", $2); print toupper($2); exit}')
+          if ! printf '%s' "$fingerprint" | grep -qE '^[0-9A-F]{64}$'; then
+            echo "::error::Could not derive a SHA-256 fingerprint from the F-Droid repository key"
+            exit 1
+          fi
+          printf '%s\n' "$fingerprint" > fdroid/repository-fingerprint.txt
+          chmod 600 fdroid/config.yml
+
+      - name: Generate the signed F-Droid indexes
+        run: |
+          set -euo pipefail
+          cd fdroid
+          fdroid update --pretty
+          test -f repo/index-v1.jar
+          test -f repo/index-v2.json
+          rm -f config.yml keystore.p12
+          mkdir -p public/fdroid
+          mv repo public/fdroid/repo
+          mv repository-url.txt public/fdroid/
+          mv repository-fingerprint.txt public/fdroid/fingerprint.txt
+          test -f public/fdroid/repo/index-v1.jar
+          test -f public/fdroid/repo/index-v2.json
+          find public -type f \( -name '*.apk' -o -name 'index-v*.json' -o -name 'index-v*.jar' \) | sort
+
+      - name: Upload GitHub Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: fdroid/public
+
+      - name: Deploy GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

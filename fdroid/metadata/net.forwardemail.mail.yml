@@ -1,0 +1,28 @@
+Categories:
+  - Internet
+License: BUSL-1.1
+AuthorName: Forward Email LLC
+AuthorWebSite: https://forwardemail.net
+WebSite: https://forwardemail.net
+SourceCode: https://github.com/forwardemail/mail.forwardemail.net
+IssueTracker: https://github.com/forwardemail/mail.forwardemail.net/issues
+Changelog: https://github.com/forwardemail/mail.forwardemail.net/releases
+
+Name: Forward Email
+Summary: Private and secure email client for Forward Email accounts
+Description: |-
+  Forward Email is the official mobile client for Forward Email accounts.
+
+  Features include multi-account support, encrypted local storage, mail search,
+  folders, message composition, contacts, calendars, and native notifications.
+  This repository serves the Google-free Android build. It uses UnifiedPush for
+  notifications and intentionally does not contain Firebase Cloud Messaging or
+  Google Play Services.
+
+  This is Forward Email's self-hosted F-Droid-compatible binary repository, not
+  the official f-droid.org catalog. The repository index is signed with a
+  dedicated repository key, while APKs retain the Android application signature
+  used for Forward Email's direct releases.
+
+AutoUpdateMode: None
+UpdateCheckMode: None

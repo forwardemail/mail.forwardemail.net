@@ -4,13 +4,16 @@ import path from 'node:path';
 const workflowPath = path.join(process.cwd(), '.github/workflows/release-mobile.yml');
 const workflow = readFileSync(workflowPath, 'utf8');
 const androidStart = workflow.indexOf('\n  android:');
-const iosStart = workflow.indexOf('\n  ios:', androidStart);
-const androidJob = workflow.slice(androidStart, iosStart);
+const androidFdroidStart = workflow.indexOf('\n  android-fdroid:', androidStart);
+const iosStart = workflow.indexOf('\n  ios:', androidFdroidStart);
+const androidJob = workflow.slice(androidStart, androidFdroidStart);
+const androidFdroidJob = workflow.slice(androidFdroidStart, iosStart);
 
 describe('mobile release workflow contract', () => {
-  it('publishes one dual-provider Android release instead of profile-specific APKs', () => {
+  it('publishes one dual-provider Android release without profile matrices', () => {
     expect(androidStart).toBeGreaterThan(-1);
-    expect(iosStart).toBeGreaterThan(androidStart);
+    expect(androidFdroidStart).toBeGreaterThan(androidStart);
+    expect(iosStart).toBeGreaterThan(androidFdroidStart);
     expect(androidJob).toContain('ANDROID_PUSH_PROVIDER: both');
     expect(androidJob).not.toContain('matrix.profile');
     expect(androidJob).not.toContain('profile: [play, fdroid]');
@@ -18,6 +21,16 @@ describe('mobile release workflow contract', () => {
     expect(androidJob).toContain('forwardemail-mail_${VERSION}_android.aab');
     expect(androidJob).not.toContain('android-play');
     expect(androidJob).not.toContain('android-fdroid');
+  });
+
+  it('publishes a separately signed Google-free UnifiedPush APK for F-Droid and Obtainium', () => {
+    expect(androidFdroidStart).toBeGreaterThan(-1);
+    expect(androidFdroidJob).toContain('Build signed UnifiedPush-only Android APK');
+    expect(androidFdroidJob).toContain('pnpm tauri:android:build:fdroid');
+    expect(androidFdroidJob).toContain('forwardemail-mail_${VERSION}_fdroid.apk');
+    expect(androidFdroidJob).toContain('ANDROID_KEYSTORE_BASE64');
+    expect(androidFdroidJob).toContain('VAPID_PUBLIC_KEY');
+    expect(androidFdroidJob).not.toContain('GOOGLE_SERVICES_JSON_BASE64');
   });
 
   it('fails before toolchain setup when dual-provider release inputs are missing', () => {

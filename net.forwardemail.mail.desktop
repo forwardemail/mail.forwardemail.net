@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Forward Email
+Comment=Private and secure email client
+Exec=forwardemail-desktop %U
+Icon=net.forwardemail.mail
+Terminal=false
+Categories=Network;Email;
+Keywords=email;mail;imap;encrypted;privacy;
+StartupNotify=true
+StartupWMClass=Forward Email
+MimeType=x-scheme-handler/mailto;x-scheme-handler/forwardemail;

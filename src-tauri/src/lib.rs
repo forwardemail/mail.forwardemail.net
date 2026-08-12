@@ -749,7 +749,13 @@ pub fn run() {
         // killing every subsequent spec file with "binary not found".
         #[cfg(not(feature = "webdriver"))]
         {
-            builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+            // Flatpak owns updates for Flatpak installations. Loading Tauri's
+            // GitHub-release updater there would attempt to replace a binary
+            // inside an immutable sandbox and bypass the user's Flatpak update
+            // policy. Flatpak exports FLATPAK_ID to every confined process.
+            if std::env::var_os("FLATPAK_ID").is_none() {
+                builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+            }
         }
     }
 
