@@ -54,7 +54,10 @@
   interface Contact {
     id: string | null;
     name: string;
+    /** Primary address retained for existing one-address UI controls. */
     email: string;
+    /** Every CardDAV EMAIL value, including secondary addresses. */
+    emails: string[];
     phone: string;
     notes: string;
     company: string;
@@ -108,6 +111,7 @@
     id: null,
     name: '',
     email: '',
+    emails: [],
     phone: '',
     notes: '',
     company: '',
@@ -586,6 +590,36 @@
     return parsed;
   };
 
+  /**
+   * Extract all distinct EMAIL values from an API response and its original
+   * vCard. The structured API values are preferred, but the vCard fallback
+   * keeps imported CardDAV contacts complete when an older response omitted
+   * its extracted email index.
+   */
+  const getContactEmails = (contact: Record<string, unknown>, vcard: ParsedVCard): string[] => {
+    const values: unknown[] = [
+      ...(Array.isArray(contact.emails) ? contact.emails : []),
+      ...(Array.isArray(contact.Emails) ? contact.Emails : []),
+      contact.email,
+      contact.Email,
+      ...(vcard.emails || []),
+    ];
+    const seen = new Set<string>();
+    const emails: string[] = [];
+    for (const value of values) {
+      const email = (
+        typeof value === 'object' && value !== null ? (value as { value?: unknown }).value : value
+      )
+        ?.toString()
+        .trim();
+      const normalized = email?.toLowerCase();
+      if (!email || !normalized || seen.has(normalized)) continue;
+      seen.add(normalized);
+      emails.push(email);
+    }
+
+    return emails;
+  };
   const exportVCard = (contact: Contact | null) => {
     if (!contact) return;
     // Use the original server content for export when available to preserve
@@ -682,7 +716,7 @@
         upsertMultipleContactsInCache(
           contacts.map((c) => ({
             id: c.id,
-            email: c.email,
+            emails: c.emails,
             name: c.name,
             avatar: c.photo || '',
             company: c.company || '',
@@ -724,7 +758,7 @@
       contacts.filter(
         (c) =>
           (c.name && c.name.toLowerCase().includes(q)) ||
-          (c.email && c.email.toLowerCase().includes(q)) ||
+          c.emails.some((email) => email.toLowerCase().includes(q)) ||
           (c.company && c.company.toLowerCase().includes(q)) ||
           (c.phone && c.phone.toLowerCase().includes(q)) ||
           (c.address && c.address.toLowerCase().includes(q)),
@@ -833,15 +867,12 @@
       if (!list || requestId !== loadRequestId) return;
       const mapped: Contact[] = list.map((c: Record<string, unknown>) => {
         const vcard = parseVCard(c.content as string);
+        const emails = getContactEmails(c, vcard);
         return {
           id: (c.id || c.contact_id || c.uid || c.Id) as string,
           name: (c.full_name || c.name || c.FullName || vcard.name || '') as string,
-          email:
-            (c.emails as { value: string }[])?.[0]?.value ||
-            (c.Emails as { value: string }[])?.[0]?.value ||
-            (c.email as string) ||
-            vcard.emails?.[0] ||
-            '',
+          email: emails[0] || '',
+          emails,
           phone:
             (c.phone_numbers as { value: string }[])?.[0]?.value ||
             (c.Phones as { value: string }[])?.[0]?.value ||
@@ -923,6 +954,7 @@
         id: draft.id,
         name,
         email,
+        emails: draft.emails,
         phone: draft.phone || '',
         notes: draft.notes || '',
         company: draft.company || '',
@@ -937,7 +969,9 @@
       const vCardContent = generateVCard(contactData);
       const payload = {
         full_name: name,
-        emails: email ? [{ value: email }] : [],
+        // Regenerate this index from the round-trip-safe vCard so editing the
+        // primary address cannot erase the contact's secondary CardDAV EMAILs.
+        emails: parseVCard(vCardContent).emails.map((value) => ({ value })),
         phone_numbers: draft.phone ? [{ value: draft.phone }] : [],
         content: vCardContent,
       };
@@ -948,16 +982,14 @@
           pathOverride: `/v1/contacts/${encodeURIComponent(id)}`,
         })) as Record<string, unknown>;
         const vcardData = parseVCard(updated?.content as string);
+        const emails = getContactEmails(updated, vcardData);
         contacts = contacts.map((c) =>
           c.id === id
             ? {
                 ...c,
                 name: (updated?.full_name as string) || name,
-                email:
-                  (updated?.emails as { value: string }[])?.[0]?.value ||
-                  (updated?.email as string) ||
-                  email ||
-                  '',
+                email: emails[0] || email || '',
+                emails,
                 phone:
                   (updated?.phone_numbers as { value: string }[])?.[0]?.value ||
                   (updated?.phone as string) ||
@@ -984,13 +1016,12 @@
           pathOverride: '/v1/contacts',
         })) as Record<string, unknown>;
         const vcardData = parseVCard(created?.content as string);
+        const emails = getContactEmails(created, vcardData);
         const mapped: Contact = {
           id: (created?.id || created?.contact_id || created?.uid || created?.Id) as string,
           name: (created?.full_name as string) || name,
-          email:
-            (created?.emails as { value: string }[])?.[0]?.value ||
-            (created?.email as string) ||
-            email,
+          email: emails[0] || email,
+          emails,
           phone:
             (created?.phone_numbers as { value: string }[])?.[0]?.value ||
             (created?.phone as string) ||
@@ -1017,7 +1048,7 @@
       if (selectedContact) {
         upsertContactInCache({
           id: selectedContact.id,
-          email: selectedContact.email,
+          emails: selectedContact.emails,
           name: selectedContact.name,
           avatar: selectedContact.photo || '',
           company: selectedContact.company || '',
@@ -1042,6 +1073,7 @@
         id: modalContact.id,
         name,
         email,
+        emails: modalContact.emails,
         phone: modalContact.phone || '',
         notes: modalContact.notes || '',
         company: modalContact.company || '',
@@ -1056,7 +1088,7 @@
       const vCardContent = generateVCard(contactData);
       const payload = {
         full_name: name,
-        emails: email ? [{ value: email }] : [],
+        emails: parseVCard(vCardContent).emails.map((value) => ({ value })),
         phone_numbers: modalContact.phone ? [{ value: modalContact.phone }] : [],
         content: vCardContent,
       };
@@ -1067,16 +1099,14 @@
           pathOverride: `/v1/contacts/${encodeURIComponent(id)}`,
         })) as Record<string, unknown>;
         const vcardData = parseVCard(updated?.content as string);
+        const emails = getContactEmails(updated, vcardData);
         contacts = contacts.map((c) =>
           c.id === id
             ? {
                 ...c,
                 name: (updated?.full_name as string) || name,
-                email:
-                  (updated?.emails as { value: string }[])?.[0]?.value ||
-                  (updated?.email as string) ||
-                  email ||
-                  '',
+                email: emails[0] || email || '',
+                emails,
                 phone:
                   (updated?.phone_numbers as { value: string }[])?.[0]?.value ||
                   (updated?.phone as string) ||
@@ -1104,13 +1134,12 @@
           pathOverride: '/v1/contacts',
         })) as Record<string, unknown>;
         const vcardData = parseVCard(created?.content as string);
+        const emails = getContactEmails(created, vcardData);
         const mapped: Contact = {
           id: (created?.id || created?.contact_id || created?.uid || created?.Id) as string,
           name: (created?.full_name as string) || name,
-          email:
-            (created?.emails as { value: string }[])?.[0]?.value ||
-            (created?.email as string) ||
-            email,
+          email: emails[0] || email,
+          emails,
           phone:
             (created?.phone_numbers as { value: string }[])?.[0]?.value ||
             (created?.phone as string) ||
@@ -1137,7 +1166,7 @@
       if (selectedContact) {
         upsertContactInCache({
           id: selectedContact.id,
-          email: selectedContact.email,
+          emails: selectedContact.emails,
           name: selectedContact.name,
           avatar: selectedContact.photo || '',
           company: selectedContact.company || '',
@@ -1206,7 +1235,7 @@
       applyFilter();
       upsertContactInCache({
         id: targetId,
-        email: target.email,
+        emails: target.emails,
         name: target.name,
         avatar: target.photo || '',
         company: target.company || '',
@@ -1393,7 +1422,7 @@
                 data-testid="contact-item"
                 data-contact-id={contact.id}
                 data-contact-name={contact.name || ''}
-                data-contact-email={contact.email || ''}
+                data-contact-email={contact.emails.join(',') || contact.email || ''}
                 class="flex w-full items-center gap-3 border-l-[3px] px-3 py-2.5 text-left hover:bg-accent/50 {selectedContact?.id ===
                 contact.id
                   ? 'border-l-primary bg-primary/10'
@@ -1419,9 +1448,12 @@
                   <div class="truncate font-medium">
                     {contact.name || contact.email || 'Contact'}
                   </div>
-                  {#if contact.email || contact.phone || contact.company}
-                    <div class="truncate text-xs text-muted-foreground">
-                      {contact.email || contact.phone || contact.company}
+                  {#if contact.emails.length || contact.phone || contact.company}
+                    <div
+                      class="truncate text-xs text-muted-foreground"
+                      title={contact.emails.join(', ')}
+                    >
+                      {contact.emails.join(', ') || contact.phone || contact.company}
                     </div>
                   {/if}
                 </div>
@@ -1491,8 +1523,12 @@
               <div class="text-lg font-semibold">
                 {draft.name || selectedContact.name || selectedContact.email || 'Contact'}
               </div>
-              {#if selectedContact.email}
-                <div class="text-sm text-muted-foreground">{selectedContact.email}</div>
+              {#if selectedContact.emails.length}
+                <div class="text-sm text-muted-foreground" data-testid="contact-email-list">
+                  {#each selectedContact.emails as contactEmail}
+                    <div data-testid="contact-email">{contactEmail}</div>
+                  {/each}
+                </div>
               {/if}
             </div>
 

@@ -230,3 +230,72 @@ describe('getRecurrenceText', () => {
     );
   });
 });
+
+describe('legacy all-day recurrence expansion (VALUE=DATE anchor)', () => {
+  /**
+   * Regression: rrule.js silently ignores DTSTART;VALUE=DATE and falls back to
+   * parse-time as the anchor. Imported "memories" calendars with yearly all-day
+   * events therefore always expanded to the current day, not their anniversary.
+   * The fix normalises VALUE=DATE anchors to a UTC midnight datetime before
+   * passing them to rrule.js.
+   */
+  it('anchors a VALUE=DATE yearly series to its imported date instead of the current day', () => {
+    const ical = [
+      'BEGIN:VCALENDAR',
+      'VERSION:2.0',
+      'BEGIN:VEVENT',
+      'UID:legacy-memory',
+      'DTSTART;VALUE=DATE:20100214',
+      'DTEND;VALUE=DATE:20100215',
+      'RRULE:FREQ=YEARLY',
+      'SUMMARY:Valentine memory',
+      'END:VEVENT',
+      'END:VCALENDAR',
+    ].join('\r\n');
+
+    const events = expandRecurringEvents(
+      [
+        {
+          id: 'legacy-memory-event',
+          calendarId: 'memories',
+          allDay: true,
+          ical,
+        },
+      ],
+      new Date('2026-01-01T00:00:00.000Z'),
+      new Date('2026-12-31T23:59:59.999Z'),
+    );
+
+    expect(events).toHaveLength(1);
+    const inst = events[0] as Record<string, unknown>;
+    expect(inst.id).toBe('legacy-memory-event::2026-02-14T00:00:00.000Z');
+    expect(inst.calendarId).toBe('memories');
+    expect(inst.allDay).toBe(true);
+    expect(inst.recurrenceOccurrence).toBe('2026-02-14T00:00:00.000Z');
+    // start/end are ISO strings produced by expandRecurringEvents
+    expect(inst.start).toBe('2026-02-14T00:00:00.000Z');
+    // end = start + duration (DTEND - DTSTART = 1 day = 86400000 ms)
+    expect(inst.end).toBe('2026-02-15T00:00:00.000Z');
+  });
+
+  it('does not affect timed events with a proper DTSTART', () => {
+    const ical = [
+      'BEGIN:VEVENT',
+      'UID:timed-daily',
+      'DTSTART:20260601T090000Z',
+      'DTEND:20260601T100000Z',
+      'RRULE:FREQ=DAILY;COUNT=3',
+      'END:VEVENT',
+    ].join('\r\n');
+
+    const events = expandRecurringEvents(
+      [{ id: 'timed-1', calendarId: 'cal', ical }],
+      new Date('2026-06-01T00:00:00.000Z'),
+      new Date('2026-06-10T00:00:00.000Z'),
+    );
+
+    expect(events).toHaveLength(3);
+    const first = events[0] as Record<string, unknown>;
+    expect(first.start).toBe('2026-06-01T09:00:00.000Z');
+  });
+});

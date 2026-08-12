@@ -163,6 +163,21 @@ function parseIcalDate(line: string | undefined): Date | null {
   return new Date(year, month, day, hour, min, sec);
 }
 
+/**
+ * rrule.js ignores `DTSTART;VALUE=DATE` and then uses parse-time as its
+ * recurrence anchor. Imported all-day series consequently materialize on the
+ * current day, regardless of their real anniversary date. Normalise RFC 5545
+ * date-only DTSTART values to an explicit UTC midnight datetime before passing
+ * them to rrule.js, while retaining the original ICS for storage and display.
+ */
+function toRruleDtstartLine(line: string): string {
+  const value = getPropValue(line);
+  if (!/^\d{8}$/.test(value)) return line;
+  const date = parseIcalDate(line);
+  if (!date) return line;
+  return `DTSTART:${date.getFullYear()}${pad2(date.getMonth() + 1)}${pad2(date.getDate())}T000000Z`;
+}
+
 function parseExdates(lines: string[]): Date[] {
   const out: Date[] = [];
   for (const line of findAllProps(lines, 'EXDATE')) {
@@ -241,7 +256,7 @@ export function expandRecurringMaster(
   // with DTSTART, RRULE, RDATE, EXDATE — same format the backend uses at
   // calendar-events.js:282-306.
   const ruleLines = [
-    dtstartLine!,
+    toRruleDtstartLine(dtstartLine!),
     rruleLine,
     ...findAllProps(master.lines, 'EXDATE'),
     ...findAllProps(master.lines, 'RDATE'),

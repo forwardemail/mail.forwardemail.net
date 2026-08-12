@@ -12,7 +12,10 @@ import { isOnline } from './network-status';
  * and refreshes from the API in the background when online.
  */
 
-const CONTACT_KEY_PREFIX = 'contacts_';
+// v2 stores one autocomplete entry for every CardDAV EMAIL property. Bumping
+// the key prevents a fresh legacy one-address cache from masking secondary
+// addresses for up to its old TTL after users upgrade.
+const CONTACT_KEY_PREFIX = 'contacts_v2_';
 const CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes
 const CONTACTS_PAGE_SIZE = 500;
 
@@ -49,21 +52,71 @@ async function writeCache(account, contacts) {
 }
 
 /**
- * Normalize a contact from the API response.
+ * Extract EMAIL values from raw vCard content. This is a compatibility fallback
+ * for CardDAV clients that use grouped properties (for example item1.EMAIL),
+ * which older server indexes may not expose in the structured emails array.
  */
-function normalizeContact(raw) {
-  if (!raw) return null;
-
-  // API returns emails as array of {value, type} objects;
-  // also handle legacy flat email/Email string fields
-  let email = '';
-  if (Array.isArray(raw.emails) && raw.emails.length > 0) {
-    email = (raw.emails[0].value || '').trim();
-  } else {
-    email = (raw.email || raw.Email || '').trim();
+function getVCardEmails(content) {
+  if (typeof content !== 'string' || !content) return [];
+  const lines = [];
+  for (const rawLine of content.split(/\r?\n/)) {
+    if (/^[ \t]/.test(rawLine) && lines.length) {
+      lines[lines.length - 1] += rawLine.slice(1);
+    } else {
+      lines.push(rawLine);
+    }
   }
 
-  if (!email) return null;
+  return lines.flatMap((line) => {
+    const colonIndex = line.indexOf(':');
+    if (colonIndex < 1) return [];
+    const key = line.slice(0, colonIndex).split(';')[0].split('.').pop()?.toUpperCase();
+    if (key !== 'EMAIL') return [];
+    const value = line
+      .slice(colonIndex + 1)
+      .replace(/^mailto:/i, '')
+      .trim();
+    return value ? [value] : [];
+  });
+}
+
+/**
+ * Return all unique, non-empty email addresses attached to a contact response.
+ * The API exposes CardDAV EMAIL properties as an array, while old caches and
+ * a few legacy callers may still use a flat email/Email property.
+ */
+function getContactEmails(raw) {
+  const seen = new Set();
+  const emails = [];
+  const values = [
+    ...(Array.isArray(raw?.emails) ? raw.emails : []),
+    ...(Array.isArray(raw?.Emails) ? raw.Emails : []),
+    raw?.email,
+    raw?.Email,
+    ...getVCardEmails(raw && raw.content),
+  ];
+
+  for (const value of values) {
+    const email = (typeof value === 'object' ? value?.value || '' : value || '').trim();
+    const key = email.toLowerCase();
+    if (!email || seen.has(key)) continue;
+    seen.add(key);
+    emails.push(email);
+  }
+
+  return emails;
+}
+
+/**
+ * Normalize a contact from the API response into one autocomplete entry per
+ * address. A CardDAV contact is one person, but each EMAIL property must be
+ * individually searchable and selectable when composing a message.
+ */
+function normalizeContact(raw) {
+  if (!raw) return [];
+
+  const emails = getContactEmails(raw);
+  if (!emails.length) return [];
 
   // API returns full_name; also handle name/Name/firstName+lastName
   let name = raw.full_name || raw.name || raw.Name || '';
@@ -71,13 +124,16 @@ function normalizeContact(raw) {
     name = [raw.firstName, raw.lastName].filter(Boolean).join(' ');
   }
 
-  return {
-    id: raw.id || raw.Id || email,
+  const contactId = String(raw.id || raw.Id || emails[0]);
+  return emails.map((email) => ({
+    // Keep cache IDs unique even when multiple entries represent one contact.
+    id: `${contactId}:${email.toLowerCase()}`,
+    contactId,
     email,
     name,
     avatar: raw.avatar || '',
     company: raw.company || '',
-  };
+  }));
 }
 
 /**
@@ -118,7 +174,7 @@ async function fetchAndCache(account) {
     }
   }
 
-  const contacts = sortContacts(allContacts.map(normalizeContact).filter(Boolean));
+  const contacts = sortContacts(allContacts.flatMap(normalizeContact));
   await writeCache(account, contacts).catch(() => {});
   return contacts;
 }
@@ -171,7 +227,9 @@ export async function removeContactFromCache(contactId) {
   const account = getAccount();
   const cached = await readCache(account);
   if (!cached?.contacts?.length) return;
-  const updated = cached.contacts.filter((c) => c.id !== contactId);
+  const updated = cached.contacts.filter(
+    (contact) => String(contact.contactId || contact.id || '') !== String(contactId),
+  );
   if (updated.length !== cached.contacts.length) {
     await writeCache(account, updated).catch(() => {});
   }
@@ -185,18 +243,18 @@ export async function removeContactFromCache(contactId) {
  */
 export async function upsertContactInCache(contact) {
   if (!contact?.id) return;
-  const normalized = normalizeContact(contact) || contact;
+  const normalized = normalizeContact(contact);
+  if (!normalized.length) return;
   const account = getAccount();
   const cached = await readCache(account);
   const existing = cached?.contacts || [];
-  const idx = existing.findIndex((c) => c.id === normalized.id);
-  let updated;
-  if (idx >= 0) {
-    updated = [...existing];
-    updated[idx] = { ...existing[idx], ...normalized };
-  } else {
-    updated = [...existing, normalized];
-  }
+  const contactId = normalized[0].contactId;
+  // Remove all old entries for this contact before inserting its current list
+  // of addresses. Fall back to id for caches written before contactId existed.
+  const updated = [
+    ...existing.filter((entry) => String(entry.contactId || entry.id || '') !== contactId),
+    ...normalized,
+  ];
   await writeCache(account, sortContacts(updated)).catch(() => {});
 }
 
@@ -208,22 +266,16 @@ export async function upsertContactInCache(contact) {
  */
 export async function upsertMultipleContactsInCache(contacts) {
   if (!contacts?.length) return;
+  const entries = contacts.flatMap(normalizeContact);
+  if (!entries.length) return;
   const account = getAccount();
   const cached = await readCache(account);
   const existing = cached?.contacts || [];
-  const idMap = new Map(existing.map((c, i) => [c.id, i]));
-  const updated = [...existing];
-  for (const contact of contacts) {
-    const normalized = normalizeContact(contact) || contact;
-    if (!normalized?.id) continue;
-    const idx = idMap.get(normalized.id);
-    if (idx !== undefined) {
-      updated[idx] = { ...updated[idx], ...normalized };
-    } else {
-      updated.push(normalized);
-      idMap.set(normalized.id, updated.length - 1);
-    }
-  }
+  const contactIds = new Set(entries.map((entry) => entry.contactId));
+  const updated = [
+    ...existing.filter((entry) => !contactIds.has(String(entry.contactId || entry.id || ''))),
+    ...entries,
+  ];
   await writeCache(account, sortContacts(updated)).catch(() => {});
 }
 
