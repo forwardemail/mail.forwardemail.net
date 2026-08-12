@@ -31,7 +31,19 @@ apps:
 parts:
   forwardemail-mail:
     plugin: nil
-    source: ..
+    source: .
+    override-pull: |
+      set -eux
+      craftctl default
+
+      # The release workflow runs `pnpm install` and a full Tauri build in this
+      # same checkout before the Snap step, so the copied source carries a host
+      # node_modules and a multi-gigabyte Rust target dir. Neither is usable in
+      # the isolated build and both eat runner disk.
+      rm -rf "$CRAFT_PART_SRC/node_modules" \
+             "$CRAFT_PART_SRC/dist" \
+             "$CRAFT_PART_SRC/coverage" \
+             "$CRAFT_PART_SRC/src-tauri/target"
     build-packages:
       - build-essential
       - ca-certificates
@@ -95,7 +107,7 @@ parts:
       dpkg-deb --extract "$deb" "$CRAFT_PART_INSTALL"
 
       # Keep the Snap package version exactly aligned with tauri.conf.json.
-      snapcraftctl set-version "$(node -p \"require('./src-tauri/tauri.conf.json').version\")"
+      craftctl set version="$(node -p "require('./src-tauri/tauri.conf.json').version")"
 
       # The desktop file comes from the Debian package. Under strict confinement
       # its executable must be the Snap application wrapper, not the raw binary.

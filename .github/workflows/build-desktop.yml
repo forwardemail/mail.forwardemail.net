@@ -88,6 +88,17 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # See release-desktop.yml: the Windows bundler pulls WiX/NSIS from GitHub
+      # at bundle time and a dropped connection there discards the whole build.
+      - name: Cache Tauri bundler tools (WiX + NSIS)
+        if: runner.os == 'Windows'
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\tauri
+          key: tauri-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            tauri-tools-${{ runner.os }}-${{ runner.arch }}-
+
       - name: Build Tauri app (unsigned CI)
         uses: tauri-apps/tauri-action@v0
         env:
@@ -143,9 +154,12 @@ jobs:
 
       - name: Build strict-confinement Snap
         id: snapcraft
+        # No `path:` — snapcraft must run from the repo root so the whole
+        # project is mounted into the build instance. Pointing it at snap/
+        # mounts only that directory, and the part's source resolves to an
+        # empty dir (ERR_PNPM_NO_PKG_MANIFEST). snapcraft finds the recipe at
+        # the standard snap/snapcraft.yaml location on its own.
         uses: snapcore/action-build@v1
-        with:
-          path: snap
 
       - name: Upload Snap package
         uses: actions/upload-artifact@v4

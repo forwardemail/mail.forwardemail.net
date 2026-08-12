@@ -122,6 +122,21 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # The Windows bundler downloads WiX and NSIS from GitHub releases at
+      # bundle time, after the Rust build has already finished. A dropped
+      # connection there ("failed to bundle project `io: Peer disconnected`")
+      # throws away the whole build. Caching the tool dir means only a cache
+      # miss is exposed to that. The bundler re-downloads anything missing or
+      # hash-mismatched, so a stale restore is self-correcting.
+      - name: Cache Tauri bundler tools (WiX + NSIS)
+        if: runner.os == 'Windows'
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\tauri
+          key: tauri-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            tauri-tools-${{ runner.os }}-${{ runner.arch }}-
+
       - name: Sync version from package.json to tauri.conf.json + Cargo.toml
         # Safeguard: `np`/`pnpm version` should run this via the package.json
         # "version" hook, but if it doesn't (e.g. version bump didn't include
@@ -265,9 +280,12 @@ jobs:
       - name: Build Snap package
         if: matrix.target == 'x86_64-unknown-linux-gnu' || matrix.target == 'aarch64-unknown-linux-gnu'
         id: snapcraft
+        # No `path:` — snapcraft must run from the repo root so the whole
+        # project is mounted into the build instance. Pointing it at snap/
+        # mounts only that directory, and the part's source resolves to an
+        # empty dir (ERR_PNPM_NO_PKG_MANIFEST). snapcraft finds the recipe at
+        # the standard snap/snapcraft.yaml location on its own.
         uses: snapcore/action-build@v1
-        with:
-          path: snap
 
       - name: Attest Snap build provenance
         if: matrix.target == 'x86_64-unknown-linux-gnu' || matrix.target == 'aarch64-unknown-linux-gnu'
