@@ -215,7 +215,7 @@
     position: fixed;
     inset: 0;
     z-index: 60;
-    background: var(--color-background, hsl(var(--background)));
+    background: var(--background);
     display: flex;
     flex-direction: column;
     animation: fe-search-slide-down 0.2s ease-out forwards;
@@ -249,8 +249,8 @@
     gap: 8px;
     padding: 8px 12px;
     padding-top: calc(8px + env(safe-area-inset-top, 0px));
-    border-bottom: 1px solid var(--color-border, hsl(var(--border)));
-    background: var(--color-background, hsl(var(--background)));
+    border-bottom: 1px solid var(--border);
+    background: var(--background);
   }
 
   .fe-search-overlay-back {
@@ -261,14 +261,14 @@
     height: 44px;
     border: none;
     background: transparent;
-    color: var(--color-foreground, hsl(var(--foreground)));
+    color: var(--foreground);
     cursor: pointer;
     border-radius: 8px;
     -webkit-tap-highlight-color: transparent;
   }
 
   .fe-search-overlay-back:active {
-    background: var(--color-accent, hsl(var(--accent)));
+    background: var(--accent);
   }
 
   .fe-search-overlay-input-wrap {
@@ -282,16 +282,16 @@
     width: 100%;
     height: 44px;
     padding: 0 40px 0 14px;
-    border: 1px solid var(--color-border, hsl(var(--border)));
+    border: 1px solid var(--border);
     border-radius: 8px;
-    background: var(--color-background, hsl(var(--background)));
-    color: var(--color-foreground, hsl(var(--foreground)));
+    background: var(--background);
+    color: var(--foreground);
     font-size: 16px; /* Prevents iOS zoom on focus */
     outline: none;
   }
 
   .fe-search-overlay-input:focus {
-    border-color: var(--color-primary, hsl(var(--primary)));
+    border-color: var(--primary);
   }
 
   /* Hide the browser's native search clear (X). The component renders its own
@@ -307,8 +307,8 @@
     right: 12px;
     width: 16px;
     height: 16px;
-    border: 2px solid var(--color-border, hsl(var(--border)));
-    border-top-color: var(--color-primary, hsl(var(--primary)));
+    border: 2px solid var(--border);
+    border-top-color: var(--primary);
     border-radius: 50%;
     animation: spin 0.6s linear infinite;
   }
@@ -329,7 +329,7 @@
     height: 32px;
     border: none;
     background: transparent;
-    color: var(--color-muted-foreground, hsl(var(--muted-foreground)));
+    color: var(--muted-foreground);
     cursor: pointer;
     border-radius: 50%;
     -webkit-tap-highlight-color: transparent;
@@ -351,7 +351,7 @@
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    color: var(--color-muted-foreground, hsl(var(--muted-foreground)));
+    color: var(--muted-foreground);
     margin-bottom: 8px;
   }
 
@@ -363,7 +363,7 @@
     padding: 12px 16px;
     border: none;
     background: transparent;
-    color: var(--color-foreground, hsl(var(--foreground)));
+    color: var(--foreground);
     font-size: 14px;
     text-align: left;
     cursor: pointer;
@@ -371,7 +371,7 @@
   }
 
   .fe-search-suggestion-row:active {
-    background: var(--color-accent, hsl(var(--accent)));
+    background: var(--accent);
   }
 
   .fe-search-chips {
@@ -382,16 +382,16 @@
 
   .fe-search-chip {
     padding: 6px 12px;
-    border: 1px solid var(--color-border, hsl(var(--border)));
+    border: 1px solid var(--border);
     border-radius: 16px;
     background: transparent;
-    color: var(--color-foreground, hsl(var(--foreground)));
+    color: var(--foreground);
     font-size: 13px;
     cursor: pointer;
     -webkit-tap-highlight-color: transparent;
   }
 
   .fe-search-chip:active {
-    background: var(--color-accent, hsl(var(--accent)));
+    background: var(--accent);
   }
 </style>

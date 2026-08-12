@@ -58,8 +58,7 @@
       active: {
         label: 'Active',
         description: 'This device is registered and ready to receive remote mail notifications.',
-        badgeClass:
-          'border-green-300 bg-green-50 text-green-800 dark:border-green-800 dark:bg-green-950 dark:text-green-200',
+        badgeClass: 'border-state-success/30 bg-state-success/10 text-state-success',
       },
       'not-registered': {
         label: 'Not registered',
@@ -69,27 +68,23 @@
       'needs-repair': {
         label: 'Needs attention',
         description: 'Local and server registration state do not match. Re-register to repair it.',
-        badgeClass:
-          'border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100',
+        badgeClass: 'border-state-caution/30 bg-state-caution/10 text-state-caution',
       },
       'permission-not-granted': {
         label: 'Permission needed',
         description: 'Notification permission is not granted on this device.',
-        badgeClass:
-          'border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100',
+        badgeClass: 'border-state-caution/30 bg-state-caution/10 text-state-caution',
       },
       'needs-distributor': {
         label: 'Distributor needed',
         description: 'Choose a UnifiedPush distributor before registering this device.',
-        badgeClass:
-          'border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100',
+        badgeClass: 'border-state-caution/30 bg-state-caution/10 text-state-caution',
       },
       'server-unavailable': {
         label: 'Status unavailable',
         description:
           'Forward Email could not be reached. Local device state is shown without changing registration.',
-        badgeClass:
-          'border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100',
+        badgeClass: 'border-state-caution/30 bg-state-caution/10 text-state-caution',
       },
       unsupported: {
         label: 'Unsupported',

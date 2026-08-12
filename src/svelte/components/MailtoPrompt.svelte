@@ -58,7 +58,7 @@
       class="flex max-w-lg flex-col gap-2 rounded-lg border border-border bg-card px-4 py-3 shadow-lg"
     >
       <div class="flex items-center gap-3">
-        <Mail class="h-5 w-5 shrink-0 text-primary" />
+        <Mail class="h-5 w-5 shrink-0 text-fg-link" />
         <p class="text-sm">Set Forward Email as your default email app?</p>
         <div class="flex shrink-0 gap-2">
           <Button size="sm" onclick={handleSetDefault}>Set as default</Button>

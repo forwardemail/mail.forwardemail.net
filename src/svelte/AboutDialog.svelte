@@ -218,7 +218,7 @@
           </dl>
 
           {#if isTauriDesktop && availableUpdate?.available}
-            <div class="rounded-md border border-sky-500/40 bg-sky-500/10 p-3 text-sm">
+            <div class="rounded-md border border-primary/40 bg-primary/10 p-3 text-sm">
               <div class="mb-2 font-medium">
                 Update available: v{availableUpdate.version}
               </div>
@@ -233,7 +233,7 @@
                 <div class="space-y-2">
                   <div class="h-1.5 w-full overflow-hidden rounded bg-muted">
                     <div
-                      class="h-full bg-sky-500 transition-all"
+                      class="h-full bg-primary transition-all"
                       style="width: {Math.round(installProgress * 100)}%"
                     ></div>
                   </div>
@@ -268,13 +268,13 @@
           <div class="border-t border-border pt-3 text-xs text-muted-foreground">
             <p>
               Made by the <button
-                class="text-sky-500 hover:underline inline cursor-pointer"
+                class="text-fg-link hover:underline inline cursor-pointer"
                 onclick={() => openExternal('https://forwardemail.net/about')}>Forward Email</button
               > team. Open-source, privacy-first, no tracking.
             </p>
             <p class="mt-2">
               <button
-                class="text-sky-500 hover:underline inline cursor-pointer"
+                class="text-fg-link hover:underline inline cursor-pointer"
                 onclick={() => openExternal('https://forwardemail.net/privacy')}
                 >Privacy Policy</button
               >

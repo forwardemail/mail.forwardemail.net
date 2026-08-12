@@ -6,6 +6,13 @@
  */
 
 // Styles
+// Brand mono face. Loaded eagerly rather than through font-loader.js because
+// --type-label is the design system's most-used element, so a swap after first
+// paint would flash across the whole UI. wght.css is the normal-weight subset
+// set (no italic); unicode-range means only the Latin file is fetched in
+// practice. Bundled locally: the CSP allows font-src 'self' data: only.
+import '@fontsource-variable/jetbrains-mono/wght.css';
+import './styles/fe-tokens.css';
 import './styles/base.css';
 import './styles/tokens.css';
 import './styles/components/index.css';

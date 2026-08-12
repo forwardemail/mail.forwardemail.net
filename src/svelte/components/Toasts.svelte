@@ -49,11 +49,11 @@
     const base = 'flex items-center justify-between gap-3 border p-4 shadow-lg';
     switch (type) {
       case 'success':
-        return `${base} border-green-100 bg-green-50/70 text-green-800 dark:border-green-700 dark:bg-green-900/50 dark:text-green-200`;
+        return `${base} border-state-success/30 bg-state-success/10 text-state-success`;
       case 'error':
-        return `${base} border-destructive/50 bg-destructive/10 text-destructive dark:border-destructive dark:bg-destructive/20`;
+        return `${base} border-destructive/30 bg-destructive/10 text-destructive`;
       case 'warning':
-        return `${base} border-yellow-200 bg-yellow-50 text-yellow-900 dark:border-yellow-800 dark:bg-yellow-950 dark:text-yellow-100`;
+        return `${base} border-state-caution/30 bg-state-caution/10 text-state-caution`;
       default:
         return `${base} border-border bg-background text-foreground`;
     }

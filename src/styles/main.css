@@ -4,84 +4,131 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/**
+ * shadcn / Tailwind bridge
+ * ========================
+ *
+ * These are the names Tailwind's utilities compile against: bg-background,
+ * text-muted-foreground, border-border, and so on. Every one of them now
+ * resolves to a semantic token from fe-tokens.css, so the Forward Email
+ * palette reaches the whole app without touching a single component.
+ *
+ * Values are hex, not oklch. That is deliberate: it removes the need for the
+ * Android WebView oklch fallback this file used to carry, and Tailwind's alpha
+ * modifiers (bg-primary/90) work the same either way.
+ *
+ * Do not put raw colour values in this file. Point at a token.
+ */
+
 :root {
+  /* Radius is unchanged. The specification's larger scale is available as
+   * --fe-radius-*; retargeting the live scale would reflow the entire app and
+   * make the palette change impossible to review on its own. */
   --radius: 0.625rem;
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.129 0.042 264.695);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.129 0.042 264.695);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.129 0.042 264.695);
-  --primary: oklch(0.208 0.042 265.755);
-  --primary-foreground: oklch(0.984 0.003 247.858);
-  --secondary: oklch(0.968 0.007 247.896);
-  --secondary-foreground: oklch(0.208 0.042 265.755);
-  --muted: oklch(0.968 0.007 247.896);
-  --muted-foreground: oklch(0.554 0.046 257.417);
-  --accent: oklch(0.968 0.007 247.896);
-  --accent-foreground: oklch(0.208 0.042 265.755);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.929 0.013 255.508);
-  --input: oklch(0.929 0.013 255.508);
-  --ring: oklch(0.704 0.04 256.788);
-  --chart-1: oklch(0.646 0.222 41.116);
-  --chart-2: oklch(0.6 0.118 184.704);
-  --chart-3: oklch(0.398 0.07 227.392);
-  --chart-4: oklch(0.828 0.189 84.429);
-  --chart-5: oklch(0.769 0.188 70.08);
-  --sidebar: oklch(0.984 0.003 247.858);
-  --sidebar-foreground: oklch(0.129 0.042 264.695);
-  --sidebar-primary: oklch(0.208 0.042 265.755);
-  --sidebar-primary-foreground: oklch(0.984 0.003 247.858);
-  --sidebar-accent: oklch(0.968 0.007 247.896);
-  --sidebar-accent-foreground: oklch(0.208 0.042 265.755);
-  --sidebar-border: oklch(0.929 0.013 255.508);
-  --sidebar-ring: oklch(0.704 0.04 256.788);
-  --scrollbar-thumb: rgba(100, 116, 139, 0.38);
-  --scrollbar-thumb-hover: rgba(100, 116, 139, 0.58);
-  --scrollbar-thumb-active: rgba(100, 116, 139, 0.72);
+
+  --background: var(--surface-canvas);
+  --foreground: var(--fg-primary);
+  --card: var(--surface-raised);
+  --card-foreground: var(--fg-primary);
+  --popover: var(--surface-overlay);
+  --popover-foreground: var(--fg-primary);
+  --primary: var(--action-primary-bg);
+  --primary-foreground: var(--action-primary-fg);
+  --secondary: var(--fe-l-200);
+  --secondary-foreground: var(--fg-primary);
+  --muted: var(--fe-l-200);
+
+  /* Maps to --fg-secondary, not --fg-muted. text-muted-foreground is used 325
+   * times in this app and carries real body and metadata text, so it has to
+   * clear 4.5:1. The faintest tier (--fg-muted) is reserved for timestamps,
+   * counts and disabled text, where it is either larger or non-essential. */
+  --muted-foreground: var(--fg-secondary);
+
+  --accent: var(--fe-l-200);
+  --accent-foreground: var(--fg-primary);
+  --destructive: var(--state-danger);
+
+  /* Previously undefined here, and defined in tokens.css as a bare HSL triple
+   * ("210 40% 98%") that is not a valid colour. text-destructive-foreground
+   * therefore resolved to nothing and silently inherited. */
+  --destructive-foreground: var(--action-danger-fg);
+
+  --border: var(--border-default);
+  --input: var(--border-default);
+  --ring: var(--focus-ring);
+
+  /* Data visualisation. Reuses the state hues rather than introducing new
+   * accents, per the specification's cap on accent count. */
+  --chart-1: var(--fe-primary);
+  --chart-2: var(--state-success);
+  --chart-3: var(--state-caution);
+  --chart-4: var(--fe-vault);
+  --chart-5: var(--state-active);
+
+  /* Sidebar family. Currently unreferenced by any component (the folder pane
+   * styles through --color-panel in mailbox.css), kept in sync so it does not
+   * drift if a shadcn sidebar lands later. */
+  --sidebar: var(--surface-raised);
+  --sidebar-foreground: var(--fg-primary);
+  --sidebar-primary: var(--action-primary-bg);
+  --sidebar-primary-foreground: var(--action-primary-fg);
+  --sidebar-accent: var(--fe-l-200);
+  --sidebar-accent-foreground: var(--fg-primary);
+  --sidebar-border: var(--border-default);
+  --sidebar-ring: var(--focus-ring);
+
+  --scrollbar-thumb: rgb(100 116 139 / 0.38);
+  --scrollbar-thumb-hover: rgb(100 116 139 / 0.58);
+  --scrollbar-thumb-active: rgb(100 116 139 / 0.72);
 }
 
 .dark {
-  /* Neutral (chroma 0) dark theme — true black/grey rather than blue.
-   * Surface/text tokens drop the ~0.04 blue chroma that tinted the whole
-   * window. Accent colours that are meant to be coloured are kept: the
-   * destructive red, the data-viz chart palette, and the sidebar active
-   * highlight (--sidebar-primary). */
-  --background: oklch(0.129 0 0);
-  --foreground: oklch(0.984 0 0);
-  --card: oklch(0.208 0 0);
-  --card-foreground: oklch(0.984 0 0);
-  --popover: oklch(0.208 0 0);
-  --popover-foreground: oklch(0.984 0 0);
-  --primary: oklch(0.929 0 0);
-  --primary-foreground: oklch(0.208 0 0);
-  --secondary: oklch(0.279 0 0);
-  --secondary-foreground: oklch(0.984 0 0);
-  --muted: oklch(0.279 0 0);
-  --muted-foreground: oklch(0.704 0 0);
-  --accent: oklch(0.279 0 0);
-  --accent-foreground: oklch(0.984 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.551 0 0);
-  --chart-1: oklch(0.488 0.243 264.376);
-  --chart-2: oklch(0.696 0.17 162.48);
-  --chart-3: oklch(0.769 0.188 70.08);
-  --chart-4: oklch(0.627 0.265 303.9);
-  --chart-5: oklch(0.645 0.246 16.439);
-  --sidebar: oklch(0.208 0 0);
-  --sidebar-foreground: oklch(0.984 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.984 0 0);
-  --sidebar-accent: oklch(0.279 0 0);
-  --sidebar-accent-foreground: oklch(0.984 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.551 0 0);
-  --scrollbar-thumb: rgba(163, 163, 163, 0.44);
-  --scrollbar-thumb-hover: rgba(189, 189, 189, 0.64);
-  --scrollbar-thumb-active: rgba(212, 212, 212, 0.8);
+  /* Canvas is Panel (#0E1628), not Ink. See the note in fe-tokens.css for why
+   * the app and the marketing site differ here. */
+  --background: var(--surface-canvas);
+  --foreground: var(--fg-primary);
+  --card: var(--surface-raised);
+  --card-foreground: var(--fg-primary);
+  --popover: var(--surface-overlay);
+  --popover-foreground: var(--fg-primary);
+
+  /* Was oklch(0.929 0 0), a near-white. That is why this file used to override
+   * accent-color on native form controls with a hardcoded blue: a near-white
+   * --primary made checked and unchecked indistinguishable. A real Primary
+   * blue makes that workaround unnecessary. */
+  --primary: var(--action-primary-bg);
+  --primary-foreground: var(--action-primary-fg);
+
+  --secondary: var(--fe-n-300);
+  --secondary-foreground: var(--fg-primary);
+  --muted: var(--fe-n-300);
+  --muted-foreground: var(--fg-secondary);
+  --accent: var(--fe-n-300);
+  --accent-foreground: var(--fg-primary);
+  --destructive: var(--state-danger);
+  --destructive-foreground: var(--action-danger-fg);
+  --border: var(--border-default);
+  --input: var(--border-default);
+  --ring: var(--focus-ring);
+
+  --chart-1: var(--fe-primary-lift);
+  --chart-2: var(--state-success);
+  --chart-3: var(--state-caution);
+  --chart-4: var(--fe-vault);
+  --chart-5: var(--state-active);
+
+  --sidebar: var(--surface-raised);
+  --sidebar-foreground: var(--fg-primary);
+  --sidebar-primary: var(--action-primary-bg);
+  --sidebar-primary-foreground: var(--action-primary-fg);
+  --sidebar-accent: var(--fe-n-300);
+  --sidebar-accent-foreground: var(--fg-primary);
+  --sidebar-border: var(--border-default);
+  --sidebar-ring: var(--focus-ring);
+
+  --scrollbar-thumb: rgb(148 163 184 / 0.4);
+  --scrollbar-thumb-hover: rgb(148 163 184 / 0.6);
+  --scrollbar-thumb-active: rgb(148 163 184 / 0.78);
 }
 
 @theme inline {
@@ -121,6 +168,40 @@
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
+
+  /* Design system tokens exposed as utilities, so component work can reach the
+   * semantic layer directly: bg-surface-sunken, text-state-encrypted,
+   * border-strong, and so on. These are additive; nothing resolves through
+   * them yet. */
+  --color-surface-canvas: var(--surface-canvas);
+  --color-surface-raised: var(--surface-raised);
+  --color-surface-overlay: var(--surface-overlay);
+  --color-surface-sunken: var(--surface-sunken);
+  --color-surface-inverse: var(--surface-inverse);
+  --color-fg-primary: var(--fg-primary);
+  --color-fg-secondary: var(--fg-secondary);
+  --color-fg-muted: var(--fg-muted);
+  --color-fg-inverse: var(--fg-inverse);
+  --color-fg-link: var(--fg-link);
+  --color-state-active: var(--state-active);
+  --color-state-success: var(--state-success);
+  --color-state-caution: var(--state-caution);
+  --color-state-danger: var(--state-danger);
+  --color-state-encrypted: var(--state-encrypted);
+  --color-state-unread: var(--state-unread);
+  --color-state-starred: var(--state-starred);
+  --color-state-caution-fill: var(--state-caution-fill);
+  --color-subtle: var(--border-subtle);
+  --color-strong: var(--border-strong);
+
+  /* The specification's radius scale, exposed as rounded-fe-* utilities. The
+   * live rounded-* scale is deliberately unchanged (retargeting it would reflow
+   * the whole app), so new signature components opt into the specification
+   * geometry explicitly through these. */
+  --radius-fe-sm: var(--fe-radius-sm);
+  --radius-fe-md: var(--fe-radius-md);
+  --radius-fe-lg: var(--fe-radius-lg);
+  --radius-fe-xl: var(--fe-radius-xl);
 }
 
 @layer base {
@@ -168,54 +249,35 @@
   background-color: var(--scrollbar-thumb-active);
 }
 
-/* Android WebView fallback: hex border colors when oklch() is unsupported.
- * Without this, --input/--border resolve to invalid → no visible border on
- * Checkbox (and other thin-bordered surfaces). Light values match the
- * oklch tokens at L=0.929 / L=1@10%. */
-@supports not (color: oklch(0% 0 0)) {
-  :root {
-    --border: #e5e7eb;
-    --input: #e5e7eb;
-  }
-  .dark {
-    --border: rgba(255, 255, 255, 0.1);
-    --input: rgba(255, 255, 255, 0.15);
-  }
-}
-
-/* Touch devices: make checkbox borders thicker AND high-contrast so they're
- * reliably visible on Android WebView. The default --input token resolves to
- * oklch(0.929), which can render at near-zero contrast against a white card on
- * Android even when oklch() itself is supported. Hex values bypass that.
- * !important is required to beat the Tailwind utility specificity from
- * data-[state=checked]:bg-primary in checkbox.svelte. */
+/* Touch devices: thicker, higher-contrast checkbox borders so they read
+ * reliably on Android WebView, where a 1px border at the default border token
+ * can render at near-zero contrast at phone density. !important is required to
+ * beat the Tailwind utility specificity from data-[state=checked]:bg-primary
+ * in checkbox.svelte. */
 @media (pointer: coarse) {
   [data-slot='checkbox'] {
     border-width: 2px !important;
-    border-color: #525252 !important;
-    /* Unchecked fill: bg-background resolves to pure white in light mode, so
-     * the box was white-on-white against a white row on Android. A light-gray
-     * fill makes the box itself visible even where the thin border reads faint
-     * at phone density. The checked selector below overrides this. */
-    background-color: #f0f0f0 !important;
+    border-color: var(--fg-muted) !important;
+    /* An unchecked box on a raised surface is otherwise white on white. The
+     * sunken fill makes the box itself visible even where the border reads
+     * faint. The checked selector below overrides this. */
+    background-color: var(--surface-sunken) !important;
   }
   .dark [data-slot='checkbox'] {
-    border-color: rgba(255, 255, 255, 0.55) !important;
-    background-color: rgba(255, 255, 255, 0.1) !important;
+    border-color: var(--fe-n-600) !important;
+    background-color: rgb(226 232 240 / 0.1) !important;
   }
-  [data-slot='checkbox'][data-state='checked'] {
-    background-color: #171717 !important;
-    border-color: #171717 !important;
-    color: #fafafa !important;
-  }
+  [data-slot='checkbox'][data-state='checked'],
   .dark [data-slot='checkbox'][data-state='checked'] {
-    background-color: #e5e5e5 !important;
-    border-color: #e5e5e5 !important;
-    color: #171717 !important;
+    background-color: var(--action-primary-bg) !important;
+    border-color: var(--action-primary-bg) !important;
+    color: var(--action-primary-fg) !important;
   }
 }
 
-/* Tooltip styling for data-tooltip attributes */
+/* Tooltip styling for data-tooltip attributes. Colours come from
+ * --tooltip-bg / --tooltip-text, which already resolve per theme, so this
+ * needs no .dark overrides. */
 [data-tooltip] {
   position: relative;
   overflow: visible !important;
@@ -227,25 +289,18 @@
   bottom: calc(100% + 8px);
   left: 50%;
   transform: translateX(-50%);
-  padding: 6px 10px;
-  border-radius: 6px;
-  font-size: 12px;
-  font-weight: 500;
+  padding: var(--tooltip-padding-y) var(--tooltip-padding-x);
+  border-radius: var(--radius-sm);
+  font-size: var(--type-meta);
+  font-weight: var(--font-medium);
   white-space: nowrap;
   pointer-events: none;
   opacity: 0;
-  transition: opacity 0.15s ease;
-  z-index: 9999;
-  background: rgb(30 30 30 / 0.95);
-  color: #fff;
-  box-shadow:
-    0 4px 6px -1px rgb(0 0 0 / 0.1),
-    0 2px 4px -2px rgb(0 0 0 / 0.1);
-}
-
-.dark [data-tooltip]::after {
-  background: rgb(250 250 250 / 0.95);
-  color: #1a1a1a;
+  transition: opacity var(--motion-fast);
+  z-index: var(--z-tooltip);
+  background: var(--tooltip-bg);
+  color: var(--tooltip-text);
+  box-shadow: var(--elev-2);
 }
 
 [data-tooltip]:hover::after {
@@ -261,15 +316,11 @@
   left: 50%;
   transform: translateX(-50%);
   border: 6px solid transparent;
-  border-top-color: rgb(30 30 30 / 0.95);
+  border-top-color: var(--tooltip-bg);
   pointer-events: none;
   opacity: 0;
-  transition: opacity 0.15s ease;
-  z-index: 9999;
-}
-
-.dark [data-tooltip]::before {
-  border-top-color: rgb(250 250 250 / 0.95);
+  transition: opacity var(--motion-fast);
+  z-index: var(--z-tooltip);
 }
 
 [data-tooltip]:hover::before {
@@ -287,12 +338,7 @@
   bottom: auto;
   top: calc(100% + 2px);
   border-top-color: transparent;
-  border-bottom-color: rgb(30 30 30 / 0.95);
-}
-
-.dark [data-tooltip-position='bottom']::before {
-  border-top-color: transparent;
-  border-bottom-color: rgb(250 250 250 / 0.95);
+  border-bottom-color: var(--tooltip-bg);
 }
 
 /* Suppress data-attribute tooltips on touch-only devices.
@@ -305,32 +351,20 @@
   }
 }
 
-/* ============================================
-   FORM INPUT DARK MODE FIX
-   Native radio buttons, checkboxes, and other form controls use the
-   CSS accent-color property. In dark mode, --primary resolves to a
-   very light gray (oklch 0.929) which makes checked/unchecked states
-   indistinguishable. Override with a vivid blue so the selected state
-   is clearly visible against the dark background.
-   ============================================ */
-.dark input[type='radio'],
-.dark input[type='checkbox'],
-.dark input[type='range'] {
-  accent-color: oklch(0.488 0.243 264.376);
+/* Native form controls take their tick and fill from the CSS accent-color
+ * property. Pointing it at the primary token keeps radios, checkboxes and
+ * ranges consistent with the rest of the app in both themes. */
+input[type='radio'],
+input[type='checkbox'],
+input[type='range'] {
+  accent-color: var(--action-primary-bg);
 }
 
-/* Ensure native date/time/color pickers render legibly in dark mode */
+/* Native date/time pickers need the scheme hint to render legibly. */
 .dark input[type='date'],
 .dark input[type='time'],
 .dark input[type='datetime-local'] {
   color-scheme: dark;
-}
-
-/* Light mode: use the standard primary color for accent */
-:root:not(.dark) input[type='radio'],
-:root:not(.dark) input[type='checkbox'],
-:root:not(.dark) input[type='range'] {
-  accent-color: oklch(0.208 0.042 265.755);
 }
 
 :root:not(.dark) input[type='date'],

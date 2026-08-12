@@ -142,6 +142,24 @@ export const SETTINGS_REGISTRY: Record<string, SettingDefinition> = {
     valueType: 'string',
     defaultValue: 'full',
   },
+  /**
+   * Row density, specification §2.6. Deliberately separate from layout_mode
+   * rather than folded into it: layout_mode chooses where the reader sits,
+   * density chooses how tall a list row is. They are orthogonal, and a user who
+   * wants a side-by-side reader has no reason to also want taller rows.
+   *
+   * Defaults to compact because the message list is this app's dominant surface
+   * and marketing spacing does not transfer to a mail client. Mobile ignores
+   * this and is always comfortable, enforced in CSS.
+   */
+  list_density: {
+    id: 'list_density',
+    label: 'Density',
+    scope: SETTING_SCOPES.DEVICE,
+    localKey: 'list_density',
+    valueType: 'string',
+    defaultValue: 'compact',
+  },
   compose_plain_default: {
     id: 'compose_plain_default',
     label: 'Plain Text Default',

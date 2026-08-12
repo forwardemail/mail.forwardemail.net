@@ -29,7 +29,15 @@ import {
 } from './stores/tabStore';
 import { writable, get } from 'svelte/store';
 import { mount } from 'svelte';
-// Design system styles - base reset first, then tokens, components, pages, then main
+// Design system styles. fe-tokens.css is the canonical token layer and must
+// load first; tokens.css and main.css both map onto it.
+// Brand mono face. Loaded eagerly rather than through font-loader.js because
+// --type-label is the design system's most-used element, so a swap after first
+// paint would flash across the whole UI. wght.css is the normal-weight subset
+// set (no italic); unicode-range means only the Latin file is fetched in
+// practice. Bundled locally: the CSP allows font-src 'self' data: only.
+import '@fontsource-variable/jetbrains-mono/wght.css';
+import './styles/fe-tokens.css';
 import './styles/base.css';
 import './styles/tokens.css';
 import './styles/components/index.css';
@@ -500,6 +508,7 @@ if (settingsRoot) {
       toasts,
       applyTheme,
       applyFont,
+      applyDensity,
     },
   });
 }
@@ -1852,6 +1861,20 @@ function applyTheme(pref) {
 }
 
 /**
+ * Row density, specification §2.6.
+ *
+ * Sets data-density on <html>. Only components that read --row-height and
+ * --row-pad-y respond, so this changes list rhythm without touching forms or
+ * buttons. Mobile is always comfortable, enforced in fe-tokens.css rather than
+ * here so it holds on viewport resize without a JS round trip.
+ */
+function applyDensity(pref) {
+  const density = pref || getEffectiveSettingValue('list_density') || 'compact';
+  const resolved = density === 'comfortable' ? 'comfortable' : 'compact';
+  document.documentElement.dataset.density = resolved;
+}
+
+/**
  * Apply font to document
  * Updates CSS variables to change font throughout app
  * @param {string} fontFamily - CSS font-family value (e.g., '"Inter Variable", system-ui, sans-serif')
@@ -2423,6 +2446,8 @@ async function bootstrap() {
 
     viewModel.settingsModal.applyTheme = applyTheme;
     viewModel.settingsModal.applyFont = applyFont;
+    viewModel.settingsModal.applyDensity = applyDensity;
+    applyDensity();
     themeUnsub?.();
     themeUnsub = effectiveTheme.subscribe((value) => {
       applyTheme(value || 'system');

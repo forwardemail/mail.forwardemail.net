@@ -250,7 +250,7 @@
       {#if submitSuccess}
         <div class="flex flex-col items-center justify-center py-10 text-center">
           <div
-            class="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-green-100 text-green-600"
+            class="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-state-success/10 text-state-success"
           >
             <CheckIcon class="h-6 w-6" />
           </div>

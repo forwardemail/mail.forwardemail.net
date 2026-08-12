@@ -252,6 +252,10 @@
 
   const getAvatarColor = (contact: Contact | null): string => {
     const colors = [
+      /* Categorical identity colours for contact avatars. Deliberately not
+       * design tokens: their job is to tell one contact from another at a
+       * glance, the same role the --chart-* ramp plays, so mapping them onto
+       * brand hues would defeat the purpose. */
       '#3b82f6',
       '#8b5cf6',
       '#ec4899',
@@ -1581,7 +1585,7 @@
                   {/if}
                   <span>Additional info</span>
                   {#if !optionalFieldsExpanded && (draft.company || draft.jobTitle || draft.timezone || draft.website || draft.birthday || draft.address)}
-                    <span class="text-primary">*</span>
+                    <span class="text-fg-link">*</span>
                   {/if}
                 </button>
 

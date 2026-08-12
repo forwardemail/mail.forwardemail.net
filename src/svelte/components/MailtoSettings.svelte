@@ -79,19 +79,17 @@
     <Card.Content class="space-y-4">
       <div class="flex items-center gap-2 text-sm">
         {#if status === 'default'}
-          <CheckCircle class="h-4 w-4 text-green-600 dark:text-green-400" />
-          <span class="text-green-600 dark:text-green-400">
-            Forward Email is set as your default email app.
-          </span>
+          <CheckCircle class="h-4 w-4 text-state-success" />
+          <span class="text-state-success"> Forward Email is set as your default email app. </span>
         {:else if status === 'registered'}
-          <HelpCircle class="h-4 w-4 text-blue-600 dark:text-blue-400" />
-          <span class="text-blue-600 dark:text-blue-400">
+          <HelpCircle class="h-4 w-4 text-fg-link" />
+          <span class="text-fg-link">
             Forward Email is registered with Windows, but Windows still needs you to choose it for
             the MAILTO link type in Default apps.
           </span>
         {:else if status === 'declined'}
-          <AlertCircle class="h-4 w-4 text-orange-500" />
-          <span class="text-orange-500">
+          <AlertCircle class="h-4 w-4 text-state-caution" />
+          <span class="text-state-caution">
             Registration was previously declined. You may need to update your browser settings.
           </span>
         {:else if status === 'not_default'}
@@ -109,7 +107,7 @@
 
       {#if instructionMessage}
         <div
-          class="flex items-start gap-2 rounded-md border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800 dark:border-blue-800 dark:bg-blue-950 dark:text-blue-200"
+          class="flex items-start gap-2 rounded-md border border-primary/30 bg-primary/10 p-3 text-sm text-fg-link"
         >
           <ExternalLink class="mt-0.5 h-4 w-4 shrink-0" />
           <p class="whitespace-pre-line">{instructionMessage}</p>

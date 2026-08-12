@@ -3,6 +3,12 @@
  *
  * Container styles for the sandboxed email iframe component.
  * The iframe content is styled separately in iframe-srcdoc.ts.
+ *
+ * An appearance-toggle dropdown used to be styled here (.fe-appearance-toggle,
+ * .fe-appearance-menu, .fe-appearance-menu-item, .fe-check) along with dark and
+ * light override blocks for it. No markup has applied those classes for some
+ * time, so roughly 100 lines and a dozen hardcoded colours went with them. The
+ * reader's appearance controls live in Settings under the Appearance section.
  */
 
 /* Container wrapping the iframe */
@@ -20,105 +26,4 @@
   display: block;
   background: transparent;
   /* No height transition — instant resize avoids visible two-phase render */
-}
-
-/* Appearance toggle dropdown styling */
-.fe-appearance-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 8px;
-  font-size: 12px;
-  border-radius: 4px;
-  cursor: pointer;
-  background: transparent;
-  border: 1px solid transparent;
-  color: var(--muted-foreground, #6b7280);
-  transition: all 0.15s ease;
-}
-
-.fe-appearance-toggle:hover {
-  background: var(--accent, #f3f4f6);
-  color: var(--accent-foreground, #1f2937);
-}
-
-.fe-appearance-toggle[data-state='open'] {
-  background: var(--accent, #f3f4f6);
-}
-
-/* Appearance dropdown menu */
-.fe-appearance-menu {
-  position: absolute;
-  z-index: 50;
-  min-width: 140px;
-  background: var(--popover, #ffffff);
-  border: 1px solid var(--border, #e5e7eb);
-  border-radius: 6px;
-  padding: 4px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-}
-
-.fe-appearance-menu-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 8px 10px;
-  font-size: 13px;
-  border: none;
-  background: transparent;
-  border-radius: 4px;
-  cursor: pointer;
-  color: var(--foreground, #1f2937);
-  text-align: left;
-}
-
-.fe-appearance-menu-item:hover {
-  background: var(--accent, #f3f4f6);
-}
-
-.fe-appearance-menu-item[data-active='true'] {
-  background: var(--accent, #f3f4f6);
-  font-weight: 500;
-}
-
-.fe-appearance-menu-item .fe-check {
-  width: 16px;
-  height: 16px;
-  opacity: 0;
-}
-
-.fe-appearance-menu-item[data-active='true'] .fe-check {
-  opacity: 1;
-}
-
-/* Dark mode / light mode overrides */
-:root.dark .fe-appearance-menu,
-.dark .fe-appearance-menu {
-  background: var(--popover, #242424);
-  border-color: var(--border, #333333);
-}
-
-:root.dark .fe-appearance-menu-item,
-.dark .fe-appearance-menu-item {
-  color: var(--foreground, #e2e8f0);
-}
-
-:root.dark .fe-appearance-menu-item:hover,
-.dark .fe-appearance-menu-item:hover {
-  background: var(--accent, #334155);
-}
-
-/* Light mode body class overrides */
-body.light-mode .fe-appearance-menu {
-  background: #ffffff;
-  border-color: #e5e7eb;
-}
-
-body.light-mode .fe-appearance-menu-item {
-  color: #1f2937;
-}
-
-body.light-mode .fe-appearance-menu-item:hover {
-  background: #f3f4f6;
 }

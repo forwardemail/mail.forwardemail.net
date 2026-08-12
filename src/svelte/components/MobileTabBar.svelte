@@ -104,7 +104,7 @@
     justify-content: center;
     gap: 2px;
     padding: 6px 0;
-    color: var(--color-muted-foreground, #888);
+    color: var(--muted-foreground);
     background: transparent;
     border: none;
     cursor: pointer;
@@ -118,7 +118,7 @@
   }
 
   .fe-mobile-tab-active {
-    color: var(--color-primary, hsl(var(--primary)));
+    color: var(--primary);
   }
 
   .fe-mobile-tab-icon {
@@ -136,12 +136,12 @@
     height: 18px;
     padding: 0 4px;
     border-radius: 9px;
-    /* Reference the raw :root HSL tokens directly. The `--color-*` names come
-     * from `@theme inline`, so they are not runtime custom properties here; an
-     * unwrapped triplet is an invalid color, which made the count inherit the
-     * active tab's blue instead of the intended white. */
-    background: hsl(var(--destructive));
-    color: hsl(var(--destructive-foreground));
+    /* Reference the runtime tokens directly. The `--color-*` names come from
+     * `@theme inline` and are not runtime custom properties, so they cannot be
+     * used here. The tokens hold complete colour values, so they must not be
+     * wrapped in hsl(). */
+    background: var(--destructive);
+    color: var(--destructive-foreground);
     font-size: 11px;
     font-weight: 600;
     line-height: 18px;

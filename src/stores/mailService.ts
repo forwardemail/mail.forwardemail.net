@@ -5,7 +5,7 @@ import { Local } from '../utils/storage.js';
 import { sanitizeHtml } from '../utils/sanitize.js';
 import { formatFriendlyDate } from '../utils/date.ts';
 import { createPerfTracer } from '../utils/perf-logger.ts';
-import { DARK_SURFACE } from '../utils/dark-surface.ts';
+import { DARK_SURFACE, LIGHT_SURFACE } from '../utils/dark-surface.ts';
 import { abortIfNeeded, getMessageApiId } from '../utils/sync-helpers.ts';
 import {
   sendSyncRequest,
@@ -1740,16 +1740,12 @@ function createPgpModal({
   const dialog = document.createElement('div');
   dialog.className = 'fe-modal';
 
-  if (isLightMode) {
-    dialog.style.background = '#ffffff';
-    dialog.style.border = '1px solid #e5e7eb';
-    dialog.style.color = '#0f172a';
-  } else {
-    // Neutral dark surfaces mirroring tokens.css (.dark) — see dark-surface.ts.
-    dialog.style.background = DARK_SURFACE.overlay;
-    dialog.style.border = `1px solid ${DARK_SURFACE.border}`;
-    dialog.style.color = DARK_SURFACE.text;
-  }
+  // This dialog is built with inline styles, so it cannot read the app's CSS
+  // custom properties. Both palettes come from dark-surface.ts.
+  const palette = isLightMode ? LIGHT_SURFACE : DARK_SURFACE;
+  dialog.style.background = palette.overlay;
+  dialog.style.border = `1px solid ${palette.border}`;
+  dialog.style.color = palette.text;
 
   dialog.style.borderRadius = '12px';
   dialog.style.padding = '18px';
@@ -1757,8 +1753,8 @@ function createPgpModal({
   dialog.style.width = '96%';
   dialog.style.boxShadow = '0 30px 80px rgba(0, 0, 0, 0.4)';
 
-  const headingColor = isLightMode ? '#0f172a' : DARK_SURFACE.text;
-  const textColor = isLightMode ? '#334155' : DARK_SURFACE.textSubtle;
+  const headingColor = palette.text;
+  const textColor = palette.textSubtle;
 
   dialog.innerHTML = `
     <h3 style="margin-top:0; color: ${headingColor}; font-size: 18px; font-weight: 600;">PGP encrypted message detected</h3>

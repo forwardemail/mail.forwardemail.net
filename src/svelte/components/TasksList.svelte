@@ -17,7 +17,7 @@
     tasks = [],
     onSelect = () => {},
     onToggleComplete = () => {},
-    resolveTaskColor = () => '#1c7ed6',
+    resolveTaskColor = () => 'var(--action-primary-bg)',
     isCompleted = () => false,
   }: Props = $props();
 

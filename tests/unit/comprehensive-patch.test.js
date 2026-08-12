@@ -1377,10 +1377,6 @@ describe('pre-release regression guards', () => {
 // 12. Round-2 fix regression guards (May 2026 follow-up batch)
 // ============================================================
 describe('round-2 fix regression guards', () => {
-  const messageRowSrc = fs.readFileSync(
-    path.resolve(__dirname, '../../src/svelte/MessageRow.svelte'),
-    'utf8',
-  );
   const calendarSrc = fs.readFileSync(
     path.resolve(__dirname, '../../src/svelte/Calendar.svelte'),
     'utf8',
@@ -1390,18 +1386,56 @@ describe('round-2 fix regression guards', () => {
     'utf8',
   );
   const tokensSrc = fs.readFileSync(path.resolve(__dirname, '../../src/styles/tokens.css'), 'utf8');
+  const feTokensSrc = fs.readFileSync(
+    path.resolve(__dirname, '../../src/styles/fe-tokens.css'),
+    'utf8',
+  );
+  const mainCssSrc = fs.readFileSync(path.resolve(__dirname, '../../src/styles/main.css'), 'utf8');
   const indexHtmlSrc = fs.readFileSync(path.resolve(__dirname, '../../index.html'), 'utf8');
+  const mailboxCssSrc = fs.readFileSync(
+    path.resolve(__dirname, '../../src/styles/pages/mailbox.css'),
+    'utf8',
+  );
 
-  it('MessageRow binds unread to font weight on both from line and subject', () => {
-    // Pre-fix: from line was unconditionally font-semibold, subject was
-    // unconditionally font-medium — only the bg-primary/5 tint cued unread.
-    // Now: bold for unread, normal for read on both. Whitespace-tolerant
-    // regex so reformats (e.g. prettier line wrapping) don't false-fail.
-    expect(messageRowSrc).toMatch(/\{\s*unread\s*\?\s*'font-bold'\s*:\s*'font-normal'\s*\}/);
-    expect(messageRowSrc).toMatch(/\{\s*unread\s*\?\s*'font-semibold'\s*:\s*'font-normal'\s*\}/);
-    // Defence-in-depth: assert the *unconditional* pre-fix classes are gone.
-    expect(messageRowSrc).not.toMatch(/gap-1\.5\s+font-semibold\s+text-foreground"/);
-    expect(messageRowSrc).not.toMatch(/truncate\s+font-medium\s+text-foreground"/);
+  // This guard used to read MessageRow.svelte. That component was superseded by
+  // rows rendered inline in Mailbox.svelte and has been deleted, so the guard
+  // now asserts the same intent against the live markup. The intent is that
+  // unread must never be cued by a background tint alone.
+  it('unread rows are cued by font weight, not by a tint alone', () => {
+    // Sender and subject take a heavier weight when unread across the row
+    // variants. Whitespace-tolerant so prettier reflows do not false-fail.
+    expect(mailboxSrcR2).toMatch(/is_unread\s*\?\s*'font-bold'\s*:\s*'font-semibold'/);
+    expect(mailboxSrcR2).toMatch(/hasUnread \|\| conv\.is_unread \? 'font-semibold' : ''/);
+  });
+
+  it('every message row exposes its unread state as an attribute', () => {
+    // The state gutter is CSS keyed on this attribute, so a row that omits it
+    // silently loses one of the three unread cues.
+    // Count the bare attribute in markup only. The same string also appears
+    // inside closest() selectors in the click handlers, which must not count.
+    const rowContainers = mailboxSrcR2.match(/^\s*data-conversation-row\s*$/gm) ?? [];
+    const unreadAttrs = mailboxSrcR2.match(/^\s*data-unread=\{/gm) ?? [];
+    expect(rowContainers.length).toBeGreaterThan(0);
+    expect(unreadAttrs.length).toBe(rowContainers.length);
+  });
+
+  it('the state gutter encodes unread with position, not only colour', () => {
+    // Specification §5.2: three cues. Weight and colour live in the markup
+    // above; this is the third, and the only one that survives without colour
+    // perception because it is a position change.
+    expect(mailboxCssSrc).toMatch(/\[data-conversation-row\]::before/);
+    expect(mailboxCssSrc).toMatch(
+      /\[data-conversation-row\]\[data-unread='true'\]::before\s*\{[^}]*background:\s*var\(--state-unread\)/,
+    );
+    // Never animate list rows on data update (§2.7).
+    expect(mailboxCssSrc).toMatch(/\[data-conversation-row\]::before\s*\{[^}]*transition:\s*none/);
+  });
+
+  it('encryption uses the vault token, never the success token', () => {
+    // Specification §5.3: delivered and encrypted are different facts and must
+    // not share a colour.
+    expect(mailboxSrcR2).toMatch(/bg-state-encrypted\/10/);
+    expect(mailboxSrcR2).not.toMatch(/pgp[\s\S]{0,400}?bg-state-success/i);
   });
 
   it('Calendar applyRemoteChange triggers a fresh event fetch for CREATE/UPDATE', () => {
@@ -1487,18 +1521,46 @@ describe('round-2 fix regression guards', () => {
     expect(mailboxSrcR2).not.toMatch(/body\.dragging\)[^}]*min-height:\s*44px/);
   });
 
-  it('dark theme surface tokens are at hue 0 with 0% saturation', () => {
-    // Previous palette held hue 240 at 4-6% sat. Pure grey (0 0% L%)
-    // removes the blue cast at full-window scale. Accent (199°) retained.
-    expect(tokensSrc).toContain('--background: 0 0% 6%;');
-    expect(tokensSrc).toContain('--card: 0 0% 8%;');
-    expect(tokensSrc).toContain('--popover: 0 0% 10%;');
-    expect(tokensSrc).toContain('--muted: 0 0% 16%;');
-    expect(tokensSrc).toContain('--border: 0 0% 18%;');
-    expect(tokensSrc).toContain('--sidebar-background: 0 0% 10%;');
-    // Accent must remain blue/cyan — these are intentional.
-    expect(tokensSrc).toContain('--primary: 199 89% 49%;');
-    expect(tokensSrc).toContain('--ring: 199 89% 49%;');
+  // Supersedes an earlier guard that asserted a pure-grey dark theme (hue 0,
+  // 0% saturation) via HSL triples in tokens.css. Two things changed. The
+  // Forward Email design system specifies a navy dark ramp, so grey is no
+  // longer the intent. And that guard was reading a block which had no effect
+  // on the rendered app: main.css declares the same names and imports last, so
+  // its values always won. tokens.css no longer carries theme values at all.
+  it('dark theme surfaces come from the navy ramp in fe-tokens.css', () => {
+    expect(feTokensSrc).toContain('--fe-ink: #070b16;');
+    expect(feTokensSrc).toContain('--fe-panel: #0e1628;');
+    expect(feTokensSrc).toContain('--fe-n-200: #16223a;');
+    expect(feTokensSrc).toContain('--fe-n-300: #22304d;');
+    // Canvas is Panel, not Ink: Ink is reserved for sunken wells and scrims.
+    expect(feTokensSrc).toMatch(/\.dark\s*\{[^}]*--surface-canvas:\s*var\(--fe-panel\)/);
+    expect(feTokensSrc).toMatch(/\.dark\s*\{[^}]*--surface-sunken:\s*var\(--fe-ink\)/);
+  });
+
+  it('tokens.css no longer redeclares the shadcn theme variables', () => {
+    // These used to be duplicated here as HSL triples and silently overridden
+    // by main.css. Re-introducing them would resurrect that dead layer.
+    for (const name of ['--background', '--card', '--popover', '--muted', '--ring', '--radius']) {
+      expect(tokensSrc).not.toMatch(new RegExp(`^\\s*${name}:`, 'm'));
+    }
+  });
+
+  it('the shadcn bridge resolves through semantic tokens, not raw colours', () => {
+    // Application colour must reach Tailwind's utilities via the token layer,
+    // so a palette change stays a one-file change.
+    expect(mainCssSrc).toContain('--background: var(--surface-canvas);');
+    expect(mainCssSrc).toContain('--foreground: var(--fg-primary);');
+    expect(mainCssSrc).toContain('--primary: var(--action-primary-bg);');
+    expect(mainCssSrc).toContain('--border: var(--border-default);');
+    expect(mainCssSrc).toContain('--ring: var(--focus-ring);');
+    // text-muted-foreground carries real body text, so it maps to the
+    // secondary tier rather than the faintest one, which fails AA on navy.
+    expect(mainCssSrc).toContain('--muted-foreground: var(--fg-secondary);');
+    // Previously undefined here and an invalid bare HSL triple in tokens.css,
+    // so text-destructive-foreground silently inherited.
+    expect(mainCssSrc).toContain('--destructive-foreground: var(--action-danger-fg);');
+    // No oklch() left to need the Android WebView fallback this file carried.
+    expect(mainCssSrc).not.toMatch(/^\s*--[a-z-]+:\s*oklch\(/m);
   });
 
   it('startup fatal-error overlay ignores WebDriver harness noise', () => {

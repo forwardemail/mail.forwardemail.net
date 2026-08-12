@@ -1,0 +1,335 @@
+/**
+ * Forward Email - Design System Tokens
+ * ====================================
+ *
+ * Canonical token layer, per the Forward Email design system specification.
+ * This file is the single source of truth for colour, state, typography face,
+ * elevation, motion and density. It is imported FIRST, before every other
+ * stylesheet, so the rest of the cascade can build on it.
+ *
+ * Layering:
+ *   fe-tokens.css   raw palette + semantic aliases   <- you are here
+ *   tokens.css      legacy alias names, mapped onto this file
+ *   main.css        shadcn/Tailwind bridge, mapped onto this file
+ *
+ * Rules that are easy to break and expensive to find later:
+ *   - Application code references the SEMANTIC layer, never a raw --fe-* value.
+ *   - Signal (cyan) and Mint (green) are never text on a light surface. They
+ *     pass 3:1 as icon and graphic fills only. Use --state-*, which already
+ *     resolves to the -deep variants in light mode.
+ *   - Primary blue is never body text on a dark surface. Use --fg-link, which
+ *     resolves to Primary Lift in dark mode.
+ *
+ * Custom property references resolve at use time, not declaration time, so
+ * tokens here may point at names declared in later stylesheets (--font-sans,
+ * --brand-font, --text-*). Only redefinition of the same name is order
+ * sensitive, and this file owns every name it declares.
+ */
+
+:root {
+  /* ============================================
+     RAW PALETTE
+     Brand values, unchanged from the mockups.
+     ============================================ */
+  --fe-ink: #070b16;
+  --fe-panel: #0e1628;
+  --fe-primary: #2563eb;
+  --fe-signal: #22d3ee;
+  --fe-mint: #34d399;
+
+  /* Text-safe accent variants. These exist because the brand accents above
+   * fail WCAG AA as text on one of the two grounds. Contrast ratios from the
+   * specification: Primary 3.8:1 on Ink, Signal 1.7:1 on light, Mint 1.8:1 on
+   * light. The variants below clear 4.5:1 on their intended ground. */
+  --fe-primary-lift: #60a5fa; /* 7.4:1 on Ink. Links and text on dark */
+  --fe-signal-deep: #0e7490; /* 5.1:1 on light. Signal semantics on light */
+  --fe-mint-deep: #047857; /* 5.4:1 on light. Mint semantics on light */
+
+  /* Caution has no light-safe variant in the specification, which is a gap:
+   * --fe-caution measures 2.0:1 on the light canvas and cannot be text there.
+   * This is amber-800, not amber-700, because amber-700 measures 4.39:1
+   * against --surface-sunken and misses AA on that one surface. */
+  --fe-caution-deep: #92400e; /* 6.2:1 or better on every light surface */
+
+  /* Semantic state hues */
+  --fe-caution: #f59e0b; /* spam, quota, degraded */
+  --fe-danger: #f87171; /* danger on dark */
+  --fe-danger-deep: #dc2626; /* danger on light */
+  --fe-vault: #a78bfa; /* encrypted, PGP, zero-access */
+
+  /* Neutral ramp, dark */
+  --fe-n-000: #070b16;
+  --fe-n-100: #0e1628;
+  --fe-n-200: #16223a;
+  --fe-n-300: #22304d;
+  --fe-n-400: #3a4a6b;
+  --fe-n-500: #64748b;
+  --fe-n-600: #94a3b8;
+  --fe-n-700: #e2e8f0;
+
+  /* Neutral ramp, light */
+  --fe-l-000: #ffffff;
+  --fe-l-100: #f5f8ff;
+  --fe-l-200: #ebf0f9;
+  --fe-l-300: #d9e1ee;
+  --fe-l-400: #b4c0d4;
+  --fe-l-500: #64748b;
+  --fe-l-600: #3a4a6b;
+  --fe-l-700: #0e1628;
+
+  /* ============================================
+     SEMANTIC ALIASES - LIGHT THEME
+     Light is the :root default; .dark overrides below.
+     ============================================ */
+
+  /* Surfaces */
+  --surface-canvas: var(--fe-l-100);
+  --surface-raised: var(--fe-l-000);
+  --surface-overlay: var(--fe-l-000);
+  --surface-sunken: var(--fe-l-200);
+  --surface-inverse: var(--fe-ink);
+
+  /* Text. Named --fg-* rather than the specification's --text-*, because
+   * --text-* is Tailwind v4's font-size namespace and this app already
+   * populates it (--text-sm, --text-base, and so on drive every text-*
+   * utility). Keeping colour out of that namespace prevents a size token and
+   * a colour token from ever colliding under one name. The legacy
+   * --text-primary / --text-secondary / --text-muted names still resolve,
+   * as aliases defined in tokens.css. */
+  --fg-primary: var(--fe-l-700);
+  --fg-secondary: var(--fe-l-600);
+  /* Measured 4.48:1 on --surface-canvas and 3.79:1 on the dark canvas, so it
+   * is BELOW AA for body text in both themes. Use it only for timestamps,
+   * counts, disabled text and other non-essential or larger content. For
+   * secondary body copy use --fg-secondary. */
+  --fg-muted: var(--fe-l-500);
+  --fg-inverse: var(--fe-n-700);
+  --fg-link: var(--fe-primary);
+  --fg-code: var(--fe-l-700);
+
+  /* Borders */
+  --border-subtle: var(--fe-l-200);
+  --border-default: var(--fe-l-300);
+  --border-strong: var(--fe-l-400);
+
+  /* Interactive */
+  --action-primary-bg: var(--fe-primary);
+  --action-primary-fg: var(--fe-l-000);
+  --action-primary-hover: #1d4ed8;
+  --action-ghost-border: var(--fe-l-300);
+  --action-ghost-hover-bg: var(--fe-l-200);
+  --action-danger-bg: var(--fe-danger-deep);
+  --action-danger-fg: var(--fe-l-000);
+
+  /* State. Light mode resolves Signal and Mint to their -deep variants so
+   * these are safe as text. See the rules note at the top of this file. */
+  --state-active: var(--fe-signal-deep); /* in progress, syncing */
+  --state-success: var(--fe-mint-deep); /* verified, delivered */
+  --state-caution: var(--fe-caution-deep); /* spam, quota, degraded */
+  --state-danger: var(--fe-danger-deep);
+  --state-encrypted: var(--fe-vault); /* deliberately NOT --state-success */
+  --state-unread: var(--fe-primary);
+
+  /* A starred or flagged message. Reuses Caution's hue rather than adding a
+   * new accent: gold is the conventional star colour, and the specification
+   * caps the accent count. Full strength in both themes because a star is an
+   * icon fill, never text. */
+  --state-starred: var(--fe-caution);
+
+  /* Graphic-fill variants. Signal and Mint clear the 3:1 threshold for icon
+   * and graphic fills on light, which is what the pricing mockup does with
+   * its checkmarks. Never use these for text. */
+  --state-active-fill: var(--fe-signal);
+  --state-success-fill: var(--fe-mint);
+  --state-caution-fill: var(--fe-caution);
+
+  /* Focus */
+  --focus-ring: var(--fe-primary);
+  --focus-ring-offset: 2px;
+
+  /* ============================================
+     TYPOGRAPHY
+     ============================================ */
+
+  /* Body face follows the user's font setting, applied to --brand-font at
+   * runtime by applyFont() in main.ts and threaded through --font-sans.
+   * Display and mono are brand-fixed and not user-overridable. */
+  --font-body: var(--font-sans);
+
+  /* Space Grotesk is deliberately omitted. The specification floors the
+   * display face at 24px and nothing in this client clears that floor, so a
+   * display face would download bytes to style nothing. The mono label in
+   * --type-label is the brand carrier here instead. */
+  --font-display: var(--font-body);
+
+  --font-mono:
+    'JetBrains Mono Variable', ui-monospace, SFMono-Regular, 'SF Mono', Monaco, Consolas,
+    'Liberation Mono', 'Courier New', monospace;
+
+  /* The signature mono label. Highest-frequency brand element: sidebar
+   * section headers, column headers, card eyebrows, metadata group labels. */
+  --type-label-size: calc(11px * var(--fe-text-scale, 1));
+  --type-label-line: 1.3;
+  --type-label-tracking: 0.14em;
+  --type-label-weight: 600;
+
+  /* Code, terminal, raw headers */
+  --type-code-size: calc(13px * var(--fe-text-scale, 1));
+  --type-code-line: 1.6;
+
+  /* Body scale, aliased onto the existing --text-* ramp rather than
+   * redefining it, so no text reflows. Note this app's --text-* names sit one
+   * step below Tailwind's defaults (--text-sm is 12px here, not 14px), which
+   * is why the mapping looks off by one. */
+  --type-body-lg: var(--text-3xl); /* 20px */
+  --type-body-md: var(--text-xl); /* 16px */
+  --type-body-sm: var(--text-md); /* 14px */
+  --type-body-xs: var(--text-base); /* 13px */
+  --type-meta: var(--text-sm); /* 12px */
+
+  /* ============================================
+     SPACING AND RADIUS
+     Specification scales, held alongside the live --space-* and --radius-*
+     tokens rather than replacing them. Retargeting the live scales would
+     reflow the whole app, which would make the palette change unreviewable.
+     Use these for new component work; see the migration notes.
+     ============================================ */
+  --fe-space-1: 4px;
+  --fe-space-2: 8px;
+  --fe-space-3: 12px;
+  --fe-space-4: 16px;
+  --fe-space-5: 24px;
+  --fe-space-6: 32px;
+  --fe-space-7: 48px;
+  --fe-space-8: 64px;
+
+  --fe-radius-sm: 6px; /* chips, badges, inputs */
+  --fe-radius-md: 10px; /* buttons, list rows */
+  --fe-radius-lg: 16px; /* cards, panels */
+  --fe-radius-xl: 24px; /* outer console frames, modals */
+  --fe-radius-full: 9999px;
+
+  /* ============================================
+     ELEVATION
+     ============================================ */
+  --elev-0: none;
+  --elev-1: 0 1px 2px rgb(0 0 0 / 0.18); /* raised rows */
+  --elev-2: 0 4px 12px rgb(0 0 0 / 0.22); /* dropdowns */
+  --elev-3: 0 12px 32px rgb(0 0 0 / 0.28); /* modals */
+  --elev-inset: inset 0 1px 0 rgb(255 255 255 / 0.04); /* dark card top edge */
+
+  /* Modal scrim, Ink at 72% */
+  --scrim: rgb(7 11 22 / 0.72);
+
+  /* ============================================
+     MOTION
+     ============================================ */
+  --motion-fast: 120ms cubic-bezier(0.4, 0, 0.2, 1); /* hover, focus */
+  --motion-base: 200ms cubic-bezier(0.4, 0, 0.2, 1); /* panels, disclosure */
+  --motion-slow: 320ms cubic-bezier(0.4, 0, 0.2, 1); /* page transition */
+
+  /* ============================================
+     DENSITY
+     Default is comfortable; message lists opt into compact.
+     ============================================ */
+  --row-height: 64px;
+  --row-pad-y: var(--fe-space-3);
+}
+
+/* ============================================
+   SEMANTIC ALIASES - DARK THEME
+   ============================================ */
+.dark {
+  /* Canvas is Panel, not Ink. Ink reads well for a few seconds on a marketing
+   * page but is fatiguing for all-day reading, and reserving it for sunken
+   * wells, code blocks and modal scrims gives overlays somewhere darker to
+   * go. Marketing pages keep Ink as canvas. */
+  --surface-canvas: var(--fe-panel);
+  --surface-raised: var(--fe-n-200);
+  --surface-overlay: var(--fe-n-200);
+  --surface-sunken: var(--fe-ink);
+  --surface-inverse: var(--fe-l-100);
+
+  --fg-primary: var(--fe-n-700);
+  --fg-secondary: var(--fe-n-600);
+  --fg-muted: var(--fe-n-500);
+  --fg-inverse: var(--fe-l-700);
+  --fg-link: var(--fe-primary-lift);
+  --fg-code: var(--fe-n-700);
+
+  --border-subtle: var(--fe-n-200);
+  --border-default: var(--fe-n-300);
+  --border-strong: var(--fe-n-400);
+
+  --action-primary-bg: var(--fe-primary);
+  --action-primary-fg: var(--fe-l-000);
+  --action-primary-hover: #3b82f6;
+  --action-ghost-border: var(--fe-n-300);
+  --action-ghost-hover-bg: var(--fe-n-300);
+  --action-danger-bg: var(--fe-danger);
+  --action-danger-fg: var(--fe-ink);
+
+  /* Dark surfaces take the full-strength accents. Signal at 10.9:1 and Mint
+   * at 10.2:1 on Ink are comfortably above AA. */
+  --state-active: var(--fe-signal);
+  --state-success: var(--fe-mint);
+  --state-caution: var(--fe-caution);
+  --state-danger: var(--fe-danger);
+  --state-encrypted: var(--fe-vault);
+  --state-unread: var(--fe-signal);
+
+  --state-starred: var(--fe-caution);
+
+  --state-active-fill: var(--fe-signal);
+  --state-success-fill: var(--fe-mint);
+  --state-caution-fill: var(--fe-caution);
+
+  --focus-ring: var(--fe-signal);
+
+  /* Shadows read poorly on near-black. Elevation on dark comes mostly from a
+   * lighter background step plus the inset top edge. */
+  --elev-1: 0 1px 2px rgb(0 0 0 / 0.3);
+  --elev-2: 0 4px 12px rgb(0 0 0 / 0.36);
+  --elev-3: 0 12px 32px rgb(0 0 0 / 0.44);
+}
+
+/* ============================================
+   DENSITY MODES
+   Every list, table and form component reads these. Mobile is always
+   comfortable and ignores the compact setting.
+   ============================================ */
+[data-density='comfortable'] {
+  --row-height: 64px;
+  --row-pad-y: var(--fe-space-3);
+}
+
+[data-density='compact'] {
+  --row-height: 44px;
+  --row-pad-y: var(--fe-space-2);
+}
+
+/**
+ * Mobile is always comfortable and ignores the compact setting. Enforced here
+ * rather than in JS so it survives a viewport resize or orientation change
+ * without a round trip, and so it cannot be defeated by the stored preference.
+ * A 44px row is also the bare touch-target minimum with no room for padding.
+ */
+@media (max-width: 640px) {
+  :root,
+  [data-density='compact'],
+  [data-density='comfortable'] {
+    --row-height: 64px;
+    --row-pad-y: var(--fe-space-3);
+  }
+}
+
+/* ============================================
+   REDUCED MOTION
+   ============================================ */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-fast: 0ms;
+    --motion-base: 0ms;
+    --motion-slow: 0ms;
+  }
+}

@@ -38,11 +38,12 @@ body {
   height: 100%;
   margin: 0 !important;
   padding: 0 !important;
-  font-family: var(--font-sans);
-  background:
-    radial-gradient(circle at 20% 20%, rgba(0, 175, 248, 0.1) 0, transparent 25%),
-    radial-gradient(circle at 80% 0%, rgba(0, 42, 144, 0.18) 0, transparent 30%), #0a0a0a;
-  color: var(--color-text);
+  font-family: var(--font-body);
+  /* Flat canvas. The app ground carries no gradient: it is read against all
+   * day, and a tinted ground makes surface steps harder to judge. The login
+   * screen below is the exception. */
+  background: var(--surface-canvas);
+  color: var(--fg-primary);
   overflow-x: hidden;
   overflow-y: hidden;
   -webkit-font-smoothing: antialiased;
@@ -65,6 +66,20 @@ body.mailbox-mode {
 #calendar-root {
   height: 100%;
   overflow-y: auto;
+}
+
+/* Diagnostics is app chrome, but its route is not part of mailbox-mode, so it
+ * would inherit the login ground below. That ground is Ink in both themes,
+ * while the light theme's tokens are built for a light surface: state text
+ * landed at 2.8:1 and body text at 1.1:1 there. Painting its own canvas keeps
+ * the token contrast contract intact. overflow-y also stops the page being
+ * clipped by the login shell's vertical centering. */
+#diagnostics-root {
+  width: 100%;
+  min-height: 100%;
+  overflow-y: auto;
+  background: var(--surface-canvas);
+  color: var(--fg-primary);
 }
 
 #rl-app {
@@ -118,34 +133,19 @@ body.mailbox-mode .fe-stars {
   display: none;
 }
 
-/* Light mode body styles */
-body.light-mode {
-  background:
-    radial-gradient(circle at 20% 20%, rgba(0, 175, 248, 0.08) 0, transparent 25%),
-    radial-gradient(circle at 80% 0%, rgba(0, 42, 144, 0.12) 0, transparent 30%), #f5f7fb;
-  color: #0f172a;
-  --color-bg: #ffffff;
-  --color-panel: #ffffff;
-  --color-bg-secondary: #f3f4f6;
-  --color-border: #e2e8f0;
-  --color-text: #0f172a;
-  --color-muted: #1f2937;
-  --color-accent: #2563eb;
-  --color-accent-strong: #16a34a;
-  --color-surface-strong: #0f172a;
-  --color-surface: #f9fafb;
-  --color-border-light: #e5e7eb;
-  --color-text-secondary: #5f6368;
-  --color-error: #dc2626;
-  --color-success: #16a34a;
-}
+/* The block of hardcoded --color-* overrides that used to sit here has been
+ * removed. Those aliases now resolve through fe-tokens.css and follow the
+ * light/dark flip on their own, so pinning light values on body only fought
+ * the token layer. */
 
-body.light-mode:not(.mailbox-mode) {
-  /* Keep the galaxy vibe even in light mode */
+/* Login is a marketing-adjacent surface, so it keeps Ink as its ground and the
+ * brand Primary-to-Signal gradient, in both themes. The app canvas does not.
+ * Login content sits inside a card, which supplies its own surface and text
+ * colours over this ground. */
+body:not(.mailbox-mode) {
   background:
-    radial-gradient(circle at 20% 20%, rgba(0, 175, 248, 0.08) 0, transparent 25%),
-    radial-gradient(circle at 80% 0%, rgba(0, 42, 144, 0.14) 0, transparent 30%), #0a0a0a;
-  color: var(--color-text);
+    radial-gradient(circle at 20% 20%, rgb(34 211 238 / 0.1) 0, transparent 25%),
+    radial-gradient(circle at 80% 0%, rgb(37 99 235 / 0.18) 0, transparent 30%), var(--fe-ink);
 }
 
 /* Note: Android WebView is padded with system bar insets at the native level
@@ -163,7 +163,9 @@ body.light-mode:not(.mailbox-mode) {
 
   body:not(.mailbox-mode)#rl-app {
     justify-content: flex-start;
-    background: var(--color-bg, #ffffff);
+    /* The card fills the viewport edge to edge here, so the Ink ground and its
+     * gradients would never be seen. Use the card surface directly. */
+    background: var(--surface-raised);
   }
 
   .fe-login-shell {
@@ -252,42 +254,48 @@ body.light-mode:not(.mailbox-mode) {
     line-height: 1.5;
   }
 
-  /* Message content should be comfortable to read */
-  .fe-message-subject {
-    font-size: calc(15px * var(--fe-text-scale));
-  }
-
-  .fe-message-from,
-  .fe-message-snippet,
-  .fe-message-date {
-    font-size: calc(13px * var(--fe-text-scale));
-  }
-
-  /* Folder list items */
-  .fe-folder {
-    font-size: calc(15px * var(--fe-text-scale));
-  }
+  /* The .fe-message-subject / -from / -snippet / -date and .fe-folder rules
+   * that used to sit here were removed: no markup applies those classes. The
+   * real message rows and folder rows are built from Tailwind utilities inline
+   * in Mailbox.svelte, so their mobile sizing comes from the --text-* ramp
+   * above. */
 }
 
 /* ============================================
    ACCESSIBILITY: FOCUS INDICATORS
    Ensure visible focus states on mobile for keyboard navigation
    ============================================ */
-@media (max-width: 640px) {
-  /* Enhanced focus indicators for touch devices using keyboard */
-  button:focus-visible,
-  a:focus-visible,
-  input:focus-visible,
-  textarea:focus-visible,
-  select:focus-visible,
-  [tabindex]:focus-visible {
-    outline: 2px solid var(--color-primary, #00aff8);
-    outline-offset: 2px;
-  }
+/**
+ * Focus, specification §6. Non-negotiable: every interactive element gets a
+ * visible ring, on :focus-visible rather than :focus so a mouse click does not
+ * leave one behind.
+ *
+ * This used to be nested inside @media (max-width: 640px), which meant desktop
+ * keyboard users only got whatever ring an individual component happened to
+ * define. It applies at every width now.
+ */
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+summary:focus-visible,
+[tabindex]:focus-visible,
+[role='button']:focus-visible,
+[role='option']:focus-visible,
+[role='treeitem']:focus-visible,
+[role='menuitem']:focus-visible,
+[role='tab']:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
+}
 
-  /* Allow opt-out for inputs inside styled containers (e.g., recipient fields) */
-  input.outline-none:focus-visible,
-  textarea.outline-none:focus-visible {
-    outline: none;
-  }
+/**
+ * Opt-out for inputs nested inside a styled container that draws the ring
+ * itself, such as the recipient fields in the composer. Two rings on one
+ * control reads as a rendering bug.
+ */
+input.outline-none:focus-visible,
+textarea.outline-none:focus-visible {
+  outline: none;
 }

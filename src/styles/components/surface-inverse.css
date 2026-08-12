@@ -1,0 +1,150 @@
+/**
+ * Emphasis inversion
+ * ==================
+ *
+ * Specification §3.4 and §1. A panel whose surface is inverted relative to the
+ * page, marking technical or recommended content: API examples, protocol logs,
+ * raw editors.
+ *
+ * This is emphasis, NOT theme. It is independent of the user's light/dark
+ * preference and must never be implemented by toggling the theme class. Hence
+ * an attribute: data-surface="inverse".
+ *
+ * Two sets of variables are redefined here. The semantic tokens cover anything
+ * written against the --fg- and --surface- tokens, and the shadcn bridge
+ * names cover
+ * Tailwind utilities like bg-card and text-muted-foreground. Both are needed:
+ * the bridge names are declared on :root, so their values are already
+ * substituted by the time a descendant redefines a token they point at.
+ * Redefining --surface-canvas alone would not move --background.
+ *
+ * Constraints, from the specification: never nest two inverse panels, and never
+ * place one inside a modal. The signal only works when it is rare. The nesting
+ * guard at the bottom of this file enforces the first mechanically.
+ */
+
+/* Light page, so the panel goes dark. */
+[data-surface='inverse'] {
+  --surface-canvas: var(--fe-panel);
+  --surface-raised: var(--fe-n-200);
+  --surface-overlay: var(--fe-n-200);
+  --surface-sunken: var(--fe-ink);
+  --surface-inverse: var(--fe-l-100);
+
+  --fg-primary: var(--fe-n-700);
+  --fg-secondary: var(--fe-n-600);
+  --fg-muted: var(--fe-n-500);
+  --fg-inverse: var(--fe-l-700);
+  --fg-link: var(--fe-primary-lift);
+  --fg-code: var(--fe-n-700);
+
+  --border-subtle: var(--fe-n-200);
+  --border-default: var(--fe-n-300);
+  --border-strong: var(--fe-n-400);
+
+  --action-primary-hover: #3b82f6;
+  --action-ghost-border: var(--fe-n-300);
+  --action-ghost-hover-bg: var(--fe-n-300);
+  --action-danger-bg: var(--fe-danger);
+  --action-danger-fg: var(--fe-ink);
+
+  /* Full-strength accents are safe on a dark ground. */
+  --state-active: var(--fe-signal);
+  --state-success: var(--fe-mint);
+  --state-danger: var(--fe-danger);
+  --state-caution: var(--fe-caution);
+  --state-unread: var(--fe-signal);
+  --focus-ring: var(--fe-signal);
+
+  --surface-hover: rgb(226 232 240 / 0.06);
+
+  /* shadcn bridge */
+  --background: var(--surface-canvas);
+  --foreground: var(--fg-primary);
+  --card: var(--surface-raised);
+  --card-foreground: var(--fg-primary);
+  --popover: var(--surface-overlay);
+  --popover-foreground: var(--fg-primary);
+  --secondary: var(--fe-n-300);
+  --secondary-foreground: var(--fg-primary);
+  --muted: var(--fe-n-300);
+  --muted-foreground: var(--fg-secondary);
+  --accent: var(--fe-n-300);
+  --accent-foreground: var(--fg-primary);
+  --destructive: var(--state-danger);
+  --destructive-foreground: var(--action-danger-fg);
+  --border: var(--border-default);
+  --input: var(--border-default);
+  --ring: var(--focus-ring);
+
+  background: var(--surface-canvas);
+  color: var(--fg-primary);
+}
+
+/* Dark page, so the panel goes light. */
+.dark [data-surface='inverse'] {
+  --surface-canvas: var(--fe-l-100);
+  --surface-raised: var(--fe-l-000);
+  --surface-overlay: var(--fe-l-000);
+  --surface-sunken: var(--fe-l-200);
+  --surface-inverse: var(--fe-ink);
+
+  --fg-primary: var(--fe-l-700);
+  --fg-secondary: var(--fe-l-600);
+  --fg-muted: var(--fe-l-500);
+  --fg-inverse: var(--fe-n-700);
+  --fg-link: var(--fe-primary);
+  --fg-code: var(--fe-l-700);
+
+  --border-subtle: var(--fe-l-200);
+  --border-default: var(--fe-l-300);
+  --border-strong: var(--fe-l-400);
+
+  --action-primary-hover: #1d4ed8;
+  --action-ghost-border: var(--fe-l-300);
+  --action-ghost-hover-bg: var(--fe-l-200);
+  --action-danger-bg: var(--fe-danger-deep);
+  --action-danger-fg: var(--fe-l-000);
+
+  /* Signal and Mint are not text-safe on light, so states take the -deep
+   * variants here exactly as they do in the light theme. */
+  --state-active: var(--fe-signal-deep);
+  --state-success: var(--fe-mint-deep);
+  --state-danger: var(--fe-danger-deep);
+  --state-caution: var(--fe-caution-deep);
+  --state-unread: var(--fe-primary);
+  --focus-ring: var(--fe-primary);
+
+  --surface-hover: rgb(14 22 40 / 0.05);
+
+  /* shadcn bridge */
+  --background: var(--surface-canvas);
+  --foreground: var(--fg-primary);
+  --card: var(--surface-raised);
+  --card-foreground: var(--fg-primary);
+  --popover: var(--surface-overlay);
+  --popover-foreground: var(--fg-primary);
+  --secondary: var(--fe-l-200);
+  --secondary-foreground: var(--fg-primary);
+  --muted: var(--fe-l-200);
+  --muted-foreground: var(--fg-secondary);
+  --accent: var(--fe-l-200);
+  --accent-foreground: var(--fg-primary);
+  --destructive: var(--state-danger);
+  --destructive-foreground: var(--action-danger-fg);
+  --border: var(--border-default);
+  --input: var(--border-default);
+  --ring: var(--focus-ring);
+
+  background: var(--surface-canvas);
+  color: var(--fg-primary);
+}
+
+/**
+ * Nesting guard. A second inverse panel inside the first would invert back to
+ * the page surface, which reads as a bug rather than emphasis. Neutralise it so
+ * the mistake is visible as "no emphasis" instead of silently looking correct.
+ */
+[data-surface='inverse'] [data-surface='inverse'] {
+  background: transparent;
+}

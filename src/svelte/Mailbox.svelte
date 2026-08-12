@@ -8,6 +8,7 @@
   let mailboxSubscriptions: Unsubscriber[] = [];
   import { mailService, getPgpKeysVersion, pgpKeysVersion } from '../stores/mailService';
   import { isTauri } from '../utils/platform.js';
+  import { readableForeground } from '../utils/contrast';
   import { searchStore } from '../stores/searchStore';
   import { Remote } from '../utils/remote';
   import { isDemoBlockedError, isDemoMode } from '../utils/demo-mode';
@@ -5589,7 +5590,7 @@
     >
       {#if isOffline}
         <div
-          class="flex items-center justify-center gap-2 px-4 py-1.5 bg-yellow-500/15 border-b border-yellow-500/25 text-yellow-700 dark:text-yellow-400 text-sm"
+          class="flex items-center justify-center gap-2 px-4 py-1.5 bg-state-caution/15 border-b border-state-caution/25 text-state-caution text-sm"
           role="status"
         >
           <WifiOff class="h-3.5 w-3.5 shrink-0" />
@@ -5944,9 +5945,20 @@
             </div>
 
             <div class="flex-1 overflow-y-auto">
-              <ul class="space-y-0.5 p-2" data-testid="folder-list">
+              <ul
+                class="space-y-0.5 p-2"
+                data-testid="folder-list"
+                role="tree"
+                aria-label="Folders"
+              >
                 {#each visibleFolders as folder}
                   <li
+                    role="treeitem"
+                    aria-selected={!outboxSelected && $selectedFolder === folder.path}
+                    aria-expanded={hasChildren(folder)
+                      ? $expandedFolders.has(folder.path)
+                      : undefined}
+                    aria-level={(folder.level || 0) + 1}
                     class={`relative transition-colors ${!outboxSelected && $selectedFolder === folder.path ? 'bg-accent ring-1 ring-border' : ''}`}
                     class:has-children={hasChildren(folder)}
                     class:fe-drag-over={dragOverFolder === folder.path}
@@ -5960,7 +5972,7 @@
                   >
                     <button
                       type="button"
-                      class={`flex items-center justify-between w-full px-3 py-2 text-sm transition-colors ${!outboxSelected && $selectedFolder === folder.path ? 'text-primary font-medium' : 'hover:bg-accent'}`}
+                      class={`flex items-center justify-between w-full px-3 py-2 text-sm transition-colors ${!outboxSelected && $selectedFolder === folder.path ? 'text-fg-link font-medium' : 'hover:bg-accent'}`}
                       onclick={() => handleSelectFolder(folder.path)}
                       onkeydown={(e) => activateOnKeys(e, () => handleSelectFolder(folder.path))}
                     >
@@ -5987,14 +5999,14 @@
 
                         <svelte:component
                           this={getFolderIcon(folder)}
-                          class="h-5 w-5 text-primary shrink-0"
+                          class="h-5 w-5 text-fg-link shrink-0"
                         />
                         <span class="truncate text-sm">{folder.name || folder.path}</span>
                       </span>
 
                       {#if folder.count}
                         <span
-                          class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-primary/10 text-primary"
+                          class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-primary/10 text-fg-link"
                           >{folder.count}</span
                         >
                       {/if}
@@ -6008,12 +6020,12 @@
                 >
                   <button
                     type="button"
-                    class={`flex items-center justify-between w-full px-3 py-2 text-sm transition-colors ${outboxSelected ? 'text-primary font-medium' : 'hover:bg-accent'}`}
+                    class={`flex items-center justify-between w-full px-3 py-2 text-sm transition-colors ${outboxSelected ? 'text-fg-link font-medium' : 'hover:bg-accent'}`}
                     onclick={selectOutbox}
                     onkeydown={(e) => activateOnKeys(e, selectOutbox)}
                   >
                     <span class="flex items-center gap-2 min-w-0 flex-1">
-                      <Send class="h-5 w-5 text-primary shrink-0" />
+                      <Send class="h-5 w-5 text-fg-link shrink-0" />
                       <span class="truncate text-sm">Outbox</span>
                       {#if $outboxProcessing}
                         <span
@@ -6023,7 +6035,7 @@
                     </span>
                     {#if $outboxCount > 0}
                       <span
-                        class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-amber-500/10 text-amber-600"
+                        class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-state-caution/10 text-state-caution"
                         >{$outboxCount}</span
                       >
                     {/if}
@@ -6161,7 +6173,7 @@
                         (item) => ($selectedConversationIds || []).includes(item.id),
                       )}
                     <button
-                      class={`inline-flex items-center justify-center h-11 w-11 transition-colors ${allSelected ? 'bg-accent text-primary' : selectionMode ? 'bg-accent/50 text-accent-foreground' : 'hover:bg-accent hover:text-accent-foreground'}`}
+                      class={`inline-flex items-center justify-center h-11 w-11 transition-colors ${allSelected ? 'bg-accent text-fg-link' : selectionMode ? 'bg-accent/50 text-accent-foreground' : 'hover:bg-accent hover:text-accent-foreground'}`}
                       type="button"
                       data-tooltip={selectionMode
                         ? allSelected
@@ -6294,7 +6306,7 @@
                             >
                               <span
                                 class="w-2.5 h-2.5 rounded-full shrink-0"
-                                style={`background:${label.color || '#9ca3af'}`}
+                                style={`background:${label.color || 'var(--fg-muted)'}`}
                               ></span>
                               <span class="flex-1 text-left"
                                 >{label.name || label.label || label.value}</span
@@ -6374,7 +6386,7 @@
                               >
                                 <span
                                   class="w-2.5 h-2.5 rounded-full shrink-0"
-                                  style={`background:${label.color || '#9ca3af'}`}
+                                  style={`background:${label.color || 'var(--fg-muted)'}`}
                                 ></span>
                                 <span class="flex-1 text-left"
                                   >{label.name || label.label || label.value}</span
@@ -6543,24 +6555,24 @@
                             <div class="text-xs">
                               {#if item.status === 'pending'}
                                 <span
-                                  class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"
+                                  class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-state-caution/10 text-state-caution"
                                   title="Pending">Queued</span
                                 >
                               {:else if item.status === 'scheduled'}
                                 <span
-                                  class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"
+                                  class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-primary/10 text-fg-link"
                                   title="Scheduled"
                                 >
                                   {formatScheduledTime(item.sendAt)}
                                 </span>
                               {:else if item.status === 'sending'}
                                 <span
-                                  class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-primary/10 text-primary animate-pulse"
+                                  class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-primary/10 text-fg-link animate-pulse"
                                   title="Sending">Sending...</span
                                 >
                               {:else if item.status === 'sent'}
                                 <span
-                                  class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
+                                  class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-state-success/10 text-state-success"
                                   title="Sent">Sent</span
                                 >
                               {:else if item.status === 'failed'}
@@ -6635,7 +6647,7 @@
                 >
                   {#if pullDistance > 0 || isRefreshing}
                     <div
-                      class={`flex items-center justify-center gap-2 py-3 text-muted-foreground ${pullDistance > 60 ? 'text-primary' : ''} ${isRefreshing ? 'text-primary' : ''}`}
+                      class={`flex items-center justify-center gap-2 py-3 text-muted-foreground ${pullDistance > 60 ? 'text-fg-link' : ''} ${isRefreshing ? 'text-fg-link' : ''}`}
                       role="status"
                       aria-live="polite"
                       aria-atomic="true"
@@ -6675,9 +6687,19 @@
                   {/if}
                   {#if $threadingEnabled}
                     {@const convList = $filteredConversations}
-                    <ul class="divide-y divide-border">
+                    <!-- Specification §6: the message list is a listbox whose
+                         options carry aria-selected. The li is presentational so
+                         the option role sits on the element that actually holds
+                         focus and the click handler. -->
+                    <ul
+                      class="divide-y divide-border"
+                      role="listbox"
+                      aria-label="Conversations"
+                      aria-multiselectable="true"
+                    >
                       {#each convList as conv (conv.id)}
                         <li
+                          role="presentation"
                           class={`fe-msg-row relative cursor-pointer hover:bg-accent/50 transition-colors ${activeConvId === conv.id || ($selectedConversationIds || []).includes(conv.id) ? 'msg-active' : ''}`}
                           oncontextmenu={(e) => openContextMenu(e, conv)}
                           ondblclick={(e) => {
@@ -6693,7 +6715,7 @@
                             <div class="absolute inset-y-0 right-0 flex items-center">
                               {#if swipeDistance > 0}
                                 <div
-                                  class={`flex items-center justify-center gap-2 px-4 bg-green-500 text-white ${swipeDistance > 80 ? 'opacity-100' : 'opacity-60'}`}
+                                  class={`flex items-center justify-center gap-2 px-4 bg-state-success text-fg-inverse ${swipeDistance > 80 ? 'opacity-100' : 'opacity-60'}`}
                                 >
                                   <svg
                                     viewBox="0 0 24 24"
@@ -6725,12 +6747,14 @@
                             </div>
                           {/if}
                           <div
-                            class={`flex items-center gap-3 cursor-pointer ${isMobile ? 'px-4 py-3' : 'px-3 py-1.5'} ${swiping && swipeItemId === conv.id ? 'user-select-none' : ''} ${window.innerWidth > 640 ? 'cursor-grab active:cursor-grabbing' : ''}`}
+                            class={`flex items-center gap-3 cursor-pointer ${isMobile ? 'px-4' : 'px-3'} ${swiping && swipeItemId === conv.id ? 'user-select-none' : ''} ${window.innerWidth > 640 ? 'cursor-grab active:cursor-grabbing' : ''}`}
                             data-conversation-row
                             data-testid="message-row"
                             data-message-id={conv.id}
                             data-unread={conv.hasUnread || conv.is_unread ? 'true' : 'false'}
-                            role="button"
+                            role="option"
+                            aria-selected={activeConvId === conv.id ||
+                              ($selectedConversationIds || []).includes(conv.id)}
                             tabindex="0"
                             draggable={window.innerWidth > 640}
                             onclick={(e) =>
@@ -6855,7 +6879,7 @@
                                     }}
                                   >
                                     {#if isMessageStarred(conv)}
-                                      <Star class="h-4 w-4 text-yellow-400 fill-yellow-400" />
+                                      <Star class="h-4 w-4 text-state-starred fill-state-starred" />
                                     {:else}
                                       <StarOff class="h-4 w-4 text-muted-foreground" />
                                     {/if}
@@ -6882,7 +6906,7 @@
                               <!-- Desktop: checkbox shown only in classic view or while in selection mode -->
                               {#if !cardView || selectionMode}
                                 <button
-                                  class={`relative w-8 h-8 rounded flex items-center justify-center shrink-0 transition-colors ${($selectedConversationIds || []).includes(conv.id) ? 'text-primary' : 'text-muted-foreground hover:text-foreground'}`}
+                                  class={`relative w-8 h-8 rounded flex items-center justify-center shrink-0 transition-colors ${($selectedConversationIds || []).includes(conv.id) ? 'text-fg-link' : 'text-muted-foreground hover:text-foreground'}`}
                                   type="button"
                                   aria-label={($selectedConversationIds || []).includes(conv.id)
                                     ? 'Deselect'
@@ -6966,7 +6990,9 @@
                                         }}
                                       >
                                         {#if isMessageStarred(conv)}
-                                          <Star class="h-3 w-3 fill-yellow-400 text-yellow-400" />
+                                          <Star
+                                            class="h-3 w-3 fill-state-starred text-state-starred"
+                                          />
                                         {:else}
                                           <StarOff class="h-3 w-3" />
                                         {/if}
@@ -7011,7 +7037,7 @@
                                           <span
                                             class="inline-flex items-center px-1.5 py-0.5 text-[10px] truncate max-w-[80px]"
                                             style={def?.color
-                                              ? `background:${def.color}; color:#fff;`
+                                              ? `background:${def.color}; color:${readableForeground(def.color)};`
                                               : ''}
                                           >
                                             {def?.name || def?.label || def?.value || lbl}
@@ -7115,7 +7141,9 @@
                                         }}
                                       >
                                         {#if isMessageStarred(conv)}
-                                          <Star class="h-3 w-3 fill-yellow-400 text-yellow-400" />
+                                          <Star
+                                            class="h-3 w-3 fill-state-starred text-state-starred"
+                                          />
                                         {:else}
                                           <StarOff class="h-3 w-3" />
                                         {/if}
@@ -7141,7 +7169,7 @@
                                           <span
                                             class="inline-flex items-center px-1.5 py-0.5 text-[10px] truncate max-w-[80px]"
                                             style={def?.color
-                                              ? `background:${def.color}; color:#fff;`
+                                              ? `background:${def.color}; color:${readableForeground(def.color)};`
                                               : ''}
                                           >
                                             {def?.name || def?.label || def?.value || lbl}
@@ -7166,255 +7194,270 @@
                     {@const msgList = $filteredMessages}
                     <!-- Keyed so Svelte moves rows instead of rewriting them in
                          place when the list prepends or reorders. -->
-                    {#each msgList as msg (msg.id)}
-                      <article
-                        class={`fe-msg-row relative cursor-pointer hover:bg-accent/50 transition-colors ${activeMsgId === msg.id || ($selectedConversationIds || []).includes(msg.id) ? 'msg-active' : ''}`}
-                        oncontextmenu={(e) => openContextMenu(e, msg)}
-                        ondblclick={(e) => {
-                          if (isDraftMessage(msg)) {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            openDraftFromMessage(msg);
-                          }
-                        }}
-                      >
-                        <div
-                          class={`flex items-center gap-3 px-3 py-1.5 cursor-pointer ${window.innerWidth > 640 ? 'cursor-grab active:cursor-grabbing' : ''}`}
-                          data-conversation-row
-                          role="button"
-                          tabindex="0"
-                          draggable={window.innerWidth > 640}
-                          onclick={(e) =>
-                            handleRowClick(msg, e, $filteredMessages || [], () => {
-                              if (isDraftMessage(msg)) {
-                                openDraftFromMessage(msg);
-                                return;
-                              }
-                              selectMessage(msg);
-                            })}
-                          onkeydown={(e) =>
-                            activateOnKeys(e, () => {
-                              if (isDraftMessage(msg)) {
-                                openDraftFromMessage(msg);
-                                return;
-                              }
-                              selectMessage(msg);
-                            })}
-                          ondragstart={(e) => handleDragStart(e, msg)}
-                          ondragend={handleDragEnd}
+                    <!-- Specification §6: the message list is a listbox. This
+                         branch rendered bare articles with no container, so
+                         there was nothing to carry the role. -->
+                    <div role="listbox" aria-label="Messages" aria-multiselectable="true">
+                      {#each msgList as msg (msg.id)}
+                        <article
+                          role="presentation"
+                          class={`fe-msg-row relative cursor-pointer hover:bg-accent/50 transition-colors ${activeMsgId === msg.id || ($selectedConversationIds || []).includes(msg.id) ? 'msg-active' : ''}`}
+                          oncontextmenu={(e) => openContextMenu(e, msg)}
+                          ondblclick={(e) => {
+                            if (isDraftMessage(msg)) {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              openDraftFromMessage(msg);
+                            }
+                          }}
                         >
-                          <!-- Desktop: checkbox shown only in classic view or while in selection mode -->
-                          {#if !cardView || selectionMode}
-                            <button
-                              class={`relative w-8 h-8 rounded flex items-center justify-center shrink-0 transition-colors ${($selectedConversationIds || []).includes(msg.id) ? 'text-primary' : 'text-muted-foreground hover:text-foreground'}`}
-                              type="button"
-                              aria-label={($selectedConversationIds || []).includes(msg.id)
-                                ? 'Deselect'
-                                : 'Select'}
-                              onclick={(e) => {
-                                e.stopPropagation();
-                                toggleSelection({ id: msg.id }, e);
-                              }}
-                            >
-                              {#if ($selectedConversationIds || []).includes(msg.id)}
-                                <CheckSquare class="h-5 w-5" />
-                              {:else}
-                                <Square class="h-5 w-5" />
-                              {/if}
-                            </button>
-                          {/if}
-                          {#if cardView}
-                            <div class="flex-1 min-w-0 flex flex-col gap-0.5">
-                              <!-- Line 1: Sender (bold, slightly bigger) + icons + Date (right, muted) -->
-                              <div class="flex items-center justify-between gap-2">
-                                <div class="flex items-center gap-1.5 min-w-0 flex-1">
-                                  {#if msg.is_unread}
-                                    <span class="w-1.5 h-1.5 rounded-full bg-primary shrink-0"
-                                    ></span>
-                                  {/if}
-                                  <span
-                                    class={`truncate text-[14px] ${msg.is_unread ? 'font-bold' : 'font-semibold'}`}
-                                    >{listIsSentFolder
-                                      ? `To: ${getMessageToName(msg) || getMessageFromName(msg)}`
-                                      : getMessageFromName(msg)}</span
-                                  >
-                                </div>
-                                <div
-                                  class="flex items-center gap-1.5 shrink-0 text-muted-foreground"
-                                >
-                                  {#if hasAttachments(msg)}
-                                    <svg viewBox="0 0 24 24" class="h-3 w-3" aria-hidden="true">
-                                      <path
-                                        d="M21.44 11.05l-8.49 8.49a5 5 0 0 1-7.07-7.07l9.19-9.19a3 3 0 1 1 4.24 4.24l-9.19 9.19a1 1 0 1 1-1.41-1.41l8.49-8.49"
-                                        fill="none"
-                                        stroke="currentColor"
-                                        stroke-width="2"
-                                        stroke-linecap="round"
-                                        stroke-linejoin="round"
-                                      ></path>
-                                    </svg>
-                                  {/if}
-                                  <button
-                                    type="button"
-                                    class="shrink-0"
-                                    aria-label={isMessageStarred(msg) ? 'Unstar' : 'Star'}
-                                    onclick={(e) => {
-                                      e.stopPropagation();
-                                      toggleStarMessage(msg);
-                                    }}
-                                  >
-                                    {#if isMessageStarred(msg)}
-                                      <Star class="h-3 w-3 fill-yellow-400 text-yellow-400" />
-                                    {:else}
-                                      <StarOff class="h-3 w-3" />
-                                    {/if}
-                                  </button>
-                                  <span class="text-[11px] whitespace-nowrap">
-                                    {formatCompactDate(msg.date)}
-                                  </span>
-                                </div>
-                              </div>
-                              <!-- Line 2: Subject -->
-                              <div
-                                class="truncate text-[13px] {msg.is_unread
-                                  ? 'font-medium text-foreground'
-                                  : 'text-foreground'}"
+                          <div
+                            class={`flex items-center gap-3 px-3 cursor-pointer ${window.innerWidth > 640 ? 'cursor-grab active:cursor-grabbing' : ''}`}
+                            data-conversation-row
+                            data-testid="message-row"
+                            data-message-id={msg.id}
+                            data-unread={msg.is_unread ? 'true' : 'false'}
+                            role="option"
+                            aria-selected={activeMsgId === msg.id ||
+                              ($selectedConversationIds || []).includes(msg.id)}
+                            tabindex="0"
+                            draggable={window.innerWidth > 640}
+                            onclick={(e) =>
+                              handleRowClick(msg, e, $filteredMessages || [], () => {
+                                if (isDraftMessage(msg)) {
+                                  openDraftFromMessage(msg);
+                                  return;
+                                }
+                                selectMessage(msg);
+                              })}
+                            onkeydown={(e) =>
+                              activateOnKeys(e, () => {
+                                if (isDraftMessage(msg)) {
+                                  openDraftFromMessage(msg);
+                                  return;
+                                }
+                                selectMessage(msg);
+                              })}
+                            ondragstart={(e) => handleDragStart(e, msg)}
+                            ondragend={handleDragEnd}
+                          >
+                            <!-- Desktop: checkbox shown only in classic view or while in selection mode -->
+                            {#if !cardView || selectionMode}
+                              <button
+                                class={`relative w-8 h-8 rounded flex items-center justify-center shrink-0 transition-colors ${($selectedConversationIds || []).includes(msg.id) ? 'text-fg-link' : 'text-muted-foreground hover:text-foreground'}`}
+                                type="button"
+                                aria-label={($selectedConversationIds || []).includes(msg.id)
+                                  ? 'Deselect'
+                                  : 'Select'}
+                                onclick={(e) => {
+                                  e.stopPropagation();
+                                  toggleSelection({ id: msg.id }, e);
+                                }}
                               >
-                                {msg.subject || '(No Subject)'}
-                              </div>
-                              <!-- Line 3: Preview (muted, smaller) -->
-                              {#if truncatePreview(msg.snippet || '', 120)}
-                                <div class="truncate text-[12px] text-muted-foreground">
-                                  {truncatePreview(msg.snippet || '', 120)}
-                                </div>
-                              {/if}
-                              {#if Array.isArray(msg.labels) && msg.labels.length}
-                                <!-- Labels row -->
-                                <div class="flex items-center gap-1 mt-0.5">
-                                  {#each msg.labels.slice(0, 4) as lbl}
-                                    {#if typeof lbl === 'string' && lbl && lbl !== '[]'}
-                                      {#if labelMap.get(lbl)}
-                                        <span
-                                          class="inline-flex items-center px-1.5 py-0.5 text-[10px] truncate max-w-[80px]"
-                                          style={labelMap.get(lbl).color
-                                            ? `background:${labelMap.get(lbl).color}; color:#fff;`
-                                            : ''}
-                                        >
-                                          {labelMap.get(lbl).name ||
-                                            labelMap.get(lbl).label ||
-                                            labelMap.get(lbl).value ||
-                                            lbl}
-                                        </span>
-                                      {:else}
-                                        <span
-                                          class="inline-flex items-center px-1.5 py-0.5 text-[10px] bg-secondary text-secondary-foreground truncate max-w-[80px]"
-                                          >{lbl}</span
-                                        >
-                                      {/if}
+                                {#if ($selectedConversationIds || []).includes(msg.id)}
+                                  <CheckSquare class="h-5 w-5" />
+                                {:else}
+                                  <Square class="h-5 w-5" />
+                                {/if}
+                              </button>
+                            {/if}
+                            {#if cardView}
+                              <div class="flex-1 min-w-0 flex flex-col gap-0.5">
+                                <!-- Line 1: Sender (bold, slightly bigger) + icons + Date (right, muted) -->
+                                <div class="flex items-center justify-between gap-2">
+                                  <div class="flex items-center gap-1.5 min-w-0 flex-1">
+                                    {#if msg.is_unread}
+                                      <span class="w-1.5 h-1.5 rounded-full bg-primary shrink-0"
+                                      ></span>
                                     {/if}
-                                  {/each}
-                                </div>
-                              {/if}
-                            </div>
-                          {:else}
-                            <!-- Classic single-row layout -->
-                            <div class="flex-1 min-w-0 flex flex-col gap-0.5 text-[13px]">
-                              <!-- Row 1: From | Subject - Preview | Date -->
-                              <div class="flex items-center gap-3">
-                                <div
-                                  class="w-[30%] min-w-[140px] max-w-[280px] shrink-0 flex items-center gap-1"
-                                >
-                                  {#if msg.is_unread}
-                                    <span class="w-1.5 h-1.5 rounded-full bg-primary shrink-0"
-                                    ></span>
-                                  {/if}
-                                  <span class={`truncate ${msg.is_unread ? 'font-semibold' : ''}`}
-                                    >{listIsSentFolder
-                                      ? `To: ${getMessageToName(msg) || getMessageFromName(msg)}`
-                                      : getMessageFromName(msg)}</span
-                                  >
-                                </div>
-                                <div
-                                  class="flex-1 min-w-0 flex items-baseline gap-1 overflow-hidden"
-                                >
-                                  <span class={`truncate ${msg.is_unread ? 'font-medium' : ''}`}
-                                    >{msg.subject}</span
-                                  >
-                                  {#if truncatePreview(msg.snippet || '', 80)}
                                     <span
-                                      class="text-muted-foreground font-normal text-xs truncate"
+                                      class={`truncate text-[14px] ${msg.is_unread ? 'font-bold' : 'font-semibold'}`}
+                                      >{listIsSentFolder
+                                        ? `To: ${getMessageToName(msg) || getMessageFromName(msg)}`
+                                        : getMessageFromName(msg)}</span
                                     >
-                                      &mdash; {truncatePreview(msg.snippet || '', 80)}
-                                    </span>
-                                  {/if}
-                                </div>
-                                <div
-                                  class="flex items-center gap-1.5 shrink-0 text-muted-foreground"
-                                >
-                                  {#if hasAttachments(msg)}
-                                    <svg viewBox="0 0 24 24" class="h-3 w-3" aria-hidden="true">
-                                      <path
-                                        d="M21.44 11.05l-8.49 8.49a5 5 0 0 1-7.07-7.07l9.19-9.19a3 3 0 1 1 4.24 4.24l-9.19 9.19a1 1 0 1 1-1.41-1.41l8.49-8.49"
-                                        fill="none"
-                                        stroke="currentColor"
-                                        stroke-width="2"
-                                        stroke-linecap="round"
-                                        stroke-linejoin="round"
-                                      ></path>
-                                    </svg>
-                                  {/if}
-                                  <button
-                                    type="button"
-                                    class="shrink-0"
-                                    aria-label={isMessageStarred(msg) ? 'Unstar' : 'Star'}
-                                    onclick={(e) => {
-                                      e.stopPropagation();
-                                      toggleStarMessage(msg);
-                                    }}
+                                  </div>
+                                  <div
+                                    class="flex items-center gap-1.5 shrink-0 text-muted-foreground"
                                   >
-                                    {#if isMessageStarred(msg)}
-                                      <Star class="h-3 w-3 fill-yellow-400 text-yellow-400" />
-                                    {:else}
-                                      <StarOff class="h-3 w-3" />
+                                    {#if hasAttachments(msg)}
+                                      <svg viewBox="0 0 24 24" class="h-3 w-3" aria-hidden="true">
+                                        <path
+                                          d="M21.44 11.05l-8.49 8.49a5 5 0 0 1-7.07-7.07l9.19-9.19a3 3 0 1 1 4.24 4.24l-9.19 9.19a1 1 0 1 1-1.41-1.41l8.49-8.49"
+                                          fill="none"
+                                          stroke="currentColor"
+                                          stroke-width="2"
+                                          stroke-linecap="round"
+                                          stroke-linejoin="round"
+                                        ></path>
+                                      </svg>
                                     {/if}
-                                  </button>
-                                  <span class="text-[11px] whitespace-nowrap">
-                                    {formatCompactDate(msg.date)}
-                                  </span>
-                                </div>
-                              </div>
-                              {#if Array.isArray(msg.labels) && msg.labels.length}
-                                <!-- Row 2: Labels -->
-                                <div class="flex items-center gap-1">
-                                  {#each msg.labels.slice(0, 4) as lbl}
-                                    {#if typeof lbl === 'string' && lbl && lbl !== '[]'}
-                                      {#if labelMap.get(lbl)}
-                                        <span
-                                          class="inline-flex items-center px-1.5 py-0.5 text-[10px] truncate max-w-[80px]"
-                                          style={labelMap.get(lbl).color
-                                            ? `background:${labelMap.get(lbl).color}; color:#fff;`
-                                            : ''}
-                                        >
-                                          {labelMap.get(lbl).name ||
-                                            labelMap.get(lbl).label ||
-                                            labelMap.get(lbl).value ||
-                                            lbl}
-                                        </span>
+                                    <button
+                                      type="button"
+                                      class="shrink-0"
+                                      aria-label={isMessageStarred(msg) ? 'Unstar' : 'Star'}
+                                      onclick={(e) => {
+                                        e.stopPropagation();
+                                        toggleStarMessage(msg);
+                                      }}
+                                    >
+                                      {#if isMessageStarred(msg)}
+                                        <Star
+                                          class="h-3 w-3 fill-state-starred text-state-starred"
+                                        />
                                       {:else}
-                                        <span
-                                          class="inline-flex items-center px-1.5 py-0.5 text-[10px] bg-secondary text-secondary-foreground truncate max-w-[80px]"
-                                          >{lbl}</span
-                                        >
+                                        <StarOff class="h-3 w-3" />
                                       {/if}
-                                    {/if}
-                                  {/each}
+                                    </button>
+                                    <span class="text-[11px] whitespace-nowrap">
+                                      {formatCompactDate(msg.date)}
+                                    </span>
+                                  </div>
                                 </div>
-                              {/if}
-                            </div>
-                          {/if}
-                        </div>
-                      </article>
-                    {/each}
+                                <!-- Line 2: Subject -->
+                                <div
+                                  class="truncate text-[13px] {msg.is_unread
+                                    ? 'font-medium text-foreground'
+                                    : 'text-foreground'}"
+                                >
+                                  {msg.subject || '(No Subject)'}
+                                </div>
+                                <!-- Line 3: Preview (muted, smaller) -->
+                                {#if truncatePreview(msg.snippet || '', 120)}
+                                  <div class="truncate text-[12px] text-muted-foreground">
+                                    {truncatePreview(msg.snippet || '', 120)}
+                                  </div>
+                                {/if}
+                                {#if Array.isArray(msg.labels) && msg.labels.length}
+                                  <!-- Labels row -->
+                                  <div class="flex items-center gap-1 mt-0.5">
+                                    {#each msg.labels.slice(0, 4) as lbl}
+                                      {#if typeof lbl === 'string' && lbl && lbl !== '[]'}
+                                        {#if labelMap.get(lbl)}
+                                          <span
+                                            class="inline-flex items-center px-1.5 py-0.5 text-[10px] truncate max-w-[80px]"
+                                            style={labelMap.get(lbl).color
+                                              ? `background:${labelMap.get(lbl).color}; color:${readableForeground(labelMap.get(lbl).color)};`
+                                              : ''}
+                                          >
+                                            {labelMap.get(lbl).name ||
+                                              labelMap.get(lbl).label ||
+                                              labelMap.get(lbl).value ||
+                                              lbl}
+                                          </span>
+                                        {:else}
+                                          <span
+                                            class="inline-flex items-center px-1.5 py-0.5 text-[10px] bg-secondary text-secondary-foreground truncate max-w-[80px]"
+                                            >{lbl}</span
+                                          >
+                                        {/if}
+                                      {/if}
+                                    {/each}
+                                  </div>
+                                {/if}
+                              </div>
+                            {:else}
+                              <!-- Classic single-row layout -->
+                              <div class="flex-1 min-w-0 flex flex-col gap-0.5 text-[13px]">
+                                <!-- Row 1: From | Subject - Preview | Date -->
+                                <div class="flex items-center gap-3">
+                                  <div
+                                    class="w-[30%] min-w-[140px] max-w-[280px] shrink-0 flex items-center gap-1"
+                                  >
+                                    {#if msg.is_unread}
+                                      <span class="w-1.5 h-1.5 rounded-full bg-primary shrink-0"
+                                      ></span>
+                                    {/if}
+                                    <span class={`truncate ${msg.is_unread ? 'font-semibold' : ''}`}
+                                      >{listIsSentFolder
+                                        ? `To: ${getMessageToName(msg) || getMessageFromName(msg)}`
+                                        : getMessageFromName(msg)}</span
+                                    >
+                                  </div>
+                                  <div
+                                    class="flex-1 min-w-0 flex items-baseline gap-1 overflow-hidden"
+                                  >
+                                    <span class={`truncate ${msg.is_unread ? 'font-medium' : ''}`}
+                                      >{msg.subject}</span
+                                    >
+                                    {#if truncatePreview(msg.snippet || '', 80)}
+                                      <span
+                                        class="text-muted-foreground font-normal text-xs truncate"
+                                      >
+                                        &mdash; {truncatePreview(msg.snippet || '', 80)}
+                                      </span>
+                                    {/if}
+                                  </div>
+                                  <div
+                                    class="flex items-center gap-1.5 shrink-0 text-muted-foreground"
+                                  >
+                                    {#if hasAttachments(msg)}
+                                      <svg viewBox="0 0 24 24" class="h-3 w-3" aria-hidden="true">
+                                        <path
+                                          d="M21.44 11.05l-8.49 8.49a5 5 0 0 1-7.07-7.07l9.19-9.19a3 3 0 1 1 4.24 4.24l-9.19 9.19a1 1 0 1 1-1.41-1.41l8.49-8.49"
+                                          fill="none"
+                                          stroke="currentColor"
+                                          stroke-width="2"
+                                          stroke-linecap="round"
+                                          stroke-linejoin="round"
+                                        ></path>
+                                      </svg>
+                                    {/if}
+                                    <button
+                                      type="button"
+                                      class="shrink-0"
+                                      aria-label={isMessageStarred(msg) ? 'Unstar' : 'Star'}
+                                      onclick={(e) => {
+                                        e.stopPropagation();
+                                        toggleStarMessage(msg);
+                                      }}
+                                    >
+                                      {#if isMessageStarred(msg)}
+                                        <Star
+                                          class="h-3 w-3 fill-state-starred text-state-starred"
+                                        />
+                                      {:else}
+                                        <StarOff class="h-3 w-3" />
+                                      {/if}
+                                    </button>
+                                    <span class="text-[11px] whitespace-nowrap">
+                                      {formatCompactDate(msg.date)}
+                                    </span>
+                                  </div>
+                                </div>
+                                {#if Array.isArray(msg.labels) && msg.labels.length}
+                                  <!-- Row 2: Labels -->
+                                  <div class="flex items-center gap-1">
+                                    {#each msg.labels.slice(0, 4) as lbl}
+                                      {#if typeof lbl === 'string' && lbl && lbl !== '[]'}
+                                        {#if labelMap.get(lbl)}
+                                          <span
+                                            class="inline-flex items-center px-1.5 py-0.5 text-[10px] truncate max-w-[80px]"
+                                            style={labelMap.get(lbl).color
+                                              ? `background:${labelMap.get(lbl).color}; color:${readableForeground(labelMap.get(lbl).color)};`
+                                              : ''}
+                                          >
+                                            {labelMap.get(lbl).name ||
+                                              labelMap.get(lbl).label ||
+                                              labelMap.get(lbl).value ||
+                                              lbl}
+                                          </span>
+                                        {:else}
+                                          <span
+                                            class="inline-flex items-center px-1.5 py-0.5 text-[10px] bg-secondary text-secondary-foreground truncate max-w-[80px]"
+                                            >{lbl}</span
+                                          >
+                                        {/if}
+                                      {/if}
+                                    {/each}
+                                  </div>
+                                {/if}
+                              </div>
+                            {/if}
+                          </div>
+                        </article>
+                      {/each}
+                    </div>
                   {/if}
                   {#if showListSkeleton}
                     <div class="space-y-0">
@@ -7587,7 +7630,7 @@
                 onclick={contextToggleStar}
               >
                 {#if isMessageStarred(contextMenuConversation || contextMenuMessage)}
-                  <Star class="h-4.5 w-4.5 mr-2 fill-yellow-400 text-yellow-400" />
+                  <Star class="h-4.5 w-4.5 mr-2 fill-state-starred text-state-starred" />
                 {:else}
                   <StarOff class="h-4.5 w-4.5 mr-2" />
                 {/if}
@@ -7727,7 +7770,7 @@
                         >
                           <span
                             class="w-2.5 h-2.5 rounded-full shrink-0"
-                            style={`background:${label.color || '#9ca3af'}`}
+                            style={`background:${label.color || 'var(--fg-muted)'}`}
                           ></span>
                           <span class="flex-1 text-left"
                             >{label.name || label.label || label.value}</span
@@ -7835,7 +7878,7 @@
                         {#if outboxRecipientsList.length > 5}
                           <button
                             type="button"
-                            class="text-xs text-primary hover:underline cursor-pointer"
+                            class="text-xs text-fg-link hover:underline cursor-pointer"
                             onclick={() => (showAllOutboxRecipients = !showAllOutboxRecipients)}
                           >
                             {showAllOutboxRecipients
@@ -7854,11 +7897,11 @@
                   <span
                     class={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
                       selectedOutboxItem.status === 'pending'
-                        ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'
+                        ? 'bg-state-caution/10 text-state-caution'
                         : selectedOutboxItem.status === 'sending'
-                          ? 'bg-primary/10 text-primary animate-pulse'
+                          ? 'bg-primary/10 text-fg-link animate-pulse'
                           : selectedOutboxItem.status === 'sent'
-                            ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
+                            ? 'bg-state-success/10 text-state-success'
                             : selectedOutboxItem.status === 'failed'
                               ? 'bg-destructive/10 text-destructive'
                               : 'bg-muted text-muted-foreground'
@@ -7951,7 +7994,7 @@
                         onclick={() => toggleStarMessage($selectedMessage)}
                       >
                         {#if isMessageStarred($selectedMessage)}
-                          <Star class="h-5 w-5 fill-yellow-400 text-yellow-400" />
+                          <Star class="h-5 w-5 fill-state-starred text-state-starred" />
                         {:else}
                           <StarOff class="h-5 w-5" />
                         {/if}
@@ -8057,7 +8100,7 @@
                                 {#if labelMap.get(lbl).color}
                                   <span
                                     class="inline-flex items-center px-2 py-0.5 rounded-full text-xs truncate max-w-[150px]"
-                                    style={`background:${labelMap.get(lbl).color}; color:#fff;`}
+                                    style={`background:${labelMap.get(lbl).color}; color:${readableForeground(labelMap.get(lbl).color)};`}
                                   >
                                     {labelMap.get(lbl).name ||
                                       labelMap.get(lbl).label ||
@@ -8226,7 +8269,7 @@
                               }}
                             >
                               {#if isMessageStarred($selectedMessage)}
-                                <Star class="h-4 w-4 fill-yellow-400 text-yellow-400" />
+                                <Star class="h-4 w-4 fill-state-starred text-state-starred" />
                               {:else}
                                 <StarOff class="h-4 w-4" />
                               {/if}
@@ -8402,7 +8445,7 @@
                                     >
                                       <span
                                         class="w-2.5 h-2.5 rounded-full shrink-0"
-                                        style={`background:${label.color || '#9ca3af'}`}
+                                        style={`background:${label.color || 'var(--fg-muted)'}`}
                                       ></span>
                                       <span>{label.name || label.label || label.value}</span>
                                     </button>
@@ -8434,7 +8477,7 @@
                   <div class="space-y-1 text-sm">
                     <div class="flex items-start gap-3">
                       <div
-                        class="font-medium cursor-pointer hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        class="font-medium cursor-pointer hover:text-fg-link hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                         data-tooltip="Click to copy"
                         data-tooltip-position="bottom"
                         role="button"
@@ -8461,7 +8504,7 @@
                         {/if}
                       </div>
                       <button
-                        class="text-xs text-primary hover:underline cursor-pointer flex items-center gap-1"
+                        class="text-xs text-fg-link hover:underline cursor-pointer flex items-center gap-1"
                         type="button"
                         aria-label={showEmailDetails ? 'Hide details' : 'Show details'}
                         title={showEmailDetails ? 'Hide details' : 'Show details'}
@@ -8487,7 +8530,7 @@
                         <div class="flex items-start gap-2">
                           <span class="text-muted-foreground shrink-0 w-16">from:</span>
                           <span
-                            class="flex-1 break-all cursor-pointer hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                            class="flex-1 break-all cursor-pointer hover:text-fg-link hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                             data-tooltip="Click to copy"
                             role="button"
                             tabindex="0"
@@ -8537,7 +8580,7 @@
                             {#if recipientsList.length > 5}
                               <button
                                 type="button"
-                                class="text-xs text-primary hover:underline cursor-pointer"
+                                class="text-xs text-fg-link hover:underline cursor-pointer"
                                 onclick={() => (showAllRecipients = !showAllRecipients)}
                               >
                                 {showAllRecipients
@@ -8567,7 +8610,7 @@
                               {#if ccList.length > 5}
                                 <button
                                   type="button"
-                                  class="text-xs text-primary hover:underline cursor-pointer"
+                                  class="text-xs text-fg-link hover:underline cursor-pointer"
                                   onclick={() => (showAllCc = !showAllCc)}
                                 >
                                   {showAllCc ? 'show less' : `+${remainingCcCount} more`}
@@ -8601,7 +8644,7 @@
                         {#if getSecurityInfo($selectedMessage)}
                           <div class="flex items-start gap-2">
                             <span class="text-muted-foreground shrink-0 w-16">security:</span>
-                            <span class="flex-1 break-all text-green-600 dark:text-green-400">
+                            <span class="flex-1 break-all text-state-success">
                               {formatSecurityStatus(getSecurityInfo($selectedMessage))}
                             </span>
                           </div>
@@ -8612,7 +8655,7 @@
                         <div class="flex items-center gap-2 mt-2 text-sm">
                           <span class="text-muted-foreground shrink-0">Reply-To:</span>
                           <span
-                            class="text-muted-foreground cursor-pointer hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                            class="text-muted-foreground cursor-pointer hover:text-fg-link hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                             data-tooltip="Click to copy"
                             role="button"
                             tabindex="0"
@@ -8661,7 +8704,7 @@
                           {#if recipientsList.length > 5}
                             <button
                               type="button"
-                              class="text-xs text-primary hover:underline cursor-pointer"
+                              class="text-xs text-fg-link hover:underline cursor-pointer"
                               onclick={() => (showAllRecipients = !showAllRecipients)}
                             >
                               {showAllRecipients
@@ -8691,7 +8734,7 @@
                             {#if ccList.length > 5}
                               <button
                                 type="button"
-                                class="text-xs text-primary hover:underline cursor-pointer"
+                                class="text-xs text-fg-link hover:underline cursor-pointer"
                                 onclick={() => (showAllCc = !showAllCc)}
                               >
                                 {showAllCc ? 'show less' : `+${remainingCcCount} more`}
@@ -8716,7 +8759,7 @@
                     <div class="flex items-center gap-2">
                       <button
                         type="button"
-                        class="text-xs text-primary hover:underline cursor-pointer"
+                        class="text-xs text-fg-link hover:underline cursor-pointer"
                         onclick={expandAllThreadMessages}
                         title="Expand all messages"
                       >
@@ -8724,7 +8767,7 @@
                       </button>
                       <button
                         type="button"
-                        class="text-xs text-primary hover:underline cursor-pointer"
+                        class="text-xs text-fg-link hover:underline cursor-pointer"
                         onclick={collapseAllThreadMessages}
                         title="Collapse all messages"
                       >
@@ -8782,9 +8825,13 @@
                           {:else}
                             {#if $pgpLocked}
                               <div
-                                class="flex items-center gap-3 p-3 mb-4 bg-blue-500/10 border border-blue-500/20 text-sm"
+                                class="flex items-center gap-3 p-3 mb-4 bg-state-encrypted/10 border border-state-encrypted/30 text-sm"
+                                role="status"
                               >
-                                <Lock class="h-4.5 w-4.5 text-blue-500" />
+                                <Lock
+                                  class="h-4.5 w-4.5 text-state-encrypted"
+                                  aria-label="Encrypted message"
+                                />
                                 <span class="flex-1">
                                   {$pgpHasKeys
                                     ? 'This message is PGP encrypted. Enter your passphrase to decrypt.'
@@ -8793,7 +8840,7 @@
                                 {#if $pgpHasKeys}
                                   <button
                                     type="button"
-                                    class="inline-flex items-center justify-center px-3 py-1.5 text-sm bg-blue-500/20 hover:bg-blue-500/30 text-blue-600 dark:text-blue-400"
+                                    class="inline-flex items-center justify-center px-3 py-1.5 text-sm bg-state-encrypted/20 hover:bg-state-encrypted/30 text-state-encrypted"
                                     onclick={() => {
                                       const msg = source.state?.selectedMessage
                                         ? get(selectedMessage)
@@ -8810,7 +8857,7 @@
                                 {:else}
                                   <button
                                     type="button"
-                                    class="inline-flex items-center justify-center px-3 py-1.5 text-sm bg-blue-500/20 hover:bg-blue-500/30 text-blue-600 dark:text-blue-400"
+                                    class="inline-flex items-center justify-center px-3 py-1.5 text-sm bg-state-encrypted/20 hover:bg-state-encrypted/30 text-state-encrypted"
                                     onclick={() => navigate('/mailbox/settings#accounts')}
                                   >
                                     Add PGP Key
@@ -8820,7 +8867,7 @@
                             {/if}
                             {#if $hasBlockedImages}
                               <div
-                                class="flex items-center gap-3 p-3 mb-4 bg-amber-500/10 border border-amber-500/20 text-sm"
+                                class="flex items-center gap-3 p-3 mb-4 bg-state-caution/10 border border-state-caution/20 text-sm"
                               >
                                 <ImageIcon class="h-4.5 w-4.5" />
                                 <span>
@@ -9022,9 +9069,13 @@
                   {:else}
                     {#if $pgpLocked}
                       <div
-                        class="flex items-center gap-3 p-3 mb-4 bg-blue-500/10 border border-blue-500/20 text-sm"
+                        class="flex items-center gap-3 p-3 mb-4 bg-state-encrypted/10 border border-state-encrypted/30 text-sm"
+                        role="status"
                       >
-                        <Lock class="h-4.5 w-4.5 text-blue-500" />
+                        <Lock
+                          class="h-4.5 w-4.5 text-state-encrypted"
+                          aria-label="Encrypted message"
+                        />
                         <span class="flex-1">
                           {$pgpHasKeys
                             ? 'This message is PGP encrypted. Enter your passphrase to decrypt.'
@@ -9033,7 +9084,7 @@
                         {#if $pgpHasKeys}
                           <button
                             type="button"
-                            class="inline-flex items-center justify-center px-3 py-1.5 text-sm bg-blue-500/20 hover:bg-blue-500/30 text-blue-600 dark:text-blue-400"
+                            class="inline-flex items-center justify-center px-3 py-1.5 text-sm bg-state-encrypted/20 hover:bg-state-encrypted/30 text-state-encrypted"
                             onclick={() => {
                               const msg = source.state?.selectedMessage
                                 ? get(selectedMessage)
@@ -9050,7 +9101,7 @@
                         {:else}
                           <button
                             type="button"
-                            class="inline-flex items-center justify-center px-3 py-1.5 text-sm bg-blue-500/20 hover:bg-blue-500/30 text-blue-600 dark:text-blue-400"
+                            class="inline-flex items-center justify-center px-3 py-1.5 text-sm bg-state-encrypted/20 hover:bg-state-encrypted/30 text-state-encrypted"
                             onclick={() => navigate('/mailbox/settings#accounts')}
                           >
                             Add PGP Key
@@ -9060,7 +9111,7 @@
                     {/if}
                     {#if $hasBlockedImages}
                       <div
-                        class="flex items-center gap-3 p-3 mb-4 bg-amber-500/10 border border-amber-500/20 text-sm"
+                        class="flex items-center gap-3 p-3 mb-4 bg-state-caution/10 border border-state-caution/20 text-sm"
                       >
                         <ImageIcon class="h-4.5 w-4.5" />
                         <span>
@@ -9602,7 +9653,7 @@
     left: 50%;
     width: 1px;
     transform: translateX(-50%);
-    background: color-mix(in srgb, var(--color-border, #e5e7eb) 82%, transparent);
+    background: color-mix(in srgb, var(--color-border) 82%, transparent);
     transition:
       background 0.15s ease,
       box-shadow 0.15s ease;
@@ -9621,14 +9672,14 @@
     background:
       repeating-linear-gradient(
           to bottom,
-          color-mix(in srgb, var(--color-muted-foreground, #94a3b8) 96%, white 4%) 0 2px,
+          color-mix(in srgb, var(--color-muted-foreground) 96%, white 4%) 0 2px,
           transparent 2px 5px
         )
         center / 2px 14px no-repeat,
-      color-mix(in srgb, var(--color-panel) 94%, var(--color-muted, #0f172a) 6%);
+      color-mix(in srgb, var(--color-panel) 94%, var(--color-muted) 6%);
     box-shadow:
-      0 0 0 1px color-mix(in srgb, var(--color-border, #e5e7eb) 72%, transparent),
-      0 1px 3px rgba(15, 23, 42, 0.18);
+      0 0 0 1px color-mix(in srgb, var(--color-border) 72%, transparent),
+      var(--elev-1);
     opacity: 0.98;
     transition:
       background 0.15s ease,
@@ -9643,8 +9694,8 @@
   .fe-sidebar-resizer:hover::before,
   .fe-sidebar-resizer.fe-sidebar-resizer-active::before,
   .fe-sidebar-resizer:focus-visible::before {
-    background: color-mix(in srgb, var(--color-accent, #00aff8) 78%, white 22%);
-    box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-accent, #00aff8) 18%, transparent);
+    background: color-mix(in srgb, var(--color-accent) 78%, white 22%);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-accent) 18%, transparent);
   }
 
   .fe-vertical-resizer:hover::after,
@@ -9656,14 +9707,14 @@
     background:
       repeating-linear-gradient(
           to bottom,
-          color-mix(in srgb, var(--color-accent, #00aff8) 82%, white 18%) 0 2px,
+          color-mix(in srgb, var(--color-accent) 82%, white 18%) 0 2px,
           transparent 2px 5px
         )
         center / 2px 14px no-repeat,
-      color-mix(in srgb, var(--color-panel) 88%, var(--color-accent, #00aff8) 12%);
+      color-mix(in srgb, var(--color-panel) 88%, var(--color-accent) 12%);
     box-shadow:
-      0 0 0 1px color-mix(in srgb, var(--color-accent, #00aff8) 20%, transparent),
-      0 2px 7px rgba(15, 23, 42, 0.22);
+      0 0 0 1px color-mix(in srgb, var(--color-accent) 20%, transparent),
+      var(--elev-2);
     opacity: 1;
   }
 
@@ -9790,8 +9841,8 @@
 
   /* Highlight drop targets */
   .fe-drag-over {
-    background: rgba(59, 130, 246, 0.1) !important;
-    border-left: 3px solid #3b82f6;
+    background: color-mix(in srgb, var(--action-primary-bg) 10%, transparent) !important;
+    border-left: 3px solid var(--action-primary-bg);
     box-shadow: none !important;
   }
 
@@ -9803,7 +9854,7 @@
     top: 50%;
     transform: translateY(-50%);
     font-size: 11px;
-    color: #3b82f6;
+    color: var(--fg-link);
     font-weight: 500;
     pointer-events: none;
     z-index: 10;
@@ -9823,12 +9874,8 @@
 
   /* Active / selected message highlight */
   .msg-active {
-    background: rgba(0, 175, 248, 0.1);
-    box-shadow: inset 3px 0 0 0 hsl(var(--primary, 199 89% 49%));
-  }
-
-  :global(body.light-mode) .msg-active {
-    background: rgba(0, 175, 248, 0.08);
+    background: color-mix(in srgb, var(--action-primary-bg) 10%, transparent);
+    box-shadow: inset 3px 0 0 0 var(--action-primary-bg);
   }
 
   /* ============================================

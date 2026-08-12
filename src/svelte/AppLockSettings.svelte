@@ -288,7 +288,7 @@
   </Card.Header>
   <Card.Content class="space-y-4">
     {#if success}
-      <div class="flex items-center gap-2 text-sm text-green-600 dark:text-green-400" role="status">
+      <div class="flex items-center gap-2 text-sm text-state-success" role="status">
         <CheckCircle class="h-4 w-4" />
         <span>{success}</span>
       </div>
@@ -493,7 +493,7 @@
             {#if passkeyRegistered}
               <div class="flex items-center gap-3">
                 <span
-                  class="inline-flex items-center gap-1 rounded-md bg-green-50 px-2 py-1 text-xs font-medium text-green-700 ring-1 ring-inset ring-green-600/20 dark:bg-green-500/10 dark:text-green-400 dark:ring-green-500/20"
+                  class="inline-flex items-center gap-1 rounded-md bg-state-success/10 px-2 py-1 text-xs font-medium text-state-success ring-1 ring-inset ring-state-success/20"
                 >
                   <ShieldCheck class="h-3 w-3" />
                   Passkey registered

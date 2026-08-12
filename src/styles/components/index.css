@@ -6,5 +6,7 @@
  * Most UI is now handled by Tailwind utility classes.
  */
 
+@import './typography.css';
+@import './surface-inverse.css';
 @import './email-iframe.css';
 @import './bottom-sheet.css';

@@ -494,7 +494,10 @@
   let fontSize = $state('16');
   let textColor = $state(
     typeof document !== 'undefined' && document.documentElement.classList.contains('dark')
-      ? '#e5e7eb'
+      ? /* Editor content colours, not UI chrome. These are serialised into the
+         * outgoing email HTML, which is rendered by the recipient's client and
+         * has no access to this app's tokens, so they must be literal. */
+        '#e5e7eb'
       : '#000000',
   );
   let highlightColor = $state('#fef08a');
@@ -3033,8 +3036,8 @@
           class="pointer-events-none absolute inset-0 z-[60] flex flex-col items-center justify-center gap-3 bg-primary/10 backdrop-blur-sm border-2 border-dashed border-primary"
           data-testid="compose-drop-overlay"
         >
-          <Paperclip class="h-10 w-10 text-primary" />
-          <p class="text-base font-medium text-primary">Drop files to attach</p>
+          <Paperclip class="h-10 w-10 text-fg-link" />
+          <p class="text-base font-medium text-fg-link">Drop files to attach</p>
         </div>
       {/if}
       <header
@@ -3175,7 +3178,7 @@
             onclick={send}
             disabled={sending}
           >
-            <Send size={32} class="text-blue-400" />
+            <Send size={32} class="text-fg-link" />
           </Button>
           <div class="relative md:hidden">
             <Button
@@ -4089,7 +4092,7 @@
           <Separator />
           <div class="flex justify-between text-sm font-medium">
             <span>Send on:</span>
-            <span class="text-primary"
+            <span class="text-fg-link"
               >{scheduleInfo?.date || ''} at {scheduleInfo?.time || ''}</span
             >
           </div>
@@ -4173,7 +4176,7 @@
   :global(.rich-editor .ProseMirror p.is-editor-empty:first-child::before) {
     content: attr(data-placeholder);
     float: left;
-    color: #9ca3af;
+    color: var(--fg-muted);
     pointer-events: none;
     height: 0;
     font-weight: 400;
@@ -4184,29 +4187,29 @@
   }
 
   :global(.rich-editor .ProseMirror .fe-reply-attribution) {
-    color: hsl(var(--muted-foreground));
+    color: var(--muted-foreground);
     font-size: 0.85em;
     padding-top: 0.5em;
-    border-top: 1px solid hsl(var(--border));
+    border-top: 1px solid var(--border);
     margin-top: 0.5em;
   }
 
   :global(.rich-editor .ProseMirror blockquote) {
-    border-left: 3px solid hsl(var(--border));
+    border-left: 3px solid var(--border);
     padding-left: 1rem;
     margin-left: 0;
-    color: hsl(var(--muted-foreground));
+    color: var(--muted-foreground);
   }
 
   :global(.rich-editor .ProseMirror pre) {
-    background: hsl(var(--muted));
+    background: var(--muted);
     border-radius: 0.375rem;
     padding: 0.75rem 1rem;
     font-family: monospace;
   }
 
   :global(.rich-editor .ProseMirror code) {
-    background: hsl(var(--muted));
+    background: var(--muted);
     border-radius: 0.25rem;
     padding: 0.125rem 0.25rem;
     font-family: monospace;
@@ -4239,7 +4242,7 @@
   }
 
   :global(.rich-editor .ProseMirror a) {
-    color: hsl(var(--primary));
+    color: var(--primary);
     text-decoration: underline;
     cursor: pointer;
   }
@@ -4259,57 +4262,47 @@
 
   :global(.rich-editor .ProseMirror th),
   :global(.rich-editor .ProseMirror td) {
-    border: 1px solid hsl(var(--border));
+    border: 1px solid var(--border);
     padding: 0.5rem;
     vertical-align: top;
   }
 
   :global(.rich-editor .ProseMirror th) {
-    background: hsl(var(--muted));
+    background: var(--muted);
     font-weight: 600;
   }
 
   /* Raw quote styles */
   :global(.raw-quote) {
-    border-left: 3px solid hsl(var(--border));
+    border-left: 3px solid var(--border);
     padding-left: 1rem;
     margin: 1rem 0;
-    color: hsl(var(--muted-foreground));
+    color: var(--muted-foreground);
   }
 
   :global(.raw-quote-inner) {
     font-size: 0.875rem;
   }
 
-  /* Emoji picker styles */
+  /* Emoji picker styles.
+   *
+   * emoji-picker-element is a web component styled through its own custom
+   * properties, so it needs values handed to it by name. Pointing them at our
+   * semantic tokens means one block covers both themes: the tokens already
+   * flip. bindEmojiPicker still toggles the .light / .dark class, which the
+   * element uses for its own internals. */
   :global(emoji-picker) {
     --border-size: 1px;
     --border-radius: 0.5rem;
-  }
-
-  :global(emoji-picker.light) {
-    --background: #ffffff;
-    --border-color: #e2e8f0;
-    --input-border-color: #cbd5e1;
-    --input-font-color: #0f172a;
-    --input-placeholder-color: #64748b;
-    --category-font-color: #475569;
-    --indicator-color: #00aff8;
-    --outline-color: #64748b;
-    --button-active-background: #e2e8f0;
-    --button-hover-background: #f1f5f9;
-  }
-
-  :global(emoji-picker.dark) {
-    --background: #242424;
-    --border-color: #333333;
-    --input-border-color: #404040;
-    --input-font-color: #e2e8f0;
-    --input-placeholder-color: #94a3b8;
-    --category-font-color: #94a3b8;
-    --indicator-color: #00aff8;
-    --outline-color: #94a3b8;
-    --button-active-background: #404040;
-    --button-hover-background: #333333;
+    --background: var(--surface-overlay);
+    --border-color: var(--border-default);
+    --input-border-color: var(--border-strong);
+    --input-font-color: var(--fg-primary);
+    --input-placeholder-color: var(--fg-muted);
+    --category-font-color: var(--fg-secondary);
+    --indicator-color: var(--action-primary-bg);
+    --outline-color: var(--focus-ring);
+    --button-active-background: var(--surface-sunken);
+    --button-hover-background: var(--surface-hover);
   }
 </style>

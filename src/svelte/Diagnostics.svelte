@@ -1,13 +1,12 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { Button } from '$lib/components/ui/button';
+  import { StatusLog, StatusLine } from '$lib/components/ui/status-log';
+  import { MonoLabel } from '$lib/components/ui/mono-label';
+  import { Badge } from '$lib/components/ui/badge';
   import RefreshCw from '@lucide/svelte/icons/refresh-cw';
   import ClipboardCopy from '@lucide/svelte/icons/clipboard-copy';
   import Mail from '@lucide/svelte/icons/mail';
-  import CheckCircle2 from '@lucide/svelte/icons/check-circle-2';
-  import XCircle from '@lucide/svelte/icons/x-circle';
-  import AlertTriangle from '@lucide/svelte/icons/alert-triangle';
-  import MinusCircle from '@lucide/svelte/icons/minus-circle';
   import {
     runDiagnostics,
     formatReportText,
@@ -70,25 +69,9 @@
     window.location.href = `mailto:support@forwardemail.net?subject=${subject}&body=${body}`;
   };
 
-  const statusClass = (s: string): string => {
-    switch (s) {
-      case 'pass':
-        return 'text-green-600 dark:text-green-400';
-      case 'fail':
-        return 'text-red-600 dark:text-red-400';
-      case 'warn':
-        return 'text-amber-600 dark:text-amber-400';
-      default:
-        return 'text-muted-foreground';
-    }
-  };
-
-  const StatusIcon = (s: string) => {
-    if (s === 'pass') return CheckCircle2;
-    if (s === 'fail') return XCircle;
-    if (s === 'warn') return AlertTriangle;
-    return MinusCircle;
-  };
+  /** Diagnostics statuses map onto the StatusLog glyph vocabulary (§3.3). */
+  const lineStatus = (s: string) =>
+    s === 'pass' ? 'success' : s === 'fail' ? 'danger' : s === 'warn' ? 'caution' : 'info';
 
   onMount(() => {
     void run();
@@ -111,49 +94,39 @@
   </header>
 
   {#if summary}
-    <div class="mb-4 flex flex-wrap gap-3 text-sm">
-      <span class="rounded-full bg-green-500/10 px-3 py-1 text-green-700 dark:text-green-400"
-        >{summary.pass} pass</span
-      >
+    <div class="mb-4 flex flex-wrap items-center gap-2">
+      <Badge variant="success" mono>{summary.pass} pass</Badge>
       {#if summary.fail > 0}
-        <span class="rounded-full bg-red-500/10 px-3 py-1 text-red-700 dark:text-red-400"
-          >{summary.fail} fail</span
-        >
+        <Badge variant="destructive" mono>{summary.fail} fail</Badge>
       {/if}
       {#if summary.warn > 0}
-        <span class="rounded-full bg-amber-500/10 px-3 py-1 text-amber-700 dark:text-amber-400"
-          >{summary.warn} warn</span
-        >
+        <Badge variant="caution" mono>{summary.warn} warn</Badge>
       {/if}
       {#if summary.skip > 0}
-        <span class="rounded-full bg-muted px-3 py-1 text-muted-foreground"
-          >{summary.skip} skipped</span
-        >
+        <Badge variant="secondary" mono>{summary.skip} skipped</Badge>
       {/if}
     </div>
   {/if}
 
-  <ul class="divide-y rounded-md border bg-card">
+  <MonoLabel tick class="mb-2">Probe results</MonoLabel>
+
+  <!-- Connection and integration diagnostics are exactly what the terminal
+       block is for (§3.3): one status line per probe, glyph first, duration in
+       tabular numerals so the column aligns. -->
+  <StatusLog label="Diagnostics probe results">
     {#if !report && !running}
-      <li class="p-4 text-sm text-muted-foreground">No results yet.</li>
+      <StatusLine status="info">No results yet.</StatusLine>
     {/if}
     {#if running && !report}
-      <li class="p-4 text-sm text-muted-foreground">Running probes…</li>
+      <StatusLine status="active">Running probes…</StatusLine>
     {/if}
     {#each report?.results ?? [] as r (r.id)}
-      {@const Icon = StatusIcon(r.status)}
-      <li class="flex items-start gap-3 p-4">
-        <Icon class="mt-0.5 h-4 w-4 flex-none {statusClass(r.status)}" />
-        <div class="min-w-0 flex-1">
-          <div class="flex items-baseline justify-between gap-2">
-            <span class="text-sm font-medium">{r.label}</span>
-            <span class="text-xs text-muted-foreground">{r.durationMs}ms</span>
-          </div>
-          <p class="mt-0.5 break-words text-sm text-muted-foreground">{r.message}</p>
-        </div>
-      </li>
+      <StatusLine status={lineStatus(r.status)} meta={`${r.durationMs}ms`}>
+        <span class="text-foreground font-semibold">{r.label}</span>
+        <span class="text-fg-muted"> — {r.message}</span>
+      </StatusLine>
     {/each}
-  </ul>
+  </StatusLog>
 
   {#if report}
     <section class="mt-6">

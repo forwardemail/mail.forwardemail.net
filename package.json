@@ -60,6 +60,7 @@
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.2.8",
+    "@fontsource-variable/jetbrains-mono": "5.3.0",
     "@fontsource-variable/literata": "^5.2.8",
     "@fontsource/merriweather": "^5.2.11",
     "@fontsource/open-sans": "^5.2.7",

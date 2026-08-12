@@ -395,7 +395,7 @@
   <Card.Header class="pb-3">
     <div class="flex items-start gap-3">
       <CalendarIcon
-        class="mt-0.5 h-5 w-5 shrink-0 {isCancel ? 'text-destructive' : 'text-primary'}"
+        class="mt-0.5 h-5 w-5 shrink-0 {isCancel ? 'text-destructive' : 'text-fg-link'}"
       />
       <div class="min-w-0 flex-1">
         <Card.Title class="truncate text-base">
@@ -445,7 +445,7 @@
     {/if}
     {#if conflicts.length > 0 && !isCancel}
       <div
-        class="flex items-start gap-2 rounded border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-700 dark:text-amber-300"
+        class="flex items-start gap-2 rounded border border-state-caution/40 bg-state-caution/10 p-2 text-xs text-state-caution"
       >
         <AlertTriangle class="mt-0.5 h-3.5 w-3.5 shrink-0" />
         <span>
@@ -479,7 +479,7 @@
     {:else}
       <div class="flex w-full flex-wrap items-center gap-2">
         {#if added}
-          <span class="flex items-center gap-2 text-sm text-green-700 dark:text-green-400">
+          <span class="flex items-center gap-2 text-sm text-state-success">
             <CheckCircle2 class="h-4 w-4" />
             {cachedEventMatch ? 'Updated on your calendar' : 'Added to your calendar'}
           </span>

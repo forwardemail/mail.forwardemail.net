@@ -407,9 +407,9 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    background: var(--lock-bg, #0a0a0a);
-    color: var(--lock-fg, #ffffff);
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--surface-canvas);
+    color: var(--fg-primary);
+    font-family: var(--font-body);
     user-select: none;
     -webkit-user-select: none;
   }
@@ -451,18 +451,18 @@
     width: 14px;
     height: 14px;
     border-radius: 50%;
-    border: 2px solid rgba(255, 255, 255, 0.3);
+    border: 2px solid var(--border-strong);
     transition: all 0.15s ease;
   }
 
   .pin-dot.filled {
-    background: #ffffff;
-    border-color: #ffffff;
+    background: var(--fg-primary);
+    border-color: var(--fg-primary);
     transform: scale(1.1);
   }
 
   .pin-dot.active {
-    border-color: rgba(255, 255, 255, 0.6);
+    border-color: var(--fg-secondary);
   }
 
   .shake {
@@ -489,7 +489,7 @@
   }
 
   .error-message {
-    color: #ff6b6b;
+    color: var(--state-danger);
     font-size: 0.8125rem;
     margin: 0 0 1rem;
     text-align: center;
@@ -503,8 +503,8 @@
   .spinner {
     width: 24px;
     height: 24px;
-    border: 2px solid rgba(255, 255, 255, 0.2);
-    border-top-color: #ffffff;
+    border: 2px solid var(--border-default);
+    border-top-color: var(--fg-primary);
     border-radius: 50%;
     animation: spin 0.6s linear infinite;
   }
@@ -541,28 +541,28 @@
   }
 
   .numpad-key.digit {
-    background: rgba(255, 255, 255, 0.08);
-    color: #ffffff;
+    background: var(--surface-raised);
+    color: var(--fg-primary);
     font-size: 1.75rem;
     font-weight: 300;
   }
 
   .numpad-key.digit:hover:not(:disabled) {
-    background: rgba(255, 255, 255, 0.15);
+    background: var(--action-ghost-hover-bg);
   }
 
   .numpad-key.digit:active:not(:disabled) {
-    background: rgba(255, 255, 255, 0.25);
+    background: var(--border-strong);
     transform: scale(0.95);
   }
 
   .numpad-key.special {
     background: transparent;
-    color: rgba(255, 255, 255, 0.7);
+    color: var(--fg-secondary);
   }
 
   .numpad-key.special:hover:not(:disabled) {
-    color: #ffffff;
+    color: var(--fg-primary);
   }
 
   .numpad-key.placeholder {
@@ -579,51 +579,6 @@
     font-size: 0.75rem;
     opacity: 0.4;
     margin-top: 1.5rem;
-  }
-
-  /* Light mode: when the app's .dark class is NOT on <html> */
-  :global(html:not(.dark)) .lock-screen {
-    --lock-bg: #f5f5f7;
-    --lock-fg: #1d1d1f;
-  }
-
-  :global(html:not(.dark)) .pin-dot {
-    border-color: rgba(0, 0, 0, 0.2);
-  }
-
-  :global(html:not(.dark)) .pin-dot.filled {
-    background: #1d1d1f;
-    border-color: #1d1d1f;
-  }
-
-  :global(html:not(.dark)) .pin-dot.active {
-    border-color: rgba(0, 0, 0, 0.4);
-  }
-
-  :global(html:not(.dark)) .numpad-key.digit {
-    background: rgba(0, 0, 0, 0.05);
-    color: #1d1d1f;
-  }
-
-  :global(html:not(.dark)) .numpad-key.digit:hover:not(:disabled) {
-    background: rgba(0, 0, 0, 0.1);
-  }
-
-  :global(html:not(.dark)) .numpad-key.digit:active:not(:disabled) {
-    background: rgba(0, 0, 0, 0.15);
-  }
-
-  :global(html:not(.dark)) .numpad-key.special {
-    color: rgba(0, 0, 0, 0.5);
-  }
-
-  :global(html:not(.dark)) .numpad-key.special:hover:not(:disabled) {
-    color: #1d1d1f;
-  }
-
-  :global(html:not(.dark)) .spinner {
-    border-color: rgba(0, 0, 0, 0.1);
-    border-top-color: #1d1d1f;
   }
 
   /* Responsive adjustments for smaller screens */

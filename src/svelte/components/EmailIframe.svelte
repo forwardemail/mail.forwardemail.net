@@ -447,8 +447,8 @@
   .fe-email-loading-indicator {
     width: 24px;
     height: 24px;
-    border: 2px solid var(--color-border, #e5e7eb);
-    border-top-color: var(--color-primary, #3b82f6);
+    border: 2px solid var(--border-default);
+    border-top-color: var(--action-primary-bg);
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
   }

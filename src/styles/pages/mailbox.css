@@ -30,154 +30,6 @@
   min-height: 0;
 }
 
-.fe-mailbox-header {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  justify-content: space-between;
-  flex-wrap: nowrap;
-  flex-direction: row;
-  background: transparent;
-  color: var(--color-text);
-}
-
-.fe-mailbox-header .fe-title {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-width: 0;
-}
-
-.fe-search-group {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  width: 100%;
-  max-width: clamp(220px, 40vw, 420px);
-  justify-content: flex-start;
-}
-
-.fe-field {
-  width: 100%;
-  padding: 10px 12px;
-  border: 1px solid var(--color-border);
-  background: var(--color-panel);
-  color: var(--color-text);
-  transition:
-    border-color 0.2s ease,
-    box-shadow 0.2s ease;
-}
-
-.fe-field:focus {
-  border-color: var(--color-accent);
-  box-shadow: 0 0 0 3px rgba(0, 175, 248, 0.25);
-  outline: none;
-}
-
-.fe-mailbox-header-right {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex: 1;
-  justify-content: space-between;
-  min-width: 0;
-}
-
-.fe-toolbar-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  flex-shrink: 0;
-}
-
-.fe-icon-btn {
-  width: 44px;
-  height: 44px;
-  min-width: 44px;
-  min-height: 44px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-}
-
-.fe-icon-svg {
-  width: 18px;
-  height: 18px;
-  stroke: currentColor;
-  stroke-width: 2;
-  fill: none;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.fe-settings-btn {
-  padding: 10px;
-  min-width: 44px;
-  justify-content: center;
-  display: inline-flex;
-  align-items: center;
-  gap: 0;
-}
-
-.fe-nav-toggle {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 44px;
-  height: 44px;
-  min-width: 44px;
-  min-height: 44px;
-  border: 1px solid #333333;
-  background: #1a1a1a;
-  color: #e5e7eb;
-  cursor: pointer;
-}
-
-.fe-reader-backbtn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 44px;
-  height: 44px;
-  min-width: 44px;
-  min-height: 44px;
-  border: 1px solid #333333;
-  background: #1a1a1a;
-  color: #e5e7eb;
-  cursor: pointer;
-}
-
-.fe-title-left {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 0;
-}
-
-.fe-title-left h1 {
-  margin: 0;
-  font-size: 20px;
-  font-weight: 700;
-  color: #e5e7eb;
-}
-
-.fe-title-left span {
-  color: #9ca3af;
-  font-size: 14px;
-}
-
-.fe-mailbox-actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex: 1;
-  justify-content: flex-end;
-}
-
 .fe-mailbox-shell {
   display: grid;
   grid-template-columns: var(--fe-sidebar-width, 240px) minmax(0, 1fr) minmax(0, 1.2fr);
@@ -218,6 +70,7 @@
 }
 
 /* Remove borders that sit flush against the window edges */
+
 .fe-folders {
   border-left: none;
   border-bottom: none;
@@ -229,6 +82,7 @@
 }
 
 /* Messages panel can be rightmost (reader hidden) or leftmost (sidebar collapsed) */
+
 .fe-messages {
   border-right: none;
   border-bottom: none;
@@ -267,31 +121,10 @@
   z-index: 2;
 }
 
-.fe-section-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3, 12px);
-  padding: var(--space-2, 8px) var(--space-3, 12px);
-}
-
-.fe-list-actions {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1, 4px);
-}
-
 .fe-reader {
   overflow-y: auto;
   overflow-x: hidden;
   padding: calc(var(--spacing, 0.25rem) * 2.5) calc(var(--spacing, 0.25rem) * 5);
-}
-
-.fe-messages .fe-section-header,
-.fe-messages .fe-list-actions {
-  position: relative;
-  z-index: var(--z-tooltip);
-  overflow: visible;
 }
 
 .fe-folders {
@@ -307,110 +140,9 @@
   display: none;
 }
 
-.fe-folders-secondary {
-  margin-top: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.fe-folders-secondary .fe-button,
-.fe-folders-secondary .fe-signout {
-  width: 100%;
-  justify-content: flex-start;
-}
-
-.fe-account-actions {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-top: 6px;
-  margin: 10px 0;
-}
-
-.fe-account-actions .fe-button {
-  width: 100%;
-  justify-content: flex-start;
-}
-
-.fe-nav-link {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
-  color: #e5e7eb;
-  text-decoration: none;
-  border: 1px solid transparent;
-  transition:
-    border-color 0.2s ease,
-    background 0.2s ease;
-}
-
-.fe-nav-link:hover {
-  border-color: rgba(0, 175, 248, 0.3);
-  background: rgba(255, 255, 255, 0.03);
-}
-
-.fe-dropdown {
-  position: relative;
-}
-
-.fe-action-menu-panel.fe-dropdown-fixed,
 .fe-dropdown-fixed {
   position: fixed !important;
   z-index: var(--z-dropdown);
-}
-
-.fe-menu-right {
-  min-width: 180px;
-  right: 0;
-  left: auto;
-}
-
-.fe-sidebar-backdrop {
-  display: none;
-}
-
-.fe-storage {
-  margin-top: 12px;
-  padding: 10px;
-  border: 1px solid var(--color-border);
-  background: rgba(255, 255, 255, 0.03);
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.fe-storage-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  color: #cbd5e1;
-}
-
-.fe-storage-bar {
-  height: 6px;
-  background: #1a1a1a;
-  border-radius: 999px;
-  overflow: hidden;
-  border: 1px solid #333333;
-}
-
-.fe-storage-fill {
-  height: 100%;
-  background: linear-gradient(90deg, #00aff8, #22c55e);
-  border-radius: 999px;
-  transition: width 0.3s ease;
-}
-
-.fe-sync-fill {
-  background: linear-gradient(90deg, #3b82f6, #06b6d4);
-  animation: pulse-sync 2s ease-in-out infinite;
-}
-
-.fe-index-fill {
-  background: linear-gradient(90deg, #8b5cf6, #ec4899);
-  animation: pulse-sync 2s ease-in-out infinite;
 }
 
 @keyframes pulse-sync {
@@ -423,64 +155,14 @@
   }
 }
 
-.fe-sync-progress .fe-storage-header,
-.fe-index-progress .fe-storage-header {
-  color: #93c5fd;
-}
-
-.fe-storage-caption {
-  color: #94a3b8;
-}
-
 .fe-pagination {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.fe-pagination-bottom {
-  justify-content: center;
-  margin-top: 10px;
-}
-
-.fe-page-label {
-  color: #9ca3af;
-  font-size: 12px;
-}
-
-.fe-badge {
-  background: rgba(0, 175, 248, 0.15);
-  color: var(--color-text);
-  padding: 3px 8px;
-  font-size: 12px;
-  border: 1px solid rgba(0, 175, 248, 0.3);
-}
-
-.fe-badge.fe-badge-outline {
-  background: transparent;
-  border: 1px solid rgba(0, 175, 248, 0.5);
-  color: var(--color-text);
-}
-
-.fe-chip {
-  padding: 4px 8px;
-  font-size: 12px;
-  background: rgba(0, 175, 248, 0.12);
-  color: var(--color-text);
-  border: 1px solid rgba(0, 175, 248, 0.28);
-}
-
-.fe-chip.ghost {
-  background: rgba(255, 255, 255, 0.06);
-  color: #e5e7eb;
-  border-color: #333333;
-}
-
 .fe-search,
-.fe-input,
-.fe-textarea,
-.tiptap.ProseMirror,
-.fe-select {
+.tiptap.ProseMirror {
   width: 100%;
   min-width: 0;
   padding: 10px 12px;
@@ -493,25 +175,13 @@
 }
 
 .fe-search:focus,
-.fe-input:focus,
-.fe-textarea:focus,
-.tiptap.ProseMirror:focus,
-.fe-select:focus {
-  border-color: var(--color-accent);
-  box-shadow: 0 0 0 3px rgba(0, 175, 248, 0.25);
+.tiptap.ProseMirror:focus {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-focus);
   outline: none;
 }
 
-.fe-search-group {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 220px;
-  justify-content: flex-start;
-}
-
-.fe-folders ul,
-.fe-message-list {
+.fe-folders ul {
   list-style: none;
   padding: 0;
   margin: 0;
@@ -520,40 +190,7 @@
   gap: 6px;
 }
 
-.fe-message-list {
-  overflow: auto;
-  flex: 1;
-}
-
-.fe-folder-actions {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin-bottom: 12px;
-}
-
 /* Folders */
-.fe-folder {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 5px 5px;
-  color: #e5e7eb;
-  cursor: pointer;
-  border: 1px solid transparent;
-  transition:
-    border-color 0.2s ease,
-    color 0.2s ease,
-    background 0.2s ease;
-  font-size: 14px;
-}
-
-.fe-folder-label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
 
 .fe-folder-icon {
   width: 16px;
@@ -571,283 +208,15 @@
   opacity: 0.9;
 }
 
-.fe-folder-label span:last-child {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.fe-icon-folder {
-  mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='black'><path d='M3 6a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6z'/></svg>");
-  -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='black'><path d='M3 6a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6z'/></svg>");
-}
-
-.fe-icon-inbox {
-  mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='black'><path d='M4 5h16l-2 10h-4l-2 3-2-3H6L4 5zm12.2 8H18l1-6H5l1 6h1.8l1.2 2 1.2-2h3.6l1.2 2 1.2-2z'/></svg>");
-  -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='black'><path d='M4 5h16l-2 10h-4l-2 3-2-3H6L4 5zm12.2 8H18l1-6H5l1 6h1.8l1.2 2 1.2-2h3.6l1.2 2 1.2-2z'/></svg>");
-}
-
-.fe-icon-drafts {
-  mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='black'><path d='M4 4h13a1 1 0 0 1 .7.3l2 2a1 1 0 0 1 .3.7v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zm0 2v12h14V8.4L16.6 6H4zm12.7 2.3 1 1-6.4 6.4H10v-1.3l6.7-6.1z'/></svg>");
-  -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='black'><path d='M4 4h13a1 1 0 0 1 .7.3l2 2a1 1 0 0 1 .3.7v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zm0 2v12h14V8.4L16.6 6H4zm12.7 2.3 1 1-6.4 6.4H10v-1.3l6.7-6.1z'/></svg>");
-}
-
-.fe-icon-sent,
-.fe-icon-outbox {
-  mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='black'><path d='M3 12l18-8-8 18-2-7-8-3z'/></svg>");
-  -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='black'><path d='M3 12l18-8-8 18-2-7-8-3z'/></svg>");
-}
-
-.fe-icon-archive {
-  mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='black'><path d='M4 5h16v3H4V5zm1 4h14v10H5V9zm3 2v2h8v-2H8z'/></svg>");
-  -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='black'><path d='M4 5h16v3H4V5zm1 4h14v10H5V9zm3 2v2h8v-2H8z'/></svg>");
-}
-
-.fe-icon-spam {
-  mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='black'><path d='M2 19 12 4l10 15H2zm10-3a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zm-1-4h2V9h-2v3z'/></svg>");
-  -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='black'><path d='M2 19 12 4l10 15H2zm10-3a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zm-1-4h2V9h-2v3z'/></svg>");
-}
-
-.fe-icon-trash {
-  mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='black'><path d='M6 7h12l-1 13H7L6 7zm2-3h8l1 2H7l1-2zm2 5v8h2v-8h-2z'/></svg>");
-  -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='black'><path d='M6 7h12l-1 13H7L6 7zm2-3h8l1 2H7l1-2zm2 5v8h2v-8h-2z'/></svg>");
-}
-
-.fe-folder.active {
-  border-color: rgba(0, 175, 248, 0.6);
-  color: #c7eafe;
-  background: rgba(0, 175, 248, 0.06);
-}
-
-/* Messages */
-.fe-message {
-  padding: 10px;
-  background: var(--color-panel);
-  border: 1px solid var(--color-border);
-  cursor: pointer;
-  transition:
-    border-color 0.2s ease,
-    background 0.2s ease;
-  min-height: 66px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  width: 100%;
-  font-family: var(--font-sans);
-}
-
-.fe-message.active {
-  border-color: rgba(0, 175, 248, 0.4);
-  background: rgba(0, 175, 248, 0.08);
-}
-
-.fe-message-subject {
-  color: var(--color-text);
-  margin: 0 0 1px;
-  font-weight: 600;
-  font-size: 14px;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  font-family: var(--font-sans);
-}
-
-.fe-message-from {
-  color: var(--color-muted);
-  font-size: 12px;
-  font-weight: 500;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font-family: var(--font-sans);
-}
-
-.fe-message-snippet {
-  color: var(--color-muted);
-  font-size: 12px;
-  line-height: 1.3;
-  font-family: var(--font-sans);
-  max-height: 3em;
-  overflow: hidden;
-}
-
-.fe-message-top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  color: var(--color-muted);
-  font-size: 12px;
-  min-width: 0;
-  gap: 6px;
-}
-
-.fe-message-date {
-  font-size: 12px;
-  color: var(--color-muted);
-  white-space: nowrap;
-}
-
-/* Bulk Actions */
-.fe-bulk-bar {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px;
-  margin: 8px 0;
-  border: 1px solid var(--color-border);
-  background: var(--color-panel);
-}
-
-.fe-bulk-count {
-  font-weight: 700;
-}
-
-.fe-bulk-actions {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  flex-wrap: nowrap;
-}
-
-.fe-bulk-move {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 220px;
-}
-
-.fe-select-toggle .fe-icon-svg {
-  width: 22px;
-  height: 22px;
-}
-
-.fe-empty {
-  border: 1px dashed var(--color-border);
-  padding: 12px;
-  color: var(--color-muted);
-  text-align: center;
-  background: var(--color-panel);
-}
-
-/* Light Mode Overrides */
+/* Panel depth, light mode only. On a dark ground a drop shadow reads poorly,
+ * so dark relies on the surface step and the panel borders instead. The
+ * surface and text colours these rules used to repeat are already set by the
+ * base rules and follow the theme on their own. */
 body.light-mode .fe-mailbox-wrapper,
 body.light-mode .fe-folders,
 body.light-mode .fe-messages,
 body.light-mode .fe-reader {
-  background: var(--color-panel);
-  border-color: var(--color-border);
-  color: var(--color-text);
-  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.08);
-}
-
-body.light-mode .fe-folder,
-body.light-mode .fe-message,
-body.light-mode .fe-empty {
-  background: transparent;
-  border-color: transparent;
-  color: #0f172a;
-}
-
-body.light-mode .fe-folder.active {
-  background: #e2e8f0;
-  border-color: #cbd5e1;
-  color: #0f172a;
-}
-
-body.light-mode .fe-message.active,
-body.light-mode .fe-folder.active {
-  background: #e2e8f0;
-  border-color: #cbd5e1;
-}
-
-body.light-mode .fe-nav-toggle {
-  background: #f1f5f9;
-  border-color: #e2e8f0;
-  color: #0f172a;
-}
-
-body.light-mode .fe-reader-backbtn {
-  background: #f1f5f9;
-  border-color: #e2e8f0;
-  color: #0f172a;
-}
-
-body.light-mode .fe-mailbox-header {
-  background: transparent;
-  color: #0f172a;
-}
-
-body.light-mode .fe-title-left h1 {
-  color: #0f172a;
-}
-
-body.light-mode .fe-title-left span {
-  color: #1f2937;
-}
-
-body.light-mode .fe-nav-link {
-  color: #0f172a;
-}
-
-body.light-mode .fe-nav-link:hover {
-  background: #f1f5f9;
-  border-color: #e2e8f0;
-}
-
-body.light-mode .fe-sync-progress .fe-storage-header,
-body.light-mode .fe-index-progress .fe-storage-header {
-  color: #1e40af;
-}
-
-body.light-mode .fe-storage {
-  background: #f8fafc;
-  border-color: #e2e8f0;
-}
-
-body.light-mode .fe-storage-header {
-  color: #111827;
-}
-
-body.light-mode .fe-storage-bar {
-  background: #e5e7eb;
-  border-color: #d1d5db;
-}
-
-body.light-mode .fe-storage-caption {
-  color: #4b5563;
-}
-
-body.light-mode .fe-badge,
-body.light-mode .fe-chip {
-  background: #e5e7eb;
-  color: var(--color-text);
-  border-color: var(--color-border);
-}
-
-body.light-mode .fe-badge.fe-badge-outline {
-  background: transparent;
-  border-color: var(--color-border-strong, #cbd5e1);
-}
-
-body.light-mode .fe-chip.ghost {
-  background: #f1f5f9;
-  color: #111827;
-  border-color: #d1d5db;
-}
-
-body.light-mode .fe-search,
-body.light-mode .fe-input,
-body.light-mode .fe-textarea,
-body.light-mode .tiptap.ProseMirror {
-  background: var(--color-panel);
-  border-color: var(--color-border);
-  color: var(--color-text);
-}
-
-body.light-mode .fe-message-subject,
-body.light-mode .fe-message-from {
-  color: var(--color-text);
+  box-shadow: var(--elev-2);
 }
 
 /* Mobile Responsive */
@@ -863,33 +232,13 @@ body.light-mode .fe-message-from {
   }
 }
 
-@media (max-width: 1024px) {
-  .fe-search-group {
-    max-width: 320px;
-  }
-}
-
 @media (max-width: 960px) {
   .fe-mailbox-shell {
     grid-template-columns: 1fr;
   }
-
-  .fe-mailbox-actions {
-    flex-direction: column;
-    align-items: flex-end;
-  }
 }
 
 @media (max-width: 820px) {
-  .fe-mailbox-header {
-    flex-direction: row;
-  }
-
-  .fe-search-group {
-    width: 100%;
-    max-width: none;
-  }
-
   .fe-mailbox-wrapper {
     height: 100%;
   }
@@ -904,13 +253,6 @@ body.light-mode .fe-message-from {
     gap: 0;
   }
 
-  .fe-mailbox-header {
-    flex-direction: row;
-    align-items: center;
-    gap: 10px;
-    flex-wrap: nowrap;
-  }
-
   .fe-folders {
     display: none;
     position: fixed;
@@ -922,22 +264,10 @@ body.light-mode .fe-message-from {
     height: auto;
     padding-bottom: var(--sai-bottom, env(safe-area-inset-bottom, 0px));
     z-index: var(--z-modal); /* 60 - above reader when sidebar is open */
-    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.35);
+    box-shadow: var(--elev-3);
   }
 
   .fe-folders.fe-folders-open {
-    display: block;
-  }
-
-  .fe-sidebar-backdrop {
-    display: none;
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.35);
-    z-index: var(--z-modal-backdrop); /* 50 - below sidebar, above reader */
-  }
-
-  .fe-sidebar-backdrop.visible {
     display: block;
   }
 
@@ -1012,50 +342,8 @@ body.light-mode .fe-message-from {
     }
   }
 
-  .mobile-reader .fe-reader > *:not(.fe-reader-backbar) {
-    padding: 0 16px;
-  }
-
-  @media (max-width: 820px) {
-    .mobile-reader .fe-reader > *:not(.fe-reader-backbar) {
-      padding: 10px 16px;
-    }
-  }
-
-  .mobile-reader .fe-reader-subject {
-    padding-top: 6px;
-  }
-
-  .fe-reader-backbar {
-    display: flex;
-    position: sticky;
-    top: 0;
-    padding: 12px 14px;
-    padding-top: max(12px, var(--sai-top, env(safe-area-inset-top, 0px)));
-    background: linear-gradient(180deg, rgba(11, 18, 32, 0.95), rgba(11, 18, 32, 0.85));
-    border-bottom: 1px solid var(--color-border);
-    z-index: 10;
-  }
-
-  body.light-mode .fe-reader-backbar {
-    background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(255, 255, 255, 0.9));
-    border-color: #e5e7eb;
-  }
-
   .mobile-reader .fe-mailbox-shell {
     position: relative;
-  }
-
-  .mobile-reader .fe-mailbox-header {
-    position: sticky;
-    top: 0;
-    z-index: var(--z-sticky); /* 20 - sticky header within reader */
-    background: var(--color-panel);
-    margin-bottom: 0;
-  }
-
-  body.light-mode .mobile-reader .fe-mailbox-header {
-    background: #ffffff;
   }
 
   .fe-mailbox-shell {
@@ -1063,37 +351,9 @@ body.light-mode .fe-message-from {
     max-height: none;
     overflow: visible;
   }
-
-  .mobile-reader .fe-nav-toggle {
-    display: none;
-  }
 }
 
 @media (max-width: 720px) {
-  .fe-mailbox-header {
-    flex-direction: row;
-    align-items: center;
-    gap: 10px;
-    flex-wrap: wrap;
-  }
-
-  .fe-mailbox-header .fe-title {
-    grid-template-columns: auto;
-    width: auto;
-  }
-
-  .fe-search-group {
-    width: 100%;
-    min-width: 0;
-    justify-content: flex-start;
-  }
-
-  .fe-mailbox-actions {
-    width: auto;
-    justify-content: flex-end;
-    gap: 8px;
-  }
-
   .fe-mailbox-shell {
     gap: 0;
   }
@@ -1105,27 +365,19 @@ body.light-mode .fe-message-from {
    ============================================ */
 @media (max-width: 820px) and (orientation: landscape) {
   /* Reduce header height in landscape */
-  .fe-mailbox-header {
-    padding: var(--space-1, 4px) var(--space-4, 16px);
-  }
 
   /* Compact message list items */
-  .fe-message {
-    padding: var(--space-2, 8px);
-    min-height: auto;
-  }
 
   /* Full screen reader on small mobile */
+
   .mobile-reader .fe-reader {
     inset: 0;
   }
 
   /* Compact reader backbar */
-  .fe-reader-backbar {
-    padding: var(--space-2, 8px) var(--space-3, 12px);
-  }
 
   /* Reduce sidebar height */
+
   .fe-folders {
     top: calc(56px + var(--sai-top, env(safe-area-inset-top, 0px)));
     bottom: 0;
@@ -1140,19 +392,54 @@ body.light-mode .fe-message-from {
    ============================================ */
 @media (max-width: 640px) {
   /* Ensure 8px minimum gap between toolbar buttons */
-  .fe-toolbar-actions,
-  .fe-bulk-actions,
-  .fe-list-actions {
-    gap: var(--space-2, 8px);
-  }
 
   /* Folder items need adequate touch spacing */
+
   .fe-folders ul {
     gap: var(--space-2, 8px);
   }
+}
 
-  .fe-folder {
-    min-height: 44px;
-    padding: var(--space-2, 8px) var(--space-3, 12px);
-  }
+/* ============================================
+   MESSAGE LIST ROW STATE
+   Specification §5.1 and §5.2.
+   ============================================ */
+
+/**
+ * The state gutter. A 4px column at the leading edge of every row, holding the
+ * unread bar. It is drawn as a pseudo-element so adding it costs no layout: the
+ * rows keep their existing horizontal padding.
+ */
+/**
+ * Row height and vertical padding come from the density tokens, per
+ * specification §2.6, so the compact/comfortable setting reaches the list
+ * without every row variant hardcoding a py-* utility.
+ */
+[data-conversation-row] {
+  position: relative;
+  min-height: var(--row-height);
+  padding-block: var(--row-pad-y);
+}
+
+[data-conversation-row]::before {
+  content: '';
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: 0;
+  width: 3px;
+  background: transparent;
+  /* Never animate this. Rows re-render on every data update, and a transition
+   * here makes the list harder to scan (specification §2.7). */
+  transition: none;
+}
+
+/**
+ * Unread is the most important visual state in the client, so it is encoded
+ * three ways, not one. Weight 600 and --fg-primary are applied on the sender
+ * and subject spans in the row markup; this is the third cue, and the only one
+ * that survives being viewed without colour perception, because it is a
+ * position change rather than a hue change.
+ */
+[data-conversation-row][data-unread='true']::before {
+  background: var(--state-unread);
 }

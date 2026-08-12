@@ -1,0 +1,45 @@
+/**
+ * Signature typography
+ * ====================
+ *
+ * The design system's three typographic devices, from specification §2.4.
+ * These are plain classes rather than Tailwind utilities because each one sets
+ * several properties together and is meaningless split apart.
+ */
+
+/**
+ * --type-label: the primary brand device. Use liberally for sidebar section
+ * headers, column headers, card eyebrows and metadata group labels. Reach for
+ * this before reaching for colour or decoration.
+ */
+.fe-type-label {
+  font-family: var(--font-mono);
+  font-size: var(--type-label-size);
+  line-height: var(--type-label-line);
+  letter-spacing: var(--type-label-tracking);
+  font-weight: var(--type-label-weight);
+  text-transform: uppercase;
+  color: var(--fg-secondary);
+}
+
+/* Code, terminal output and raw mail headers. */
+.fe-type-code {
+  font-family: var(--font-mono);
+  font-size: var(--type-code-size);
+  line-height: var(--type-code-line);
+}
+
+/**
+ * Every numeral in a data context. tabular-nums is what makes a column of
+ * sizes, counts or timestamps line up instead of jittering per row.
+ */
+.fe-numeral {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Numerals that should align but keep the surrounding face, for example inside
+ * a sentence rather than a column. */
+.fe-tabular {
+  font-variant-numeric: tabular-nums;
+}

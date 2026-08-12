@@ -6,14 +6,19 @@
  *
  * USAGE:
  * Import and use BottomSheet.svelte component with actions array.
+ *
+ * This file used to carry a light-mode block of eleven rules. Every one of them
+ * restated the same token names with a different literal fallback, which was
+ * the only thing making them differ. The tokens resolve per theme now, so the
+ * base rules cover both and the block is gone.
  */
 
 /* Backdrop */
 .fe-bottom-sheet-backdrop {
   position: fixed;
   inset: 0;
-  z-index: var(--z-modal-backdrop, 50);
-  background: rgba(0, 0, 0, 0.5);
+  z-index: var(--z-modal-backdrop);
+  background: var(--scrim);
   display: flex;
   align-items: flex-end;
   justify-content: center;
@@ -35,9 +40,9 @@
   width: 100%;
   max-width: 500px;
   max-height: 85vh;
-  background: var(--surface-modal, #242424);
-  border-radius: var(--radius-xl, 12px) var(--radius-xl, 12px) 0 0;
-  box-shadow: var(--shadow-2xl, 0 -4px 20px rgba(0, 0, 0, 0.3));
+  background: var(--surface-overlay);
+  border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+  box-shadow: var(--elev-3);
   overflow: hidden;
   animation: fe-sheet-slide-up 0.3s ease-out;
   touch-action: none;
@@ -57,7 +62,7 @@
 .fe-bottom-sheet-handle {
   display: flex;
   justify-content: center;
-  padding: var(--space-3, 12px);
+  padding: var(--space-3);
   cursor: grab;
 }
 
@@ -68,8 +73,8 @@
 .fe-bottom-sheet-handle-bar {
   width: 36px;
   height: 4px;
-  border-radius: var(--radius-full, 999px);
-  background: var(--border-strong, #475569);
+  border-radius: var(--radius-full);
+  background: var(--border-strong);
 }
 
 /* Header */
@@ -77,15 +82,15 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 var(--space-4, 16px) var(--space-3, 12px);
-  border-bottom: 1px solid var(--border-default, #334155);
+  padding: 0 var(--space-4) var(--space-3);
+  border-bottom: 1px solid var(--border-default);
 }
 
 .fe-bottom-sheet-title {
   margin: 0;
-  font-size: var(--text-lg, 15px);
-  font-weight: var(--font-semibold, 600);
-  color: var(--text-primary, #e5e7eb);
+  font-size: var(--text-lg);
+  font-weight: var(--font-semibold);
+  color: var(--fg-primary);
 }
 
 .fe-bottom-sheet-close {
@@ -98,23 +103,23 @@
   min-height: 44px;
   border: none;
   background: transparent;
-  color: var(--text-secondary, #94a3b8);
+  color: var(--fg-secondary);
   cursor: pointer;
-  border-radius: var(--radius-md, 8px);
-  transition: background-color var(--transition-fast, 100ms);
+  border-radius: var(--radius-md);
+  transition: background-color var(--motion-fast);
 }
 
 .fe-bottom-sheet-close:hover {
-  background: var(--surface-hover, rgba(255, 255, 255, 0.05));
-  color: var(--text-primary, #e5e7eb);
+  background: var(--surface-hover);
+  color: var(--fg-primary);
 }
 
 /* Content / Actions */
 .fe-bottom-sheet-content {
-  padding: var(--space-2, 8px);
+  padding: var(--space-2);
   display: flex;
   flex-direction: column;
-  gap: var(--space-1, 4px);
+  gap: var(--space-1);
   overflow-y: auto;
   max-height: 50vh;
 }
@@ -122,29 +127,29 @@
 .fe-bottom-sheet-action {
   display: flex;
   align-items: center;
-  gap: var(--space-3, 12px);
+  gap: var(--space-3);
   width: 100%;
   min-height: 52px;
-  padding: var(--space-3, 12px) var(--space-4, 16px);
+  padding: var(--space-3) var(--space-4);
   border: none;
   background: transparent;
-  color: var(--text-primary, #e5e7eb);
-  font-size: var(--text-md, 14px);
-  font-weight: var(--font-medium, 500);
+  color: var(--fg-primary);
+  font-size: var(--text-md);
+  font-weight: var(--font-medium);
   text-align: left;
   cursor: pointer;
-  border-radius: var(--radius-md, 8px);
+  border-radius: var(--radius-md);
   transition:
-    background-color var(--transition-fast, 100ms),
-    color var(--transition-fast, 100ms);
+    background-color var(--motion-fast),
+    color var(--motion-fast);
 }
 
 .fe-bottom-sheet-action:hover:not(:disabled) {
-  background: var(--surface-hover, rgba(255, 255, 255, 0.05));
+  background: var(--surface-hover);
 }
 
 .fe-bottom-sheet-action:active:not(:disabled) {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--action-ghost-hover-bg);
 }
 
 .fe-bottom-sheet-action:disabled {
@@ -153,17 +158,17 @@
 }
 
 .fe-bottom-sheet-action--destructive {
-  color: var(--color-error, #ef4444);
+  color: var(--state-danger);
 }
 
 .fe-bottom-sheet-action--destructive:hover:not(:disabled) {
-  background: rgba(239, 68, 68, 0.1);
+  background: color-mix(in srgb, var(--state-danger) 10%, transparent);
 }
 
 /* Footer */
 .fe-bottom-sheet-footer {
-  padding: var(--space-2, 8px);
-  border-top: 1px solid var(--border-default, #334155);
+  padding: var(--space-2);
+  border-top: 1px solid var(--border-default);
 }
 
 .fe-bottom-sheet-cancel {
@@ -172,81 +177,22 @@
   justify-content: center;
   width: 100%;
   min-height: 52px;
-  padding: var(--space-3, 12px) var(--space-4, 16px);
-  border: 1px solid var(--border-default, #334155);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border-default);
   background: transparent;
-  color: var(--text-primary, #e5e7eb);
-  font-size: var(--text-md, 14px);
-  font-weight: var(--font-semibold, 600);
+  color: var(--fg-primary);
+  font-size: var(--text-md);
+  font-weight: var(--font-semibold);
   cursor: pointer;
-  border-radius: var(--radius-md, 8px);
+  border-radius: var(--radius-md);
   transition:
-    background-color var(--transition-fast, 100ms),
-    border-color var(--transition-fast, 100ms);
+    background-color var(--motion-fast),
+    border-color var(--motion-fast);
 }
 
 .fe-bottom-sheet-cancel:hover {
-  background: var(--surface-hover, rgba(255, 255, 255, 0.05));
-  border-color: var(--border-strong, #475569);
-}
-
-/* Light mode */
-body.light-mode .fe-bottom-sheet,
-:root:not(.dark) .fe-bottom-sheet {
-  background: var(--surface-modal, #ffffff);
-}
-
-body.light-mode .fe-bottom-sheet-handle-bar,
-:root:not(.dark) .fe-bottom-sheet-handle-bar {
-  background: var(--border-strong, #cbd5e1);
-}
-
-body.light-mode .fe-bottom-sheet-header,
-:root:not(.dark) .fe-bottom-sheet-header {
-  border-bottom-color: var(--border-default, #e2e8f0);
-}
-
-body.light-mode .fe-bottom-sheet-title,
-:root:not(.dark) .fe-bottom-sheet-title {
-  color: var(--text-primary, #0f172a);
-}
-
-body.light-mode .fe-bottom-sheet-close,
-:root:not(.dark) .fe-bottom-sheet-close {
-  color: var(--text-secondary, #64748b);
-}
-
-body.light-mode .fe-bottom-sheet-close:hover,
-:root:not(.dark) .fe-bottom-sheet-close:hover {
-  background: var(--surface-hover, #f1f5f9);
-  color: var(--text-primary, #0f172a);
-}
-
-body.light-mode .fe-bottom-sheet-action,
-:root:not(.dark) .fe-bottom-sheet-action {
-  color: var(--text-primary, #0f172a);
-}
-
-body.light-mode .fe-bottom-sheet-action:hover:not(:disabled),
-:root:not(.dark) .fe-bottom-sheet-action:hover:not(:disabled) {
-  background: var(--surface-hover, #f1f5f9);
-}
-
-body.light-mode .fe-bottom-sheet-footer,
-:root:not(.dark) .fe-bottom-sheet-footer {
-  border-top-color: var(--border-default, #e2e8f0);
-}
-
-body.light-mode .fe-bottom-sheet-cancel,
-:root:not(.dark) .fe-bottom-sheet-cancel {
-  color: var(--text-primary, #0f172a);
-  border-color: var(--border-default, #e2e8f0);
-}
-
-body.light-mode .fe-bottom-sheet-cancel:hover,
-:root:not(.dark) .fe-bottom-sheet-cancel:hover {
-  background: var(--surface-hover, #f1f5f9);
-  border-color: var(--border-strong, #cbd5e1);
+  background: var(--surface-hover);
+  border-color: var(--border-strong);
 }
 
 /* Desktop: Convert to centered modal on larger screens */
@@ -256,8 +202,8 @@ body.light-mode .fe-bottom-sheet-cancel:hover,
   }
 
   .fe-bottom-sheet {
-    border-radius: var(--radius-xl, 12px);
-    margin: var(--space-4, 16px);
+    border-radius: var(--radius-xl);
+    margin: var(--space-4);
     animation: fe-sheet-fade-in 0.2s ease-out;
   }
 

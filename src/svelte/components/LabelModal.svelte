@@ -140,6 +140,9 @@
     border-radius: 8px;
     border: 2px solid transparent;
     cursor: pointer;
+    /* Contrast ring over a user-chosen swatch colour. A literal white at low
+     * alpha is correct here: the underlying colour is arbitrary, so no theme
+     * token can guarantee separation from it. */
     box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.35);
     transition:
       transform 0.1s ease,
@@ -151,9 +154,9 @@
   }
 
   .label-color-swatch.active {
-    border-color: hsl(var(--foreground));
+    border-color: var(--foreground);
     box-shadow:
-      0 0 0 2px hsl(var(--background)),
+      0 0 0 2px var(--background),
       inset 0 0 0 1px rgba(255, 255, 255, 0.35);
   }
 
@@ -162,14 +165,14 @@
     align-items: center;
     gap: 10px;
     padding-top: 14px;
-    border-top: 1px solid hsl(var(--border));
+    border-top: 1px solid var(--border);
   }
 
   .label-color-input {
     width: 44px;
     height: 36px;
     border-radius: 8px;
-    border: 1px solid hsl(var(--border));
+    border: 1px solid var(--border);
     cursor: pointer;
     background: transparent;
     flex-shrink: 0;

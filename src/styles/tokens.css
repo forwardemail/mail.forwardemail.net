@@ -1,235 +1,102 @@
 /**
- * Forward Email Webmail - Design Tokens
- * ======================================
- * 
- * This file contains all design tokens (CSS custom properties) for the application.
- * It serves as the single source of truth for:
- * - Colors (brand, semantic, surfaces, text, borders)
- * - Spacing scale
- * - Border radius scale
- * - Typography scale
- * - Shadows
- * - Transitions
- * 
- * USAGE:
- * - Always use tokens instead of hardcoded values
- * - Dark mode is the default; light mode overrides are defined in body.light-mode
- * - Use semantic tokens (--text-primary) over raw colors (#e5e7eb) when possible
+ * Forward Email Webmail - Legacy Token Aliases
+ * ============================================
+ *
+ * fe-tokens.css is the canonical token layer. This file holds:
+ *   1. Legacy alias names (--color-*, --surface-*, --text-primary, ...) that
+ *      map onto the canonical semantic tokens, so existing CSS keeps working.
+ *      Every one of them resolves through a semantic token; there are no raw
+ *      colour values left in this file.
+ *   2. Scales that fe-tokens.css deliberately does not own: the --text-* font
+ *      size ramp (which is Tailwind's font-size namespace and drives every
+ *      text-* utility), --space-*, --radius-*, --z-*, and the --shadow-* set.
+ *
+ * The shadcn theme variables that used to live here have been removed. They
+ * were dead: main.css declares the same names and imports last, so its values
+ * always won. Look in main.css for --background, --primary, --border, --radius
+ * and friends.
+ *
+ * When adding a token, add it to fe-tokens.css, not here. This file only
+ * shrinks from now on.
  */
 
 :root {
   /* ============================================
-     SHADCN-SVELTE THEME VARIABLES
-     Required for shadcn-svelte components
-     Light theme is default (shadcn standard)
-     ============================================ */
-  --radius: 0.5rem;
-  --font-sans: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-
-  /* Light theme (default) - HSL values without hsl() wrapper */
-  --background: 0 0% 100%;
-  --foreground: 222.2 84% 4.9%;
-  --card: 0 0% 100%;
-  --card-foreground: 222.2 84% 4.9%;
-  --popover: 0 0% 100%;
-  --popover-foreground: 222.2 84% 4.9%;
-  --primary: 199 89% 49%;
-  --primary-foreground: 210 40% 98%;
-  --secondary: 210 40% 96.1%;
-  --secondary-foreground: 222.2 47.4% 11.2%;
-  --muted: 210 40% 96.1%;
-  --muted-foreground: 215.4 16.3% 46.9%;
-  --accent: 210 40% 96.1%;
-  --accent-foreground: 222.2 47.4% 11.2%;
-  --destructive: 0 84.2% 60.2%;
-  --destructive-foreground: 210 40% 98%;
-  --border: 214.3 31.8% 91.4%;
-  --input: 214.3 31.8% 91.4%;
-  --ring: 199 89% 49%;
-  --chart-1: 220 70% 50%;
-  --chart-2: 160 60% 45%;
-  --chart-3: 30 80% 55%;
-  --chart-4: 280 65% 60%;
-  --chart-5: 340 75% 55%;
-  --sidebar-background: 0 0% 98%;
-  --sidebar-foreground: 240 5.3% 26.1%;
-  --sidebar-primary: 240 5.9% 10%;
-  --sidebar-primary-foreground: 0 0% 98%;
-  --sidebar-accent: 240 4.8% 95.9%;
-  --sidebar-accent-foreground: 240 5.9% 10%;
-  --sidebar-border: 220 13% 91%;
-  --sidebar-ring: 217.2 91.2% 59.8%;
-
-  /* ============================================
-     BRAND COLORS
-     Core brand identity colors
-     ============================================ */
-  --brand-blue: #00aff8;
-  --brand-blue-light: #00c4ff;
-  --brand-blue-dark: #0088cc;
-  --brand-navy: #002a90;
-  --brand-navy-light: #003db8;
-
-  /* ============================================
-     COLOR PALETTE
-     Raw color values - use semantic tokens in components
+     LEGACY SEMANTIC ALIASES
+     Every one of these resolves through fe-tokens.css, so they follow the
+     light/dark flip without needing their own .dark overrides.
      ============================================ */
 
-  /* Blues */
-  --blue-50: #eff6ff;
-  --blue-100: #dbeafe;
-  --blue-200: #bfdbfe;
-  --blue-300: #93c5fd;
-  --blue-400: #60a5fa;
-  --blue-500: #3b82f6;
-  --blue-600: #2563eb;
-  --blue-700: #1d4ed8;
+  /* Actions and accents */
+  --color-primary: var(--action-primary-bg);
+  --color-primary-hover: var(--action-primary-hover);
+  --color-primary-active: var(--action-primary-hover);
+  --color-secondary: var(--fe-panel);
+  --color-secondary-hover: var(--fe-n-300);
+  --color-accent: var(--action-primary-bg);
+  --color-accent-hover: var(--action-primary-hover);
+  --color-accent-muted: rgb(37 99 235 / 0.15);
+  --color-accent-strong: var(--state-success);
 
-  /* Cyans / Teals */
-  --cyan-400: #22d3ee;
-  --cyan-500: #06b6d4;
-  --cyan-600: #0891b2;
+  /* Status */
+  --color-success: var(--state-success);
+  --color-success-text: var(--state-success);
+  --color-error: var(--state-danger);
+  --color-error-text: var(--state-danger);
+  --color-warning: var(--state-caution);
+  --color-warning-text: var(--state-caution);
+  --color-info: var(--action-primary-bg);
 
-  /* Greens */
-  --green-50: #ecfdf5;
-  --green-100: #d1fae5;
-  --green-400: #4ade80;
-  --green-500: #22c55e;
-  --green-600: #16a34a;
-  --green-700: #15803d;
+  /* Surfaces. --surface-canvas / -raised / -overlay / -sunken / -inverse are
+   * canonical and live in fe-tokens.css. */
+  --surface-base: var(--surface-canvas);
+  --surface-default: var(--surface-raised);
+  --surface-card: var(--surface-raised);
+  --surface-panel: var(--surface-raised);
+  --surface-sidebar: var(--surface-canvas);
+  --surface-modal: var(--surface-overlay);
+  --surface-elevated: var(--surface-overlay);
+  --surface-toast: var(--surface-overlay);
+  --surface-tooltip: var(--surface-inverse);
 
-  /* Reds */
-  --red-50: #fef2f2;
-  --red-100: #fee2e2;
-  --red-200: #fecaca;
-  --red-400: #f87171;
-  --red-500: #ef4444;
-  --red-600: #dc2626;
-  --red-700: #b91c1c;
+  /* Hover and unread tints are spelled out per theme rather than derived with
+   * color-mix(). An engine that lacks color-mix() drops the declaration
+   * entirely, which would make row hover and the unread tint invisible rather
+   * than merely off-colour. Translucent rgb() is supported everywhere this
+   * app runs, including older Android WebView. */
+  --surface-hover: rgb(14 22 40 / 0.05);
+  --surface-unread: rgb(37 99 235 / 0.06);
+  --surface-unread-hover: rgb(37 99 235 / 0.11);
 
-  /* Yellows / Ambers */
-  --yellow-50: #fefce8;
-  --yellow-100: #fef3c7;
-  --yellow-400: #facc15;
-  --yellow-500: #eab308;
-  --amber-500: #f59e0b;
-  --amber-600: #d97706;
+  --color-bg: var(--surface-raised);
+  --color-panel: var(--surface-raised);
+  --color-bg-secondary: var(--surface-sunken);
+  --color-surface: var(--surface-canvas);
+  --color-surface-strong: var(--surface-inverse);
 
-  /* Grays (Slate) - Dark mode surfaces */
-  --slate-950: #020617;
-  --slate-900: #0f172a;
-  --slate-850: #0b1220;
-  --slate-800: #1e293b;
-  --slate-700: #334155;
-  --slate-600: #475569;
-  --slate-500: #64748b;
-  --slate-400: #94a3b8;
-  --slate-300: #cbd5e1;
-  --slate-200: #e2e8f0;
-  --slate-100: #f1f5f9;
-  --slate-50: #f8fafc;
+  /* Text. --fg-* are canonical; these names are kept for existing callers. */
+  --text-primary: var(--fg-primary);
+  --text-secondary: var(--fg-secondary);
+  --text-muted: var(--fg-muted);
+  --text-inverse: var(--fg-inverse);
+  --text-link: var(--fg-link);
+  --text-link-hover: var(--fg-link);
+  --color-text: var(--fg-primary);
+  --color-muted: var(--fg-secondary);
+  --color-text-secondary: var(--fg-muted);
 
-  /* ============================================
-     SEMANTIC COLORS
-     Use these for UI elements
-     ============================================ */
-
-  /* Primary action color */
-  --color-primary: var(--brand-blue);
-  --color-primary-hover: var(--brand-blue-light);
-  --color-primary-active: var(--brand-blue-dark);
-
-  /* Secondary brand color */
-  --color-secondary: var(--brand-navy);
-  --color-secondary-hover: var(--brand-navy-light);
-
-  /* Status colors */
-  --color-success: var(--green-500);
-  --color-success-light: var(--green-100);
-  --color-success-text: #bbf7d0;
-
-  --color-error: var(--red-500);
-  --color-error-light: var(--red-100);
-  --color-error-text: #fecdd3;
-
-  --color-warning: var(--amber-500);
-  --color-warning-light: var(--yellow-100);
-  --color-warning-text: #fcd34d;
-
-  --color-info: var(--blue-500);
-  --color-info-light: var(--blue-100);
-
-  /* ============================================
-     SURFACE COLORS (Light Mode Default)
-     Background colors for different elevation levels
-     ============================================ */
-  --surface-base: #f5f7fb; /* Page background */
-  --surface-sunken: var(--slate-100); /* Lower than base */
-  --surface-default: #ffffff; /* Default panels, cards */
-  --surface-raised: #ffffff; /* Elevated elements */
-  --surface-overlay: #ffffff; /* Modals, dropdowns */
-
-  /* Additional surface tokens */
-  --surface-card: #ffffff; /* Cards and content areas */
-  --surface-panel: #ffffff; /* Side panels */
-  --surface-sidebar: var(--slate-50); /* Sidebar background */
-  --surface-modal: #ffffff; /* Modal background */
-  --surface-elevated: #ffffff; /* Elevated content */
-  --surface-tooltip: var(--slate-800); /* Tooltip background */
-  --surface-toast: #ffffff; /* Toast notification background */
-  --surface-hover: var(--slate-50); /* Hover state background */
-  --surface-unread: rgba(14, 165, 233, 0.05); /* Unread item background */
-  --surface-unread-hover: rgba(14, 165, 233, 0.08); /* Unread item hover */
-
-  /* Backward compatibility aliases */
-  --color-bg: #ffffff;
-  --color-panel: #ffffff;
-  --color-bg-secondary: var(--slate-100);
-  --color-surface: var(--slate-50);
-  --color-surface-strong: var(--slate-900);
-
-  /* ============================================
-     TEXT COLORS (Light Mode Default)
-     ============================================ */
-  --text-primary: var(--slate-900); /* Main text */
-  --text-secondary: var(--slate-600); /* Subdued text */
-  --text-muted: var(--slate-500); /* Very subdued text */
-  --text-inverse: #ffffff; /* Text on dark backgrounds */
-  --text-link: var(--blue-600); /* Link text */
-  --text-link-hover: var(--blue-700); /* Link hover */
-
-  /* Backward compatibility aliases */
-  --color-text: var(--text-primary);
-  --color-muted: var(--text-secondary);
-  --color-text-secondary: var(--slate-500);
-
-  /* ============================================
-     BORDER COLORS (Light Mode Default)
-     ============================================ */
-  --border-default: var(--slate-200);
-  --border-subtle: rgba(0, 0, 0, 0.06);
-  --border-strong: var(--slate-300);
-  --border-focus: var(--brand-blue);
-  --border-error: var(--red-500);
-  --border-success: var(--green-500);
-
-  /* Backward compatibility aliases */
+  /* Borders. --border-subtle / -default / -strong are canonical. */
+  --border-focus: var(--focus-ring);
+  --border-error: var(--state-danger);
+  --border-success: var(--state-success);
   --color-border: var(--border-default);
-  --color-border-light: var(--slate-200);
-
-  /* ============================================
-     ACCENT COLORS
-     For highlights, active states, etc.
-     ============================================ */
-  --color-accent: var(--brand-blue);
-  --color-accent-hover: var(--brand-blue-light);
-  --color-accent-muted: rgba(0, 175, 248, 0.15);
-  --color-accent-strong: var(--green-500);
+  --color-border-light: var(--border-subtle);
 
   /* ============================================
      SPACING SCALE
-     Consistent spacing throughout the app
-     Based on 4px base unit
+     4px base unit. Held here rather than in fe-tokens.css because these are
+     the live values the app lays out against; the specification's scale is
+     available as --fe-space-* for new work.
      ============================================ */
   --space-0: 0;
   --space-px: 1px;
@@ -254,24 +121,26 @@
 
   /* ============================================
      BORDER RADIUS SCALE
-     Consistent rounding throughout the app
+     Live values. The specification's scale is --fe-radius-* in fe-tokens.css.
+     Note --radius itself belongs to main.css, which feeds Tailwind's
+     rounded-* utilities.
      ============================================ */
   --radius-none: 0;
-  --radius-xs: 4px; /* Tiny elements, tooltips */
-  --radius-sm: 6px; /* Chips, badges, small buttons */
-  --radius-md: 8px; /* Buttons, inputs */
-  --radius-lg: 10px; /* Cards, panels */
-  --radius-xl: 12px; /* Larger cards, modals */
-  --radius-2xl: 14px; /* Section containers */
-  --radius-3xl: 16px; /* Page-level containers */
-  --radius-full: 999px; /* Pills, avatars */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-xl: 12px;
+  --radius-2xl: 14px;
+  --radius-3xl: 16px;
+  --radius-full: 999px;
 
   /* ============================================
      TYPOGRAPHY SCALE
-     Font sizes with corresponding line heights
+     Font families other than --font-mono live here because --font-sans is
+     user-selectable at runtime. --font-mono and --font-display are
+     brand-fixed and live in fe-tokens.css.
      ============================================ */
-
-  /* Font Families */
   --font-sans: var(
     --brand-font,
     system-ui,
@@ -282,9 +151,6 @@
     sans-serif
   );
   --font-serif: var(--brand-heading-font, Georgia, 'Times New Roman', serif);
-  --font-mono:
-    ui-monospace, SFMono-Regular, 'SF Mono', Monaco, Consolas, 'Liberation Mono', 'Courier New',
-    monospace;
 
   /* Multiplier applied to every font size below. Defaults to 1 and is set at
    * runtime from the operating system's preferred text size (see
@@ -330,8 +196,9 @@
   --tracking-wider: 0.05em;
 
   /* ============================================
-     SHADOWS (Light Mode Default)
-     Elevation system using box-shadows
+     SHADOWS
+     The specification's elevation set is --elev-* in fe-tokens.css. These
+     remain for existing callers and are being migrated onto it.
      ============================================ */
   --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.05);
   --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.06);
@@ -341,27 +208,24 @@
   --shadow-2xl: 0 20px 50px rgba(0, 0, 0, 0.15);
   --shadow-3xl: 0 30px 80px rgba(0, 0, 0, 0.18);
 
-  /* Colored shadows for accents */
-  --shadow-primary: 0 4px 12px rgba(14, 165, 233, 0.15);
-  --shadow-primary-lg: 0 8px 24px rgba(14, 165, 233, 0.2);
-  --shadow-error: 0 4px 12px rgba(239, 68, 68, 0.15);
-  --shadow-success: 0 4px 12px rgba(34, 197, 94, 0.15);
+  --shadow-primary: 0 4px 12px rgb(37 99 235 / 0.15);
+  --shadow-primary-lg: 0 8px 24px rgb(37 99 235 / 0.2);
+  --shadow-error: 0 4px 12px rgb(220 38 38 / 0.15);
+  --shadow-success: 0 4px 12px rgb(4 120 87 / 0.15);
 
-  /* Component-specific shadows */
-  --shadow-card: 0 1px 4px rgba(0, 0, 0, 0.08);
-  --shadow-dropdown: 0 8px 24px rgba(0, 0, 0, 0.15);
-  --shadow-modal: 0 20px 50px rgba(0, 0, 0, 0.2);
-  --shadow-popover: 0 8px 24px rgba(0, 0, 0, 0.12);
-  --shadow-toast: 0 4px 16px rgba(0, 0, 0, 0.12);
+  --shadow-card: var(--elev-1);
+  --shadow-dropdown: var(--elev-2);
+  --shadow-modal: var(--elev-3);
+  --shadow-popover: var(--elev-2);
+  --shadow-toast: var(--elev-2);
 
-  /* Focus ring shadows */
-  --shadow-focus: 0 0 0 3px rgba(14, 165, 233, 0.25);
-  --shadow-focus-error: 0 0 0 3px rgba(239, 68, 68, 0.2);
-  --shadow-focus-success: 0 0 0 3px rgba(34, 197, 94, 0.2);
+  --shadow-focus: 0 0 0 3px rgb(37 99 235 / 0.25);
+  --shadow-focus-error: 0 0 0 3px rgb(220 38 38 / 0.2);
+  --shadow-focus-success: 0 0 0 3px rgb(4 120 87 / 0.2);
 
   /* ============================================
      TRANSITIONS
-     Animation timing and easing
+     The specification's set is --motion-* in fe-tokens.css.
      ============================================ */
   --duration-instant: 0ms;
   --duration-fast: 100ms;
@@ -375,7 +239,6 @@
   --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
   --ease-bounce: cubic-bezier(0.68, -0.55, 0.265, 1.55);
 
-  /* Common transition presets */
   --transition-fast: var(--duration-fast) var(--ease-out);
   --transition-base: var(--duration-normal) var(--ease-out);
   --transition-slow: var(--duration-slow) var(--ease-out);
@@ -388,7 +251,6 @@
 
   /* ============================================
      Z-INDEX SCALE
-     Consistent stacking contexts
      ============================================ */
   --z-base: 0;
   --z-dropdown: 10;
@@ -404,10 +266,10 @@
 
   /* ============================================
      COMPONENT-SPECIFIC TOKENS
-     Pre-composed values for common components
      ============================================ */
 
-  /* Buttons - minimum 44px for WCAG touch target compliance */
+  /* Buttons. 44px floor is the WCAG touch target minimum, which the
+     specification also requires in compact density. */
   --btn-height-sm: 44px;
   --btn-height-md: 44px;
   --btn-height-lg: 48px;
@@ -415,29 +277,25 @@
   --btn-padding-x-md: var(--space-3-5);
   --btn-padding-x-lg: var(--space-4);
 
-  /* Inputs - minimum 44px for WCAG touch target compliance */
   --input-height-sm: 44px;
   --input-height-md: 44px;
   --input-height-lg: 48px;
   --input-padding-x: var(--space-3);
   --input-padding-y: var(--space-2-5);
 
-  /* Cards */
   --card-padding: var(--space-4);
   --card-padding-sm: var(--space-3);
   --card-padding-lg: var(--space-5);
 
-  /* Tooltips */
-  --tooltip-bg: var(--slate-700);
-  --tooltip-text: #ffffff;
+  --tooltip-bg: var(--surface-tooltip);
+  --tooltip-text: var(--fg-inverse);
   --tooltip-padding-x: var(--space-2-5);
   --tooltip-padding-y: var(--space-1-5);
 
-  /* Modals */
   --modal-padding-header: var(--space-5);
   --modal-padding-body: var(--space-6);
   --modal-padding-footer: var(--space-4) var(--space-6);
-  --modal-overlay-bg: rgba(0, 0, 0, 0.5);
+  --modal-overlay-bg: var(--scrim);
   --modal-max-width: 500px;
   --modal-max-width-sm: 380px;
   --modal-max-width-lg: 600px;
@@ -447,87 +305,13 @@
 }
 
 /* ============================================
-   DARK MODE (for shadcn html.dark pattern)
+   DARK MODE
+   Only tokens whose dark value is not already derived from fe-tokens.css need
+   an entry here. Everything built on --surface-*, --fg-*, --border-* or
+   --state-* flips automatically.
    ============================================ */
 .dark {
-  /* shadcn dark theme variables — surface tokens are pure neutral
-   * (hue 0, saturation 0) so dark mode reads as true black/grey rather
-   * than blue. Previous palette held hue 240° at 4-6% sat which is
-   * imperceptible per-pixel but tinted noticeably blue at full-window
-   * scale. Primary cyan accent (199°) retained for highlights, rings,
-   * and focus states. */
-  --background: 0 0% 6%;
-  --foreground: 0 0% 98%;
-  --card: 0 0% 8%;
-  --card-foreground: 0 0% 98%;
-  --popover: 0 0% 10%;
-  --popover-foreground: 0 0% 98%;
-  --primary: 199 89% 49%;
-  --primary-foreground: 0 0% 10%;
-  --secondary: 0 0% 16%;
-  --secondary-foreground: 0 0% 98%;
-  --muted: 0 0% 16%;
-  --muted-foreground: 0 0% 65%;
-  --accent: 0 0% 16%;
-  --accent-foreground: 0 0% 98%;
-  --destructive: 0 62.8% 60.6%;
-  --destructive-foreground: 0 0% 98%;
-  --border: 0 0% 18%;
-  --input: 0 0% 18%;
-  --ring: 199 89% 49%;
-  --sidebar-background: 0 0% 10%;
-  --sidebar-foreground: 0 0% 95.9%;
-  --sidebar-primary: 224.3 76.3% 48%;
-  --sidebar-primary-foreground: 0 0% 100%;
-  --sidebar-accent: 0 0% 15.9%;
-  --sidebar-accent-foreground: 0 0% 95.9%;
-  --sidebar-border: 0 0% 15.9%;
-  --sidebar-ring: 217.2 91.2% 59.8%;
-
-  /* Surface colors — neutral greys (no blue slate tint). Lightness steps
-   * mirror the previous slate-950→700 ramp so depth/elevation reads the same. */
-  --surface-base: #0a0a0a;
-  --surface-sunken: #0a0a0a;
-  --surface-default: #141414;
-  --surface-raised: #1a1a1a;
-  --surface-overlay: #242424;
-  --surface-card: #1a1a1a;
-  --surface-panel: #141414;
-  --surface-sidebar: #0a0a0a;
-  --surface-modal: #242424;
-  --surface-elevated: #242424;
-  --surface-tooltip: #333333;
-  --surface-toast: #242424;
-  --surface-hover: rgba(255, 255, 255, 0.05);
-  --surface-unread: rgba(0, 175, 248, 0.08);
-  --surface-unread-hover: rgba(0, 175, 248, 0.12);
-
-  /* Backward compatibility */
-  --color-bg: var(--surface-default);
-  --color-panel: var(--surface-raised);
-  --color-bg-secondary: #171717;
-  --color-surface: #242424;
-  --color-surface-strong: #ffffff;
-
-  /* Text colors */
-  --text-primary: var(--slate-200);
-  --text-secondary: var(--slate-400);
-  --text-muted: var(--slate-500);
-  --text-inverse: var(--slate-900);
-  --text-link: var(--blue-400);
-  --text-link-hover: var(--blue-300);
-  --color-text: var(--text-primary);
-  --color-muted: var(--text-secondary);
-  --color-text-secondary: var(--text-secondary);
-
-  /* Border colors */
-  --border-default: #333333;
-  --border-subtle: rgba(255, 255, 255, 0.08);
-  --border-strong: #404040;
-  --color-border: var(--border-default);
-  --color-border-light: #404040;
-
-  /* Shadows (darker for dark mode) */
+  /* Shadows go deeper on dark grounds. */
   --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.2);
   --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.2);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.25);
@@ -535,62 +319,58 @@
   --shadow-xl: 0 12px 32px rgba(0, 0, 0, 0.35);
   --shadow-2xl: 0 20px 50px rgba(0, 0, 0, 0.4);
   --shadow-3xl: 0 30px 80px rgba(0, 0, 0, 0.45);
-  --shadow-primary: 0 8px 24px rgba(0, 175, 248, 0.25);
-  --shadow-primary-lg: 0 12px 32px rgba(0, 175, 248, 0.35);
-  --shadow-error: 0 8px 24px rgba(239, 68, 68, 0.25);
-  --shadow-success: 0 8px 24px rgba(34, 197, 94, 0.25);
-  --shadow-card: 0 2px 8px rgba(0, 0, 0, 0.2);
-  --shadow-dropdown: 0 8px 24px rgba(0, 0, 0, 0.35);
-  --shadow-modal: 0 20px 50px rgba(0, 0, 0, 0.5);
-  --shadow-popover: 0 8px 24px rgba(0, 0, 0, 0.3);
-  --shadow-toast: 0 8px 24px rgba(0, 0, 0, 0.35);
-  --shadow-focus: 0 0 0 3px rgba(0, 175, 248, 0.25);
-  --shadow-focus-error: 0 0 0 3px rgba(239, 68, 68, 0.25);
-  --shadow-focus-success: 0 0 0 3px rgba(34, 197, 94, 0.25);
-}
 
-/* ============================================
-   LIGHT MODE (backward compatibility)
-   Light mode is now the default in :root.
-   This section kept for legacy body.light-mode class.
-   ============================================ */
-body.light-mode {
-  /* Explicit light mode - same as :root defaults */
+  /* Tooltips stay dark-on-dark rather than inverting to a light chip, which
+   * at tooltip size reads as a flash rather than a surface. */
+  --surface-tooltip: var(--fe-n-300);
+  --tooltip-text: var(--fg-primary);
+
+  /* Tints lift off the navy ground, and the unread tint switches from Primary
+   * to Signal to match --state-unread. */
+  --surface-hover: rgb(226 232 240 / 0.06);
+  --surface-unread: rgb(34 211 238 / 0.08);
+  --surface-unread-hover: rgb(34 211 238 / 0.14);
+
+  --shadow-primary: 0 8px 24px rgb(37 99 235 / 0.25);
+  --shadow-primary-lg: 0 12px 32px rgb(37 99 235 / 0.35);
+  --shadow-error: 0 8px 24px rgb(248 113 113 / 0.25);
+  --shadow-success: 0 8px 24px rgb(52 211 153 / 0.25);
+
+  --shadow-focus: 0 0 0 3px rgb(34 211 238 / 0.25);
+  --shadow-focus-error: 0 0 0 3px rgb(248 113 113 / 0.25);
+  --shadow-focus-success: 0 0 0 3px rgb(52 211 153 / 0.25);
 }
 
 /* ============================================
    PRINT STYLES
-   Simplified colors for printing
    ============================================ */
 @media print {
   :root {
-    --surface-default: #ffffff;
+    --surface-canvas: #ffffff;
     --surface-raised: #ffffff;
-    --text-primary: #000000;
-    --text-secondary: #333333;
+    --fg-primary: #000000;
+    --fg-secondary: #333333;
     --border-default: #cccccc;
   }
 }
 
 /* ============================================
    HIGH CONTRAST MODE
-   For users who prefer high contrast
    ============================================ */
 @media (prefers-contrast: high) {
   :root {
-    --border-default: var(--slate-500);
-    --border-subtle: var(--slate-600);
+    --border-subtle: var(--fe-l-400);
+    --border-default: var(--fe-l-500);
   }
 
-  body.light-mode {
-    --border-default: var(--slate-400);
-    --border-subtle: var(--slate-500);
+  .dark {
+    --border-subtle: var(--fe-n-400);
+    --border-default: var(--fe-n-500);
   }
 }
 
 /* ============================================
    REDUCED MOTION
-   Disable animations for users who prefer it
    ============================================ */
 @media (prefers-reduced-motion: reduce) {
   :root {

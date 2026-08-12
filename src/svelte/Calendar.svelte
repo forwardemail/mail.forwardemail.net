@@ -15,6 +15,7 @@
   import { normalizeEmail } from '../utils/address';
   import { queueEmail } from '../utils/outbox-service';
   import { refreshTaskReminders } from '../utils/task-reminders';
+  import { DARK_SURFACE, LIGHT_SURFACE } from '../utils/dark-surface';
   import {
     buildAllDayRange,
     buildLocalDateTime,
@@ -291,10 +292,33 @@
     return `#${toHex(mix(a.r, b.r))}${toHex(mix(a.g, b.g))}${toHex(mix(a.b, b.b))}`;
   };
 
+  /* Categorical identity colours, one per calendar. These are deliberately not
+   * design tokens: their job is to tell calendars apart, the same role the
+   * --chart-* ramp plays, so collapsing them onto brand hues would defeat
+   * the point. */
   const calendarColorPalette = ['#1c7ed6', '#f59f00', '#d6336c', '#2f9e44', '#5f3dc4', '#0ca678'];
+  const DEFAULT_CALENDAR_COLOR = calendarColorPalette[0];
   const resolveCalendarColor = (cal: unknown, index: number) =>
     normalizeHexColor((cal as Record<string, unknown>)?.color) ||
     calendarColorPalette[index % calendarColorPalette.length];
+
+  /* schedule-x takes resolved colour strings in its config rather than reading
+   * CSS, so these are computed from the surface palettes in dark-surface.ts.
+   * The chip fill is the calendar's identity colour blended toward the panel
+   * surface, and the label colour is that surface's text colour. */
+  const buildCalendarColorEntry = (colorName: string, base: string) => ({
+    colorName,
+    lightColors: {
+      main: base,
+      container: blendHex(base, LIGHT_SURFACE.panel, 0.85),
+      onContainer: LIGHT_SURFACE.text,
+    },
+    darkColors: {
+      main: blendHex(base, DARK_SURFACE.text, 0.35),
+      container: blendHex(base, DARK_SURFACE.panel, 0.7),
+      onContainer: DARK_SURFACE.text,
+    },
+  });
 
   const ensureSafeMutationObserver = () => {
     if (typeof window === 'undefined' || typeof MutationObserver === 'undefined') return;
@@ -319,7 +343,7 @@
   let calendarsModalOpen = $state(false);
   let newCalendarModal = $state(false);
   let newCalendarName = $state('');
-  let newCalendarColor = $state('#1c7ed6');
+  let newCalendarColor = $state(DEFAULT_CALENDAR_COLOR);
   let savingCalendar = $state(false);
   let deleteCalendarModal = $state(false);
   let deleteCalendarId = $state('');
@@ -1975,7 +1999,7 @@
       toasts?.show?.('Calendar created', 'success');
       newCalendarModal = false;
       newCalendarName = '';
-      newCalendarColor = '#1c7ed6';
+      newCalendarColor = DEFAULT_CALENDAR_COLOR;
       try {
         await fetchCalendars();
         if (createdCalendarId) {
@@ -2248,36 +2272,10 @@
       const id = getCalendarId(cal);
       if (!id) return;
       const base = resolveCalendarColor(cal, index);
-      const lightContainer = blendHex(base, '#ffffff', 0.85);
-      const darkContainer = blendHex(base, '#1a1a1a', 0.7);
-      entries[id as string] = {
-        colorName: id,
-        lightColors: {
-          main: base,
-          container: lightContainer,
-          onContainer: '#0f172a',
-        },
-        darkColors: {
-          main: blendHex(base, '#ffffff', 0.35),
-          onContainer: '#ffffff',
-          container: darkContainer,
-        },
-      };
+      entries[id as string] = buildCalendarColorEntry(id as string, base);
     });
     if (!Object.keys(entries).length) {
-      entries.default = {
-        colorName: 'default',
-        lightColors: {
-          main: '#1c7ed6',
-          container: '#e7f5ff',
-          onContainer: '#1864ab',
-        },
-        darkColors: {
-          main: '#74c0fc',
-          onContainer: '#ffffff',
-          container: '#1e3a8a',
-        },
-      };
+      entries.default = buildCalendarColorEntry('default', DEFAULT_CALENDAR_COLOR);
     }
     return entries;
   };
@@ -4515,7 +4513,7 @@
         {:else}
           {#if isForeignZone(newEvent.timezone)}
             <div
-              class="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-900 dark:text-amber-200"
+              class="rounded-md border border-state-caution/30 bg-state-caution/10 px-3 py-2 text-xs text-state-caution"
             >
               Times shown in your local zone (<span class="font-mono">{viewerZone}</span>). Event
               time zone: <span class="font-mono">{newEvent.timezone}</span>.
@@ -4917,7 +4915,7 @@
             {/if}
             <span>More details</span>
             {#if !optionalFieldsExpanded && (newEvent.location || newEvent.url || newEvent.timezone || newEvent.attendees)}
-              <span class="ml-1 text-primary">•</span>
+              <span class="ml-1 text-fg-link">•</span>
             {/if}
           </button>
 
@@ -5228,7 +5226,7 @@
         {:else}
           {#if isForeignZone(editEvent.timezone)}
             <div
-              class="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-900 dark:text-amber-200"
+              class="rounded-md border border-state-caution/30 bg-state-caution/10 px-3 py-2 text-xs text-state-caution"
             >
               Times shown in your local zone (<span class="font-mono">{viewerZone}</span>). Event
               time zone: <span class="font-mono">{editEvent.timezone}</span>.
@@ -5501,7 +5499,7 @@
             {/if}
             <span>More details</span>
             {#if !optionalFieldsExpanded && (editEvent.location || editEvent.url || editEvent.timezone || editEvent.attendees)}
-              <span class="ml-1 text-primary">•</span>
+              <span class="ml-1 text-fg-link">•</span>
             {/if}
           </button>
 
@@ -5993,89 +5991,82 @@
     overflow-y: auto;
   }
 
-  /* Override schedule-x primary colors */
+  /* schedule-x reads its own --sx-color-* custom properties, so it can be
+   * themed by handing it our tokens. is-dark is derived from the same theme
+   * setting as html.dark, so the tokens flip on their own wherever both themes
+   * were previously spelled out, and those .is-dark duplicates are gone. */
   .sx-wrapper {
-    --sx-color-primary: #0066ff !important;
-    --sx-color-on-primary: #ffffff !important;
+    --sx-color-primary: var(--action-primary-bg) !important;
+    --sx-color-on-primary: var(--action-primary-fg) !important;
   }
 
   .sx-wrapper :global(.sx__time-grid-event),
   .sx-wrapper :global(.sx__month-grid-event) {
-    --sx-color-primary: #0066ff !important;
-    --sx-color-primary-container: #e6efff !important;
-    --sx-color-on-primary-container: #003bb3 !important;
-  }
-
-  /* Dark mode overrides - event labels with better visibility */
-  .sx-wrapper.is-dark :global(.sx__time-grid-event),
-  .sx-wrapper.is-dark :global(.sx__month-grid-event) {
-    --sx-color-primary: #60a5fa !important;
-    --sx-color-primary-container: #1e40af !important;
-    --sx-color-on-primary-container: #e0f2fe !important;
+    --sx-color-primary: var(--action-primary-bg) !important;
+    /* Event chip fill: a primary wash over the raised surface, which lands
+     * pale on light and deep on dark from a single declaration. */
+    --sx-color-primary-container: color-mix(
+      in srgb,
+      var(--action-primary-bg) 18%,
+      var(--surface-raised)
+    ) !important;
+    --sx-color-on-primary-container: var(--fg-primary) !important;
   }
 
   /* Dark mode calendar background and text colors */
   .sx-wrapper.is-dark {
-    --sx-color-surface: oklch(0.129 0.042 264.695) !important;
-    --sx-color-on-surface: #e2e8f0 !important;
-    --sx-color-surface-container-low: oklch(0.178 0.042 265.755) !important;
-    --sx-color-on-surface-variant: #94a3b8 !important;
-    --sx-color-outline: #334155 !important;
-    --sx-color-outline-variant: #334155 !important;
-    background: oklch(0.129 0.042 264.695) !important;
-    color: #e2e8f0 !important;
+    --sx-color-surface: var(--surface-canvas) !important;
+    --sx-color-on-surface: var(--fg-primary) !important;
+    --sx-color-surface-container-low: var(--surface-raised) !important;
+    --sx-color-on-surface-variant: var(--fg-secondary) !important;
+    --sx-color-outline: var(--border-default) !important;
+    --sx-color-outline-variant: var(--border-default) !important;
+    background: var(--surface-canvas) !important;
+    color: var(--fg-primary) !important;
   }
 
   .sx-wrapper.is-dark :global(.sx__calendar-wrapper),
   .sx-wrapper.is-dark :global(.sx__month-grid-wrapper),
   .sx-wrapper.is-dark :global(.sx__week-grid),
   .sx-wrapper.is-dark :global(.sx__time-grid-wrapper) {
-    background: oklch(0.129 0.042 264.695) !important;
+    background: var(--surface-canvas) !important;
   }
 
   .sx-wrapper.is-dark :global(.sx__calendar-header),
   .sx-wrapper.is-dark :global(.sx__date-grid-wrapper) {
-    background: oklch(0.178 0.042 265.755) !important;
-    border-color: #334155 !important;
+    background: var(--surface-raised) !important;
+    border-color: var(--border-default) !important;
   }
 
   .sx-wrapper.is-dark :global(.sx__month-grid-day),
   .sx-wrapper.is-dark :global(.sx__time-grid-day) {
-    border-color: #334155 !important;
+    border-color: var(--border-default) !important;
   }
 
   .sx-wrapper.is-dark :global(.sx__month-grid-cell) {
-    border-color: #334155 !important;
+    border-color: var(--border-default) !important;
   }
 
   .sx-wrapper.is-dark :global(button),
   .sx-wrapper.is-dark :global(.sx__date-grid-day) {
-    color: #e2e8f0 !important;
+    color: var(--fg-primary) !important;
   }
 
   .sx-wrapper.is-dark :global(.sx__time-grid-event),
   .sx-wrapper.is-dark :global(.sx__month-grid-event) {
-    color: #e0f2fe !important;
+    color: var(--fg-primary) !important;
   }
 
   /* Calendar Grid Hover States */
   .sx-wrapper :global(.sx__time-grid-day:hover) {
-    background: rgba(59, 130, 246, 0.03);
+    background: color-mix(in srgb, var(--action-primary-bg) 6%, transparent);
     transition: background 0.15s ease;
-  }
-
-  .sx-wrapper.is-dark :global(.sx__time-grid-day:hover) {
-    background: rgba(96, 165, 250, 0.08);
   }
 
   .sx-wrapper :global(.sx__month-grid-cell:hover) {
-    background: rgba(59, 130, 246, 0.05);
+    background: color-mix(in srgb, var(--action-primary-bg) 6%, transparent);
     transition: background 0.15s ease;
     cursor: pointer;
-  }
-
-  .sx-wrapper.is-dark :global(.sx__month-grid-cell:hover) {
-    background: rgba(96, 165, 250, 0.1);
   }
 
   .sx-wrapper :global(.sx__time-grid-event),
@@ -6089,32 +6080,22 @@
   .sx-wrapper :global(.sx__time-grid-event:hover),
   .sx-wrapper :global(.sx__month-grid-event:hover) {
     transform: translateY(-1px);
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    box-shadow: var(--elev-2);
     cursor: pointer;
-  }
-
-  .sx-wrapper.is-dark :global(.sx__time-grid-event:hover),
-  .sx-wrapper.is-dark :global(.sx__month-grid-event:hover) {
-    box-shadow: 0 4px 16px rgba(96, 165, 250, 0.25);
   }
 
   .sx-wrapper :global(.sx__date-grid-cell.sx__is-today) {
     font-weight: 700;
   }
 
-  .sx-wrapper.is-dark :global(.sx__date-grid-cell.sx__is-today) {
-    color: #60a5fa !important;
+  .sx-wrapper :global(.sx__date-grid-cell.sx__is-today) {
+    color: var(--fg-link) !important;
   }
 
   .sx-wrapper :global(.sx__month-grid-cell:focus-visible) {
-    outline: 2px solid #3b82f6;
+    outline: 2px solid var(--focus-ring);
     outline-offset: -2px;
-    background: rgba(59, 130, 246, 0.1);
-  }
-
-  .sx-wrapper.is-dark :global(.sx__month-grid-cell:focus-visible) {
-    outline-color: #60a5fa;
-    background: rgba(96, 165, 250, 0.15);
+    background: color-mix(in srgb, var(--focus-ring) 12%, transparent);
   }
 
   /* Fix view selector dropdown z-index - needs to be above sticky headers */
@@ -6129,7 +6110,7 @@
     top: 100% !important;
     right: 0;
     border-radius: 0.375rem;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    box-shadow: var(--elev-2);
   }
 
   .sx-wrapper :global(.sx__range-heading),
@@ -6148,25 +6129,22 @@
   .sx-wrapper :global(.sx__date-picker-popup) {
     overflow: hidden !important;
     border-radius: 0.5rem;
-    border: 1px solid var(--sx-color-outline-variant, #c4c7c5);
+    border: 1px solid var(--sx-color-outline-variant);
     padding: 12px !important;
     width: auto !important;
     min-width: 18rem;
     max-width: 22rem;
   }
   .sx-wrapper.is-dark :global(.sx__date-picker-popup) {
-    border-color: #334155 !important;
-    background-color: oklch(0.178 0.042 265.755) !important;
+    border-color: var(--border-default) !important;
+    background-color: var(--surface-overlay) !important;
   }
-  /* Improve today circle contrast in dark mode */
-  .sx-wrapper.is-dark :global(.sx__date-picker__day.sx__date-picker__day--today) {
-    background-color: #7c3aed !important;
-    color: #fff !important;
-  }
-  /* Improve today circle in light mode */
+  /* Today circle. Was violet in both themes; violet is --state-encrypted in
+   * this system and would misread as an encryption cue, so today takes the
+   * primary accent instead. */
   .sx-wrapper :global(.sx__date-picker__day.sx__date-picker__day--today) {
-    background-color: #6d28d9 !important;
-    color: #fff !important;
+    background-color: var(--action-primary-bg) !important;
+    color: var(--action-primary-fg) !important;
   }
   /* Remove bottom margin on last week row to prevent extra space */
   .sx-wrapper :global(.sx__date-picker__week:last-child) {

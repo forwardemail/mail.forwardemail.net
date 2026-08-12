@@ -86,7 +86,7 @@ export const buildOriginalViewerPage = ({
     body { background: ${DARK_SURFACE.surface}; color: ${DARK_SURFACE.text}; }
     header { background: ${DARK_SURFACE.panel}; border-bottom: 1px solid rgba(255,255,255,0.05); }
     button { background: ${DARK_SURFACE.overlay}; color: ${DARK_SURFACE.text}; border: 1px solid rgba(255,255,255,0.08); }
-    button:hover { background: ${DARK_SURFACE.border}; }
+    button:hover { background: ${DARK_SURFACE.borderStrong}; }
     .label { color: ${DARK_SURFACE.textMuted}; }
     pre { background: ${DARK_SURFACE.base}; border: 1px solid rgba(255,255,255,0.05); }
     .toast { background: ${DARK_SURFACE.overlay}; border: 1px solid rgba(255,255,255,0.1); color: ${DARK_SURFACE.text}; }

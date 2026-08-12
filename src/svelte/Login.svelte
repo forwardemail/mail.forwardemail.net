@@ -388,7 +388,7 @@
       <span>
         Don't have an account?
         <a
-          class="text-primary underline-offset-4 hover:underline"
+          class="text-fg-link underline-offset-4 hover:underline"
           href="https://forwardemail.net"
           target="_blank"
           rel="noopener noreferrer"

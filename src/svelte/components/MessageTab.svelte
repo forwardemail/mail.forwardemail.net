@@ -415,7 +415,7 @@
           <h1 class="text-xl font-semibold">{message.subject || '(No subject)'}</h1>
           {#if message.pgpEncrypted && !pgpLocked}
             <span
-              class="inline-flex shrink-0 items-center gap-1 rounded border border-emerald-500/25 bg-emerald-500/10 px-1.5 py-0.5 text-xs text-emerald-700 dark:text-emerald-400"
+              class="inline-flex shrink-0 items-center gap-1 rounded border border-state-success/25 bg-state-success/10 px-1.5 py-0.5 text-xs text-state-success"
               title="This message was PGP encrypted and decrypted with your key"
             >
               <LockKeyhole class="h-3 w-3" />
@@ -453,9 +453,9 @@
         <!-- Blocked Images Warning -->
         {#if hasBlockedImages && !showAllImages}
           <div
-            class="flex items-center gap-2 p-3 mb-4 bg-yellow-500/10 border border-yellow-500/25 text-sm"
+            class="flex items-center gap-2 p-3 mb-4 bg-state-caution/10 border border-state-caution/25 text-sm"
           >
-            <ImageIcon class="h-4 w-4 text-yellow-600 shrink-0" />
+            <ImageIcon class="h-4 w-4 text-state-caution shrink-0" />
             <span>Remote images blocked ({blockedImageCount})</span>
             <Button
               variant="outline"
@@ -472,9 +472,9 @@
         <!-- PGP Warning -->
         {#if pgpLocked}
           <div
-            class="flex items-center gap-2 p-3 mb-4 bg-orange-500/10 border border-orange-500/25 text-sm"
+            class="flex items-center gap-2 p-3 mb-4 bg-state-caution/10 border border-state-caution/25 text-sm"
           >
-            <ShieldAlert class="h-4 w-4 text-orange-600 shrink-0" />
+            <ShieldAlert class="h-4 w-4 text-state-caution shrink-0" />
             <span>This message is encrypted. Enter your PGP passphrase to decrypt.</span>
           </div>
         {/if}

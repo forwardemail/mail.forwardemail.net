@@ -131,6 +131,7 @@
     toasts?: ToastApi | null;
     applyTheme?: (theme: string) => void;
     applyFont?: (family: string) => void;
+    applyDensity?: (density: string) => void;
   }
 
   let {
@@ -148,6 +149,7 @@
     toasts = null,
     applyTheme = () => {},
     applyFont = () => {},
+    applyDensity = () => {},
   }: Props = $props();
 
   const asStore = <T,>(value: Readable<T> | T | undefined): Readable<T> =>
@@ -169,6 +171,7 @@
   let apiKey = $state('');
   let theme = $state('system');
   let layoutModeChoice = $state('full');
+  let listDensity = $state('compact');
   let section = $state('general');
   let composePlainDefault = $state(false);
   let attachmentReminderEnabled = $state(false);
@@ -654,6 +657,7 @@
     apiKey = Local.get('api_key') || '';
     theme = getEffectiveSettingValue('theme', { account: currentAcct }) || 'system';
     layoutModeChoice = getEffectiveSettingValue('layout_mode', { account: currentAcct }) || 'full';
+    listDensity = getEffectiveSettingValue('list_density', { account: currentAcct }) || 'compact';
     composePlainDefault = Boolean(
       getEffectiveSettingValue('compose_plain_default', { account: currentAcct }),
     );
@@ -1003,6 +1007,16 @@
       toasts?.show?.('Theme updated', 'success');
     } catch (err) {
       showMutationError(err, 'Failed to save theme');
+    }
+  };
+
+  const saveDensity = async () => {
+    try {
+      await setSettingValue('list_density', listDensity, { account: getAccountId() });
+      applyDensity?.(listDensity);
+      toasts?.show?.('Density updated', 'success');
+    } catch (err) {
+      showMutationError(err, 'Failed to save density');
     }
   };
 
@@ -1741,9 +1755,7 @@
   </Alert.Root>
 {/if}
 {#if success}
-  <Alert.Root
-    class="mx-4 mt-4 border-green-500 bg-green-50 text-green-900 dark:bg-green-950 dark:text-green-100"
-  >
+  <Alert.Root class="mx-4 mt-4 border-state-success bg-state-success/10 text-state-success">
     <CheckCircle class="h-4 w-4" />
     <Alert.Description>{success}</Alert.Description>
   </Alert.Root>
@@ -1760,7 +1772,7 @@
         <button
           type="button"
           class="px-3 py-2 text-left text-sm font-medium transition-colors {section === sec.id
-            ? 'bg-primary/10 text-primary'
+            ? 'bg-primary/10 text-fg-link'
             : 'text-muted-foreground hover:bg-accent hover:text-foreground'}"
           onclick={() => {
             section = sec.id;
@@ -2014,6 +2026,42 @@
 
         <Card.Root>
           <Card.Header>
+            <Card.Title>Density</Card.Title>
+          </Card.Header>
+          <Card.Content class="space-y-3">
+            <div class="flex flex-col gap-2">
+              <label class="flex items-center gap-2">
+                <input
+                  type="radio"
+                  name="density"
+                  value="compact"
+                  bind:group={listDensity}
+                  onchange={saveDensity}
+                  class="accent-primary"
+                />
+                <span>Compact (Recommended)</span>
+              </label>
+              <label class="flex items-center gap-2">
+                <input
+                  type="radio"
+                  name="density"
+                  value="comfortable"
+                  bind:group={listDensity}
+                  onchange={saveDensity}
+                  class="accent-primary"
+                />
+                <span>Comfortable</span>
+              </label>
+            </div>
+            <p class="text-sm text-muted-foreground">
+              Controls how tall message list rows are. Phones always use Comfortable so rows stay
+              large enough to tap.
+            </p>
+          </Card.Content>
+        </Card.Root>
+
+        <Card.Root>
+          <Card.Header>
             <Card.Title>Composer defaults</Card.Title>
           </Card.Header>
           <Card.Content class="space-y-4">
@@ -2125,7 +2173,7 @@
               </Select.Root>
             </div>
             {#if fontLoading}
-              <p class="text-sm text-primary">Loading font...</p>
+              <p class="text-sm text-fg-link">Loading font...</p>
             {/if}
             {#if fontChoice !== 'system'}
               <div class="border border-border p-3" style="font-family: {currentFontFamily}">
@@ -2489,7 +2537,10 @@
                 {#each labelsList as label (getLabelKey(label))}
                   <div class="flex items-center justify-between border border-border p-2">
                     <div class="flex items-center gap-3">
-                      <div class="h-4 w-4" style="background: {label.color || '#9ca3af'}"></div>
+                      <div
+                        class="h-4 w-4"
+                        style="background: {label.color || 'var(--fg-muted)'}"
+                      ></div>
                       <div>
                         <div class="font-medium">{label.name || getLabelKey(label)}</div>
                         <div class="text-xs text-muted-foreground">
@@ -2601,15 +2652,11 @@
             <Card.Description>Monitor the health of your search index.</Card.Description>
           </Card.Header>
           <Card.Content class="space-y-4">
-            <div
-              class="p-3 {searchHealth.healthy
-                ? 'bg-green-50 dark:bg-green-950'
-                : 'bg-yellow-50 dark:bg-yellow-950'}"
-            >
+            <div class="p-3 {searchHealth.healthy ? 'bg-state-success/10' : 'bg-state-caution/10'}">
               <div
                 class="flex items-center gap-2 font-semibold {searchHealth.healthy
-                  ? 'text-green-600'
-                  : 'text-yellow-600'}"
+                  ? 'text-state-success'
+                  : 'text-state-caution'}"
               >
                 {#if searchHealth.healthy}
                   <CheckCircle class="h-4 w-4" />
@@ -2983,7 +3030,7 @@
 
               <button
                 type="button"
-                class="flex items-center gap-1 text-xs text-sky-500 hover:text-sky-400 hover:underline"
+                class="flex items-center gap-1 text-xs text-fg-link hover:underline"
                 onclick={() => (otherPlatformsOpen = !otherPlatformsOpen)}
                 aria-expanded={otherPlatformsOpen}
               >
@@ -3010,7 +3057,7 @@
                                 download={asset.name}
                                 target="_blank"
                                 rel="noopener noreferrer"
-                                class="text-sky-500 hover:text-sky-400 hover:underline"
+                                class="text-fg-link hover:underline"
                               >
                                 {asset.name}
                               </a>
@@ -3030,7 +3077,7 @@
                       href={desktopRelease.htmlUrl || DESKTOP_RELEASES_URL}
                       target="_blank"
                       rel="noopener noreferrer"
-                      class="text-sky-500 hover:text-sky-400 hover:underline"
+                      class="text-fg-link hover:underline"
                     >
                       View full release notes on GitHub →
                     </a>
@@ -3068,7 +3115,7 @@
                   href="https://forwardemail.net/faq"
                   target="_blank"
                   rel="noopener noreferrer"
-                  class="text-sky-500 hover:text-sky-400 hover:underline">FAQ</a
+                  class="text-fg-link hover:underline">FAQ</a
                 >
               </li>
               <li>
@@ -3076,7 +3123,7 @@
                   href="https://forwardemail.net/guides"
                   target="_blank"
                   rel="noopener noreferrer"
-                  class="text-sky-500 hover:text-sky-400 hover:underline">Guides</a
+                  class="text-fg-link hover:underline">Guides</a
                 >
               </li>
               <li>
@@ -3084,7 +3131,7 @@
                   href="https://forwardemail.net/help"
                   target="_blank"
                   rel="noopener noreferrer"
-                  class="text-sky-500 hover:text-sky-400 hover:underline">Help & Support</a
+                  class="text-fg-link hover:underline">Help & Support</a
                 >
               </li>
               <li>
@@ -3092,7 +3139,7 @@
                   href="https://forwardemail.net/email-api"
                   target="_blank"
                   rel="noopener noreferrer"
-                  class="text-sky-500 hover:text-sky-400 hover:underline">Email API Documentation</a
+                  class="text-fg-link hover:underline">Email API Documentation</a
                 >
               </li>
               <li>
@@ -3100,7 +3147,7 @@
                   href="https://forwardemail.net/privacy"
                   target="_blank"
                   rel="noopener noreferrer"
-                  class="text-sky-500 hover:text-sky-400 hover:underline">Privacy Policy</a
+                  class="text-fg-link hover:underline">Privacy Policy</a
                 >
               </li>
             </ul>
@@ -3119,7 +3166,7 @@
                   href="https://github.com/forwardemail"
                   target="_blank"
                   rel="noopener noreferrer"
-                  class="text-sky-500 hover:text-sky-400 hover:underline">GitHub</a
+                  class="text-fg-link hover:underline">GitHub</a
                 >
               </li>
               <li>
@@ -3127,7 +3174,7 @@
                   href="https://matrix.to/#/#forward-email:matrix.org"
                   target="_blank"
                   rel="noopener noreferrer"
-                  class="text-sky-500 hover:text-sky-400 hover:underline">Matrix Chat</a
+                  class="text-fg-link hover:underline">Matrix Chat</a
                 >
               </li>
               <li>
@@ -3135,7 +3182,7 @@
                   href="https://x.com/fwdemail"
                   target="_blank"
                   rel="noopener noreferrer"
-                  class="text-sky-500 hover:text-sky-400 hover:underline">X (Twitter)</a
+                  class="text-fg-link hover:underline">X (Twitter)</a
                 >
               </li>
             </ul>

@@ -377,7 +377,7 @@ function getQuoteToggleStyles(): string {
     }
 
     body.fe-iframe-dark .fe-quote-toggle:hover {
-      background: ${DARK_SURFACE.border} !important;
+      background: ${DARK_SURFACE.borderStrong} !important;
       color: ${DARK_SURFACE.textSubtle} !important;
     }
 
