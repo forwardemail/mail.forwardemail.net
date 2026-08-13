@@ -753,7 +753,11 @@ pub fn run() {
             // GitHub-release updater there would attempt to replace a binary
             // inside an immutable sandbox and bypass the user's Flatpak update
             // policy. Flatpak exports FLATPAK_ID to every confined process.
-            if std::env::var_os("FLATPAK_ID").is_none() {
+            // snapd owns updates the same way, and a snap's own files are
+            // mounted read-only from squashfs, so a self-replacing updater
+            // cannot write there at all. snapd exports SNAP to every confined
+            // process.
+            if std::env::var_os("FLATPAK_ID").is_none() && std::env::var_os("SNAP").is_none() {
                 builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
             }
         }

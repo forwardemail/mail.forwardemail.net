@@ -100,7 +100,17 @@ parts:
       corepack enable
       corepack prepare pnpm@9.15.9 --activate
       pnpm install --frozen-lockfile
-      pnpm tauri build --bundles deb
+
+      # The release workflow flips bundle.createUpdaterArtifacts to true in this
+      # same checkout before the Snap step runs, so the copied source carries
+      # that edit and the bundler then wants TAURI_SIGNING_PRIVATE_KEY. That
+      # secret is wired into the tauri-action step, not the Snap step, and
+      # snapcraft runs this scriptlet inside an LXD instance that would not
+      # inherit the runner's environment either way, so the build stops with
+      # "A public key has been found, but no private key". Nothing is lost by
+      # turning it off: snapd updates Snaps, and only the .deb is unpacked
+      # below, so the updater artifacts would be discarded here regardless.
+      pnpm tauri build --bundles deb --config '{"bundle":{"createUpdaterArtifacts":false}}'
 
       deb=$(find src-tauri/target/release/bundle/deb -maxdepth 1 -name '*.deb' -type f | head -n 1)
       test -n "$deb"

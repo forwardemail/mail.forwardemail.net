@@ -61,6 +61,13 @@ normal Debian bundle from the tagged source and stages its runtime dependencies;
 therefore the Snap version follows `src-tauri/tauri.conf.json` exactly. Snapcraft
 requires a registered name before automated pushes can succeed. [1] [2]
 
+The application disables Tauri's GitHub updater when `SNAP` is present, for the
+same reason it does under Flatpak: snapd is the authoritative updater and a
+snap's own files are mounted read-only. The recipe also forces
+`bundle.createUpdaterArtifacts` off, because the release job turns that flag on
+in the checkout it hands to snapcraft and the signing key stays outside the
+build instance.
+
 ### One-time setup
 
 1. Sign in to [Snapcraft](https://snapcraft.io/), create the publisher account
