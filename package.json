@@ -97,6 +97,7 @@
     "bits-ui": "^2.18.0",
     "clsx": "^2.1.1",
     "date-fns": "^3.6.0",
+    "devalue": "5.8.1",
     "dexie": "^4.4.2",
     "dompurify": "^3.4.2",
     "emoji-picker-element": "^1.29.1",
