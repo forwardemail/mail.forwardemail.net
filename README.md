@@ -146,7 +146,7 @@ If you are building your own custom Linux binary instead of installing a publish
 
 <!-- readme-screenshots:start -->
 
-**Screenshots as of August 13, 2026.**
+**Screenshots as of August 17, 2026.**
 
 These screenshots are captured automatically from the production Demo Account after each successful release. Expand a theme and device group to browse its views.
 
