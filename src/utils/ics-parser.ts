@@ -248,6 +248,70 @@ export const buildReplyIcs = (
   return cal.toString();
 };
 
+export const mergeReplyIntoIcs = (existingIcs: string, replyIcs: string): string => {
+  let existingCal: ICAL.Component;
+  let replyCal: ICAL.Component;
+  try {
+    existingCal = new ICAL.Component(ICAL.parse(existingIcs));
+    replyCal = new ICAL.Component(ICAL.parse(replyIcs));
+  } catch {
+    return existingIcs;
+  }
+
+  const existingVevents = existingCal.getAllSubcomponents('vevent');
+  const replyVevents = replyCal.getAllSubcomponents('vevent');
+  if (!existingVevents.length || !replyVevents.length) return existingIcs;
+
+  const getRecurrenceId = (vevent: ICAL.Component): string => {
+    const prop = vevent.getFirstProperty('recurrence-id');
+    return prop ? String(prop.getFirstValue()) : '';
+  };
+
+  replyVevents.forEach((replyVevent) => {
+    const rid = getRecurrenceId(replyVevent);
+    const targetVevent =
+      existingVevents.find((v) => getRecurrenceId(v) === rid) ||
+      existingVevents.find((v) => !getRecurrenceId(v)) ||
+      existingVevents[0];
+    if (!targetVevent) return;
+
+    let touched = false;
+    replyVevent.getAllProperties('attendee').forEach((replyAttendeeProp) => {
+      const email = stripMailto(replyAttendeeProp.getFirstValue());
+      const partstat = replyAttendeeProp.getParameter('partstat') as string | undefined;
+      if (!email || !partstat) return;
+      const target = email.toLowerCase();
+
+      const match = targetVevent
+        .getAllProperties('attendee')
+        .find((p) => stripMailto(p.getFirstValue()).toLowerCase() === target);
+
+      if (match) {
+        match.setParameter('partstat', partstat);
+      } else {
+        // Replying attendee isn't on our copy (e.g. invite forwarded outside
+        // the original list) — add them instead of silently dropping the RSVP.
+        const newProp = new ICAL.Property('attendee', targetVevent);
+        newProp.setParameter('partstat', partstat);
+        const cn = replyAttendeeProp.getParameter('cn') as string | undefined;
+        if (cn) newProp.setParameter('cn', cn);
+        newProp.setValue(`mailto:${email}`);
+        targetVevent.addProperty(newProp);
+      }
+      touched = true;
+    });
+
+    if (touched) {
+      const dtstamp = ICAL.Time.fromJSDate(new Date(), true);
+      const dtstampProp = targetVevent.getFirstProperty('dtstamp');
+      if (dtstampProp) dtstampProp.setValue(dtstamp);
+      else targetVevent.addPropertyWithValue('dtstamp', dtstamp);
+    }
+  });
+
+  return existingCal.toString();
+};
+
 export const findMatchingCachedEvent = (
   invite: ParsedInvite,
   cachedEvents: Array<Record<string, unknown>>,

@@ -410,7 +410,7 @@
           try {
             const decoded = decodeRawHtml((currentNode.attrs.raw as string) || '');
             if (decoded && isValidDecodedHtml(decoded)) {
-              inner.innerHTML = DOMPurify.sanitize(decoded, { ADD_TAGS: ['style'] });
+              inner.innerHTML = DOMPurify.sanitize(decoded, { FORBID_TAGS: ['style', 'script'] });
             } else {
               // Fallback: render plain text of the decoded quote (attrs.raw is the
               // bare base64, not an HTML string, so extractRawQuoteText can't parse it).

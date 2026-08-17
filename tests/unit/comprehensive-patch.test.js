@@ -1302,6 +1302,15 @@ describe('pre-release regression guards', () => {
     expect(inviteCardSrc).toMatch(/<select[\s\S]*bind:value=\{selectedCalendarId\}/);
   });
 
+  it('CalendarInviteCard merges REPLY attendee status instead of overwriting the attendee list', () => {
+    // Clicking "Update event" on an attendee's RSVP reply used to PUT the
+    // reply's truncated ics (organizer + one attendee) as the whole event
+    // body, wiping every other attendee. handleAdd must merge via
+    // mergeReplyIntoIcs against the existing event's full ical for REPLYs.
+    expect(inviteCardSrc).toContain('mergeReplyIntoIcs');
+    expect(inviteCardSrc).toMatch(/invite\.method === 'REPLY'\s*&&\s*wasUpdate/);
+  });
+
   it('markFolderAsRead no longer hits .modify((m) => …) — db worker rejects that', () => {
     // The bug surfaced as "db worker modify does not support function
     // callbacks; pass an object". Switching to bulkPut preserves \Flagged
@@ -1625,6 +1634,22 @@ describe('round-2 fix regression guards', () => {
     it('shows a drop overlay while a file drag is in progress', () => {
       expect(composeSrc).toContain('data-testid="compose-drop-overlay"');
       expect(composeSrc).toContain('{#if isDraggingFile}');
+    });
+  });
+
+  describe('RawHtmlQuote sanitize config (forward CSP font-src fix)', () => {
+    const composeSrc = fs.readFileSync(
+      path.resolve(__dirname, '../../src/svelte/Compose.svelte'),
+      'utf8',
+    );
+
+    it('forbids <style>/<script> instead of allowing <style> through', () => {
+      // ADD_TAGS: ['style'] let forwarded emails' <style>/@font-face blocks
+      // (e.g. Gmail calendar invites embedding fonts.gstatic.com) straight
+      // into the compose window's DOM, which compose.html's CSP then blocked
+      // (font-src has no https:), surfacing as a console CSP violation.
+      expect(composeSrc).not.toMatch(/ADD_TAGS:\s*\[\s*'style'\s*\]/);
+      expect(composeSrc).toMatch(/FORBID_TAGS:\s*\[\s*'style'/);
     });
   });
 });

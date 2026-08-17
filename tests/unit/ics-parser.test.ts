@@ -4,6 +4,7 @@ import {
   isCalendarAttachment,
   normalizeIcsForCalendar,
   buildReplyIcs,
+  mergeReplyIntoIcs,
   fetchAttachmentText,
   findMatchingCachedEvent,
   findConflictingEvents,
@@ -295,6 +296,116 @@ describe('buildReplyIcs', () => {
     expect(reply).toMatch(/mailto:BOB@example.com/);
     // CN comes from the matched attendee even when the casing differs
     expect(reply).toMatch(/CN=Bob/);
+  });
+});
+
+// ical.js line-folds properties past the 75-octet limit (RFC 5545) onto a
+// continuation line prefixed with a space — unfold before matching whole
+// property lines by regex, or a folded ATTENDEE's mailto: ends up truncated
+// onto its own line.
+const unfold = (ics: string): string => ics.replace(/\r\n[ \t]/g, '');
+
+describe('mergeReplyIntoIcs', () => {
+  it('merges the replying attendee PARTSTAT while preserving all other attendees', () => {
+    const invite = parseIcs(sampleIcs)!;
+    const reply = buildReplyIcs(invite, 'bob@example.com', 'ACCEPTED');
+    const merged = mergeReplyIntoIcs(sampleIcs, reply);
+    const attendees = unfold(merged).match(/^ATTENDEE.*$/gm) || [];
+    expect(attendees).toHaveLength(2);
+    expect(attendees.find((a) => a.includes('bob@example.com'))).toMatch(/PARTSTAT=ACCEPTED/);
+    expect(attendees.find((a) => a.includes('carol@example.com'))).toMatch(/PARTSTAT=ACCEPTED/);
+    expect(merged).toMatch(/SUMMARY:Quarterly Review/);
+  });
+
+  it('matches attendee email case-insensitively', () => {
+    const invite = parseIcs(sampleIcs)!;
+    const reply = buildReplyIcs(invite, 'BOB@EXAMPLE.COM', 'DECLINED');
+    const merged = mergeReplyIntoIcs(sampleIcs, reply);
+    const attendees = unfold(merged).match(/^ATTENDEE.*$/gm) || [];
+    expect(attendees).toHaveLength(2);
+    expect(attendees.find((a) => /bob@example\.com/i.test(a))).toMatch(/PARTSTAT=DECLINED/);
+  });
+
+  it('appends an unrecognized replying attendee instead of dropping the RSVP', () => {
+    const reply = [
+      'BEGIN:VCALENDAR',
+      'VERSION:2.0',
+      'METHOD:REPLY',
+      'BEGIN:VEVENT',
+      'UID:abc123@example.com',
+      'DTSTAMP:20260102T000000Z',
+      'ORGANIZER;CN=Alice:mailto:alice@example.com',
+      'ATTENDEE;CN=Dave;PARTSTAT=ACCEPTED:mailto:dave@example.com',
+      'END:VEVENT',
+      'END:VCALENDAR',
+    ].join('\r\n');
+    const merged = mergeReplyIntoIcs(sampleIcs, reply);
+    const attendees = unfold(merged).match(/^ATTENDEE.*$/gm) || [];
+    expect(attendees).toHaveLength(3);
+    expect(attendees.find((a) => a.includes('dave@example.com'))).toMatch(/PARTSTAT=ACCEPTED/);
+    expect(attendees.find((a) => a.includes('bob@example.com'))).toMatch(/PARTSTAT=NEEDS-ACTION/);
+    expect(attendees.find((a) => a.includes('carol@example.com'))).toMatch(/PARTSTAT=ACCEPTED/);
+  });
+
+  it('refreshes DTSTAMP on merge and leaves unrelated fields untouched', () => {
+    const invite = parseIcs(sampleIcs)!;
+    const reply = buildReplyIcs(invite, 'carol@example.com', 'TENTATIVE');
+    const merged = mergeReplyIntoIcs(sampleIcs, reply);
+    expect(merged).not.toMatch(/DTSTAMP:20260101T000000Z/);
+    expect(merged).toMatch(/DTSTAMP:\d{8}T\d{6}Z/);
+    expect(merged).toMatch(/LOCATION:Zoom/);
+    expect(merged).toMatch(/ATTENDEE;CN=Bob/);
+  });
+
+  it('updates only the matching RECURRENCE-ID override, leaving the master and other overrides intact', () => {
+    const recurringWithOverride = [
+      'BEGIN:VCALENDAR',
+      'VERSION:2.0',
+      'BEGIN:VEVENT',
+      'UID:rec2@x',
+      'DTSTAMP:20260101T000000Z',
+      'DTSTART:20260504T150000Z',
+      'DTEND:20260504T160000Z',
+      'SUMMARY:Weekly Sync',
+      'RRULE:FREQ=WEEKLY;BYDAY=MO',
+      'ATTENDEE;PARTSTAT=NEEDS-ACTION:mailto:bob@example.com',
+      'END:VEVENT',
+      'BEGIN:VEVENT',
+      'UID:rec2@x',
+      'RECURRENCE-ID:20260511T150000Z',
+      'DTSTAMP:20260101T000000Z',
+      'DTSTART:20260511T150000Z',
+      'DTEND:20260511T160000Z',
+      'SUMMARY:Weekly Sync (moved)',
+      'ATTENDEE;PARTSTAT=NEEDS-ACTION:mailto:bob@example.com',
+      'END:VEVENT',
+      'END:VCALENDAR',
+    ].join('\r\n');
+
+    const replyForOverride = [
+      'BEGIN:VCALENDAR',
+      'VERSION:2.0',
+      'METHOD:REPLY',
+      'BEGIN:VEVENT',
+      'UID:rec2@x',
+      'RECURRENCE-ID:20260511T150000Z',
+      'DTSTAMP:20260102T000000Z',
+      'ATTENDEE;PARTSTAT=ACCEPTED:mailto:bob@example.com',
+      'END:VEVENT',
+      'END:VCALENDAR',
+    ].join('\r\n');
+
+    const merged = mergeReplyIntoIcs(recurringWithOverride, replyForOverride);
+    const veventBlocks = merged.split('BEGIN:VEVENT').slice(1);
+    const master = veventBlocks.find((v) => !v.includes('RECURRENCE-ID'))!;
+    const override = veventBlocks.find((v) => v.includes('RECURRENCE-ID'))!;
+    expect(master).toMatch(/PARTSTAT=NEEDS-ACTION/);
+    expect(override).toMatch(/PARTSTAT=ACCEPTED/);
+  });
+
+  it('returns the existing ics unchanged for malformed input rather than throwing', () => {
+    expect(mergeReplyIntoIcs('not ics', 'also not ics')).toBe('not ics');
+    expect(() => mergeReplyIntoIcs(sampleIcs, 'garbage')).not.toThrow();
   });
 });
 

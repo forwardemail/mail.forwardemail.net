@@ -17,6 +17,7 @@
   import {
     normalizeIcsForCalendar,
     buildReplyIcs,
+    mergeReplyIntoIcs,
     findMatchingCachedEvent,
     findConflictingEvents,
     type ParsedInvite,
@@ -242,7 +243,6 @@
       }
       // Persist the user's choice as the default for future invites.
       Local.set(defaultCalendarKey(), calendarId);
-      const ical = normalizeIcsForCalendar(invite.raw);
 
       // Authoritative server-side UID check: catches both a stale local cache
       // and the server's own auto-import of incoming invites. Without this,
@@ -255,6 +255,24 @@
         '';
       const wasUpdate = !!matchId;
       if (remoteMatch) cachedEventMatch = remoteMatch;
+
+      // A reply invite (an attendee's RSVP) only carries the organizer plus
+      // that one attendee. Merge its PARTSTAT into the existing event's full
+      // attendee list instead of overwriting the event with the truncated
+      // reply, which would drop every other attendee.
+      const getFullIcal = (ev: Record<string, unknown> | null | undefined): string =>
+        (ev?.ical as string) ||
+        ((ev?.raw as Record<string, unknown> | undefined)?.ical as string) ||
+        '';
+      let ical: string;
+      if (invite.method === 'REPLY' && wasUpdate) {
+        const existingIcal = getFullIcal(remoteMatch) || getFullIcal(cachedEventMatch);
+        ical = existingIcal
+          ? normalizeIcsForCalendar(mergeReplyIntoIcs(existingIcal, invite.raw))
+          : normalizeIcsForCalendar(invite.raw);
+      } else {
+        ical = normalizeIcsForCalendar(invite.raw);
+      }
 
       let response: Record<string, unknown> = {};
       if (wasUpdate) {
