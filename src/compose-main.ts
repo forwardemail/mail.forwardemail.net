@@ -16,6 +16,7 @@ import './styles/fe-tokens.css';
 import './styles/base.css';
 import './styles/tokens.css';
 import './styles/components/index.css';
+import './styles/pages/index.css';
 import './styles/main.css';
 
 import { mount } from 'svelte';

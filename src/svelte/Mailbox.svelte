@@ -309,6 +309,7 @@
   let showAllRecipients = $state(false);
   let showAllCc = $state(false);
   let showAllOutboxRecipients = $state(false);
+  let attachmentStripExpanded = $state(true);
 
   // Observables → stores
   const fallbackState = {
@@ -8784,24 +8785,62 @@
                         class={`p-4 ${isExpanded ? 'border border-border shadow-sm bg-card mb-3' : ''} ${isSelected ? 'ring-2 ring-primary/20' : ''}`}
                         data-message-id={message.id}
                       >
-                        <button
-                          type="button"
-                          class="flex items-center gap-2 cursor-pointer hover:bg-accent/50 p-2 -m-2 mb-2"
-                          onclick={() => toggleThreadMessage(message)}
-                          aria-expanded={isExpanded}
-                        >
-                          <ChevronRight
-                            class={`h-4 w-4 transition-transform ${isExpanded ? 'rotate-90' : ''}`}
-                          />
-                          <span class="font-medium text-foreground truncate"
-                            >{extractDisplayName(message.from) ||
-                              message.from ||
-                              '(no sender)'}</span
+                        <div class="flex items-center gap-2 p-2 -m-2 mb-2">
+                          <button
+                            type="button"
+                            class="flex items-center gap-2 cursor-pointer hover:bg-accent/50 flex-1 min-w-0 text-left"
+                            onclick={() => toggleThreadMessage(message)}
+                            aria-expanded={isExpanded}
                           >
-                          <span class="text-xs text-muted-foreground ml-auto shrink-0"
+                            <ChevronRight
+                              class={`h-4 w-4 shrink-0 transition-transform ${isExpanded ? 'rotate-90' : ''}`}
+                            />
+                            <span class="font-medium text-foreground truncate"
+                              >{extractDisplayName(message.from) ||
+                                message.from ||
+                                '(no sender)'}</span
+                            >
+                          </button>
+                          <span class="text-xs text-muted-foreground shrink-0"
                             >{formatReaderDate(message.date)}</span
                           >
-                        </button>
+                          {#if isExpanded}
+                            {#if canReply}
+                              <button
+                                type="button"
+                                class="inline-flex items-center justify-center h-8 w-8 shrink-0 hover:bg-accent hover:text-accent-foreground"
+                                aria-label="Reply to this message"
+                                data-tooltip="Reply"
+                                data-tooltip-position="bottom"
+                                onclick={() => mailboxView?.replyTo?.(message)}
+                              >
+                                <Reply class="h-4 w-4" />
+                              </button>
+                              <button
+                                type="button"
+                                class="inline-flex items-center justify-center h-8 w-8 shrink-0 hover:bg-accent hover:text-accent-foreground"
+                                aria-label="Reply all to this message"
+                                data-tooltip="Reply all"
+                                data-tooltip-position="bottom"
+                                onclick={() => mailboxView?.replyAll?.(message)}
+                              >
+                                <ReplyAll class="h-4 w-4" />
+                              </button>
+                            {/if}
+                            {#if canForward}
+                              <button
+                                type="button"
+                                class="inline-flex items-center justify-center h-8 w-8 shrink-0 hover:bg-accent hover:text-accent-foreground"
+                                aria-label="Forward this message"
+                                data-tooltip="Forward"
+                                data-tooltip-position="bottom"
+                                onclick={() => mailboxView?.forwardMessage?.(message)}
+                              >
+                                <Forward class="h-4 w-4" />
+                              </button>
+                            {/if}
+                          {/if}
+                        </div>
                         {#if isExpanded && isSelected}
                           {#if showSkeleton}
                             <div class="min-h-[120px] flex items-center justify-center p-6">
@@ -8958,92 +8997,116 @@
                     {/each}
                   </div>
                   <!-- Aggregated attachment strip for the entire thread -->
+                  {@const seenThreadAttachments = new Set()}
                   {@const allThreadAttachments = threadMessages.reduce((acc, msg) => {
-                    const atts =
+                    const atts = (
                       msg.id === $selectedMessage?.id
                         ? filterDownloadableAttachments($attachments)
                         : filterDownloadableAttachments(
                             $threadMessageBodies.get(msg.id)?.attachments || [],
-                          );
+                          )
+                    ).filter((att) => {
+                      // Forwarded/quoted messages within a thread often carry the same
+                      // embedded image as the message they quote — without this, the
+                      // same file shows once per message it appears in.
+                      const key = att.contentId || `${att.name || att.filename}:${att.size || ''}`;
+                      if (seenThreadAttachments.has(key)) return false;
+                      seenThreadAttachments.add(key);
+                      return true;
+                    });
                     if (atts.length) acc.push({ message: msg, attachments: atts });
                     return acc;
                   }, [])}
+                  {@const totalThreadAttachmentCount = allThreadAttachments.reduce(
+                    (n, g) => n + g.attachments.length,
+                    0,
+                  )}
                   {#if allThreadAttachments.length}
                     <div
                       class="sticky bottom-0 z-10 mt-4 border-t border-border bg-[var(--color-panel)]/95 p-4 backdrop-blur supports-[backdrop-filter]:bg-[var(--color-panel)]/85"
                     >
-                      <div class="flex items-center gap-2 mb-3 text-sm text-muted-foreground">
+                      <button
+                        type="button"
+                        class="flex items-center gap-2 mb-1.5 text-sm text-muted-foreground cursor-pointer hover:text-foreground transition-colors"
+                        onclick={() => (attachmentStripExpanded = !attachmentStripExpanded)}
+                        aria-expanded={attachmentStripExpanded}
+                      >
                         <Paperclip class="h-4 w-4" />
                         <span
-                          >{allThreadAttachments.reduce((n, g) => n + g.attachments.length, 0)} attachment{allThreadAttachments.reduce(
-                            (n, g) => n + g.attachments.length,
-                            0,
-                          ) === 1
+                          >{totalThreadAttachmentCount} attachment{totalThreadAttachmentCount === 1
                             ? ''
                             : 's'}</span
                         >
-                      </div>
-                      {#each allThreadAttachments as group}
-                        {#if allThreadAttachments.length > 1}
-                          <div class="text-xs text-muted-foreground mb-1.5 mt-3 first:mt-0">
-                            {extractDisplayName(group.message.from) ||
-                              group.message.from ||
-                              '(no sender)'}
-                          </div>
-                        {/if}
-                        <div class="flex flex-wrap gap-2">
-                          {#each group.attachments as att}
-                            {#if isPreviewableImage(att) && att.href}
-                              <div class="flex flex-col gap-1 max-w-[120px]">
-                                <button
-                                  type="button"
-                                  class="cursor-pointer rounded border border-border overflow-hidden hover:opacity-90 transition-opacity"
-                                  onclick={() =>
-                                    openImagePreview(group.attachments, att, group.message)}
-                                  title="Preview {att.name || att.filename}"
-                                >
-                                  <img
-                                    src={att.href}
-                                    alt={att.name || att.filename}
-                                    class="max-h-20 max-w-[120px] object-contain"
-                                  />
-                                </button>
-                                <div
-                                  class="flex items-center gap-1.5 text-xs text-muted-foreground px-0.5"
-                                >
-                                  <span class="truncate">{att.name || att.filename}</span>
-                                  {#if att.size}<span class="shrink-0"
-                                      >{formatAttachmentSize(att.size)}</span
-                                    >{/if}
+                        <ChevronRight
+                          class={`h-4 w-4 transition-transform ${attachmentStripExpanded ? 'rotate-90' : ''}`}
+                        />
+                      </button>
+                      {#if attachmentStripExpanded}
+                        <div class="max-h-80 overflow-y-auto pt-1.5">
+                          {#each allThreadAttachments as group}
+                            {#if allThreadAttachments.length > 1}
+                              <div class="text-xs text-muted-foreground mb-1.5 mt-3 first:mt-0">
+                                {extractDisplayName(group.message.from) ||
+                                  group.message.from ||
+                                  '(no sender)'}
+                              </div>
+                            {/if}
+                            <div class="flex flex-wrap gap-2">
+                              {#each group.attachments as att}
+                                {#if isPreviewableImage(att) && att.href}
+                                  <div class="flex flex-col gap-1 max-w-[120px]">
+                                    <button
+                                      type="button"
+                                      class="cursor-pointer rounded border border-border overflow-hidden hover:opacity-90 transition-opacity"
+                                      onclick={() =>
+                                        openImagePreview(group.attachments, att, group.message)}
+                                      title="Preview {att.name || att.filename}"
+                                    >
+                                      <img
+                                        src={att.href}
+                                        alt={att.name || att.filename}
+                                        class="max-h-20 max-w-[120px] object-contain"
+                                      />
+                                    </button>
+                                    <div
+                                      class="flex items-center gap-1.5 text-xs text-muted-foreground px-0.5"
+                                    >
+                                      <span class="truncate">{att.name || att.filename}</span>
+                                      {#if att.size}<span class="shrink-0"
+                                          >{formatAttachmentSize(att.size)}</span
+                                        >{/if}
+                                      <button
+                                        type="button"
+                                        class="shrink-0 hover:text-foreground transition-colors cursor-pointer"
+                                        onclick={() =>
+                                          mailService.downloadAttachment(att, group.message)}
+                                        title="Download"
+                                      >
+                                        <Download class="h-3.5 w-3.5" />
+                                      </button>
+                                    </div>
+                                  </div>
+                                {:else}
                                   <button
                                     type="button"
-                                    class="shrink-0 hover:text-foreground transition-colors cursor-pointer"
+                                    class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm bg-secondary hover:bg-secondary/80 cursor-pointer transition-colors"
                                     onclick={() =>
                                       mailService.downloadAttachment(att, group.message)}
-                                    title="Download"
+                                    title="Download {att.name || att.filename}"
+                                    data-testid="attachment-row"
                                   >
-                                    <Download class="h-3.5 w-3.5" />
+                                    <span>{att.name || att.filename}</span>
+                                    {#if att.size}<span class="text-xs text-muted-foreground"
+                                        >{formatAttachmentSize(att.size)}</span
+                                      >{/if}
+                                    <Download class="h-3.5 w-3.5 ml-1" />
                                   </button>
-                                </div>
-                              </div>
-                            {:else}
-                              <button
-                                type="button"
-                                class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm bg-secondary hover:bg-secondary/80 cursor-pointer transition-colors"
-                                onclick={() => mailService.downloadAttachment(att, group.message)}
-                                title="Download {att.name || att.filename}"
-                                data-testid="attachment-row"
-                              >
-                                <span>{att.name || att.filename}</span>
-                                {#if att.size}<span class="text-xs text-muted-foreground"
-                                    >{formatAttachmentSize(att.size)}</span
-                                  >{/if}
-                                <Download class="h-3.5 w-3.5 ml-1" />
-                              </button>
-                            {/if}
+                                {/if}
+                              {/each}
+                            </div>
                           {/each}
                         </div>
-                      {/each}
+                      {/if}
                     </div>
                   {/if}
                 {:else if $selectedMessage}
@@ -9168,7 +9231,7 @@
                     />
                     {#if filterDownloadableAttachments($attachments).length}
                       <div
-                        class="sticky bottom-0 z-10 mt-4 flex flex-wrap gap-2 border-t border-border bg-[var(--color-panel)]/95 pt-4 pb-3 backdrop-blur supports-[backdrop-filter]:bg-[var(--color-panel)]/85"
+                        class="sticky bottom-0 z-10 mt-4 flex flex-wrap gap-2 max-h-80 overflow-y-auto border-t border-border bg-[var(--color-panel)]/95 pt-4 pb-3 backdrop-blur supports-[backdrop-filter]:bg-[var(--color-panel)]/85"
                       >
                         {#each filterDownloadableAttachments($attachments) as att}
                           {#if isPreviewableImage(att) && att.href}

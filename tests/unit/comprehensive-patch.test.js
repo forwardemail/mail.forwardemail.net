@@ -1108,6 +1108,14 @@ describe('PGP desktop and settings regressions', () => {
     path.resolve(__dirname, '../../src/svelte/Mailbox.svelte'),
     'utf8',
   );
+  const composeMainSrc = fs.readFileSync(
+    path.resolve(__dirname, '../../src/compose-main.ts'),
+    'utf8',
+  );
+  const mailboxActionsSrc = fs.readFileSync(
+    path.resolve(__dirname, '../../src/stores/mailboxActions.ts'),
+    'utf8',
+  );
   const settingsSrc = fs.readFileSync(
     path.resolve(__dirname, '../../src/svelte/Settings.svelte'),
     'utf8',
@@ -1192,8 +1200,65 @@ describe('PGP desktop and settings regressions', () => {
   it('should keep attachment trays sticky at the bottom of the reader pane', () => {
     expect(mailboxSrc).toContain('sticky bottom-0 z-10 mt-4 border-t border-border');
     expect(mailboxSrc).toContain(
-      'sticky bottom-0 z-10 mt-4 flex flex-wrap gap-2 border-t border-border',
+      'sticky bottom-0 z-10 mt-4 flex flex-wrap gap-2 max-h-80 overflow-y-auto border-t border-border',
     );
+  });
+
+  it('Tauri desktop compose window imports pages/index.css so the rich-text editor gets its padding/border', () => {
+    // compose-main.ts is a separate Vite entry (Tauri desktop only) from
+    // main.ts (web/mobile) and used to omit styles/pages/index.css, which is
+    // where mailbox.css's `.tiptap.ProseMirror` rule (padding, border,
+    // background, focus ring) lives. Without it, the desktop compose editor
+    // rendered as bare unstyled text with no padding around the caret.
+    expect(composeMainSrc).toContain("import './styles/pages/index.css';");
+  });
+
+  it('View Original / Download .eml fall back to meta.nodemailer.headers and warn when the live raw fetch comes up short', () => {
+    // A normally-loaded message's parsed headers live at meta.nodemailer.headers
+    // (same shape Mailbox.svelte's own from/to/cc fill-in, threading.ts, and
+    // address.ts already read) — viewOriginal/downloadOriginal only checked
+    // meta.headers/Headers/rawHeaders/RawHeaders, so the cached step was
+    // effectively always empty and "View Original" depended entirely on the
+    // live raw=true network call succeeding, silently showing "No headers
+    // available" whenever that call failed (offline, timeout, purged raw copy).
+    const viewOriginalBody = mailboxActionsSrc.slice(
+      mailboxActionsSrc.indexOf('export const viewOriginal'),
+      mailboxActionsSrc.indexOf('// Export everything as a single object'),
+    );
+    expect(viewOriginalBody).toContain(
+      'meta.headers || meta.Headers || meta.rawHeaders || meta.RawHeaders || meta.nodemailer?.headers',
+    );
+    expect(viewOriginalBody).toContain('let attemptedRawFetch = false;');
+    expect(viewOriginalBody).toContain('attemptedRawFetch = true;');
+    expect(viewOriginalBody).toMatch(
+      /if \(attemptedRawFetch && \(!headersText \|\| !payload \|\| looksLikeHtml\(payload\)\)\)/,
+    );
+    expect(viewOriginalBody).toContain(
+      "Couldn't load the full original message from the server — showing what's cached",
+    );
+
+    const downloadOriginalBody = mailboxActionsSrc.slice(
+      mailboxActionsSrc.indexOf('export const downloadOriginal'),
+      mailboxActionsSrc.indexOf('export const getSpamReportAddress'),
+    );
+    expect(downloadOriginalBody).toContain('meta.nodemailer?.headers');
+  });
+
+  it('threaded attachment strip is height-capped, collapsible, and de-duplicates attachments repeated across messages', () => {
+    // The aggregated strip used to grow without bound (one row per sender per
+    // attachment, every message in the thread) and had no way to shrink it,
+    // so a long thread with repeated forwarded images could dominate the
+    // reader pane. It also listed the same embedded image once per message
+    // that carried it, inflating both the count and the height further.
+    expect(mailboxSrc).toContain('let attachmentStripExpanded = $state(true);');
+    expect(mailboxSrc).toContain('class="max-h-80 overflow-y-auto pt-1.5"');
+    expect(mailboxSrc).toMatch(
+      /onclick=\{\(\) => \(attachmentStripExpanded = !attachmentStripExpanded\)\}/,
+    );
+    expect(mailboxSrc).toContain(
+      "const key = att.contentId || `${att.name || att.filename}:${att.size || ''}`;",
+    );
+    expect(mailboxSrc).toContain('if (seenThreadAttachments.has(key)) return false;');
   });
 
   it('should skip invalid stored keys instead of treating them like retryable passphrase failures', () => {
@@ -1344,6 +1409,18 @@ describe('pre-release regression guards', () => {
     expect(mailboxSveltePrSrc).toMatch(/let messageListWrapper = \$state/);
     expect(mailboxSveltePrSrc).toMatch(/let infiniteScrollSentinel = \$state/);
     expect(mailboxSveltePrSrc).not.toMatch(/let sentinelObserved/);
+  });
+
+  it('thread view lets each message reply/reply-all/forward itself, not just the pinned selectedMessage', () => {
+    // Reply/Reply All/Forward used to be wired only to the header actions,
+    // which are bound to $selectedMessage — always the thread's last
+    // message. Expanding an earlier message in the thread never repointed
+    // it, so there was no way to reply to an earlier participant without
+    // losing In-Reply-To/References threading. Each thread <article> must
+    // call mailboxView's reply actions with its own loop-local `message`.
+    expect(mailboxSveltePrSrc).toMatch(/mailboxView\?\.replyTo\?\.\(message\)/);
+    expect(mailboxSveltePrSrc).toMatch(/mailboxView\?\.replyAll\?\.\(message\)/);
+    expect(mailboxSveltePrSrc).toMatch(/mailboxView\?\.forwardMessage\?\.\(message\)/);
   });
 
   it('account switch clears the viewed-email state in the currentAccount subscriber', () => {

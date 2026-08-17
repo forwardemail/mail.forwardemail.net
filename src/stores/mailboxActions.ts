@@ -2332,7 +2332,11 @@ export const downloadOriginal = async (msg) => {
       (typeof content?.body === 'string' && !looksLikeHtml(content.body) ? content.body : '');
     if (decryptedText) {
       const headersText = normalizeHeaders(
-        meta.headers || meta.Headers || meta.rawHeaders || meta.RawHeaders,
+        meta.headers ||
+          meta.Headers ||
+          meta.rawHeaders ||
+          meta.RawHeaders ||
+          meta.nodemailer?.headers,
         emlPayload,
       );
       const headerBlock = headersText
@@ -2429,12 +2433,14 @@ export const viewOriginal = async (msg) => {
     meta.rawMessage ||
     pickOriginalContent(content);
   let headersText = normalizeHeaders(
-    meta.headers || meta.Headers || meta.rawHeaders || meta.RawHeaders,
+    meta.headers || meta.Headers || meta.rawHeaders || meta.RawHeaders || meta.nodemailer?.headers,
     payload,
   );
 
   // If the cached meta/body doesn't have raw RFC822 (or looks like rendered HTML), fetch it explicitly.
+  let attemptedRawFetch = false;
   if ((!payload || looksLikeHtml(payload) || !headersText) && target) {
+    attemptedRawFetch = true;
     const rawRes = await fetchRawOriginal(target);
     if (rawRes) {
       // Handle both string responses and object responses
@@ -2479,6 +2485,18 @@ export const viewOriginal = async (msg) => {
   // Detect current theme from parent window
   const isLightMode =
     typeof document !== 'undefined' && document.body.classList.contains('light-mode');
+
+  // The live raw=true fetch above was our last chance at real headers/source.
+  // If we needed it (attemptedRawFetch) and still came up short — offline,
+  // timeout, 404 because the server no longer holds a raw copy, etc. — the
+  // viewer would otherwise silently open showing "No headers available"
+  // with no indication why. Warn instead of failing silently.
+  if (attemptedRawFetch && (!headersText || !payload || looksLikeHtml(payload))) {
+    toastsRef?.show?.(
+      "Couldn't load the full original message from the server — showing what's cached",
+      'warning',
+    );
+  }
 
   const viewerPage = buildOriginalViewerPage({
     raw: payload,
