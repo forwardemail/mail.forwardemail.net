@@ -159,6 +159,7 @@
   import Inbox from '@lucide/svelte/icons/inbox';
   import Send from '@lucide/svelte/icons/send';
   import FileEdit from '@lucide/svelte/icons/file-edit';
+  import File from '@lucide/svelte/icons/file';
   import Trash2 from '@lucide/svelte/icons/trash-2';
   import Archive from '@lucide/svelte/icons/archive';
   import FolderIcon from '@lucide/svelte/icons/folder';
@@ -9023,7 +9024,7 @@
                   )}
                   {#if allThreadAttachments.length}
                     <div
-                      class="sticky bottom-0 z-10 mt-4 border-t border-border bg-[var(--color-panel)]/95 p-4 backdrop-blur supports-[backdrop-filter]:bg-[var(--color-panel)]/85"
+                      class="sticky bottom-0 z-10 mt-4 shrink-0 border-t border-border bg-[var(--color-panel)]/95 p-4 backdrop-blur supports-[backdrop-filter]:bg-[var(--color-panel)]/85"
                     >
                       <button
                         type="button"
@@ -9053,11 +9054,11 @@
                             {/if}
                             <div class="flex flex-wrap gap-2">
                               {#each group.attachments as att}
-                                {#if isPreviewableImage(att) && att.href}
-                                  <div class="flex flex-col gap-1 max-w-[120px]">
+                                <div class="flex h-24 w-[104px] shrink-0 flex-col gap-1">
+                                  {#if isPreviewableImage(att) && att.href}
                                     <button
                                       type="button"
-                                      class="cursor-pointer rounded border border-border overflow-hidden hover:opacity-90 transition-opacity"
+                                      class="min-h-0 flex-1 cursor-pointer rounded border border-border bg-muted/30 overflow-hidden hover:opacity-90 transition-opacity flex items-center justify-center"
                                       onclick={() =>
                                         openImagePreview(group.attachments, att, group.message)}
                                       title="Preview {att.name || att.filename}"
@@ -9065,43 +9066,38 @@
                                       <img
                                         src={att.href}
                                         alt={att.name || att.filename}
-                                        class="max-h-20 max-w-[120px] object-contain"
+                                        class="max-h-full max-w-full object-contain"
                                       />
                                     </button>
-                                    <div
-                                      class="flex items-center gap-1.5 text-xs text-muted-foreground px-0.5"
+                                  {:else}
+                                    <button
+                                      type="button"
+                                      class="min-h-0 flex-1 cursor-pointer rounded border border-border bg-muted/30 overflow-hidden hover:opacity-90 transition-opacity flex items-center justify-center"
+                                      onclick={() =>
+                                        mailService.downloadAttachment(att, group.message)}
+                                      title="Download {att.name || att.filename}"
+                                      data-testid="attachment-row"
                                     >
-                                      <span class="truncate">{att.name || att.filename}</span>
-                                      {#if att.size}<span class="shrink-0"
-                                          >{formatAttachmentSize(att.size)}</span
-                                        >{/if}
-                                      <button
-                                        type="button"
-                                        class="shrink-0 hover:text-foreground transition-colors cursor-pointer"
-                                        onclick={() =>
-                                          mailService.downloadAttachment(att, group.message)}
-                                        title="Download"
-                                      >
-                                        <Download class="h-3.5 w-3.5" />
-                                      </button>
-                                    </div>
-                                  </div>
-                                {:else}
-                                  <button
-                                    type="button"
-                                    class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm bg-secondary hover:bg-secondary/80 cursor-pointer transition-colors"
-                                    onclick={() =>
-                                      mailService.downloadAttachment(att, group.message)}
-                                    title="Download {att.name || att.filename}"
-                                    data-testid="attachment-row"
+                                      <File class="h-7 w-7 text-muted-foreground" />
+                                    </button>
+                                  {/if}
+                                  <div
+                                    class="flex items-center gap-1 text-xs text-muted-foreground px-0.5 shrink-0"
                                   >
-                                    <span>{att.name || att.filename}</span>
-                                    {#if att.size}<span class="text-xs text-muted-foreground"
-                                        >{formatAttachmentSize(att.size)}</span
-                                      >{/if}
-                                    <Download class="h-3.5 w-3.5 ml-1" />
-                                  </button>
-                                {/if}
+                                    <span class="truncate min-w-0 flex-1"
+                                      >{att.name || att.filename}</span
+                                    >
+                                    <button
+                                      type="button"
+                                      class="shrink-0 hover:text-foreground transition-colors cursor-pointer"
+                                      onclick={() =>
+                                        mailService.downloadAttachment(att, group.message)}
+                                      title="Download"
+                                    >
+                                      <Download class="h-3.5 w-3.5" />
+                                    </button>
+                                  </div>
+                                </div>
                               {/each}
                             </div>
                           {/each}
@@ -9231,14 +9227,14 @@
                     />
                     {#if filterDownloadableAttachments($attachments).length}
                       <div
-                        class="sticky bottom-0 z-10 mt-4 flex flex-wrap gap-2 max-h-80 overflow-y-auto border-t border-border bg-[var(--color-panel)]/95 pt-4 pb-3 backdrop-blur supports-[backdrop-filter]:bg-[var(--color-panel)]/85"
+                        class="sticky bottom-0 z-10 mt-4 flex shrink-0 flex-nowrap items-start gap-2 overflow-x-auto overflow-y-hidden border-t border-border bg-[var(--color-panel)]/95 pt-4 pb-3 backdrop-blur supports-[backdrop-filter]:bg-[var(--color-panel)]/85"
                       >
                         {#each filterDownloadableAttachments($attachments) as att}
-                          {#if isPreviewableImage(att) && att.href}
-                            <div class="flex flex-col gap-1 max-w-[120px]">
+                          <div class="flex h-24 w-[104px] shrink-0 flex-col gap-1">
+                            {#if isPreviewableImage(att) && att.href}
                               <button
                                 type="button"
-                                class="cursor-pointer rounded border border-border overflow-hidden hover:opacity-90 transition-opacity"
+                                class="min-h-0 flex-1 cursor-pointer rounded border border-border bg-muted/30 overflow-hidden hover:opacity-90 transition-opacity flex items-center justify-center"
                                 onclick={() =>
                                   openImagePreview(
                                     filterDownloadableAttachments($attachments),
@@ -9250,41 +9246,37 @@
                                 <img
                                   src={att.href}
                                   alt={att.name || att.filename}
-                                  class="max-h-20 max-w-[120px] object-contain"
+                                  class="max-h-full max-w-full object-contain"
                                 />
                               </button>
-                              <div
-                                class="flex items-center gap-1.5 text-xs text-muted-foreground px-0.5"
+                            {:else}
+                              <button
+                                type="button"
+                                class="min-h-0 flex-1 cursor-pointer rounded border border-border bg-muted/30 overflow-hidden hover:opacity-90 transition-opacity flex items-center justify-center"
+                                onclick={() =>
+                                  mailService.downloadAttachment(att, $selectedMessage)}
+                                title="Download {att.name || att.filename}"
+                                data-testid="attachment-row"
                               >
-                                <span class="truncate">{att.name || att.filename}</span>
-                                {#if att.size}<span class="shrink-0"
-                                    >{formatAttachmentSize(att.size)}</span
-                                  >{/if}
-                                <button
-                                  type="button"
-                                  class="shrink-0 hover:text-foreground transition-colors cursor-pointer"
-                                  onclick={() =>
-                                    mailService.downloadAttachment(att, $selectedMessage)}
-                                  title="Download"
-                                >
-                                  <Download class="h-3.5 w-3.5" />
-                                </button>
-                              </div>
-                            </div>
-                          {:else}
-                            <button
-                              type="button"
-                              class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm bg-secondary hover:bg-secondary/80 cursor-pointer transition-colors"
-                              onclick={() => mailService.downloadAttachment(att, $selectedMessage)}
-                              title="Download {att.name || att.filename}"
+                                <File class="h-7 w-7 text-muted-foreground" />
+                              </button>
+                            {/if}
+                            <div
+                              class="flex items-center gap-1 text-xs text-muted-foreground px-0.5 shrink-0"
                             >
-                              <span>{att.name || att.filename}</span>
-                              {#if att.size}<span class="text-xs text-muted-foreground"
-                                  >{formatAttachmentSize(att.size)}</span
-                                >{/if}
-                              <Download class="h-3.5 w-3.5 ml-1" />
-                            </button>
-                          {/if}
+                              <span class="truncate min-w-0 flex-1">{att.name || att.filename}</span
+                              >
+                              <button
+                                type="button"
+                                class="shrink-0 hover:text-foreground transition-colors cursor-pointer"
+                                onclick={() =>
+                                  mailService.downloadAttachment(att, $selectedMessage)}
+                                title="Download"
+                              >
+                                <Download class="h-3.5 w-3.5" />
+                              </button>
+                            </div>
+                          </div>
                         {/each}
                       </div>
                     {/if}

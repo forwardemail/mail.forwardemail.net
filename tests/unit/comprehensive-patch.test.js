@@ -1198,10 +1198,43 @@ describe('PGP desktop and settings regressions', () => {
   });
 
   it('should keep attachment trays sticky at the bottom of the reader pane', () => {
-    expect(mailboxSrc).toContain('sticky bottom-0 z-10 mt-4 border-t border-border');
+    expect(mailboxSrc).toContain('sticky bottom-0 z-10 mt-4 shrink-0 border-t border-border');
     expect(mailboxSrc).toContain(
-      'sticky bottom-0 z-10 mt-4 flex flex-wrap gap-2 max-h-80 overflow-y-auto border-t border-border',
+      'sticky bottom-0 z-10 mt-4 flex shrink-0 flex-nowrap items-start gap-2 overflow-x-auto overflow-y-hidden border-t border-border',
     );
+  });
+
+  it('single-message attachment tray is a fixed-height single row of uniform tiles, not a wrapping grid that shrinks to content', () => {
+    // flex-wrap let the tray's height vary with content: a message whose
+    // attachments were all non-image files (short ~32px button pills) rendered
+    // a barely-visible sliver, while image thumbnails (~104px tall) rendered
+    // much taller — inconsistent, and the short case looked broken/cut off.
+    // flex-nowrap + overflow-x-auto + a uniform h-24 card per tile (image
+    // preview or a generic File icon fallback) makes the tray always the same
+    // height regardless of attachment mix or count.
+    expect(mailboxSrc).not.toMatch(
+      /flex flex-wrap gap-2 max-h-80 overflow-y-auto border-t border-border/,
+    );
+    expect(mailboxSrc).toContain('class="flex h-24 w-[104px] shrink-0 flex-col gap-1"');
+  });
+
+  it('attachment trays cannot be crushed to a sliver by the reader pane flex layout', () => {
+    // .fe-reader is `display: flex; flex-direction: column`. Any flex item
+    // with non-visible overflow on the main axis gets its CSS "automatic
+    // minimum size" forced to 0 (CSS Flexbox spec 4.5), so without an
+    // explicit flex-shrink: 0 the shrink algorithm can crush the tray down to
+    // just its padding/border whenever the message body wants more vertical
+    // space — reproduced live: a single-PDF-attachment message rendered the
+    // tray at 29px despite its tiles being h-24 (96px). shrink-0 pins the
+    // tray to its content height regardless of sibling flex-item pressure.
+    const singleMessageTray = mailboxSrc.match(
+      /class="sticky bottom-0 z-10 mt-4 flex shrink-0 flex-nowrap[^"]*overflow-y-hidden[^"]*"/,
+    );
+    expect(singleMessageTray).not.toBeNull();
+    const threadedTray = mailboxSrc.match(
+      /class="sticky bottom-0 z-10 mt-4 shrink-0 border-t border-border[^"]*"/,
+    );
+    expect(threadedTray).not.toBeNull();
   });
 
   it('Tauri desktop compose window imports pages/index.css so the rich-text editor gets its padding/border', () => {
