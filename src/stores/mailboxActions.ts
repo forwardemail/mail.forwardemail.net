@@ -172,8 +172,22 @@ export const computeReplyTargets = (msg = {}, options = {}) => {
   const nonMeTo = toList.filter((a) => !isSelf(a));
   const nonMeCc = ccList.filter((a) => !isSelf(a));
 
-  // Check if the message was sent by the current user
-  const isOwnMessage = fromList.length > 0 && fromList.every((a) => isSelf(a));
+  // Check if the message was sent by the current user. Address-matching alone
+  // is not enough: a message genuinely received in the Inbox can have a From
+  // (and To) that happens to match one of the user's own configured accounts
+  // (e.g. a system notification sent from/to a support@ alias the user also
+  // manages elsewhere) without being a copy of something this account sent —
+  // in that case Reply-To must still win. Only apply the "own message"
+  // override when we know the folder and it looks like Sent, or when we
+  // don't know the folder at all (preserves the original sent-copy fix for
+  // callers that don't pass folder info).
+  const folderStr = String(msg?.folder || '');
+  const knownFolder = folderStr.trim().length > 0;
+  const looksLikeSentFolder = /sent/i.test(folderStr);
+  const isOwnMessage =
+    fromList.length > 0 &&
+    fromList.every((a) => isSelf(a)) &&
+    (!knownFolder || looksLikeSentFolder);
 
   // For simple reply, prioritize the sender — but if the message is from
   // yourself (sent copy), reply to the original TO recipients instead.

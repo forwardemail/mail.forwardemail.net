@@ -371,6 +371,34 @@ describe('computeReplyTargets', () => {
     const out = computeReplyTargets(msg);
     expect(out.to).toEqual(['contact@example.com']);
   });
+
+  it('honors reply-to even when from/to both match self, for a message not known to be in Sent', () => {
+    // Reported bug: a system notification with From == To == an address the
+    // user also manages as one of their own accounts (e.g. support@ on their
+    // own domain) landed in the Inbox with a Reply-To pointing elsewhere.
+    // Address-only "own message" detection treated it as a sent copy and
+    // redirected reply to self instead of honoring Reply-To.
+    hoisted.localStore.set('email', 'support@example.com');
+    currentAccount.set('support@example.com');
+    const msg = {
+      from: ['support@example.com'],
+      to: ['support@example.com'],
+      replyTo: ['mwrightx@gmail.com'],
+      folder: 'INBOX',
+    };
+    const out = computeReplyTargets(msg);
+    expect(out.to).toEqual(['mwrightx@gmail.com']);
+  });
+
+  it('still redirects reply to TO recipients for a message genuinely in the Sent folder', () => {
+    const msg = {
+      from: ['user@example.com'],
+      to: ['bob@example.com'],
+      folder: 'Sent',
+    };
+    const out = computeReplyTargets(msg);
+    expect(out.to).toEqual(['bob@example.com']);
+  });
 });
 
 describe('toggleRead', () => {
