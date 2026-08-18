@@ -1286,6 +1286,7 @@
   const closeNativeWindow = async () => {
     try {
       const { getCurrentWindow } = await import('@tauri-apps/api/window');
+      const win = getCurrentWindow();
       // Defer the close off the current AppKit event tick.
       // macOS 26+ WebKit crashes inside
       // WebPageProxy::dispatchSetObscuredContentInsets when a webview
@@ -1296,7 +1297,23 @@
       // calls queued.  100 ms gives WebKit enough time to drain its
       // internal layout/geometry queue before the WebPageProxy is freed.
       await new Promise((resolve) => setTimeout(resolve, 100));
-      getCurrentWindow().close();
+      // The pre-close delay above doesn't cover what happens DURING the
+      // close itself: macOS animates window close by default, and that
+      // animation runs across several frames on a background queue while
+      // WebKit's own CVDisplayLink-driven layout/scrolling sync keeps
+      // firing for the closing webview. A refresh landing mid-teardown can
+      // dereference already-freed WebKit state (seen as EXC_BAD_ACCESS in
+      // WebCore::ScrollingTree::takePendingScrollUpdates). Disabling the
+      // animation makes the close synchronous and removes that race.
+      if (isTauriDesktop && /Mac/i.test(navigator.platform || '')) {
+        try {
+          const { invoke } = await import('@tauri-apps/api/core');
+          await invoke('macos_disable_close_animation', { label: win.label });
+        } catch {
+          // Best-effort — fall through to closing normally either way.
+        }
+      }
+      win.close();
     } catch {
       window.close();
     }

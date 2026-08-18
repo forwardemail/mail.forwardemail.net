@@ -1762,4 +1762,42 @@ describe('round-2 fix regression guards', () => {
       expect(composeSrc).toMatch(/FORBID_TAGS:\s*\[\s*'style'/);
     });
   });
+
+  describe('macOS compose-window close animation disabled (WebKit ScrollingTree crash fix)', () => {
+    // Crash report: EXC_BAD_ACCESS in WebCore::ScrollingTree::takePendingScrollUpdates,
+    // reached via a CVDisplayLink-driven WebKit display refresh, with
+    // -[NSAnimation _runBlocking] active on another thread at the same instant —
+    // i.e. the macOS window-close genie animation racing WebKit's own per-frame
+    // layout/scrolling teardown for the closing webview. Reported right after
+    // sending an email, which is exactly when the compose window auto-closes.
+    const composeSrc = fs.readFileSync(
+      path.resolve(__dirname, '../../src/svelte/Compose.svelte'),
+      'utf8',
+    );
+    const composeMainSrc = fs.readFileSync(
+      path.resolve(__dirname, '../../src/compose-main.ts'),
+      'utf8',
+    );
+    const libRsSrc = fs.readFileSync(path.resolve(__dirname, '../../src-tauri/src/lib.rs'), 'utf8');
+
+    it('Rust: macos_disable_close_animation sets NSWindowAnimationBehaviorNone and is registered', () => {
+      expect(libRsSrc).toContain(
+        'fn macos_disable_close_animation(app: tauri::AppHandle, label: String)',
+      );
+      expect(libRsSrc).toContain('setAnimationBehavior: 2isize');
+      expect(libRsSrc).toContain('macos_disable_close_animation,');
+    });
+
+    it('Compose.svelte: closeNativeWindow disables the animation before closing', () => {
+      expect(composeSrc).toMatch(
+        /invoke\('macos_disable_close_animation', \{ label: win\.label \}\)[\s\S]{0,120}win\.close\(\)/,
+      );
+    });
+
+    it('compose-main.ts: the backstop close path also disables the animation before closing', () => {
+      expect(composeMainSrc).toMatch(
+        /invoke\('macos_disable_close_animation', \{ label: win\.label \}\)[\s\S]{0,300}win\.close\(\)/,
+      );
+    });
+  });
 });

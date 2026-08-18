@@ -96,12 +96,22 @@ if (composeRoot) {
           // Not in Tauri context — ignore
         }
         // Fallback close. Compose.svelte's closeNativeWindow() is the primary,
-        // macOS-crash-safe close (it defers off the AppKit tick); this is a
+        // macOS-crash-safe close (it defers off the AppKit tick and disables
+        // the close animation, see closeNativeWindow() for why); this is a
         // backstop in case that path didn't run.
         setTimeout(async () => {
           try {
             const { getCurrentWindow } = await import('@tauri-apps/api/window');
-            getCurrentWindow().close();
+            const win = getCurrentWindow();
+            if (/Mac/i.test(navigator.platform || '')) {
+              try {
+                const { invoke } = await import('@tauri-apps/api/core');
+                await invoke('macos_disable_close_animation', { label: win.label });
+              } catch {
+                // Best-effort — fall through to closing normally either way.
+              }
+            }
+            win.close();
           } catch {
             window.close();
           }

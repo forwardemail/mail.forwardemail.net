@@ -139,6 +139,41 @@ fn toggle_window_visibility(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Disables the native genie close/miniaturize animation on the named window.
+///
+/// On macOS 26+, WebKit drives per-webview layout/scrolling sync
+/// (RemoteLayerTreeDrawingAreaProxy, ScrollingTree) off a CVDisplayLink
+/// callback that keeps firing while a window is being torn down. The
+/// animated close runs that teardown across several frames on a background
+/// dispatch queue (-[NSAnimation _runBlocking]); if a display-link refresh
+/// lands mid-teardown it can dereference already-freed WebKit state and
+/// crash with EXC_BAD_ACCESS (seen in both
+/// WebPageProxy::dispatchSetObscuredContentInsets and
+/// WebCore::ScrollingTree::takePendingScrollUpdates crash reports). Skipping
+/// the animation makes the close synchronous and removes the race. Called
+/// from the compose window right before it closes itself after a send —
+/// the window that's created and destroyed most often in a session.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+fn macos_disable_close_animation(app: tauri::AppHandle, label: String) -> Result<(), String> {
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
+
+    let window = app
+        .get_webview_window(&label)
+        .ok_or_else(|| format!("No window with label {label}"))?;
+    let ns_window = window.ns_window().map_err(|e| e.to_string())?;
+    let ns_window: *mut AnyObject = ns_window.cast();
+    if ns_window.is_null() {
+        return Err("ns_window is null".to_string());
+    }
+    // NSWindowAnimationBehaviorNone = 2.
+    unsafe {
+        let _: () = msg_send![ns_window, setAnimationBehavior: 2isize];
+    }
+    Ok(())
+}
+
 // ── Mailto Handler Commands ─────────────────────────────────────────────────
 //
 // Cross-platform default mailto: handler check and registration.
@@ -858,6 +893,8 @@ pub fn run() {
             diagnostics::clear_logs,
             #[cfg(desktop)]
             toggle_window_visibility,
+            #[cfg(target_os = "macos")]
+            macos_disable_close_animation,
             #[cfg(desktop)]
             is_default_mailto_handler,
             #[cfg(desktop)]
