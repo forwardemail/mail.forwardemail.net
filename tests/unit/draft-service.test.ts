@@ -293,3 +293,82 @@ describe('createAutosaveTimer', () => {
     expect(h.remoteRequest.mock.calls[1][0]).toBe('MessageUpdate');
   });
 });
+
+describe('createAutosaveTimer – iOS crash prevention (unhandled rejection guards)', () => {
+  // On iOS, an unhandled promise rejection terminates the WKWebView process
+  // outright (see notification-manager-ios-crash.test.js for the same class
+  // of bug elsewhere in this app) rather than just logging like on desktop.
+  // checkAndSave() is invoked fire-and-forget from a setInterval tick and
+  // from the markDirty() debounce timer — neither call site awaits or
+  // catches it, so it must never reject, even when getDraftData() or the
+  // caller's own onError handler throws.
+  let unhandledRejections: unknown[];
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    unhandledRejections = [];
+    process.on('unhandledRejection', (reason) => unhandledRejections.push(reason));
+  });
+
+  afterEach(() => {
+    process.removeAllListeners('unhandledRejection');
+    vi.useRealTimers();
+  });
+
+  it('saveNow() resolves instead of rejecting when getDraftData throws', async () => {
+    const t = createAutosaveTimer(() => {
+      throw new Error('boom from getDraftData');
+    });
+    await expect(t.saveNow()).resolves.toBeNull();
+    expect(unhandledRejections).toHaveLength(0);
+  });
+
+  it('saveNow() resolves even when the onError handler itself throws', async () => {
+    const t = createAutosaveTimer(
+      () => {
+        throw new Error('boom from getDraftData');
+      },
+      {
+        onError: () => {
+          throw new Error('boom from onError too');
+        },
+      },
+    );
+    await expect(t.saveNow()).resolves.toBeNull();
+    expect(unhandledRejections).toHaveLength(0);
+  });
+
+  it('a setInterval-driven autosave tick never produces an unhandled rejection', async () => {
+    const t = createAutosaveTimer(
+      () => {
+        throw new Error('boom');
+      },
+      {
+        onError: () => {
+          throw new Error('handler boom too');
+        },
+      },
+    );
+    t.start();
+    t.markDirty();
+    await vi.advanceTimersByTimeAsync(35_000); // past the debounce and one interval tick
+    t.stop();
+    expect(unhandledRejections).toHaveLength(0);
+  });
+
+  it('the markDirty() debounce timer never produces an unhandled rejection', async () => {
+    const t = createAutosaveTimer(
+      () => {
+        throw new Error('boom');
+      },
+      {
+        onError: () => {
+          throw new Error('handler boom too');
+        },
+      },
+    );
+    t.markDirty();
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(unhandledRejections).toHaveLength(0);
+  });
+});

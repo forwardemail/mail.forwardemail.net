@@ -305,11 +305,24 @@ export function createAutosaveTimer(getDraftData, handlers = {}) {
         return saved;
       }
     } catch (err) {
-      onError?.(err);
+      // Belt-and-suspenders: if the handler itself throws, don't let that
+      // escape this catch block and reject runSave() — see the note on
+      // checkAndSave() below for why an unhandled rejection here matters.
+      try {
+        onError?.(err);
+      } catch (handlerErr) {
+        console.error('[draft-service] onError handler threw:', handlerErr);
+      }
     }
     return null;
   };
 
+  // checkAndSave() is invoked fire-and-forget from a setInterval tick and
+  // from the markDirty() debounce timer below — neither call site awaits or
+  // catches it. runSave() already swallows its own errors, but this must
+  // never reject either: on iOS, an unhandled promise rejection terminates
+  // the WKWebView process outright (see notification-manager.js's cold-start
+  // crash fix), which would silently kill autosave rather than just log it.
   const checkAndSave = async () => {
     if (inFlight) {
       pendingSave = true;
@@ -326,6 +339,9 @@ export function createAutosaveTimer(getDraftData, handlers = {}) {
           return await runSave();
         }
         return result;
+      } catch (err) {
+        console.error('[draft-service] Unexpected error in autosave:', err);
+        return null;
       } finally {
         inFlight = null;
       }
@@ -337,7 +353,7 @@ export function createAutosaveTimer(getDraftData, handlers = {}) {
     start() {
       if (timer) return;
       timer = setInterval(() => {
-        if (dirty) checkAndSave();
+        if (dirty) checkAndSave().catch(() => {});
       }, AUTOSAVE_INTERVAL);
     },
     stop() {
@@ -356,7 +372,9 @@ export function createAutosaveTimer(getDraftData, handlers = {}) {
       if (stopped) return;
       dirty = true;
       if (debounceTimer) clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(checkAndSave, AUTOSAVE_DEBOUNCE);
+      debounceTimer = setTimeout(() => {
+        checkAndSave().catch(() => {});
+      }, AUTOSAVE_DEBOUNCE);
     },
     // Lock the current content as the no-save baseline. Called after
     // programmatic prefill (reply/forward quoted body) so an untouched compose

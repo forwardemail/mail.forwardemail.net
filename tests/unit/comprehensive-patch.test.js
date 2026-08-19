@@ -1800,4 +1800,25 @@ describe('round-2 fix regression guards', () => {
       );
     });
   });
+
+  describe('Compose send() never leaves an unhandled rejection on iOS', () => {
+    // send() is bound directly to the Send button's onclick with nothing
+    // downstream awaiting or catching it. proceedWithSend() catches its own
+    // errors, but everything before that (attachmentLoading check,
+    // checkAttachmentReminder, and proceedWithSend's own pre-try-block calls)
+    // did not. On iOS an unhandled promise rejection terminates the WKWebView
+    // process outright (same class of bug fixed for cold-start push handling
+    // in notification-manager.js) instead of just logging, which reads as
+    // "the Send button does nothing."
+    const composeSrc = fs.readFileSync(
+      path.resolve(__dirname, '../../src/svelte/Compose.svelte'),
+      'utf8',
+    );
+
+    it('wraps the whole send() body in try/catch and resets sending state on failure', () => {
+      expect(composeSrc).toMatch(
+        /const send = async \(\) => \{[\s\S]{0,900}try \{[\s\S]{0,400}await proceedWithSend\(\);[\s\S]{0,80}\} catch \(err\) \{[\s\S]{0,200}sending = false;/,
+      );
+    });
+  });
 });

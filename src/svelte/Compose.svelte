@@ -2701,15 +2701,32 @@
   };
 
   const send = async () => {
-    if (attachmentLoading > 0) {
-      error = 'Please wait for attachments to finish loading.';
-      return;
+    // proceedWithSend() catches its own errors internally, but everything in
+    // this function runs before its try blocks begin (attachmentLoading
+    // check, checkAttachmentReminder, and proceedWithSend's own
+    // isDemoMode/autosaveTimer.stop/buildPayload calls). send() is bound
+    // directly to the Send button's onclick with nothing downstream awaiting
+    // or catching it, so any throw here becomes an unhandled promise
+    // rejection — on iOS that terminates the WKWebView process outright
+    // (see notification-manager.js's cold-start crash fix) rather than just
+    // logging like on desktop, which reads as "the Send button does
+    // nothing." This is a last-resort guard, not the primary error path.
+    try {
+      if (attachmentLoading > 0) {
+        error = 'Please wait for attachments to finish loading.';
+        return;
+      }
+      if (checkAttachmentReminder()) {
+        showAttachmentReminderModal = true;
+        return;
+      }
+      await proceedWithSend();
+    } catch (err) {
+      console.error('[Compose] Unexpected error sending message:', err);
+      sending = false;
+      error = (err as Error)?.message || 'Send failed';
+      toasts?.show?.(error, 'error');
     }
-    if (checkAttachmentReminder()) {
-      showAttachmentReminderModal = true;
-      return;
-    }
-    await proceedWithSend();
   };
 
   const finishOpen = (shouldFocusToField = false) => {
