@@ -1703,6 +1703,42 @@ describe('round-2 fix regression guards', () => {
     );
   });
 
+  describe('Message row drag-to-move-folder is desktop-only, reactively (mobile long-press glitch fix)', () => {
+    // Reported bug: on mobile, press-and-hold on a message row briefly
+    // flashed a sliver of a modal/sidebar element — a native browser
+    // drag-lift preview or touch-callout artifact from a row whose
+    // `draggable` attribute was gated by a raw `window.innerWidth > 640`
+    // check. That check is a plain, non-reactive read: Svelte's signal
+    // system has no dependency to hook into for `window.innerWidth`, so the
+    // attribute could go stale across a resize/orientation change that
+    // didn't also touch some other reactive value in the same render block.
+    // Rebinding to the existing `isMobile` derived (already used for the
+    // very same row's padding, right next to the old check) makes it
+    // reactive and consistent with the rest of the file, and the desktop
+    // bail inside handleDragStart is upgraded to match it.
+    it('gates draggable and cursor-grab styling on the reactive isMobile derived, not raw window.innerWidth', () => {
+      expect(mailboxSrcR2).not.toMatch(/draggable=\{window\.innerWidth/);
+      expect(mailboxSrcR2).not.toMatch(/window\.innerWidth > 640 \? 'cursor-grab/);
+      const draggableBindings = mailboxSrcR2.match(/draggable=\{!isMobile\}/g) ?? [];
+      expect(draggableBindings.length).toBe(2); // conversation row + message row
+      const cursorGrabBindings =
+        mailboxSrcR2.match(/\$\{!isMobile \? 'cursor-grab active:cursor-grabbing' : ''\}/g) ?? [];
+      expect(cursorGrabBindings.length).toBe(2);
+    });
+
+    it('handleDragStart bails on mobile via the reactive isMobile derived', () => {
+      expect(mailboxSrcR2).toMatch(
+        /const handleDragStart = \(e, item\) => \{[\s\S]{0,400}if \(isMobile\) \{[\s\S]{0,80}e\.preventDefault\(\);[\s\S]{0,40}return;/,
+      );
+    });
+
+    it('mobile CSS suppresses native drag-lift/touch-callout on message rows as defense-in-depth', () => {
+      expect(mailboxCssSrc).toMatch(
+        /@media \(max-width: 640px\) \{[\s\S]{0,2000}\[data-conversation-row\] \{[\s\S]{0,80}-webkit-user-drag:\s*none;[\s\S]{0,80}-webkit-touch-callout:\s*none;/,
+      );
+    });
+  });
+
   describe('Compose drag-and-drop attachments (Apple-Silicon-Tahoe durable fix)', () => {
     const composeSrc = fs.readFileSync(
       path.resolve(__dirname, '../../src/svelte/Compose.svelte'),

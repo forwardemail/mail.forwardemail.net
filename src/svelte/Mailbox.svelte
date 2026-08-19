@@ -2937,8 +2937,12 @@
 
   // Drag and drop handlers
   const handleDragStart = (e, item) => {
-    // Only on desktop
-    if (window.innerWidth <= 640) {
+    // Desktop-only. This is a belt-and-suspenders bail: the draggable
+    // attribute below already reacts to isMobile and should keep native
+    // drag from ever initiating on mobile, but this stops it cold if a
+    // dragstart still slips through (e.g. a stale attribute value from a
+    // render that hasn't caught up with a very recent resize).
+    if (isMobile) {
       e.preventDefault();
       return;
     }
@@ -6749,7 +6753,7 @@
                             </div>
                           {/if}
                           <div
-                            class={`flex items-center gap-3 cursor-pointer ${isMobile ? 'px-4' : 'px-3'} ${swiping && swipeItemId === conv.id ? 'user-select-none' : ''} ${window.innerWidth > 640 ? 'cursor-grab active:cursor-grabbing' : ''}`}
+                            class={`flex items-center gap-3 cursor-pointer ${isMobile ? 'px-4' : 'px-3'} ${swiping && swipeItemId === conv.id ? 'user-select-none' : ''} ${!isMobile ? 'cursor-grab active:cursor-grabbing' : ''}`}
                             data-conversation-row
                             data-testid="message-row"
                             data-message-id={conv.id}
@@ -6758,7 +6762,7 @@
                             aria-selected={activeConvId === conv.id ||
                               ($selectedConversationIds || []).includes(conv.id)}
                             tabindex="0"
-                            draggable={window.innerWidth > 640}
+                            draggable={!isMobile}
                             onclick={(e) =>
                               handleRowClick(conv, e, $filteredConversations || [], () => {
                                 const message = conv?.messages?.[conv.messages.length - 1] || conv;
@@ -7214,7 +7218,7 @@
                           }}
                         >
                           <div
-                            class={`flex items-center gap-3 px-3 cursor-pointer ${window.innerWidth > 640 ? 'cursor-grab active:cursor-grabbing' : ''}`}
+                            class={`flex items-center gap-3 px-3 cursor-pointer ${!isMobile ? 'cursor-grab active:cursor-grabbing' : ''}`}
                             data-conversation-row
                             data-testid="message-row"
                             data-message-id={msg.id}
@@ -7223,7 +7227,7 @@
                             aria-selected={activeMsgId === msg.id ||
                               ($selectedConversationIds || []).includes(msg.id)}
                             tabindex="0"
-                            draggable={window.innerWidth > 640}
+                            draggable={!isMobile}
                             onclick={(e) =>
                               handleRowClick(msg, e, $filteredMessages || [], () => {
                                 if (isDraftMessage(msg)) {

@@ -398,6 +398,20 @@ body.light-mode .fe-reader {
   .fe-folders ul {
     gap: var(--space-2, 8px);
   }
+
+  /* Drag-to-move-to-folder is desktop-only (the row's draggable attribute
+   * is bound to !isMobile in Mailbox.svelte). Belt-and-suspenders: some
+   * WebKit/Blink mobile builds show a native drag-lift preview or
+   * touch-callout menu on a long-press of a draggable element before our JS
+   * dragstart handler ever runs, which reads as a stray sliver of UI (a
+   * drop-target highlight, a context menu) flashing on hold. These
+   * properties suppress that at the browser level regardless of the
+   * draggable attribute's value on a given render.
+   */
+  [data-conversation-row] {
+    -webkit-user-drag: none;
+    -webkit-touch-callout: none;
+  }
 }
 
 /* ============================================
