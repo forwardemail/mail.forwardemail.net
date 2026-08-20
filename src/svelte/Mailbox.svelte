@@ -4023,6 +4023,11 @@
 
   const openContextMenu = async (event, item) => {
     event?.preventDefault?.();
+    // Touch-and-hold on mobile synthesizes a `contextmenu` DOM event, the
+    // same one a desktop right-click fires. Mobile has its own tap-to-open
+    // action menu (the ellipsis button in the reader) and swipe actions, so
+    // don't let a long-press double as a row context menu here.
+    if (isMobileViewport()) return;
     const isConversation = Array.isArray(item?.messages);
     const msg = isConversation ? item?.messages?.slice?.(-1)?.[0] : item;
     if (!msg) return;
