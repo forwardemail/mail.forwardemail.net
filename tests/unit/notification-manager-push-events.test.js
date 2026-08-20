@@ -57,6 +57,12 @@ vi.mock('../../src/utils/mime-utils.js', () => ({
 vi.mock('../../src/utils/address.ts', () => ({
   extractEmail: vi.fn((value) => (typeof value === 'string' ? value : '')),
 }));
+// Controls the backgrounded-WS visual skip: 'fcm' means the OS tray owns
+// background alerts, null means no push registration.
+let mockPushProvider = null;
+vi.mock('../../src/utils/push-notifications.js', () => ({
+  getActivePushProvider: () => mockPushProvider,
+}));
 
 import {
   connectNotifications,
@@ -90,6 +96,7 @@ describe('notification-manager push event listener', () => {
   beforeEach(async () => {
     vi.useFakeTimers();
     vi.clearAllMocks();
+    mockPushProvider = null;
     // Simulate background so handleNewMessage fires OS notification (not toast)
     Object.defineProperty(document, 'visibilityState', {
       value: 'hidden',
@@ -267,6 +274,59 @@ describe('notification-manager push event listener', () => {
     ['null detail', null],
   ])('ignores push events with %s', (_description, detail) => {
     window.dispatchEvent(new CustomEvent('fe:push-notification', { detail }));
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it('keeps side effects but skips the visual for a suppressAlert WebSocket event', async () => {
+    // The server marks the tmp storage sync-back event suppressAlert because
+    // the original delivery already alerted the user. Badge and cache side
+    // effects must still run; only the visual must not repeat.
+    wsClient.emit('newMessage', {
+      notification_id: '123e4567-e89b-12d3-a456-426614174010',
+      mailbox: 'INBOX',
+      suppressAlert: true,
+      message: {
+        uid: 'sync-back-1',
+        from: { text: 'Sender <sender@example.com>' },
+        subject: 'Synced from tmp storage',
+      },
+    });
+
+    await vi.waitFor(() => expect(getBadgeCount()).toBe(1));
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it('draws the background visual for a WS newMessage when no FCM registration owns alerts', async () => {
+    wsClient.emit('newMessage', {
+      notification_id: '123e4567-e89b-12d3-a456-426614174011',
+      mailbox: 'INBOX',
+      message: {
+        uid: 'ws-draw-1',
+        from: { text: 'Sender <sender@example.com>' },
+        subject: 'WS drawn',
+      },
+    });
+
+    await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
+    expect(notify.mock.calls[0][0].body).toContain('WS drawn');
+  });
+
+  it('skips the background visual for a WS newMessage when FCM owns alerts', async () => {
+    // Firebase draws the tray notification itself for a backgrounded app and
+    // never calls onMessageReceived, so the coalescer cannot suppress this
+    // WebSocket copy. The client must not draw a duplicate.
+    mockPushProvider = 'fcm';
+    wsClient.emit('newMessage', {
+      notification_id: '123e4567-e89b-12d3-a456-426614174012',
+      mailbox: 'INBOX',
+      message: {
+        uid: 'ws-skip-1',
+        from: { text: 'Sender <sender@example.com>' },
+        subject: 'FCM owns this',
+      },
+    });
+
+    await vi.waitFor(() => expect(getBadgeCount()).toBe(1));
     expect(notify).not.toHaveBeenCalled();
   });
 

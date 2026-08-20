@@ -90,7 +90,7 @@ describe('native push tap normalization', () => {
     vi.restoreAllMocks();
   });
 
-  it('marks both received and tapped OS notifications as system-displayed', async () => {
+  it('marks system-displayed only when the FCM message carried a notification block', async () => {
     await expect(initPushNotifications()).resolves.toBe(true);
     expect(callbacks.received).toBeTypeOf('function');
     expect(callbacks.tapped).toBeTypeOf('function');
@@ -99,24 +99,29 @@ describe('native push tap normalization', () => {
     const listener = (event) => delivered.push(event.detail);
     globalThis.addEventListener('fe:push-notification', listener);
 
-    const notification = {
-      data: {
-        event: 'newMessage',
-        notificationId: '123e4567-e89b-12d3-a456-426614174200',
-        mailbox: 'INBOX',
-      },
+    const data = {
+      event: 'newMessage',
+      notificationId: '123e4567-e89b-12d3-a456-426614174200',
+      mailbox: 'INBOX',
     };
-    callbacks.received(notification);
-    callbacks.tapped(notification);
+    // Alert push: the OS drew this one, the client must not draw again.
+    callbacks.received({ data, notification: { title: 'John', body: 'Hi' } });
+    // Data-only push: nothing was drawn, the client stays free to draw.
+    callbacks.received({ data });
+    // A tapped notification was by definition drawn by the OS.
+    callbacks.tapped({ data });
 
     globalThis.removeEventListener('fe:push-notification', listener);
     expect(delivered).toEqual([
       {
-        ...notification.data,
+        ...data,
         displayedBySystem: true,
       },
       {
-        ...notification.data,
+        ...data,
+      },
+      {
+        ...data,
         notificationTapped: true,
         displayedBySystem: true,
       },

@@ -614,6 +614,17 @@ function pruneStaleRegistrations(currentAccounts) {
 
   for (const email of Object.keys(registrations)) {
     if (!activeEmails.has(email)) {
+      // Deleting only the local record orphans a live server row, which then
+      // keeps receiving (duplicate) pushes for this device. Attempt the
+      // server-side delete too. It is best-effort: the account's aliasAuth is
+      // already gone, so this only succeeds when the current session is
+      // allowed to manage that row. The reliable cleanup path remains
+      // deregisterAccountPush at sign-out time.
+      const regId = registrations[email]?.regId;
+      if (regId) {
+        unregisterPushToken(regId).catch(() => {});
+      }
+
       delete registrations[email];
       changed = true;
     }
@@ -748,10 +759,12 @@ async function initializeAndroidFcmPush() {
   const tokenRefreshListener = await onTokenRefresh(async (token) => {
     await handleTokenRefresh(token, 'android');
   });
-  // displayedBySystem=true: FCM notification field causes Android to
-  // auto-display the notification, so the client must not show a duplicate.
+  // The plugin only includes a `notification` object when the FCM message
+  // carried one (the field that makes backgrounded Android auto-display it).
+  // A data-only message displays nothing on its own, so marking it
+  // displayedBySystem would wrongly suppress the client-drawn visual.
   const receivedListener = await onNotificationReceived((notification) => {
-    dispatchPushPayload(notification, false, true);
+    dispatchPushPayload(notification, false, notification?.notification != null);
   });
   const tappedListener = await onNotificationTapped((notification) => {
     dispatchPushPayload(notification, true, true);
@@ -1302,6 +1315,19 @@ export function getStoredPushToken() {
 
 export function getPushPlatform() {
   return Local.get(TOKEN_PLATFORM_KEY) || getMobilePlatform();
+}
+
+/**
+ * Effective push provider ('fcm' | 'apns' | 'unified-push') for the active
+ * account's registration, or null when the active account has none. Used by
+ * notification-manager to decide whether backgrounded alerts are OS-drawn.
+ */
+export function getActivePushProvider() {
+  const email = Local.get('email') || '';
+  if (!email) return null;
+  const record = getAccountRegistrations()[email];
+  if (!record || !record.regId) return null;
+  return normalizePushProvider(record.platform);
 }
 
 export function isPushInitialized() {

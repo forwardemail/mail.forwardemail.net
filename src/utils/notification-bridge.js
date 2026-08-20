@@ -164,6 +164,7 @@ export async function notify({ title, body, icon, tag, data, channelId, number }
       channelId: safeChannel,
       data,
       number: safeNumber,
+      tag: safeTag,
     });
   }
 
@@ -281,13 +282,27 @@ async function _requestTauriPermission() {
   }
 }
 
-async function _notifyTauri({ title, body, channelId, data, number }) {
+// The Tauri notification plugin assigns a random i32 id when none is given,
+// so two displays for the same message always stack as two entries in the
+// shade. Deriving the id from the dedup tag makes a repeat display for the
+// same message REPLACE the earlier one instead (same behavior the web branch
+// gets from the Notification `tag` option).
+function stableNotificationId(tag) {
+  let hash = 0;
+  for (let i = 0; i < tag.length; i++) {
+    hash = (Math.imul(hash, 31) + tag.charCodeAt(i)) | 0;
+  }
+  return hash;
+}
+
+async function _notifyTauri({ title, body, channelId, data, number, tag }) {
   const mod = await ensureTauriNotification();
   if (!mod) return;
   try {
     const granted = await mod.isPermissionGranted();
     if (!granted) return;
     const payload = { title, body: body || '', actionTypeId: 'default-mail' };
+    if (typeof tag === 'string' && tag) payload.id = stableNotificationId(tag);
     if (channelId) payload.channelId = channelId;
     // Android uses the number field for app icon badge count
     if (typeof number === 'number' && number > 0) payload.number = number;

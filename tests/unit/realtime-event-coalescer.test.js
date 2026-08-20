@@ -191,7 +191,10 @@ describe('realtime event transport coalescer', () => {
     });
   });
 
-  it('does not collapse distinct events merely because their display data matches', () => {
+  it('collapses two producers of the same message even when their notification_ids differ', () => {
+    // Same uid means the same message. Two sends with distinct per-send
+    // notification_ids is exactly the duplicate-producer bug shape, so the
+    // legacy identity key must collapse them.
     const onEvent = vi.fn();
     const coalescer = createRealtimeEventCoalescer({ onEvent, isVisible: () => true });
 
@@ -207,7 +210,50 @@ describe('realtime event transport coalescer', () => {
     });
     vi.advanceTimersByTime(PUSH_COALESCE_MS);
 
+    expect(onEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not collapse genuinely distinct messages', () => {
+    const onEvent = vi.fn();
+    const coalescer = createRealtimeEventCoalescer({ onEvent, isVisible: () => true });
+
+    coalescer.handlePush({
+      event: 'newMessage',
+      notification_id: 'event-7a',
+      message: { uid: 7, subject: 'Same subject' },
+    });
+    coalescer.handlePush({
+      event: 'newMessage',
+      notification_id: 'event-7b',
+      message: { uid: 8, subject: 'Same subject' },
+    });
+    vi.advanceTimersByTime(PUSH_COALESCE_MS);
+
     expect(onEvent).toHaveBeenCalledTimes(2);
+  });
+
+  it('coalesces a WebSocket copy that lacks notification_id with a push that has one', () => {
+    // Mixed-version deployments: the push carries notification_id but the
+    // WebSocket copy does not (or vice versa). The shared legacy identity is
+    // what lets them coalesce.
+    const onEvent = vi.fn();
+    const coalescer = createRealtimeEventCoalescer({ onEvent, isVisible: () => true });
+
+    coalescer.handlePush({
+      event: 'newMessage',
+      notification_id: 'push-only-id',
+      displayedBySystem: true,
+      message: { uid: 9 },
+    });
+    coalescer.handleWebSocket('newMessage', { message: { uid: 9 } });
+    vi.advanceTimersByTime(PUSH_COALESCE_MS);
+
+    expect(onEvent).toHaveBeenCalledTimes(1);
+    expect(onEvent).toHaveBeenCalledWith(
+      'newMessage',
+      { message: { uid: 9 } },
+      { source: 'websocket', suppressVisual: true },
+    );
   });
 
   it('suppresses late provider retries until the bounded TTL expires', () => {

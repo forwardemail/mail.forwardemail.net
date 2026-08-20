@@ -709,20 +709,20 @@ async function prependNewMessageToStore({ msg, mailbox, from, subject, uid, acco
   }
 }
 
-async function handleNewMessage(data, { suppressVisual = false } = {}) {
+async function handleNewMessage(data, { suppressVisual = false, source = '' } = {}) {
   if (!data || typeof data !== 'object') return;
 
   // Belt-and-suspenders: wrap the entire handler so that no unhandled
   // rejection can escape.  On iOS WKWebView an unhandled rejection during
   // cold start terminates the webview process (instant crash on app open).
   try {
-    await _handleNewMessageInner(data, { suppressVisual });
+    await _handleNewMessageInner(data, { suppressVisual, source });
   } catch (err) {
     console.warn('[notification-manager] handleNewMessage error:', err);
   }
 }
 
-async function _handleNewMessageInner(data, { suppressVisual = false } = {}) {
+async function _handleNewMessageInner(data, { suppressVisual = false, source = '' } = {}) {
   // Reconstruct a message-like object from flat push data fields when
   // data.message is missing (push-only scenario, e.g. WS disconnected).
   // The server includes sender/subject/snippet in the push data payload.
@@ -845,8 +845,10 @@ async function _handleNewMessageInner(data, { suppressVisual = false } = {}) {
   // The dedup map is persisted for three days and survives account switches, so
   // the tag has to name the account too. A UID is per-mailbox, not global:
   // without the prefix, account A's message 5 permanently suppresses account
-  // B's message 5.
-  const safeTag = sanitize(`new-message-${accountEmail}-${uid || Date.now()}`, MAX_TAG_LEN);
+  // B's message 5. Date.now() is the last resort only: a time-based tag is
+  // unique per display, which disables dedup entirely for that message.
+  const tagIdentity = uid || msg.message_id || msg.header_message_id || msg.MessageId || Date.now();
+  const safeTag = sanitize(`new-message-${accountEmail}-${tagIdentity}`, MAX_TAG_LEN);
 
   // Optimistically inject the envelope into the message list if the user is
   // currently viewing the affected folder. Without this, the WS broadcast
@@ -877,7 +879,15 @@ async function _handleNewMessageInner(data, { suppressVisual = false } = {}) {
   // suppressVisual=true: OS already displayed via push — do nothing visual.
   const appVisible = typeof document !== 'undefined' && document.visibilityState === 'visible';
 
-  if (suppressVisual) {
+  // The server marks an event suppressAlert when an earlier push already
+  // alerted the user for this message (the tmp storage sync-back path). The
+  // data side effects above must still run so caches stay in sync, but the
+  // visual must not repeat. WebSocket payloads carry a boolean, FCM data
+  // payloads carry the string 'true'.
+  const alertSuppressed =
+    suppressVisual || data.suppressAlert === true || data.suppressAlert === 'true';
+
+  if (alertSuppressed) {
     // OS already showed this notification via push (FCM/APNs) — skip all visuals.
   } else if (appVisible) {
     // Foreground: in-app toast only — no OS notification interruption.
@@ -901,6 +911,23 @@ async function _handleNewMessageInner(data, { suppressVisual = false } = {}) {
       },
     });
   } else {
+    // Background WebSocket event on a device whose alerts are owned by FCM:
+    // Firebase draws the tray notification itself before the app hears about
+    // the push, and onMessageReceived never fires for an OS-drawn message, so
+    // the coalescer cannot suppress this WebSocket copy. Skip the client-drawn
+    // duplicate and let the push own background alerts. UnifiedPush and
+    // unregistered devices keep the client-drawn notification. Tradeoff: an
+    // FCM delivery outage also silences background WS alerts; the planned
+    // data-only FCM migration removes this special case.
+    if (source === 'websocket') {
+      try {
+        const { getActivePushProvider } = await import('./push-notifications.js');
+        if (getActivePushProvider() === 'fcm') return;
+      } catch {
+        // Push module unavailable (web build without push) - draw as usual.
+      }
+    }
+
     // Background: show OS notification (no toast — user won't see it).
     // Gmail-style format: sender name as title, subject plus preview as body.
     showNotification({
