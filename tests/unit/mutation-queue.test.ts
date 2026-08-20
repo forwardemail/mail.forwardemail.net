@@ -165,13 +165,23 @@ describe('mutation-queue', () => {
     expect(finalState).toEqual([]);
   });
 
-  it('gives up after MAX_RETRIES and emits a mutation-queue-failed event', async () => {
+  it('gives up after MAX_RETRIES and emits mutation-queue-failed + a per-mutation revert event', async () => {
     remoteRequestMock.mockRejectedValue(new Error('boom'));
-    const listener = vi.fn();
-    window.addEventListener('mutation-queue-failed', listener as unknown as (ev: Event) => void);
+    const countListener = vi.fn();
+    const revertListener = vi.fn();
+    window.addEventListener(
+      'mutation-queue-failed',
+      countListener as unknown as (ev: Event) => void,
+    );
+    window.addEventListener(
+      'mailbox-mutation-permanently-failed',
+      revertListener as unknown as (ev: Event) => void,
+    );
 
     await queueModule.queueMutation('delete', {
       messageId: 'm1',
+      internalId: 'm1',
+      subject: 'Test subject',
       folder: 'INBOX',
     });
 
@@ -188,11 +198,93 @@ describe('mutation-queue', () => {
       await drainMicrotasks();
     }
 
-    expect(listener).toHaveBeenCalledTimes(1);
-    const detail = (listener.mock.calls[0][0] as CustomEvent).detail;
-    expect(detail).toEqual({ count: 1 });
+    expect(countListener).toHaveBeenCalledTimes(1);
+    expect((countListener.mock.calls[0][0] as CustomEvent).detail).toEqual({ count: 1 });
 
-    window.removeEventListener('mutation-queue-failed', listener as unknown as (ev: Event) => void);
+    // The revert event carries the full mutation record — a listener needs
+    // type + payload (including the revert-relevant fields) to undo it.
+    expect(revertListener).toHaveBeenCalledTimes(1);
+    const reverted = (revertListener.mock.calls[0][0] as CustomEvent).detail;
+    expect(reverted.type).toBe('delete');
+    expect(reverted.payload).toMatchObject({ internalId: 'm1', subject: 'Test subject' });
+
+    // Exhausted mutation is pruned from the persisted queue once reverted.
+    const record = metaStore.get('mutation_queue_user@example.com');
+    expect(record?.value).toEqual([]);
+
+    window.removeEventListener(
+      'mutation-queue-failed',
+      countListener as unknown as (ev: Event) => void,
+    );
+    window.removeEventListener(
+      'mailbox-mutation-permanently-failed',
+      revertListener as unknown as (ev: Event) => void,
+    );
+  });
+
+  it('reconcilePermanentlyFailedMutations reverts entries left behind by another processor (e.g. the SW)', async () => {
+    // Simulate the SW marking a mutation 'failed' with retries exhausted
+    // while this tab's processMutationQueue never ran it itself.
+    const key = 'mutation_queue_user@example.com';
+    metaStore.set(key, {
+      key,
+      updatedAt: Date.now(),
+      value: [
+        {
+          id: 'sw-mut-1',
+          type: 'move',
+          payload: { messageId: 'm9', internalId: 'm9', targetFolder: 'Archive' },
+          status: 'failed',
+          retryCount: 5,
+          createdAt: Date.now(),
+        },
+      ],
+    });
+
+    const revertListener = vi.fn();
+    window.addEventListener(
+      'mailbox-mutation-permanently-failed',
+      revertListener as unknown as (ev: Event) => void,
+    );
+
+    await queueModule.reconcilePermanentlyFailedMutations();
+
+    expect(revertListener).toHaveBeenCalledTimes(1);
+    const reverted = (revertListener.mock.calls[0][0] as CustomEvent).detail;
+    expect(reverted.id).toBe('sw-mut-1');
+    expect(metaStore.get(key)?.value).toEqual([]);
+
+    window.removeEventListener(
+      'mailbox-mutation-permanently-failed',
+      revertListener as unknown as (ev: Event) => void,
+    );
+  });
+
+  it('reconcilePermanentlyFailedMutations is a no-op when nothing is exhausted', async () => {
+    isOnlineMock.mockReturnValue(false);
+    await queueModule.queueMutation('toggleRead', {
+      messageId: 'm1',
+      isUnread: true,
+      flags: [],
+      folder: 'INBOX',
+    });
+
+    const revertListener = vi.fn();
+    window.addEventListener(
+      'mailbox-mutation-permanently-failed',
+      revertListener as unknown as (ev: Event) => void,
+    );
+
+    await queueModule.reconcilePermanentlyFailedMutations();
+
+    expect(revertListener).not.toHaveBeenCalled();
+    const record = metaStore.get('mutation_queue_user@example.com');
+    expect(record?.value).toHaveLength(1); // untouched, still pending
+
+    window.removeEventListener(
+      'mailbox-mutation-permanently-failed',
+      revertListener as unknown as (ev: Event) => void,
+    );
   });
 
   it('skips execution when offline and leaves queue intact', async () => {

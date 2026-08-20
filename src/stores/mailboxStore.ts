@@ -118,11 +118,13 @@ const addPendingDeletes = pendingDeleteTracker.add;
 const filterPendingDeletes = pendingDeleteTracker.filter;
 export const getPendingDeleteIds = pendingDeleteTracker.getIds;
 const confirmDeletes = pendingDeleteTracker.confirm;
+const cancelPendingDelete = pendingDeleteTracker.cancel;
 
 const pendingFlagTracker = createPendingFlagTracker();
 const addPendingFlagMutation = pendingFlagTracker.add;
 const applyPendingFlagMutations = pendingFlagTracker.apply;
 const confirmFlagMutations = pendingFlagTracker.confirm;
+const cancelPendingFlag = pendingFlagTracker.cancel;
 
 // Optimistically-inserted Sent messages, re-injected into Sent list responses
 // until the backend indexer makes the just-sent message queryable.
@@ -1591,12 +1593,14 @@ const createMailboxStore = () => {
     const account = Local.get('email') || 'default';
     const recordId = msg.id;
 
-    // Save original state for rollback
-    const originalList = get(messages);
     const originalSelected = get(selectedMessage);
 
+    // Snapshot the row before the destructive write below, so a permanently
+    // failed delete can restore it exactly (see revertFailedMutation).
+    const snapshot = recordId != null ? await db.messages.get([account, recordId]) : null;
+
     // Optimistic remove from store
-    const list = originalList.filter((m) => m.id !== msg.id);
+    const list = get(messages).filter((m) => m.id !== msg.id);
     messages.set(list);
     addPendingDeletes([msg.id]);
     if (originalSelected?.id === msg.id) {
@@ -1621,10 +1625,16 @@ const createMailboxStore = () => {
     }
     await searchStore.actions.removeFromIndex([msg.id]).catch(() => {});
 
-    // Sync to server or queue for later
+    // Sync to server or queue for later. snapshot is the pre-delete row (not
+    // the body — bodies are lazily refetched from the server on open, so
+    // restoring the header/envelope row is enough for a revert).
     const mutationPayload = {
       messageId: apiId,
+      internalId: recordId,
+      subject: msg.subject,
       permanent,
+      sourceFolder: msg.folder,
+      snapshot: snapshot || null,
     };
 
     if (!isOnline()) {
@@ -1749,7 +1759,8 @@ const createMailboxStore = () => {
           return msg;
         }),
       );
-      chunkResults.forEach((result, idx) => {
+      for (let idx = 0; idx < chunkResults.length; idx++) {
+        const result = chunkResults[idx];
         if (result.status === 'fulfilled') {
           successfulDeletes.push(chunk[idx]);
           results.push(true);
@@ -1763,9 +1774,26 @@ const createMailboxStore = () => {
             results.push(true);
           } else {
             results.push(false);
+            // Unlike the single-message path, this row's IDB entry was never
+            // touched (the batch DB cleanup below only runs for
+            // successfulDeletes), so there's nothing to snapshot — queuing
+            // for retry (and, if that's ultimately exhausted, un-suppressing
+            // it) is enough to converge back to server truth.
+            const failedMsg = chunk[idx];
+            const failedApiId = getMessageApiId(failedMsg);
+            if (failedApiId) {
+              await queueMutation('delete', {
+                messageId: failedApiId,
+                internalId: failedMsg.id,
+                subject: failedMsg.subject,
+                permanent,
+                sourceFolder: failedMsg.folder,
+                snapshot: null,
+              });
+            }
           }
         }
-      });
+      }
     }
 
     // Batch DB cleanup for successful deletes
@@ -1839,7 +1867,6 @@ const createMailboxStore = () => {
     const recordId = msg.id;
     const result = { success: false };
 
-    // Save original state for rollback (only if staying in folder)
     const originalList = stayInFolder ? get(messages) : null;
     const originalSelected = stayInFolder ? get(selectedMessage) : null;
 
@@ -1908,10 +1935,14 @@ const createMailboxStore = () => {
       await searchStore.actions.indexMessages([{ ...msg, folder: target }]).catch(() => {});
     }
 
-    // Sync to server or queue for later
+    // Sync to server or queue for later. sourceFolder lets a permanently
+    // failed mutation restore the pre-move folder.
     const mutationPayload = {
       messageId: apiId,
+      internalId: recordId,
+      subject: msg.subject,
       targetFolder: target,
+      sourceFolder: msg.folder,
     };
 
     if (!isOnline()) {
@@ -2043,14 +2074,31 @@ const createMailboxStore = () => {
           return msg;
         }),
       );
-      chunkResults.forEach((result, idx) => {
+      for (let idx = 0; idx < chunkResults.length; idx++) {
+        const result = chunkResults[idx];
         if (result.status === 'fulfilled') {
           successfulMoves.push(chunk[idx]);
           results.push(true);
         } else {
           results.push(false);
+          // This row's IDB folder was never touched (the batch DB update
+          // below only runs for successfulMoves), so there's nothing to
+          // snapshot — queuing for retry (and, if that's ultimately
+          // exhausted, un-suppressing it) is enough to converge back to
+          // server truth.
+          const failedMsg = chunk[idx];
+          const failedApiId = getMessageApiId(failedMsg);
+          if (failedApiId) {
+            await queueMutation('move', {
+              messageId: failedApiId,
+              internalId: failedMsg.id,
+              subject: failedMsg.subject,
+              targetFolder: target,
+              sourceFolder: failedMsg.folder,
+            });
+          }
         }
-      });
+      }
     }
 
     // Batch DB updates for successful moves
@@ -2104,6 +2152,98 @@ const createMailboxStore = () => {
     const failed = results.length - success;
 
     return { success, failed };
+  };
+
+  /**
+   * Roll back the local half of a mutation transaction whose backend half is
+   * now confirmed permanently failed (mutation-queue.js exhausted its
+   * retries, or the service worker did while no tab was open). Restores the
+   * pre-mutation IDB/store state so this client converges back to server
+   * truth instead of staying silently out of sync with it.
+   */
+  const revertFailedMutation = async (mutation) => {
+    const { type, payload } = mutation || {};
+    if (!type || !payload) return;
+
+    const account = payload.account || Local.get('email') || 'default';
+    const id = payload.internalId ?? payload.messageId;
+    if (id == null) return;
+    const subjectLabel = payload.subject ? `"${payload.subject}"` : 'a message';
+    const toasts = get(toastsRef);
+
+    try {
+      if (type === 'delete' || type === 'move') {
+        cancelPendingDelete(id);
+
+        if (type === 'delete' && payload.snapshot) {
+          await db.messages.put(payload.snapshot).catch(() => {});
+          await searchStore.actions.indexMessages([payload.snapshot]).catch(() => {});
+        } else if (type === 'move' && payload.sourceFolder) {
+          // Only undo if the row is still where our failed move left it —
+          // if something else has since moved or deleted it, that's the
+          // authoritative state and this stale mutation shouldn't clobber it.
+          const existing = await db.messages.get([account, id]);
+          if (existing && existing.folder === payload.targetFolder) {
+            const restored = { ...existing, folder: payload.sourceFolder, updatedAt: Date.now() };
+            await db.messages.put(restored).catch(() => {});
+            const bodyRecord = await db.messageBodies.get([account, id]);
+            if (bodyRecord) {
+              await db.messageBodies
+                .put({ ...bodyRecord, folder: payload.sourceFolder, updatedAt: Date.now() })
+                .catch(() => {});
+            }
+            await searchStore.actions.indexMessages([restored]).catch(() => {});
+          }
+        }
+
+        if (payload.sourceFolder) {
+          invalidateFolderInMemCache(account, payload.sourceFolder);
+          if (get(selectedFolder) === payload.sourceFolder) {
+            void loadMessages().catch(() => {});
+          }
+        }
+
+        toasts?.show?.(
+          `Couldn't ${type === 'delete' ? 'delete' : 'move'} ${subjectLabel} — restored`,
+          'error',
+        );
+        return;
+      }
+
+      if (type === 'toggleRead' || type === 'toggleStar' || type === 'label') {
+        cancelPendingFlag(id);
+
+        const restoreFields =
+          type === 'toggleRead'
+            ? {
+                is_unread: payload.isUnread,
+                is_unread_index: payload.isUnread ? 1 : 0,
+                flags: payload.flags || [],
+              }
+            : type === 'toggleStar'
+              ? { is_starred: payload.isStarred, flags: payload.flags || [] }
+              : { labels: payload.previousLabels || [] };
+
+        await db.messages
+          .where('[account+id]')
+          .equals([account, id])
+          .modify(restoreFields)
+          .catch(() => {});
+
+        const current = get(messages);
+        if (current.some((m) => m.id === id)) {
+          messages.set(current.map((m) => (m.id === id ? { ...m, ...restoreFields } : m)));
+        }
+        const selected = get(selectedMessage);
+        if (selected?.id === id) {
+          selectedMessage.set({ ...selected, ...restoreFields });
+        }
+
+        toasts?.show?.(`Couldn't sync a change to ${subjectLabel} — reverted`, 'error');
+      }
+    } catch (err) {
+      warn('revertFailedMutation failed', err);
+    }
   };
 
   /**
@@ -2752,6 +2892,7 @@ const createMailboxStore = () => {
       invalidateFolderInMemCache,
       addPendingFlagMutation,
       addPendingDeletes,
+      revertFailedMutation,
     },
   };
 };

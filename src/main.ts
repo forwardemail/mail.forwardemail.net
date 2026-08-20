@@ -419,6 +419,13 @@ globalThis.addEventListener('mutation-queue-failed', () => {
   toasts.show("Some changes couldn't be synced. Please try again.", 'error');
 });
 
+// A specific mutation (delete/move/star/read/label) is confirmed permanently
+// failed — roll back its local IDB/store change so this client converges
+// back to server truth instead of staying silently out of sync with it.
+globalThis.addEventListener('mailbox-mutation-permanently-failed', (event) => {
+  mailboxStore.actions.revertFailedMutation(event.detail);
+});
+
 // Decides whether an auth failure is real or just the vault being locked.
 // Shared by the failure handlers and the mobile resume gate so both agree on
 // when the app can authenticate at all.

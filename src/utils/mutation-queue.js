@@ -306,6 +306,7 @@ export async function processMutationQueue() {
             detail: { count: permanentlyFailed.length },
           }),
         );
+        dispatchPermanentFailures(permanentlyFailed);
       }
     }
   } finally {
@@ -315,6 +316,46 @@ export async function processMutationQueue() {
 
   if (queuedDuringRun) {
     await processMutationQueue();
+  }
+}
+
+/**
+ * Fire one 'mailbox-mutation-permanently-failed' event per exhausted
+ * mutation, carrying the full record (type + payload) so a listener can
+ * revert the optimistic local change it can no longer expect to land.
+ */
+function dispatchPermanentFailures(mutations) {
+  if (typeof window === 'undefined') return;
+  for (const mutation of mutations) {
+    window.dispatchEvent(
+      new CustomEvent('mailbox-mutation-permanently-failed', { detail: mutation }),
+    );
+  }
+}
+
+/**
+ * Sweep the queue for mutations already marked 'failed' with retries
+ * exhausted that this tab didn't just process itself — e.g. the service
+ * worker's Background Sync processor gave up while no tab was open. Those
+ * entries sit in the shared queue record untouched (sw-sync.js doesn't have
+ * store/Dexie access to revert them), so the next time a tab is around to
+ * read the queue, it needs to notice and revert them too.
+ *
+ * Safe to call anytime: reads a fresh snapshot under the write lock, so it
+ * can't race processMutationQueue's own prune of the same entries.
+ */
+export async function reconcilePermanentlyFailedMutations() {
+  const account = getAccount();
+  let permanentlyFailed = [];
+  await withQueueLock(async () => {
+    const queue = await readQueue(account);
+    permanentlyFailed = queue.filter((m) => m.status === 'failed' && m.retryCount >= MAX_RETRIES);
+    if (!permanentlyFailed.length) return;
+    const remaining = queue.filter((m) => !(m.status === 'failed' && m.retryCount >= MAX_RETRIES));
+    await writeQueue(account, remaining);
+  });
+  if (permanentlyFailed.length) {
+    dispatchPermanentFailures(permanentlyFailed);
   }
 }
 
@@ -354,16 +395,22 @@ export function initMutationQueue() {
     processMutationQueue();
   });
 
-  // Listen for SW Background Sync completion to refresh counts
+  // Listen for SW Background Sync completion to refresh counts, and revert
+  // any mutation the SW gave up on while this tab (or any tab) was closed —
+  // the SW has no store/Dexie access to do that itself.
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.addEventListener('message', (event) => {
       if (event.data?.type === 'mutationQueueProcessed') {
         getMutationQueueCount();
+        reconcilePermanentlyFailedMutations();
       }
     });
   }
 
-  // Process any pending mutations on startup
+  // Process any pending mutations on startup, and revert anything left
+  // behind 'failed' from a previous session (e.g. the SW's Background Sync
+  // exhausted retries while the app wasn't running to react to it).
+  reconcilePermanentlyFailedMutations();
   if (isOnline()) {
     processMutationQueue();
   }

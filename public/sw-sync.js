@@ -575,6 +575,19 @@
   // (META_STORE is declared with the other store names at the top.)
   const MUTATION_QUEUE_PREFIX = 'mutation_queue_';
   const MUTATION_MAX_RETRIES = 5;
+  const MUTATION_BASE_BACKOFF_MS = 3000;
+  const MUTATION_MAX_BACKOFF_MS = 2 * 60 * 1000;
+
+  // Mirrors src/utils/backoff.js's exponentialBackoff. Duplicated rather than
+  // imported: this file is a plain script (no bundler) loaded via
+  // importScripts, so it can't pull in the ESM util the main thread uses.
+  const mutationBackoff = (retryCount) => {
+    const delay = Math.min(
+      MUTATION_BASE_BACKOFF_MS * Math.pow(2, retryCount),
+      MUTATION_MAX_BACKOFF_MS,
+    );
+    return Math.floor(delay + delay * Math.random() * 0.2);
+  };
 
   /**
    * Read all mutation queue entries from the meta store.
@@ -729,15 +742,39 @@
 
         try {
           const ok = await executeMutationSW(mutation);
-          mutation.status = ok ? 'completed' : 'failed';
-          if (!ok) mutation.retryCount = (mutation.retryCount || 0) + 1;
+          if (ok) {
+            mutation.status = 'completed';
+          } else {
+            // A non-OK HTTP response, not a thrown/network exception — same
+            // retry budget as the catch branch below so a single 4xx/5xx
+            // doesn't skip straight to 'failed' before MUTATION_MAX_RETRIES
+            // (and, downstream, before the main thread treats it as
+            // permanently failed and reverts the optimistic local change).
+            mutation.retryCount = (mutation.retryCount || 0) + 1;
+            if (mutation.retryCount >= MUTATION_MAX_RETRIES) {
+              mutation.status = 'failed';
+            } else {
+              mutation.status = 'pending';
+              mutation.nextRetryAt = Date.now() + mutationBackoff(mutation.retryCount);
+            }
+          }
         } catch {
           mutation.retryCount = (mutation.retryCount || 0) + 1;
-          mutation.status = mutation.retryCount >= MUTATION_MAX_RETRIES ? 'failed' : 'pending';
+          if (mutation.retryCount >= MUTATION_MAX_RETRIES) {
+            mutation.status = 'failed';
+          } else {
+            mutation.status = 'pending';
+            mutation.nextRetryAt = Date.now() + mutationBackoff(mutation.retryCount);
+          }
         }
       }
 
       if (modified) {
+        // 'failed' entries (retries exhausted) are kept, not pruned here —
+        // this worker has no Dexie/store access to revert the optimistic
+        // local change they correspond to. They stay in the shared queue
+        // record until a tab is open to notice and revert them (see
+        // reconcilePermanentlyFailedMutations in src/utils/mutation-queue.js).
         const remaining = queue.filter((m) => m.status !== 'completed');
         try {
           await writeMutationQueue(key, remaining);

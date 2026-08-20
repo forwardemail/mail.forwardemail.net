@@ -13,12 +13,18 @@
 //     the server STOPS reporting the id; an insert is dropped when the server
 //     STARTS reporting it.
 //
-// All auto-expire entries after PENDING_DELETE_TTL (60s — generous to cover
-// slow connections / queued sync tasks). The factories take an injectable
-// `now`/`ttl` purely so tests can drive expiry deterministically; production
-// callers use the defaults and get identical behavior to the inlined originals.
-
-export const PENDING_DELETE_TTL = 60_000;
+// All auto-expire entries after PENDING_DELETE_TTL. The factories take an
+// injectable `now`/`ttl` purely so tests can drive expiry deterministically;
+// production callers use the defaults and get identical behavior to the
+// inlined originals.
+//
+// Must comfortably exceed the offline mutation queue's worst-case total
+// backoff window (MAX_RETRIES=5 against BASE_BACKOFF_MS/MAX_BACKOFF_MS in
+// mutation-queue.js, a few minutes worst case) — otherwise a mutation that's
+// still retrying can have its suppressed row flash back into view (a stale
+// list load reintroducing it) before the queue has either succeeded or given
+// up and triggered a proper revert via cancel().
+export const PENDING_DELETE_TTL = 5 * 60_000;
 
 interface TrackerOptions {
   now?: () => number;
@@ -70,6 +76,12 @@ export function createPendingDeleteTracker({
         if (!serverIds.has(id)) pending.delete(id);
       }
     },
+    // Stop suppressing a single id without waiting out its TTL — used when a
+    // queued mutation for it has been confirmed permanently failed and the
+    // caller is about to restore the pre-mutation state instead.
+    cancel(id: string) {
+      pending.delete(id);
+    },
     clear() {
       pending.clear();
     },
@@ -118,6 +130,12 @@ export function createPendingFlagTracker({
           pending.delete(id);
         }
       }
+    },
+    // Stop suppressing a single id without waiting out its TTL — used when a
+    // queued mutation for it has been confirmed permanently failed and the
+    // caller is about to restore the pre-mutation flag values instead.
+    cancel(id: string) {
+      pending.delete(id);
     },
     clear() {
       pending.clear();

@@ -59,8 +59,23 @@ describe('createPendingDeleteTracker', () => {
     expect(t.getIds()).toEqual([]);
   });
 
-  it('exposes the shared 60s default TTL', () => {
-    expect(PENDING_DELETE_TTL).toBe(60_000);
+  it('cancel() stops suppressing a single id without waiting out the TTL', () => {
+    const t = createPendingDeleteTracker();
+    t.add(['a', 'b']);
+    t.cancel('a');
+    expect(t.getIds()).toEqual(['b']);
+    expect(t.filter([{ id: 'a' }, { id: 'b' }])).toEqual([{ id: 'a' }]);
+  });
+
+  it('cancel() on an id that was never pending is a no-op', () => {
+    const t = createPendingDeleteTracker();
+    t.add(['a']);
+    t.cancel('missing');
+    expect(t.getIds()).toEqual(['a']);
+  });
+
+  it('exposes the shared 5-minute default TTL', () => {
+    expect(PENDING_DELETE_TTL).toBe(5 * 60_000);
   });
 });
 
@@ -131,6 +146,15 @@ describe('createPendingFlagTracker', () => {
     t.add('m1', { is_unread: false });
     t.clear();
     expect(t.apply([{ id: 'm1', is_unread: true }])).toEqual([{ id: 'm1', is_unread: true }]);
+  });
+
+  it('cancel() stops overriding a single id without waiting out the TTL', () => {
+    const t = createPendingFlagTracker();
+    t.add('m1', { is_unread: false });
+    t.add('m2', { is_starred: true });
+    t.cancel('m1');
+    expect(t.apply([{ id: 'm1', is_unread: true }])).toEqual([{ id: 'm1', is_unread: true }]);
+    expect(t.apply([{ id: 'm2', is_starred: false }])).toEqual([{ id: 'm2', is_starred: true }]);
   });
 });
 

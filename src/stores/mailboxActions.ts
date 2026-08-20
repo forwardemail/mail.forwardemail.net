@@ -440,9 +440,13 @@ export const toggleRead = async (msg) => {
 
   mailboxStore.actions.updateFolderUnreadCounts();
 
-  // Sync to server or queue for later
+  // Sync to server or queue for later. isUnread/flags are the PRE-toggle
+  // values — kept as-is (not the new nextUnread/newFlags) so a permanently
+  // failed mutation can restore exactly this state.
   const mutationPayload = {
     messageId: apiId,
+    internalId: msg.id,
+    subject: msg.subject,
     isUnread: isUnread,
     flags: msg.flags || [],
     folder: msg.folder,
@@ -525,9 +529,13 @@ export const toggleStar = async (msg) => {
     .modify({ flags: Array.from(newFlags), is_starred: !isStarred })
     .catch(() => {});
 
-  // Sync to server or queue for later
+  // Sync to server or queue for later. isStarred/flags are the PRE-toggle
+  // values — kept as-is (not the new state) so a permanently failed mutation
+  // can restore exactly this state.
   const mutationPayload = {
     messageId: apiId,
+    internalId: msg.id,
+    subject: msg.subject,
     isStarred: isStarred,
     flags: msg.flags || [],
     folder: msg.folder,
@@ -1191,10 +1199,14 @@ export const contextLabel = async (msgOrLabel, labelMaybe, options = {}) => {
   );
   const labelName = lbl?.name || lbl?.label || lbl?.value || labelId;
 
-  // Sync to server or queue for later
+  // Sync to server or queue for later. previousLabels lets a permanently
+  // failed mutation restore the pre-change label set.
   const mutationPayload = {
     messageId: apiId,
+    internalId: msgId,
+    subject: targetMsg.subject,
     labels: nextLabels,
+    previousLabels: currentLabels,
   };
 
   if (!isOnline()) {
