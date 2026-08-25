@@ -1,0 +1,16 @@
+# Machine-generated files. Prettier 3 also respects .gitignore by default;
+# this file covers what is generated but either tracked or outside
+# .gitignore's patterns.
+
+# pnpm owns the lockfile's formatting; reformatting it just makes every
+# dependency bump a formatting change too.
+pnpm-lock.yaml
+
+# Generated mobile projects and Gradle output. The nested .tauri/ project
+# inside vendored plugins is rebuilt by every Android build, so formatting
+# it is undone by the next build - which is exactly how it kept failing
+# release checks on machines that had built Android locally.
+src-tauri/gen/
+src-tauri/plugins/**/android/.tauri/
+src-tauri/plugins/**/android/build/
+src-tauri/plugins/**/android/.gradle/
