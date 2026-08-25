@@ -1,13 +1,38 @@
 import { currentPath } from './state.js';
+import { openApp } from './app.js';
 
 export async function activateDemo(browser: WebdriverIO.Browser): Promise<void> {
-  const tryDemo = await browser.$('[data-testid="try-demo-btn"]');
-  // 30s, not 15s: on the slowest gating runner (macos-15-intel) the login
-  // screen's cold-start render — especially after a spec's clearStorage +
-  // double openApp reload, with the WebView offscreen ("page has no displayID")
-  // — has intermittently crossed 15s, flaking activateDemo before the app even
-  // painted the button. Same slow-runner headroom as the calendar-nav gate.
-  await tryDemo.waitForExist({ timeout: 30_000 });
+  let tryDemo = await browser.$('[data-testid="try-demo-btn"]');
+  // 30s, not 15s: on the slowest gating runners the login screen's cold-start
+  // render (especially after a spec's clearStorage + double openApp reload,
+  // with the WebView offscreen) has intermittently crossed 15s, flaking
+  // activateDemo before the app even painted the button.
+  try {
+    await tryDemo.waitForExist({ timeout: 30_000 });
+  } catch {
+    // Two distinct failures land here and only one is a bug. On the
+    // software-GL Linux runner, WebKitGTK occasionally wedges so hard on one
+    // cold start that even WebDriver's findElements script times out (the
+    // "Script execution timed out" warnings) - no selector timeout can see a
+    // button on a page whose event loop is stuck. One relaunch un-wedges that
+    // case. A genuinely missing button fails the second wait on a healthy
+    // page, so the gate keeps its teeth. The diagnostics say which case it
+    // was: a wedged page reports nothing, a healthy page missing the button
+    // reports its actual path and paint state.
+    const diag = await browser
+      .execute(() => ({
+        path: location.pathname,
+        readyState: document.readyState,
+        bodyChildren: document.body?.children.length ?? 0,
+      }))
+      .catch(() => 'page unresponsive (execute timed out)');
+    console.warn(
+      `[activateDemo] try-demo-btn absent after 30s; diagnostics: ${JSON.stringify(diag)}. Relaunching the app once.`,
+    );
+    await openApp(browser);
+    tryDemo = await browser.$('[data-testid="try-demo-btn"]');
+    await tryDemo.waitForExist({ timeout: 30_000 });
+  }
 
   // Click via the native DOM rather than WDIO's actionability click.
   // On the macOS-arm64 CI runner the app window spawns very short
