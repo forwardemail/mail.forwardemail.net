@@ -25,6 +25,8 @@
  *   - Message UIDs, folder paths, timestamps, flags
  */
 
+import { ARGON2_SALT_BYTES as ARGON2_SALT_BYTES_SHARED, deriveArgon2Key } from './argon2-kdf.js';
+
 const VAULT_KEY = 'webmail_crypto_vault';
 const LOCK_PREFS_KEY = 'webmail_lock_prefs';
 const ENCRYPTED_PREFIX = '\x00ENC\x01';
@@ -269,33 +271,16 @@ function setLockPrefs(prefs) {
  * @param {Uint8Array} salt - 16-byte salt (stored in the vault)
  * @returns {Promise<Uint8Array>} 32-byte KEK
  */
-// Argon2id salt length (matches libsodium crypto_pwhash_SALTBYTES)
-const ARGON2_SALT_BYTES = 16;
+// Argon2id salt length, re-exported for existing callers.
+const ARGON2_SALT_BYTES = ARGON2_SALT_BYTES_SHARED;
 
 async function deriveKekFromPin(pin, salt) {
-  const { argon2id } = await import('hash-wasm');
   if (!pin || typeof pin !== 'string') {
     throw new Error('PIN is required');
   }
-  if (!salt || salt.length !== ARGON2_SALT_BYTES) {
-    throw new Error('Invalid salt');
-  }
-  // Argon2id with moderate parameters (matches libsodium OPSLIMIT_MODERATE / MEMLIMIT_MODERATE)
-  const hashHex = await argon2id({
-    password: pin,
-    salt,
-    parallelism: 1,
-    iterations: 3, // OPSLIMIT_MODERATE
-    memorySize: 262144, // MEMLIMIT_MODERATE = 256 MiB in KiB
-    hashLength: 32, // crypto_secretbox_KEYBYTES
-    outputType: 'hex',
-  });
-  // Convert hex string to Uint8Array
-  const kek = new Uint8Array(32);
-  for (let i = 0; i < 32; i++) {
-    kek[i] = Number.parseInt(hashHex.slice(i * 2, i * 2 + 2), 16);
-  }
-  return kek;
+  // Shared with the QR pairing-code wrap so the app has ONE Argon2id cost
+  // profile, by construction rather than by keeping two copies in sync.
+  return deriveArgon2Key(pin, salt, 32 /* crypto_secretbox_KEYBYTES */);
 }
 
 /**

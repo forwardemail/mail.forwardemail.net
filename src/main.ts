@@ -238,7 +238,12 @@ function detectRoute() {
 
 const PROTECTED_ROUTES = new Set(['mailbox', 'settings', 'profile', 'calendar', 'contacts']);
 
-const hasReadableCredentials = () => Boolean(Local.get('authToken') || Local.get('alias_auth'));
+// api_key is included because getAuthHeader falls back to it when alias_auth
+// is absent, and QR pairing can import an account that authenticates only by
+// API key. Recognising fewer credential shapes here than the API layer does
+// stranded such an account on the login screen right after a successful pair.
+const hasReadableCredentials = () =>
+  Boolean(Local.get('authToken') || Local.get('alias_auth') || Local.get('api_key'));
 
 // A locked vault cannot answer "is this session signed in?", and treating that
 // silence as a no is what made an app-locked phone look signed out after it

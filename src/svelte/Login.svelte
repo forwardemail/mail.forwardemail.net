@@ -7,6 +7,13 @@
   import * as Card from '$lib/components/ui/card';
   import ChevronLeft from '@lucide/svelte/icons/chevron-left';
   import Play from '@lucide/svelte/icons/play';
+  import QrCodeIcon from '@lucide/svelte/icons/qr-code';
+  import ScanPairingCode from './components/ScanPairingCode.svelte';
+  import { isTauriMobile } from '../utils/platform.js';
+  // Imported from support directly, not the device-sync barrel: this flag is
+  // needed at first paint, and the barrel statically pulls the whole pairing
+  // graph into the entry chunk with it.
+  import { isDevicePairingSupported } from '../utils/device-sync/support';
   import { Remote } from '../utils/remote';
   import { buildAliasAuthHeader } from '../utils/auth.ts';
   import { Local, Accounts } from '../utils/storage';
@@ -18,6 +25,11 @@
   }
 
   let { onSuccess = () => {} }: Props = $props();
+
+  // Setting up PGP by hand is the worst part of onboarding, and it bites before
+  // there is any Settings page to visit, so pairing has to be reachable from
+  // the sign-in screen, not only from inside a signed-in session.
+  let pairingScannerOpen = $state(false);
 
   // Client-side login rate limiting to prevent brute-force
   let loginAttempts = 0;
@@ -382,6 +394,22 @@
       <p class="mt-2 text-center text-xs text-muted-foreground">
         Explore the interface with sample data. No account required.
       </p>
+
+      {#if isTauriMobile && isDevicePairingSupported()}
+        <Button
+          variant="outline"
+          class="mt-4 w-full"
+          disabled={submitRequest}
+          onclick={() => (pairingScannerOpen = true)}
+          data-testid="scan-pairing-btn"
+        >
+          <QrCodeIcon class="mr-2 h-4 w-4" />
+          Scan a code from another device
+        </Button>
+        <p class="mt-2 text-center text-xs text-muted-foreground">
+          Copy an account, its PGP keys and its settings from Forward Email on your computer.
+        </p>
+      {/if}
     </Card.Content>
 
     <Card.Footer class="flex-col gap-1 text-center text-sm text-muted-foreground">
@@ -399,3 +427,15 @@
     </Card.Footer>
   </Card.Root>
 </div>
+
+{#if pairingScannerOpen}
+  <ScanPairingCode
+    onCancel={() => (pairingScannerOpen = false)}
+    onDone={() => {
+      pairingScannerOpen = false;
+      // The account now exists and is active; a reload routes into the mailbox
+      // through the normal startup path rather than a half-initialised one.
+      globalThis.location.reload();
+    }}
+  />
+{/if}

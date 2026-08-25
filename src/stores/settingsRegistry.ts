@@ -18,6 +18,15 @@ export type SettingDefinition = {
   accountScoped?: boolean;
   localFallbackOnDefault?: boolean;
   sensitive?: boolean;
+  /**
+   * Whether this setting travels to another device over QR pairing.
+   * Opt-in on purpose: a new DEVICE-scope setting stays put until someone
+   * decides it makes sense on a different form factor. Layout, density and
+   * the sync/prefetch tuning block are the standing counter-examples: a
+   * phone has no use for a desktop's three-pane layout or its body-sync
+   * budget.
+   */
+  portable?: boolean;
   storage?: string;
   overrideKey?: string;
   defaultOverride?: boolean;
@@ -120,6 +129,7 @@ const serializeJson = (value: unknown): string => {
 export const SETTINGS_REGISTRY: Record<string, SettingDefinition> = {
   locale: {
     id: 'locale',
+    portable: true,
     label: 'Locale',
     scope: SETTING_SCOPES.DEVICE,
     localKey: 'formatting_locale',
@@ -128,6 +138,7 @@ export const SETTINGS_REGISTRY: Record<string, SettingDefinition> = {
   },
   theme: {
     id: 'theme',
+    portable: true,
     label: 'Theme',
     scope: SETTING_SCOPES.DEVICE,
     localKey: 'theme',
@@ -162,6 +173,7 @@ export const SETTINGS_REGISTRY: Record<string, SettingDefinition> = {
   },
   compose_plain_default: {
     id: 'compose_plain_default',
+    portable: true,
     label: 'Plain Text Default',
     scope: SETTING_SCOPES.DEVICE,
     localKey: 'compose_plain_default',
@@ -172,6 +184,7 @@ export const SETTINGS_REGISTRY: Record<string, SettingDefinition> = {
   },
   attachment_reminder: {
     id: 'attachment_reminder',
+    portable: true,
     label: 'Attachment Reminder',
     scope: SETTING_SCOPES.DEVICE,
     localKey: 'attachment_reminder',
@@ -182,6 +195,7 @@ export const SETTINGS_REGISTRY: Record<string, SettingDefinition> = {
   },
   default_reply_all: {
     id: 'default_reply_all',
+    portable: true,
     label: 'Default Reply All',
     scope: SETTING_SCOPES.DEVICE,
     localKey: 'default_reply_all',
@@ -192,6 +206,7 @@ export const SETTINGS_REGISTRY: Record<string, SettingDefinition> = {
   },
   send_and_archive_default: {
     id: 'send_and_archive_default',
+    portable: true,
     label: 'Send & Archive Default',
     scope: SETTING_SCOPES.DEVICE,
     localKey: 'send_and_archive_default',
@@ -205,6 +220,7 @@ export const SETTINGS_REGISTRY: Record<string, SettingDefinition> = {
   // window shows an Undo toast for the duration.
   undo_send_delay: {
     id: 'undo_send_delay',
+    portable: true,
     label: 'Undo Send Delay',
     scope: SETTING_SCOPES.DEVICE,
     localKey: 'undo_send_delay',
@@ -270,6 +286,7 @@ export const SETTINGS_REGISTRY: Record<string, SettingDefinition> = {
   },
   font: {
     id: 'font',
+    portable: true,
     label: 'Font',
     scope: SETTING_SCOPES.DEVICE,
     localKey: (account) => `font_${account}`,
@@ -289,6 +306,7 @@ export const SETTINGS_REGISTRY: Record<string, SettingDefinition> = {
   },
   spam_report_address: {
     id: 'spam_report_address',
+    portable: true,
     label: 'Spam Report Address',
     scope: SETTING_SCOPES.DEVICE,
     localKey: (account) => `spam_report_address_${account}`,
@@ -300,6 +318,7 @@ export const SETTINGS_REGISTRY: Record<string, SettingDefinition> = {
   },
   block_remote_images: {
     id: 'block_remote_images',
+    portable: true,
     label: 'Block Remote Images',
     scope: SETTING_SCOPES.DEVICE,
     localKey: 'block_remote_images',
@@ -320,6 +339,7 @@ export const SETTINGS_REGISTRY: Record<string, SettingDefinition> = {
   },
   block_tracking_pixels: {
     id: 'block_tracking_pixels',
+    portable: true,
     label: 'Block Tracking Pixels',
     scope: SETTING_SCOPES.DEVICE,
     localKey: 'block_tracking_pixels',
@@ -330,6 +350,7 @@ export const SETTINGS_REGISTRY: Record<string, SettingDefinition> = {
   },
   view_plain_text: {
     id: 'view_plain_text',
+    portable: true,
     label: 'View Emails As Plain Text',
     scope: SETTING_SCOPES.DEVICE,
     localKey: 'view_plain_text',
@@ -418,12 +439,14 @@ export const SETTINGS_REGISTRY: Record<string, SettingDefinition> = {
   },
   saved_searches: {
     id: 'saved_searches',
+    portable: true,
     label: 'Saved Searches',
     scope: SETTING_SCOPES.DEVICE,
     storage: 'indexeddb',
   },
   pgp_keys: {
     id: 'pgp_keys',
+    portable: true,
     label: 'PGP Keys',
     scope: SETTING_SCOPES.DEVICE,
     localKey: (account) => `pgp_keys_${account}`,
@@ -436,6 +459,7 @@ export const SETTINGS_REGISTRY: Record<string, SettingDefinition> = {
   },
   pgp_passphrases: {
     id: 'pgp_passphrases',
+    portable: true,
     label: 'PGP Passphrases',
     scope: SETTING_SCOPES.DEVICE,
     localKey: (account) => `pgp_passphrases_${account}`,
@@ -448,6 +472,7 @@ export const SETTINGS_REGISTRY: Record<string, SettingDefinition> = {
   },
   default_calendar_id: {
     id: 'default_calendar_id',
+    portable: true,
     label: 'Default Calendar for Invites',
     scope: SETTING_SCOPES.DEVICE,
     localKey: (account) => `default_calendar_id_${account}`,
@@ -457,6 +482,7 @@ export const SETTINGS_REGISTRY: Record<string, SettingDefinition> = {
   },
   hide_completed_todos: {
     id: 'hide_completed_todos',
+    portable: true,
     label: 'Hide Completed Todos',
     scope: SETTING_SCOPES.DEVICE,
     localKey: 'hide_completed_todos',
@@ -467,6 +493,7 @@ export const SETTINGS_REGISTRY: Record<string, SettingDefinition> = {
   },
   tasks_sort: {
     id: 'tasks_sort',
+    portable: true,
     label: 'Tasks Sort Order',
     scope: SETTING_SCOPES.DEVICE,
     localKey: 'tasks_sort',
@@ -475,6 +502,7 @@ export const SETTINGS_REGISTRY: Record<string, SettingDefinition> = {
   },
   start_week_on_sunday: {
     id: 'start_week_on_sunday',
+    portable: true,
     label: 'Start Week on Sunday',
     scope: SETTING_SCOPES.DEVICE,
     localKey: 'start_week_on_sunday',
@@ -487,6 +515,15 @@ export const SETTINGS_REGISTRY: Record<string, SettingDefinition> = {
 
 export const getSettingDefinition = (id: string): SettingDefinition | undefined =>
   SETTINGS_REGISTRY[id] || null;
+
+/**
+ * Ids of every setting that may be carried to another device.
+ * See SettingDefinition.portable for why this is an allowlist.
+ */
+export const getPortableSettingIds = (): string[] =>
+  Object.values(SETTINGS_REGISTRY)
+    .filter((def) => def.portable)
+    .map((def) => def.id);
 
 export const resolveLocalKey = (
   def: SettingDefinition | undefined,

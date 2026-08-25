@@ -17,6 +17,12 @@ import {
 } from './settingsRegistry';
 import type { SettingDefinition } from './settingsRegistry';
 import type { Label, PgpKey } from '../types';
+import {
+  readPgpKeys,
+  readPgpPassphrases,
+  writePgpKeys,
+  writePgpPassphrases,
+} from '../utils/pgp-local';
 import { warn } from '../utils/logger.ts';
 import { getAuthHeader } from '../utils/auth';
 import {
@@ -352,20 +358,15 @@ export const effectiveArchiveFolder: Readable<string> = derived(
  * These are device-specific and never synced to the server
  */
 export const LocalSettings = {
-  // PGP keys stored locally (account-scoped)
+  // PGP keys stored locally (account-scoped). Reads and writes go through
+  // pgp-local.ts, which the QR pairing bundle also uses, so there is a single
+  // parser for this storage shape.
   getPgpKeys(): PgpKey[] {
-    try {
-      const currentAcct = Local.get('email') || 'default';
-      const data = Local.get(`pgp_keys_${currentAcct}`);
-      return data ? JSON.parse(data) : [];
-    } catch {
-      return [];
-    }
+    return readPgpKeys();
   },
 
   setPgpKeys(keys: PgpKey[]): void {
-    const currentAcct = Local.get('email') || 'default';
-    Local.set(`pgp_keys_${currentAcct}`, JSON.stringify(keys || []));
+    writePgpKeys(keys);
   },
 
   addPgpKey(key: PgpKey): void {
@@ -379,29 +380,21 @@ export const LocalSettings = {
     this.setPgpKeys(keys);
   },
 
-  // PGP passphrases (device-local, account-scoped)
+  // PGP passphrases (device-local, account-scoped, keyed by key name)
   getPgpPassphrases(): Record<string, string> {
-    try {
-      const currentAcct = Local.get('email') || 'default';
-      const data = Local.get(`pgp_passphrases_${currentAcct}`);
-      return data ? JSON.parse(data) : {};
-    } catch {
-      return {};
-    }
+    return readPgpPassphrases();
   },
 
   setPgpPassphrase(keyId: string, passphrase: string): void {
-    const currentAcct = Local.get('email') || 'default';
     const passphrases = this.getPgpPassphrases();
     passphrases[keyId] = passphrase;
-    Local.set(`pgp_passphrases_${currentAcct}`, JSON.stringify(passphrases));
+    writePgpPassphrases(passphrases);
   },
 
   removePgpPassphrase(keyId: string): void {
-    const currentAcct = Local.get('email') || 'default';
     const passphrases = this.getPgpPassphrases();
     delete passphrases[keyId];
-    Local.set(`pgp_passphrases_${currentAcct}`, JSON.stringify(passphrases));
+    writePgpPassphrases(passphrases);
   },
 
   // Email signature (device-local, account-scoped). Stored as plain text;

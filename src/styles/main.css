@@ -213,6 +213,27 @@
   }
 }
 
+/* Camera previews (QR device pairing).
+ *
+ * Android's WebView draws its own start-playback control over any <video> that
+ * is not currently playing: a large play glyph filling the viewfinder while
+ * getUserMedia is still resolving. There is no attribute or property for it:
+ * the control lives in the shadow DOM, so it can only be hidden in CSS.
+ *
+ * Scoped to the preview class rather than every <video> so a real media player
+ * added later keeps its controls. The only videos in the app today are the two
+ * camera previews.
+ */
+.fe-camera-preview::-webkit-media-controls,
+.fe-camera-preview::-webkit-media-controls-enclosure,
+.fe-camera-preview::-webkit-media-controls-panel,
+.fe-camera-preview::-webkit-media-controls-overlay-play-button,
+.fe-camera-preview::-webkit-media-controls-start-playback-button {
+  display: none !important;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
 /* Theme-aware scrollbars for every native scroll surface. Firefox uses the
  * standardized properties; Chromium/WebView/Safari use the pseudo-elements.
  * A transparent track avoids the bright gutter shown by the platform default,

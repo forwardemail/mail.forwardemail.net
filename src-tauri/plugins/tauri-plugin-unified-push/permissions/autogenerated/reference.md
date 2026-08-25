@@ -1,3 +1,17 @@
+## Default Permission
+
+Allows the Forward Email Android app to manage UnifiedPush registration, distributor selection, queued messages, and native event listeners.
+
+#### This default permission set includes the following:
+
+- `allow-get-state`
+- `allow-register`
+- `allow-pick-distributor`
+- `allow-drain-messages`
+- `allow-unregister`
+- `allow-registerListener`
+- `allow-removeListener`
+
 ## Permission Table
 
 <table>

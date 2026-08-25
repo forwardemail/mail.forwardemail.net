@@ -7,6 +7,12 @@
   import { cacheManager } from '../utils/cache-manager';
   import { unregisterServiceWorker } from '../utils/sw-cache.js';
   import AppLockSettings from './AppLockSettings.svelte';
+  import DeviceSyncCard from './components/DeviceSyncCard.svelte';
+  import ScanPairingCode from './components/ScanPairingCode.svelte';
+  // Imported from support directly, not the device-sync barrel: this flag is
+  // needed at first paint, and the barrel statically pulls the whole pairing
+  // graph into the entry chunk with it.
+  import { isDevicePairingSupported } from '../utils/device-sync/support';
   import MailtoSettings from './components/MailtoSettings.svelte';
   import { forceDeleteAllDatabases } from '../utils/db-recovery.js';
   import { closeDatabase, terminateDbWorker } from '../utils/db-worker-client.js';
@@ -34,6 +40,7 @@
   import Info from '@lucide/svelte/icons/info';
   import User from '@lucide/svelte/icons/user';
   import Pencil from '@lucide/svelte/icons/pencil';
+  import QrCodeIcon from '@lucide/svelte/icons/qr-code';
   import X from '@lucide/svelte/icons/x';
   import MessageSquare from '@lucide/svelte/icons/message-square';
   import AlertCircle from '@lucide/svelte/icons/alert-circle';
@@ -194,6 +201,7 @@
   let rebuildingIndex = $state(false);
   let rebuildConfirmVisible = $state(false);
   let pgpKeys = $state<{ name: string; value: string }[]>([]);
+  let pairingScannerOpen = $state(false);
   let keyFormVisible = $state(false);
   let editingKeyName = $state('');
   let editingKeyValue = $state('');
@@ -2311,6 +2319,31 @@
           </Card.Content>
         </Card.Root>
 
+        <!--
+          QR device pairing. Desktop and webmail send; mobile receives, so each
+          side gets only the half it can actually perform. Hidden entirely on
+          iOS until a decoder ships - see device-sync/support.ts.
+        -->
+        {#if isTauriMobile && isDevicePairingSupported()}
+          <Card.Root>
+            <Card.Header>
+              <Card.Title class="flex items-center gap-2">
+                <QrCodeIcon class="h-4 w-4" />
+                Add from another device
+              </Card.Title>
+              <Card.Description>
+                Scan the pairing code shown by Forward Email on your computer to copy an account,
+                its PGP keys and its settings onto this phone.
+              </Card.Description>
+            </Card.Header>
+            <Card.Content>
+              <Button onclick={() => (pairingScannerOpen = true)}>Scan a code</Button>
+            </Card.Content>
+          </Card.Root>
+        {:else if !isTauriMobile}
+          <DeviceSyncCard account={aliasEmail || Local.get('email') || ''} />
+        {/if}
+
         <Card.Root>
           <Card.Header>
             <Card.Title>Privacy</Card.Title>
@@ -3209,12 +3242,40 @@
                 <span class="ml-2 text-xs text-muted-foreground">{updateCheckResult}</span>
               {/if}
             </div>
+            <!--
+              The diagnostics page is otherwise only reachable from the About
+              dialog, which opens from a native menu event and so does not
+              exist on mobile. Without this there is no way to reach it on a
+              phone, which is where it is needed most.
+            -->
+            <div class="pt-2">
+              <button
+                type="button"
+                class="text-fg-link hover:underline"
+                onclick={() => {
+                  globalThis.history.pushState({}, '', '/mailbox/diagnostics');
+                  globalThis.dispatchEvent(new PopStateEvent('popstate'));
+                }}>Run diagnostics</button
+              >
+            </div>
           </Card.Content>
         </Card.Root>
       {/if}
     </div>
   </div>
 </div>
+
+{#if pairingScannerOpen}
+  <ScanPairingCode
+    onCancel={() => (pairingScannerOpen = false)}
+    onDone={() => {
+      pairingScannerOpen = false;
+      // Credentials, keys and settings all changed underneath the app; a
+      // reload is the honest way to pick every one of them up.
+      globalThis.location.reload();
+    }}
+  />
+{/if}
 
 <LabelModal
   visible={labelModalVisible}

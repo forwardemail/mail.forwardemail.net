@@ -250,17 +250,26 @@ describe('inject-ios-scene-delegate.cjs', () => {
 
   // ─── Build script integration tests ─────────────────────────────────────────
 
-  it('ios-dev.sh calls inject-ios-scene-delegate.cjs', () => {
+  // Every path reaches the scene-delegate injection through the shared
+  // configure-ios-project.sh, which owns the ordered post-init step list. The
+  // property being guarded is unchanged: each build path runs the injection.
+
+  it('configure-ios-project.sh calls inject-ios-scene-delegate.cjs', () => {
+    const shared = fs.readFileSync(path.join(ROOT, 'scripts', 'configure-ios-project.sh'), 'utf8');
+    expect(shared).toContain('inject-ios-scene-delegate.cjs');
+  });
+
+  it('ios-dev.sh runs the shared iOS configure script', () => {
     const iosDevSh = fs.readFileSync(path.join(ROOT, 'scripts', 'ios-dev.sh'), 'utf8');
-    expect(iosDevSh).toContain('inject-ios-scene-delegate.cjs');
+    expect(iosDevSh).toContain('configure-ios-project.sh');
   });
 
-  it('ios-build.sh calls inject-ios-scene-delegate.cjs', () => {
+  it('ios-build.sh runs the shared iOS configure script', () => {
     const iosBuildSh = fs.readFileSync(path.join(ROOT, 'scripts', 'ios-build.sh'), 'utf8');
-    expect(iosBuildSh).toContain('inject-ios-scene-delegate.cjs');
+    expect(iosBuildSh).toContain('configure-ios-project.sh');
   });
 
-  it('CI workflows call inject-ios-scene-delegate.cjs', () => {
+  it('CI workflows run the shared iOS configure script', () => {
     const e2eIos = fs.readFileSync(
       path.join(ROOT, '.github', 'workflows', 'e2e-mobile-ios.yml'),
       'utf8',
@@ -274,9 +283,9 @@ describe('inject-ios-scene-delegate.cjs', () => {
       'utf8',
     );
 
-    expect(e2eIos).toContain('inject-ios-scene-delegate.cjs');
-    expect(buildMobile).toContain('inject-ios-scene-delegate.cjs');
-    expect(releaseMobile).toContain('inject-ios-scene-delegate.cjs');
+    expect(e2eIos).toContain('configure-ios-project.sh');
+    expect(buildMobile).toContain('configure-ios-project.sh');
+    expect(releaseMobile).toContain('configure-ios-project.sh');
   });
 
   // ─── MobilePushPlugin tests ─────────────────────────────────────────────────

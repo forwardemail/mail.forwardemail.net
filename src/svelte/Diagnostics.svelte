@@ -13,6 +13,7 @@
     summarizeReport,
     type DiagnosticsReport,
   } from '../utils/diagnostics';
+  import CameraSpike from './components/CameraSpike.svelte';
 
   let report = $state<DiagnosticsReport | null>(null);
   let running = $state(false);
@@ -152,4 +153,6 @@
       </details>
     </section>
   {/if}
+
+  <CameraSpike />
 </div>

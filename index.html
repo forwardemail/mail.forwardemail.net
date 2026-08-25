@@ -439,14 +439,25 @@
         };
       })();
 
-      // Show fallback UI if main script fails to load/execute within 15 seconds
+      // Show fallback UI if the main script fails to load or execute in time.
+      //
+      // The budget depends on how the app is being served. Vite injects its
+      // client script only from the dev server, and dev delivers the app as
+      // hundreds of unbundled modules. On mobile every one of those is a round
+      // trip through the adb tunnel (measured at ~25ms against ~1ms on the
+      // host), so a cold boot runs well past a minute and the production
+      // budget fires every time, reloading into an even slower boot. A built
+      // app serves a handful of bundled chunks locally and should still fail
+      // fast.
       (function () {
+        var isDevServer = !!document.querySelector('script[src="/@vite/client"]');
+        var bootTimeoutMs = isDevServer ? 120000 : 15000;
         var timeout = setTimeout(function () {
           var fallback = document.getElementById('fe-fallback-recovery');
           if (fallback && !window.__appBootstrapped) {
             fallback.style.display = 'block';
           }
-        }, 15000);
+        }, bootTimeoutMs);
 
         // Clear timeout once app bootstraps successfully
         var origMark2 = window.__markAppBootstrapped;

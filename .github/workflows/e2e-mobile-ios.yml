@@ -80,8 +80,8 @@ jobs:
           CI: 'true'
         run: pnpm tauri ios init
 
-      - name: Inject iOS 26 scene delegate
-        run: node scripts/inject-ios-scene-delegate.cjs
+      - name: Configure generated iOS project (camera permission + scene delegate)
+        run: bash scripts/configure-ios-project.sh
 
       - name: Build iOS app (debug, simulator)
         run: pnpm tauri ios build --debug --target aarch64-sim

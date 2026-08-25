@@ -573,9 +573,9 @@ jobs:
         if: steps.check.outputs.enabled == 'true'
         run: pnpm tauri ios init --ci
 
-      - name: Inject iOS 26 scene delegate
+      - name: Configure generated iOS project (camera permission + scene delegate)
         if: steps.check.outputs.enabled == 'true'
-        run: node scripts/inject-ios-scene-delegate.cjs
+        run: bash scripts/configure-ios-project.sh
 
       # As with Android: init scaffolds the default Tauri icons into the
       # gitignored gen/ project, so regenerate branded icons from the manifest

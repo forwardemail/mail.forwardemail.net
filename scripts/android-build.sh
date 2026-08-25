@@ -60,8 +60,13 @@ echo ""
 # These scripts modify src-tauri/gen/android/ after `tauri android init`
 # regenerates it. They are idempotent and safe to re-run.
 node scripts/configure-android-push.cjs
+node scripts/configure-mobile-camera.cjs
 node scripts/configure-mobile-display-name.cjs
 node scripts/inject-android-signing.cjs
 node scripts/inject-android-mainactivity.cjs
 
-npx tauri android build "${FEATURE_ARGS[@]}" "$@"
+# macOS ships bash 3.2, where `set -u` treats an empty array expansion as an
+# unbound variable; that was only fixed in bash 4.4. FEATURE_ARGS is empty for
+# the default unified-push profile, so expand it through the ${arr[@]+...}
+# guard rather than directly.
+npx tauri android build ${FEATURE_ARGS[@]+"${FEATURE_ARGS[@]}"} "$@"

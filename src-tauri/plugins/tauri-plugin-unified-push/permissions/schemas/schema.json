@@ -338,6 +338,12 @@
           "type": "string",
           "const": "deny-unregister",
           "markdownDescription": "Denies the unregister command without any pre-configured scope."
+        },
+        {
+          "description": "Allows the Forward Email Android app to manage UnifiedPush registration, distributor selection, queued messages, and native event listeners.\n#### This default permission set includes:\n\n- `allow-get-state`\n- `allow-register`\n- `allow-pick-distributor`\n- `allow-drain-messages`\n- `allow-unregister`\n- `allow-registerListener`\n- `allow-removeListener`",
+          "type": "string",
+          "const": "default",
+          "markdownDescription": "Allows the Forward Email Android app to manage UnifiedPush registration, distributor selection, queued messages, and native event listeners.\n#### This default permission set includes:\n\n- `allow-get-state`\n- `allow-register`\n- `allow-pick-distributor`\n- `allow-drain-messages`\n- `allow-unregister`\n- `allow-registerListener`\n- `allow-removeListener`"
         }
       ]
     }
