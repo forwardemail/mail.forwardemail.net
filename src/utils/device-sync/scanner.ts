@@ -3,8 +3,8 @@
  *
  * The decoder is deliberately behind a tiny interface. Android has a native
  * BarcodeDetector (measured: present, with qr_code among its formats), while
- * WebKit has none, so iOS will need a bundled decoder - jsQR or zxing-wasm -
- * dropped in here without the scanner UI knowing which one it got.
+ * WebKit has none, so iOS falls back to the bundled jsQR decoder. The scanner
+ * UI never knows which one it got.
  *
  * Every decoder returns STRINGS, which is why frames are base45 rather than
  * raw byte mode: DetectedBarcode.rawValue is a DOMString and binary payloads do
@@ -39,14 +39,73 @@ const getDetectorCtor = (): BarcodeDetectorCtor | undefined =>
 export const isNativeDecoderAvailable = (): boolean => Boolean(getDetectorCtor());
 
 /**
- * Resolve a decoder for this platform, or null when none is available.
+ * Bundled decoder for engines without BarcodeDetector, which in practice means
+ * WKWebView. Rasterises the current frame onto an offscreen canvas and hands
+ * the pixels to jsQR, the same library the Playwright e2e uses to read the
+ * sender's canvas, so both sides of the test matrix exercise one decoder.
  *
- * Null is a real answer the caller must handle - it means "this build cannot
- * scan here" - rather than something to paper over with a broken loop.
+ * jsQR is imported lazily: platforms with a native detector never load it.
+ */
+async function createJsQrDecoder(): Promise<QrDecoder | null> {
+  let jsQR: typeof import('jsqr').default;
+  try {
+    jsQR = (await import('jsqr')).default;
+  } catch {
+    return null;
+  }
+
+  let canvas: HTMLCanvasElement;
+  let context: CanvasRenderingContext2D | null;
+  try {
+    canvas = document.createElement('canvas');
+    context = canvas.getContext('2d', { willReadFrequently: true });
+  } catch {
+    // Some webviews throw from getContext rather than returning null; either
+    // way the fallback cannot run here.
+    return null;
+  }
+  if (!context) return null;
+
+  // Bounds the per-frame cost. A version 20 symbol needs far less than this,
+  // and jsQR's runtime grows with pixel count, not with symbol density.
+  const MAX_DIMENSION = 1024;
+
+  return {
+    kind: 'jsQR',
+    async decode(source: QrFrameSource): Promise<string[]> {
+      const width = 'videoWidth' in source ? source.videoWidth : source.width;
+      const height = 'videoHeight' in source ? source.videoHeight : source.height;
+      if (!width || !height) return [];
+
+      const scale = Math.min(1, MAX_DIMENSION / Math.max(width, height));
+      const w = Math.max(1, Math.round(width * scale));
+      const h = Math.max(1, Math.round(height * scale));
+      if (canvas.width !== w) canvas.width = w;
+      if (canvas.height !== h) canvas.height = h;
+
+      context.drawImage(source, 0, 0, w, h);
+      const image = context.getImageData(0, 0, w, h);
+      // The sender always paints dark modules on a white quiet zone, so the
+      // inverted pass would be pure wasted work; skipping it roughly halves
+      // the decode time.
+      const found = jsQR(image.data, w, h, { inversionAttempts: 'dontInvert' });
+      return found?.data ? [found.data] : [];
+    },
+    close() {
+      // The canvas is garbage collected with the closure.
+    },
+  };
+}
+
+/**
+ * Resolve a decoder for this platform: the native BarcodeDetector where it
+ * exists and can do QR, the bundled jsQR decoder otherwise. Null only when
+ * even the fallback cannot run (no canvas 2d context, import failure), which
+ * the caller must still surface as "this build cannot scan here".
  */
 export async function createQrDecoder(): Promise<QrDecoder | null> {
   const ctor = getDetectorCtor();
-  if (!ctor) return null;
+  if (!ctor) return createJsQrDecoder();
 
   // Ask before constructing: a detector built for an unsupported format throws
   // on first use rather than at construction, which would surface as a scan
@@ -54,9 +113,9 @@ export async function createQrDecoder(): Promise<QrDecoder | null> {
   if (typeof ctor.getSupportedFormats === 'function') {
     try {
       const formats = await ctor.getSupportedFormats();
-      if (!formats.includes('qr_code')) return null;
+      if (!formats.includes('qr_code')) return createJsQrDecoder();
     } catch {
-      return null;
+      return createJsQrDecoder();
     }
   }
 

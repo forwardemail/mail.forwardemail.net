@@ -10,10 +10,6 @@
   import QrCodeIcon from '@lucide/svelte/icons/qr-code';
   import ScanPairingCode from './components/ScanPairingCode.svelte';
   import { isTauriMobile } from '../utils/platform.js';
-  // Imported from support directly, not the device-sync barrel: this flag is
-  // needed at first paint, and the barrel statically pulls the whole pairing
-  // graph into the entry chunk with it.
-  import { isDevicePairingSupported } from '../utils/device-sync/support';
   import { Remote } from '../utils/remote';
   import { buildAliasAuthHeader } from '../utils/auth.ts';
   import { Local, Accounts } from '../utils/storage';
@@ -395,7 +391,7 @@
         Explore the interface with sample data. No account required.
       </p>
 
-      {#if isTauriMobile && isDevicePairingSupported()}
+      {#if isTauriMobile}
         <Button
           variant="outline"
           class="mt-4 w-full"
@@ -433,9 +429,12 @@
     onCancel={() => (pairingScannerOpen = false)}
     onDone={() => {
       pairingScannerOpen = false;
-      // The account now exists and is active; a reload routes into the mailbox
-      // through the normal startup path rather than a half-initialised one.
-      globalThis.location.reload();
+      // Same completion as a normal sign-in, which never reloads the page.
+      // The reload this used to do froze the app on iOS (tao stopped
+      // processing input after a custom-scheme reload) and could race
+      // WKWebView's lazy localStorage persistence, losing the just-written
+      // credentials and landing back on this screen.
+      onSuccess?.('/mailbox');
     }}
   />
 {/if}

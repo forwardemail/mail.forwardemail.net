@@ -17,6 +17,27 @@ import type { QrDecoder, QrFrameSource } from '../../src/utils/device-sync/scann
 
 const FRAME = {} as QrFrameSource;
 
+vi.mock('jsqr', () => ({
+  default: vi.fn((data: Uint8ClampedArray) =>
+    // The stubbed context below tags decodable frames with a marker byte.
+    data[0] === 0xfe ? { data: 'FE1-FROM-JSQR' } : null,
+  ),
+}));
+
+/** A working 2d context, since jsdom's getContext throws without node-canvas. */
+const stubCanvasContext = (firstByte: number) => {
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
+    drawImage: vi.fn(),
+    getImageData: vi.fn(() => ({
+      data: Uint8ClampedArray.of(firstByte, 0, 0, 255),
+      width: 1,
+      height: 1,
+    })),
+  } as unknown as CanvasRenderingContext2D);
+};
+
+const VIDEO_FRAME = { videoWidth: 640, videoHeight: 480 } as unknown as QrFrameSource;
+
 const fakeDecoder = (impl: () => Promise<string[]>): QrDecoder => ({
   kind: 'fake',
   decode: impl,
@@ -28,21 +49,53 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
+  vi.restoreAllMocks();
 });
 
 describe('createQrDecoder', () => {
-  it('reports no native decoder when BarcodeDetector is absent (the iOS case)', async () => {
+  it('falls back to the bundled jsQR decoder without BarcodeDetector (the iOS case)', async () => {
     vi.stubGlobal('BarcodeDetector', undefined);
+    stubCanvasContext(0xfe);
+
     expect(isNativeDecoderAvailable()).toBe(false);
-    await expect(createQrDecoder()).resolves.toBeNull();
+    const decoder = await createQrDecoder();
+    expect(decoder?.kind).toBe('jsQR');
+    await expect(decoder!.decode(VIDEO_FRAME)).resolves.toEqual(['FE1-FROM-JSQR']);
   });
 
-  it('refuses a detector that cannot do qr_code rather than scanning forever', async () => {
+  it('returns nothing for a frame jsQR cannot read, without erroring', async () => {
+    vi.stubGlobal('BarcodeDetector', undefined);
+    stubCanvasContext(0x00);
+
+    const decoder = await createQrDecoder();
+    await expect(decoder!.decode(VIDEO_FRAME)).resolves.toEqual([]);
+  });
+
+  it('skips a frame whose source has no dimensions yet', async () => {
+    vi.stubGlobal('BarcodeDetector', undefined);
+    stubCanvasContext(0xfe);
+
+    const decoder = await createQrDecoder();
+    const notReady = { videoWidth: 0, videoHeight: 0 } as unknown as QrFrameSource;
+    await expect(decoder!.decode(notReady)).resolves.toEqual([]);
+  });
+
+  it('falls back to jsQR when the detector cannot do qr_code', async () => {
     // A detector built for an unsupported format throws on first use, not at
     // construction - which would look like a scan that simply never matches.
     vi.stubGlobal('BarcodeDetector', {
       getSupportedFormats: async () => ['ean_13', 'code_128'],
     });
+    stubCanvasContext(0xfe);
+
+    const decoder = await createQrDecoder();
+    expect(decoder?.kind).toBe('jsQR');
+  });
+
+  it('resolves null only when even the fallback cannot run', async () => {
+    // jsdom's real getContext throws without node-canvas, which stands in for
+    // a webview with no usable 2d context.
+    vi.stubGlobal('BarcodeDetector', undefined);
     await expect(createQrDecoder()).resolves.toBeNull();
   });
 
@@ -60,13 +113,15 @@ describe('createQrDecoder', () => {
     await expect(decoder!.decode(FRAME)).resolves.toEqual(['FE1-ONE']);
   });
 
-  it('treats a detector whose format query throws as unavailable', async () => {
+  it('falls back to jsQR when the format query throws', async () => {
     vi.stubGlobal('BarcodeDetector', {
       getSupportedFormats: async () => {
         throw new Error('nope');
       },
     });
-    await expect(createQrDecoder()).resolves.toBeNull();
+    stubCanvasContext(0xfe);
+    const decoder = await createQrDecoder();
+    expect(decoder?.kind).toBe('jsQR');
   });
 });
 

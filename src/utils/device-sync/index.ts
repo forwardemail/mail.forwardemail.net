@@ -66,5 +66,3 @@ export {
   unwrapSealKey,
   wrapSealKey,
 } from './pairing-code';
-
-export { isDevicePairingSupported } from './support';

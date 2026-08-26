@@ -29,6 +29,25 @@ const root = path.resolve(__dirname, '..');
 const CAMERA_USAGE_DESCRIPTION =
   'Forward Email uses the camera to scan a pairing code shown by another device.';
 
+/**
+ * Every iOS privacy usage description the app declares, injected per-key so a
+ * project that already carries one of them still gains the others.
+ *
+ * NSLocalNetworkUsageDescription exists for `tauri ios dev` on a physical
+ * device, where the app connects to the dev server over the LAN and iOS 14+
+ * gates that behind the Local Network permission. A production build never
+ * opens a local-network connection, so the key sits unused there and the
+ * prompt never appears; declaring it unconditionally is harmless and keeps
+ * one pipeline instead of a dev-only fork.
+ */
+const IOS_USAGE_DESCRIPTIONS = [
+  { key: 'NSCameraUsageDescription', text: CAMERA_USAGE_DESCRIPTION },
+  {
+    key: 'NSLocalNetworkUsageDescription',
+    text: 'Forward Email connects to your development server over the local network during development.',
+  },
+];
+
 const ANDROID_PERMISSIONS = ['android.permission.CAMERA'];
 const ANDROID_FEATURES = [{ name: 'android.hardware.camera', required: false }];
 
@@ -98,7 +117,11 @@ function configureIosProjectYml(appleDir) {
   if (!fs.existsSync(projectYmlPath)) return false;
 
   let yml = fs.readFileSync(projectYmlPath, 'utf8');
-  if (yml.includes('NSCameraUsageDescription')) return false;
+  // Checked PER KEY, not with one early return: a project regenerated after a
+  // previous run already carries the earlier keys, and skipping the whole
+  // block would silently drop any newly added description forever.
+  const missing = IOS_USAGE_DESCRIPTIONS.filter(({ key }) => !yml.includes(key));
+  if (missing.length === 0) return false;
 
   const infoPropsRegex = /(info:\s*\n\s+path:[^\n]+\n\s+properties:\n)/;
   const match = yml.match(infoPropsRegex);
@@ -113,13 +136,11 @@ function configureIosProjectYml(appleDir) {
   const afterProps = yml.substring(yml.indexOf(match[0]) + match[0].length);
   const baseIndent = (afterProps.split('\n')[0].match(/^(\s*)/) || ['', '    '])[1];
 
-  yml = yml.replace(
-    infoPropsRegex,
-    `$1${baseIndent}NSCameraUsageDescription: "${CAMERA_USAGE_DESCRIPTION}"\n`,
-  );
+  const lines = missing.map(({ key, text }) => `${baseIndent}${key}: "${text}"\n`).join('');
+  yml = yml.replace(infoPropsRegex, `$1${lines}`);
 
   fs.writeFileSync(projectYmlPath, yml);
-  console.log('Added NSCameraUsageDescription to project.yml info.properties');
+  console.log(`Added ${missing.map(({ key }) => key).join(', ')} to project.yml info.properties`);
   return true;
 }
 
@@ -128,17 +149,20 @@ function configureIosPlist(targetDir) {
   if (!fs.existsSync(plistPath)) return false;
 
   let plist = fs.readFileSync(plistPath, 'utf8');
-  if (plist.includes('NSCameraUsageDescription')) return false;
+  const missing = IOS_USAGE_DESCRIPTIONS.filter(({ key }) => !plist.includes(key));
+  if (missing.length === 0) return false;
 
-  const entry = `\t<key>NSCameraUsageDescription</key>\n\t<string>${CAMERA_USAGE_DESCRIPTION}</string>\n`;
   if (!/<\/dict>\s*<\/plist>\s*$/.test(plist)) {
     console.warn('Info.plist has an unexpected shape; skipping the direct patch');
     return false;
   }
 
-  plist = plist.replace(/<\/dict>\s*<\/plist>\s*$/, `${entry}</dict>\n</plist>\n`);
+  const entries = missing
+    .map(({ key, text }) => `\t<key>${key}</key>\n\t<string>${text}</string>\n`)
+    .join('');
+  plist = plist.replace(/<\/dict>\s*<\/plist>\s*$/, `${entries}</dict>\n</plist>\n`);
   fs.writeFileSync(plistPath, plist);
-  console.log('Added NSCameraUsageDescription to Info.plist');
+  console.log(`Added ${missing.map(({ key }) => key).join(', ')} to Info.plist`);
   return true;
 }
 
@@ -159,4 +183,4 @@ if (!touchedAndroid && !touchedIos) {
   console.log('Camera permissions already configured');
 }
 
-module.exports = { CAMERA_USAGE_DESCRIPTION };
+module.exports = { CAMERA_USAGE_DESCRIPTION, IOS_USAGE_DESCRIPTIONS };

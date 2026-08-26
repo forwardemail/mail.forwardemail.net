@@ -186,6 +186,38 @@ describe('configure-mobile-camera', () => {
     expect(yml).toContain('CFBundleDisplayName: Mail');
   });
 
+  it('declares the local-network usage description for dev-on-device', () => {
+    const fixture = createFixture();
+    fixture.run();
+
+    expect(fixture.projectYml()).toContain('NSLocalNetworkUsageDescription:');
+    expect(fixture.plist()).toContain('<key>NSLocalNetworkUsageDescription</key>');
+  });
+
+  it('adds a newly introduced key to a project that already has the older ones', () => {
+    // The regression this guards: a single includes() early-return skipped the
+    // whole block when any one key was present, so projects configured before
+    // a key was introduced never received it.
+    const fixture = createFixture();
+    fixture.run();
+
+    const ymlWithoutLocalNetwork = fixture
+      .projectYml()
+      .split('\n')
+      .filter((line) => !line.includes('NSLocalNetworkUsageDescription'))
+      .join('\n');
+    writeFileSync(
+      join(fixture.root, 'src-tauri', 'gen', 'apple', 'project.yml'),
+      ymlWithoutLocalNetwork,
+    );
+
+    fixture.run();
+
+    expect(fixture.projectYml()).toContain('NSLocalNetworkUsageDescription:');
+    // And the key that was already there is not duplicated.
+    expect(fixture.projectYml().match(/NSCameraUsageDescription/g)).toHaveLength(1);
+  });
+
   it('also patches Info.plist directly, for when xcodegen is unavailable', () => {
     const fixture = createFixture();
     fixture.run();

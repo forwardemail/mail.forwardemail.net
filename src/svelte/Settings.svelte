@@ -9,10 +9,6 @@
   import AppLockSettings from './AppLockSettings.svelte';
   import DeviceSyncCard from './components/DeviceSyncCard.svelte';
   import ScanPairingCode from './components/ScanPairingCode.svelte';
-  // Imported from support directly, not the device-sync barrel: this flag is
-  // needed at first paint, and the barrel statically pulls the whole pairing
-  // graph into the entry chunk with it.
-  import { isDevicePairingSupported } from '../utils/device-sync/support';
   import MailtoSettings from './components/MailtoSettings.svelte';
   import { forceDeleteAllDatabases } from '../utils/db-recovery.js';
   import { closeDatabase, terminateDbWorker } from '../utils/db-worker-client.js';
@@ -2321,10 +2317,10 @@
 
         <!--
           QR device pairing. Desktop and webmail send; mobile receives, so each
-          side gets only the half it can actually perform. Hidden entirely on
-          iOS until a decoder ships - see device-sync/support.ts.
+          side gets only the half it can actually perform. iOS scans through
+          the bundled jsQR decoder, since WebKit has no BarcodeDetector.
         -->
-        {#if isTauriMobile && isDevicePairingSupported()}
+        {#if isTauriMobile}
           <Card.Root>
             <Card.Header>
               <Card.Title class="flex items-center gap-2">
@@ -3268,11 +3264,23 @@
 {#if pairingScannerOpen}
   <ScanPairingCode
     onCancel={() => (pairingScannerOpen = false)}
-    onDone={() => {
+    onDone={(result) => {
       pairingScannerOpen = false;
-      // Credentials, keys and settings all changed underneath the app; a
-      // reload is the honest way to pick every one of them up.
-      globalThis.location.reload();
+      // Deliberately NOT location.reload(). A hard reload straight after the
+      // credential writes froze the app on iOS (tao stopped processing input
+      // after the custom-scheme reload) and can race WKWebView's lazy
+      // localStorage persistence, landing a freshly paired phone on the login
+      // screen. Normal sign-in and account switching never reload either;
+      // pairing uses the same in-app paths.
+      if (result.account) {
+        void switchAccount(result.account);
+        globalThis.history.pushState({}, '', '/mailbox');
+        globalThis.dispatchEvent(new PopStateEvent('popstate'));
+      } else {
+        // Same-account import: keys and settings changed in place.
+        refreshSyncWorkerPgpKeys();
+        localSettingsVersion.update((n) => n + 1);
+      }
     }}
   />
 {/if}

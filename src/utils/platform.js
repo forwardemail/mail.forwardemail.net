@@ -46,11 +46,6 @@ export const isTauriDesktop = isTauri && nativePlatform !== 'android' && nativeP
  */
 export const isTauriMobile = isTauri && (nativePlatform === 'android' || nativePlatform === 'ios');
 
-/**
- * True when running inside the Tauri iOS webview specifically.
- */
-export const isTauriIOS = isTauri && nativePlatform === 'ios';
-
 export const isServiceWorkerSupported =
   typeof navigator !== 'undefined' && 'serviceWorker' in navigator;
 

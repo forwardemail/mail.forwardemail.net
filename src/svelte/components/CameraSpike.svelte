@@ -57,6 +57,7 @@
   let video = $state<HTMLVideoElement | null>(null);
 
   let cameraFps = $state(0);
+  let decoderKind = $state('none');
   let decodeAttempts = $state(0);
   let decodesSucceeded = $state(0);
   let lastRawValue = $state('');
@@ -128,8 +129,8 @@
     }
     if (!isNativeDecoderAvailable()) {
       return {
-        tone: 'warn',
-        text: 'Camera works, but there is no BarcodeDetector here. The scanner needs a bundled JS decoder (jsQR or zxing-wasm). Expected on iOS.',
+        tone: 'unknown',
+        text: 'No native BarcodeDetector here; scanning uses the bundled jsQR decoder. Point it at a pairing code.',
       };
     }
     return { tone: 'unknown', text: 'Camera is live. Nothing decoded yet.' };
@@ -219,6 +220,7 @@
 
       trackInfo = stream.getVideoTracks()[0]?.getSettings() as Record<string, unknown>;
       decoder = await createQrDecoder();
+      decoderKind = decoder?.kind ?? 'none';
 
       cameraState = 'live';
       startFpsCounter();
@@ -252,6 +254,7 @@
       `cameraState: ${cameraState}`,
       `cameraError: ${cameraError || 'none'}`,
       `trackSettings: ${trackInfo ? JSON.stringify(trackInfo) : 'n/a'}`,
+      `decoder: ${decoderKind}`,
       `cameraFps: ${cameraFps}`,
       `decodeAttempts: ${decodeAttempts}`,
       `decodesSucceeded: ${decodesSucceeded}`,
