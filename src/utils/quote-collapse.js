@@ -88,7 +88,39 @@ export function processQuotedContent(html, options = {}) {
 
     let hasQuotes = false;
 
-    // 1. Find and wrap <blockquote> elements
+    // 1. Find known quote containers and attribution prefixes FIRST, each
+    //    grouped with the quote siblings that follow it. Order matters twice
+    //    over here, and both lessons were learned from shipped misformats:
+    //    - A Thunderbird reply is a moz-cite-prefix div FOLLOWED BY a sibling
+    //      blockquote. Wrapping bare blockquotes first left the prefix to be
+    //      wrapped on its own, stacking two collapse toggles per reply.
+    //    - A Gmail reply nests its blockquote INSIDE div.gmail_quote. Wrapping
+    //      the inner blockquote first and the container second produced a
+    //      wrapper inside a wrapper, with a second toggle hidden in the
+    //      collapsed content.
+    const containerQuotes = doc.querySelectorAll(
+      '.gmail_quote, .gmail_extra, [class*="gmail_quote"], .yahoo_quoted, .moz-cite-prefix, .OutlookMessageHeader, [class*="quoted"]',
+    );
+    containerQuotes.forEach((quote) => {
+      if (quote.closest('.fe-quote-wrapper')) return;
+      // Only OUTERMOST quote boundaries get a toggle. A title or attribution
+      // line already inside a blockquote (or inside another client's quote
+      // container) is part of that quote's content; wrapping it separately
+      // plants a second collapsible inside the first.
+      if (
+        quote.parentElement?.closest(
+          'blockquote, .gmail_quote, .gmail_extra, [class*="gmail_quote"], .yahoo_quoted, [class*="quoted"]',
+        )
+      ) {
+        return;
+      }
+      hasQuotes = true;
+      const group = [quote, ...collectQuotedSiblings(quote)];
+      wrapElementsInCollapsible(group, doc, collapseByDefault);
+    });
+
+    // 2. Wrap any remaining bare <blockquote> elements (cite quotes from
+    //    clients without a recognized container or prefix).
     const blockquotes = doc.querySelectorAll('blockquote');
     blockquotes.forEach((bq) => {
       // Skip if already wrapped
@@ -101,24 +133,6 @@ export function processQuotedContent(html, options = {}) {
 
       hasQuotes = true;
       wrapInCollapsible(bq, doc, collapseByDefault);
-    });
-
-    // 2. Find Gmail's quote divs
-    const gmailQuotes = doc.querySelectorAll('.gmail_quote, .gmail_extra, [class*="gmail_quote"]');
-    gmailQuotes.forEach((quote) => {
-      if (quote.closest('.fe-quote-wrapper')) return;
-      hasQuotes = true;
-      wrapInCollapsible(quote, doc, collapseByDefault);
-    });
-
-    // 3. Find Yahoo/Outlook quote divs
-    const otherQuotes = doc.querySelectorAll(
-      '.yahoo_quoted, .moz-cite-prefix, .OutlookMessageHeader, [class*="quoted"]',
-    );
-    otherQuotes.forEach((quote) => {
-      if (quote.closest('.fe-quote-wrapper')) return;
-      hasQuotes = true;
-      wrapInCollapsible(quote, doc, collapseByDefault);
     });
 
     // 4. Look for text-based quote patterns in the content
