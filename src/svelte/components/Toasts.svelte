@@ -46,16 +46,24 @@
   };
 
   const getToastClasses = (type?: string) => {
-    const base = 'flex items-center justify-between gap-3 border p-4 shadow-lg';
+    // Toasts float over arbitrary mailbox content, so the surface must be
+    // OPAQUE. The old bg-state-*/10 backgrounds were 90% transparent, which
+    // read as a faint wash over whatever was underneath, unreadable in light
+    // mode especially on mobile. bg-popover supplies the solid elevated base
+    // (same token as dropdowns and popovers); the tint is layered on top via
+    // a flat gradient, since background-image paints over background-color in
+    // the same element.
+    const base =
+      'flex items-center justify-between gap-3 border p-4 shadow-lg bg-popover bg-gradient-to-b';
     switch (type) {
       case 'success':
-        return `${base} border-state-success/30 bg-state-success/10 text-state-success`;
+        return `${base} from-state-success/10 to-state-success/10 border-state-success/30 text-state-success`;
       case 'error':
-        return `${base} border-destructive/30 bg-destructive/10 text-destructive`;
+        return `${base} from-destructive/10 to-destructive/10 border-destructive/30 text-destructive`;
       case 'warning':
-        return `${base} border-state-caution/30 bg-state-caution/10 text-state-caution`;
+        return `${base} from-state-caution/10 to-state-caution/10 border-state-caution/30 text-state-caution`;
       default:
-        return `${base} border-border bg-background text-foreground`;
+        return `${base} from-transparent to-transparent border-border text-foreground`;
     }
   };
 </script>
