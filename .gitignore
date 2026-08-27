@@ -22,6 +22,7 @@ src-tauri/target/
 src-tauri/plugins/**/target/
 src-tauri/plugins/**/android/.gradle/
 src-tauri/plugins/**/android/build/
+src-tauri/plugins/**/.tauri/
 src-tauri/gen/
 src-tauri/capabilities/android-fcm.generated.json
 
