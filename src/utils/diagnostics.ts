@@ -187,45 +187,51 @@ export const checkCSPEnforcement = (): Promise<DiagnosticResult> =>
   });
 
 /**
- * Updater manifest reachable. On Tauri desktop only. Fetches the manifest
- * URL directly (without the plugin) so we test the network path without
- * triggering an install. This is the second canary for the macOS sandbox
- * bug — and the canary for #2579 (GitHub redirect 401s).
+ * Updater manifest reachable. On Tauri desktop only. Goes through the
+ * updater plugin's check(), which issues the HTTP GET from the Rust backend,
+ * because that IS the updater's network path: it exercises the macOS sandbox
+ * canary and the #2579 GitHub redirect for real, and it checks only, never
+ * installs. This probe used to fetch the manifest URL from the webview
+ * instead, which tested nothing the updater does and could not even reach
+ * the network: github.com is not in connect-src, so the CSP (deliberately
+ * frozen) blocked the request and the probe reported its own violation.
  */
 export const checkUpdaterManifest = (): Promise<DiagnosticResult> =>
   runCheck('updater-manifest', 'Updater manifest', async () => {
     if (!isTauriDesktop) {
       return { status: 'skip', message: 'Updater is desktop-only' };
     }
-    const url =
-      'https://github.com/forwardemail/mail.forwardemail.net/releases/latest/download/latest.json';
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8000);
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error('updater check timed out after 15s')), 15_000);
+    });
+
     try {
-      const response = await fetch(url, {
-        method: 'GET',
-        signal: controller.signal,
-        cache: 'no-store',
-        redirect: 'follow',
-      });
-      if (!response.ok) {
+      // Namespace access, not a named destructure: the web build replaces
+      // Tauri modules with stubs, and a missing named export there turns into
+      // a Rollup warning (see stubTauriModulesPlugin in vite.config.js). The
+      // isTauriDesktop guard above means this import only runs on desktop.
+      const mod = await import('@tauri-apps/plugin-updater');
+      // Update | null; null means the manifest was fetched and parsed and the
+      // app is current - reachability proven either way. Network and redirect
+      // failures (the actual canaries) reject.
+      const update = await Promise.race([mod.check(), timeout]);
+      if (update?.version) {
         return {
-          status: 'fail',
-          message: `HTTP ${response.status} from manifest endpoint`,
-          detail: { httpStatus: response.status },
+          status: 'pass',
+          message: `Manifest reachable; latest: v${update.version}`,
+          detail: { latestVersion: update.version, updateAvailable: update.available === true },
         };
       }
-      const json = (await response.json()) as { version?: string };
-      if (typeof json.version !== 'string') {
-        return { status: 'fail', message: 'Manifest is reachable but missing version field' };
-      }
+      return { status: 'pass', message: 'Manifest reachable; app is up to date' };
+    } catch (error) {
       return {
-        status: 'pass',
-        message: `Latest: v${json.version}`,
-        detail: { latestVersion: json.version },
+        status: 'fail',
+        message: `Updater check failed: ${(error as Error)?.message || String(error)}`,
       };
     } finally {
-      clearTimeout(timeout);
+      clearTimeout(timer);
     }
   });
 

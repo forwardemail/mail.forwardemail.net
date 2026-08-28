@@ -273,10 +273,33 @@ class ForwardEmailPushService : PushService() {
       )
     }
 
-    val launchIntent = packageManager.getLaunchIntentForPackage(packageName)?.apply {
-      addFlags(android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP or android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP)
+    // Tap-through: deep-link straight to the message when the payload names
+    // one. forwardemail://mailbox#inbox/<uid> is the exact URL the frontend
+    // already routes for in-app notification clicks, so every transport
+    // shares one navigation path - including cold start, which the frontend
+    // drains via get_pending_deep_links. A bare launch intent (the previous
+    // behaviour, kept as fallback) can only open the app at the inbox list.
+    // The uid charset is restricted rather than encoded; anything outside it
+    // falls back instead of building a URL from untrusted payload bytes.
+    val uid = payload.optString("uid").take(64)
+    val tapIntent = if (uid.isNotEmpty() && uid.matches(Regex("[A-Za-z0-9._-]+"))) {
+      android.content.Intent(
+        android.content.Intent.ACTION_VIEW,
+        android.net.Uri.parse("forwardemail://mailbox#inbox/$uid")
+      ).apply {
+        setPackage(packageName)
+        addFlags(
+          android.content.Intent.FLAG_ACTIVITY_NEW_TASK or
+            android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP or
+            android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP
+        )
+      }
+    } else {
+      packageManager.getLaunchIntentForPackage(packageName)?.apply {
+        addFlags(android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP or android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP)
+      }
     }
-    val pendingIntent = launchIntent?.let {
+    val pendingIntent = tapIntent?.let {
       PendingIntent.getActivity(
         this,
         payload.toString().hashCode(),

@@ -6711,7 +6711,7 @@
                       {#each convList as conv (conv.id)}
                         <li
                           role="presentation"
-                          class={`fe-msg-row relative cursor-pointer hover:bg-accent/50 transition-colors ${activeConvId === conv.id || ($selectedConversationIds || []).includes(conv.id) ? 'msg-active' : ''}`}
+                          class={`fe-msg-row relative cursor-pointer hover:bg-accent/50 transition-colors ${swipeItemId === conv.id ? 'overflow-hidden' : ''} ${activeConvId === conv.id || ($selectedConversationIds || []).includes(conv.id) ? 'msg-active' : ''}`}
                           oncontextmenu={(e) => openContextMenu(e, conv)}
                           ondblclick={(e) => {
                             const message = conv?.messages?.[conv.messages.length - 1];
@@ -6722,13 +6722,35 @@
                             }
                           }}
                         >
-                          {#if swipeItemId === conv.id}
-                            <div class="absolute inset-y-0 right-0 flex items-center">
-                              {#if swipeDistance > 0}
-                                <div
-                                  class={`flex items-center justify-center gap-2 px-4 bg-state-success text-fg-inverse ${swipeDistance > 80 ? 'opacity-100' : 'opacity-60'}`}
-                                >
+                          {#if swipeItemId === conv.id && swipeDistance !== 0}
+                            <!--
+                              Gmail-style underlay: a full-bleed colored layer
+                              behind the whole row, with the action pinned to
+                              the edge being revealed - left for archive
+                              (swipe right), right for delete (swipe left).
+                              The old version was a small badge anchored
+                              right-0 for BOTH directions, so an archive swipe
+                              slid the row away from its own indicator. The
+                              icon scales up as the 80px trigger threshold is
+                              crossed, in step with the haptic tick.
+                            -->
+                            <div
+                              class={`absolute inset-0 flex items-center ${
+                                swipeDistance > 0
+                                  ? 'justify-start bg-state-success text-fg-inverse'
+                                  : 'justify-end bg-destructive text-destructive-foreground'
+                              }`}
+                            >
+                              <div
+                                class={`flex items-center gap-2 px-6 transition-all duration-150 ${
+                                  Math.abs(swipeDistance) > 80
+                                    ? 'scale-100 opacity-100'
+                                    : 'scale-75 opacity-70'
+                                }`}
+                              >
+                                {#if swipeDistance > 0}
                                   <svg
+                                    class="h-5 w-5 shrink-0"
                                     viewBox="0 0 24 24"
                                     fill="none"
                                     stroke="currentColor"
@@ -6736,13 +6758,11 @@
                                   >
                                     <path d="M21 8v13H3V8M1 3h22v5H1zM10 12h4" />
                                   </svg>
-                                  <span>Archive</span>
-                                </div>
-                              {:else if swipeDistance < 0}
-                                <div
-                                  class={`flex items-center justify-center gap-2 px-4 bg-destructive text-destructive-foreground ${Math.abs(swipeDistance) > 80 ? 'opacity-100' : 'opacity-60'}`}
-                                >
+                                  <span class="text-sm font-medium">Archive</span>
+                                {:else}
+                                  <span class="text-sm font-medium">Delete</span>
                                   <svg
+                                    class="h-5 w-5 shrink-0"
                                     viewBox="0 0 24 24"
                                     fill="none"
                                     stroke="currentColor"
@@ -6752,9 +6772,8 @@
                                       d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
                                     />
                                   </svg>
-                                  <span>Delete</span>
-                                </div>
-                              {/if}
+                                {/if}
+                              </div>
                             </div>
                           {/if}
                           <div
@@ -7046,7 +7065,7 @@
                                                (e.g. not yet synced on this client) so persisted
                                                labels never silently vanish; fall back to the keyword. -->
                                           <span
-                                            class="inline-flex items-center px-1.5 py-0.5 text-[10px] truncate max-w-[80px]"
+                                            class="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] truncate max-w-[80px]"
                                             style={def?.color
                                               ? `background:${def.color}; color:${readableForeground(def.color)};`
                                               : ''}
@@ -7178,7 +7197,7 @@
                                                (e.g. not yet synced on this client) so persisted
                                                labels never silently vanish; fall back to the keyword. -->
                                           <span
-                                            class="inline-flex items-center px-1.5 py-0.5 text-[10px] truncate max-w-[80px]"
+                                            class="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] truncate max-w-[80px]"
                                             style={def?.color
                                               ? `background:${def.color}; color:${readableForeground(def.color)};`
                                               : ''}
@@ -7346,7 +7365,7 @@
                                       {#if typeof lbl === 'string' && lbl && lbl !== '[]'}
                                         {#if labelMap.get(lbl)}
                                           <span
-                                            class="inline-flex items-center px-1.5 py-0.5 text-[10px] truncate max-w-[80px]"
+                                            class="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] truncate max-w-[80px]"
                                             style={labelMap.get(lbl).color
                                               ? `background:${labelMap.get(lbl).color}; color:${readableForeground(labelMap.get(lbl).color)};`
                                               : ''}
@@ -7443,7 +7462,7 @@
                                       {#if typeof lbl === 'string' && lbl && lbl !== '[]'}
                                         {#if labelMap.get(lbl)}
                                           <span
-                                            class="inline-flex items-center px-1.5 py-0.5 text-[10px] truncate max-w-[80px]"
+                                            class="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] truncate max-w-[80px]"
                                             style={labelMap.get(lbl).color
                                               ? `background:${labelMap.get(lbl).color}; color:${readableForeground(labelMap.get(lbl).color)};`
                                               : ''}
