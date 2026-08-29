@@ -39,7 +39,18 @@ describe('mobile push registration lifecycle wiring', () => {
     expect(nativeLifecycleBlock).toMatch(
       /onResume\(\(\) => \{[\s\S]*?syncPushForActiveAccount\(\);[\s\S]*?\}\);/,
     );
-    expect(nativeLifecycleBlock.match(/syncPushForActiveAccount\(\);/g)).toHaveLength(2);
+    // The cold start sync must stay deferred past page load. Invoking a mobile
+    // plugin command while wry's native onPageLoaded callback is still on the
+    // main thread can deadlock the runtime plugin mutex and ANR on Android.
+    expect(nativeLifecycleBlock).toMatch(
+      /const schedulePushSync = \(\) => setTimeout\(syncPushForActiveAccount, \d+\);/,
+    );
+    expect(nativeLifecycleBlock).toMatch(
+      /document\.readyState === 'complete'[\s\S]*?schedulePushSync\(\);[\s\S]*?addEventListener\('load', schedulePushSync, \{ once: true \}\);/,
+    );
+    // Exactly one immediate invocation, and it lives inside onResume. The cold
+    // start path only schedules; a second bare call would reintroduce the race.
+    expect(nativeLifecycleBlock.match(/syncPushForActiveAccount\(\);/g)).toHaveLength(1);
   });
 
   it('uses the authenticated synchronization guard after account switching', () => {
