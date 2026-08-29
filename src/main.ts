@@ -2775,7 +2775,17 @@ async function bootstrap() {
           });
         }
       });
-      syncPushForActiveAccount();
+      // Defer the boot-time push sync until well after page load. Invoking a
+      // mobile plugin command (unified-push get_state) while wry's native
+      // onPageLoaded callback is still running can deadlock the main thread
+      // on the runtime plugin mutex and trip a 10s input ANR on Android.
+      // Push registration is not latency sensitive, so waiting is free.
+      const schedulePushSync = () => setTimeout(syncPushForActiveAccount, 3000);
+      if (document.readyState === 'complete') {
+        schedulePushSync();
+      } else {
+        window.addEventListener('load', schedulePushSync, { once: true });
+      }
     }
 
     if (canUseServiceWorker() && import.meta.env.PROD) {
