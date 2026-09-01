@@ -4,7 +4,7 @@ export default defineConfig({
   test: {
     include: ['specs/**/*.spec.ts'],
     globalSetup: ['./setup/global.ts'],
-    setupFiles: ['./setup/per-test.ts'],
+    setupFiles: ['./setup/undici-dispatcher.ts', './setup/per-test.ts'],
     // tauri-plugin-webdriver allows one WebDriver session per app instance.
     // Run spec files sequentially so sessions never overlap.
     fileParallelism: false,
