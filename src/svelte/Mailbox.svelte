@@ -212,6 +212,7 @@
   import MobileSearchOverlay from './components/MobileSearchOverlay.svelte';
   import MessageTab from './components/MessageTab.svelte';
   import CalendarInviteCard from './components/CalendarInviteCard.svelte';
+  import GetStartedCard from './components/GetStartedCard.svelte';
   import {
     isCalendarAttachment,
     fetchAttachmentText,
@@ -1109,6 +1110,9 @@
   // Delayed empty state: only show after settling to avoid flicker
   const EMPTY_STATE_DELAY_MS = 600;
   let showEmptyState = $state(false);
+  // Reported by GetStartedCard; swaps the Inbox Zero copy for a welcome while
+  // the setup checklist is showing.
+  let getStartedVisible = $state(false);
   let emptyStateTimeoutId: ReturnType<typeof setTimeout> | null = null;
   $effect(() => {
     const shouldBeEmpty =
@@ -7547,28 +7551,38 @@
                           </button>
                         {/if}
                       {:else if $selectedFolder === 'INBOX'}
-                        <svg
-                          class="h-12 w-12 text-muted-foreground mb-4"
-                          viewBox="0 0 24 24"
-                          aria-hidden="true"
-                        >
-                          <path
-                            d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
-                            stroke="currentColor"
-                            fill="none"
-                            stroke-width="2"
+                        {#if !getStartedVisible}
+                          <svg
+                            class="h-12 w-12 text-muted-foreground mb-4"
+                            viewBox="0 0 24 24"
+                            aria-hidden="true"
+                          >
+                            <path
+                              d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
+                              stroke="currentColor"
+                              fill="none"
+                              stroke-width="2"
+                            />
+                            <line
+                              x1="9"
+                              y1="13"
+                              x2="15"
+                              y2="13"
+                              stroke="currentColor"
+                              stroke-width="2"
+                            />
+                          </svg>
+                          <h3>Inbox Zero!</h3>
+                          <p>You're all caught up</p>
+                        {:else}
+                          <h3 class="mb-4">Welcome to Forward Email</h3>
+                        {/if}
+                        <div class="w-full max-w-md px-4 text-left">
+                          <GetStartedCard
+                            bind:visible={getStartedVisible}
+                            onNavigate={(id) => navigate(`/mailbox/settings#${id}`)}
                           />
-                          <line
-                            x1="9"
-                            y1="13"
-                            x2="15"
-                            y2="13"
-                            stroke="currentColor"
-                            stroke-width="2"
-                          />
-                        </svg>
-                        <h3>Inbox Zero!</h3>
-                        <p>You're all caught up</p>
+                        </div>
                       {:else if isDraftFolder($selectedFolder)}
                         <svg
                           class="h-12 w-12 text-muted-foreground mb-4"

@@ -113,6 +113,7 @@
   import { LABEL_PALETTE, pickLabelColor as pickLabelColorFromPalette } from '../utils/labels.js';
   import FeedbackModal from './FeedbackModal.svelte';
   import LabelModal from './components/LabelModal.svelte';
+  import GetStartedCard from './components/GetStartedCard.svelte';
   import PushNotificationSettings from './components/PushNotificationSettings.svelte';
 
   interface ToastApi {
@@ -1820,6 +1821,13 @@
   <div class="fe-mobile-page-scroll flex-1 overflow-y-auto p-4 md:p-6">
     <div class="mx-auto max-w-4xl space-y-6">
       {#if section === 'general'}
+        <GetStartedCard
+          onNavigate={(id) => {
+            section = id;
+            history.replaceState(null, '', `#${id}`);
+          }}
+        />
+
         <Card.Root>
           <Card.Header>
             <Card.Title class="flex items-center gap-2">

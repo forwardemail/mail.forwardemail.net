@@ -193,6 +193,18 @@ export const SETTINGS_REGISTRY: Record<string, SettingDefinition> = {
     localParse: (raw) => parseBoolean(raw, true),
     localSerialize: (value) => serializeBoolean(Boolean(value)),
   },
+  // Not portable: a paired phone is a new device and should get its own
+  // chance at the checklist.
+  get_started_dismissed: {
+    id: 'get_started_dismissed',
+    label: 'Get Started Dismissed',
+    scope: SETTING_SCOPES.DEVICE,
+    localKey: 'get_started_dismissed',
+    valueType: 'boolean',
+    defaultValue: false,
+    localParse: (raw) => parseBoolean(raw, false),
+    localSerialize: (value) => serializeBoolean(Boolean(value)),
+  },
   default_reply_all: {
     id: 'default_reply_all',
     portable: true,
