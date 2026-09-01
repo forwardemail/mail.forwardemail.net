@@ -13,7 +13,7 @@ permissions: {}
 env:
   # Wrangler 4.87+ requires Node 22+. Keep this in sync with release.yml's
   # inlined deploy job (it has its own node-version pin).
-  NODE_VERSION: '22'
+  NODE_VERSION: '26'
   R2_BUCKET: ${{ vars.R2_BUCKET }}
 
 jobs:

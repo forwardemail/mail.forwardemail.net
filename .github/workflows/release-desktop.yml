@@ -44,7 +44,7 @@ concurrency:
 env:
   CARGO_INCREMENTAL: 0
   RUST_BACKTRACE: short
-  NODE_VERSION: '22'
+  NODE_VERSION: '26'
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
 jobs:
