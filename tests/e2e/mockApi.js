@@ -30,6 +30,35 @@ export async function mockApi(page, overrides = {}) {
   const calendars = structuredClone(overrides.calendars || mockCalendars);
   const events = structuredClone(overrides.events || mockEvents);
 
+  // Nothing may escape to the real API. The seeded session uses fake
+  // credentials, so any request that fell through came back as a genuine
+  // 401 from api.forwardemail.net; three of those trip the app's
+  // fe:auth-expired interception and it signs the test out mid-flow, with
+  // real network latency deciding which test gets hit. Playwright consults
+  // routes newest-first, so this catch-all is registered before the
+  // specific handlers below and only sees what they don't claim. A 404
+  // keeps an unmocked endpoint loud without looking like an auth failure.
+  await page.route('**/v1/**', (route) =>
+    jsonResponse(route, { message: `e2e mock: ${route.request().url()} is not mocked` }, 404),
+  );
+
+  // Boot-time calls the app always makes; shapes mirror the demo interceptor.
+  await page.route('**/v1/account**', (route) => {
+    if (route.request().method() === 'GET') {
+      return jsonResponse(route, {
+        id: 'e2e-account-id',
+        email: 'test@example.com',
+        plan: 'enhanced-protection',
+        storage_used: 15728640,
+        storage_quota: 10737418240,
+        locale: 'en',
+        timezone: 'UTC',
+      });
+    }
+    return jsonResponse(route, { Result: { success: true } });
+  });
+  await page.route('**/v1/labels**', (route) => jsonResponse(route, []));
+
   await page.route('**/v1/folders**', (route) => jsonResponse(route, { Result: folders }));
 
   await page.route('**/v1/messages**', (route) => {
@@ -215,5 +244,6 @@ export async function mockApi(page, overrides = {}) {
     return jsonResponse(route, { Result: { success: true } });
   });
 
-  // No catch-all needed; unhandled requests will pass through by default.
+  // Non-API requests (the app itself, fonts, workers) still pass through to
+  // the preview server; only /v1/** is fenced off above.
 }
