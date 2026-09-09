@@ -74,8 +74,15 @@ export function buildLocalDateTime(dateStr: string, time24: string): string {
   return `${dm[1]}${dm[2]}${dm[3]}T${hh}${mm}00`;
 }
 
-/** UTC offset in minutes (positive east of UTC) of an IANA zone at an instant. */
-export function zoneOffsetMinutes(tzid: string, at: Date): number {
+/**
+ * UTC offset in minutes (positive east of UTC) of an IANA zone at an instant.
+ * Returns null when the runtime cannot resolve the zone. Callers must not
+ * treat that as zero: a silent zero here sent the typed wall-clock to the
+ * server as a UTC instant, which showed up hours off on every device.
+ */
+export function zoneOffsetMinutes(tzid: string, at: Date): number | null {
+  if (!tzid) return null;
+  if (tzid === 'UTC') return 0;
   try {
     const dtf = new Intl.DateTimeFormat('en-US', {
       timeZone: tzid,
@@ -97,19 +104,44 @@ export function zoneOffsetMinutes(tzid: string, at: Date): number {
       Number(m.minute),
       Number(m.second),
     );
+    if (!Number.isFinite(asUtc)) return null;
     return Math.round((asUtc - at.getTime()) / 60000);
   } catch {
-    return 0;
+    return null;
   }
+}
+
+/**
+ * The device's IANA zone, validated. Returns '' when the runtime reports a
+ * zone it cannot itself resolve, or one whose offset disagrees with the
+ * clock the JS engine actually uses. Some Android WebViews report 'UTC' or
+ * 'Etc/Unknown' from Intl when the zone lookup fails; stamping that on an
+ * event turned "8:00 AM" into "8:00 UTC" and rendered it at 2:00 AM. With an
+ * empty zone the calendar falls back to device-local instants, which are
+ * always right for the device that typed the time.
+ */
+export function detectDeviceTimezone(now: Date = new Date()): string {
+  let tz = '';
+  try {
+    tz = String(Intl.DateTimeFormat().resolvedOptions().timeZone || '').trim();
+  } catch {
+    return '';
+  }
+  if (!tz || /unknown/i.test(tz)) return '';
+  const viaZone = zoneOffsetMinutes(tz, now);
+  if (viaZone == null) return '';
+  if (viaZone !== -now.getTimezoneOffset()) return '';
+  return tz;
 }
 
 /**
  * Convert a wall-clock (date 'YYYY-MM-DD' + time 'H:MM'/'HH:MM') *in the given
  * IANA zone* to the corresponding UTC instant. Two-pass so it settles correctly
  * around DST transitions. Used to produce a UTC ISO for optimistic rendering /
- * caching that matches the persisted `DTSTART;TZID=` wall-clock. Falls back to
- * treating the components as UTC when no zone (or 'UTC') is supplied. Returns
- * null on bad input.
+ * caching that matches the persisted `DTSTART;TZID=` wall-clock. An explicit
+ * 'UTC' zone treats the components as UTC. Returns null on bad input, when no
+ * zone is given, or when the zone cannot be resolved, so the caller can fall
+ * back to the device clock instead of silently using UTC.
  */
 export function zonedWallClockToUTC(dateStr: string, time24: string, tzid?: string): Date | null {
   const dm = DATE_RE.exec(String(dateStr || '').trim());
@@ -122,13 +154,37 @@ export function zonedWallClockToUTC(dateStr: string, time24: string, tzid?: stri
     Number(tm[1]),
     Number(tm[2]),
   );
-  if (!tzid || tzid === 'UTC') return new Date(guess);
+  if (!tzid) return null;
+  if (tzid === 'UTC') return new Date(guess);
   let offset = zoneOffsetMinutes(tzid, new Date(guess));
+  if (offset == null) return null;
   let utc = guess - offset * 60000;
   // Re-evaluate at the refined instant: the offset can differ across a DST jump.
   offset = zoneOffsetMinutes(tzid, new Date(utc));
+  if (offset == null) return null;
   utc = guess - offset * 60000;
   return new Date(utc);
+}
+
+/**
+ * The same wall-clock interpreted on the device's own clock. This is the
+ * fallback when no zone can be trusted: it is exactly what the person typing
+ * the time meant on the device they typed it on. Returns null on bad input.
+ */
+export function deviceWallClockToUTC(dateStr: string, time24: string): Date | null {
+  const dm = DATE_RE.exec(String(dateStr || '').trim());
+  const tm = TIME_RE.exec(String(time24 || '').trim());
+  if (!dm || !tm) return null;
+  const d = new Date(
+    Number(dm[1]),
+    Number(dm[2]) - 1,
+    Number(dm[3]),
+    Number(tm[1]),
+    Number(tm[2]),
+    0,
+    0,
+  );
+  return Number.isFinite(d.getTime()) ? d : null;
 }
 
 // DTSTART/DTEND carrying VALUE=DATE (all-day) — but NOT VALUE=DATE-TIME. Other
@@ -211,19 +267,26 @@ function findZoneTransitions(
   const start = Date.UTC(year, 0, 1);
   const end = Date.UTC(year + 1, 0, 1);
   const out: Array<{ at: number; from: number; to: number }> = [];
-  let prev = zoneOffsetMinutes(tzid, new Date(start));
+  // Resolution failure surfaces as a thrown error so buildVTimezone returns
+  // [] rather than a VTIMEZONE built from zero offsets.
+  const offsetAt = (ms: number): number => {
+    const off = zoneOffsetMinutes(tzid, new Date(ms));
+    if (off == null) throw new RangeError(`Cannot resolve time zone ${tzid}`);
+    return off;
+  };
+  let prev = offsetAt(start);
   for (let t = start + DAY; t <= end; t += DAY) {
-    const cur = zoneOffsetMinutes(tzid, new Date(t));
+    const cur = offsetAt(t);
     if (cur !== prev) {
       let lo = t - DAY;
       let hi = t;
       while (hi - lo > 1000) {
         const mid = lo + Math.floor((hi - lo) / 2);
-        if (zoneOffsetMinutes(tzid, new Date(mid)) === prev) lo = mid;
+        if (offsetAt(mid) === prev) lo = mid;
         else hi = mid;
       }
-      out.push({ at: hi, from: prev, to: zoneOffsetMinutes(tzid, new Date(hi)) });
-      prev = zoneOffsetMinutes(tzid, new Date(hi));
+      out.push({ at: hi, from: prev, to: offsetAt(hi) });
+      prev = offsetAt(hi);
     }
   }
   return out;
@@ -293,6 +356,9 @@ export function buildVTimezone(tzid: string, year?: number): string[] {
       // No DST observed: a single permanent STANDARD offset.
       const ref = new Date(Date.UTC(refYear, 0, 15));
       const off = zoneOffsetMinutes(tzid, ref);
+      // An unresolvable zone must not become a +0000 VTIMEZONE: parsers would
+      // then read the TZID wall-clock as UTC.
+      if (off == null) return [];
       lines.push(
         'BEGIN:STANDARD',
         'DTSTART:19700101T000000',

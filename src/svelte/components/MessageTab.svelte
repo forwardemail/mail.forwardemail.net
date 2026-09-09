@@ -33,7 +33,6 @@
 
   // Services
   import { mailService } from '../../stores/mailService';
-  import { Remote } from '../../utils/remote';
   import { isDemoBlockedError } from '../../utils/demo-mode';
   import { Local } from '../../utils/storage';
   import { processQuotedContent } from '../../utils/quote-collapse.js';
@@ -42,7 +41,7 @@
   import { openComposeWindow } from '../../utils/compose-window';
   import { closeTab } from '../../stores/tabStore';
   import { normalizeEmail, extractAddressList } from '../../utils/address.ts';
-  import { getMessageApiId, extractRecipientsField } from '../../utils/sync-helpers';
+  import { extractRecipientsField } from '../../utils/sync-helpers';
   import { getEffectiveSettingValue, localSettingsVersion } from '../../stores/settingsStore';
   import {
     buildReplyQuotedBody,
@@ -51,6 +50,8 @@
     addForwardPrefix,
     stripQuoteCollapseMarkup,
     deleteMessage,
+    archiveMessage,
+    toggleRead,
     getForwardAttachments,
   } from '../../stores/mailboxActions';
   import type { Message, Attachment } from '../../types';
@@ -214,20 +215,19 @@
     }
   }
 
-  // Mark as read on open
+  // Mark as read on open. This has to go through the shared toggleRead action
+  // rather than a direct PUT: the action also flips the row in the messages
+  // store and in the IndexedDB cache and recounts the folder badges. A direct
+  // PUT left the cached row unread, so the sidebar count never dropped when a
+  // message was read in a tab, and a later delete carried the stale unread
+  // flag into Trash.
   function markAsRead() {
     if (!message?.is_unread) return;
-    const apiId = getMessageApiId(message as Parameters<typeof getMessageApiId>[0]) || message?.id;
-    if (!apiId) return;
-    Remote.request(
-      'MessageUpdate',
-      { flags: { add: ['\\Seen'] } },
-      {
-        method: 'PUT',
-        pathOverride: `/v1/messages/${encodeURIComponent(String(apiId))}`,
-      },
-    ).catch(() => {});
-    message = { ...message!, is_unread: false };
+    const target = { ...message, folder: message.folder || folder };
+    message = { ...message, is_unread: false };
+    toggleRead(target).catch((err) => {
+      console.warn('Failed to mark message read from tab', err);
+    });
   }
 
   // ─── Actions ────────────────────────────────────────────────────────
@@ -295,20 +295,19 @@
     });
   }
 
+  // Archive through the shared store action, same as delete. It resolves the
+  // account's real archive folder, moves the cached row, removes it from the
+  // list and recounts the folder badges. The old direct PUT did none of that,
+  // which is why the sidebar counts did not change after archiving in a tab.
   async function handleArchive() {
     if (!message) return;
-    const archiveFolder = getEffectiveSettingValue('archive_folder') || 'Archive';
-    const apiId = getMessageApiId(message as Parameters<typeof getMessageApiId>[0]) || message?.id;
-    if (!apiId) return;
+    const target = { ...message, folder: message.folder || folder };
     try {
-      await Remote.request(
-        'MessageUpdate',
-        { folder: archiveFolder },
-        {
-          method: 'PUT',
-          pathOverride: `/v1/messages/${encodeURIComponent(String(apiId))}`,
-        },
-      );
+      const result = await archiveMessage(target);
+      if (result && result.success === false) {
+        if (!result.blocked) error = 'Failed to archive message';
+        return;
+      }
       closeTab(tabId);
     } catch (err) {
       if (!isDemoBlockedError(err)) {

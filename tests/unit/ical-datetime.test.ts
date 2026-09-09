@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import ICAL from 'ical.js';
 import {
   toICalDate,
@@ -7,6 +7,8 @@ import {
   buildLocalDateTime,
   zoneOffsetMinutes,
   zonedWallClockToUTC,
+  deviceWallClockToUTC,
+  detectDeviceTimezone,
   parseAllDayFromIcal,
   localDateOf,
   buildVTimezone,
@@ -81,6 +83,10 @@ describe('zoneOffsetMinutes', () => {
   it('America/Phoenix is UTC-7 year-round (no DST)', () => {
     expect(zoneOffsetMinutes('America/Phoenix', new Date('2025-07-31T18:00:00Z'))).toBe(-420);
   });
+  it('is null, not zero, for an unresolvable zone', () => {
+    expect(zoneOffsetMinutes('Not/AZone', new Date('2025-07-31T12:00:00Z'))).toBeNull();
+    expect(zoneOffsetMinutes('', new Date('2025-07-31T12:00:00Z'))).toBeNull();
+  });
   it('UTC is zero', () => {
     expect(zoneOffsetMinutes('UTC', new Date('2025-07-31T18:00:00Z'))).toBe(0);
   });
@@ -107,10 +113,20 @@ describe('zonedWallClockToUTC', () => {
     const phoenix = zonedWallClockToUTC('2025-07-31', '15:00', 'America/Phoenix')?.toISOString();
     expect(phoenix).toBe('2025-07-31T22:00:00.000Z');
   });
-  it('treats components as UTC when no zone given', () => {
-    expect(zonedWallClockToUTC('2025-07-31', '15:00')?.toISOString()).toBe(
+  it('treats components as UTC only when UTC is named explicitly', () => {
+    expect(zonedWallClockToUTC('2025-07-31', '15:00', 'UTC')?.toISOString()).toBe(
       '2025-07-31T15:00:00.000Z',
     );
+  });
+  it('returns null when no zone is given so callers fall back to the device clock', () => {
+    // Regression: an empty zone used to be read as UTC, which stamped a typed
+    // 8:00 AM as 08:00Z and rendered it at 2:00 AM in Mountain time.
+    expect(zonedWallClockToUTC('2025-07-31', '15:00')).toBeNull();
+    expect(zonedWallClockToUTC('2025-07-31', '15:00', '')).toBeNull();
+  });
+  it('returns null for a zone the runtime cannot resolve', () => {
+    expect(zonedWallClockToUTC('2025-07-31', '15:00', 'Etc/Unknown')).toBeNull();
+    expect(zonedWallClockToUTC('2025-07-31', '15:00', 'Not/AZone')).toBeNull();
   });
   it('returns null for bad input', () => {
     expect(zonedWallClockToUTC('2025-07-31', '', 'America/Denver')).toBeNull();
@@ -234,5 +250,79 @@ describe('buildVTimezone (resolved via ical.js — the DST-offset regression)', 
   it('returns no VTIMEZONE for UTC / empty', () => {
     expect(buildVTimezone('UTC')).toEqual([]);
     expect(buildVTimezone('')).toEqual([]);
+  });
+});
+
+describe('deviceWallClockToUTC', () => {
+  it('interprets the wall-clock on the device clock', () => {
+    const d = deviceWallClockToUTC('2026-09-09', '8:00');
+    expect(d).not.toBeNull();
+    expect(d!.getFullYear()).toBe(2026);
+    expect(d!.getMonth()).toBe(8);
+    expect(d!.getDate()).toBe(9);
+    expect(d!.getHours()).toBe(8);
+    expect(d!.getMinutes()).toBe(0);
+    // Same instant the legacy Date constructor path produced.
+    expect(d!.getTime()).toBe(new Date(2026, 8, 9, 8, 0, 0, 0).getTime());
+  });
+  it('returns null for bad input', () => {
+    expect(deviceWallClockToUTC('', '8:00')).toBeNull();
+    expect(deviceWallClockToUTC('2026-09-09', '8')).toBeNull();
+  });
+});
+
+describe('detectDeviceTimezone', () => {
+  const RealDTF = Intl.DateTimeFormat;
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  // Swap only what resolvedOptions().timeZone reports; the zone math itself
+  // keeps running against the real ICU data.
+  const reportZone = (tz: string) => {
+    vi.spyOn(Intl, 'DateTimeFormat').mockImplementation(((
+      ...args: ConstructorParameters<typeof Intl.DateTimeFormat>
+    ) => {
+      const real = new RealDTF(...args);
+      if (args.length === 0) {
+        return {
+          resolvedOptions: () => ({ ...real.resolvedOptions(), timeZone: tz }),
+        } as unknown as Intl.DateTimeFormat;
+      }
+      return real;
+    }) as unknown as typeof Intl.DateTimeFormat);
+  };
+
+  it('accepts the zone the runtime reports when its offset matches the device clock', () => {
+    const real = new RealDTF().resolvedOptions().timeZone;
+    expect(detectDeviceTimezone()).toBe(real);
+  });
+
+  it('rejects Etc/Unknown', () => {
+    reportZone('Etc/Unknown');
+    expect(detectDeviceTimezone()).toBe('');
+  });
+
+  it('rejects a zone whose offset disagrees with the device clock', () => {
+    const now = new Date('2026-09-09T14:00:00Z');
+    // Pick a zone that is definitely not the device's offset right now.
+    const deviceOffset = -now.getTimezoneOffset();
+    const decoy = deviceOffset === 0 ? 'America/Denver' : 'UTC';
+    reportZone(decoy);
+    expect(detectDeviceTimezone(now)).toBe('');
+  });
+
+  it('returns empty when Intl throws', () => {
+    vi.spyOn(Intl, 'DateTimeFormat').mockImplementation((() => {
+      throw new RangeError('no icu');
+    }) as unknown as typeof Intl.DateTimeFormat);
+    expect(detectDeviceTimezone()).toBe('');
+  });
+});
+
+describe('buildVTimezone for an unresolvable zone', () => {
+  it('returns [] rather than a +0000 VTIMEZONE', () => {
+    expect(buildVTimezone('Not/AZone', 2026)).toEqual([]);
+    expect(buildVTimezone('Etc/Unknown', 2026)).toEqual([]);
   });
 });

@@ -20,10 +20,13 @@
     buildAllDayRange,
     buildLocalDateTime,
     zonedWallClockToUTC,
+    deviceWallClockToUTC,
+    detectDeviceTimezone,
     parseAllDayFromIcal,
     localDateOf,
     buildVTimezone,
   } from '../utils/ical-datetime';
+  import { parseCalendarHashTarget, consumedCalendarHash } from '../utils/calendar-hash';
   import { parseNaturalLanguage } from '../utils/calendar-nlp';
   import {
     expandRecurringEvents,
@@ -360,13 +363,12 @@
   // The user's IANA timezone (e.g. "America/New_York"). Stamped onto every
   // new/edited event so downstream devices can reproduce the original wall
   // clock — see iCalendar TZID handling in generateICalEvent.
-  const getDefaultTimezone = () => {
-    try {
-      return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
-    } catch {
-      return 'UTC';
-    }
-  };
+  // Empty when the runtime cannot be trusted to name its own zone (see
+  // detectDeviceTimezone). An empty zone makes every save path below use
+  // device-local instants and plain UTC DTSTART/DTEND values, which is always
+  // correct for the device that typed the time. The old fallback of 'UTC'
+  // stamped the typed wall-clock as a UTC instant, hours off for everyone.
+  const getDefaultTimezone = () => detectDeviceTimezone();
 
   // Surface a hint when an event's stored TZID differs from the viewer's
   // local zone so users understand that the time fields shown are converted
@@ -530,19 +532,25 @@
 
   const getCalendarHashTarget = () => {
     if (typeof window === 'undefined') return null;
-    const hash = window.location.hash || '';
-    const match = hash.match(/^#(event|task)=([^&]+)/i);
-    if (!match) return null;
+    return parseCalendarHashTarget(window.location.hash || '');
+  };
+
+  // Drop the #event= / #task= target once it has been opened. Every event
+  // reload re-applies the hash, and the websocket echo of the user's own
+  // save triggers a reload, so leaving the target in place reopened the
+  // dialog right after Save closed it.
+  const consumeCalendarHashTarget = () => {
+    if (typeof window === 'undefined' || typeof history === 'undefined') return;
+    if (!getCalendarHashTarget()) return;
+    const section = currentSection === 'tasks' ? 'tasks' : 'calendar';
     try {
-      return {
-        kind: match[1].toLowerCase(),
-        id: decodeURIComponent(match[2]),
-      };
+      history.replaceState(
+        history.state,
+        '',
+        `${window.location.pathname}${window.location.search}${consumedCalendarHash(section)}`,
+      );
     } catch {
-      return {
-        kind: match[1].toLowerCase(),
-        id: match[2],
-      };
+      // Best effort. A blocked replaceState only means the old behaviour.
     }
   };
 
@@ -605,6 +613,7 @@
     if (!match) return false;
     if (editEventModal && editEvent.id === String(match.id || '')) return true;
     openEditEvent({ id: match.id || match.uid || target.id });
+    consumeCalendarHashTarget();
     return true;
   };
 
@@ -979,7 +988,12 @@
     // to bare UTC zulu loses that wall-clock anchor and is the cause of
     // the cross-device time-drift bug.
     const allDay = Boolean(event.allDay);
-    const useTzid = !allDay && Boolean(timezone) && timezone !== 'UTC';
+    // A TZID is only usable with a VTIMEZONE we could actually build. If the
+    // zone does not resolve, fall back to UTC instants from the ISO values
+    // rather than emitting a TZID that parsers would read as floating/UTC.
+    const tzLines =
+      !allDay && Boolean(timezone) && timezone !== 'UTC' ? buildVTimezone(timezone as string) : [];
+    const useTzid = tzLines.length > 0;
     const tzParam = useTzid ? `;TZID=${escape(timezone as string)}` : '';
     let dtstartLine: string;
     let dtendLine: string;
@@ -1013,7 +1027,7 @@
     // RFC 5545 §3.6.5: any referenced TZID must be defined by a VTIMEZONE
     // component in the same calendar. Without this, strict CalDAV clients
     // (Apple, DAVx5) treat the TZID as opaque or fall back to UTC.
-    if (useTzid) lines.push(...buildVTimezone(timezone as string));
+    if (useTzid) lines.push(...tzLines);
 
     lines.push(
       'BEGIN:VEVENT',
@@ -1114,7 +1128,9 @@
     const todoUid = uid || `${Date.now()}@forwardemail.net`;
     // See generateICalEvent for the TZID rationale — same wall-clock anchor
     // applies to VTODO DTSTART/DUE.
-    const useTzid = Boolean(timezone) && timezone !== 'UTC';
+    const tzLines =
+      Boolean(timezone) && timezone !== 'UTC' ? buildVTimezone(timezone as string) : [];
+    const useTzid = tzLines.length > 0;
     const lines = [
       'BEGIN:VCALENDAR',
       'VERSION:2.0',
@@ -1122,7 +1138,7 @@
       'CALSCALE:GREGORIAN',
       `METHOD:${method}`,
     ];
-    if (useTzid) lines.push(...buildVTimezone(timezone as string));
+    if (useTzid) lines.push(...tzLines);
 
     lines.push(
       'BEGIN:VTODO',
@@ -2908,7 +2924,9 @@
         const t24 = to24Hour(form.startTime, form.startMeridiem);
         const startValue = buildLocalDateTime(form.date, t24);
         const utc =
-          zonedWallClockToUTC(form.date, t24, selTz) ?? new Date(`${form.date}T${t24}:00`);
+          zonedWallClockToUTC(form.date, t24, selTz) ??
+          deviceWallClockToUTC(form.date, t24) ??
+          new Date(`${form.date}T${t24}:00`);
         const iso = utc.toISOString();
         return {
           ok: true,
@@ -3851,6 +3869,11 @@
         { id: ctx.masterId, calendar_id: ctx.calendarId, ical: newIcal },
         { method: 'PUT', pathOverride: `/v1/calendar-events/${ctx.masterId}` },
       );
+      // The server has the override now, so close both dialogs before the
+      // local re-expansion below. Anything that throws past this point must
+      // not leave a stale dialog over a change that already went through.
+      editEventModal = false;
+      recurrenceEditPrompt = { open: false, action: null };
       // Update the master's stored ICS so re-expansion picks up the
       // override.
       allEvents = (allEvents || []).map((ev) => {
@@ -3862,8 +3885,6 @@
       applySelectedEvents();
       setError('');
       setSuccess('Occurrence updated');
-      editEventModal = false;
-      recurrenceEditPrompt = { open: false, action: null };
     } catch (err) {
       if (!isDemoBlockedError(err)) {
         setError((err as Error)?.message || 'Unable to update occurrence.');

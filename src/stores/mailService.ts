@@ -20,7 +20,7 @@ import {
   extractTextContent,
 } from '../utils/mime-utils.js';
 import { getCachedAttachmentBlob, cacheAttachmentBlob } from '../utils/attachment-cache.js';
-import { isTauriDesktop } from '../utils/platform.js';
+import { isTauri } from '../utils/platform.js';
 import type { Message, Attachment, PerfTracer, PgpKey } from '../types';
 import { messages } from './messageStore';
 import { writable } from 'svelte/store';
@@ -111,12 +111,16 @@ interface CachedBody {
 const debugLog = (..._args: unknown[]): void => {};
 const debugWarn = (..._args: unknown[]): void => {};
 
-// Trigger file download — uses Tauri's native save dialog on desktop
-// and the standard anchor download behavior on the web.
+// Trigger file download. Inside Tauri (desktop and mobile) this goes through
+// the native save dialog plus the fs plugin; the web build uses the standard
+// anchor download. Mobile must not fall through to the anchor path: the
+// Android WebView wry creates has no DownloadListener and WKWebView ignores
+// the download attribute, so a.click() silently does nothing there.
 function triggerDownload(href: string, filename: string): void {
-  if (isTauriDesktop) {
+  if (isTauri) {
     triggerDownloadTauri(href, filename).catch((err) => {
       console.warn('[mailService] Tauri save failed:', err);
+      reportSaveDialogFailure(filename, err);
     });
     return;
   }
@@ -146,9 +150,10 @@ const LARGE_ATTACHMENT_BYTES = 50 * 1024 * 1024;
 // or trigger a Blob-based download on the web. Bypasses bufferToDataUrl
 // so we never materialize a base64 representation of the attachment.
 function triggerDownloadBytes(bytes: Uint8Array, filename: string, _contentType: string): void {
-  if (isTauriDesktop) {
+  if (isTauri) {
     triggerDownloadBytesTauri(bytes, filename).catch((err) => {
       console.warn('[mailService] Tauri save failed:', err);
+      reportSaveDialogFailure(filename, err);
     });
     return;
   }
@@ -209,7 +214,7 @@ async function triggerDownloadBytesTauri(bytes: Uint8Array, filename: string): P
       `Could not save "${safeFilename}" to the selected location. Please choose another folder, retry the download, or allow access if your operating system blocked the write.`,
       'error',
     );
-    throw err;
+    throw markReported(err);
   }
 }
 
@@ -306,6 +311,26 @@ function dispatchMailServiceToast(message: string, type = 'error'): void {
   window.dispatchEvent(new CustomEvent('fe:mail-service-toast', { detail: { message, type } }));
 }
 
+// The write paths already toast their own message before rethrowing. This
+// covers everything before the write starts (dialog plugin missing, the
+// invoke rejected by a capability, the dialog itself throwing) so a failed
+// download is never silent.
+function markReported(err: unknown): unknown {
+  if (err && typeof err === 'object') {
+    (err as { reported?: boolean }).reported = true;
+    return err;
+  }
+  return Object.assign(new Error(String(err)), { reported: true });
+}
+
+function reportSaveDialogFailure(filename: string, err: unknown): void {
+  if (err && typeof err === 'object' && (err as { reported?: boolean }).reported) return;
+  dispatchMailServiceToast(
+    `Could not open a save location for "${filename}". Please try again.`,
+    'error',
+  );
+}
+
 async function triggerDownloadTauri(href: string, filename: string): Promise<void> {
   const { remove, writeFile } = await import('@tauri-apps/plugin-fs');
   const { saveFileDialog } = await import('../utils/download');
@@ -365,7 +390,7 @@ async function triggerDownloadTauri(href: string, filename: string): Promise<voi
       `Could not save "${safeFilename}" to the selected location. Please choose another folder, retry the download, or allow access if your operating system blocked the write.`,
       'error',
     );
-    throw err;
+    throw markReported(err);
   }
 }
 
