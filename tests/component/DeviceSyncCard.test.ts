@@ -194,6 +194,46 @@ describe('<DeviceSyncCard />', () => {
     expect(screen.getByRole('button', { name: /show pairing code/i })).toBeInTheDocument();
   });
 
+  it('drops a live code when the account switches underneath it', async () => {
+    // Two accounts signed in: a code built for the first must not stay on
+    // screen after the switcher moves to the second. It used to persist until
+    // the page was reloaded.
+    const { rerender } = render(DeviceSyncCard, { props: { account: ACCOUNT } });
+    await showCode();
+
+    await rerender({ account: 'support@example.com' });
+
+    await waitFor(() => expect(screen.queryByText(/expires in/i)).toBeNull());
+    expect(screen.getByText(/dropped when you switched accounts/i)).toBeInTheDocument();
+    expect(screen.getByText(/dropped when you switched accounts/i).textContent).toContain(ACCOUNT);
+    expect(screen.getByRole('button', { name: /show pairing code/i })).toBeInTheDocument();
+    expect(screen.getByText('support@example.com')).toBeInTheDocument();
+    expect(screen.queryByText(/change the password/i)).toBeNull();
+  });
+
+  it('names the account whose password was shown when an unprotected code is dropped', async () => {
+    const { rerender } = render(DeviceSyncCard, { props: { account: ACCOUNT } });
+    await fireEvent.click(screen.getByRole('checkbox', { name: /require a pairing code/i }));
+    await showCode();
+
+    await rerender({ account: 'support@example.com' });
+
+    await waitFor(() => expect(screen.getByText(/change the password/i)).toBeInTheDocument());
+    expect(screen.getByText(/change the password/i).textContent).toContain(ACCOUNT);
+    expect(screen.getByText(/change the password/i).textContent).not.toContain(
+      'support@example.com',
+    );
+  });
+
+  it('leaves an idle card alone on an account switch', async () => {
+    const { rerender } = render(DeviceSyncCard, { props: { account: ACCOUNT } });
+    await rerender({ account: 'support@example.com' });
+
+    expect(screen.queryByText(/dropped when you switched/i)).toBeNull();
+    expect(screen.queryByText(/that code expired/i)).toBeNull();
+    expect(screen.getByRole('button', { name: /show pairing code/i })).toBeInTheDocument();
+  });
+
   it('demands the app lock PIN before building a code', async () => {
     lockEnabled = true;
     render(DeviceSyncCard, { props: { account: ACCOUNT } });

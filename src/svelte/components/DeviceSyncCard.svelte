@@ -13,7 +13,7 @@
    *
    * The receiving half lives on mobile: Settings → Add from another device.
    */
-  import { onDestroy } from 'svelte';
+  import { onDestroy, untrack } from 'svelte';
   import * as Card from '$lib/components/ui/card';
   import { Button } from '$lib/components/ui/button';
   import { Checkbox } from '$lib/components/ui/checkbox';
@@ -65,6 +65,11 @@
   let pairingCode = $state('');
   let sharedCredentials = $state(false);
   let expiredUnprotected = $state(false);
+  // The account the current (or most recent) code was built for. The prop can
+  // change underneath a live code via the account switcher, and the warning
+  // below has to name the account whose password was actually on screen.
+  let codeAccount = $state('');
+  let droppedForSwitch = $state(false);
   let frameIndex = $state(0);
   let secondsLeft = $state(0);
   let held = $state(false);
@@ -142,11 +147,12 @@
    * leaving them in component state after the code expires would keep a live
    * credential around for as long as the settings page stays open.
    */
-  const stopPairing = (next: 'idle' | 'expired') => {
+  const stopPairing = (next: 'idle' | 'expired', { switched = false } = {}) => {
     // Decide the warning BEFORE the wipe below; by render time pairingCode is
     // always empty, which made the rotate-password alarm fire on every
     // credential expiry, protected or not.
     expiredUnprotected = next === 'expired' && sharedCredentials && !pairingCode;
+    droppedForSwitch = next === 'expired' && switched;
     clearTimers();
     frames = [];
     frameIndex = 0;
@@ -166,10 +172,13 @@
     // countdown and animation intervals keep running alongside the new ones.
     clearTimers();
     expiredUnprotected = false;
+    droppedForSwitch = false;
+    const forAccount = account;
+    codeAccount = forAccount;
 
     try {
       const bundle = await collectBundle({
-        account,
+        account: forAccount,
         include: { account: includeAccount, pgp: pgpSelected, settings: includeSettings },
         source: {
           app: isTauriDesktop ? 'desktop' : 'web',
@@ -185,6 +194,14 @@
       const sessionId = newSessionId();
       const code = requireCode ? generatePairingCode() : '';
       const frameKey = code ? await wrapSealKey(key, code, sessionId) : key;
+
+      // The account switched while the bundle was being sealed. Everything
+      // above belongs to the previous account, so show nothing.
+      if (forAccount !== account) {
+        codeAccount = '';
+        phase = 'idle';
+        return;
+      }
 
       pairingCode = code ? formatPairingCode(code) : '';
       sharedCredentials = includeAccount;
@@ -269,6 +286,26 @@
     await startPairing();
   };
 
+  // A live code is bound to the account it was built for. Switching accounts
+  // swaps the prop underneath it, and the frames on screen would still carry
+  // the previous account's credentials, so drop them. The card used to keep
+  // showing the old account's code until the page was reloaded.
+  $effect(() => {
+    const next = account;
+    untrack(() => {
+      if (phase === 'pin') {
+        phase = 'idle';
+        pin = '';
+        error = '';
+        return;
+      }
+      if (phase !== 'active' || next === codeAccount) return;
+      // Treated like an expiry: the code was displayed, so an unprotected
+      // credential code still earns the rotate-password warning.
+      stopPairing('expired', { switched: true });
+    });
+  });
+
   $effect(() => {
     const frame = frames[frameIndex];
     const target = canvas;
@@ -331,13 +368,18 @@
     {#if phase === 'idle' || phase === 'expired'}
       {#if phase === 'expired'}
         <p class="text-sm text-muted-foreground">
-          That code expired. Generate a new one when your phone is ready.
+          {#if droppedForSwitch}
+            The code for <strong>{codeAccount}</strong> was dropped when you switched accounts. Generate
+            a new one for this account when your phone is ready.
+          {:else}
+            That code expired. Generate a new one when your phone is ready.
+          {/if}
         </p>
         {#if expiredUnprotected}
           <p class="text-sm">
-            That code carried this account's password with no pairing code. If anyone could see your
-            screen, change the password for <strong>{account}</strong> — rotating it is the only thing
-            that actually revokes what was shown.
+            That code carried the password for <strong>{codeAccount || account}</strong> with no pairing
+            code. If anyone could see your screen, change the password for that account — rotating it
+            is the only thing that actually revokes what was shown.
           </p>
         {/if}
       {/if}

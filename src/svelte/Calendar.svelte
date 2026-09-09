@@ -4,7 +4,13 @@
   import { downloadFile } from '../utils/download';
   import { pickFiles } from '../utils/file-picker';
   import { ScheduleXCalendar } from '@schedule-x/svelte';
-  import { createCalendar, viewDay, viewWeek, viewMonthGrid } from '@schedule-x/calendar';
+  import {
+    createCalendar,
+    viewDay,
+    viewWeek,
+    viewMonthGrid,
+    viewMonthAgenda,
+  } from '@schedule-x/calendar';
   import '@schedule-x/theme-default/dist/index.css';
   import DOMPurify from 'dompurify';
   import { i18n } from '../utils/i18n';
@@ -27,6 +33,7 @@
     buildVTimezone,
   } from '../utils/ical-datetime';
   import { parseCalendarHashTarget, consumedCalendarHash } from '../utils/calendar-hash';
+  import { buildMonthAgendaContent } from '../utils/month-agenda-content';
   import { parseNaturalLanguage } from '../utils/calendar-nlp';
   import {
     expandRecurringEvents,
@@ -1661,8 +1668,20 @@
 
   const isDesktopViewport = () => typeof window !== 'undefined' && window.innerWidth > 900;
 
+  // Schedule-X flips into its small layout when the calendar element is
+  // narrower than 700px and only offers views flagged for small screens
+  // there (Day and Month agenda). Week and Month grid are hidden on phones,
+  // so a phone default of Week used to be silently replaced by Day.
+  const SCHEDULE_X_SMALL_BREAKPOINT = 700;
+  const isPhoneViewport = () =>
+    typeof window !== 'undefined' && window.innerWidth < SCHEDULE_X_SMALL_BREAKPOINT;
+
   const resolveDefaultView = () => {
-    const view = isDesktopViewport() ? viewMonthGrid : viewWeek;
+    const view = isPhoneViewport()
+      ? viewMonthAgenda
+      : isDesktopViewport()
+        ? viewMonthGrid
+        : viewWeek;
     return (view as { name?: string })?.name || view;
   };
 
@@ -2443,12 +2462,21 @@
         .map((ev) => {
           const e = ev as Record<string, unknown>;
           const range = formatRangeForScheduleX(e);
+          const title = e.title || e.summary || e.name || 'Event';
           return {
             id: e.id || e.uid,
-            title: e.title || e.summary || e.name || 'Event',
+            title,
             start: range.start,
             end: range.end,
             calendarId: e.calendarId || e.calendar_id || 'default',
+            // Schedule-X 1.x renders its own HTML time stamp as text in the
+            // month-agenda view. Hand it ready-made markup instead.
+            _customContent: {
+              monthAgenda: buildMonthAgendaContent(
+                { title, start: range.start, end: range.end },
+                i18n.getShortFormattingLocale() || 'en-US',
+              ),
+            },
           };
         })
         .filter((ev) => ev.start && ev.end);
@@ -2487,7 +2515,10 @@
         try {
           calendarInstance = createCalendar({
             locale: i18n.getShortFormattingLocale() || 'en-US',
-            views: [viewDay, viewWeek, viewMonthGrid],
+            // Month agenda is the small-screen month: a dot grid plus the
+            // tapped day's events. It hides itself on wide layouts, where
+            // the month grid takes over, and vice versa.
+            views: [viewDay, viewWeek, viewMonthGrid, viewMonthAgenda],
             defaultView: resolveDefaultView(),
             // 0 = Sunday, 1 = Monday (schedule-x WeekDay). Read non-reactively;
             // the effect below rebuilds the calendar when this setting changes.
@@ -4032,6 +4063,7 @@
   const SWIPE_THRESHOLD_PX = 60;
   const SWIPE_HORIZONTAL_DEADZONE =
     '.sx__time-grid-event, .sx__month-grid-event, .sx__date-grid-event, ' +
+    '.sx__month-agenda-event, ' +
     '.time-dropdown, [role="dialog"], [data-dropdown], input, select, button';
 
   const isCalendarModalOpen = () =>
@@ -6022,7 +6054,8 @@
   }
 
   .sx-wrapper :global(.sx__time-grid-event),
-  .sx-wrapper :global(.sx__month-grid-event) {
+  .sx-wrapper :global(.sx__month-grid-event),
+  .sx-wrapper :global(.sx__month-agenda-event) {
     --sx-color-primary: var(--action-primary-bg) !important;
     /* Event chip fill: a primary wash over the raised surface, which lands
      * pale on light and deep on dark from a single declaration. */
@@ -6048,6 +6081,7 @@
 
   .sx-wrapper.is-dark :global(.sx__calendar-wrapper),
   .sx-wrapper.is-dark :global(.sx__month-grid-wrapper),
+  .sx-wrapper.is-dark :global(.sx__month-agenda-wrapper),
   .sx-wrapper.is-dark :global(.sx__week-grid),
   .sx-wrapper.is-dark :global(.sx__time-grid-wrapper) {
     background: var(--surface-canvas) !important;
@@ -6091,7 +6125,8 @@
   }
 
   .sx-wrapper :global(.sx__time-grid-event),
-  .sx-wrapper :global(.sx__month-grid-event) {
+  .sx-wrapper :global(.sx__month-grid-event),
+  .sx-wrapper :global(.sx__month-agenda-event) {
     border-radius: 6px;
     transition:
       transform 0.15s ease,
