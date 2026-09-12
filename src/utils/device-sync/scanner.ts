@@ -155,8 +155,8 @@ export async function resolveQrDecoder(): Promise<QrDecoder | null> {
 /**
  * The camera configuration both pairing surfaces open. The continuous-focus
  * constraint came out of real device testing (a phone parks focus at the wrong
- * distance on a dense code and never recovers) and lives here once so the
- * diagnostics spike keeps measuring the same camera the scanner uses.
+ * distance on a dense code and never recovers) and lives here once so every
+ * pairing surface opens the same camera.
  * Advanced constraints are ignored where unsupported.
  */
 export const QR_CAMERA_CONSTRAINTS = {

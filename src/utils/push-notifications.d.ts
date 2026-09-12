@@ -93,6 +93,7 @@ export function reregisterCurrentDevicePush(): Promise<PushManagementResult>;
 export function removePushRegistration(registrationId: string): Promise<PushManagementResult>;
 export function getStoredPushToken(): string | null;
 export function getPushPlatform(): 'ios' | 'android' | PushProvider | null;
+export function getActivePushProvider(): PushProvider | null;
 export function isPushInitialized(): boolean;
 export function getAndroidPushProviderPreference(): 'fcm' | 'unified-push';
 export function selectFcmPushProvider(): Promise<boolean>;

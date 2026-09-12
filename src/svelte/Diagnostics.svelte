@@ -7,13 +7,13 @@
   import RefreshCw from '@lucide/svelte/icons/refresh-cw';
   import ClipboardCopy from '@lucide/svelte/icons/clipboard-copy';
   import Mail from '@lucide/svelte/icons/mail';
+  import ArrowLeft from '@lucide/svelte/icons/arrow-left';
   import {
     runDiagnostics,
     formatReportText,
     summarizeReport,
     type DiagnosticsReport,
   } from '../utils/diagnostics';
-  import CameraSpike from './components/CameraSpike.svelte';
 
   let report = $state<DiagnosticsReport | null>(null);
   let running = $state(false);
@@ -74,6 +74,25 @@
   const lineStatus = (s: string) =>
     s === 'pass' ? 'success' : s === 'fail' ? 'danger' : s === 'warn' ? 'caution' : 'info';
 
+  /**
+   * The page is a bare route with no chrome of its own, and the desktop app
+   * has no browser back button, so without this the only way out was a
+   * reload. Pop the entry that brought us here; when the page was opened
+   * directly there is nothing to pop, so go to the mailbox instead.
+   */
+  const goBack = () => {
+    // The in-app entry points stamp fromApp on their history entry. A deep
+    // link or a reload has no such entry, and history.back() there would
+    // leave the app (web) or do nothing (Tauri), so route to the mailbox.
+    const state = globalThis.history.state as { fromApp?: boolean } | null;
+    if (state?.fromApp) {
+      globalThis.history.back();
+      return;
+    }
+    globalThis.history.pushState({ route: 'mailbox' }, '', '/mailbox');
+    globalThis.dispatchEvent(new PopStateEvent('popstate'));
+  };
+
   onMount(() => {
     void run();
   });
@@ -82,6 +101,10 @@
 <div class="mx-auto max-w-3xl p-6">
   <header class="mb-6 flex items-baseline justify-between gap-4">
     <div>
+      <Button variant="ghost" size="sm" class="-ml-2 mb-2" onclick={goBack}>
+        <ArrowLeft class="mr-1 h-4 w-4" />
+        Back
+      </Button>
       <h1 class="text-2xl font-semibold">Diagnostics</h1>
       <p class="mt-1 text-sm text-muted-foreground">
         Probes the network, storage, and OS-integration surfaces. Paste the report into a support
@@ -153,6 +176,4 @@
       </details>
     </section>
   {/if}
-
-  <CameraSpike />
 </div>

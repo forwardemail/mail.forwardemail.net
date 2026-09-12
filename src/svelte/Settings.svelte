@@ -3257,7 +3257,11 @@
                 type="button"
                 class="text-fg-link hover:underline"
                 onclick={() => {
-                  globalThis.history.pushState({}, '', '/mailbox/diagnostics');
+                  globalThis.history.pushState(
+                    { route: 'diagnostics', fromApp: true },
+                    '',
+                    '/mailbox/diagnostics',
+                  );
                   globalThis.dispatchEvent(new PopStateEvent('popstate'));
                 }}>Run diagnostics</button
               >

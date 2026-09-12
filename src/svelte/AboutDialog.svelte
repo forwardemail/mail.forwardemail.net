@@ -284,7 +284,11 @@
                 class="hover:underline inline cursor-pointer"
                 onclick={() => {
                   close();
-                  globalThis.history.pushState({}, '', '/mailbox/diagnostics');
+                  globalThis.history.pushState(
+                    { route: 'diagnostics', fromApp: true },
+                    '',
+                    '/mailbox/diagnostics',
+                  );
                   globalThis.dispatchEvent(new PopStateEvent('popstate'));
                 }}>Run diagnostics</button
               >

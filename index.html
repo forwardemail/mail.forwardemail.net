@@ -40,6 +40,31 @@
               window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches
             );
           document.documentElement.style.backgroundColor = dark ? '#0a0a0a' : '#f5f7fb';
+
+          // App Lock cold start: decide "locked" here, before any bundle
+          // loads, and paint the lock cover immediately. The real lock screen
+          // mounts from main.ts, but every route component mounts first and
+          // the shell painted for a moment before the overlay caught up,
+          // leaking folder names and looking like the app forgot to lock.
+          // Same three facts crypto-store.js reads (prefs, vault, session).
+          var prefs = JSON.parse(localStorage.getItem('webmail_lock_prefs') || 'null');
+          var vault = JSON.parse(localStorage.getItem('webmail_crypto_vault') || 'null');
+          var unlocked = sessionStorage.getItem('webmail_lock_session_unlocked') === '1';
+          if (prefs && prefs.enabled === true && vault && vault.encryptedDek && !unlocked) {
+            var overlay = document.getElementById('app-lock-overlay');
+            var cover = document.getElementById('app-lock-boot');
+            if (overlay && cover) {
+              overlay.style.display = 'block';
+              overlay.style.position = 'fixed';
+              overlay.style.inset = '0';
+              overlay.style.zIndex = '99999';
+              overlay.style.visibility = 'visible';
+              overlay.style.backgroundColor = dark ? '#0a0a0a' : '#f5f7fb';
+              cover.style.display = 'flex';
+              cover.style.color = dark ? '#e5e7eb' : '#111827';
+              document.documentElement.classList.add('app-lock-boot');
+            }
+          }
         } catch (e) {}
       })();
     </script>
@@ -74,7 +99,48 @@
     <div id="compose-root"></div>
     <div id="passphrase-root"></div>
     <div id="toasts-root"></div>
-    <div id="app-lock-overlay"></div>
+    <div id="app-lock-overlay">
+      <!--
+        Static stand-in for the lock screen, shown by the head script on a
+        locked cold start and hidden by main.ts the moment the real lock screen
+        mounts. Inline styles only: an inline <style> would make Tauri add a
+        style-src nonce (see the note above the head script).
+      -->
+      <div
+        id="app-lock-boot"
+        aria-hidden="true"
+        style="
+          display: none;
+          position: fixed;
+          inset: 0;
+          visibility: visible;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          gap: 1rem;
+          font-family:
+            system-ui,
+            -apple-system,
+            sans-serif;
+        "
+      >
+        <svg
+          width="48"
+          height="48"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.5"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          style="opacity: 0.8"
+        >
+          <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+          <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+        </svg>
+        <div style="font-size: 1.5rem; font-weight: 600">Forward Email</div>
+      </div>
+    </div>
 
     <!-- Fallback recovery UI for catastrophic errors before main JS loads -->
     <div

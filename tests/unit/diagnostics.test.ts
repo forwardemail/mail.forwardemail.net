@@ -21,10 +21,23 @@ vi.mock('../../src/utils/platform.js', () => ({
   getPlatform: () => 'web',
 }));
 
+vi.mock('../../src/utils/crypto-store.js', () => ({
+  isLockEnabled: () => lockState.enabled,
+  isVaultConfigured: () => lockState.configured,
+  isUnlocked: () => lockState.unlocked,
+  getLockPrefs: () => ({ pinLength: 6, hasPasskey: lockState.hasPasskey }),
+}));
+const lockState = { enabled: false, configured: false, unlocked: false, hasPasskey: false };
+
 import {
   checkApiConnectivity,
+  checkAppLock,
+  checkCamera,
   checkCSPEnforcement,
   checkIndexedDB,
+  checkPushRegistration,
+  checkQrDecoder,
+  checkSecureContext,
   checkServiceWorker,
   checkUpdaterManifest,
   formatReportText,
@@ -258,5 +271,81 @@ describe('runDiagnostics — composer', () => {
       results: [],
     };
     expect(report.generatedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
+  });
+});
+
+describe('checkSecureContext', () => {
+  const original = Object.getOwnPropertyDescriptor(globalThis, 'isSecureContext');
+  afterEach(() => {
+    if (original) Object.defineProperty(globalThis, 'isSecureContext', original);
+    else delete (globalThis as { isSecureContext?: boolean }).isSecureContext;
+  });
+  const setSecure = (value: boolean | undefined) => {
+    if (value === undefined) delete (globalThis as { isSecureContext?: boolean }).isSecureContext;
+    else Object.defineProperty(globalThis, 'isSecureContext', { value, configurable: true });
+  };
+
+  it('passes in a secure context', async () => {
+    setSecure(true);
+    const r = await checkSecureContext();
+    expect(r.status).toBe('pass');
+    expect(r.message).toContain(location.origin);
+  });
+
+  it('fails on an insecure origin, the LAN dev-address case that blocks the camera', async () => {
+    setSecure(false);
+    const r = await checkSecureContext();
+    expect(r.status).toBe('fail');
+    expect(r.message).toMatch(/camera/i);
+  });
+
+  it('skips when the runtime does not report it', async () => {
+    setSecure(undefined);
+    expect((await checkSecureContext()).status).toBe('skip');
+  });
+});
+
+describe('phone-only probes on web', () => {
+  it('skip rather than fail, so a desktop report is not full of red', async () => {
+    for (const check of [checkCamera, checkQrDecoder, checkPushRegistration]) {
+      const r = await check();
+      expect(r.status).toBe('skip');
+    }
+  });
+});
+
+describe('checkAppLock', () => {
+  beforeEach(() => {
+    Object.assign(lockState, {
+      enabled: false,
+      configured: false,
+      unlocked: false,
+      hasPasskey: false,
+    });
+  });
+
+  it('skips when the lock is off', async () => {
+    expect((await checkAppLock()).status).toBe('skip');
+  });
+
+  it('flags a lock that is on with no vault behind it', async () => {
+    lockState.enabled = true;
+    const r = await checkAppLock();
+    expect(r.status).toBe('fail');
+    expect(r.message).toMatch(/no vault/i);
+  });
+
+  it('reports state and unlock methods without any secret', async () => {
+    Object.assign(lockState, { enabled: true, configured: true, unlocked: true, hasPasskey: true });
+    const r = await checkAppLock();
+    expect(r.status).toBe('pass');
+    expect(r.message).toBe('On, unlocked; PIN (6 digits) + passkey');
+    expect(Object.keys(r.detail ?? {}).sort()).toEqual([
+      'configured',
+      'enabled',
+      'hasPasskey',
+      'pinLength',
+      'unlocked',
+    ]);
   });
 });

@@ -331,6 +331,145 @@ export const checkServiceWorker = (): Promise<DiagnosticResult> =>
     };
   });
 
+/**
+ * Secure context. getUserMedia, WebAuthn and the crypto APIs the vault uses
+ * are all gated on it. Inside Tauri this depends on how the app was launched
+ * (tauri.localhost and adb-reversed localhost are secure, a LAN dev address
+ * is not), which is the first thing to rule out when pairing cannot scan.
+ */
+export const checkSecureContext = (): Promise<DiagnosticResult> =>
+  runCheck('secure-context', 'Secure context', async () => {
+    const origin = typeof location === 'undefined' ? 'n/a' : location.origin;
+    const secure = (globalThis as { isSecureContext?: boolean }).isSecureContext;
+    if (typeof secure !== 'boolean') {
+      return { status: 'skip', message: 'Not reported by this runtime', detail: { origin } };
+    }
+    return {
+      status: secure ? 'pass' : 'fail',
+      message: secure
+        ? `Secure (${origin})`
+        : `Not secure (${origin}); camera and passkeys blocked`,
+      detail: { origin, secure },
+    };
+  });
+
+/**
+ * Camera present, without opening it. Device enumeration needs no permission
+ * and has no prompt; labels are blank until permission is granted, so only
+ * the count is reported. Mobile only: that is the pairing scanner's side.
+ */
+export const checkCamera = (): Promise<DiagnosticResult> =>
+  runCheck('camera', 'Camera', async () => {
+    if (!isTauriMobile) return { status: 'skip', message: 'Only checked on phones' };
+    const devices = navigator.mediaDevices?.enumerateDevices;
+    if (typeof devices !== 'function') {
+      return { status: 'fail', message: 'mediaDevices API unavailable in this webview' };
+    }
+    const list = await navigator.mediaDevices.enumerateDevices();
+    const cameras = list.filter((d) => d.kind === 'videoinput').length;
+    return {
+      status: cameras > 0 ? 'pass' : 'fail',
+      message: cameras > 0 ? `${cameras} camera(s) detected` : 'No camera detected',
+      detail: { cameras },
+    };
+  });
+
+/**
+ * Which QR decoder the pairing scanner would use here: the native
+ * BarcodeDetector where the engine has one, the bundled jsQR otherwise.
+ * Nothing is decoded; this only resolves the decoder. Mobile only.
+ */
+export const checkQrDecoder = (): Promise<DiagnosticResult> =>
+  runCheck('qr-decoder', 'QR decoder', async () => {
+    if (!isTauriMobile) return { status: 'skip', message: 'Only checked on phones' };
+    const scanner = await import('./device-sync/scanner');
+    const native = scanner.isNativeDecoderAvailable();
+    const decoder = await scanner.createQrDecoder();
+    if (!decoder) {
+      return {
+        status: 'fail',
+        message: 'No usable decoder (no BarcodeDetector and jsQR could not start)',
+        detail: { native },
+      };
+    }
+    try {
+      decoder.close();
+    } catch {
+      // nothing to release
+    }
+    return {
+      status: 'pass',
+      message: `${decoder.kind}${native ? '' : ' (bundled fallback)'}`,
+      detail: { kind: decoder.kind, native },
+    };
+  });
+
+/**
+ * Push registration as this device sees it, from local state only. No
+ * network: the Settings push card already does the server comparison. The
+ * provider tells support which delivery path to look at. Mobile only.
+ */
+export const checkPushRegistration = (): Promise<DiagnosticResult> =>
+  runCheck('push-registration', 'Push registration', async () => {
+    if (!isTauriMobile) return { status: 'skip', message: 'Only checked on phones' };
+    const push = await import('./push-notifications.js');
+    const hasToken = Boolean(push.getStoredPushToken());
+    const provider = push.getActivePushProvider();
+    const platform = push.getPushPlatform() || 'unknown';
+    if (!hasToken) {
+      return {
+        status: 'warn',
+        message: 'No device token stored',
+        detail: { hasToken, provider, platform },
+      };
+    }
+    if (!provider) {
+      return {
+        status: 'warn',
+        message: 'Token stored but the active account has no registration',
+        detail: { hasToken, provider, platform },
+      };
+    }
+    return {
+      status: 'pass',
+      message: `Registered via ${provider}`,
+      detail: { hasToken, provider, platform },
+    };
+  });
+
+/**
+ * App Lock state. Reports configuration, not secrets: whether the lock is
+ * on, whether a vault exists, whether it is open right now, and which
+ * unlock methods are set up. The "enabled but no vault" combination is the
+ * one that has produced blank rows and sign-out lookalikes before.
+ */
+export const checkAppLock = (): Promise<DiagnosticResult> =>
+  runCheck('app-lock', 'App Lock', async () => {
+    const store = await import('./crypto-store.js');
+    const enabled = store.isLockEnabled();
+    const configured = store.isVaultConfigured();
+    const unlocked = store.isUnlocked();
+    const prefs = store.getLockPrefs() as { pinLength?: number; hasPasskey?: boolean };
+    const detail = {
+      enabled,
+      configured,
+      unlocked,
+      pinLength: prefs?.pinLength ?? null,
+      hasPasskey: Boolean(prefs?.hasPasskey),
+    };
+    if (!enabled) return { status: 'skip', message: 'Off', detail };
+    if (!configured) {
+      return { status: 'fail', message: 'Enabled but no vault exists', detail };
+    }
+    const methods = [`PIN (${detail.pinLength ?? '?'} digits)`];
+    if (detail.hasPasskey) methods.push('passkey');
+    return {
+      status: 'pass',
+      message: `On, ${unlocked ? 'unlocked' : 'locked'}; ${methods.join(' + ')}`,
+      detail,
+    };
+  });
+
 // ── Composer ────────────────────────────────────────────────────────────────
 
 /** Run every check and assemble a report. Each check has its own try/catch. */
@@ -344,6 +483,11 @@ export const runDiagnostics = async (): Promise<DiagnosticsReport> => {
     checkMailtoRegistration(),
     checkNotificationPermission(),
     checkServiceWorker(),
+    checkSecureContext(),
+    checkCamera(),
+    checkQrDecoder(),
+    checkPushRegistration(),
+    checkAppLock(),
   ]);
   return {
     generatedAt: new Date().toISOString(),

@@ -28,7 +28,8 @@ import {
   openMessageTab,
 } from './stores/tabStore';
 import { writable, get } from 'svelte/store';
-import { mount } from 'svelte';
+import { mount, unmount } from 'svelte';
+import LockScreen from './svelte/LockScreen.svelte';
 // Design system styles. fe-tokens.css is the canonical token layer and must
 // load first; tokens.css and main.css both map onto it.
 // Brand mono face. Loaded eagerly rather than through font-loader.js because
@@ -2019,7 +2020,7 @@ async function showLockScreen(): Promise<void> {
   }
 
   _lockScreenPromise = new Promise((resolve) => {
-    const lockOverlay = document.querySelector('#app-lock-overlay');
+    const lockOverlay = document.querySelector('#app-lock-overlay') as HTMLElement | null;
     if (!lockOverlay) {
       _lockScreenPromise = null;
       resolve();
@@ -2027,50 +2028,74 @@ async function showLockScreen(): Promise<void> {
     }
 
     lockOverlay.style.display = 'block';
-    import('svelte').then(({ mount, unmount }) => {
-      import('./svelte/LockScreen.svelte').then(({ default: LockScreen }) => {
-        const comp = mount(LockScreen, { target: lockOverlay });
-        lockOverlay.addEventListener(
-          'unlock',
-          () => {
-            unmount(comp);
-            lockOverlay.style.display = 'none';
-            _lockScreenPromise = null;
-            // While the app sat locked, background loads (websocket ticks,
-            // sync completions) read IndexedDB without the key, so sealed
-            // messages landed in the in-memory list and LRU cache as empty
-            // shells (no subject or sender). Drop that cache and re-read the
-            // current folder now that the key is back; without this the
-            // blank rows stick around until the user re-selects the folder.
-            try {
-              mailboxStore.actions.clearFolderMessageCache?.();
-              void mailboxStore.actions.loadMessages?.()?.catch?.(() => {});
-            } catch {
-              // Refresh is best-effort; re-selecting the folder recovers too.
-            }
+    // Mounted synchronously from a static import. A lazy chunk here left a
+    // visible gap between the shell painting and the lock covering it.
+    const comp = mount(LockScreen, { target: lockOverlay });
+    hideBootLockCover();
+    lockOverlay.addEventListener(
+      'unlock',
+      () => {
+        unmount(comp);
+        lockOverlay.style.display = 'none';
+        _lockScreenPromise = null;
+        // While the app sat locked, background loads (websocket ticks,
+        // sync completions) read IndexedDB without the key, so sealed
+        // messages landed in the in-memory list and LRU cache as empty
+        // shells (no subject or sender). Drop that cache and re-read the
+        // current folder now that the key is back; without this the
+        // blank rows stick around until the user re-selects the folder.
+        try {
+          mailboxStore.actions.clearFolderMessageCache?.();
+          void mailboxStore.actions.loadMessages?.()?.catch?.(() => {});
+        } catch {
+          // Refresh is best-effort; re-selecting the folder recovers too.
+        }
 
-            // Everything that could not authenticate while the vault was shut.
-            // The mobile resume burst skips itself when it lands on a locked
-            // app, and the visibility handler that normally revives the
-            // WebSockets has already been and gone, so unlocking is the only
-            // point left to run this. Without it the app sits unlocked with
-            // dead sockets and a queue that has not drained.
-            try {
-              processMutationQueue();
-              syncPushForActiveAccount();
-              globalThis.dispatchEvent(new CustomEvent('fe:force-reconnect'));
-            } catch (err) {
-              console.warn('[app-lock] post-unlock resume failed:', err);
-            }
+        // Everything that could not authenticate while the vault was shut.
+        // The mobile resume burst skips itself when it lands on a locked
+        // app, and the visibility handler that normally revives the
+        // WebSockets has already been and gone, so unlocking is the only
+        // point left to run this. Without it the app sits unlocked with
+        // dead sockets and a queue that has not drained.
+        try {
+          processMutationQueue();
+          syncPushForActiveAccount();
+          globalThis.dispatchEvent(new CustomEvent('fe:force-reconnect'));
+        } catch (err) {
+          console.warn('[app-lock] post-unlock resume failed:', err);
+        }
 
-            resolve();
-          },
-          { once: true },
-        );
-      });
-    });
+        resolve();
+      },
+      { once: true },
+    );
   });
   return _lockScreenPromise;
+}
+
+// The static cover index.html paints on a locked cold start, before any
+// bundle runs. Hidden as soon as the real lock screen mounts, and dropped
+// entirely (with the overlay it sits in) when bootstrap decides no lock is
+// due after all, which happens when the head script's cheap check and the
+// real one disagree (a corrupt pref, a session stash that still restores).
+function hideBootLockCover(): void {
+  const cover = document.getElementById('app-lock-boot');
+  if (cover) cover.style.display = 'none';
+  document.documentElement.classList.remove('app-lock-boot');
+}
+
+function settleBootLockCover(): void {
+  hideBootLockCover();
+  if (_lockScreenPromise) return;
+  const lockOverlay = document.querySelector('#app-lock-overlay') as HTMLElement | null;
+  if (lockOverlay) lockOverlay.style.display = 'none';
+}
+
+// True when the cold-start path below will end up showing the lock screen.
+// Used to mount it at the very top of bootstrap so the PIN pad is on screen
+// while the rest of boot (clear-manifest fetch, DB init) runs behind it.
+function lockScreenDueAtBoot(): boolean {
+  return isLockEnabled() && isVaultConfigured() && !isUnlocked() && !wasUnlockedThisSession();
 }
 
 /**
@@ -2092,6 +2117,15 @@ async function bootstrap() {
   const root = document.querySelector('#rl-app');
   if (!root) {
     return;
+  }
+
+  // App Lock first. The head script in index.html already painted a static
+  // cover; mounting the real lock screen now, before the clear-manifest fetch
+  // and database init, means the PIN pad is usable as early as possible. The
+  // same promise is awaited further down where the route depends on it.
+  if (lockScreenDueAtBoot()) {
+    pauseInactivityTimer();
+    void showLockScreen();
   }
 
   // Check if this client needs a forced reset before any initialization
@@ -2412,7 +2446,12 @@ async function bootstrap() {
         routeStore.set('mailbox');
         history.replaceState({ route: 'mailbox' }, '', '/mailbox');
       }
-    } else if (!isLockEnabled()) {
+    }
+    // Whatever the branches above decided, the static cold-start cover is
+    // done: either the real lock screen took over or no lock was due.
+    settleBootLockCover();
+
+    if (!isLockEnabled()) {
       // No app lock — credentials are stored as plaintext in localStorage.
       // Ensure sessionStorage has a copy of each tab-scoped key.  The browser
       // can clear sessionStorage under memory pressure or after a crash,
