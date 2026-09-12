@@ -28,17 +28,23 @@ pub fn init<R: Runtime, C: DeserializeOwned>(
 /// Access to the remote-push APIs.
 pub struct RemotePush<R: Runtime>(PluginHandle<R>);
 
+// run_mobile_plugin_async rather than run_mobile_plugin: the sync variant
+// parks the calling thread until the native side answers on the main thread,
+// and when that caller is the IPC thread holding the plugin store mutex the
+// main thread can deadlock against it in wry's onPageLoaded.
 impl<R: Runtime> RemotePush<R> {
-  pub fn get_token(&self) -> crate::Result<String> {
+  pub async fn get_token(&self) -> crate::Result<String> {
     self.0
-      .run_mobile_plugin::<TokenResponse>("getToken", ())
+      .run_mobile_plugin_async::<TokenResponse>("getToken", ())
+      .await
       .map(|response| response.token)
       .map_err(Into::into)
   }
 
-  pub fn request_permission(&self) -> crate::Result<PermissionState> {
+  pub async fn request_permission(&self) -> crate::Result<PermissionState> {
     self.0
-      .run_mobile_plugin("requestPermissions", ())
+      .run_mobile_plugin_async("requestPermissions", ())
+      .await
       .map_err(Into::into)
   }
 }

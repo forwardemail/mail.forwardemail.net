@@ -15,13 +15,13 @@ pub fn init<R: Runtime, C: DeserializeOwned>(
 pub struct RemotePush<R: Runtime>(AppHandle<R>);
 
 impl<R: Runtime> RemotePush<R> {
-  pub fn get_token(&self) -> crate::Result<String> {
+  pub async fn get_token(&self) -> crate::Result<String> {
     Ok("".to_string())
   }
 
-  pub fn request_permission(&self) -> crate::Result<PermissionState> {
+  pub async fn request_permission(&self) -> crate::Result<PermissionState> {
     // Desktop builds never register this plugin (push is mobile-only), so this
-    // stub just satisfies the shared trait signature.
+    // stub just satisfies the shared signature.
     Ok(PermissionState { granted: false })
   }
 }
