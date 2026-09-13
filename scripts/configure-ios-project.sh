@@ -7,12 +7,13 @@
 # several places, and a missing NSCameraUsageDescription is not a denied
 # permission on iOS: UIKit kills the process on first camera access.
 #
-# ORDER MATTERS: the camera script writes NSCameraUsageDescription into
-# project.yml, and the scene-delegate script then runs xcodegen, which
-# regenerates Info.plist FROM project.yml. Swapping them silently discards the
-# plist entry.
+# ORDER MATTERS: the camera and store-metadata scripts write into project.yml,
+# and the scene-delegate script then runs xcodegen, which regenerates the
+# Xcode project and Info.plist FROM project.yml. Running xcodegen first
+# silently discards their entries.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 node scripts/configure-mobile-camera.cjs
+node scripts/configure-ios-store-metadata.cjs
 node scripts/inject-ios-scene-delegate.cjs

@@ -4,7 +4,9 @@ Turnkey answers for the App Store Connect and Google Play Console submissions, g
 the actual app code. Where a value is a judgment call or needs your confirmation it is
 marked **[CONFIRM]**.
 
-Last verified against `main` on 2026-06-13.
+Last verified against `main` on 2026-09-13. Pipeline state: every `v*` tag already uploads the
+signed IPA to TestFlight and the signed AAB to the Google Play **internal** track; what remains is
+console metadata, listing assets, and promotion (see [release-readiness.md](./release-readiness.md)).
 
 ---
 
@@ -22,23 +24,25 @@ Last verified against `main` on 2026-06-13.
 | Support contact            | support@forwardemail.net (feedback emails here)  | `feedback-payload.ts`                        |
 | Backend API                | `https://api.forwardemail.net` only (CSP-pinned) | `tauri.conf.json` CSP                        |
 
-**Device family [CONFIRM]:** the iOS `Info.plist` carries `UISupportedInterfaceOrientations~ipad`,
-implying a **universal (iPhone + iPad)** build. Confirm `TARGETED_DEVICE_FAMILY`; if universal,
-you must supply **iPad screenshots** as well (see §6).
+**Device family: universal (iPhone + iPad).** `scripts/configure-ios-store-metadata.cjs` sets
+`TARGETED_DEVICE_FAMILY = "1,2"` explicitly in the generated project (it was previously
+unset and universal only by Xcode default). App Store Connect therefore requires **iPad
+screenshots** as well (see §6).
 
 ---
 
 ## 2. Hard-blocker checklist (these cause guaranteed rejection if missing)
 
-| Requirement                       | Status             | Notes                                                                               |
-| --------------------------------- | ------------------ | ----------------------------------------------------------------------------------- |
-| In-app account deletion           | ✅ done            | Settings → **Delete account** → web flow. Distinct from Sign out.                   |
-| iOS encryption declaration        | ✅ done            | `ITSAppUsesNonExemptEncryption=false` injected at build (`inject-ios-signing.cjs`). |
-| `NSPhotoLibraryUsageDescription`  | ✅ done            | injected at build (image picker for attachments/avatars).                           |
-| Privacy policy URL                | ⚠️ **publish it**  | App links `forwardemail.net/privacy` — make sure that page is live.                 |
-| Privacy labels / Data Safety form | ⬜ fill in console | Exact answers in §4 / §5.                                                           |
-| Screenshots per device class      | ⬜ produce         | Specs in §6.                                                                        |
-| Apple deletion path is reachable  | ✅ done            | Reviewer will follow the link — it lands on the deletion page directly.             |
+| Requirement                                | Status             | Notes                                                                               |
+| ------------------------------------------ | ------------------ | ----------------------------------------------------------------------------------- |
+| In-app account deletion                    | ✅ done            | Settings → **Delete account** → web flow. Distinct from Sign out.                   |
+| iOS encryption declaration                 | ✅ done            | `ITSAppUsesNonExemptEncryption=false` injected at build (`inject-ios-signing.cjs`). |
+| `NSPhotoLibraryUsageDescription`           | ✅ done            | injected at build (image picker for attachments/avatars).                           |
+| Privacy manifest (`PrivacyInfo.xcprivacy`) | ✅ done            | `src-tauri/PrivacyInfo.xcprivacy`, copied into the Xcode target at build.           |
+| Privacy policy URL                         | ⚠️ **publish it**  | App links `forwardemail.net/privacy` — make sure that page is live.                 |
+| Privacy labels / Data Safety form          | ⬜ fill in console | Exact answers in §4 / §5.                                                           |
+| Screenshots per device class               | ⬜ produce         | Specs in §6.                                                                        |
+| Apple deletion path is reachable           | ✅ done            | Reviewer will follow the link — it lands on the deletion page directly.             |
 
 ---
 
@@ -102,11 +106,21 @@ App Store Connect won't even prompt per build.)
 
 **Privacy choices / usage strings:**
 
-- `NSPhotoLibraryUsageDescription` — present (image picker). String currently: _"Forward Email
-  needs access to your photos so you can attach images to emails and set a profile picture."_
-- **Not needed (correctly absent):** `NSCameraUsageDescription` (no `getUserMedia`/capture),
-  `NSFaceIDUsageDescription` (biometric is WebAuthn/passkeys via the system, not
-  `LocalAuthentication`), `NSUserTrackingUsageDescription` (no ATT/IDFA), location strings.
+- `NSPhotoLibraryUsageDescription` — present (image picker). String: _"Forward Email uses your
+  photo library so you can attach photos to emails and set profile pictures."_ (one string now;
+  `Info.ios.plist` and `inject-ios-signing.cjs` used to disagree).
+- `NSCameraUsageDescription` — present. QR device pairing scans a code shown by another device
+  (`scripts/configure-mobile-camera.cjs`). Declare **Camera** access in the App Privacy
+  questionnaire only if asked about permissions; no camera data leaves the device.
+- `NSLocalNetworkUsageDescription` — present in every build because the dev pipeline needs it
+  for on-device `tauri ios dev`. Production never opens a local-network connection, so the
+  prompt never appears. Reviewers may ask; the answer is "development-only, unused in release".
+- **Not needed (correctly absent):** `NSFaceIDUsageDescription` (biometric is WebAuthn/passkeys
+  via the system, not `LocalAuthentication`), `NSUserTrackingUsageDescription` (no ATT/IDFA),
+  location strings.
+- `PrivacyInfo.xcprivacy` declares no tracking, the email address and user content as
+  app-functionality data, and the four required-reason API categories WKWebView and Tauri reach
+  (user defaults, file timestamps, disk space, system boot time).
 
 **Push notifications:** APNs support is implemented for iOS. `inject-ios-signing.cjs` generates
 the iOS-only `aps-environment` entitlement while leaving the shared macOS entitlements unchanged.
@@ -170,29 +184,33 @@ settings/account. None are currently in the repo (`e2e-webview/screenshots` are 
 
 ## 7. Permissions declared (low review friction)
 
-**Android:** `INTERNET`, `ACCESS_NETWORK_STATE`, `POST_NOTIFICATIONS`, `VIBRATE`, and
-`RECEIVE_BOOT_COMPLETED` support network access, notification display, and UnifiedPush
-re-registration after restart. The dual-provider release also contains the generated FCM service
-and the first-party UnifiedPush connector. It requests no SMS, location, storage, camera, contacts,
-or accessibility permission. Deep-link intent filters use `mailto:` and `forwardemail:` custom
-schemes, so no `assetlinks.json` file is needed. `MainActivity` is the only exported activity, and
-the FileProvider is not exported.
+**Android:** `INTERNET`, `ACCESS_NETWORK_STATE`, `POST_NOTIFICATIONS`, `VIBRATE`,
+`RECEIVE_BOOT_COMPLETED`, and `CAMERA` (QR device pairing; `android.hardware.camera` is declared
+`required="false"` so camera-less devices stay eligible). The dual-provider release also contains
+the generated FCM service and the first-party UnifiedPush connector. It requests no SMS, location,
+storage, contacts, or accessibility permission. Deep-link intent filters use `mailto:` and
+`forwardemail:` custom schemes, so no `assetlinks.json` file is needed. `MainActivity` is the only
+exported activity, and the FileProvider is not exported.
 
-**iOS:** `NSPhotoLibraryUsageDescription` supports the image picker, and the iOS-only
-`aps-environment` entitlement enables APNs. Custom-scheme deep links do not require Associated
-Domains.
+**iOS:** `NSPhotoLibraryUsageDescription` (image picker), `NSCameraUsageDescription` (QR pairing),
+`NSLocalNetworkUsageDescription` (development only), the `PrivacyInfo.xcprivacy` manifest, and
+the iOS-only `aps-environment` entitlement for APNs. Custom-scheme deep links do not require
+Associated Domains.
 
 ---
 
 ## 8. Open items / decisions to confirm
 
-1. **[CONFIRM]** Publish `forwardemail.net/privacy` (live before submission — the app links it).
-2. **[CONFIRM]** Device family — iPhone-only vs universal → determines iPad screenshot requirement.
+1. **[CONFIRM]** Publish `forwardemail.net/privacy` (live before submission — the app links it;
+   the URL currently redirects, confirm the final page is public).
+2. ✅ Device family is universal (set explicitly). Produce iPad 12.9" screenshots.
 3. **[CONFIRM]** Diagnostics-in-feedback: list it or rely on the user-initiated carve-out (pick the
    same answer for Apple §4 and Google §5).
 4. Complete a physical-device APNs smoke test and include the new-mail push behavior in the App Review notes.
 5. **[CONFIRM]** Age-rating questionnaire — answer "No" to unrestricted web access.
-6. Provision the 6 iOS TestFlight secrets (build pipeline is ready; secret-gated).
-7. Create the Play Console app and testing tracks. Store its service-account JSON as the
-   `GOOGLE_PLAY_SERVICE_ACCOUNT` release secret and optionally set the `PLAY_TRACK` variable;
-   `release-mobile.yml` already uploads the generated AAB when that secret is configured.
+6. ✅ iOS TestFlight secrets are provisioned; every release uploads to TestFlight.
+7. ✅ Play Console app exists; `GOOGLE_PLAY_SERVICE_ACCOUNT` is set and every release uploads the
+   AAB to the `internal` track. Remaining: listing, Data Safety, content rating, feature graphic,
+   then promote internal → closed → production.
+8. Create a **demo reviewer account** (a dedicated alias seeded with mail, contacts, and calendar
+   entries). Both Apple and Google review require working credentials for an email client.

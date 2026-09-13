@@ -50,6 +50,35 @@ if (fs.existsSync(cargoLockPath)) {
   }
 }
 
+// Update the AppStream metainfo release list. The deb, rpm, Snap, and Flatpak
+// packages ship this file, and package review tools flag a metainfo whose
+// newest <release> is older than the package version. Prepend today's release
+// unless it is already listed.
+const metainfoPath = path.join(root, 'net.forwardemail.mail.metainfo.xml');
+if (fs.existsSync(metainfoPath)) {
+  let metainfo = fs.readFileSync(metainfoPath, 'utf8');
+  if (!metainfo.includes(`<release version="${version}"`)) {
+    const today = new Date().toISOString().slice(0, 10);
+    const entry = `  <releases>\n    <release version="${version}" date="${today}"/>\n`;
+    if (/^ {2}<releases>\n/m.test(metainfo)) {
+      metainfo = metainfo.replace(/^ {2}<releases>\n/m, entry);
+      fs.writeFileSync(metainfoPath, metainfo);
+    } else {
+      console.warn('metainfo.xml has no <releases> block; skipping release entry');
+    }
+  }
+}
+
+// Point the Flatpak manifest at the tag np is about to create. The commit
+// hash is not known while the version hook runs (np commits after it), so the
+// manifest pins the tag only; flatpak-builder accepts a tag on its own.
+const flatpakManifestPath = path.join(root, 'net.forwardemail.mail.yml');
+if (fs.existsSync(flatpakManifestPath)) {
+  let manifest = fs.readFileSync(flatpakManifestPath, 'utf8');
+  const updated = manifest.replace(/^(\s*tag:\s*)v[0-9][^\n]*$/m, `$1v${version}`);
+  if (updated !== manifest) fs.writeFileSync(flatpakManifestPath, updated);
+}
+
 // Update Android tauri.properties (versionName + versionCode)
 const tauriPropsPath = path.join(root, 'src-tauri', 'gen', 'android', 'app', 'tauri.properties');
 if (fs.existsSync(tauriPropsPath)) {

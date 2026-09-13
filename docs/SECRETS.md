@@ -16,22 +16,25 @@ Open **Settings → Secrets and variables → Actions** in the GitHub repository
 
 `GITHUB_TOKEN` is provided automatically by GitHub Actions. Do not create it manually.
 
+> **Current state (verified 2026-09-13):** every signing and deployment secret is stored as a **repository** secret; the `release` environment holds only a duplicate `IOS_PROVISIONING_PROFILE_BASE64`. Jobs that declare `environment: release` still resolve repository secrets, so releases work, but environment protection rules (required reviewers, branch restrictions) protect nothing until the values are moved. Migrate by re-adding each value with `gh secret set NAME --env release` and then deleting the repository copy; secret values cannot be copied through the API, so this needs the original material.
+
 ## Quick reference
 
 ### Desktop signing and updater secrets
 
-| Name                                 | Type   | Required           | Purpose                                                                  |
-| ------------------------------------ | ------ | ------------------ | ------------------------------------------------------------------------ |
-| `TAURI_SIGNING_PRIVATE_KEY`          | Secret | Yes                | Private key used to sign Tauri updater bundles and generate `.sig` files |
-| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Secret | Yes                | Password chosen when generating the updater private key                  |
-| `APPLE_CERTIFICATE`                  | Secret | Yes for macOS rows | Base64-encoded macOS `.p12` certificate for desktop code signing         |
-| `APPLE_CERTIFICATE_PASSWORD`         | Secret | Yes for macOS rows | Password used when exporting the macOS `.p12`                            |
-| `APPLE_SIGNING_IDENTITY`             | Secret | Yes for macOS rows | macOS signing identity string such as `Developer ID Application: ...`    |
-| `APPLE_ID`                           | Secret | Yes for macOS rows | Apple ID email used for notarization                                     |
-| `APPLE_PASSWORD`                     | Secret | Yes for macOS rows | App-specific password used for notarization                              |
-| `APPLE_TEAM_ID`                      | Secret | Yes for macOS rows | Apple Developer Team ID used by desktop notarization and shared with iOS |
-| `WINDOWS_CERTIFICATE`                | Secret | Optional           | Base64-encoded exportable `.pfx` Windows code-signing certificate        |
-| `WINDOWS_CERTIFICATE_PASSWORD`       | Secret | Optional           | Password used when exporting the Windows `.pfx`                          |
+| Name                                 | Type     | Required            | Purpose                                                                                                               |
+| ------------------------------------ | -------- | ------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `TAURI_SIGNING_PRIVATE_KEY`          | Secret   | Yes                 | Private key used to sign Tauri updater bundles and generate `.sig` files                                              |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Secret   | Yes                 | Password chosen when generating the updater private key                                                               |
+| `APPLE_CERTIFICATE`                  | Secret   | Yes for macOS rows  | Base64-encoded macOS `.p12` certificate for desktop code signing                                                      |
+| `APPLE_CERTIFICATE_PASSWORD`         | Secret   | Yes for macOS rows  | Password used when exporting the macOS `.p12`                                                                         |
+| `APPLE_SIGNING_IDENTITY`             | Secret   | Yes for macOS rows  | macOS signing identity string such as `Developer ID Application: ...`                                                 |
+| `APPLE_ID`                           | Secret   | Yes for macOS rows  | Apple ID email used for notarization                                                                                  |
+| `APPLE_PASSWORD`                     | Secret   | Yes for macOS rows  | App-specific password used for notarization                                                                           |
+| `APPLE_TEAM_ID`                      | Secret   | Yes for macOS rows  | Apple Developer Team ID used by desktop notarization and shared with iOS                                              |
+| `WINDOWS_CERTIFICATE`                | Secret   | Not yet provisioned | Base64-encoded exportable `.pfx`; imported into the runner cert store and its thumbprint written to `tauri.conf.json` |
+| `WINDOWS_CERTIFICATE_PASSWORD`       | Secret   | Not yet provisioned | Password used when exporting the Windows `.pfx`                                                                       |
+| `WINDOWS_SIGNING_REQUIRED`           | Variable | No                  | Set to `true` after the certificate exists so a missing secret fails the Windows rows instead of shipping unsigned    |
 
 The updater signing key is required for normal production desktop releases. The workflow fails closed when `TAURI_SIGNING_PRIVATE_KEY` is absent unless the break-glass `ALLOW_NO_UPDATER=true` repository variable is set; that override intentionally omits updater artifacts and should not be left enabled. Every macOS release row also fails closed unless all six Apple signing and notarization secrets above are present.
 
@@ -146,11 +149,20 @@ Use the matching **Developer ID Application** entry as `APPLE_SIGNING_IDENTITY`.
 
 ### Windows code-signing secrets
 
-The current desktop release workflow expects an **exportable `.pfx` file**. That means `WINDOWS_CERTIFICATE` must contain a base64-encoded `.pfx`, and `WINDOWS_CERTIFICATE_PASSWORD` must be the password used when that `.pfx` was exported.
+**Current state (2026-09-13): no Windows certificate is provisioned, so the Windows installers on GitHub Releases ship unsigned and Windows shows a SmartScreen prompt on first install.** The workflow prints a warning on each Windows row until the secrets below exist. Set the repository variable `WINDOWS_SIGNING_REQUIRED=true` after provisioning so a missing secret fails the release instead of silently shipping unsigned again.
 
-If your certificate issuer provides a hardware token or cloud-signing workflow that cannot be exported as a `.pfx`, these two secrets are **not** sufficient by themselves. In that case you need issuer-specific signing integration or a custom signing command instead of the built-in `.pfx` flow.
+How signing works in CI: `tauri-action` does not read `WINDOWS_CERTIFICATE`. The `Import Windows code-signing certificate` step in `release-desktop.yml` decodes the `.pfx`, imports it into the runner's `Cert:\CurrentUser\My` store with `Import-PfxCertificate`, and writes the resulting thumbprint into `bundle.windows.certificateThumbprint` in `tauri.conf.json` so the Tauri bundler signs the MSI and NSIS installers with `signtool`. That is the only path the two secrets support.
 
-If you already have an exportable `.pfx`, keep it and skip to the encoding step. Otherwise, use one of the flows below.
+| Name                           | Type                | Purpose                                                                |
+| ------------------------------ | ------------------- | ---------------------------------------------------------------------- |
+| `WINDOWS_CERTIFICATE`          | `release` secret    | One-line base64 of an exportable code-signing `.pfx`                   |
+| `WINDOWS_CERTIFICATE_PASSWORD` | `release` secret    | Password used when the `.pfx` was exported                             |
+| `WINDOWS_SIGNING_REQUIRED`     | Repository variable | Set to `true` once the certificate exists; missing secret fails closed |
+
+#### Choosing a certificate
+
+- **Azure Trusted Signing** (about $10/month, available to US organizations) does not issue an exportable `.pfx`; it signs through a cloud service. To use it, configure `bundle.windows.signCommand` in `tauri.conf.json` to call `trusted-signing-cli` (or `signtool` with the Trusted Signing dlib) and store the Azure credentials as secrets instead of the two above. Since 2024 an EV certificate gives no SmartScreen advantage over OV or Trusted Signing; reputation builds from download volume either way.
+- **OV certificate from a CA** with an exportable key works with the `.pfx` flow below. New certificates issued after 2026-03-01 are limited to 458 days of validity, so plan an annual rotation.
 
 #### Export from the Windows certificate store
 
@@ -166,8 +178,6 @@ Export-PfxCertificate \
 
 #### Convert a `.cer` plus private key into `.pfx`
 
-If your CA gave you a certificate file and a separate private key, you can convert them with OpenSSL:
-
 ```bash
 openssl pkcs12 -export \
   -out forwardemail-windows.pfx \
@@ -175,7 +185,7 @@ openssl pkcs12 -export \
   -in certificate.cer
 ```
 
-OpenSSL will prompt you for an export password. That export password becomes `WINDOWS_CERTIFICATE_PASSWORD`.
+The export password becomes `WINDOWS_CERTIFICATE_PASSWORD`.
 
 #### Base64-encode the `.pfx`
 
@@ -183,13 +193,7 @@ OpenSSL will prompt you for an export password. That export password becomes `WI
 [Convert]::ToBase64String([IO.File]::ReadAllBytes('forwardemail-windows.pfx'))
 ```
 
-Store the resulting one-line base64 string as `WINDOWS_CERTIFICATE`. Store the password used to export the `.pfx` as `WINDOWS_CERTIFICATE_PASSWORD`.
-
-If you also want to inspect or confirm the certificate thumbprint for local signing configuration, use:
-
-```powershell
-Get-PfxCertificate .\forwardemail-windows.pfx | Select-Object Thumbprint, Subject
-```
+Store the one-line output as `WINDOWS_CERTIFICATE`, then set `WINDOWS_SIGNING_REQUIRED=true` and verify the next release's `-setup.exe` and `.msi` with `Get-AuthenticodeSignature` before updating the README.
 
 ### Android signing keystore
 

@@ -43,9 +43,14 @@ jobs:
       - name: Comment clear-manifest warning
         if: github.event_name == 'pull_request' && steps.clear_check.outputs.has_warning == 'true'
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
+        env:
+          # The warning text is derived from the PR diff. Read it from the
+          # environment instead of interpolating it into the script source,
+          # where a backtick or ${} in the text would execute as JavaScript.
+          CLEAR_WARNING: ${{ steps.clear_check.outputs.clear_warning }}
         with:
           script: |
-            const body = `${{ steps.clear_check.outputs.clear_warning }}`;
+            const body = process.env.CLEAR_WARNING;
             // Check for existing comment to avoid duplicates
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,

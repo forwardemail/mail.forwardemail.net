@@ -116,14 +116,14 @@ skips when its signing and App Store Connect values are unavailable. Desktop sig
 notarization remain conditional on their platform credentials. See the workflow-specific
 requirements below before creating a release tag.
 
-| Platform     | Signing                           | Notes                                                                                    |
-| ------------ | --------------------------------- | ---------------------------------------------------------------------------------------- |
-| macOS        | Apple Developer ID + notarization | Users won't see Gatekeeper warnings                                                      |
-| Windows      | Authenticode certificate          | Improves Microsoft Defender and SmartScreen trust, but reputation still builds over time |
-| Linux        | None needed                       | `.deb` and `.rpm` work unsigned; trust is handled by the host package flow               |
-| Android      | Self-managed keystore (`.jks`)    | Required for Play Store; optional for APK                                                |
-| iOS          | Apple Distribution + ASC API key  | Required for TestFlight — job skips gracefully when secrets aren't set                   |
-| Auto-updater | Ed25519 key                       | Required for `.sig` files                                                                |
+| Platform     | Signing                           | Notes                                                                                                                                                                                                                          |
+| ------------ | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| macOS        | Apple Developer ID + notarization | Users won't see Gatekeeper warnings                                                                                                                                                                                            |
+| Windows      | Authenticode certificate          | **Not yet provisioned.** Installers ship unsigned until `WINDOWS_CERTIFICATE` exists; the workflow warns per row and fails closed once `WINDOWS_SIGNING_REQUIRED=true` is set. Reputation still builds over time after signing |
+| Linux        | None needed                       | `.deb` and `.rpm` work unsigned; trust is handled by the host package flow                                                                                                                                                     |
+| Android      | Self-managed keystore (`.jks`)    | Required for Play Store; optional for APK                                                                                                                                                                                      |
+| iOS          | Apple Distribution + ASC API key  | Required for TestFlight — job skips gracefully when secrets aren't set                                                                                                                                                         |
+| Auto-updater | Ed25519 key                       | Required for `.sig` files                                                                                                                                                                                                      |
 
 See [SECRETS.md](./SECRETS.md) for the full list of required secrets, [desktop-ci-secrets.md](./desktop-ci-secrets.md) for desktop signing setup, and [ios-setup.md](./ios-setup.md) for the iOS signing and TestFlight flow.
 
@@ -133,13 +133,17 @@ Tauri v2 has a handful of platform-specific bugs that are easy to ship past in
 `tauri dev` and only show up in signed/notarized production builds. Run through
 this list before promoting a draft GitHub release.
 
-### macOS — App Sandbox + updater smoke test
+### macOS — entitlements + updater smoke test
 
-The macOS bundle has `com.apple.security.app-sandbox = true` with
-`com.apple.security.network.client = true` granted (`src-tauri/Entitlements.plist`).
-Without that network entitlement, the App Sandbox blocks every outbound
-request in production builds — including the updater check — even though
-everything works in `tauri dev` (tauri-apps/tauri#13878).
+The Developer ID macOS bundle is **not** sandboxed. `src-tauri/Entitlements.plist`
+carries only `com.apple.security.network.client` and the two Hardened Runtime
+JIT entitlements; `com.apple.security.app-sandbox` was removed on 2026-06-02
+because a sandbox without file-access entitlements crashes the file picker
+(see [the postmortem](./desktop-postmortem-macos-sandbox-filepicker-2026-06-02.md)).
+A separate `Entitlements.appstore.plist` (sandbox plus user-selected file
+access) exists for the future Mac App Store lane and must never be referenced
+from `tauri.conf.json`. Entitlement mistakes only show up in signed builds
+(tauri-apps/tauri#13878), so run this on a notarized build.
 
 Smoke test, on a notarized signed build (not `tauri dev`):
 
@@ -152,6 +156,8 @@ Smoke test, on a notarized signed build (not `tauri dev`):
      account).
 4. If outbound traffic is silently failing, re-check `Entitlements.plist`
    ships in the bundle (`codesign -d --entitlements - /Applications/Forward\ Email.app`).
+5. Open Compose and add an attachment. The native file picker must open;
+   a crash here means the sandbox entitlement crept back in.
 
 ### Windows — `mailto:` handler smoke test
 

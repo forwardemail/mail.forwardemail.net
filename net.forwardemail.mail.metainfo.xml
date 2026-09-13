@@ -27,14 +27,16 @@
   <screenshots>
     <screenshot type="default">
       <caption>Mailbox in dark mode</caption>
-      <image type="source">https://raw.githubusercontent.com/forwardemail/mail.forwardemail.net/v0.12.46/docs/screenshots/desktop/mail-dark.jpg</image>
+      <image type="source">https://raw.githubusercontent.com/forwardemail/mail.forwardemail.net/main/docs/screenshots/desktop/mail-dark.jpg</image>
     </screenshot>
     <screenshot>
       <caption>Compose a new email</caption>
-      <image type="source">https://raw.githubusercontent.com/forwardemail/mail.forwardemail.net/v0.12.46/docs/screenshots/desktop/compose-light.jpg</image>
+      <image type="source">https://raw.githubusercontent.com/forwardemail/mail.forwardemail.net/main/docs/screenshots/desktop/compose-light.jpg</image>
     </screenshot>
   </screenshots>
+  <!-- scripts/sync-version.cjs prepends a release entry on every version bump. -->
   <releases>
+    <release version="0.13.5" date="2026-09-13"/>
     <release version="0.12.46" date="2026-08-09"/>
   </releases>
   <content_rating type="oars-1.1"/>

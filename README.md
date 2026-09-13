@@ -48,27 +48,29 @@ This is the official, open-source, and end-to-end encrypted webmail client for [
 
 Official desktop and Android artifacts are published on the [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases) page. Desktop builds are produced by the public [GitHub Actions](https://github.com/forwardemail/mail.forwardemail.net/actions) release workflows, and the desktop release matrix now targets **macOS arm64/x64**, **Windows x64/arm64**, and **Linux x64/arm64**.
 
-[![Snap Store](https://snapcraft.io/forwardemail-mail/badge.svg)](https://snapcraft.io/forwardemail-mail) [![Flathub](https://img.shields.io/flathub/v/net.forwardemail.mail?label=Flathub)](https://flathub.org/apps/net.forwardemail.mail) [![GitHub Release](https://img.shields.io/github/v/release/forwardemail/mail.forwardemail.net?label=GitHub%20Release)](https://github.com/forwardemail/mail.forwardemail.net/releases/latest)
+[![GitHub Release](https://img.shields.io/github/v/release/forwardemail/mail.forwardemail.net?label=GitHub%20Release)](https://github.com/forwardemail/mail.forwardemail.net/releases/latest)
 
-| Platform    | Architecture          | Download                                                                                                                      | Store                                                     |
-| :---------- | :-------------------- | :---------------------------------------------------------------------------------------------------------------------------- | :-------------------------------------------------------- |
-| **Web**     | —                     | [mail.forwardemail.net](https://mail.forwardemail.net)                                                                        | —                                                         |
-| **Windows** | x64                   | `.msi` / `.exe` on [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases)                          | —                                                         |
-| **Windows** | arm64                 | `-setup.exe` on [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases)                             | —                                                         |
-| **macOS**   | Apple Silicon & Intel | `.dmg` on [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases)                                   | App Store (Coming Soon)                                   |
-| **Linux**   | x64                   | `.deb` / `.AppImage` / `.rpm` on [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases)            | —                                                         |
-| **Linux**   | arm64                 | `.deb` / `.rpm` on [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases)                          | —                                                         |
-| **Linux**   | x64 / arm64           | `snap install forwardemail-mail` after publication                                                                            | [Snap Store](https://snapcraft.io/forwardemail-mail)      |
-| **Linux**   | x64 / arm64           | `flatpak install flathub net.forwardemail.mail` after publication                                                             | [Flathub](https://flathub.org/apps/net.forwardemail.mail) |
-| **Android** | Universal             | Dual-provider `.apk` / `.aab` on [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases)            | Google Play (Coming Soon)                                 |
-| **Android** | Google-free           | `forwardemail-mail_<version>_fdroid.apk` on [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases) | Self-hosted F-Droid repository / Obtainium                |
-| **iOS**     | arm64                 | TestFlight / App Store distribution                                                                                           | App Store (Coming Soon)                                   |
+Store listings are in progress. The current status of every channel, and what is left before the v1 release, is tracked in [Release Readiness](./docs/release-readiness.md).
+
+| Platform    | Architecture          | Download                                                                                                                       | Store                                                   |
+| :---------- | :-------------------- | :----------------------------------------------------------------------------------------------------------------------------- | :------------------------------------------------------ |
+| **Web**     | —                     | [mail.forwardemail.net](https://mail.forwardemail.net)                                                                         | —                                                       |
+| **Windows** | x64                   | `.msi` / `.exe` on [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases)                           | —                                                       |
+| **Windows** | arm64                 | `-setup.exe` on [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases)                              | —                                                       |
+| **macOS**   | Apple Silicon & Intel | `.dmg` on [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases)                                    | App Store (Coming Soon)                                 |
+| **Linux**   | x64                   | `.deb` / `.AppImage` / `.rpm` on [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases)             | —                                                       |
+| **Linux**   | arm64                 | `.deb` / `.rpm` on [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases)                           | —                                                       |
+| **Linux**   | x64 / arm64           | `forwardemail-mail_<version>_<arch>.snap` on [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases) | Snap Store (pending name registration)                  |
+| **Linux**   | x64 / arm64           | Flatpak manifest in the repository                                                                                             | Flathub (planned after v1)                              |
+| **Android** | Universal             | Dual-provider `.apk` / `.aab` on [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases)             | Google Play (internal testing)                          |
+| **Android** | Google-free           | `forwardemail-mail_<version>_fdroid.apk` on [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases)  | Obtainium today; self-hosted F-Droid repository pending |
+| **iOS**     | arm64                 | TestFlight                                                                                                                     | App Store (Coming Soon)                                 |
 
 ### Linux package managers
 
 #### Snap Store
 
-After the [Snap Store listing](https://snapcraft.io/forwardemail-mail) is live, install the strict-confinement package with:
+The Snap is attached to every GitHub Release today. Once the [Snap Store listing](https://snapcraft.io/forwardemail-mail) is live, install the strict-confinement package with:
 
 ```bash
 sudo snap install forwardemail-mail
@@ -78,7 +80,7 @@ Snap updates are managed by the operating system. To inspect the installed chann
 
 #### Flathub
 
-After the [Flathub page](https://flathub.org/apps/net.forwardemail.mail) is live, install and run the sandboxed Flatpak with:
+Flathub submission is planned after the v1 release (see [Release Readiness](./docs/release-readiness.md)). Once the [Flathub page](https://flathub.org/apps/net.forwardemail.mail) is live, install and run the sandboxed Flatpak with:
 
 ```bash
 flatpak install flathub net.forwardemail.mail
@@ -274,7 +276,7 @@ Our implementation supports a wide range of authenticators for Passkey-based App
 
 ### Tamper-Proof Builds
 
-All builds are handled by public [GitHub Actions](https://github.com/features/actions) workflows directly from the source code. Desktop applications are signed with platform-specific certificates (Apple Developer ID and Windows Authenticode), and the [Tauri](https://github.com/tauri-apps/tauri) updater uses Ed25519 signatures to verify every update package. Mailbox content and WebSocket updates travel directly between the app and Forward Email. Platform delivery infrastructure is used only where the operating system requires it: APNs on iOS, FCM or a user-selected UnifiedPush distributor on Android, and GitHub Releases for desktop update packages. Forward Email does not add advertising, analytics, or tracking intermediaries to those paths.
+All builds are handled by public [GitHub Actions](https://github.com/features/actions) workflows directly from the source code. macOS builds are signed with an Apple Developer ID certificate and notarized, Android and iOS builds are signed with their platform release keys, and every desktop bundle carries a SLSA build-provenance attestation you can check with `gh attestation verify`. Windows installers are not yet Authenticode-signed (a certificate is being provisioned; see [Release Readiness](./docs/release-readiness.md)), so Windows shows a SmartScreen prompt on first install. The [Tauri](https://github.com/tauri-apps/tauri) updater uses Ed25519 signatures to verify every update package on all three desktop platforms. Mailbox content and WebSocket updates travel directly between the app and Forward Email. Platform delivery infrastructure is used only where the operating system requires it: APNs on iOS, FCM or a user-selected UnifiedPush distributor on Android, and GitHub Releases for desktop update packages. Forward Email does not add advertising, analytics, or tracking intermediaries to those paths.
 
 ## Features
 
@@ -365,6 +367,7 @@ Detailed architecture documentation is available in the `docs/` directory:
 - [iOS Setup](./docs/ios-setup.md) — Local signing, CI, and TestFlight workflow
 - [Release Process](./docs/RELEASES.md) — How releases are managed
 - [Distribution Publishing](./docs/distribution-publishing.md) — Snap, Flathub, F-Droid, Homebrew, and Obtainium setup
+- [Release Readiness](./docs/release-readiness.md) — Channel status, accounts still needed, and the v1 release checklist
 - [Security Hardening](./docs/SECURITY.md) — Security practices and hardening
 - [App Lock Architecture](docs/app-lock-architecture.md) — Client-side encryption and App Lock design
 - [Push Notifications](./docs/PUSH_NOTIFICATIONS.md) — Push notification setup

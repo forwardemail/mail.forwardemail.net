@@ -145,7 +145,8 @@ jobs:
       # this, the called workflow inherits push + head_commit from release.yml's
       # tag-push trigger and skips itself, stalling every downstream build job.
       release_gate: true
-    secrets: inherit
+    # No `secrets: inherit`: the E2E workflow references no secrets, so it
+    # must not receive the signing and deployment set.
 
   # ── 1c. CI gate (lint + format + unit + build) ─────────────────────────
   # A release is triggered by a tag push, which does NOT re-run ci.yml's
@@ -184,7 +185,9 @@ jobs:
       - name: Format
         run: pnpm format
       - name: Unit tests
-        run: pnpm test -- --run
+        # test:unit, not test: the `test` script runs lint:fix and format:fix
+        # first, which mutate the checkout. A gate must only check.
+        run: pnpm test:unit
       - name: Build
         run: pnpm build
 
@@ -426,8 +429,19 @@ jobs:
   # so deploy.yml's `on: release: [published]` never fires from the publish step.
   # deploy.yml is kept for manual re-deploys via workflow_dispatch.
   deploy:
-    needs: [create-release, publish]
-    if: always() && (needs.publish.result == 'success' || needs.publish.result == 'skipped')
+    needs: [create-release, e2e-webview, ci-gate, build-desktop, publish]
+    # The gates are listed explicitly. `publish` is skipped both when np
+    # already published the release (fine) and when build-desktop failed
+    # (not fine), so accepting a skipped publish alone let a release whose
+    # E2E or CI gate failed still deploy to production. Require every gate
+    # here so a red run can never ship the web app.
+    if: >-
+      !cancelled()
+      && needs.create-release.result == 'success'
+      && needs.e2e-webview.result == 'success'
+      && needs.ci-gate.result == 'success'
+      && needs.build-desktop.result == 'success'
+      && (needs.publish.result == 'success' || needs.publish.result == 'skipped')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -476,7 +490,16 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
         run: |
-          sed -i "s/bucket_name = \"myselfhosted-webmail-test-1\"/bucket_name = \"${R2_BUCKET}\"/" worker/wrangler.toml
+          set -euo pipefail
+          if [ -z "${R2_BUCKET}" ]; then
+            echo "::error::R2_BUCKET variable is not set; refusing to deploy a Worker bound to an unknown bucket"
+            exit 1
+          fi
+          # Bind the Worker to the same bucket the assets were synced to.
+          # Match any current bucket_name value instead of a fixed string so
+          # the rewrite cannot silently become a no-op again.
+          sed -i -E "s/^bucket_name = \".*\"/bucket_name = \"${R2_BUCKET}\"/" worker/wrangler.toml
+          grep -q "bucket_name = \"${R2_BUCKET}\"" worker/wrangler.toml
           cd worker
           pnpm install --no-frozen-lockfile
           npx wrangler deploy
@@ -492,9 +515,11 @@ jobs:
             --data '{"purge_everything":true}'
 
   # ── 6. Capture and publish README screenshots ──────────────────────────
-  # Runs against the freshly deployed production app. This is a required
-  # release job: all 64 images must be captured, embedded in README.md, and
-  # committed with docs/screenshots before the release can pass.
+  # Runs against the freshly deployed production app and commits the refreshed
+  # gallery to main. It is documentation, not a release gate: by the time it
+  # runs the binaries and the web app have already shipped, and a transient
+  # non-fast-forward on main must not turn a good release red. A failure is
+  # surfaced as a warning in release-summary; rerun it with workflow_dispatch.
   release-screenshots:
     needs: [create-release, deploy]
     if: always() && needs.deploy.result == 'success'
@@ -503,7 +528,8 @@ jobs:
       base_url: 'https://mail.forwardemail.net'
       dry_run: false
       source_ref: ${{ github.sha }}
-    secrets: inherit
+    # No `secrets: inherit`: the screenshot workflow only needs GITHUB_TOKEN,
+    # which reusable workflows receive automatically.
 
   # ── 7. Notify Matrix (final step — runs only on full success) ──────────
   # Standalone matrix workflow has `release:` disabled so this is the single
@@ -512,7 +538,7 @@ jobs:
   # directly in the CI log for debuggability.
   notify-matrix:
     needs: [create-release, deploy, release-screenshots]
-    if: always() && needs.deploy.result == 'success' && needs.release-screenshots.result == 'success'
+    if: always() && needs.deploy.result == 'success'
     runs-on: ubuntu-latest
     env:
       MATRIX_TOKEN: ${{ secrets.MATRIX_TOKEN }}
@@ -609,8 +635,7 @@ jobs:
               "e2e-webview:$E2E" \
               "ci-gate:$GATE" \
               "build-desktop:$DESK" \
-              "deploy:$DEPLOY" \
-              "release-screenshots:$SHOTS"; do
+              "deploy:$DEPLOY"; do
             name="${pair%%:*}"
             result="${pair#*:}"
             if [ "$result" != "success" ]; then
@@ -656,6 +681,13 @@ jobs:
           if [ "$HOMEBREW" != "success" ] && [ "$HOMEBREW" != "skipped" ]; then
             echo "::error::publish-homebrew-tap result=$HOMEBREW (expected success or skipped)"
             fail=1
+          fi
+
+          # README screenshots are documentation. The release has already
+          # shipped when they run, so a failure is a loud warning to rerun
+          # the screenshot workflow, not a reason to fail the release.
+          if [ "$SHOTS" != "success" ]; then
+            echo "::warning::release-screenshots result=$SHOTS. The release shipped; rerun 'README screenshots' via workflow_dispatch to refresh the gallery."
           fi
 
           # checksums is best-effort — it only runs when build-desktop

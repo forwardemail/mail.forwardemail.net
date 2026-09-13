@@ -1,0 +1,12 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "createUpdaterArtifacts": false,
+    "macOS": {
+      "entitlements": "Entitlements.appstore.plist",
+      "files": {
+        "embedded.provisionprofile": "./ForwardEmail-MacAppStore.provisionprofile"
+      }
+    }
+  }
+}

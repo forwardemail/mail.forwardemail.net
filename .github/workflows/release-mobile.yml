@@ -122,8 +122,12 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Decode Android keystore
+        env:
+          # Pass through env rather than interpolating the secret into the
+          # rendered shell command.
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
         run: |
-          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > /tmp/keystore.jks
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > /tmp/keystore.jks
           # Verify keystore was decoded correctly
           if [ ! -s /tmp/keystore.jks ]; then
             echo "Error: keystore file is empty or missing"
@@ -464,7 +468,9 @@ jobs:
         shell: bash
         env:
           APPLE_CERT: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERT_PW: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           IOS_CERT: ${{ secrets.IOS_CERTIFICATE_BASE64 }}
+          IOS_CERT_PW: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
           PROFILE: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
           TEAM: ${{ secrets.APPLE_TEAM_ID }}
           ASC_KEY: ${{ secrets.APP_STORE_CONNECT_API_KEY }}
@@ -474,6 +480,12 @@ jobs:
           missing=""
           if [ -z "$IOS_CERT" ] && [ -z "$APPLE_CERT" ]; then
             missing="$missing IOS_CERTIFICATE_BASE64_or_APPLE_CERTIFICATE"
+          fi
+          # The import step falls back to the macOS .p12 password when the
+          # dedicated iOS one is unset. Catch a dedicated cert with no
+          # password here instead of failing inside the keychain import.
+          if [ -n "$IOS_CERT" ] && [ -z "$IOS_CERT_PW" ] && [ -z "$APPLE_CERT_PW" ]; then
+            missing="$missing IOS_CERTIFICATE_PASSWORD"
           fi
           [ -z "$PROFILE" ]    && missing="$missing IOS_PROVISIONING_PROFILE_BASE64"
           [ -z "$TEAM" ]       && missing="$missing APPLE_TEAM_ID"

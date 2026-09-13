@@ -67,8 +67,16 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
         run: |
-          # Update bucket name in wrangler.toml from R2_BUCKET variable
-          sed -i "s/bucket_name = \"myselfhosted-webmail-test-1\"/bucket_name = \"${R2_BUCKET}\"/" worker/wrangler.toml
+          set -euo pipefail
+          if [ -z "${R2_BUCKET}" ]; then
+            echo "::error::R2_BUCKET variable is not set; refusing to deploy a Worker bound to an unknown bucket"
+            exit 1
+          fi
+          # Bind the Worker to the same bucket the assets were synced to.
+          # Match any current bucket_name value so the rewrite cannot silently
+          # become a no-op when the committed default changes.
+          sed -i -E "s/^bucket_name = \".*\"/bucket_name = \"${R2_BUCKET}\"/" worker/wrangler.toml
+          grep -q "bucket_name = \"${R2_BUCKET}\"" worker/wrangler.toml
           cd worker
           pnpm install --no-frozen-lockfile
           npx wrangler deploy

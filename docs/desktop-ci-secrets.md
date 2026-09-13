@@ -75,8 +75,8 @@ All secrets should be added to the **`release`** GitHub environment.
 | `APPLE_ID`                           | Yes      | Apple ID email for notarization                                   | Apple Developer account                                                 |
 | `APPLE_PASSWORD`                     | Yes      | App-specific password for notarization                            | [appleid.apple.com](https://appleid.apple.com) → App-Specific Passwords |
 | `APPLE_TEAM_ID`                      | Yes      | Apple Developer Team ID                                           | [developer.apple.com](https://developer.apple.com) → Membership         |
-| `WINDOWS_CERTIFICATE`                | Optional | Base64-encoded exportable Windows `.pfx` code-signing certificate | Exported from the Windows cert store or your certificate issuer         |
-| `WINDOWS_CERTIFICATE_PASSWORD`       | Optional | Password used when exporting the Windows `.pfx`                   | Set during `.pfx` export                                                |
+| `WINDOWS_CERTIFICATE`                | Not yet  | Base64-encoded exportable Windows `.pfx` code-signing certificate | Exported from the Windows cert store or your certificate issuer         |
+| `WINDOWS_CERTIFICATE_PASSWORD`       | Not yet  | Password used when exporting the Windows `.pfx`                   | Set during `.pfx` export                                                |
 
 The desktop workflow also reads the repository variable `ALLOW_NO_UPDATER`. Leave it unset during normal releases: the workflow fails closed when `TAURI_SIGNING_PRIVATE_KEY` is missing. Setting `ALLOW_NO_UPDATER=true` is an emergency override that deliberately produces release artifacts without updater signatures.
 
@@ -93,30 +93,7 @@ The macOS matrix rows fail closed unless all six Apple signing and notarization 
 
 ## Windows Code Signing
 
-The GitHub Actions flow in this repository expects an **exportable `.pfx` certificate**. If your certificate issuer only supports hardware-token signing or a cloud HSM flow, use the issuer's signing integration instead of the `.pfx` path below.
-
-If the certificate is already installed and exportable on Windows, you can create the `.pfx` with:
-
-```powershell
-$PfxPassword = ConvertTo-SecureString -String 'choose-a-strong-password' -Force -AsPlainText
-Export-PfxCertificate \
-  -Cert Cert:\CurrentUser\My\<THUMBPRINT> \
-  -FilePath .\forwardemail-windows.pfx \
-  -Password $PfxPassword
-```
-
-Then base64-encode the `.pfx` and store the values in the `release` environment:
-
-```powershell
-[Convert]::ToBase64String([IO.File]::ReadAllBytes('forwardemail-windows.pfx'))
-```
-
-| GitHub secret                  | Value                                                       |
-| ------------------------------ | ----------------------------------------------------------- |
-| `WINDOWS_CERTIFICATE`          | One-line base64 output of `forwardemail-windows.pfx`        |
-| `WINDOWS_CERTIFICATE_PASSWORD` | The password used when exporting `forwardemail-windows.pfx` |
-
-If you want a full cross-platform walkthrough, including `.cer` + private-key conversion and iOS/mobile values, use [SECRETS.md](./SECRETS.md) as the canonical guide.
+**Not yet provisioned.** Windows installers currently ship unsigned; the release workflow warns on every Windows row. The procedure, certificate options, and the `WINDOWS_SIGNING_REQUIRED` fail-closed switch are documented in [SECRETS.md](./SECRETS.md#windows-code-signing-secrets). In short: `release-desktop.yml` imports the base64 `.pfx` from `WINDOWS_CERTIFICATE` into the runner certificate store and writes its thumbprint into `bundle.windows.certificateThumbprint`, which is what makes the Tauri bundler sign the MSI and NSIS installers. A cloud signer such as Azure Trusted Signing needs `bundle.windows.signCommand` instead.
 
 ## Verifying Artifacts
 

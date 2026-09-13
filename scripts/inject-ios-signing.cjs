@@ -224,8 +224,11 @@ if (fs.existsSync(infoPlistPath)) {
 // NSPhotoLibraryUsageDescription is required because the app presents an image
 // picker for attachments / avatars (<input type="file" accept="image/*">).
 if (fs.existsSync(infoPlistPath)) {
+  // Same wording as src-tauri/Info.ios.plist. Two different strings used to
+  // ship depending on whether this script ran, so simulator and device builds
+  // showed different prompts.
   const photoUsage =
-    'Forward Email needs access to your photos so you can attach images to emails and set a profile picture.';
+    'Forward Email uses your photo library so you can attach photos to emails and set profile pictures.';
   try {
     execSync(`plutil -replace ITSAppUsesNonExemptEncryption -bool false "${infoPlistPath}"`);
     execSync(

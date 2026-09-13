@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Mac App Store entitlements ONLY. Referenced by tauri.appstore.conf.json,
+       never by tauri.conf.json. The Developer ID build (GitHub Releases,
+       Homebrew) must keep using Entitlements.plist, which has no sandbox:
+       see docs/desktop-postmortem-macos-sandbox-filepicker-2026-06-02.md.
+
+       The App Store requires the sandbox. The sandbox is only safe here
+       because the user-selected file entitlements below are present; without
+       them NSOpenPanel returns nil and the file picker crashes.
+       NOTE: keep this file pure ASCII with no double hyphen inside comments;
+       Apple AMFIUnserializeXML (codesign) rejects both, unlike plutil. -->
+
+  <key>com.apple.security.app-sandbox</key>
+  <true/>
+
+  <!-- Required by App Review for App Store builds. -->
+  <key>com.apple.application-identifier</key>
+  <string>FH83QMJS7P.net.forwardemail.mail</string>
+  <key>com.apple.developer.team-identifier</key>
+  <string>FH83QMJS7P</string>
+
+  <!-- Network access for API and WebSocket connections -->
+  <key>com.apple.security.network.client</key>
+  <true/>
+
+  <!-- Powerbox-brokered open and save panels for attachments, vCard, ICS,
+       and avatar pickers. -->
+  <key>com.apple.security.files.user-selected.read-write</key>
+  <true/>
+  <key>com.apple.security.files.downloads.read-write</key>
+  <true/>
+
+  <!-- Hardened Runtime: WebKit JIT (required by Tauri) -->
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+</dict>
+</plist>

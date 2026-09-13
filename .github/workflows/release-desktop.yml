@@ -130,7 +130,7 @@ jobs:
       # hash-mismatched, so a stale restore is self-correcting.
       - name: Cache Tauri bundler tools (WiX + NSIS)
         if: runner.os == 'Windows'
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~\AppData\Local\tauri
           key: tauri-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}
@@ -243,6 +243,52 @@ jobs:
           fi
           echo "All Apple signing/notary secrets present for ${{ matrix.label }}."
 
+      # Windows Authenticode signing. tauri-action does not read
+      # WINDOWS_CERTIFICATE; Tauri signs only when
+      # bundle.windows.certificateThumbprint names a certificate that is
+      # already installed in the runner's certificate store (or when a
+      # signCommand is configured). Import the .pfx here and write its
+      # thumbprint into tauri.conf.json so the bundler actually signs.
+      # Until a certificate exists this step warns and the installers ship
+      # unsigned; set repo variable WINDOWS_SIGNING_REQUIRED=true once the
+      # certificate is provisioned so a missing secret fails closed instead.
+      - name: Import Windows code-signing certificate
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          WINDOWS_SIGNING_REQUIRED: ${{ vars.WINDOWS_SIGNING_REQUIRED }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrEmpty($env:WINDOWS_CERTIFICATE)) {
+            if ($env:WINDOWS_SIGNING_REQUIRED -eq 'true') {
+              Write-Host "::error::WINDOWS_SIGNING_REQUIRED=true but WINDOWS_CERTIFICATE is not set. Refusing to ship unsigned Windows installers for ${{ matrix.label }}."
+              exit 1
+            }
+            Write-Host "::warning::WINDOWS_CERTIFICATE is not set. ${{ matrix.label }} installers will ship UNSIGNED (SmartScreen warnings). Provision the certificate per docs/SECRETS.md."
+            exit 0
+          }
+          if ([string]::IsNullOrEmpty($env:WINDOWS_CERTIFICATE_PASSWORD)) {
+            Write-Host "::error::WINDOWS_CERTIFICATE is set but WINDOWS_CERTIFICATE_PASSWORD is empty."
+            exit 1
+          }
+          $pfxPath = Join-Path $env:RUNNER_TEMP 'forwardemail-windows.pfx'
+          [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
+          $password = ConvertTo-SecureString -String $env:WINDOWS_CERTIFICATE_PASSWORD -Force -AsPlainText
+          $cert = Import-PfxCertificate -FilePath $pfxPath -CertStoreLocation Cert:\CurrentUser\My -Password $password
+          Remove-Item -Force $pfxPath
+          $thumbprint = $cert.Thumbprint
+          if ([string]::IsNullOrEmpty($thumbprint)) {
+            Write-Host "::error::Import-PfxCertificate returned no thumbprint."
+            exit 1
+          }
+          $confPath = 'src-tauri/tauri.conf.json'
+          $conf = Get-Content -Raw $confPath | ConvertFrom-Json
+          $conf.bundle.windows.certificateThumbprint = $thumbprint
+          $conf | ConvertTo-Json -Depth 32 | Set-Content -Path $confPath -Encoding utf8
+          Write-Host "Imported Windows code-signing certificate ($($cert.Subject)); thumbprint written to tauri.conf.json."
+
       - name: Build and release Tauri app
         uses: tauri-apps/tauri-action@fce9c6108b31ea247710505d3aaaa893ee6768d4 # v0
         env:
@@ -257,9 +303,8 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          # Windows code signing (optional)
-          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
-          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          # Windows signing is configured by the import step above, which
+          # writes the certificate thumbprint into tauri.conf.json.
         with:
           tagName: ${{ steps.release_meta.outputs.tag_name }}
           releaseName: ${{ steps.release_meta.outputs.release_name }}
@@ -285,7 +330,7 @@ jobs:
         # mounts only that directory, and the part's source resolves to an
         # empty dir (ERR_PNPM_NO_PKG_MANIFEST). snapcraft finds the recipe at
         # the standard snap/snapcraft.yaml location on its own.
-        uses: snapcore/action-build@v1
+        uses: snapcore/action-build@3bdaa03e1ba6bf59a65f84a751d943d549a54e79 # v1.3.0
 
       - name: Attest Snap build provenance
         if: matrix.target == 'x86_64-unknown-linux-gnu' || matrix.target == 'aarch64-unknown-linux-gnu'
@@ -313,7 +358,7 @@ jobs:
       # have been configured. Once enabled, a missing credential fails closed.
       - name: Publish Snap to stable channel
         if: (matrix.target == 'x86_64-unknown-linux-gnu' || matrix.target == 'aarch64-unknown-linux-gnu') && vars.PUBLISH_SNAP_STORE == 'true'
-        uses: snapcore/action-publish@v1
+        uses: snapcore/action-publish@214b86e5ca036ead1668c79afb81e550e6c54d40 # v1.2.0
         env:
           SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
         with:
@@ -430,7 +475,7 @@ jobs:
     uses: ./.github/workflows/e2e-webview.yml
     with:
       release_gate: true
-    secrets: inherit
+    # No `secrets: inherit`: the E2E workflow references no secrets.
 
   # Release gate: promote the draft release to published ONLY after every
   # build-and-release matrix row AND every e2e-webview matrix row passed.
@@ -439,6 +484,12 @@ jobs:
   # inspect and either fix and re-run or delete. Prevents partial/broken
   # releases from being user-visible (the v0.10.17–v0.10.21 failure mode
   # where an unsigned bundle shipped under a published tag).
+  #
+  # Standalone runs only (desktop-v* tag or workflow_dispatch). When
+  # release.yml calls this workflow it passes release_id and owns
+  # publication: its own publish job promotes the draft after the mobile
+  # builds and SHA256SUMS.txt have landed. Promoting here as well made the
+  # release public while Android and iOS assets were still uploading.
   publish-release:
     name: Publish release (gate)
     needs: [build-and-release, e2e-webview-gate]
@@ -447,6 +498,7 @@ jobs:
     # upstream). Still blocks on a failed build or a failed/cancelled gate, so a
     # broken build never publishes; a 'skipped' gate is treated as satisfied.
     if: ${{ !cancelled()
+      && inputs.release_id == ''
       && needs.build-and-release.result == 'success'
       && (needs.e2e-webview-gate.result == 'success' || needs.e2e-webview-gate.result == 'skipped') }}
     runs-on: ubuntu-latest

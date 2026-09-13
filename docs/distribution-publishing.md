@@ -29,6 +29,19 @@ metadata, and a cask template. The first-party Homebrew tap is intentionally a
 separate repository, because Homebrew discovers casks from the tap rather than
 from this application source tree.
 
+### Status as of 2026-09-13
+
+| Channel                       | State                                                                                                  | Next action                                                                  |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------- |
+| Snap Store                    | Snap built and attached to every release; `forwardemail-mail` is **not registered** on the store       | Register the name, export scoped credentials, set `PUBLISH_SNAP_STORE`       |
+| Flathub                       | **Deferred until after v1.** Manifest kept current by `sync-version.cjs`; PR CI build is dispatch-only | See the deferral note in the Flathub section before doing anything           |
+| F-Droid-compatible repository | Publisher wired; GitHub Pages already set to Actions deploys; index key **not created**                | Generate the key, add the two secrets, set `PUBLISH_FDROID_REPOSITORY`       |
+| Homebrew                      | Cask PR workflow wired; `forwardemail/homebrew-forwardemail` **does not exist yet**                    | Create the tap from `homebrew/`, issue the token, set `PUBLISH_HOMEBREW_TAP` |
+| Obtainium                     | Works today against the `_fdroid.apk` release asset                                                    | None                                                                         |
+
+[Release Readiness](./release-readiness.md) tracks these alongside the app
+stores and the accounts still to be opened.
+
 ## One-time GitHub configuration
 
 Create the secrets in **Settings → Secrets and variables → Actions →
@@ -115,6 +128,19 @@ workflow change; do not use the production stable credential to publish an
 unreviewed development build.
 
 ## Flathub Flatpak
+
+> **Deferred until after v1 (decision 2026-09-13).** Two policy questions are
+> unresolved and both need an owner decision before engineering time goes here.
+> First, the redistribution prerequisite below under `BUSL-1.1`. Second,
+> Flathub's inclusion policy (in force since 2026-05-29) requires submitters to
+> disclose AI-generated or AI-assisted code they know is in the application or
+> its packaging, lets reviewers reject on the extent of that material, and
+> forbids AI tools from opening or writing the submission pull request. This
+> codebase is developed with AI assistance, so any submission must disclose
+> that and accept the review risk. Until the decision is revisited, the
+> manifest is kept building (tag bumped by `scripts/sync-version.cjs`, PR CI
+> job available through `workflow_dispatch`), the offline source lists are
+> **not** regenerated, and nothing is submitted.
 
 The Flatpak application ID is `net.forwardemail.mail`. Its manifest builds from
 pinned, offline Node and Cargo source manifests and packages against the GNOME

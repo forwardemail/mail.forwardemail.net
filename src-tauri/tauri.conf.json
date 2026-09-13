@@ -34,6 +34,13 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "publisher": "Forward Email LLC",
+    "homepage": "https://forwardemail.net",
+    "copyright": "Copyright (c) 2026 Forward Email LLC",
+    "license": "BUSL-1.1",
+    "category": "Productivity",
+    "shortDescription": "Private email, contacts, and calendar client for Forward Email",
+    "longDescription": "Forward Email is the official desktop and mobile client for Forward Email accounts. It supports multiple accounts, encrypted local storage, fast search, folders and labels, contacts, calendars, message composition with attachments, desktop notifications, and keyboard shortcuts.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

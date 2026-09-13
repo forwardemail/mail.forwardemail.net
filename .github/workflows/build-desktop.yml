@@ -124,6 +124,11 @@ jobs:
 
   flatpak:
     name: Build (Flatpak)
+    # Flathub submission is deferred past v1 (see docs/release-readiness.md).
+    # The manifest pins a fixed git tag, so running this on every pull
+    # request rebuilt an old release rather than the PR. Keep it available
+    # for manual verification of the manifest until the lane is revived.
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout
@@ -159,7 +164,7 @@ jobs:
         # mounts only that directory, and the part's source resolves to an
         # empty dir (ERR_PNPM_NO_PKG_MANIFEST). snapcraft finds the recipe at
         # the standard snap/snapcraft.yaml location on its own.
-        uses: snapcore/action-build@v1
+        uses: snapcore/action-build@3bdaa03e1ba6bf59a65f84a751d943d549a54e79 # v1.3.0
 
       - name: Upload Snap package
         uses: actions/upload-artifact@v4
