@@ -54,13 +54,27 @@ function createDocument(includeBody = false, fields = null) {
   });
 }
 
+/** Rough byte weight of one entry, used for the size the stats report. */
+const entrySize = (e) =>
+  (e.subject?.length || 0) +
+  (e.from?.length || 0) +
+  (e.to?.length || 0) +
+  (e.cc?.length || 0) +
+  (e.snippet?.length || 0) +
+  (e.labelsText?.length || 0) +
+  (e.body?.length || 0);
+
 export class SearchService {
   constructor({ includeBody = false, account, preset = null } = {}) {
     this.includeBody = includeBody;
     this.account = accountKey(account);
     this.preset = preset || (includeBody ? 'FULL' : 'MINIMAL');
     this.index = createDocument(includeBody, preset ? SEARCH_PRESETS[preset]?.fields : null);
-    this.entries = [];
+    // Keyed by id so an update replaces in place. This used to be an array
+    // that removeEntry() filtered in full for every upsert, which made a
+    // sync batch against a big index O(batch x index) and showed up as the
+    // renderer pegging a core for minutes.
+    this._entries = new Map();
     this.sizeBytes = 0;
     this.folderIndexes = new Map();
     // Coalesced persistence. persist() writes the whole entries array, so
@@ -83,24 +97,27 @@ export class SearchService {
     const cached = await dbClient.searchIndex.get([this.account, SEARCH_INDEX_KEY]);
 
     if (cached?.data?.length) {
-      // Normalize entries - ensure labelsText exists for proper FlexSearch indexing
-      this.entries = cached.data.map((entry) => {
-        if (entry.labelsText !== undefined) return entry;
-        // Generate labelsText from labels array for backwards compatibility
-        const labelsArray = Array.isArray(entry.labels) ? entry.labels : [];
-        return { ...entry, labelsText: labelsArray.join(' ') };
-      });
-      this.sizeBytes = cached.sizeBytes || 0;
+      this._entries = new Map();
       this.index = createDocument(this.includeBody);
-      this.entries.forEach((entry) => this.index.add(entry));
-      return this.entries.length;
+      for (const raw of cached.data) {
+        if (!raw?.id) continue;
+        // Normalize entries - ensure labelsText exists for proper FlexSearch indexing
+        const entry =
+          raw.labelsText !== undefined
+            ? raw
+            : { ...raw, labelsText: (Array.isArray(raw.labels) ? raw.labels : []).join(' ') };
+        this._entries.set(entry.id, entry);
+        this.index.add(entry);
+      }
+      this.sizeBytes = cached.sizeBytes || 0;
+      return this._entries.size;
     }
     return 0;
   }
 
   async reset(entries = []) {
     this.index = createDocument(this.includeBody);
-    this.entries = [];
+    this._entries = new Map();
     this.sizeBytes = 0;
     entries.forEach((entry) => this.addEntry(entry));
     await this.persist();
@@ -128,15 +145,8 @@ export class SearchService {
       labelsText: labelsArray.join(' '),
       body: this.includeBody ? entry.body || entry.textContent || '' : undefined,
     };
-    this.entries.push(safeEntry);
-    this.sizeBytes +=
-      (safeEntry.subject?.length || 0) +
-      (safeEntry.from?.length || 0) +
-      (safeEntry.to?.length || 0) +
-      (safeEntry.cc?.length || 0) +
-      (safeEntry.snippet?.length || 0) +
-      (safeEntry.labelsText?.length || 0) +
-      (safeEntry.body?.length || 0);
+    this._entries.set(safeEntry.id, safeEntry);
+    this.sizeBytes += entrySize(safeEntry);
     try {
       this.index.add(safeEntry);
     } catch {
@@ -146,12 +156,25 @@ export class SearchService {
 
   removeEntry(entryId) {
     if (!entryId) return;
+    const existing = this._entries.get(entryId);
+    if (existing) {
+      this._entries.delete(entryId);
+      this.sizeBytes = Math.max(0, this.sizeBytes - entrySize(existing));
+    }
     try {
       this.index.remove(entryId);
-      this.entries = this.entries.filter((e) => e.id !== entryId);
     } catch {
       // ignore
     }
+  }
+
+  /** Entries in insertion order. A fresh array each call; prefer size() for counts. */
+  get entries() {
+    return Array.from(this._entries.values());
+  }
+
+  size() {
+    return this._entries.size;
   }
 
   updateEntry(entry) {
@@ -182,18 +205,10 @@ export class SearchService {
       return;
     }
 
-    const sizeBytes =
-      this.sizeBytes ||
-      this.entries.reduce((sum, e) => {
-        return (
-          sum +
-          (e.subject?.length || 0) +
-          (e.from?.length || 0) +
-          (e.snippet?.length || 0) +
-          (Array.isArray(e.labels) ? e.labels.reduce((s, l) => s + (l?.length || 0), 0) : 0) +
-          (e.body?.length || 0)
-        );
-      }, 0);
+    let sizeBytes = this.sizeBytes;
+    if (!sizeBytes) {
+      for (const e of this._entries.values()) sizeBytes += entrySize(e);
+    }
     this.sizeBytes = sizeBytes;
 
     await dbClient.searchIndex.put({
@@ -207,7 +222,7 @@ export class SearchService {
       key: SEARCH_INDEX_KEY,
       account: this.account,
       value: {
-        count: this.entries.length,
+        count: this._entries.size,
         includeBody: this.includeBody,
         sizeBytes,
       },
@@ -333,7 +348,7 @@ export class SearchService {
 
   getStats() {
     return {
-      count: this.entries.length,
+      count: this._entries.size,
       sizeBytes: this.sizeBytes,
       includeBody: this.includeBody,
       preset: this.preset,

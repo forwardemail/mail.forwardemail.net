@@ -462,6 +462,28 @@ setNotificationToasts(toasts);
 viewModel.toasts = toasts;
 viewModel.mailboxView.toasts = toasts;
 
+// Answer the desktop renderer watchdog (src-tauri/src/renderer_watchdog.rs).
+// Rust pings this every few seconds; if the WebKit content process has died
+// the calls stop arriving and Rust reloads the window. The first answer after
+// such a reload comes back flagged so the user learns why the page blinked.
+// Installed here, after the toast host exists, and kept free of anything
+// that could throw: a page that never answers is reloaded once and then
+// left alone, so this handler must be the most reliable code in the file.
+if (isTauriDesktop) {
+  (globalThis as { __feHeartbeat?: (seq: number) => void }).__feHeartbeat = (seq) => {
+    import('./utils/tauri-bridge.js')
+      .then(({ invoke }) => invoke('renderer_heartbeat', { seq }))
+      .then((reply) => {
+        if ((reply as { reloaded?: boolean } | undefined)?.reloaded) {
+          toasts.show('The page stopped responding and was reloaded.', 'info');
+        }
+      })
+      .catch(() => {
+        // Never let a failed heartbeat surface; silence is the signal.
+      });
+  };
+}
+
 // Reconcile push registrations for ALL signed-in accounts.
 // Despite the name kept for call-site compatibility, syncPushNotifications()
 // now registers the device token for every account, not just the active one.

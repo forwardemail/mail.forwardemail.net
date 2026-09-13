@@ -470,6 +470,44 @@ export const checkAppLock = (): Promise<DiagnosticResult> =>
     };
   });
 
+/**
+ * Desktop renderer watchdog. Rust pings the page and reloads the window when
+ * the WebKit content process stops answering. A reload count above zero on a
+ * support report is the tell for the renderer dying mid-session, which
+ * otherwise leaves no crash file. Reads state only; never triggers anything.
+ */
+export const checkRendererWatchdog = (): Promise<DiagnosticResult> =>
+  runCheck('renderer-watchdog', 'Renderer watchdog', async () => {
+    if (!isTauriDesktop) {
+      return { status: 'skip', message: 'Renderer watchdog is desktop-only' };
+    }
+    const { invoke } = await import('./tauri-bridge.js');
+    const status = (await invoke('renderer_watchdog_status')) as
+      | { reloads: number; lastReloadUnixMs: number | null; missed: number; armed: boolean }
+      | undefined;
+    if (!status) {
+      return { status: 'fail', message: 'Watchdog status unavailable' };
+    }
+    const detail = {
+      reloads: status.reloads,
+      lastReloadAt: status.lastReloadUnixMs
+        ? new Date(status.lastReloadUnixMs).toISOString()
+        : null,
+      armed: status.armed,
+    };
+    if (status.reloads > 0) {
+      return {
+        status: 'warn',
+        message: `Renderer reloaded ${status.reloads} time${status.reloads === 1 ? '' : 's'} this session`,
+        detail,
+      };
+    }
+    if (!status.armed) {
+      return { status: 'warn', message: 'Page has not answered the watchdog yet', detail };
+    }
+    return { status: 'pass', message: 'Renderer answering; no reloads this session', detail };
+  });
+
 // ── Composer ────────────────────────────────────────────────────────────────
 
 /** Run every check and assemble a report. Each check has its own try/catch. */
@@ -488,6 +526,7 @@ export const runDiagnostics = async (): Promise<DiagnosticsReport> => {
     checkQrDecoder(),
     checkPushRegistration(),
     checkAppLock(),
+    checkRendererWatchdog(),
   ]);
   return {
     generatedAt: new Date().toISOString(),

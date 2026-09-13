@@ -80,6 +80,8 @@ const ALLOWED_COMMANDS = new Set([
   'get_log_path',
   'read_recent_logs',
   'clear_logs',
+  'renderer_heartbeat',
+  'renderer_watchdog_status',
 ]);
 
 export async function invoke(cmd, args) {

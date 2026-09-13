@@ -6,6 +6,7 @@ import {
   normalizeHeaders,
   buildOriginalViewerPage,
   pickOriginalContent,
+  buildServerDraftPrefill,
 } from '../../src/stores/mailbox-actions-helpers';
 import { DARK_SURFACE } from '../../src/utils/dark-surface';
 
@@ -151,5 +152,119 @@ describe('buildOriginalViewerPage', () => {
     const page = buildOriginalViewerPage({ raw: 'headers' });
     expect(page).toContain('"decrypted":""');
     expect(page).toContain('style="display:none;"');
+  });
+});
+
+// A draft that reached the Drafts folder from another client or the API has
+// no local record, so everything compose needs comes off the list row and,
+// when fetched, the server detail. The row is a display rendering: joined
+// recipient strings, no body, no files.
+describe('buildServerDraftPrefill', () => {
+  const row = {
+    id: 'msg-1',
+    folder: 'Drafts',
+    subject: 'Quarterly numbers',
+    to: '"Ada Lovelace" <ada@example.com>, bob@example.com',
+    cc: 'carol@example.com',
+    bcc: '"Dee, Dana" <dana@example.com>',
+    reply_to: 'replies@example.com',
+    in_reply_to: '<orig@example.com>',
+    references: '<root@example.com> <orig@example.com>',
+  };
+
+  it('splits the joined recipient strings into one entry per address', () => {
+    const prefill = buildServerDraftPrefill({ msg: row, apiId: 'srv-1' });
+
+    expect(prefill.to).toEqual(['Ada Lovelace <ada@example.com>', 'bob@example.com']);
+    expect(prefill.cc).toEqual(['carol@example.com']);
+    // The comma inside the quoted display name is not a separator, and the
+    // quotes stay because the chip text is parsed again as an address on send.
+    expect(prefill.bcc).toEqual(['"Dee, Dana" <dana@example.com>']);
+  });
+
+  it('carries reply-to and the threading headers from the row', () => {
+    const prefill = buildServerDraftPrefill({ msg: row, apiId: 'srv-1' });
+
+    expect(prefill.replyTo).toBe('replies@example.com');
+    expect(prefill.inReplyTo).toBe('<orig@example.com>');
+    expect(prefill.references).toBe('<root@example.com> <orig@example.com>');
+  });
+
+  it('binds compose to the server message and the row for cleanup', () => {
+    const prefill = buildServerDraftPrefill({ msg: row, apiId: 'srv-1' });
+
+    expect(prefill.serverDraftId).toBe('srv-1');
+    expect(prefill.sourceMessageId).toBe('msg-1');
+    expect(prefill.subject).toBe('Quarterly numbers');
+  });
+
+  // Lightweight list rows come without address fields at all, so the detail
+  // fetch is the only source. Its parsed headers are the mailparser shape.
+  it('falls back to the detail for recipients and headers the row lacks', () => {
+    const bare = { id: 'msg-2', folder: 'Drafts', subject: 'Re: thread' };
+    const detail = {
+      nodemailer: {
+        to: { value: [{ name: 'Ada', address: 'ada@example.com' }] },
+        cc: { value: [{ address: 'carol@example.com' }] },
+        inReplyTo: '<orig@example.com>',
+        references: ['<root@example.com>', '<orig@example.com>'],
+        headers: { 'reply-to': 'replies@example.com' },
+      },
+    };
+
+    const prefill = buildServerDraftPrefill({ msg: bare, apiId: 'srv-2', detail });
+
+    expect(prefill.to).toEqual(['Ada <ada@example.com>']);
+    expect(prefill.cc).toEqual(['carol@example.com']);
+    expect(prefill.bcc).toEqual([]);
+    expect(prefill.replyTo).toBe('replies@example.com');
+    expect(prefill.inReplyTo).toBe('<orig@example.com>');
+    expect(prefill.references).toBe('<root@example.com> <orig@example.com>');
+  });
+
+  it('prefers the detail recipients over the row rendering when both exist', () => {
+    const detail = { nodemailer: { to: { value: [{ address: 'only@example.com' }] } } };
+
+    const prefill = buildServerDraftPrefill({ msg: row, apiId: 'srv-1', detail });
+
+    expect(prefill.to).toEqual(['only@example.com']);
+  });
+
+  it('hands over html when there is one and attachments untouched', () => {
+    const attachments = [{ name: 'a.txt', contentType: 'text/plain', content: 'aGk=', size: 2 }];
+
+    const prefill = buildServerDraftPrefill({
+      msg: row,
+      apiId: 'srv-1',
+      html: '<p>Hello</p>',
+      text: 'Hello',
+      attachments,
+    });
+
+    expect(prefill.html).toBe('<p>Hello</p>');
+    expect(prefill.text).toBeUndefined();
+    expect(prefill.attachments).toBe(attachments);
+  });
+
+  // Compose ignores a text prefill unless it is already in plain-text mode,
+  // which a fresh open never is; a text-only draft has to arrive as HTML.
+  it('converts a text-only body to escaped paragraphs', () => {
+    const prefill = buildServerDraftPrefill({ msg: row, apiId: 'srv-1', text: 'a < b\nline 2' });
+
+    expect(prefill.html).toBe('<p>a &lt; b</p><p>line 2</p>');
+  });
+
+  it('omits the optional keys rather than passing empty strings', () => {
+    const prefill = buildServerDraftPrefill({ msg: { id: 'x', subject: '' }, apiId: 'x' });
+
+    expect(prefill).toEqual({
+      to: [],
+      cc: [],
+      bcc: [],
+      subject: '',
+      attachments: [],
+      sourceMessageId: 'x',
+      serverDraftId: 'x',
+    });
   });
 });

@@ -212,7 +212,9 @@ function createWebSocketUpdater() {
       const hasCredentials = isNonEmptyString(email) && isNonEmptyString(aliasAuth);
 
       // Demo mode is intentionally offline and backed by local fake data.
-      if (!demoMode) {
+      // stop() keeps the watcher alive on purpose, so a later start() must
+      // reuse it rather than open a second socket next to the first.
+      if (!demoMode && !releaseWatcher) {
         releaseWatcher = createReleaseWatcher();
         releaseWatcher.on(WS_EVENTS.NEW_RELEASE, (data) => {
           if (data && typeof data === 'object') {

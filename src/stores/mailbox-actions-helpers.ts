@@ -8,6 +8,7 @@
 // the `</`-sequence escape that stops embedded message data from breaking out of
 // the <script> tag, and the subject `<`/`>` escaping in the page <h1>.
 import { DARK_SURFACE } from '../utils/dark-surface';
+import { displayAddresses, extractAddressList } from '../utils/address';
 
 /**
  * Sanitize a subject into a safe download filename. Keeps alphanumerics plus
@@ -250,4 +251,135 @@ export const pickOriginalContent = (
 ): string => {
   if (!content) return '';
   return content.raw || content.body || content.textContent || '';
+};
+
+// ---------------------------------------------------------------------------
+// Server drafts
+// ---------------------------------------------------------------------------
+
+type DraftRow = Record<string, unknown> & {
+  id?: string;
+  subject?: string;
+  in_reply_to?: string | null;
+  references?: string | null;
+};
+
+export interface ServerDraftPrefillInput {
+  /** The Drafts folder list row, as normalized by the sync layer. */
+  msg: DraftRow;
+  /** Id to update and delete on the server, from getMessageApiId(msg). */
+  apiId: string;
+  /** Result of GET /v1/messages/:id when one was fetched, else null. */
+  detail?: Record<string, unknown> | null;
+  /** Sanitized HTML body, from the cache or from the detail fetch. */
+  html?: string;
+  /** Plain text body, when the message has no HTML part. */
+  text?: string;
+  /** Compose attachment objects (name, contentType, base64 content, size). */
+  attachments?: unknown[];
+}
+
+// The row renders a name with quotes ("Ada Lovelace" <ada@x>) while the
+// parsed object form comes out bare (Ada Lovelace <ada@x>), and compose chips
+// show whichever they were given. Drop the quotes only when nothing in the
+// name needs them; a comma or a bracket has to stay quoted because the chip
+// text is parsed again as an address when the message is sent.
+const unquoteSimpleName = (address: string): string => {
+  const match = address.match(/^"([^"\\]*)"\s*(<[^>]*>)$/);
+  if (!match) return address;
+  const [, name, angle] = match;
+  return /[,;:<>@()[\]]/.test(name) ? address : `${name} ${angle}`;
+};
+
+const textToHtml = (text: string): string =>
+  text
+    .split(/\r?\n/)
+    .map(
+      (line) => `<p>${line.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</p>`,
+    )
+    .join('');
+
+const headerLookup = (headers: unknown, name: string): string => {
+  if (!headers || typeof headers !== 'object') return '';
+  const lower = name.toLowerCase();
+  const record = headers as Record<string, unknown>;
+  const key = Object.keys(record).find((k) => k.toLowerCase() === lower);
+  if (!key) return '';
+  const value = record[key];
+  if (Array.isArray(value)) return value.map(String).join(' ').trim();
+  return value == null ? '' : String(value).trim();
+};
+
+/**
+ * Read a threading header off whatever shape we have: the normalized row
+ * (snake_case), the detail result's parsed nodemailer fields, or its raw
+ * header map.
+ */
+const threadingHeader = (
+  msg: DraftRow,
+  detail: Record<string, unknown> | null | undefined,
+  rowKey: 'in_reply_to' | 'references',
+): string => {
+  const camel = rowKey === 'in_reply_to' ? 'inReplyTo' : 'references';
+  const headerName = rowKey === 'in_reply_to' ? 'in-reply-to' : 'references';
+  const fromRow = msg[rowKey] ?? msg[camel];
+  if (typeof fromRow === 'string' && fromRow.trim()) return fromRow.trim();
+  if (Array.isArray(fromRow) && fromRow.length) return fromRow.map(String).join(' ').trim();
+  const nm = (detail?.nodemailer as Record<string, unknown> | undefined) || undefined;
+  const parsed = detail?.[camel] ?? detail?.[rowKey] ?? nm?.[camel];
+  if (typeof parsed === 'string' && parsed.trim()) return parsed.trim();
+  if (Array.isArray(parsed) && parsed.length) return parsed.map(String).join(' ').trim();
+  return headerLookup(nm?.headers, headerName) || headerLookup(detail?.headers, headerName);
+};
+
+/**
+ * Turn a Drafts folder message into a compose prefill.
+ *
+ * The row alone is not enough: its recipients are comma-joined display
+ * strings, it never carries a body or attachments, and a draft written by
+ * another client (or by the API) is only editable in place if compose knows
+ * the server id. This is the one spot that maps all of that, so the shape
+ * compose receives is the same whether the body came from the cache or from
+ * a detail fetch. Pure so it can be tested without a store or a network.
+ */
+export const buildServerDraftPrefill = ({
+  msg,
+  apiId,
+  detail = null,
+  html = '',
+  text = '',
+  attachments = [],
+}: ServerDraftPrefillInput): Record<string, unknown> => {
+  // extractAddressList handles the row's string form and, when the row is
+  // missing the field (lightweight list mode), the detail's parsed headers.
+  // Prefer the detail when both exist: the row is a display rendering and
+  // the detail keeps the original quoting.
+  const addressField = (field: 'to' | 'cc' | 'bcc' | 'replyTo'): string[] => {
+    const fromDetail = detail ? displayAddresses(extractAddressList(detail, field)) : [];
+    const list = fromDetail.length ? fromDetail : displayAddresses(extractAddressList(msg, field));
+    return list.map(unquoteSimpleName);
+  };
+
+  const replyTo = addressField('replyTo');
+  const inReplyTo = threadingHeader(msg, detail, 'in_reply_to');
+  const references = threadingHeader(msg, detail, 'references');
+
+  const prefill: Record<string, unknown> = {
+    to: addressField('to'),
+    cc: addressField('cc'),
+    bcc: addressField('bcc'),
+    subject: typeof msg.subject === 'string' ? msg.subject : '',
+    attachments: Array.isArray(attachments) ? attachments : [],
+    sourceMessageId: msg.id,
+    serverDraftId: apiId,
+  };
+  if (replyTo.length) prefill.replyTo = replyTo[0];
+  if (inReplyTo) prefill.inReplyTo = inReplyTo;
+  if (references) prefill.references = references;
+  // Compose only reads a text prefill in plain-text mode, which a fresh open
+  // never is, so a text-only draft is handed over as minimal HTML instead of
+  // arriving empty.
+  if (html) prefill.html = html;
+  else if (text) prefill.html = textToHtml(text);
+  return prefill;
 };

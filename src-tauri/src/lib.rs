@@ -4,6 +4,7 @@ use tauri::{Emitter, Listener, Manager};
 
 mod diagnostics;
 mod redaction;
+mod renderer_watchdog;
 
 #[cfg(target_os = "macos")]
 mod file_picker_macos;
@@ -899,6 +900,8 @@ pub fn run() {
             is_default_mailto_handler,
             #[cfg(desktop)]
             set_default_mailto_handler,
+            renderer_watchdog::renderer_heartbeat,
+            renderer_watchdog::renderer_watchdog_status,
             #[cfg(target_os = "macos")]
             file_picker_macos::pick_files_macos,
             #[cfg(target_os = "macos")]
@@ -907,6 +910,7 @@ pub fn run() {
             self_heal_macos::self_heal_flush_launch_services,
         ])
         .manage(PendingDeepLinks(Mutex::new(Vec::new())))
+        .manage(renderer_watchdog::WatchdogState::default())
         .setup(|app| {
             // Set up native menu bar and tray icon on desktop
             #[cfg(desktop)]
@@ -944,6 +948,10 @@ pub fn run() {
                 });
 
                 setup_tray(app)?;
+
+                // Reload the main webview if its content process stops
+                // answering. See renderer_watchdog.rs for the why.
+                renderer_watchdog::start(app.handle().clone());
 
                 // Register global shortcut: Cmd+Shift+M (macOS) / Ctrl+Shift+M (others)
                 use tauri_plugin_global_shortcut::{

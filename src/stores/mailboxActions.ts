@@ -34,6 +34,7 @@ import {
   normalizeHeaders,
   buildOriginalViewerPage,
   pickOriginalContent,
+  buildServerDraftPrefill,
 } from './mailbox-actions-helpers';
 import { startInitialSync, queueBodiesForFolder } from '../utils/sync-controller';
 import { resetSyncWorkerReady, revokeSyncWorkerAuth } from '../utils/sync-worker-client.js';
@@ -57,6 +58,7 @@ import { i18n } from '../utils/i18n';
 import { isTauri, isTauriDesktop, isTauriMobile, swReadyWithTimeout } from '../utils/platform.js';
 import { downloadFile } from '../utils/download';
 import { warn } from '../utils/logger.ts';
+import { sanitizeHtml } from '../utils/sanitize.js';
 import { resetTabs } from './tabStore';
 import { parseReferences } from '../utils/threading';
 import { isOnline } from '../utils/network-status';
@@ -735,55 +737,12 @@ export const getForwardAttachments = async (msg) => {
   if (!msgId) return [];
 
   const folder = msg?.folder_path || msg?.folder || '';
-
-  // Compose cannot open until the bytes are in hand — on desktop it is a
-  // separate window that gets seeded once at creation. Most fetches are quick
-  // enough to pass unnoticed, so the notice waits a beat rather than flashing
-  // every time, but a slow one must not leave the click looking ignored.
-  let noticeId = null;
-  const noticeTimer = setTimeout(() => {
-    noticeId = toastsRef?.show?.('Preparing forward…', 'info', 0);
-  }, 600);
-  const clearNotice = () => {
-    clearTimeout(noticeTimer);
-    if (noticeId != null) toastsRef?.dismiss?.(noticeId);
-  };
+  const clearNotice = showDelayedNotice('Preparing forward…');
 
   try {
-    const detailRes = await Remote.request(
-      'Message',
-      {},
-      {
-        method: 'GET',
-        pathOverride: `/v1/messages/${encodeURIComponent(msgId)}?folder=${encodeURIComponent(folder)}&raw=false`,
-      },
-    );
-    const result = detailRes?.Result || detailRes;
-    const list = result?.nodemailer?.attachments || result?.attachments || [];
-    if (!Array.isArray(list)) return [];
-
-    // Carry everything the reader lists, which is every part the server sends.
-    // An earlier version skipped anything with a Content-ID on the assumption
-    // it was an embedded image, but plenty of clients stamp one on ordinary
-    // attachments too — that assumption is what silently dropped the file the
-    // user was trying to forward. The id is preserved instead, so parts the
-    // quoted body references by cid: still resolve.
-    const forwardable = list
-      .map((att) => {
-        const content = attachmentToBase64(att);
-        if (!content) return null;
-        const filename = att.filename || att.name || generateAttachmentName(att);
-        const cid = att.cid || att.contentId;
-        return {
-          name: filename,
-          filename,
-          size: att.size || 0,
-          contentType: att.contentType || att.mimeType || att.type || 'application/octet-stream',
-          content,
-          ...(cid ? { cid: String(cid).replace(/^<|>$/g, '') } : {}),
-        };
-      })
-      .filter(Boolean);
+    const result = await fetchMessageDetail(msgId, folder);
+    const list = detailAttachmentList(result);
+    const forwardable = mapDetailAttachments(list);
 
     // Dev-only, and only on an explicit forward, so it is quiet in normal use.
     // Every step that can silently produce an empty list is visible here.
@@ -810,6 +769,145 @@ export const getForwardAttachments = async (msg) => {
   } finally {
     clearNotice();
   }
+};
+
+/**
+ * Show a toast only if an operation is still running after a short delay.
+ *
+ * Compose cannot open until the bytes are in hand — on desktop it is a
+ * separate window that gets seeded once at creation. Most fetches are quick
+ * enough to pass unnoticed, so the notice waits a beat rather than flashing
+ * every time, but a slow one must not leave the click looking ignored.
+ * Returns the function that cancels or dismisses it.
+ */
+const showDelayedNotice = (message, delayMs = 600) => {
+  let noticeId = null;
+  const noticeTimer = setTimeout(() => {
+    noticeId = toastsRef?.show?.(message, 'info', 0);
+  }, delayMs);
+  return () => {
+    clearTimeout(noticeTimer);
+    if (noticeId != null) toastsRef?.dismiss?.(noticeId);
+  };
+};
+
+/**
+ * Fetch the full parsed message from the server. Same call the reader makes;
+ * the caller decides what to keep out of it.
+ */
+const fetchMessageDetail = async (msgId, folder) => {
+  const detailRes = await Remote.request(
+    'Message',
+    {},
+    {
+      method: 'GET',
+      pathOverride: `/v1/messages/${encodeURIComponent(msgId)}?folder=${encodeURIComponent(folder || '')}&raw=false`,
+    },
+  );
+  return detailRes?.Result || detailRes;
+};
+
+const detailAttachmentList = (result) => {
+  const list = result?.nodemailer?.attachments || result?.attachments || [];
+  return Array.isArray(list) ? list : [];
+};
+
+/**
+ * Map the server's attachment parts to the objects compose attaches.
+ *
+ * Carry everything the reader lists, which is every part the server sends.
+ * An earlier version skipped anything with a Content-ID on the assumption
+ * it was an embedded image, but plenty of clients stamp one on ordinary
+ * attachments too — that assumption is what silently dropped the file the
+ * user was trying to forward. The id is preserved instead, so parts the
+ * quoted body references by cid: still resolve.
+ */
+const mapDetailAttachments = (list) =>
+  list
+    .map((att) => {
+      const content = attachmentToBase64(att);
+      if (!content) return null;
+      const filename = att.filename || att.name || generateAttachmentName(att);
+      const cid = att.cid || att.contentId;
+      return {
+        name: filename,
+        filename,
+        size: att.size || 0,
+        contentType: att.contentType || att.mimeType || att.type || 'application/octet-stream',
+        content,
+        ...(cid ? { cid: String(cid).replace(/^<|>$/g, '') } : {}),
+      };
+    })
+    .filter(Boolean);
+
+const messageReportsAttachments = (msg) =>
+  Boolean(msg?.has_attachment || msg?.has_attachments || msg?.hasAttachments) ||
+  (Array.isArray(msg?.attachments) && msg.attachments.length > 0);
+
+const detailHtml = (result) =>
+  result?.html ||
+  result?.textAsHtml ||
+  result?.nodemailer?.html ||
+  result?.nodemailer?.textAsHtml ||
+  '';
+
+const detailText = (result) => result?.text || result?.nodemailer?.text || '';
+
+/**
+ * Open a Drafts folder message in compose when there is no local draft record
+ * for it, which is the case for drafts written by another client or through
+ * the API.
+ *
+ * The list row on its own opens a hollow draft: it never carries the body or
+ * the attachments, and its recipients are one joined string. So the body is
+ * taken from the validated cache when it is there, and otherwise, or whenever
+ * the message reports attachments, one detail fetch supplies the body, the
+ * files and the headers together. The server id is handed to compose so its
+ * autosave updates this message in place instead of creating a second draft.
+ * A failed fetch still opens compose with what the row had; the user can see
+ * the gap and re-attach, which beats a click that does nothing.
+ */
+export const openServerDraft = async (msg) => {
+  if (!msg || !composeModalRef?.open) return;
+  const apiId = getMessageApiId(msg);
+  if (!apiId) return;
+  const folder = msg?.folder_path || msg?.folder || '';
+
+  let html = await getMessageBodyForReply(msg);
+  let text = '';
+  let detail = null;
+  let attachments = [];
+  const rowHasRecipients = Boolean(msg?.to || msg?.cc || msg?.bcc);
+  const needsDetail = !html || messageReportsAttachments(msg) || !rowHasRecipients;
+
+  if (needsDetail) {
+    const clearNotice = showDelayedNotice('Opening draft…');
+    try {
+      detail = await fetchMessageDetail(apiId, folder);
+      if (!html) {
+        // The cache path stores already sanitized HTML; this one is fresh from
+        // the server, so run it through the same sanitizer the reader uses.
+        // Images are never blocked here: this is the user's own outgoing
+        // draft, not an incoming message, and a placeholder would be saved
+        // back into it on the next autosave.
+        const raw = detailHtml(detail);
+        html = raw
+          ? sanitizeHtml(raw, { blockRemoteImages: false, blockTrackingPixels: false }).html
+          : '';
+        text = html ? '' : detailText(detail);
+      }
+      if (messageReportsAttachments(msg)) {
+        attachments = mapDetailAttachments(detailAttachmentList(detail));
+      }
+    } catch (err) {
+      warn('[openServerDraft] Failed to load the draft from the server:', err);
+      toastsRef?.show?.("Couldn't load the whole draft — opening what is cached", 'warning');
+    } finally {
+      clearNotice();
+    }
+  }
+
+  composeModalRef.open(buildServerDraftPrefill({ msg, apiId, detail, html, text, attachments }));
 };
 
 /**
@@ -993,9 +1091,7 @@ export const forwardMessage = async (msg) => {
   // some — the request pulls the whole message body, so it is not worth making
   // every plain forward wait on it. The flag is spelled differently depending
   // on where the record came from, so accept any of them.
-  const hasAttachments =
-    Boolean(msg?.has_attachment || msg?.has_attachments || msg?.hasAttachments) ||
-    (Array.isArray(msg?.attachments) && msg.attachments.length > 0);
+  const hasAttachments = messageReportsAttachments(msg);
   const attachments = hasAttachments ? await getForwardAttachments(msg) : [];
   if (!hasAttachments) {
     warn('[forward] skipped the attachment fetch — no attachment flag on the record', {
@@ -2573,4 +2669,5 @@ export const mailboxActions = {
   starredOnly,
   downloadOriginal,
   viewOriginal,
+  openServerDraft,
 };

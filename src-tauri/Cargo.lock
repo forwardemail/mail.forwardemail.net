@@ -1316,6 +1316,7 @@ dependencies = [
  "tauri-plugin-webdriver",
  "tauri-plugin-window-state",
  "time",
+ "tokio",
 ]
 
 [[package]]

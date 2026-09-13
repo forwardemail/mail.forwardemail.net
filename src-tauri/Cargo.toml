@@ -44,6 +44,8 @@ tauri-plugin-dialog = "2.7.1"
 tauri-plugin-fs = "2.5.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Already in the tree via tauri; used directly for the renderer watchdog timer.
+tokio = { version = "1", features = ["time"] }
 log = "0.4"
 regex = "1"
 time = { version = "0.3", features = ["macros", "formatting"] }

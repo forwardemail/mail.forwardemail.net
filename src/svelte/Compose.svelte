@@ -2933,6 +2933,13 @@
     if (resolvedPrefill.sourceMessageId) {
       sourceMessageId = resolvedPrefill.sourceMessageId as string;
     }
+    // A draft that already lives on the server but has no local record
+    // (written by another client or through the API). Seeding the id here,
+    // before the autosave timer starts, makes the first save a PUT on that
+    // message instead of a POST that leaves a second copy in Drafts.
+    if (resolvedPrefill.serverDraftId && !currentDraftServerId) {
+      currentDraftServerId = resolvedPrefill.serverDraftId as string;
+    }
     const shouldFocusToField = toList.length === 0;
     finishOpen(shouldFocusToField);
   };

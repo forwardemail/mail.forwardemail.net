@@ -310,7 +310,9 @@ import {
   buildReplyQuotedBody,
   getForwardAttachments,
   forwardMessage,
+  openServerDraft,
   setComposeModal,
+  setToasts,
   stripQuoteCollapseMarkup,
   getMessageBodyForReply,
   loadLabels,
@@ -320,6 +322,7 @@ import {
   accountMenuOpen,
 } from '../../src/stores/mailboxActions.ts';
 import { mailboxStore } from '../../src/stores/mailboxStore';
+import { db } from '../../src/utils/db';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -889,5 +892,128 @@ describe('forwardMessage', () => {
 
     expect(hoisted.remoteRequest).not.toHaveBeenCalled();
     expect(composeRef.forward.mock.calls[0][0].attachments).toEqual([]);
+  });
+});
+
+// Drafts written by another client or through the API have no local record,
+// so opening one is a fetch-and-map job. The cases below pin what must and
+// must not hit the network, and that compose is bound to the server copy.
+describe('openServerDraft', () => {
+  const composeRef = { forward: vi.fn(), reply: vi.fn(), open: vi.fn(), updateReplyBody: vi.fn() };
+  const row = {
+    id: 'm1',
+    apiId: 'srv-1',
+    folder: 'Drafts',
+    subject: 'Draft from the API',
+    to: 'ada@example.com, bob@example.com',
+    in_reply_to: '<orig@example.com>',
+  };
+  const detail = {
+    html: '<p>Hello from the automation</p>',
+    text: 'Hello from the automation',
+    nodemailer: {
+      attachments: [
+        { filename: 'brief.pdf', contentType: 'application/pdf', size: 5, content: 'SGVsbG8=' },
+      ],
+      headers: { references: '<orig@example.com>' },
+    },
+  };
+
+  beforeEach(() => {
+    composeRef.open.mockClear();
+    hoisted.remoteRequest.mockReset();
+    hoisted.toastShow.mockClear();
+    vi.mocked(db.messageBodies.get).mockReset().mockResolvedValue(null);
+    setComposeModal(composeRef);
+    setToasts({ show: hoisted.toastShow, dismiss: vi.fn() });
+    hoisted.localStore.set('email', 'user@example.com');
+  });
+
+  it('opens from the cache without a fetch when the body is there and nothing is attached', async () => {
+    vi.mocked(db.messageBodies.get).mockResolvedValueOnce({ body: '<p>cached body</p>' });
+
+    await openServerDraft(row);
+
+    expect(hoisted.remoteRequest).not.toHaveBeenCalled();
+    const prefill = composeRef.open.mock.calls[0][0];
+    expect(prefill.html).toBe('<p>cached body</p>');
+    expect(prefill.to).toEqual(['ada@example.com', 'bob@example.com']);
+    expect(prefill.inReplyTo).toBe('<orig@example.com>');
+    expect(prefill.serverDraftId).toBe('srv-1');
+    expect(prefill.sourceMessageId).toBe('m1');
+    expect(prefill.attachments).toEqual([]);
+  });
+
+  it('fetches the detail once on a cache miss and takes body, files and headers from it', async () => {
+    hoisted.remoteRequest.mockResolvedValueOnce(detail);
+
+    await openServerDraft({ ...row, has_attachment: true });
+
+    expect(hoisted.remoteRequest).toHaveBeenCalledTimes(1);
+    expect(hoisted.remoteRequest.mock.calls[0][2]).toMatchObject({
+      method: 'GET',
+      pathOverride: '/v1/messages/srv-1?folder=Drafts&raw=false',
+    });
+    const prefill = composeRef.open.mock.calls[0][0];
+    expect(prefill.html).toContain('Hello from the automation');
+    expect(prefill.attachments).toEqual([
+      {
+        name: 'brief.pdf',
+        filename: 'brief.pdf',
+        size: 5,
+        contentType: 'application/pdf',
+        content: 'SGVsbG8=',
+      },
+    ]);
+    expect(prefill.references).toBe('<orig@example.com>');
+  });
+
+  // The cache never holds attachment bytes, so a cached body is not enough
+  // when the row says there are files.
+  it('still fetches when the body is cached but the message reports attachments', async () => {
+    vi.mocked(db.messageBodies.get).mockResolvedValueOnce({ body: '<p>cached body</p>' });
+    hoisted.remoteRequest.mockResolvedValueOnce(detail);
+
+    await openServerDraft({ ...row, has_attachment: true });
+
+    expect(hoisted.remoteRequest).toHaveBeenCalledTimes(1);
+    const prefill = composeRef.open.mock.calls[0][0];
+    expect(prefill.html).toBe('<p>cached body</p>');
+    expect(prefill.attachments).toHaveLength(1);
+  });
+
+  it('sanitizes a body that came straight from the server', async () => {
+    hoisted.remoteRequest.mockResolvedValueOnce({
+      html: '<p>ok</p><script>alert(1)</script><img src="https://x.test/a.png">',
+    });
+
+    await openServerDraft(row);
+
+    const prefill = composeRef.open.mock.calls[0][0];
+    expect(prefill.html).not.toContain('<script');
+    // The draft's own images are kept; this is outgoing mail, not a message
+    // from a stranger, and a placeholder would get autosaved back into it.
+    expect(prefill.html).toContain('https://x.test/a.png');
+  });
+
+  it('opens with what the row had when the fetch fails, and says so', async () => {
+    hoisted.remoteRequest.mockRejectedValueOnce(new Error('offline'));
+
+    await openServerDraft({ ...row, has_attachment: true });
+
+    expect(composeRef.open).toHaveBeenCalledTimes(1);
+    const prefill = composeRef.open.mock.calls[0][0];
+    expect(prefill.to).toEqual(['ada@example.com', 'bob@example.com']);
+    expect(prefill.html).toBeUndefined();
+    expect(prefill.attachments).toEqual([]);
+    expect(prefill.serverDraftId).toBe('srv-1');
+    expect(hoisted.toastShow).toHaveBeenCalledWith(expect.stringContaining('draft'), 'warning');
+  });
+
+  it('does nothing without a server id to bind to', async () => {
+    await openServerDraft({ subject: 'no id' });
+
+    expect(composeRef.open).not.toHaveBeenCalled();
+    expect(hoisted.remoteRequest).not.toHaveBeenCalled();
   });
 });

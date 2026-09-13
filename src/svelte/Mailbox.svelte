@@ -87,6 +87,7 @@
     indexProgress,
     reportSpamMessage,
     toggleStar,
+    openServerDraft,
   } from '../stores/mailboxActions';
   import {
     profileName,
@@ -1008,6 +1009,25 @@
   // Cache message bodies for thread messages (Gmail-like - keeps bodies loaded when expanded)
   // Map of messageId -> { body: string, attachments: array, loading: boolean }
   const threadMessageBodies = writable(new Map());
+  // Bodies are processed HTML, often with inline images as data URLs, and
+  // this map used to keep every one ever expanded until the account changed.
+  // Over a long session that is hundreds of megabytes sitting in the
+  // renderer. Keep the most recent ones and drop the rest, except bodies of
+  // messages that are still expanded on screen.
+  const MAX_THREAD_BODIES = 40;
+  const withThreadBody = (map: Map<string, unknown>, id: string, value: unknown) => {
+    const next = new Map(map);
+    next.delete(id);
+    next.set(id, value);
+    if (next.size > MAX_THREAD_BODIES) {
+      const expanded = get(expandedThreadMessages);
+      for (const key of next.keys()) {
+        if (next.size <= MAX_THREAD_BODIES) break;
+        if (key !== id && !expanded.has(key)) next.delete(key);
+      }
+    }
+    return next;
+  };
 
   // Check if a thread message has its body cached
   const getThreadMessageBody = (msgId) => {
@@ -1027,11 +1047,9 @@
     }
 
     // Mark as loading
-    threadMessageBodies.update((map) => {
-      const next = new Map(map);
-      next.set(msg.id, { body: '', attachments: [], loading: true });
-      return next;
-    });
+    threadMessageBodies.update((map) =>
+      withThreadBody(map, msg.id, { body: '', attachments: [], loading: true }),
+    );
 
     try {
       await mailService.loadMessageDetail(msg, {
@@ -1039,12 +1057,13 @@
           if ((Local.get('email') || 'default') !== loadAccount) return;
           // Process quoted content for collapsible display
           const processedBody = processQuotedContent(body, { collapseByDefault: true });
-          threadMessageBodies.update((map) => {
-            const next = new Map(map);
-            const existing = next.get(msg.id) || {};
-            next.set(msg.id, { ...existing, body: processedBody, loading: false });
-            return next;
-          });
+          threadMessageBodies.update((map) =>
+            withThreadBody(map, msg.id, {
+              ...(map.get(msg.id) || {}),
+              body: processedBody,
+              loading: false,
+            }),
+          );
           // Initialize quote toggles after next tick
           tick().then(() => {
             const container = document.querySelector(`[data-message-id="${msg.id}"]`);
@@ -1053,22 +1072,17 @@
         },
         onAttachments: (atts) => {
           if ((Local.get('email') || 'default') !== loadAccount) return;
-          threadMessageBodies.update((map) => {
-            const next = new Map(map);
-            const existing = next.get(msg.id) || {};
-            next.set(msg.id, { ...existing, attachments: atts || [] });
-            return next;
-          });
+          threadMessageBodies.update((map) =>
+            withThreadBody(map, msg.id, { ...(map.get(msg.id) || {}), attachments: atts || [] }),
+          );
         },
       });
     } catch (err) {
       if ((Local.get('email') || 'default') !== loadAccount) return;
       console.warn('[loadThreadMessageBody] Failed to load body for message:', msg.id, err);
-      threadMessageBodies.update((map) => {
-        const next = new Map(map);
-        next.set(msg.id, { body: '', attachments: [], loading: false, error: true });
-        return next;
-      });
+      threadMessageBodies.update((map) =>
+        withThreadBody(map, msg.id, { body: '', attachments: [], loading: false, error: true }),
+      );
     }
   };
 
@@ -4497,21 +4511,10 @@
       mailboxView.composeModal.open({ draftId: draft.id, sourceMessageId: msg.id });
       return;
     }
-    let cachedBody = null;
-    try {
-      cachedBody = await db.messageBodies.get([account, msg.id]);
-    } catch {
-      // ignore cache lookup errors
-    }
-    // No local draft - open with message content and track source for deletion
-    mailboxView.composeModal.open({
-      to: msg.to,
-      cc: msg.cc,
-      subject: msg.subject || '',
-      html: cachedBody?.body || msg.body || '',
-      text: cachedBody?.textContent || msg.text || '',
-      sourceMessageId: msg.id,
-    });
+    // No local record: the draft was written by another client or through
+    // the API. The store action fetches what the row lacks (body, files,
+    // headers) and opens compose bound to the server message.
+    await openServerDraft(msg);
   };
 
   const contextEditDraft = async () => {
