@@ -10,7 +10,16 @@ export default [
   {
     // public/sw-message-normalize.js is a generated Vite bundle (see
     // scripts/build-sw-normalize.mjs), not hand-written source — don't lint it.
-    ignores: ['dist/**', 'node_modules/**', 'src-tauri/**', 'public/sw-message-normalize.js'],
+    // vite.config.js.timestamp-*.mjs is a transient bundle Vite writes while
+    // loading the config. It normally gets deleted, but a crashed or killed
+    // process can leave one behind and it should never be linted.
+    ignores: [
+      'dist/**',
+      'node_modules/**',
+      'src-tauri/**',
+      'public/sw-message-normalize.js',
+      'vite.config.js.timestamp-*.mjs',
+    ],
   },
   {
     files: ['**/*.{js,mjs,cjs}'],
