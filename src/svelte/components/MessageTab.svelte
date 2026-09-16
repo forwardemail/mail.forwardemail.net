@@ -39,6 +39,8 @@
   import { formatFriendlyDate } from '../../utils/date';
   import { extractDisplayName } from '../../utils/address.ts';
   import { openComposeWindow } from '../../utils/compose-window';
+  import { openExternalUrl } from '../../utils/external-links.js';
+  import { parseMailto, mailtoToPrefill } from '../../utils/mailto';
   import { closeTab } from '../../stores/tabStore';
   import { normalizeEmail, extractAddressList } from '../../utils/address.ts';
   import { extractRecipientsField } from '../../utils/sync-helpers';
@@ -261,6 +263,23 @@
     });
   }
 
+  // Links inside the body: mailto opens a compose window, everything else
+  // goes to the system browser through the shared helper (never navigates
+  // the webview). Mirrors handleIframeLinkClick in Mailbox.svelte.
+  async function handleLinkClick(url: string, isMailto: boolean) {
+    if (isMailto) {
+      await openComposeWindow({ action: 'open', prefill: mailtoToPrefill(parseMailto(url)) });
+      return;
+    }
+    try {
+      await openExternalUrl(url, {
+        log: (...args: unknown[]) => console.warn('[MessageTab]', ...args),
+      });
+    } catch (err) {
+      console.warn('[MessageTab] Failed to open URL:', err);
+    }
+  }
+
   async function handleForward() {
     if (!message) return;
     const deliveredTo = getDeliveredToAddress();
@@ -481,7 +500,14 @@
         <!-- Email Body -->
         {#if body}
           <div class="mb-6">
-            <EmailIframe html={body} {messageId} plainText={viewPlainText} />
+            <!-- The iframe runtime prevents default on every link and relays
+                 the click here; without a handler, links in a tab were dead. -->
+            <EmailIframe
+              html={body}
+              {messageId}
+              plainText={viewPlainText}
+              onLinkClick={handleLinkClick}
+            />
           </div>
         {/if}
 

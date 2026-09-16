@@ -263,6 +263,93 @@
     true,
   );
 
+  // Link hover and keyboard focus: tell the parent which link is under the
+  // pointer so it can show the full destination in its status bar. The
+  // desktop app has no browser status bar and the email cannot draw outside
+  // its sandbox, so this relay is the only way the user sees a target before
+  // clicking. One message per anchor; leaving posts a single end message.
+  (function () {
+    var hovered = null;
+
+    function describe(link) {
+      return {
+        url: link.href,
+        text: (link.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 200),
+      };
+    }
+
+    function begin(link) {
+      if (link === hovered) return;
+      hovered = link;
+      parent.postMessage({ type: 'link-hover', payload: describe(link) }, TARGET_ORIGIN);
+    }
+
+    function end(link) {
+      if (link && link !== hovered) return;
+      if (!hovered) return;
+      hovered = null;
+      parent.postMessage({ type: 'link-hover-end', payload: {} }, TARGET_ORIGIN);
+    }
+
+    function anchorFrom(target) {
+      return target && target.closest ? target.closest('a[href]') : null;
+    }
+
+    document.addEventListener(
+      'mouseover',
+      function (e) {
+        var link = anchorFrom(e.target);
+        if (link) begin(link);
+        else end(null);
+      },
+      true,
+    );
+
+    document.addEventListener(
+      'mouseout',
+      function (e) {
+        var link = anchorFrom(e.target);
+        if (!link) return;
+        // Moving between descendants of the same anchor is not a leave.
+        var next = anchorFrom(e.relatedTarget);
+        if (next === link) return;
+        end(link);
+      },
+      true,
+    );
+
+    document.addEventListener(
+      'focusin',
+      function (e) {
+        var link = anchorFrom(e.target);
+        if (link) begin(link);
+      },
+      true,
+    );
+
+    document.addEventListener(
+      'focusout',
+      function (e) {
+        var link = anchorFrom(e.target);
+        if (link) end(link);
+      },
+      true,
+    );
+
+    // Leaving the document (the pointer crossed out of the iframe) ends the
+    // preview even when no mouseout reached an anchor.
+    document.addEventListener(
+      'mouseleave',
+      function () {
+        end(null);
+      },
+      true,
+    );
+    window.addEventListener('blur', function () {
+      end(null);
+    });
+  })();
+
   // Block form submissions — forward to parent for logging.
   document.addEventListener(
     'submit',

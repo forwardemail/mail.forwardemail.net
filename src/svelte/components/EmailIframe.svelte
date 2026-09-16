@@ -2,7 +2,8 @@
   import { onMount, onDestroy } from 'svelte';
   import { buildIframeSrcdoc } from '../../utils/iframe-srcdoc';
   import { htmlToPlainText } from '../../utils/sanitize.js';
-  import { isTauri } from '../../utils/platform.js';
+  import { isTauri, isTauriDesktop } from '../../utils/platform.js';
+  import { describeLinkTarget, type LinkPreview } from '../../utils/link-preview';
 
   interface Props {
     html: string;
@@ -32,6 +33,15 @@
 
   // Track message changes for theme-based recreation
   let themeVersion = $state(0);
+
+  // Link under the pointer (or keyboard focus) inside the iframe, relayed by
+  // the runtime. Shown in a status bar pinned to the bottom of the window,
+  // where browsers put it. Desktop app only: in a browser the browser's own
+  // status bar already shows the target, and two bars in the same corner
+  // fight each other. Rendered with text only: the href and link text are
+  // untrusted email data.
+  const showLinkPreview = isTauriDesktop;
+  let linkPreview: LinkPreview | null = $state(null);
 
   // Track which messages we've already attempted recovery for (prevents loops)
   const recoveryAttempted = new Set<string>();
@@ -222,7 +232,7 @@
     }
 
     // Only accept messages with our known types
-    const validTypes = ['height', 'link', 'form', 'ready', 'swipe'];
+    const validTypes = ['height', 'link', 'link-hover', 'link-hover-end', 'form', 'ready', 'swipe'];
     if (!validTypes.includes(data.type)) {
       return;
     }
@@ -256,9 +266,24 @@
         break;
 
       case 'link':
+        linkPreview = null;
         if (typeof data.payload?.url === 'string') {
           onLinkClick?.(data.payload.url, data.payload.isMailto === true);
         }
+        break;
+
+      case 'link-hover':
+        if (showLinkPreview && typeof data.payload?.url === 'string') {
+          const preview = describeLinkTarget(
+            data.payload.url,
+            typeof data.payload.text === 'string' ? data.payload.text : '',
+          );
+          linkPreview = preview.kind === 'unsupported' ? null : preview;
+        }
+        break;
+
+      case 'link-hover-end':
+        linkPreview = null;
         break;
 
       case 'form':
@@ -374,6 +399,7 @@
 
   onDestroy(() => {
     mounted = false;
+    linkPreview = null;
     window.removeEventListener('message', handleMessage);
     themeObserver?.disconnect();
     stopHeightPolling();
@@ -422,6 +448,30 @@
   </div>
 {/key}
 
+{#if linkPreview}
+  <div
+    class="fe-link-preview"
+    class:fe-link-preview-warn={linkPreview.mismatch || linkPreview.isIdn}
+    role="status"
+    aria-live="polite"
+    data-testid="link-preview"
+  >
+    {#if linkPreview.mismatch}
+      <span class="fe-link-preview-note"
+        >Text says {linkPreview.mismatch.textHost}, link goes to</span
+      >
+    {:else if linkPreview.isIdn}
+      <span class="fe-link-preview-note">Internationalized domain</span>
+    {/if}
+    <span class="fe-link-preview-url">
+      {#if linkPreview.kind === 'http'}<span class="fe-link-preview-dim">{linkPreview.prefix}</span
+        ><span class="fe-link-preview-host">{linkPreview.host}</span><span
+          class="fe-link-preview-dim">{linkPreview.suffix}</span
+        >{:else}{linkPreview.display}{/if}
+    </span>
+  </div>
+{/if}
+
 <style>
   .fe-email-iframe-container {
     width: 100%;
@@ -456,6 +506,56 @@
   @keyframes spin {
     to {
       transform: rotate(360deg);
+    }
+  }
+
+  /* Status bar for the hovered link. Bottom-left of the window like a
+     browser's, above the reader but below dialogs and toasts. */
+  .fe-link-preview {
+    position: fixed;
+    left: 0;
+    bottom: 0;
+    z-index: 40;
+    max-width: min(72vw, 900px);
+    padding: 3px 10px;
+    border: 1px solid var(--border-default);
+    border-left: 0;
+    border-bottom: 0;
+    border-top-right-radius: 6px;
+    background: var(--surface-raised);
+    color: var(--text-primary);
+    font-size: 12px;
+    line-height: 1.5;
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    pointer-events: none;
+    box-shadow: 0 -1px 6px rgba(0, 0, 0, 0.08);
+  }
+
+  .fe-link-preview-warn {
+    border-color: var(--state-caution);
+    box-shadow: inset 3px 0 0 var(--state-caution);
+  }
+
+  .fe-link-preview-note {
+    color: var(--state-caution);
+    font-family: inherit;
+    margin-right: 6px;
+  }
+
+  .fe-link-preview-host {
+    font-weight: 700;
+  }
+
+  .fe-link-preview-dim {
+    color: var(--text-muted);
+  }
+
+  @media (max-width: 640px) {
+    .fe-link-preview {
+      max-width: calc(100vw - 16px);
     }
   }
 </style>
