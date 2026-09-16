@@ -13,8 +13,10 @@ const homebrewWorkflow = readWorkflow('publish-homebrew-tap.yml');
 
 describe('distribution workflow contracts', () => {
   it('keeps Snap artifacts and Store publication on the native Linux release rows', () => {
-    expect(desktopWorkflow).toContain('snapcore/action-build@v1');
-    expect(desktopWorkflow).toContain('snapcore/action-publish@v1');
+    // Both actions receive or produce release material, so they are pinned
+    // to a commit SHA with the version kept as a trailing comment.
+    expect(desktopWorkflow).toMatch(/snapcore\/action-build@[0-9a-f]{40} # v1/);
+    expect(desktopWorkflow).toMatch(/snapcore\/action-publish@[0-9a-f]{40} # v1/);
     expect(desktopWorkflow).toContain("vars.PUBLISH_SNAP_STORE == 'true'");
     expect(desktopWorkflow).toContain('SNAPCRAFT_STORE_CREDENTIALS');
     expect(desktopWorkflow).toContain('aarch64-unknown-linux-gnu');
@@ -34,7 +36,7 @@ describe('distribution workflow contracts', () => {
     //      recipe has to turn the flag back off or the bundler aborts after the
     //      full Rust build has already run.
     const enableUpdaterStep = desktopWorkflow.indexOf('conf.bundle.createUpdaterArtifacts = true');
-    const snapBuildStep = desktopWorkflow.indexOf('snapcore/action-build@v1');
+    const snapBuildStep = desktopWorkflow.indexOf('snapcore/action-build@');
     expect(enableUpdaterStep).toBeGreaterThan(-1);
     expect(snapBuildStep).toBeGreaterThan(enableUpdaterStep);
 
@@ -61,10 +63,10 @@ describe('distribution workflow contracts', () => {
     expect(fdroidWorkflow).toContain('FDROID_KEYSTORE_PASSWORD');
     expect(fdroidWorkflow).toContain('fdroid/public');
     expect(fdroidWorkflow).toContain('fingerprint.txt');
-    expect(fdroidWorkflow).toContain('actions/configure-pages@v5');
+    expect(fdroidWorkflow).toMatch(/actions\/configure-pages@[0-9a-f]{40} # v5/);
     expect(fdroidWorkflow).toContain('needs: build');
     expect(fdroidWorkflow).toContain('name: github-pages');
-    expect(fdroidWorkflow).toContain('actions/deploy-pages@v4');
+    expect(fdroidWorkflow).toMatch(/actions\/deploy-pages@[0-9a-f]{40} # v4/);
   });
 
   it('keeps the Homebrew updater opt-in and targeted at the protected release environment', () => {
@@ -75,6 +77,7 @@ describe('distribution workflow contracts', () => {
     expect(homebrewWorkflow).toContain('HOMEBREW_TAP_REPOSITORY');
     expect(homebrewWorkflow).toContain('sha256sum');
     expect(homebrewWorkflow).toContain('Casks/forward-email.rb');
-    expect(homebrewWorkflow).toContain('peter-evans/create-pull-request@v7');
+    // Receives the cross-repository write token, so it is SHA-pinned.
+    expect(homebrewWorkflow).toMatch(/peter-evans\/create-pull-request@[0-9a-f]{40} # v7/);
   });
 });

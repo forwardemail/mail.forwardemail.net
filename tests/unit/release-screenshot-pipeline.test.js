@@ -17,7 +17,7 @@ const screenshotScript = readFileSync(
 const releaseAssetPublisher = join(repositoryRoot, 'scripts/publish-release-screenshots.sh');
 
 describe('release screenshot workflow', () => {
-  it('is a required release stage that captures from the exact release revision', () => {
+  it('runs after the deploy from the exact release revision without gating a shipped release', () => {
     expect(screenshotWorkflow).toContain('workflow_call:');
     expect(screenshotWorkflow).not.toContain('workflow_run:');
     expect(screenshotWorkflow).toContain('ref: ${{ inputs.source_ref }}');
@@ -29,8 +29,14 @@ describe('release screenshot workflow', () => {
     expect(releaseWorkflow).toContain('uses: ./.github/workflows/readme-screenshots.yml');
     expect(releaseWorkflow).toContain("base_url: 'https://mail.forwardemail.net'");
     expect(releaseWorkflow).toContain('source_ref: ${{ github.sha }}');
-    expect(releaseWorkflow).toContain('release-screenshots:$SHOTS');
-    expect(releaseWorkflow).toContain("needs.release-screenshots.result == 'success'");
+    expect(releaseWorkflow).toContain('needs: [create-release, deploy]');
+
+    // By the time screenshots run the binaries and web app have shipped. A
+    // failed gallery refresh (a concurrent merge on main, a layout change)
+    // must surface as a warning to rerun, not turn a good release red.
+    expect(releaseWorkflow).not.toContain('"release-screenshots:$SHOTS"');
+    expect(releaseWorkflow).toContain('::warning::release-screenshots result=$SHOTS');
+    expect(releaseWorkflow).not.toContain("needs.release-screenshots.result == 'success'");
   });
 
   it('publishes the complete tracked screenshot set through README.md', () => {
@@ -43,7 +49,13 @@ describe('release screenshot workflow', () => {
     expect(screenshotWorkflow).toContain('git status --porcelain -- README.md docs/screenshots');
     expect(screenshotWorkflow).toContain('git add README.md docs/screenshots');
     expect(screenshotWorkflow).toContain('git rebase origin/main');
-    expect(screenshotWorkflow).toContain('git push origin HEAD:main');
+    // The checkout keeps no push token in .git/config; the one push
+    // authenticates explicitly with the job's GITHUB_TOKEN.
+    expect(screenshotWorkflow).toContain('persist-credentials: false');
+    expect(screenshotWorkflow).not.toContain('git push origin HEAD:main');
+    expect(screenshotWorkflow).toContain(
+      'git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:main',
+    );
 
     expect(screenshotScript).toContain("const DEFAULT_OUTPUT_DIRECTORY = 'docs/screenshots'");
     expect(screenshotScript).toContain('replaceScreenshotGallery');

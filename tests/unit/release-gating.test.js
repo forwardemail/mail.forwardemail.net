@@ -1,0 +1,96 @@
+/**
+ * Contracts for the release-pipeline hardening of 2026-09-13. Each rule here
+ * closes a way a red run could still ship or a secret could leak; see
+ * docs/release-readiness.md ("Pipeline hardening completed").
+ */
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+
+const root = process.cwd();
+const readWorkflow = (name) => readFileSync(path.join(root, '.github', 'workflows', name), 'utf8');
+
+const releaseWorkflow = readWorkflow('release.yml');
+const desktopWorkflow = readWorkflow('release-desktop.yml');
+const mobileWorkflow = readWorkflow('release-mobile.yml');
+const ciWorkflow = readWorkflow('ci.yml');
+const deployWorkflow = readWorkflow('deploy.yml');
+
+const jobBlock = (workflow, jobName) => {
+  const start = workflow.indexOf(`\n  ${jobName}:\n`);
+  expect(start).toBeGreaterThan(-1);
+  const rest = workflow.slice(start + 1);
+  const next = rest.slice(1).search(/\n {2}[a-z][\w-]*:\n/);
+  return next === -1 ? rest : rest.slice(0, next + 1);
+};
+
+describe('release gating contracts', () => {
+  it('deploys the web app only when every release gate succeeded', () => {
+    const deploy = jobBlock(releaseWorkflow, 'deploy');
+    expect(deploy).toContain(
+      'needs: [create-release, e2e-webview, ci-gate, build-desktop, publish]',
+    );
+    expect(deploy).toContain("needs.e2e-webview.result == 'success'");
+    expect(deploy).toContain("needs.ci-gate.result == 'success'");
+    expect(deploy).toContain("needs.build-desktop.result == 'success'");
+    // A skipped publish is still fine (np may have published first) but only
+    // once the gates above have passed.
+    expect(deploy).toContain("needs.publish.result == 'skipped'");
+  });
+
+  it('promotes the release from the orchestrator only, after mobile assets and checksums', () => {
+    const publishRelease = jobBlock(desktopWorkflow, 'publish-release');
+    expect(publishRelease).toContain("inputs.release_id == ''");
+    const publish = jobBlock(releaseWorkflow, 'publish');
+    expect(publish).toContain('needs: [create-release, build-desktop, build-mobile, checksums]');
+  });
+
+  it('runs the release CI gate with the non-mutating unit script', () => {
+    const gate = jobBlock(releaseWorkflow, 'ci-gate');
+    expect(gate).toContain('run: pnpm test:unit');
+    expect(gate).not.toContain('pnpm test --');
+  });
+
+  it('imports the Windows certificate into the runner store and fails closed on demand', () => {
+    expect(desktopWorkflow).toContain('- name: Import Windows code-signing certificate');
+    expect(desktopWorkflow).toContain('Import-PfxCertificate');
+    expect(desktopWorkflow).toContain('$conf.bundle.windows.certificateThumbprint = $thumbprint');
+    expect(desktopWorkflow).toContain("$env:WINDOWS_SIGNING_REQUIRED -eq 'true'");
+    // tauri-action never read these; passing them there only looked like signing.
+    const buildStep = desktopWorkflow.slice(
+      desktopWorkflow.indexOf('- name: Build and release Tauri app'),
+      desktopWorkflow.indexOf('- name: Build Snap package'),
+    );
+    expect(buildStep).not.toContain('WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}');
+  });
+
+  it('does not hand the signing secrets to workflows that reference none', () => {
+    // Match the YAML key on its own line; the explanatory comments in those
+    // jobs mention the phrase and must not satisfy or fail this check.
+    const inheritLine = /^ {4}secrets: inherit\s*$/m;
+    for (const job of ['e2e-webview', 'release-screenshots']) {
+      expect(jobBlock(releaseWorkflow, job)).not.toMatch(inheritLine);
+    }
+    expect(jobBlock(desktopWorkflow, 'e2e-webview-gate')).not.toMatch(inheritLine);
+    // The builds still need the signing set, so the rule is targeted, not blanket.
+    expect(jobBlock(releaseWorkflow, 'build-desktop')).toMatch(inheritLine);
+  });
+
+  it('keeps secrets and untrusted text out of rendered commands', () => {
+    expect(mobileWorkflow).not.toContain('echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}"');
+    expect(mobileWorkflow).toContain('printf \'%s\' "$ANDROID_KEYSTORE_BASE64" | base64 -d');
+    expect(ciWorkflow).toContain('const body = process.env.CLEAR_WARNING;');
+    expect(ciWorkflow).not.toContain(
+      'const body = `${{ steps.clear_check.outputs.clear_warning }}`;',
+    );
+  });
+
+  it('binds the Worker to whatever bucket the assets were synced to', () => {
+    for (const workflow of [releaseWorkflow, deployWorkflow]) {
+      expect(workflow).not.toContain('myselfhosted-webmail-test-1');
+      expect(workflow).toContain(
+        'sed -i -E "s/^bucket_name = \\".*\\"/bucket_name = \\"${R2_BUCKET}\\"/"',
+      );
+      expect(workflow).toContain('R2_BUCKET variable is not set');
+    }
+  });
+});
