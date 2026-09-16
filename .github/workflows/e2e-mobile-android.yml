@@ -63,7 +63,14 @@ jobs:
           shared-key: e2e-android
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3.2.2
+        with:
+          # The action's default is "tools platform-tools". Google removed the
+          # legacy "tools" package from the SDK repository in September 2026,
+          # so the default now fails with "Failed to find package 'tools'"
+          # (broke every Android job from 2026-09-14). Nothing here used it;
+          # platform-tools (adb) is the only package the jobs need from it.
+          packages: platform-tools
 
       - name: Install Android NDK
         run: sdkmanager "ndk;27.0.12077973"

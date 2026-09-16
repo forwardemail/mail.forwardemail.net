@@ -48,7 +48,9 @@ describe('release screenshot workflow', () => {
     expect(screenshotWorkflow).toContain('Expected 64 unique README screenshot references');
     expect(screenshotWorkflow).toContain('git status --porcelain -- README.md docs/screenshots');
     expect(screenshotWorkflow).toContain('git add README.md docs/screenshots');
-    expect(screenshotWorkflow).toContain('git rebase origin/main');
+    // A re-run replays a second capture over the first; binary JPEGs cannot
+    // merge, so the freshly captured set must win the rebase.
+    expect(screenshotWorkflow).toContain('git rebase -X theirs origin/main');
     // The checkout keeps no push token in .git/config; the one push
     // authenticates explicitly with the job's GITHUB_TOKEN.
     expect(screenshotWorkflow).toContain('persist-credentials: false');
