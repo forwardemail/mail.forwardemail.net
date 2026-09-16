@@ -99,6 +99,7 @@
     setSettingValue,
     localSettingsVersion,
   } from '../stores/settingsStore';
+  import { hasAnsweredFlag } from '../utils/threading';
   import {
     folders as foldersStore,
     selectedFolder as selectedFolderStore,
@@ -7317,6 +7318,26 @@
                                   <div
                                     class="flex items-center gap-1.5 shrink-0 text-muted-foreground"
                                   >
+                                    {#if hasAnsweredFlag(msg)}
+                                      <svg viewBox="0 0 24 24" class="h-3 w-3" aria-hidden="true">
+                                        <path
+                                          d="M9 17l-5-5 5-5"
+                                          fill="none"
+                                          stroke="currentColor"
+                                          stroke-width="2"
+                                          stroke-linecap="round"
+                                          stroke-linejoin="round"
+                                        ></path>
+                                        <path
+                                          d="M20 18v-2a4 4 0 0 0-4-4H4"
+                                          fill="none"
+                                          stroke="currentColor"
+                                          stroke-width="2"
+                                          stroke-linecap="round"
+                                          stroke-linejoin="round"
+                                        ></path>
+                                      </svg>
+                                    {/if}
                                     {#if hasAttachments(msg)}
                                       <svg viewBox="0 0 24 24" class="h-3 w-3" aria-hidden="true">
                                         <path
@@ -7428,6 +7449,26 @@
                                   <div
                                     class="flex items-center gap-1.5 shrink-0 text-muted-foreground"
                                   >
+                                    {#if hasAnsweredFlag(msg)}
+                                      <svg viewBox="0 0 24 24" class="h-3 w-3" aria-hidden="true">
+                                        <path
+                                          d="M9 17l-5-5 5-5"
+                                          fill="none"
+                                          stroke="currentColor"
+                                          stroke-width="2"
+                                          stroke-linecap="round"
+                                          stroke-linejoin="round"
+                                        ></path>
+                                        <path
+                                          d="M20 18v-2a4 4 0 0 0-4-4H4"
+                                          fill="none"
+                                          stroke="currentColor"
+                                          stroke-width="2"
+                                          stroke-linecap="round"
+                                          stroke-linejoin="round"
+                                        ></path>
+                                      </svg>
+                                    {/if}
                                     {#if hasAttachments(msg)}
                                       <svg viewBox="0 0 24 24" class="h-3 w-3" aria-hidden="true">
                                         <path

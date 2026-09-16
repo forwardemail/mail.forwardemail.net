@@ -108,3 +108,26 @@ describe('buildOptimisticSentSource', () => {
     expect(src.attachments).toBeUndefined();
   });
 });
+
+describe('buildOptimisticSentSource reply headers', () => {
+  it('keeps inReplyTo and references so the reply index sees the just-sent reply', () => {
+    const src = buildOptimisticSentSource(
+      {
+        from: 'me@example.com',
+        to: ['you@example.com'],
+        subject: 'Re: Hi',
+        inReplyTo: '<orig@example.com>',
+        references: '<root@example.com> <orig@example.com>',
+      },
+      { id: 'sent-1' },
+    );
+    expect(src.inReplyTo).toBe('<orig@example.com>');
+    expect(src.references).toBe('<root@example.com> <orig@example.com>');
+  });
+
+  it('defaults references to an empty string for a fresh message', () => {
+    const src = buildOptimisticSentSource({ from: 'me@example.com' }, { id: 'sent-2' });
+    expect(src.inReplyTo).toBeUndefined();
+    expect(src.references).toBe('');
+  });
+});

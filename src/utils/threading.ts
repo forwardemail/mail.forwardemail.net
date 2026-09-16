@@ -290,6 +290,21 @@ const getMessageDateValue = (message: MessageLike | null | undefined): number =>
 /**
  * Group messages into conversations (two-pass algorithm for better threading)
  */
+/**
+ * True when the message has been replied to, from either the derived
+ * `is_answered` style fields or the IMAP `\Answered` flag (case-insensitive).
+ * Shared by conversation grouping and by the flat message-row indicator.
+ */
+export function hasAnsweredFlag(message: MessageLike | null | undefined): boolean {
+  if (!message) return false;
+  if (message.is_answered || message.is_replied || message.isAnswered || message.isReplied) {
+    return true;
+  }
+  const rawFlags = (message.flags as string[]) || (message.Flags as string[]) || [];
+  const flags = Array.isArray(rawFlags) ? rawFlags : [];
+  return flags.some((flag) => String(flag).toLowerCase() === '\\answered');
+}
+
 export function groupIntoConversations(messages: MessageLike[]): ConversationResult[] {
   if (!Array.isArray(messages) || messages.length === 0) {
     return [];
@@ -297,16 +312,6 @@ export function groupIntoConversations(messages: MessageLike[]): ConversationRes
 
   const messageIdToConvId = new Map<string, string>();
   const conversationMap = new Map<string, ConversationAccumulator>();
-
-  const hasAnsweredFlag = (message: MessageLike | null | undefined): boolean => {
-    if (!message) return false;
-    if (message.is_answered || message.is_replied || message.isAnswered || message.isReplied) {
-      return true;
-    }
-    const rawFlags = (message.flags as string[]) || (message.Flags as string[]) || [];
-    const flags = Array.isArray(rawFlags) ? rawFlags : [];
-    return flags.some((flag) => String(flag).toLowerCase() === '\\answered');
-  };
 
   // First pass: assign conversation IDs and build lookup map
   for (const message of messages) {

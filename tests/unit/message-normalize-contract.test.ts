@@ -161,3 +161,26 @@ describe('message normalization contract: SW bundle === canonical', () => {
     });
   }
 });
+
+describe('is_answered derivation', () => {
+  it('derives is_answered from the \\Answered flag like is_starred from \\Flagged', () => {
+    const answered = normalizeMessageForCache(
+      { id: 'a', flags: ['\\Seen', '\\Answered'] } as RawArg,
+      'INBOX',
+      'acct',
+    );
+    const lowercase = normalizeMessageForCache(
+      { id: 'b', flags: ['\\answered'] } as RawArg,
+      'INBOX',
+      'acct',
+    );
+    const plain = normalizeMessageForCache(
+      { id: 'c', flags: ['\\Seen'] } as RawArg,
+      'INBOX',
+      'acct',
+    );
+    expect(answered.is_answered).toBe(true);
+    expect(lowercase.is_answered).toBe(true);
+    expect(plain.is_answered).toBe(false);
+  });
+});

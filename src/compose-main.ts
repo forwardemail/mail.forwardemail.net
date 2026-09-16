@@ -24,6 +24,7 @@ import Compose from './svelte/Compose.svelte';
 import { createToastHost } from './svelte/toastsHost';
 import { getEffectiveSettingValue } from './stores/settingsStore';
 import { installPasteNormalizer } from './utils/paste-normalizer';
+import { installRuntimeErrorNotifier } from './utils/runtime-error-notifier';
 
 // Undo WebKit's percent-encoded uri-list paste for text copied out of the
 // editor. See paste-normalizer.ts for details.
@@ -119,6 +120,11 @@ if (composeRoot) {
       },
     },
   });
+  // Mounted: the compose.html fatal overlay stands down for runtime errors
+  // (it checks this flag) and the throttled toast takes over. Mount failures
+  // above still reach the overlay because the flag is set only after mount.
+  (globalThis as { __appBootstrapped?: boolean }).__appBootstrapped = true;
+  installRuntimeErrorNotifier(toasts);
 }
 
 /**

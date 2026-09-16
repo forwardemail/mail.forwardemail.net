@@ -37,6 +37,7 @@ export interface PendingFlagMutation {
   is_unread_index?: number;
   flags?: string[];
   is_starred?: boolean;
+  is_answered?: boolean;
 }
 
 export function createPendingDeleteTracker({
@@ -127,6 +128,8 @@ export function createPendingFlagTracker({
         if (p.is_unread !== undefined && msg.is_unread === p.is_unread) {
           pending.delete(id);
         } else if (p.is_starred !== undefined && msg.is_starred === p.is_starred) {
+          pending.delete(id);
+        } else if (p.is_answered !== undefined && msg.is_answered === p.is_answered) {
           pending.delete(id);
         }
       }

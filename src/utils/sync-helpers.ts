@@ -376,6 +376,12 @@ export function normalizeMessageForCache(
     is_unread_index: isUnread ? 1 : 0,
     is_starred: Boolean(raw.is_flagged) || Boolean(raw.is_starred) || flags.includes('\\Flagged'),
     is_flagged: Boolean(raw.is_flagged) || Boolean(raw.is_starred) || flags.includes('\\Flagged'),
+    // Derived like is_starred so the reply indicator and the optimistic flag
+    // tracker can compare a server record to the optimistic state directly.
+    is_answered:
+      Boolean(raw.is_answered) ||
+      Boolean(raw.is_replied) ||
+      flags.some((flag) => String(flag).toLowerCase() === '\\answered'),
     has_attachment: (() => {
       const fromFlag = Boolean(raw.has_attachment || raw.hasAttachments);
       const fromArray = Array.isArray(raw.attachments) && (raw.attachments as unknown[]).length > 0;

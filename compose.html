@@ -28,6 +28,19 @@
             /^(moz-extension|chrome-extension|safari-web-extension|safari-extension|webkit-masked-url|extension):/i;
           return re.test(String(e.sourceFile || '')) || re.test(String(e.blockedURI || ''));
         }
+        // See index.html for both rules. A browser-sanitized "Script error."
+        // at 0:0 with no error object comes from an injected script, not the
+        // app; and once compose-main.ts has mounted, runtime errors belong to
+        // the in-app logger and toast, not a panel over the draft.
+        function isSanitizedForeignError(event) {
+          if (!event || event.error) return false;
+          var msg = String(event.message || '');
+          if (!/^Script error\.?$/i.test(msg)) return false;
+          return !event.filename && !(event.lineno > 0);
+        }
+        function appHasBooted() {
+          return window.__appBootstrapped === true;
+        }
         function showFatal(detail) {
           if (SHOWN) {
             var prev = document.getElementById('fe-fatal-error');
@@ -81,6 +94,12 @@
           function (event) {
             var t = event.target;
             if (t && t !== window && t.tagName) return;
+            if (isSanitizedForeignError(event)) {
+              try {
+                console.warn('[fe-fatal][compose] ignoring sanitized cross-origin script error');
+              } catch (_) {}
+              return;
+            }
             var err = event.error || {
               name: 'Error',
               message: event.message || 'unknown error',
@@ -91,6 +110,7 @@
             try {
               console.error('[fe-fatal][compose]', err, event);
             } catch (_) {}
+            if (appHasBooted()) return;
             showFatal(describe('error', err));
           },
           true,
@@ -100,6 +120,7 @@
           try {
             console.error('[fe-fatal][compose][unhandledrejection]', reason);
           } catch (_) {}
+          if (appHasBooted()) return;
           showFatal(describe('unhandledrejection', reason));
         });
         document.addEventListener('securitypolicyviolation', function (e) {
@@ -107,6 +128,7 @@
             console.error('[fe-fatal][compose][csp]', e);
           } catch (_) {}
           if (isExtensionViolation(e)) return;
+          if (appHasBooted()) return;
           showFatal(
             [
               'CSP violation',

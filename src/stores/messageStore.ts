@@ -31,18 +31,39 @@ export const messages = deferredWritable<Message[]>([]);
 export function markMessageAnsweredInStore(messageId: string | null | undefined): void {
   if (!messageId) return;
   const target = String(messageId);
+  let nextFlags: string[] | null = null;
   messages.update((list) =>
     (list || []).map((m) => {
       if (String(m?.id) !== target) return m;
       const flags = Array.isArray(m.flags) ? m.flags : [];
+      const withAnswered = flags.includes('\\Answered') ? flags : [...flags, '\\Answered'];
+      nextFlags = withAnswered;
       if (flags.includes('\\Answered') && m.is_answered) return m;
-      return {
-        ...m,
-        flags: flags.includes('\\Answered') ? flags : [...flags, '\\Answered'],
-        is_answered: true,
-      };
+      return { ...m, flags: withAnswered, is_answered: true };
     }),
   );
+  if (answeredFlagHook) {
+    try {
+      answeredFlagHook(target, nextFlags);
+    } catch {
+      // The hook only protects the optimistic state; never let it break a send.
+    }
+  }
+}
+
+type AnsweredFlagHook = (messageId: string, flags: string[] | null) => void;
+let answeredFlagHook: AnsweredFlagHook | null = null;
+
+/**
+ * Registered by mailboxStore so the optimistic \Answered flag is re-applied on
+ * top of the list reload that follows every send. Without it, loadMessages()
+ * replaced the in-memory list a moment after markMessageAnsweredInStore and
+ * the indicator vanished until the server echoed the flag. `flags` is the
+ * message's full flag list when it was on screen, null when it was not (the
+ * hook then registers only is_answered so it cannot clobber unknown flags).
+ */
+export function setAnsweredFlagHook(hook: AnsweredFlagHook | null): void {
+  answeredFlagHook = hook;
 }
 
 export const selectedMessage: Writable<Message | null> = writable(null);

@@ -230,3 +230,23 @@ describe('createPendingInsertTracker', () => {
     expect(t.getIds()).toEqual([]);
   });
 });
+
+describe('createPendingFlagTracker answered flag', () => {
+  it('re-applies is_answered and flags over a reloaded list until the server agrees', () => {
+    const t = createPendingFlagTracker();
+    t.add('a', { is_answered: true, flags: ['\\Seen', '\\Answered'] });
+    const reloaded = [{ id: 'a', is_answered: false, flags: ['\\Seen'] }];
+    expect(t.apply(reloaded)).toEqual([
+      { id: 'a', is_answered: true, flags: ['\\Seen', '\\Answered'] },
+    ]);
+    t.confirm([{ id: 'a', is_answered: true, flags: ['\\Seen', '\\Answered'] }]);
+    expect(t.apply(reloaded)).toBe(reloaded);
+  });
+
+  it('keeps overriding while the server still reports the message as unanswered', () => {
+    const t = createPendingFlagTracker();
+    t.add('a', { is_answered: true });
+    t.confirm([{ id: 'a', is_answered: false }]);
+    expect(t.apply([{ id: 'a', is_answered: false }])).toEqual([{ id: 'a', is_answered: true }]);
+  });
+});

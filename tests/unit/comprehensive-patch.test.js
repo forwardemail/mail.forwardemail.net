@@ -1038,6 +1038,10 @@ describe('Large mailbox bootstrap timeout regressions', () => {
     expect(sentCopySrc).toContain('references: emailPayload.references ||');
     expect(mainSrc).toContain('references: prefill?.references');
     expect(mainSrc).toContain('refreshReplyTargets?.({ force: true })');
+    // The desktop compose window can only flag the original as \Answered if
+    // the main window forwards the original's id and folder in the prefill.
+    expect(mainSrc).toContain('replyToMessageId: prefill?.replyToMessageId');
+    expect(mainSrc).toContain('replyToMessageFolder: prefill?.replyToMessageFolder');
   });
 
   it('should preserve the current message selection after sending a reply reloads the inbox', () => {

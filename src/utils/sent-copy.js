@@ -96,6 +96,12 @@ export const buildOptimisticSentSource = (emailPayload = {}, response = {}) => {
     bcc: emailPayload.bcc || [],
     subject: emailPayload.subject || '',
     text: emailPayload.text,
+    // Reply headers feed the Sent-derived reply index (refreshReplyTargets),
+    // which is what draws the thread count next to the original message.
+    // Without them the just-sent reply was invisible to that index until the
+    // real Sent sync landed.
+    inReplyTo: emailPayload.inReplyTo,
+    references: emailPayload.references || '',
     has_attachment: emailPayload.has_attachment || (emailPayload.attachments?.length ?? 0) > 0,
     flags: ['\\Seen'],
   };

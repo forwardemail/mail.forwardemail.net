@@ -61,7 +61,13 @@ export const createConversationGrouper = () => {
     const stable = grouped.map((conv) => {
       conv.messages = deduplicateMessages(conv.messages);
       conv.is_unread = conv.hasUnread;
-      if (targetSet.size) {
+      // `hasReply` is already true when any message carries \Answered (set by
+      // groupIntoConversations). The Sent-derived reply index can only ADD to
+      // that. An unconditional assignment here erased the flag whenever the
+      // index was non-empty, which on a busy inbox is always, so a reply set
+      // by this client a moment ago or by another user of the same account
+      // never showed until the Sent sync caught up.
+      if (targetSet.size && !conv.hasReply) {
         conv.hasReply = conv.messages.some((message) =>
           targetSet.has(message?.header_message_id || message?.message_id || message?.id),
         );

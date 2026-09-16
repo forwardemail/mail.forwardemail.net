@@ -4,6 +4,7 @@ import {
   getConversationId,
   groupIntoConversations,
   deduplicateMessages,
+  hasAnsweredFlag,
 } from '../../src/utils/threading';
 
 describe('threading utils', () => {
@@ -80,5 +81,17 @@ describe('threading utils', () => {
     const different = conversations.find((c) => c.displaySubject === 'Different thread');
     expect(different?.messages.length).toBe(1);
     expect(different?.hasUnread).toBe(true);
+  });
+});
+
+describe('hasAnsweredFlag', () => {
+  it('reads the IMAP flag case-insensitively and the derived fields', () => {
+    expect(hasAnsweredFlag({ flags: ['\\Seen', '\\Answered'] })).toBe(true);
+    expect(hasAnsweredFlag({ flags: ['\\answered'] })).toBe(true);
+    expect(hasAnsweredFlag({ Flags: ['\\Answered'] })).toBe(true);
+    expect(hasAnsweredFlag({ is_answered: true })).toBe(true);
+    expect(hasAnsweredFlag({ flags: ['\\Seen'] })).toBe(false);
+    expect(hasAnsweredFlag({ flags: 'not-an-array' })).toBe(false);
+    expect(hasAnsweredFlag(null)).toBe(false);
   });
 });

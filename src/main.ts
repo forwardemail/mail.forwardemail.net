@@ -102,6 +102,7 @@ import {
   terminateDbWorker,
 } from './utils/db';
 import { markBootstrapReady, markAppReady } from './utils/bootstrap-ready.js';
+import { installRuntimeErrorNotifier } from './utils/runtime-error-notifier';
 import { initPerfObservers } from './utils/perf-logger.ts';
 import { attemptRecovery } from './utils/db-recovery';
 import { parseMailto, mailtoToPrefill } from './utils/mailto';
@@ -883,6 +884,14 @@ async function refreshSentFolderAfterSend(sentRaw?: unknown) {
     const sentFolder = mailboxStore.actions.getSentFolderPath?.() as string | undefined;
     if (!sentFolder) return;
     if (sentRaw) await mailboxStore.actions.applyOptimisticSentMessage?.(sentRaw);
+    // The optimistic record carries in_reply_to/references, so rebuilding the
+    // reply index now (instead of waiting out its 60s TTL) makes the thread
+    // count and reply arrow reflect the reply that was just sent.
+    try {
+      await mailboxStore.actions.refreshReplyTargets?.({ force: true });
+    } catch (error) {
+      console.warn('[main] Failed to refresh reply targets after send:', error);
+    }
     const upper = sentFolder.toUpperCase();
     mailboxStore.actions.invalidateFolderInMemCache?.(acct, sentFolder);
     const sentFolderRec = (get(mailboxStore.state.folders) || []).find(
@@ -1310,6 +1319,12 @@ if (isTauriDesktop) {
           html: quotedHtml,
           inReplyTo: prefill?.inReplyTo,
           references: prefill?.references,
+          // The compose window reports these back on compose:sent; they are
+          // the only way the main window learns which message to flag
+          // \Answered. Dropping them here left desktop replies unflagged
+          // everywhere (memory, IndexedDB, and the server).
+          replyToMessageId: prefill?.replyToMessageId ?? null,
+          replyToMessageFolder: prefill?.replyToMessageFolder ?? null,
         },
       });
     },
@@ -1458,18 +1473,14 @@ if (isTauriDesktop) {
             console.warn(String.raw`[main] Failed to set \Answered flag:`, error);
           }
         }
-
-        try {
-          await mailboxStore.actions.refreshReplyTargets?.({ force: true });
-        } catch (error) {
-          console.warn('[main] Failed to refresh reply targets after send:', error);
-        }
       }
 
       // Surface the just-sent message in Sent promptly (don't wait for the
       // periodic sync). Runs whether or not we archive the source; a queued
-      // (offline) send isn't in Sent yet so it's skipped.
-      if (!result?.queued) refreshSentFolderAfterSend(result?.sentCopy);
+      // (offline) send isn't in Sent yet so it's skipped. Awaited because the
+      // optimistic Sent record it writes is what the reply index reads, and
+      // the list reload below must not race ahead of it.
+      if (!result?.queued) await refreshSentFolderAfterSend(result?.sentCopy);
 
       if (result?.archive) {
         const message = get(selectedMessage);
@@ -2213,10 +2224,15 @@ async function bootstrap() {
 
     markBootstrapReady();
 
-    // Signal to fallback recovery UI that the app has bootstrapped successfully
+    // Signal to fallback recovery UI that the app has bootstrapped successfully.
+    // From here on the index.html fatal overlay stands down for runtime errors
+    // (it checks window.__appBootstrapped); the error logger keeps recording
+    // them and this notifier surfaces them as a throttled toast instead of a
+    // page-covering panel.
     if (typeof globalThis.__markAppBootstrapped === 'function') {
       globalThis.__markAppBootstrapped();
     }
+    installRuntimeErrorNotifier(toasts);
 
     // Initialize i18n first
     await i18n.init();

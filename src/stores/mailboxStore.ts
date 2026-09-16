@@ -42,6 +42,7 @@ import {
   attachments,
   messageLoading,
   filteredMessages,
+  setAnsweredFlagHook,
 } from './messageStore';
 import {
   threadingEnabled,
@@ -125,6 +126,14 @@ const addPendingFlagMutation = pendingFlagTracker.add;
 const applyPendingFlagMutations = pendingFlagTracker.apply;
 const confirmFlagMutations = pendingFlagTracker.confirm;
 const cancelPendingFlag = pendingFlagTracker.cancel;
+
+// Keep an optimistic \Answered across the list reload that follows a send.
+// Read and star register their mutations at their own call sites; the
+// answered flag is set from three send paths (in-page compose, the desktop
+// compose window, the outbox), so it registers through this hook instead.
+setAnsweredFlagHook((id, flags) => {
+  addPendingFlagMutation(id, { is_answered: true, ...(flags ? { flags } : {}) });
+});
 
 // Optimistically-inserted Sent messages, re-injected into Sent list responses
 // until the backend indexer makes the just-sent message queryable.

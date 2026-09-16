@@ -280,6 +280,28 @@
           }
           return false;
         }
+        // Browsers strip the message, file, and line from an error when the
+        // script that threw is not same-origin with the page, leaving only
+        // "Script error." at 0:0 with no error object. Our own bundles are
+        // same-origin module scripts and always report full detail, so a
+        // sanitized error can only come from a script the browser injected
+        // (Firefox for iOS user scripts, Safari extensions). It says nothing
+        // about the app and the app is almost always fine, so it must never
+        // blank the UI. Seen 2026-09-15 on Firefox iOS 155 / iOS 26.6.
+        function isSanitizedForeignError(event) {
+          if (!event || event.error) return false;
+          var msg = String(event.message || '');
+          if (!/^Script error\.?$/i.test(msg)) return false;
+          return !event.filename && !(event.lineno > 0);
+        }
+        // Once main.ts has bootstrapped, the in-app error logger owns runtime
+        // errors (it records them for the Diagnostics page and support
+        // feedback, and shows a toast). This overlay exists to make a
+        // white screen diagnosable, so after boot a runtime fault must not
+        // replace a working mailbox with a black panel.
+        function appHasBooted() {
+          return window.__appBootstrapped === true;
+        }
         function showFatal(detail) {
           if (isTestHarnessNoise(detail)) return;
           if (SHOWN) {
@@ -338,6 +360,12 @@
             // chunk-recovery handler below — ignore them here.
             var t = event.target;
             if (t && t !== window && t.tagName) return;
+            if (isSanitizedForeignError(event)) {
+              try {
+                console.warn('[fe-fatal] ignoring sanitized cross-origin script error', event);
+              } catch (_) {}
+              return;
+            }
             var err = event.error;
             if (!err) {
               err = {
@@ -351,6 +379,7 @@
             try {
               console.error('[fe-fatal]', err, event);
             } catch (_) {}
+            if (appHasBooted()) return;
             showFatal(describe('error', err));
           },
           true,
@@ -369,6 +398,7 @@
           try {
             console.error('[fe-fatal][unhandledrejection]', reason);
           } catch (_) {}
+          if (appHasBooted()) return;
           showFatal(describe('unhandledrejection', reason));
         });
         // Also surface CSP violations (these don't go through the 'error'
@@ -379,6 +409,7 @@
             console.error('[fe-fatal][csp]', e);
           } catch (_) {}
           if (isIgnorableCspViolation(e)) return;
+          if (appHasBooted()) return;
           var detail = [
             'CSP violation',
             'directive: ' + e.violatedDirective,
