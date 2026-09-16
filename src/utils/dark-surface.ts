@@ -16,31 +16,31 @@
 
 /** Dark theme. Mirrors the `.dark` block in fe-tokens.css. */
 export const DARK_SURFACE = {
-  /** Sunken wells and code blocks — `--surface-sunken` (`--fe-ink`) */
-  base: '#070b16',
-  /** Page canvas — `--surface-canvas` (`--fe-panel`) */
-  surface: '#0e1628',
+  /** Sunken wells and code blocks — `--surface-sunken` (`--fe-n-000`) */
+  base: '#0e1628',
+  /** Page canvas — `--surface-canvas` (`--fe-n-100`) */
+  surface: '#131d33',
   /** Panels / cards / the reader pane — `--surface-raised` (`--fe-n-200`) */
-  panel: '#16223a',
-  /** Elevated surfaces: modals, chips, buttons — `--surface-overlay` steps up
-   *  to `--fe-n-300` here, matching what `--accent` / `--muted` resolve to in
-   *  the app, so a chip still reads as raised against `panel`. */
-  overlay: '#22304d',
-  /** Default border — `--border-default` (`--fe-n-300`) */
-  border: '#22304d',
+  panel: '#1b2740',
+  /** Elevated surfaces: modals, chips, buttons — `--surface-overlay`
+   *  (`--fe-n-300`), the same step `--accent` / `--muted` resolve to in the
+   *  app, so a chip still reads as raised against `panel`. */
+  overlay: '#243352',
+  /** Default border — `--border-default` (`--fe-n-350`) */
+  border: '#2d3d5e',
   /** Stronger border, and the hover step above `overlay` — `--border-strong`
    *  (`--fe-n-400`) */
-  borderStrong: '#3a4a6b',
+  borderStrong: '#41547a',
   /** Primary text — `--fg-primary` (`--fe-n-700`) */
-  text: '#e2e8f0',
+  text: '#e6ebf4',
   /** Muted / secondary text — `--fg-secondary` (`--fe-n-600`). Deliberately
-   *  not `--fg-muted` (`--fe-n-500`), which measures about 3.2:1 against
-   *  `panel` and fails AA for the quoted body text this is used on. */
-  textMuted: '#94a3b8',
+   *  not `--fg-muted` (`--fe-n-500`): it now clears AA on `panel` at 4.3:1,
+   *  but quoted body text deserves the comfortable margin. */
+  textMuted: '#a3b1c6',
   /** Secondary text that still has to read as body copy, and the hover
    *  brightening of `textMuted`. Shares a value with `text` because the dark
    *  neutral ramp has no step between `--fe-n-600` and `--fe-n-700`. */
-  textSubtle: '#e2e8f0',
+  textSubtle: '#e6ebf4',
   /** Link text — `--fg-link` (`--fe-primary-lift`) */
   link: '#60a5fa',
 } as const;

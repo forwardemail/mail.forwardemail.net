@@ -39,7 +39,7 @@
             dark = !!(
               window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches
             );
-          document.documentElement.style.backgroundColor = dark ? '#0a0a0a' : '#f5f7fb';
+          document.documentElement.style.backgroundColor = dark ? '#131d33' : '#f5f7fb';
 
           // App Lock cold start: decide "locked" here, before any bundle
           // loads, and paint the lock cover immediately. The real lock screen
@@ -59,7 +59,7 @@
               overlay.style.inset = '0';
               overlay.style.zIndex = '99999';
               overlay.style.visibility = 'visible';
-              overlay.style.backgroundColor = dark ? '#0a0a0a' : '#f5f7fb';
+              overlay.style.backgroundColor = dark ? '#131d33' : '#f5f7fb';
               cover.style.display = 'flex';
               cover.style.color = dark ? '#e5e7eb' : '#111827';
               document.documentElement.classList.add('app-lock-boot');

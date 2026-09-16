@@ -50,7 +50,7 @@ export function contrastRatio(a: string, b: string): number {
  */
 const AA_BODY_TEXT = 4.5;
 const PALETTE_DARK = '#070b16'; /* --fe-ink */
-const PALETTE_LIGHT = '#e2e8f0'; /* --fe-n-700 */
+const PALETTE_LIGHT = '#e6ebf4'; /* --fe-n-700 */
 
 export function readableForeground(background: string | null | undefined): string {
   if (!background) return PALETTE_LIGHT;

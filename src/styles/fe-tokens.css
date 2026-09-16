@@ -57,15 +57,27 @@
   --fe-danger-deep: #dc2626; /* danger on light */
   --fe-vault: #a78bfa; /* encrypted, PGP, zero-access */
 
-  /* Neutral ramp, dark */
-  --fe-n-000: #070b16;
-  --fe-n-100: #0e1628;
-  --fe-n-200: #16223a;
-  --fe-n-300: #22304d;
-  --fe-n-400: #3a4a6b;
-  --fe-n-500: #64748b;
-  --fe-n-600: #94a3b8;
-  --fe-n-700: #e2e8f0;
+  /* Neutral ramp, dark.
+   *
+   * Lifted one step on 2026-09-16: the original ramp started at Ink and put
+   * the canvas at Panel, which left the sidebar, list and canvas within one
+   * step of each other, row separators at the noise floor, and --fg-muted at
+   * 3.79:1 on the canvas. The hue is unchanged; every step is brighter. Ink
+   * and Panel themselves are brand values and stay as they are above for
+   * marketing surfaces, scrims and --surface-inverse.
+   *
+   * --fe-n-350 is a half step: the default border needs to sit between the
+   * overlay surface (n-300) and the strong border (n-400) to be visible on
+   * the canvas without reading as an outline. */
+  --fe-n-000: #0e1628;
+  --fe-n-100: #131d33;
+  --fe-n-200: #1b2740;
+  --fe-n-300: #243352;
+  --fe-n-350: #2d3d5e;
+  --fe-n-400: #41547a;
+  --fe-n-500: #7c8ba3;
+  --fe-n-600: #a3b1c6;
+  --fe-n-700: #e6ebf4;
 
   /* Neutral ramp, light */
   --fe-l-000: #ffffff;
@@ -98,10 +110,10 @@
    * as aliases defined in tokens.css. */
   --fg-primary: var(--fe-l-700);
   --fg-secondary: var(--fe-l-600);
-  /* Measured 4.48:1 on --surface-canvas and 3.79:1 on the dark canvas, so it
-   * is BELOW AA for body text in both themes. Use it only for timestamps,
-   * counts, disabled text and other non-essential or larger content. For
-   * secondary body copy use --fg-secondary. */
+  /* Measured 4.48:1 on --surface-canvas, so it is BELOW AA for body text in
+   * light mode (the lifted dark ramp clears it at 4.86:1). Use it only for
+   * timestamps, counts, disabled text and other non-essential or larger
+   * content. For secondary body copy use --fg-secondary. */
   --fg-muted: var(--fe-l-500);
   --fg-inverse: var(--fe-n-700);
   --fg-link: var(--fe-primary);
@@ -240,31 +252,36 @@
    SEMANTIC ALIASES - DARK THEME
    ============================================ */
 .dark {
-  /* Canvas is Panel, not Ink. Ink reads well for a few seconds on a marketing
-   * page but is fatiguing for all-day reading, and reserving it for sunken
-   * wells, code blocks and modal scrims gives overlays somewhere darker to
-   * go. Marketing pages keep Ink as canvas. */
-  --surface-canvas: var(--fe-panel);
+  /* The canvas sits one step above Panel and Ink is never a working surface.
+   * Ink reads well for a few seconds on a marketing page but is fatiguing for
+   * all-day reading; the old Panel value now serves as the sunken well for
+   * quoted text, code blocks and modal scrims, so overlays still have
+   * somewhere darker to go. Marketing pages keep Ink as canvas. Each surface
+   * is a distinct ramp step so sidebar, list, cards and menus separate. */
+  --surface-canvas: var(--fe-n-100);
   --surface-raised: var(--fe-n-200);
-  --surface-overlay: var(--fe-n-200);
-  --surface-sunken: var(--fe-ink);
+  --surface-overlay: var(--fe-n-300);
+  --surface-sunken: var(--fe-n-000);
   --surface-inverse: var(--fe-l-100);
 
   --fg-primary: var(--fe-n-700);
   --fg-secondary: var(--fe-n-600);
+  /* 4.86:1 on the canvas (AA for body text), 4.31:1 on raised surfaces and
+   * 3.64:1 on overlays (AA for labels and large text only). Keep it for
+   * timestamps, counts and labels; secondary body copy uses --fg-secondary. */
   --fg-muted: var(--fe-n-500);
   --fg-inverse: var(--fe-l-700);
   --fg-link: var(--fe-primary-lift);
   --fg-code: var(--fe-n-700);
 
-  --border-subtle: var(--fe-n-200);
-  --border-default: var(--fe-n-300);
+  --border-subtle: var(--fe-n-300);
+  --border-default: var(--fe-n-350);
   --border-strong: var(--fe-n-400);
 
   --action-primary-bg: var(--fe-primary);
   --action-primary-fg: var(--fe-l-000);
   --action-primary-hover: #3b82f6;
-  --action-ghost-border: var(--fe-n-300);
+  --action-ghost-border: var(--fe-n-350);
   --action-ghost-hover-bg: var(--fe-n-300);
   --action-danger-bg: var(--fe-danger);
   --action-danger-fg: var(--fe-ink);

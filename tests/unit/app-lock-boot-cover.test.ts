@@ -68,7 +68,9 @@ describe('index.html lock cover', () => {
     seedLock();
     localStorage.setItem('webmail_theme', 'dark');
     runHeadScript();
-    expect(overlay().style.backgroundColor).toBe('rgb(10, 10, 10)');
+    // The dark canvas from fe-tokens.css (--fe-n-100), so the cover does not
+    // flash a different shade than the app that replaces it.
+    expect(overlay().style.backgroundColor).toBe('rgb(19, 29, 51)');
   });
 
   it('stays hidden when the lock is off', () => {

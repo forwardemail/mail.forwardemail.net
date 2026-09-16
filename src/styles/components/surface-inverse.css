@@ -23,12 +23,13 @@
  * guard at the bottom of this file enforces the first mechanically.
  */
 
-/* Light page, so the panel goes dark. */
+/* Light page, so the panel goes dark. Same steps as the .dark theme in
+   fe-tokens.css so an inverse panel matches what dark mode users see. */
 [data-surface='inverse'] {
-  --surface-canvas: var(--fe-panel);
+  --surface-canvas: var(--fe-n-100);
   --surface-raised: var(--fe-n-200);
-  --surface-overlay: var(--fe-n-200);
-  --surface-sunken: var(--fe-ink);
+  --surface-overlay: var(--fe-n-300);
+  --surface-sunken: var(--fe-n-000);
   --surface-inverse: var(--fe-l-100);
 
   --fg-primary: var(--fe-n-700);
@@ -38,12 +39,12 @@
   --fg-link: var(--fe-primary-lift);
   --fg-code: var(--fe-n-700);
 
-  --border-subtle: var(--fe-n-200);
-  --border-default: var(--fe-n-300);
+  --border-subtle: var(--fe-n-300);
+  --border-default: var(--fe-n-350);
   --border-strong: var(--fe-n-400);
 
   --action-primary-hover: #3b82f6;
-  --action-ghost-border: var(--fe-n-300);
+  --action-ghost-border: var(--fe-n-350);
   --action-ghost-hover-bg: var(--fe-n-300);
   --action-danger-bg: var(--fe-danger);
   --action-danger-fg: var(--fe-ink);
