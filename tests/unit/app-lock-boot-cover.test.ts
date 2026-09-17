@@ -70,7 +70,7 @@ describe('index.html lock cover', () => {
     runHeadScript();
     // The dark canvas from fe-tokens.css (--fe-n-100), so the cover does not
     // flash a different shade than the app that replaces it.
-    expect(overlay().style.backgroundColor).toBe('rgb(19, 29, 51)');
+    expect(overlay().style.backgroundColor).toBe('rgb(24, 34, 56)');
   });
 
   it('stays hidden when the lock is off', () => {

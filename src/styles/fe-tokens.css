@@ -59,25 +59,27 @@
 
   /* Neutral ramp, dark.
    *
-   * Lifted one step on 2026-09-16: the original ramp started at Ink and put
-   * the canvas at Panel, which left the sidebar, list and canvas within one
-   * step of each other, row separators at the noise floor, and --fg-muted at
-   * 3.79:1 on the canvas. The hue is unchanged; every step is brighter. Ink
-   * and Panel themselves are brand values and stay as they are above for
-   * marketing surfaces, scrims and --surface-inverse.
+   * Lifted two steps (2026-09-16, then again 2026-09-17 after the first lift
+   * still read too heavy in the app): the original ramp started at Ink and
+   * put the canvas at Panel, which left the sidebar, list and canvas within
+   * one step of each other, row separators at the noise floor, and
+   * --fg-muted at 3.79:1 on the canvas. The hue is unchanged and leans
+   * slightly slate; every step is brighter. Ink and Panel themselves are
+   * brand values and stay as they are above for marketing surfaces, scrims
+   * and --surface-inverse.
    *
    * --fe-n-350 is a half step: the default border needs to sit between the
    * overlay surface (n-300) and the strong border (n-400) to be visible on
    * the canvas without reading as an outline. */
-  --fe-n-000: #0e1628;
-  --fe-n-100: #131d33;
-  --fe-n-200: #1b2740;
-  --fe-n-300: #243352;
-  --fe-n-350: #2d3d5e;
-  --fe-n-400: #41547a;
-  --fe-n-500: #7c8ba3;
-  --fe-n-600: #a3b1c6;
-  --fe-n-700: #e6ebf4;
+  --fe-n-000: #111a2e;
+  --fe-n-100: #182238;
+  --fe-n-200: #212e48;
+  --fe-n-300: #293856;
+  --fe-n-350: #354666;
+  --fe-n-400: #4a5d84;
+  --fe-n-500: #8493ab;
+  --fe-n-600: #a9b6ca;
+  --fe-n-700: #e8edf5;
 
   /* Neutral ramp, light */
   --fe-l-000: #ffffff;
@@ -111,7 +113,7 @@
   --fg-primary: var(--fe-l-700);
   --fg-secondary: var(--fe-l-600);
   /* Measured 4.48:1 on --surface-canvas, so it is BELOW AA for body text in
-   * light mode (the lifted dark ramp clears it at 4.86:1). Use it only for
+   * light mode (the lifted dark ramp clears it at 5.09:1). Use it only for
    * timestamps, counts, disabled text and other non-essential or larger
    * content. For secondary body copy use --fg-secondary. */
   --fg-muted: var(--fe-l-500);
@@ -266,8 +268,8 @@
 
   --fg-primary: var(--fe-n-700);
   --fg-secondary: var(--fe-n-600);
-  /* 4.86:1 on the canvas (AA for body text), 4.31:1 on raised surfaces and
-   * 3.64:1 on overlays (AA for labels and large text only). Keep it for
+  /* 5.09:1 on the canvas (AA for body text), 4.35:1 on raised surfaces and
+   * 3.76:1 on overlays (AA for labels and large text only). Keep it for
    * timestamps, counts and labels; secondary body copy uses --fg-secondary. */
   --fg-muted: var(--fe-n-500);
   --fg-inverse: var(--fe-l-700);

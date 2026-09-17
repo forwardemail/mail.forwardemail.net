@@ -1652,13 +1652,14 @@ describe('round-2 fix regression guards', () => {
   // its values always won. tokens.css no longer carries theme values at all.
   it('dark theme surfaces come from the navy ramp in fe-tokens.css', () => {
     // Brand values stay put; the working neutral ramp was lifted one step on
-    // 2026-09-16 so surfaces separate and --fg-muted clears AA on the canvas.
+    // 2026-09-16 and again on 2026-09-17 so surfaces separate and --fg-muted
+    // clears AA on the canvas.
     expect(feTokensSrc).toContain('--fe-ink: #070b16;');
     expect(feTokensSrc).toContain('--fe-panel: #0e1628;');
-    expect(feTokensSrc).toContain('--fe-n-100: #131d33;');
-    expect(feTokensSrc).toContain('--fe-n-200: #1b2740;');
-    expect(feTokensSrc).toContain('--fe-n-300: #243352;');
-    expect(feTokensSrc).toContain('--fe-n-500: #7c8ba3;');
+    expect(feTokensSrc).toContain('--fe-n-100: #182238;');
+    expect(feTokensSrc).toContain('--fe-n-200: #212e48;');
+    expect(feTokensSrc).toContain('--fe-n-300: #293856;');
+    expect(feTokensSrc).toContain('--fe-n-500: #8493ab;');
     // Ink is never a working surface: canvas is the lifted ramp, and the old
     // Panel value serves as the sunken well for quotes, code and scrims.
     expect(feTokensSrc).toMatch(/\.dark\s*\{[^}]*--surface-canvas:\s*var\(--fe-n-100\)/);
@@ -1672,20 +1673,20 @@ describe('round-2 fix regression guards', () => {
       'utf8',
     );
     for (const [key, hex] of [
-      ['base', '#0e1628'],
-      ['surface', '#131d33'],
-      ['panel', '#1b2740'],
-      ['overlay', '#243352'],
-      ['border', '#2d3d5e'],
-      ['borderStrong', '#41547a'],
-      ['text', '#e6ebf4'],
-      ['textMuted', '#a3b1c6'],
+      ['base', '#111a2e'],
+      ['surface', '#182238'],
+      ['panel', '#212e48'],
+      ['overlay', '#293856'],
+      ['border', '#354666'],
+      ['borderStrong', '#4a5d84'],
+      ['text', '#e8edf5'],
+      ['textMuted', '#a9b6ca'],
     ]) {
       expect(darkSurfaceSrc).toContain(`${key}: '${hex}'`);
     }
     // Cold start paints the same canvas so boot does not flash darker.
     const indexSrc = fs.readFileSync(path.resolve(__dirname, '../../index.html'), 'utf8');
-    expect(indexSrc).toContain("dark ? '#131d33' : '#f5f7fb'");
+    expect(indexSrc).toContain("dark ? '#182238' : '#f5f7fb'");
     expect(indexSrc).not.toContain('#0a0a0a');
   });
 

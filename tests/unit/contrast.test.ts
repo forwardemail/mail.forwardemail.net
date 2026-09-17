@@ -23,7 +23,7 @@ describe('contrast helper', () => {
     // The bug this fixes: a pale label chip previously forced white text.
     expect(readableForeground('#fef08a')).toBe('#070b16');
     expect(readableForeground('#ffffff')).toBe('#070b16');
-    expect(readableForeground('#0e1628')).toBe('#e6ebf4');
+    expect(readableForeground('#0e1628')).toBe('#e8edf5');
   });
 
   it('escalates off-palette when the palette neutral misses AA', () => {
@@ -33,7 +33,7 @@ describe('contrast helper', () => {
     expect(readableForeground('#2563eb')).toBe('#ffffff');
     expect(readableForeground('#d6336c')).toBe('#ffffff');
     // A background with headroom keeps the palette neutral.
-    expect(readableForeground('#5f3dc4')).toBe('#e6ebf4');
+    expect(readableForeground('#5f3dc4')).toBe('#e8edf5');
   });
 
   it('whatever it picks clears AA for body text', () => {
@@ -60,8 +60,8 @@ describe('contrast helper', () => {
   });
 
   it('falls back to a light foreground when no colour is set', () => {
-    expect(readableForeground(null)).toBe('#e6ebf4');
-    expect(readableForeground(undefined)).toBe('#e6ebf4');
-    expect(readableForeground('')).toBe('#e6ebf4');
+    expect(readableForeground(null)).toBe('#e8edf5');
+    expect(readableForeground(undefined)).toBe('#e8edf5');
+    expect(readableForeground('')).toBe('#e8edf5');
   });
 });

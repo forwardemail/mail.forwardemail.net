@@ -17,30 +17,30 @@
 /** Dark theme. Mirrors the `.dark` block in fe-tokens.css. */
 export const DARK_SURFACE = {
   /** Sunken wells and code blocks — `--surface-sunken` (`--fe-n-000`) */
-  base: '#0e1628',
+  base: '#111a2e',
   /** Page canvas — `--surface-canvas` (`--fe-n-100`) */
-  surface: '#131d33',
+  surface: '#182238',
   /** Panels / cards / the reader pane — `--surface-raised` (`--fe-n-200`) */
-  panel: '#1b2740',
+  panel: '#212e48',
   /** Elevated surfaces: modals, chips, buttons — `--surface-overlay`
    *  (`--fe-n-300`), the same step `--accent` / `--muted` resolve to in the
    *  app, so a chip still reads as raised against `panel`. */
-  overlay: '#243352',
+  overlay: '#293856',
   /** Default border — `--border-default` (`--fe-n-350`) */
-  border: '#2d3d5e',
+  border: '#354666',
   /** Stronger border, and the hover step above `overlay` — `--border-strong`
    *  (`--fe-n-400`) */
-  borderStrong: '#41547a',
+  borderStrong: '#4a5d84',
   /** Primary text — `--fg-primary` (`--fe-n-700`) */
-  text: '#e6ebf4',
+  text: '#e8edf5',
   /** Muted / secondary text — `--fg-secondary` (`--fe-n-600`). Deliberately
-   *  not `--fg-muted` (`--fe-n-500`): it now clears AA on `panel` at 4.3:1,
+   *  not `--fg-muted` (`--fe-n-500`): it clears AA on `panel` at 4.35:1,
    *  but quoted body text deserves the comfortable margin. */
-  textMuted: '#a3b1c6',
+  textMuted: '#a9b6ca',
   /** Secondary text that still has to read as body copy, and the hover
    *  brightening of `textMuted`. Shares a value with `text` because the dark
    *  neutral ramp has no step between `--fe-n-600` and `--fe-n-700`. */
-  textSubtle: '#e6ebf4',
+  textSubtle: '#e8edf5',
   /** Link text — `--fg-link` (`--fe-primary-lift`) */
   link: '#60a5fa',
 } as const;
