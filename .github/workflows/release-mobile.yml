@@ -185,6 +185,7 @@ jobs:
         run: pnpm tauri:android:build
 
       - name: Rename APK with version
+        id: artifacts
         run: |
           VERSION="${{ inputs.version || inputs.tag || github.ref_name }}"
           VERSION="${VERSION#v}"
@@ -198,8 +199,12 @@ jobs:
             echo "::error::Expected exactly one APK and one AAB; found ${#APKS[@]} APK(s) and ${#AABS[@]} AAB(s)"
             exit 1
           fi
-          mv "${APKS[0]}" "$(dirname "${APKS[0]}")/forwardemail-mail_${VERSION}_android.apk"
-          mv "${AABS[0]}" "$(dirname "${AABS[0]}")/forwardemail-mail_${VERSION}_android.aab"
+          APK_OUT="$(dirname "${APKS[0]}")/forwardemail-mail_${VERSION}_android.apk"
+          AAB_OUT="$(dirname "${AABS[0]}")/forwardemail-mail_${VERSION}_android.aab"
+          mv "${APKS[0]}" "$APK_OUT"
+          mv "${AABS[0]}" "$AAB_OUT"
+          echo "apk=$APK_OUT" >> "$GITHUB_OUTPUT"
+          echo "aab=$AAB_OUT" >> "$GITHUB_OUTPUT"
 
       # SLSA build provenance for the signed APK + AAB. Users verify with
       # `gh attestation verify <file> --owner forwardemail`.
@@ -217,39 +222,21 @@ jobs:
           tag: v${{ inputs.version || inputs.tag || github.ref_name }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload signed APK/AAB to release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-          RELEASE_ID: ${{ steps.resolve_release.outputs.release_id }}
-          TAG: ${{ steps.resolve_release.outputs.tag }}
-        run: |
-          set -euo pipefail
-          FILES=()
-          while IFS= read -r f; do FILES+=("$f"); done < <(find src-tauri/gen/android/app/build/outputs/apk -name '*.apk' -type f)
-          while IFS= read -r f; do FILES+=("$f"); done < <(find src-tauri/gen/android/app/build/outputs/bundle -name '*.aab' -type f)
-          if [ ${#FILES[@]} -eq 0 ]; then
-            echo "::error::No APK/AAB files found to upload"
-            exit 1
-          fi
-          echo "Uploading ${#FILES[@]} file(s) to release id=$RELEASE_ID (tag=$TAG)"
+      # Uploads go through the shared action so a transient GitHub 5xx on the
+      # upload endpoint retries instead of failing a finished build.
+      - name: Upload signed APK to release
+        uses: ./.github/actions/upload-release-asset
+        with:
+          release-id: ${{ steps.resolve_release.outputs.release_id }}
+          path: ${{ steps.artifacts.outputs.apk }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
-          # Upload each file via the GitHub asset upload endpoint
-          for f in "${FILES[@]}"; do
-            name=$(basename "$f")
-            echo "  → $name"
-            # Delete any existing asset with the same name (clobber behavior)
-            existing_id=$(gh api "repos/${GH_REPO}/releases/${RELEASE_ID}/assets" \
-              --jq ".[] | select(.name==\"$name\") | .id" | head -n 1)
-            if [ -n "$existing_id" ]; then
-              gh api -X DELETE "repos/${GH_REPO}/releases/assets/${existing_id}" || true
-            fi
-            gh api \
-              --method POST \
-              -H "Content-Type: application/octet-stream" \
-              "https://uploads.github.com/repos/${GH_REPO}/releases/${RELEASE_ID}/assets?name=${name}" \
-              --input "$f"
-          done
+      - name: Upload signed AAB to release
+        uses: ./.github/actions/upload-release-asset
+        with:
+          release-id: ${{ steps.resolve_release.outputs.release_id }}
+          path: ${{ steps.artifacts.outputs.aab }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       # --- Google Play Console upload (closed/open testing) -------------------
       # Uploads the signed .aab to the configured Play track. Gated on the
@@ -443,18 +430,11 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload Google-free APK to release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-          RELEASE_ID: ${{ steps.resolve_release.outputs.release_id }}
-          APK: ${{ steps.apk.outputs.path }}
-        run: |
-          set -euo pipefail
-          name=$(basename "$APK")
-          existing_id=$(gh api "repos/${GH_REPO}/releases/${RELEASE_ID}/assets" --jq ".[] | select(.name==\"$name\") | .id" | head -n 1)
-          [ -z "$existing_id" ] || gh api -X DELETE "repos/${GH_REPO}/releases/assets/${existing_id}"
-          gh api --method POST -H "Content-Type: application/octet-stream" \
-            "https://uploads.github.com/repos/${GH_REPO}/releases/${RELEASE_ID}/assets?name=${name}" --input "$APK"
+        uses: ./.github/actions/upload-release-asset
+        with:
+          release-id: ${{ steps.resolve_release.outputs.release_id }}
+          path: ${{ steps.apk.outputs.path }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Clean up Android credentials
         if: always()
@@ -802,29 +782,11 @@ jobs:
 
       - name: Upload signed IPA to release
         if: steps.check.outputs.enabled == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-          RELEASE_ID: ${{ steps.resolve_release.outputs.release_id }}
-          TAG: ${{ steps.resolve_release.outputs.tag }}
-        run: |
-          set -euo pipefail
-          if [ -z "${IPA_PATH:-}" ] || [ ! -f "$IPA_PATH" ]; then
-            echo "::error::IPA_PATH not set or file missing"
-            exit 1
-          fi
-          name=$(basename "$IPA_PATH")
-          echo "Uploading $name to release id=$RELEASE_ID (tag=$TAG)"
-          existing_id=$(gh api "repos/${GH_REPO}/releases/${RELEASE_ID}/assets" \
-            --jq ".[] | select(.name==\"$name\") | .id" | head -n 1)
-          if [ -n "$existing_id" ]; then
-            gh api -X DELETE "repos/${GH_REPO}/releases/assets/${existing_id}" || true
-          fi
-          gh api \
-            --method POST \
-            -H "Content-Type: application/octet-stream" \
-            "https://uploads.github.com/repos/${GH_REPO}/releases/${RELEASE_ID}/assets?name=${name}" \
-            --input "$IPA_PATH"
+        uses: ./.github/actions/upload-release-asset
+        with:
+          release-id: ${{ steps.resolve_release.outputs.release_id }}
+          path: ${{ env.IPA_PATH }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Clean up signing artifacts
         if: always()

@@ -318,23 +318,12 @@ jobs:
 
       - name: Upload checksums to release
         if: steps.sums.outputs.generated == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-          RELEASE_ID: ${{ steps.resolve_release.outputs.release_id }}
-        run: |
-          cd artifacts
-          name="SHA256SUMS.txt"
-          existing_id=$(gh api "repos/${GH_REPO}/releases/${RELEASE_ID}/assets" \
-            --jq ".[] | select(.name==\"$name\") | .id" | head -n 1)
-          if [ -n "$existing_id" ]; then
-            gh api -X DELETE "repos/${GH_REPO}/releases/assets/${existing_id}" || true
-          fi
-          gh api \
-            --method POST \
-            -H "Content-Type: text/plain" \
-            "https://uploads.github.com/repos/${GH_REPO}/releases/${RELEASE_ID}/assets?name=${name}" \
-            --input "$name"
+        uses: ./.github/actions/upload-release-asset
+        with:
+          release-id: ${{ steps.resolve_release.outputs.release_id }}
+          path: artifacts/SHA256SUMS.txt
+          content-type: text/plain
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
   # ── 4. Publish the release ─────────────────────────────────────────────
   # Since build-* resolve-at-upload-time prefers published over draft, assets
@@ -372,10 +361,27 @@ jobs:
                 [ -n "$existing" ] && gh api -X DELETE "repos/${GH_REPO}/releases/assets/${existing}" || true
                 gh api -H "Accept: application/octet-stream" \
                   "repos/${GH_REPO}/releases/assets/${aid}" > "/tmp/${aname}"
-                gh api --method POST -H "Content-Type: application/octet-stream" \
-                  "https://uploads.github.com/repos/${GH_REPO}/releases/${OTHER_PUBLISHED}/assets?name=${aname}" \
-                  --input "/tmp/${aname}"
+                # The upload endpoint returns transient 5xx responses; retry
+                # rather than abandon the consolidation half way through.
+                uploaded=0
+                for attempt in 1 2 3 4 5; do
+                  if gh api --method POST -H "Content-Type: application/octet-stream" \
+                    "https://uploads.github.com/repos/${GH_REPO}/releases/${OTHER_PUBLISHED}/assets?name=${aname}" \
+                    --input "/tmp/${aname}"; then
+                    uploaded=1
+                    break
+                  fi
+                  echo "::warning::Upload of ${aname} failed on attempt ${attempt}; retrying"
+                  stale=$(gh api "repos/${GH_REPO}/releases/${OTHER_PUBLISHED}/assets" \
+                    --jq ".[] | select(.name==\"$aname\") | .id" | head -n 1)
+                  [ -z "$stale" ] || gh api -X DELETE "repos/${GH_REPO}/releases/assets/${stale}" || true
+                  sleep $(( attempt * attempt * 5 ))
+                done
                 rm -f "/tmp/${aname}"
+                if [ "$uploaded" -ne 1 ]; then
+                  echo "::error::Could not migrate ${aname} onto the published release"
+                  exit 1
+                fi
               done <<< "$draft_assets"
             fi
             gh api -X DELETE "repos/${GH_REPO}/releases/${RELEASE_ID}"

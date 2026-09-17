@@ -94,3 +94,51 @@ describe('release gating contracts', () => {
     }
   });
 });
+
+describe('release asset upload resilience', () => {
+  const uploadAction = readFileSync(
+    path.join(root, '.github', 'actions', 'upload-release-asset', 'action.yml'),
+    'utf8',
+  );
+  const buildDesktopWorkflow = readWorkflow('build-desktop.yml');
+
+  it('lets tauri-action retry builds and uploads inside the job', () => {
+    // v0.6.2 is the first pinned release with `retryAttempts`. GitHub's upload
+    // endpoint failed three rows of v0.13.9 with transient 5xx responses.
+    expect(desktopWorkflow).toMatch(
+      /tauri-apps\/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0\.6\.2/,
+    );
+    expect(buildDesktopWorkflow).toMatch(
+      /tauri-apps\/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0\.6\.2/,
+    );
+    expect(jobBlock(desktopWorkflow, 'build-and-release')).toContain('retryAttempts: 3');
+  });
+
+  it('routes every first-party asset upload through the retrying action', () => {
+    for (const [name, workflow] of [
+      ['release-desktop.yml', desktopWorkflow],
+      ['release-mobile.yml', mobileWorkflow],
+    ]) {
+      expect(workflow, `${name} still uploads directly`).not.toContain('uploads.github.com');
+      expect(workflow).toContain('uses: ./.github/actions/upload-release-asset');
+    }
+    // Snap, APK, AAB, Google-free APK, IPA, checksums.
+    const uses = [desktopWorkflow, mobileWorkflow, releaseWorkflow]
+      .join('\n')
+      .match(/uses: \.\/\.github\/actions\/upload-release-asset/g);
+    expect(uses).toHaveLength(6);
+    // The only remaining direct upload is the draft-to-published migration
+    // loop, which carries its own retry.
+    const migration = jobBlock(releaseWorkflow, 'publish');
+    expect(migration).toContain('uploads.github.com');
+    expect(migration).toContain('for attempt in 1 2 3 4 5');
+  });
+
+  it('retries with backoff, clobbers partial assets, and verifies the size', () => {
+    expect(uploadAction).toContain("default: '5'");
+    expect(uploadAction).toContain('delete_existing');
+    expect(uploadAction).toContain('sleep $(( attempt * attempt * 5 ))');
+    expect(uploadAction).toContain('[ "$remote" = "$size" ]');
+    expect(uploadAction).toContain('&& verify; then');
+  });
+});

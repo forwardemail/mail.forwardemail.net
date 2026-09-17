@@ -522,6 +522,14 @@
     left: 0;
     bottom: 0;
     z-index: 1000;
+    /* The sidebar it overlaps (aside.fe-folders) is a composited layer: it
+       carries a transform with a transition. In Chromium the z-index alone
+       keeps the bar on top; WebKit on macOS was seen painting the bar under
+       that layer now and then. Promote the bar to its own layer so the
+       compositor orders it by z-index rather than by layer creation order. */
+    transform: translateZ(0);
+    will-change: transform;
+    isolation: isolate;
     max-width: min(72vw, 900px);
     padding: 3px 10px;
     border: 1px solid var(--border-default);

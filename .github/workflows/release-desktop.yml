@@ -290,7 +290,13 @@ jobs:
           Write-Host "Imported Windows code-signing certificate ($($cert.Subject)); thumbprint written to tauri.conf.json."
 
       - name: Build and release Tauri app
-        uses: tauri-apps/tauri-action@fce9c6108b31ea247710505d3aaaa893ee6768d4 # v0
+        # v0.6.2: adds `retryAttempts`, which re-tries a failed build and each
+        # failed asset upload inside the same job. GitHub's upload endpoint
+        # returns transient 5xx responses ("Unicorn!", "Error saving asset")
+        # a few times a month; without retries one of those failed the whole
+        # 25-minute row (v0.13.9, run 35251791779). v1 renames the updater
+        # .app.tar.gz assets and is a separate, deliberate upgrade.
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Tauri updater signing key (generates .sig files for auto-update)
@@ -317,6 +323,7 @@ jobs:
           # all rows had verified the bundles open.
           releaseDraft: true
           prerelease: false
+          retryAttempts: 3
           args: ${{ matrix.args }}
 
       # Build strict-confinement Snaps from the same tagged source on both
@@ -340,18 +347,11 @@ jobs:
 
       - name: Upload Snap package to release
         if: matrix.target == 'x86_64-unknown-linux-gnu' || matrix.target == 'aarch64-unknown-linux-gnu'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_ID: ${{ steps.resolve_release.outputs.release_id }}
-          SNAP: ${{ steps.snapcraft.outputs.snap }}
-        run: |
-          set -euo pipefail
-          test -f "$SNAP"
-          name=$(basename "$SNAP")
-          existing_id=$(gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}/assets" --jq ".[] | select(.name==\"$name\") | .id" | head -n 1)
-          [ -z "$existing_id" ] || gh api -X DELETE "repos/${GITHUB_REPOSITORY}/releases/assets/${existing_id}"
-          gh api --method POST -H "Content-Type: application/octet-stream" \
-            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}/assets?name=${name}" --input "$SNAP"
+        uses: ./.github/actions/upload-release-asset
+        with:
+          release-id: ${{ steps.resolve_release.outputs.release_id }}
+          path: ${{ steps.snapcraft.outputs.snap }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       # Publishing to the Snap Store is intentionally opt-in so existing
       # releases are not blocked before the store name and scoped credentials

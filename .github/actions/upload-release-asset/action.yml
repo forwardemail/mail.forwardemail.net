@@ -1,0 +1,93 @@
+name: 'Upload release asset with retries'
+description: >-
+  Uploads one file to a GitHub Release, replacing any asset with the same
+  name, and retries the upload when GitHub's upload endpoint fails. The
+  endpoint returns transient 5xx responses ("Unicorn!", "Error saving
+  asset", "Error creating asset temp dir") often enough that a single
+  attempt fails a 25-minute build a few times a month. A failed attempt can
+  leave a partial asset behind under the same name, so every retry deletes
+  it first. The upload is verified by reading the asset back and comparing
+  its size to the local file.
+
+inputs:
+  release-id:
+    description: 'Numeric release ID to upload to'
+    required: true
+  path:
+    description: 'Local file to upload'
+    required: true
+  name:
+    description: 'Asset name; defaults to the file basename'
+    required: false
+    default: ''
+  content-type:
+    description: 'Content-Type header for the upload'
+    required: false
+    default: 'application/octet-stream'
+  attempts:
+    description: 'Maximum upload attempts'
+    required: false
+    default: '5'
+  github-token:
+    description: 'Token with contents: write'
+    required: true
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Upload
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        GH_REPO: ${{ github.repository }}
+        RELEASE_ID: ${{ inputs.release-id }}
+        FILE: ${{ inputs.path }}
+        NAME_IN: ${{ inputs.name }}
+        CONTENT_TYPE: ${{ inputs.content-type }}
+        ATTEMPTS: ${{ inputs.attempts }}
+      run: |
+        set -euo pipefail
+        if [ ! -f "$FILE" ]; then
+          echo "::error::Asset file not found: $FILE"
+          exit 1
+        fi
+        name="${NAME_IN:-$(basename "$FILE")}"
+        size=$(wc -c < "$FILE" | tr -d ' ')
+        encoded=$(jq -rn --arg n "$name" '$n | @uri')
+
+        delete_existing() {
+          local ids
+          ids=$(gh api "repos/${GH_REPO}/releases/${RELEASE_ID}/assets?per_page=100" \
+            --jq ".[] | select(.name==\"$name\") | .id" || true)
+          for id in $ids; do
+            echo "Removing existing asset $name (id $id)"
+            gh api -X DELETE "repos/${GH_REPO}/releases/assets/${id}" || true
+          done
+        }
+
+        verify() {
+          local remote
+          remote=$(gh api "repos/${GH_REPO}/releases/${RELEASE_ID}/assets?per_page=100" \
+            --jq ".[] | select(.name==\"$name\") | .size" | head -n 1 || true)
+          [ "$remote" = "$size" ]
+        }
+
+        for attempt in $(seq 1 "$ATTEMPTS"); do
+          delete_existing
+          echo "Uploading $name ($size bytes), attempt $attempt of $ATTEMPTS"
+          if gh api --method POST -H "Content-Type: ${CONTENT_TYPE}" \
+               "https://uploads.github.com/repos/${GH_REPO}/releases/${RELEASE_ID}/assets?name=${encoded}" \
+               --input "$FILE" > /tmp/upload-response.json 2> /tmp/upload-error.txt \
+             && verify; then
+            echo "Uploaded $name"
+            exit 0
+          fi
+          echo "::warning::Upload of $name failed on attempt $attempt"
+          head -c 400 /tmp/upload-error.txt || true
+          echo
+          if [ "$attempt" -lt "$ATTEMPTS" ]; then
+            sleep $(( attempt * attempt * 5 ))
+          fi
+        done
+        echo "::error::Upload of $name failed after $ATTEMPTS attempts"
+        exit 1

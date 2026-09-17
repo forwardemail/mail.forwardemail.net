@@ -248,6 +248,26 @@ drop back to `4.0` — it's no longer in Ubuntu 24 / Debian 13 repos
   `11.0` would drop Catalina users in exchange for fewer JS-feature edge
   cases — defer until telemetry shows Catalina usage is negligible.
 
+### GitHub asset upload failures
+
+GitHub's release upload endpoint returns transient 5xx responses a few times a
+month ("Unicorn!", "Error saving asset", "Error creating asset temp dir"). In
+v0.13.9 (run 35251791779) three rows failed this way after their builds had
+already succeeded. Two defenses are in place:
+
+- `tauri-action` runs with `retryAttempts: 3`, so a failed upload (or build) is
+  retried inside the same job without losing the warm Rust target directory.
+- Every first-party upload (Snap, APK, AAB, Google-free APK, IPA, checksums)
+  goes through `.github/actions/upload-release-asset`, which deletes any
+  partial asset of the same name, retries with backoff, and verifies the
+  uploaded size.
+
+If a row still fails, use **Re-run failed jobs** on the run. GitHub re-runs the
+failed rows and every job that was skipped downstream (checksums, publish,
+deploy), and a re-uploaded asset replaces the earlier one by name. Note that a
+re-run executes the workflow files from the tagged commit, so it will not pick
+up workflow fixes merged since the tag.
+
 ## Related Documentation
 
 - [SECRETS.md](./SECRETS.md) — Required secrets for CI/CD and release signing
