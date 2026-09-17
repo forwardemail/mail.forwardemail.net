@@ -4,6 +4,7 @@
   import { htmlToPlainText } from '../../utils/sanitize.js';
   import { isTauri, isTauriDesktop } from '../../utils/platform.js';
   import { describeLinkTarget, type LinkPreview } from '../../utils/link-preview';
+  import { portal } from '../../utils/portal';
 
   interface Props {
     html: string;
@@ -449,7 +450,10 @@
 {/key}
 
 {#if linkPreview}
+  <!-- Hoisted to body: inside the reader column a fixed element paints
+       underneath the sidebar, which owns the bottom-left of the window. -->
   <div
+    use:portal
     class="fe-link-preview"
     class:fe-link-preview-warn={linkPreview.mismatch || linkPreview.isIdn}
     role="status"
@@ -510,12 +514,14 @@
   }
 
   /* Status bar for the hovered link. Bottom-left of the window like a
-     browser's, above the reader but below dialogs and toasts. */
+     browser's. Lives on body (see use:portal), so the z-index is against
+     the app's own scale: above the shell's z-50 and z-[100] chrome, below
+     dialog overlays at 9998 and tooltips at 9999. */
   .fe-link-preview {
     position: fixed;
     left: 0;
     bottom: 0;
-    z-index: 40;
+    z-index: 1000;
     max-width: min(72vw, 900px);
     padding: 3px 10px;
     border: 1px solid var(--border-default);
