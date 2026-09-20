@@ -4,6 +4,7 @@
   import Pencil from '@lucide/svelte/icons/pencil';
   import CheckCheck from '@lucide/svelte/icons/check-check';
   import Trash2 from '@lucide/svelte/icons/trash-2';
+  import Eraser from '@lucide/svelte/icons/eraser';
   import type { Folder } from '$types';
 
   interface MenuState {
@@ -18,8 +19,11 @@
     onRename?: (folder: Folder) => void;
     onDelete?: (folder: Folder) => void;
     onMarkAsRead?: (folder: Folder) => void;
+    onEmpty?: (folder: Folder) => void;
     onClose?: () => void;
     isSystemFolder?: (path: string) => boolean;
+    /** True for Trash and Junk, the only folders that offer Empty. */
+    isPurgeableFolder?: (folder: Folder) => boolean;
   }
 
   let {
@@ -28,8 +32,10 @@
     onRename = () => {},
     onDelete = () => {},
     onMarkAsRead = () => {},
+    onEmpty = () => {},
     onClose = () => {},
     isSystemFolder = () => false,
+    isPurgeableFolder = () => false,
   }: Props = $props();
 
   let menuEl: HTMLDivElement | null = $state(null);
@@ -116,6 +122,7 @@
   });
 
   const systemFolder = $derived(menu?.folder ? isSystemFolder(menu.folder.path) : false);
+  const purgeable = $derived(menu?.folder ? isPurgeableFolder(menu.folder) : false);
 </script>
 
 {#if menu}
@@ -160,6 +167,19 @@
     </button>
 
     <Separator class="my-1.5" />
+
+    {#if purgeable}
+      <button
+        type="button"
+        class="flex w-full items-center gap-2.5 px-3 py-2 text-sm text-destructive outline-none transition-colors hover:bg-destructive/10 focus:bg-destructive/10"
+        onclick={() => handleAction(onEmpty)}
+        role="menuitem"
+        data-testid="folder-empty"
+      >
+        <Eraser class="h-4 w-4" />
+        <span>Empty folder</span>
+      </button>
+    {/if}
 
     <button
       type="button"

@@ -42,6 +42,7 @@ const DEDICATED_BUCKET_IDS = new Set(['pgp_keys', 'pgp_passphrases', 'saved_sear
  */
 const EXTRA_KEYS: { id: string; localKey: (account: string) => string }[] = [
   { id: 'signature', localKey: (account) => `signature_${account}` },
+  { id: 'signature_html', localKey: (account) => `signature_html_${account}` },
   { id: 'signature_enabled', localKey: (account) => `signature_enabled_${account}` },
   // settingsStore lowercases the account for profile keys; match it exactly or
   // the value lands under a key nothing reads.

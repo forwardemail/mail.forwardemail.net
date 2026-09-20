@@ -131,3 +131,51 @@ describe('buildOptimisticSentSource reply headers', () => {
     expect(src.references).toBe('');
   });
 });
+
+/**
+ * An encrypted send must not leave the plaintext behind in Sent. The composer
+ * hands the finished ciphertext over as `raw`; the Sent copy has to use it
+ * instead of re-serializing the structured body it was built from.
+ */
+describe('buildSentCopyPayload with an encrypted message', () => {
+  const RAW =
+    'MIME-Version: 1.0\r\nContent-Type: multipart/encrypted\r\n\r\n-----BEGIN PGP MESSAGE-----\r\nx\r\n-----END PGP MESSAGE-----';
+
+  it('files the ciphertext rather than the plaintext body', () => {
+    const out = buildSentCopyPayload(
+      {
+        raw: RAW,
+        from: 'me@example.com',
+        to: ['a@x.com'],
+        subject: 'Hi',
+        text: 'the secret',
+        html: '<p>the secret</p>',
+      },
+      'me@example.com',
+      [],
+      'Sent',
+    );
+
+    expect(out.raw).toBe(RAW);
+    expect(out.text).toBeUndefined();
+    expect(out.html).toBeUndefined();
+    expect(JSON.stringify(out)).not.toContain('the secret');
+  });
+
+  it('still resolves the Sent folder and marks the copy read', () => {
+    const out = buildSentCopyPayload({ raw: RAW }, 'me@example.com', [], 'Sent');
+    expect(out.folder).toBe('Sent');
+    expect(out.flags).toEqual(['\\Seen']);
+  });
+
+  it('uses the structured fields when there is no ciphertext', () => {
+    const out = buildSentCopyPayload(
+      { from: 'me@example.com', to: ['a@x.com'], subject: 'Hi', text: 'plain' },
+      'me@example.com',
+      [],
+      'Sent',
+    );
+    expect(out.raw).toBeUndefined();
+    expect(out.text).toBe('plain');
+  });
+});

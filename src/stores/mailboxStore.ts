@@ -78,6 +78,7 @@ import {
   resolveHasMoreAfterFetch,
   isNoContentResponse,
   extractMessageList,
+  collectFolderMessages,
   mapServerMessage,
   sortParamForOrder,
   buildMessageListRequestKey,
@@ -651,6 +652,9 @@ const createMailboxStore = () => {
         countSource: unreadCount !== null ? 'server' : 'local',
         flags: f.flags || f.Flags || [],
         specialUse: f.specialUse || f.special_use || undefined,
+        // Milliseconds the server keeps a message in this folder before
+        // purging it. Only Trash and Junk carry a non-zero value.
+        retention: readNumber(f.retention),
       };
     });
     const SYSTEM_FOLDER_ORDER: Record<string, number> = {
@@ -2707,20 +2711,52 @@ const createMailboxStore = () => {
    * Empty a folder by permanently deleting all messages
    * Used for Trash and Spam folders
    */
+  /**
+   * Enumerate every message in a folder from the server, page by page.
+   *
+   * Emptying a folder cannot work off the local cache: the cache only holds the
+   * pages that have been opened, so a Trash with thousands of messages would
+   * lose a couple of hundred and report success. Returns the union of what the
+   * server lists and what the cache holds, so a message that is cached but
+   * missing from a failed page still gets deleted.
+   */
+  const enumerateFolderMessages = async (folderPath: string, account: string) => {
+    const PAGE_SIZE = 250;
+    const cached = await db.messages
+      .where('[account+folder]')
+      .equals([account, folderPath])
+      .toArray()
+      .catch(() => []);
+
+    return collectFolderMessages({
+      cached: cached || [],
+      pageSize: PAGE_SIZE,
+      fetchPage: async (page) => {
+        const res = await Remote.request(
+          'MessageList',
+          { folder: folderPath, page, limit: PAGE_SIZE, raw: false, attachments: false },
+          { method: 'GET', pathOverride: '/v1/messages', timeout: 60_000 },
+        );
+        return extractMessageList('main', res);
+      },
+    });
+  };
+
   const emptyFolder = async (folderPath: string) => {
     if (!folderPath) return { success: false, count: 0, error: 'No folder specified' };
 
     const account = Local.get('email') || 'default';
 
     try {
-      // Get all messages in the folder from cache
-      const folderMessages = await db.messages
-        .where('[account+folder]')
-        .equals([account, folderPath])
-        .toArray();
+      const { messages: folderMessages, complete } = await enumerateFolderMessages(
+        folderPath,
+        account,
+      );
 
       if (!folderMessages.length) {
-        return { success: true, count: 0 };
+        return complete
+          ? { success: true, count: 0 }
+          : { success: false, count: 0, error: 'Could not list the folder contents' };
       }
 
       // Optimistic UI update - clear all messages if viewing this folder
@@ -2789,7 +2825,15 @@ const createMailboxStore = () => {
         await loadMessages();
       }
 
-      return { success: true, count: successCount, failed: failCount };
+      // `complete` false means the listing was cut short, so messages the
+      // server holds were never enumerated. Say so rather than reporting a
+      // clean empty and leaving the user to discover the leftovers.
+      return {
+        success: true,
+        count: successCount,
+        failed: failCount,
+        partial: !complete,
+      };
     } catch (err) {
       console.error('emptyFolder failed', err);
       return { success: false, count: 0, error: err?.message || 'Failed to empty folder' };
@@ -2895,6 +2939,7 @@ const createMailboxStore = () => {
       buildFolderList,
       // Bulk folder actions
       getSpamFolderPath,
+      emptyFolder,
       emptyTrash,
       emptySpam,
       clearFolderMessageCache: () => folderMessageCache.clear(),

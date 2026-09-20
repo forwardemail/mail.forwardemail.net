@@ -397,20 +397,26 @@ export const LocalSettings = {
     writePgpPassphrases(passphrases);
   },
 
-  // Email signature (device-local, account-scoped). Stored as plain text;
-  // Compose renders it into HTML for rich mode and appends it verbatim in
-  // plain-text mode.
-  getSignature(): { enabled: boolean; text: string } {
-    const currentAcct = Local.get('email') || 'default';
+  // Email signature (device-local, account-scoped). Stored as an HTML/plain
+  // pair: `html` drives the rich-text editor, `text` is used in plain-text
+  // mode and as the fallback for installs that predate HTML signatures.
+  getSignature(account?: string): { enabled: boolean; text: string; html: string } {
+    const currentAcct = account || Local.get('email') || 'default';
     const text = Local.get(`signature_${currentAcct}`) || '';
+    const html = Local.get(`signature_html_${currentAcct}`) || '';
     const enabled = Local.get(`signature_enabled_${currentAcct}`) === 'true';
-    return { enabled, text };
+    return { enabled, text, html };
   },
 
-  setSignature(next: { enabled?: boolean; text?: string }): void {
-    const currentAcct = Local.get('email') || 'default';
+  // `account` lets a deferred write land on the account the edit was made
+  // under, even if the user switched accounts before it fired.
+  setSignature(next: { enabled?: boolean; text?: string; html?: string }, account?: string): void {
+    const currentAcct = account || Local.get('email') || 'default';
     if (next.text !== undefined) {
       Local.set(`signature_${currentAcct}`, next.text);
+    }
+    if (next.html !== undefined) {
+      Local.set(`signature_html_${currentAcct}`, next.html);
     }
     if (next.enabled !== undefined) {
       Local.set(`signature_enabled_${currentAcct}`, next.enabled ? 'true' : 'false');
@@ -761,6 +767,23 @@ export const settingsActions = {
  * Fetch labels from /v1/account (labels are part of settings)
  */
 export async function fetchLabels(includeHidden = false, { force = false } = {}): Promise<Label[]> {
+  const { labels } = await fetchLabelsWithSource(includeHidden, { force });
+  return labels;
+}
+
+/**
+ * Same fetch as fetchLabels, but also reports whether the list came from the
+ * server or from cache.
+ *
+ * Callers that reconcile against the registry need that distinction: a cached
+ * list says nothing about labels the server no longer has, so treating it as
+ * authoritative would delete labels during an outage or on an api_key session
+ * (whose account response carries no `settings` at all).
+ */
+export async function fetchLabelsWithSource(
+  includeHidden = false,
+  { force = false } = {},
+): Promise<{ labels: Label[]; authoritative: boolean }> {
   const account = Local.get('email') || 'default';
 
   try {
@@ -787,7 +810,7 @@ export async function fetchLabels(includeHidden = false, { force = false } = {})
       warn(
         '[settingsStore] Account response missing `settings` (likely api_key auth) — keeping cached labels intact.',
       );
-      return get(settingsLabels);
+      return { labels: get(settingsLabels), authoritative: false };
     }
 
     const settingsData = extractSettingsFromAccount(responseObj);
@@ -800,7 +823,7 @@ export async function fetchLabels(includeHidden = false, { force = false } = {})
     settingsLabels.set(labels);
     await cacheLabels(account, labelArray); // Cache all labels
 
-    return get(settingsLabels);
+    return { labels: get(settingsLabels), authoritative: true };
   } catch (err) {
     // Suppress warning for expected no-credentials case (login page)
     const errMsg = err instanceof Error ? err.message : '';
@@ -808,7 +831,7 @@ export async function fetchLabels(includeHidden = false, { force = false } = {})
       warn('[settingsStore] Failed to fetch labels:', err);
     }
     // Keep using cached labels
-    return get(settingsLabels);
+    return { labels: get(settingsLabels), authoritative: false };
   }
 }
 

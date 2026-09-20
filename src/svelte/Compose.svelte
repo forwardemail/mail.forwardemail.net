@@ -69,6 +69,10 @@
   import TableCell from '@tiptap/extension-table-cell';
   import TableHeader from '@tiptap/extension-table-header';
   import { bufferToDataUrl, extractTextContent } from '../utils/mime-utils.js';
+  import { htmlToPlainText } from '../utils/sanitize.js';
+  import { hasRichFormatting } from '../utils/compose-format';
+  import { buildEncryptedPayload } from '../utils/pgp-send';
+  import { recipientKeyCoverage } from '../utils/pgp-recipients';
   import { pickFiles } from '../utils/file-picker';
   import { isTauriDesktop } from '../utils/platform';
   import { i18n } from '../utils/i18n';
@@ -98,7 +102,7 @@
     profileName,
     LocalSettings,
   } from '../stores/settingsStore';
-  import { applySignatureHtml, applySignaturePlain } from '../utils/signature';
+  import { applySignatureHtml, applySignaturePlain, isSignatureEmpty } from '../utils/signature';
   import { markMessageAnsweredInStore } from '../stores/messageStore';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
@@ -140,6 +144,9 @@
   import ChevronDown from '@lucide/svelte/icons/chevron-down';
   import Archive from '@lucide/svelte/icons/archive';
   import RemoveFormatting from '@lucide/svelte/icons/remove-formatting';
+  import FileText from '@lucide/svelte/icons/file-text';
+  import Lock from '@lucide/svelte/icons/lock';
+  import LockOpen from '@lucide/svelte/icons/lock-open';
 
   interface ToastApi {
     show?: (message: string, type?: string) => void;
@@ -216,6 +223,33 @@
   let showAttachmentReminderModal = $state(false);
   let attachmentReminderKeyword = $state('');
   let showDiscardModal = $state(false);
+  let showPlainTextConfirm = $state(false);
+
+  // Manual outbound encryption. The server already encrypts opportunistically
+  // when it can find a key over WKD, but that is invisible and cannot be
+  // forced; this is the override, and it uses only keys the user pinned.
+  let encryptEnabled = $state(false);
+  // Bcc is left out on purpose: an encrypted send refuses it (see pgp-send),
+  // so counting it here would show a green banner for a send that will fail.
+  const encryptRecipients = $derived([
+    ...(toList.length ? toList : parseRecipients(toInput)),
+    ...(ccList.length ? ccList : parseRecipients(ccInput)),
+  ]);
+  const encryptHasBcc = $derived(
+    (bccList.length ? bccList : parseRecipients(bccInput)).some((a) => String(a).trim()),
+  );
+  const encryptCoverage = $derived(recipientKeyCoverage(encryptRecipients));
+  const encryptReady = $derived(encryptCoverage.allCovered && !encryptHasBcc);
+
+  const toggleEncrypt = () => {
+    encryptEnabled = !encryptEnabled;
+    if (encryptEnabled && encryptCoverage.missing.length) {
+      toasts?.show?.(
+        `No public key for ${encryptCoverage.missing.join(', ')}. Add one in Settings to send encrypted.`,
+        'warning',
+      );
+    }
+  };
   let showCc = $state(false);
   let showBcc = $state(false);
   let showReplyTo = $state(false);
@@ -1344,6 +1378,7 @@
     subject = '';
     body = '';
     isPlainText = getPlainTextDefault();
+    encryptEnabled = false;
     attachments = [];
     attachmentError = '';
     attachmentLoading = 0;
@@ -1865,11 +1900,17 @@
     });
   };
 
-  const togglePlainText = () => {
-    if (!isPlainText && editorView) {
-      body = editorView.getText();
-      editorView.destroy();
+  const applyPlainTextToggle = () => {
+    if (!isPlainText) {
+      // getHTML, not the editor's getText: getText drops every link target.
+      const html = editorView ? editorView.getHTML() : body || '';
+      body = htmlToPlainText(html);
+      editorView?.destroy();
       editorView = null;
+    } else {
+      // Without this the HTML parser collapses the blank lines and list
+      // markers the user typed into one run-on paragraph.
+      body = plainTextToHtml(body || '');
     }
     isPlainText = !isPlainText;
     editorReady = false;
@@ -1877,6 +1918,29 @@
       initEditor(false);
     });
     markDraftDirty();
+  };
+
+  /**
+   * Switch the body between the rich-text editor and the plain-text textarea.
+   *
+   * Settings has only ever had "use plain text by default", so a message
+   * already open could not be switched at all. Rich to plain is lossy, so it
+   * confirms first when there is real formatting to lose.
+   */
+  const togglePlainText = () => {
+    if (!isPlainText) {
+      const html = editorView ? editorView.getHTML() : body || '';
+      if (hasRichFormatting(html)) {
+        showPlainTextConfirm = true;
+        return;
+      }
+    }
+    applyPlainTextToggle();
+  };
+
+  const confirmPlainText = () => {
+    showPlainTextConfirm = false;
+    applyPlainTextToggle();
   };
 
   const isFormatActive = (format: string) => {
@@ -2374,6 +2438,14 @@
       error = 'Invalid schedule time.';
       return;
     }
+    if (encryptEnabled) {
+      // A raw message carries its own Date header and the API ignores the
+      // separate `date` field for it, so a scheduled encrypted send would go
+      // out immediately. Refuse rather than silently send now.
+      error = 'Scheduled send is not available for encrypted messages yet.';
+      toasts?.show?.(error, 'error');
+      return;
+    }
     const payload = buildPayload();
     if (!payload) return;
     sending = true;
@@ -2469,6 +2541,36 @@
     success = '';
     const isOnline = checkIsOnline();
 
+    // Encrypt before any branch. Every path below (undo-send queue, offline
+    // queue, direct POST) has to carry the ciphertext, or the lock toggle only
+    // protects whichever path happened to check it and the rest go out in the
+    // clear under a banner that says otherwise.
+    if (encryptEnabled) {
+      const encrypted = await buildEncryptedPayload({
+        from: payload.from as string,
+        to: payload.to as string[],
+        cc: payload.cc as string[],
+        bcc: payload.bcc as string[],
+        subject: payload.subject as string,
+        text: payload.text as string,
+        html: payload.html as string,
+        attachments: payload.attachments as { filename?: string }[],
+        replyTo: payload.reply_to as string,
+        inReplyTo: payload.inReplyTo as string,
+        references: payload.references as string,
+      });
+      if (!encrypted.ok) {
+        error = encrypted.message || 'Could not encrypt this message.';
+        toasts?.show?.(error, 'error');
+        sending = false;
+        return;
+      }
+      // The raw message replaces the structured body everywhere it would be
+      // read: the /v1/emails POST, the outbox, and the Sent copy.
+      for (const key of ['html', 'text', 'attachments', 'has_attachment']) delete payload[key];
+      payload.raw = encrypted.payload?.raw;
+    }
+
     // Undo-send: when enabled and online, hold the message in the outbox for
     // the configured window instead of sending immediately. The main window
     // shows the Undo toast and, when the window passes, triggers the actual
@@ -2561,6 +2663,7 @@
       const apiPayload = { ...payload };
       delete apiPayload._replyToMessageId;
       delete apiPayload._replyToMessageFolder;
+
       await Remote.request('Emails', apiPayload, { method: 'POST' });
       // Captured from whichever Sent-copy save runs below, then handed to the
       // main window so it can show the message in Sent instantly (optimistic
@@ -2903,13 +3006,13 @@
     // quote arrives later via updateReplyBody, which inserts the signature
     // itself, so inserting here too would just be overwritten).
     const skipSig = resolvedPrefill.draftId || resolvedPrefill.bodyLoading;
-    const sig = skipSig ? { enabled: false, text: '' } : LocalSettings.getSignature();
-    if (sig.enabled && sig.text) {
+    const sig = skipSig ? { enabled: false, text: '', html: '' } : LocalSettings.getSignature();
+    if (sig.enabled && !isSignatureEmpty(sig)) {
       if (isPlainText) {
-        body = applySignaturePlain(sig.text, body);
+        body = applySignaturePlain(sig, body);
       } else {
         const baseHtml = (resolvedPrefill.html as string) || body || '';
-        const withSig = applySignatureHtml(sig.text, baseHtml);
+        const withSig = applySignatureHtml(sig, baseHtml);
         if (editorView) {
           editorView.commands.setContent(withSig);
           editorView.commands.focus('start');
@@ -2969,7 +3072,8 @@
     // reply counterpart to the open() insertion (which handles new/forward);
     // the reply quote only arrives here, after the body loads.
     const sig = LocalSettings.getSignature();
-    const content = sig.enabled && sig.text ? applySignatureHtml(sig.text, newBody) : newBody;
+    const content =
+      sig.enabled && !isSignatureEmpty(sig) ? applySignatureHtml(sig, newBody) : newBody;
     // Set the HTML content in the editor. emitUpdate=false so tiptap doesn't
     // fire onUpdate → markDraftDirty for programmatic prefill — otherwise an
     // untouched reply would autosave a draft 3s after opening.
@@ -3263,6 +3367,23 @@
                 {/if}
                 <button
                   type="button"
+                  class="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground"
+                  onclick={() => {
+                    showMobileMenu = false;
+                    togglePlainText();
+                  }}
+                >
+                  {#if isPlainText}
+                    <Type class="h-4 w-4" />
+                    Switch to rich text
+                  {:else}
+                    <FileText class="h-4 w-4" />
+                    Switch to plain text
+                  {/if}
+                </button>
+                <div class="h-px bg-border my-1"></div>
+                <button
+                  type="button"
                   class="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground disabled:opacity-50 disabled:pointer-events-none"
                   disabled={sending}
                   onclick={() => {
@@ -3525,6 +3646,31 @@
             bind:ref={subjectInputEl}
           />
         </div>
+
+        {#if encryptEnabled}
+          <div
+            class="mx-4 mb-2 flex items-start gap-2 border px-3 py-2 text-xs {encryptReady
+              ? 'border-border bg-muted/40 text-muted-foreground'
+              : 'border-destructive/40 bg-destructive/10 text-destructive'}"
+            data-testid="compose-encrypt-banner"
+          >
+            <Lock class="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <span>
+              {#if encryptHasBcc}
+                Bcc is not available for encrypted messages. Move those recipients to To or Cc, or
+                turn encryption off to send.
+              {:else if encryptCoverage.allCovered}
+                Encrypted to {encryptCoverage.statuses.map((r) => r.email).join(', ')}. The subject
+                line is not encrypted.
+              {:else if encryptCoverage.statuses.length}
+                No public key for {encryptCoverage.missing.join(', ')}. Add one in Settings, or turn
+                encryption off to send.
+              {:else}
+                Add a recipient to check for a public key.
+              {/if}
+            </span>
+          </div>
+        {/if}
 
         <div class="flex-1 min-h-[200px] flex flex-col" onclick={focusEditor}>
           {#if !isPlainText}
@@ -3948,6 +4094,65 @@
             </Tooltip.Root>
             <Tooltip.Root>
               <Tooltip.Trigger>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  class={encryptEnabled
+                    ? encryptReady
+                      ? 'bg-accent text-fg-link'
+                      : 'bg-accent text-destructive'
+                    : ''}
+                  aria-pressed={encryptEnabled}
+                  onclick={toggleEncrypt}
+                  data-testid="compose-toggle-encrypt"
+                >
+                  {#if encryptEnabled}
+                    <Lock class="h-4 w-4" />
+                  {:else}
+                    <LockOpen class="h-4 w-4" />
+                  {/if}
+                </Button>
+              </Tooltip.Trigger>
+              <Tooltip.Content>
+                <p>
+                  {#if !encryptEnabled}
+                    Encrypt with a recipient's PGP key
+                  {:else if encryptHasBcc}
+                    Bcc is not available for encrypted messages
+                  {:else if encryptCoverage.allCovered}
+                    Encrypted to {encryptCoverage.statuses.length} recipient{encryptCoverage
+                      .statuses.length === 1
+                      ? ''
+                      : 's'}
+                  {:else}
+                    Missing a key for {encryptCoverage.missing.join(', ')}
+                  {/if}
+                </p>
+              </Tooltip.Content>
+            </Tooltip.Root>
+            <Tooltip.Root>
+              <Tooltip.Trigger>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  class={isPlainText ? 'bg-accent' : ''}
+                  aria-pressed={isPlainText}
+                  onclick={togglePlainText}
+                  data-testid="compose-toggle-plain-text"
+                >
+                  {#if isPlainText}
+                    <Type class="h-4 w-4" />
+                  {:else}
+                    <FileText class="h-4 w-4" />
+                  {/if}
+                </Button>
+              </Tooltip.Trigger>
+              <Tooltip.Content>
+                <p>{isPlainText ? 'Switch to rich text' : 'Switch to plain text'}</p>
+              </Tooltip.Content>
+            </Tooltip.Root>
+            <Tooltip.Root>
+              <Tooltip.Trigger>
                 <Button variant="ghost" size="icon" onclick={saveCurrentDraft}>
                   <Save class="h-4 w-4" />
                 </Button>
@@ -4019,6 +4224,24 @@
             >Send anyway</Button
           >
           <Button onclick={() => dismissAttachmentReminder(false)}>Add attachment</Button>
+        </Dialog.Footer>
+      </Dialog.Content>
+    </Dialog.Root>
+
+    <Dialog.Root bind:open={showPlainTextConfirm}>
+      <Dialog.Content class="sm:max-w-[400px]">
+        <Dialog.Header>
+          <Dialog.Title>Switch to plain text?</Dialog.Title>
+        </Dialog.Header>
+        <div class="py-4">
+          <p class="text-muted-foreground">
+            Bold, colors, links and lists will be removed from this message. Link addresses are kept
+            as text.
+          </p>
+        </div>
+        <Dialog.Footer>
+          <Button variant="ghost" onclick={() => (showPlainTextConfirm = false)}>Cancel</Button>
+          <Button onclick={confirmPlainText}>Switch to plain text</Button>
         </Dialog.Footer>
       </Dialog.Content>
     </Dialog.Root>

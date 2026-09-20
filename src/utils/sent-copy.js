@@ -13,6 +13,16 @@ export const buildSentCopyPayload = (
   sentFolderOverride = null,
 ) => {
   const sentFolder = sentFolderOverride || resolveSentFolder(account, folderList);
+  // An encrypted send hands us the finished RFC 5322 message. Storing the
+  // structured fields instead would put the plaintext body in Sent, which
+  // would undo the encryption the user just asked for.
+  if (emailPayload.raw) {
+    return {
+      raw: emailPayload.raw,
+      folder: sentFolder,
+      flags: ['\\Seen'],
+    };
+  }
   return {
     from: emailPayload.from,
     to: emailPayload.to || [],

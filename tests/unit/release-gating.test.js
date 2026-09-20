@@ -142,3 +142,19 @@ describe('release asset upload resilience', () => {
     expect(uploadAction).toContain('&& verify; then');
   });
 });
+
+describe('latest release promotion', () => {
+  it('marks the release Latest explicitly when publishing and when consolidating', () => {
+    const publish = jobBlock(releaseWorkflow, 'publish');
+    expect(publish).toContain('-f draft=false -f make_latest=true');
+    expect(publish).toContain('releases/${OTHER_PUBLISHED}" -f make_latest=true');
+  });
+
+  it('fails a green run whose tag is not published and Latest', () => {
+    const summary = jobBlock(releaseWorkflow, 'release-summary');
+    expect(summary).toContain('- name: Verify the release is published and Latest');
+    expect(summary).toContain("releases/tags/${TAG}\" --jq '.draft'");
+    expect(summary).toContain("releases/latest\" --jq '.tag_name'");
+    expect(summary).toContain('if [ "$latest" != "$TAG" ]; then');
+  });
+});

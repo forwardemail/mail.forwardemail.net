@@ -306,6 +306,27 @@ export async function requestPgpDecryption({ raw, messageId, account }) {
 }
 
 /**
+ * Ask the worker to encrypt an outbound message to a set of recipient keys.
+ *
+ * @param {Object} options
+ * @param {string} options.plaintext - The inner MIME tree to encrypt
+ * @param {string[]} options.recipientKeys - Armored public keys
+ * @param {boolean} [options.sign] - Also sign when a private key is unlocked
+ * @returns {Promise<Object>} { success, armored, signed } or { success:false, reason, message }
+ */
+export async function requestPgpEncryption({ plaintext, recipientKeys, sign = true }) {
+  return sendSyncTask(
+    {
+      type: 'encryptMessage',
+      plaintext,
+      recipientKeys,
+      sign,
+    },
+    { timeout: 30000 },
+  );
+}
+
+/**
  * Unlock a PGP key with a passphrase from the main thread
  * Called after user provides passphrase via modal
  *

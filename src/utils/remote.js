@@ -331,6 +331,15 @@ export const Remote = {
       EmailCancel: { path: '/v1/emails/:id', method: 'DELETE' },
       Account: { path: '/v1/account', method: 'GET' },
       AccountUpdate: { path: '/v1/account', method: 'PUT' },
+      // Sieve scripts back the Filters UI. The /v1/sieve-scripts routes take
+      // alias auth (the same credentials as messages/folders) and derive the
+      // domain and alias from it, so no ids go in the path.
+      SieveScripts: { path: '/v1/sieve-scripts', method: 'GET' },
+      SieveScriptCreate: { path: '/v1/sieve-scripts', method: 'POST' },
+      SieveScript: { path: '/v1/sieve-scripts/:id', method: 'GET' },
+      SieveScriptUpdate: { path: '/v1/sieve-scripts/:id', method: 'PUT' },
+      SieveScriptDelete: { path: '/v1/sieve-scripts/:id', method: 'DELETE' },
+      SieveScriptActivate: { path: '/v1/sieve-scripts/:id/activate', method: 'POST' },
     };
 
     const entry = endpoints[action];

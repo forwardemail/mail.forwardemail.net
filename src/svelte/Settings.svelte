@@ -10,6 +10,9 @@
   import DeviceSyncCard from './components/DeviceSyncCard.svelte';
   import ScanPairingCode from './components/ScanPairingCode.svelte';
   import MailtoSettings from './components/MailtoSettings.svelte';
+  import FiltersSettings from './components/FiltersSettings.svelte';
+  import SignatureEditor from './components/SignatureEditor.svelte';
+  import RecipientKeysCard from './components/RecipientKeysCard.svelte';
   import { forceDeleteAllDatabases } from '../utils/db-recovery.js';
   import { closeDatabase, terminateDbWorker } from '../utils/db-worker-client.js';
   import { deactivateDemoMode, isDemoBlockedError } from '../utils/demo-mode.js';
@@ -183,6 +186,8 @@
   let sendAndArchiveDefault = $state(false);
   let signatureEnabled = $state(false);
   let signatureText = $state('');
+  let signatureHtmlValue = $state('');
+  let signatureSaveTimer: ReturnType<typeof setTimeout> | null = null;
   let undoSendDelay = $state('0');
   let archiveFolder = $state('');
   let sentFolder = $state('');
@@ -651,6 +656,7 @@
   });
 
   onDestroy(() => {
+    flushSignatureSave();
     subscriptions.forEach((fn) => fn?.());
   });
 
@@ -675,6 +681,7 @@
     const sig = LocalSettings.getSignature();
     signatureEnabled = sig.enabled;
     signatureText = sig.text;
+    signatureHtmlValue = sig.html;
     undoSendDelay = String(
       getEffectiveSettingValue('undo_send_delay', { account: currentAcct }) || 0,
     );
@@ -1103,9 +1110,33 @@
     toasts?.show?.(`Signature ${signatureEnabled ? 'enabled' : 'disabled'}`, 'success');
   };
 
-  const saveSignatureText = () => {
-    LocalSettings.setSignature({ text: signatureText });
-    toasts?.show?.('Signature saved', 'success');
+  // The rich editor fires on every keystroke, so writes are debounced and the
+  // toast only follows the settled value rather than each character.
+  let pendingSignatureWrite: (() => void) | null = null;
+
+  // Runs the deferred write now. Called by the timer, and on destroy so a
+  // final edit is not lost when the user leaves within the debounce window.
+  const flushSignatureSave = () => {
+    if (signatureSaveTimer) clearTimeout(signatureSaveTimer);
+    signatureSaveTimer = null;
+    const write = pendingSignatureWrite;
+    pendingSignatureWrite = null;
+    write?.();
+  };
+
+  const saveSignatureValue = (value: { html: string; text: string }) => {
+    signatureHtmlValue = value.html;
+    signatureText = value.text;
+    // Captured now, not when the timer fires: an account switch inside the
+    // window would otherwise store this signature under the other account.
+    const account = getAccountId();
+    if (signatureSaveTimer) clearTimeout(signatureSaveTimer);
+    pendingSignatureWrite = () =>
+      LocalSettings.setSignature({ html: value.html, text: value.text }, account);
+    signatureSaveTimer = setTimeout(() => {
+      flushSignatureSave();
+      toasts?.show?.('Signature saved', 'success');
+    }, 600);
   };
 
   const saveUndoSendDelay = async () => {
@@ -1731,6 +1762,7 @@
     { id: 'appearance', label: 'Appearance' },
     { id: 'privacy', label: 'Privacy & Security' },
     { id: 'folders', label: 'Folders & Labels' },
+    { id: 'filters', label: 'Filters' },
     { id: 'calendar', label: 'Calendar' },
     { id: 'search', label: 'Search' },
     { id: 'advanced', label: 'Advanced' },
@@ -2142,7 +2174,7 @@
           <Card.Header>
             <Card.Title>Signature</Card.Title>
             <Card.Description>
-              Added to new messages, replies, and forwards. Plain text; stored on this device.
+              Added to new messages, replies, and forwards. Stored on this device.
             </Card.Description>
           </Card.Header>
           <Card.Content class="space-y-4">
@@ -2152,12 +2184,10 @@
             </label>
             <div class="space-y-2">
               <Label for="signature-textarea">Signature</Label>
-              <Textarea
-                id="signature-textarea"
-                bind:value={signatureText}
-                onchange={saveSignatureText}
-                placeholder={'Jane Doe\nForward Email'}
-                class="min-h-[120px] font-mono text-sm"
+              <SignatureEditor
+                html={signatureHtmlValue}
+                text={signatureText}
+                onChange={saveSignatureValue}
               />
             </div>
           </Card.Content>
@@ -2248,6 +2278,8 @@
 
         <!-- App Lock section - above PGP encryption -->
         <AppLockSettings />
+
+        <RecipientKeysCard onToast={(message, type) => toasts?.show?.(message, type)} />
 
         <Card.Root>
           <Card.Header>
@@ -2411,6 +2443,17 @@
             </p>
           </Card.Content>
         </Card.Root>
+      {/if}
+
+      {#if section === 'filters'}
+        <FiltersSettings
+          folders={availableFolders.map((path) => ({ path, label: path }))}
+          labels={labelsList.map((l: LabelItem) => ({
+            keyword: getLabelKey(l) as string,
+            name: l.name || (getLabelKey(l) as string),
+          }))}
+          onToast={(message, type) => toasts?.show?.(message, type)}
+        />
       {/if}
 
       {#if section === 'folders'}

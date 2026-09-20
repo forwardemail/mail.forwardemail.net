@@ -26,6 +26,7 @@
     extractDisplayName,
   } from '../utils/address.ts';
   import { truncatePreview } from '../utils/preview';
+  import { describeFolderRetention } from '../utils/retention';
   import { validateLabelName } from '../utils/label-validation.ts';
   import DOMPurify from 'dompurify';
   import { restoreBlockedImages } from '../utils/sanitize.js';
@@ -3650,6 +3651,49 @@
     }
   };
 
+  // Trash and Junk are the only folders the server purges on a retention
+  // window, and the only ones where "empty" means anything beyond deleting
+  // each message by hand.
+  const isPurgeableFolder = (folder) =>
+    matchesFolderKey(folder?.path, ['TRASH', 'DELETED', 'DELETED ITEMS', 'SPAM', 'JUNK']);
+
+  let emptyFolderTarget = $state(null);
+  let emptyingFolder = $state(false);
+
+  const promptEmptyFolder = (folder) => {
+    emptyFolderTarget = folder;
+  };
+
+  const confirmEmptyFolder = async () => {
+    const folder = emptyFolderTarget;
+    if (!folder) return;
+    emptyingFolder = true;
+    try {
+      const result = await mailboxStore?.actions?.emptyFolder?.(folder.path);
+      if (!result?.success) {
+        showToast(result?.error || 'Failed to empty folder', 'error');
+        return;
+      }
+      const label = folder.name || folder.path;
+      if (result.partial) {
+        // The listing was cut short, so some messages were never enumerated.
+        showToast(
+          `Deleted ${result.count} from "${label}", but some could not be listed. Try again.`,
+          'warning',
+        );
+      } else if (result.failed) {
+        showToast(`Deleted ${result.count} from "${label}", ${result.failed} failed`, 'warning');
+      } else {
+        showToast(`Emptied "${label}"`, 'success');
+      }
+    } catch (err) {
+      showMutationError(err, `Failed to empty folder: ${err.message}`);
+    } finally {
+      emptyingFolder = false;
+      emptyFolderTarget = null;
+    }
+  };
+
   const handleFolderActionConfirm = async (action, folder, value) => {
     try {
       if (action === 'create') {
@@ -4495,6 +4539,19 @@
     matchesFolderKey($selectedFolder, ['TRASH', 'DELETED', 'DELETED ITEMS']),
   );
   const listIsDraftFolder = $derived(isDraftFolder($selectedFolder));
+
+  // Retention notice for the folder in view. Only Trash and Junk carry a
+  // window, so describeFolderRetention returns no days for everything else and
+  // the banner stays hidden.
+  const selectedFolderObject = $derived(
+    ($folders || []).find((f) => f.path === $selectedFolder) || null,
+  );
+  const selectedFolderRetention = $derived(
+    describeFolderRetention(selectedFolderObject, {
+      used: $storageUsed,
+      total: $storageTotal,
+    }),
+  );
 
   const openDraftFromMessage = async (msg) => {
     if (!msg || !mailboxView?.composeModal?.open) return;
@@ -6444,6 +6501,23 @@
                     >
                   {/if}</span
                 >
+              </div>
+            {/if}
+
+            {#if selectedFolderRetention.effectiveDays && !outboxSelected}
+              <div
+                class="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-muted/40 px-4 py-2"
+                data-testid="retention-notice"
+              >
+                <span class="text-xs text-muted-foreground">{selectedFolderRetention.text}</span>
+                <button
+                  type="button"
+                  class="text-xs font-medium text-destructive hover:underline disabled:opacity-50"
+                  disabled={emptyingFolder || !selectedFolderObject}
+                  onclick={() => promptEmptyFolder(selectedFolderObject)}
+                >
+                  {emptyingFolder ? 'Emptying…' : 'Empty now'}
+                </button>
               </div>
             {/if}
 
@@ -9565,8 +9639,10 @@
             onRename={handleRenameFolder}
             onDelete={handleDeleteFolder}
             onMarkAsRead={handleMarkFolderAsRead}
+            onEmpty={promptEmptyFolder}
             onClose={closeFolderContextMenu}
             {isSystemFolder}
+            {isPurgeableFolder}
           />
         {/if}
 
@@ -9578,6 +9654,38 @@
             onClose={handleFolderActionClose}
           />
         {/if}
+
+        <Dialog.Root
+          open={Boolean(emptyFolderTarget)}
+          onOpenChange={(open) => {
+            if (!open && !emptyingFolder) emptyFolderTarget = null;
+          }}
+        >
+          <Dialog.Content class="sm:max-w-[420px]">
+            <Dialog.Header>
+              <Dialog.Title>
+                Empty "{emptyFolderTarget?.name || emptyFolderTarget?.path}"?
+              </Dialog.Title>
+            </Dialog.Header>
+            <div class="py-4">
+              <p class="text-muted-foreground">
+                Every message in this folder is permanently deleted. This cannot be undone.
+              </p>
+            </div>
+            <Dialog.Footer>
+              <Button
+                variant="ghost"
+                disabled={emptyingFolder}
+                onclick={() => (emptyFolderTarget = null)}
+              >
+                Cancel
+              </Button>
+              <Button variant="destructive" disabled={emptyingFolder} onclick={confirmEmptyFolder}>
+                {emptyingFolder ? 'Emptying…' : 'Empty folder'}
+              </Button>
+            </Dialog.Footer>
+          </Dialog.Content>
+        </Dialog.Root>
       {/if}
     </div>
   {/if}

@@ -1344,6 +1344,60 @@ async function handleDecryptMessageTask(task) {
  * Handle MIME parsing request from main thread (Phase 3 optimization)
  * This allows main thread to delegate all MIME parsing to worker
  */
+/**
+ * Encrypt an outbound message to a set of recipient public keys.
+ *
+ * Runs here rather than on the main thread for the same reason decryption
+ * does: openpgp is large and the key material already lives in this worker.
+ * Signing is opportunistic — if a private key is unlocked the message is
+ * signed too, but a locked key must never block sending an encrypted message.
+ */
+async function handleEncryptMessageTask(task) {
+  const { plaintext, recipientKeys = [], sign = true } = task;
+
+  if (!plaintext || typeof plaintext !== 'string') {
+    return { success: false, reason: 'invalid_input', message: 'Nothing to encrypt' };
+  }
+  if (!Array.isArray(recipientKeys) || !recipientKeys.length) {
+    return { success: false, reason: 'no_recipient_keys', message: 'No recipient keys provided' };
+  }
+
+  let publicKeys;
+  try {
+    publicKeys = await Promise.all(
+      recipientKeys.map((armored) => openpgp.readKey({ armoredKey: armored })),
+    );
+  } catch (err) {
+    return {
+      success: false,
+      reason: 'bad_recipient_key',
+      message: `A recipient public key could not be read: ${err?.message || err}`,
+    };
+  }
+
+  try {
+    const message = await openpgp.createMessage({ text: plaintext });
+    const armored = await openpgp.encrypt({
+      message,
+      encryptionKeys: publicKeys,
+      ...(sign && unlockedPgpKeys.length ? { signingKeys: unlockedPgpKeys } : {}),
+      format: 'armored',
+    });
+    return {
+      success: true,
+      armored,
+      signed: Boolean(sign && unlockedPgpKeys.length),
+      recipientCount: publicKeys.length,
+    };
+  } catch (err) {
+    return {
+      success: false,
+      reason: 'encrypt_failed',
+      message: err?.message || 'Encryption failed',
+    };
+  }
+}
+
 async function handleParseRawTask(task) {
   const { raw, existingAttachments = [] } = task;
 
@@ -1374,7 +1428,10 @@ async function handleTask(taskId, task) {
     // Auth is checked per task account, not against a shared header, so a task
     // left over from a switched-away account fails here instead of borrowing
     // the live account's credentials. PGP tasks are local-only (no fetch).
-    const isLocalOnlyTask = task?.type === 'decryptMessage' || task?.type === 'parseRaw';
+    const isLocalOnlyTask =
+      task?.type === 'decryptMessage' ||
+      task?.type === 'parseRaw' ||
+      task?.type === 'encryptMessage';
     if (!apiBase || (!isLocalOnlyTask && !authFor(accountKey(task?.account)))) {
       throw new Error('Worker not initialized');
     }
@@ -1403,6 +1460,8 @@ async function handleTask(taskId, task) {
       summary = await handleDecryptMessageTask(task);
     } else if (task.type === 'parseRaw') {
       summary = await handleParseRawTask(task);
+    } else if (task.type === 'encryptMessage') {
+      summary = await handleEncryptMessageTask(task);
     } else {
       throw new Error(`Unsupported task type: ${task.type}`);
     }

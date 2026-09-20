@@ -17,7 +17,7 @@ import {
   loadProfileName,
   loadProfileImage,
   settingsLabels,
-  fetchLabels,
+  fetchLabelsWithSource,
   fetchAccountData,
   effectiveLayoutMode,
   setSettingValue,
@@ -40,6 +40,7 @@ import { startInitialSync, queueBodiesForFolder } from '../utils/sync-controller
 import { resetSyncWorkerReady, revokeSyncWorkerAuth } from '../utils/sync-worker-client.js';
 import { isDemoBlockedError, isDemoMode } from '../utils/demo-mode';
 import { clearMailServiceState } from './mailService';
+import { resetFilters } from './filtersStore';
 import {
   normalizeEmail,
   dedupeAddresses,
@@ -1368,6 +1369,15 @@ export const loadLabels = async (options = {}) => {
   const account = Local.get('email') || 'default';
   const initialAccount = account;
   const labelMap = new Map();
+  // Ids the account settings registry returned. These are the labels Settings
+  // manages, so they are always kept.
+  const registeredIds = new Set();
+  // Ids seen on a real message (or folder flag list) during this pass.
+  const discoveredIds = new Set();
+  // Only set when the registry came from the server. A cached registry says
+  // nothing about labels the server dropped, so reconciliation is skipped and
+  // the cache is left exactly as it was.
+  let registryAuthoritative = false;
   const palette = LABEL_PALETTE;
   const colorFor = (name = '') => {
     let hash = 0;
@@ -1410,12 +1420,17 @@ export const loadLabels = async (options = {}) => {
   }
 
   try {
-    const settingsLabelsList =
-      (await fetchLabels(true, { force: true }).catch(() => get(settingsLabels) || [])) || [];
+    const registry = await fetchLabelsWithSource(true, { force: true }).catch(() => ({
+      labels: get(settingsLabels) || [],
+      authoritative: false,
+    }));
+    const settingsLabelsList = registry?.labels || [];
+    registryAuthoritative = Boolean(registry?.authoritative);
     if ((Local.get('email') || 'default') !== initialAccount) return;
-    (settingsLabelsList || []).forEach((lbl) => {
+    settingsLabelsList.forEach((lbl) => {
       const id = lbl.keyword || lbl.id || lbl.name;
       if (!id || isHiddenLabel(id)) return;
+      registeredIds.add(id);
       const existing = labelMap.get(id);
       labelMap.set(id, {
         ...existing,
@@ -1423,6 +1438,7 @@ export const loadLabels = async (options = {}) => {
         name: lbl.name || existing?.name || id,
         color: lbl.color || existing?.color || colorFor(id),
         account,
+        discovered: false,
         createdAt: existing?.createdAt || Date.now(),
         updatedAt: Date.now(),
       });
@@ -1431,26 +1447,34 @@ export const loadLabels = async (options = {}) => {
     warn('loadLabels settings labels failed', err);
   }
 
-  // Only scan messages for label discovery on first load (no cached labels).
-  // On subsequent loads the labels table already has all previously discovered labels.
-  if (labelMap.size === 0) {
+  // Scan cached messages for keywords when there is something to learn: either
+  // nothing is known yet (first load), or the cache holds entries the registry
+  // did not return and we need to know which of those are still on a message.
+  //
+  // The second case is self-limiting. Once the reconcile below drops the
+  // entries no message carries, later loads have no unverified ids left and
+  // skip the scan, so the full-table read happens once and not on every load.
+  const unverifiedIds = [...labelMap.keys()].filter((id) => !registeredIds.has(id));
+  if (labelMap.size === 0 || (registryAuthoritative && unverifiedIds.length > 0)) {
     try {
       const allMessages = await db.messages
         .where('account')
         .equals(account)
         .toArray()
         .catch(() => []);
-      if (!allMessages?.length) return;
-      for (const msg of allMessages) {
+      for (const msg of allMessages || []) {
         if ((Local.get('email') || 'default') !== initialAccount) break;
         for (const lbl of msg.labels || []) {
           const key = String(lbl);
-          if (!labelMap.has(key) && !isHiddenLabel(key)) {
+          if (isHiddenLabel(key)) continue;
+          discoveredIds.add(key);
+          if (!labelMap.has(key)) {
             labelMap.set(key, {
               id: key,
               name: key,
               color: colorFor(key),
               account,
+              discovered: true,
               createdAt: Date.now(),
               updatedAt: Date.now(),
             });
@@ -1501,8 +1525,10 @@ export const loadLabels = async (options = {}) => {
         if (!entry) continue;
         (entry.flags || []).forEach((flag) => {
           const label = normalizeLabel(flag, entry.folder.path);
-          if (label && !labelMap.has(label.id)) {
-            labelMap.set(label.id, label);
+          if (!label) return;
+          discoveredIds.add(label.id);
+          if (!labelMap.has(label.id)) {
+            labelMap.set(label.id, { ...label, discovered: true });
           }
         });
       }
@@ -1513,9 +1539,20 @@ export const loadLabels = async (options = {}) => {
 
   if ((Local.get('email') || 'default') !== initialAccount) return;
 
-  const normalized = Array.from(labelMap.values()).filter(
-    (l) => l.id && l.name && !isHiddenLabel(l.id),
-  );
+  // Reconcile against the registry. Anything the server still knows about is
+  // kept; anything else survives only while a message actually carries it.
+  //
+  // Without this the labels table was append-only: loadLabels seeded itself
+  // from its own cache, merged the registry on top, then wrote the union back,
+  // so a keyword that reached the cache once (from a message, a folder's
+  // PERMANENTFLAGS, or a label deleted afterwards) reappeared in the filter
+  // dropdown forever while Settings, which reads the registry alone, showed
+  // nothing. That mismatch is the "phantom label" report.
+  const normalized = Array.from(labelMap.values()).filter((l) => {
+    if (!l.id || !l.name || isHiddenLabel(l.id)) return false;
+    if (!registryAuthoritative) return true;
+    return registeredIds.has(l.id) || discoveredIds.has(l.id);
+  });
   availableLabels.set(normalized);
   try {
     await db.labels
@@ -1566,6 +1603,9 @@ export const mergeNewLabels = async (messages, account) => {
         name: key.replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim() || key,
         color: colorFor(key),
         account,
+        // Discovered from a message keyword, not registered in settings.
+        // loadLabels drops these again once no message carries them.
+        discovered: true,
         createdAt: Date.now(),
         updatedAt: Date.now(),
       });
@@ -2173,6 +2213,9 @@ const performAccountSwitch = async (email) => {
   clearMailServiceState();
   mailboxStore.actions.resetForAccount?.();
   mailboxStore.actions.clearFolderMessageCache?.();
+  // Filters are per-alias server-side scripts, and the store caches the script
+  // id. Carrying that across a switch would save one alias's rules onto another.
+  resetFilters();
 
   // PHASE 3: Atomic swap — replace stores with cached data instead of blanking them
   initialSyncStarted.set(false);

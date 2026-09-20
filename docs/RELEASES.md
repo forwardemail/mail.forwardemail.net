@@ -248,6 +248,17 @@ drop back to `4.0` — it's no longer in Ubuntu 24 / Debian 13 repos
   `11.0` would drop Catalina users in exchange for fewer JS-feature edge
   cases — defer until telemetry shows Catalina usage is negligible.
 
+### Latest release promotion
+
+The release stays a draft until every build row, the mobile jobs, and the
+checksum file have landed. The `publish` job then flips it to published with
+`make_latest=true` set explicitly, so Latest does not depend on GitHub's
+creation-date default (a draft created before a hotfix and published after it
+would otherwise not become Latest). `release-summary` ends by verifying that the
+tag is published and is what `releases/latest` returns, because the desktop
+updater endpoint follows Latest. A green run therefore always means the new
+version is what users are offered.
+
 ### GitHub asset upload failures
 
 GitHub's release upload endpoint returns transient 5xx responses a few times a

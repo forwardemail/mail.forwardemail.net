@@ -10,6 +10,7 @@ import {
   resolveHasMoreAfterFetch,
   isNoContentResponse,
   extractMessageList,
+  collectFolderMessages,
   mapServerMessage,
   sortParamForOrder,
   buildMessageListRequestKey,
@@ -756,5 +757,104 @@ describe('isStaleListRequest', () => {
 
   it('is stale when a newer request superseded this one (key mismatch)', () => {
     expect(isStaleListRequest({ ...base, inFlightKey: 'k2' })).toBe(true);
+  });
+});
+
+/**
+ * Emptying Trash used to delete only the messages that happened to be in the
+ * local cache, then report success — so a Trash with thousands of messages
+ * lost a couple of hundred and looked emptied. The walk has to cover the
+ * server's pages, and has to admit when it could not.
+ */
+describe('collectFolderMessages', () => {
+  const page = (ids: string[]) => ids.map((id) => ({ id }));
+
+  it('walks every page until the server returns an empty one', async () => {
+    const pages = [page(['a', 'b']), page(['c', 'd']), page(['e'])];
+    const fetchPage = vi.fn(async (n: number) => pages[n - 1] || []);
+
+    const out = await collectFolderMessages({ fetchPage, pageSize: 2 });
+
+    expect(out.complete).toBe(true);
+    expect(out.messages.map((m) => m.id)).toEqual(['a', 'b', 'c', 'd', 'e']);
+    // Three pages of data plus the empty page that proves there is no more.
+    expect(fetchPage).toHaveBeenCalledTimes(4);
+  });
+
+  it('does not treat a short page as the end of the folder', async () => {
+    // The API's pagination middleware clamps `limit`, so asking for 250 and
+    // getting 100 back says nothing about whether more remain. Stopping there
+    // is the silent partial-empty this helper exists to prevent.
+    const fetchPage = vi.fn(async (n: number) =>
+      n === 1 ? page(['a']) : n === 2 ? page(['b']) : [],
+    );
+
+    const out = await collectFolderMessages({ fetchPage, pageSize: 250 });
+
+    expect(out.complete).toBe(true);
+    expect(out.messages.map((m) => m.id)).toEqual(['a', 'b']);
+  });
+
+  it('stops on an empty page without calling again', async () => {
+    const fetchPage = vi.fn(async (n: number) => (n === 1 ? page(['a', 'b']) : []));
+
+    const out = await collectFolderMessages({ fetchPage, pageSize: 2 });
+
+    expect(out.complete).toBe(true);
+    expect(fetchPage).toHaveBeenCalledTimes(2);
+  });
+
+  it('includes cached messages the server listing missed', async () => {
+    // A message can be in the cache but absent from the listing (indexer lag).
+    // Dropping it would leave it behind after an "empty".
+    const out = await collectFolderMessages({
+      fetchPage: async (n) => (n === 1 ? page(['a']) : []),
+      cached: [{ id: 'cached-only' }],
+      pageSize: 50,
+    });
+
+    expect(out.messages.map((m) => m.id).sort()).toEqual(['a', 'cached-only']);
+  });
+
+  it('merges server fields onto a cached record rather than replacing it', async () => {
+    const out = await collectFolderMessages({
+      fetchPage: async (n) => (n === 1 ? [{ id: 'a', subject: 'from server' }] : []),
+      cached: [{ id: 'a', uid: 42 }],
+      pageSize: 50,
+    });
+
+    expect(out.messages).toHaveLength(1);
+    expect(out.messages[0]).toMatchObject({ id: 'a', uid: 42, subject: 'from server' });
+  });
+
+  it('reports incomplete when a page fails, keeping what it already has', async () => {
+    const fetchPage = vi.fn(async (n: number) => {
+      if (n === 1) return page(['a', 'b']);
+      throw new Error('network');
+    });
+
+    const out = await collectFolderMessages({ fetchPage, pageSize: 2 });
+
+    // Claiming success here is what made the old behaviour a silent data bug.
+    expect(out.complete).toBe(false);
+    expect(out.messages.map((m) => m.id)).toEqual(['a', 'b']);
+  });
+
+  it('reports incomplete rather than looping forever on a server that never ends', async () => {
+    const fetchPage = vi.fn(async () => page(['x', 'y']));
+
+    const out = await collectFolderMessages({ fetchPage, pageSize: 2, maxPages: 3 });
+
+    expect(out.complete).toBe(false);
+    expect(fetchPage).toHaveBeenCalledTimes(3);
+  });
+
+  it('skips records with no id instead of collapsing them under one key', async () => {
+    const out = await collectFolderMessages({
+      fetchPage: async (n) => (n === 1 ? [{ id: 'a' }, { subject: 'no id' }] : []),
+      pageSize: 50,
+    });
+
+    expect(out.messages.map((m) => m.id)).toEqual(['a']);
   });
 });

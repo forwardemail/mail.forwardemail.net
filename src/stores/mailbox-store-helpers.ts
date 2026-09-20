@@ -500,3 +500,51 @@ export const isStaleListRequest = ({
   activeAccount !== account ||
   activeFolder?.toUpperCase() !== folder?.toUpperCase() ||
   inFlightKey !== requestKey;
+
+/**
+ * Walk every page of a folder listing and return the union of what the server
+ * lists and what was already cached.
+ *
+ * Emptying a folder cannot work off the cache alone: the cache only holds the
+ * pages that have been opened, so a Trash holding thousands of messages would
+ * lose a couple of hundred and report success. `complete` is false when the
+ * walk was cut short — by a failed page or the page cap — so the caller can
+ * say the folder is not actually empty instead of claiming it is.
+ */
+export const collectFolderMessages = async ({
+  fetchPage,
+  cached = [],
+  maxPages = 400,
+}: {
+  fetchPage: (page: number) => Promise<Record<string, unknown>[]>;
+  cached?: Record<string, unknown>[];
+  /** Request size; accepted for callers, not used to decide when to stop. */
+  pageSize?: number;
+  maxPages?: number;
+}): Promise<{ messages: Record<string, unknown>[]; complete: boolean }> => {
+  const byId = new Map<string, Record<string, unknown>>();
+  for (const msg of cached || []) {
+    const id = String(msg?.id ?? '');
+    if (id) byId.set(id, msg);
+  }
+
+  for (let page = 1; page <= maxPages; page++) {
+    let list: Record<string, unknown>[];
+    try {
+      list = (await fetchPage(page)) || [];
+    } catch {
+      return { messages: [...byId.values()], complete: false };
+    }
+    if (!list.length) return { messages: [...byId.values()], complete: true };
+    for (const raw of list) {
+      const id = String(raw?.id ?? raw?._id ?? '');
+      if (id) byId.set(id, { ...(byId.get(id) || {}), ...raw, id });
+    }
+    // Keep going until a page comes back empty. A short page is not proof
+    // the folder is exhausted: the API's pagination middleware clamps `limit`
+    // to its own maximum, so a request for 250 can legitimately return fewer
+    // with plenty left. Treating that as the end is exactly the silent
+    // partial-empty this helper exists to prevent. Costs one extra request.
+  }
+  return { messages: [...byId.values()], complete: false };
+};

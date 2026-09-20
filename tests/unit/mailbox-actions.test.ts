@@ -39,6 +39,11 @@ const hoisted = vi.hoisted(() => {
     settingsLabelsGet: vi.fn().mockResolvedValue(null),
     messagesToArray: vi.fn().mockResolvedValue([]),
     labelsToArray: vi.fn().mockResolvedValue([]),
+    labelsBulkPut: vi.fn().mockResolvedValue(undefined),
+    fetchLabelsWithSource: vi.fn().mockResolvedValue({
+      labels: [{ keyword: 'work', name: 'Work', color: '#abc' }],
+      authoritative: true,
+    }),
     buildFolderList: vi.fn((f: unknown) => f),
     toastShow: vi.fn(),
   };
@@ -230,6 +235,7 @@ vi.mock('../../src/stores/settingsStore', () => {
     // Returning a label keeps loadLabels' labelMap non-empty so it skips the
     // first-load message scan and proceeds to the folder-flag fetch path.
     fetchLabels: vi.fn().mockResolvedValue([{ keyword: 'work', name: 'Work', color: '#abc' }]),
+    fetchLabelsWithSource: (...a: unknown[]) => hoisted.fetchLabelsWithSource(...a),
     settingsActions: { setBodyIndexing: vi.fn() },
     bodyIndexing: writable(false),
     loadProfileName: vi.fn(),
@@ -290,7 +296,7 @@ vi.mock('../../src/utils/db', () => {
             delete: vi.fn().mockResolvedValue(undefined),
           }),
         }),
-        bulkPut: vi.fn().mockResolvedValue(undefined),
+        bulkPut: (...a: unknown[]) => hoisted.labelsBulkPut(...a),
       },
       drafts: chain,
     },
@@ -316,6 +322,7 @@ import {
   stripQuoteCollapseMarkup,
   getMessageBodyForReply,
   loadLabels,
+  mergeNewLabels,
   FOLDER_FLAG_FETCH_CONCURRENCY,
   availableLabels,
   currentAccount,
@@ -669,6 +676,101 @@ describe('loadLabels folder-flag fetch (#2 fan-out)', () => {
     expect(opts.pathOverride).toBe('/v1/folders/inbox-id');
     const labels = get(availableLabels);
     expect(labels.some((l) => l.id === 'ProjectX')).toBe(true);
+  });
+});
+
+// A user reported a "test" label in the mailbox filter dropdown that Settings
+// never showed. The labels table was append-only: loadLabels seeded itself from
+// its own cache, merged the registry on top, then wrote the union back — so any
+// keyword that reached the cache once stayed forever, while Settings (registry
+// only) showed nothing.
+describe('loadLabels registry reconciliation (phantom label)', () => {
+  const registry = (labels: unknown[], authoritative = true) =>
+    hoisted.fetchLabelsWithSource.mockResolvedValue({ labels, authoritative });
+
+  beforeEach(() => {
+    mailboxStore.state.folders.set([]);
+  });
+
+  it('drops a cached label the registry dropped and no message carries', async () => {
+    hoisted.labelsToArray.mockResolvedValue([
+      { id: 'work', name: 'Work', account: 'user@example.com' },
+      { id: 'test', name: 'test', account: 'user@example.com', discovered: true },
+    ]);
+    hoisted.messagesToArray.mockResolvedValue([{ id: 'm1', labels: ['work'] }]);
+    registry([{ keyword: 'work', name: 'Work', color: '#abc' }]);
+
+    await loadLabels();
+
+    const ids = get(availableLabels).map((l) => l.id);
+    expect(ids).toContain('work');
+    expect(ids).not.toContain('test');
+  });
+
+  it('keeps an unregistered label while a message still carries the keyword', async () => {
+    hoisted.labelsToArray.mockResolvedValue([
+      { id: 'work', name: 'Work', account: 'user@example.com' },
+      { id: 'from-thunderbird', name: 'from-thunderbird', account: 'user@example.com' },
+    ]);
+    hoisted.messagesToArray.mockResolvedValue([{ id: 'm1', labels: ['work', 'from-thunderbird'] }]);
+    registry([{ keyword: 'work', name: 'Work' }]);
+
+    await loadLabels();
+
+    const ids = get(availableLabels).map((l) => l.id);
+    expect(ids).toContain('from-thunderbird');
+  });
+
+  it('never drops a label the registry still returns', async () => {
+    hoisted.labelsToArray.mockResolvedValue([]);
+    hoisted.messagesToArray.mockResolvedValue([]);
+    registry([{ keyword: 'work', name: 'Work' }]);
+
+    await loadLabels();
+
+    expect(get(availableLabels).map((l) => l.id)).toContain('work');
+  });
+
+  it('leaves the cache intact when the registry came from cache, not the server', async () => {
+    // Offline, or an api_key session whose account response carries no
+    // `settings`. Reconciling on a non-authoritative list would delete labels
+    // that are perfectly valid server-side.
+    hoisted.labelsToArray.mockResolvedValue([
+      { id: 'work', name: 'Work', account: 'user@example.com' },
+      { id: 'test', name: 'test', account: 'user@example.com', discovered: true },
+    ]);
+    hoisted.messagesToArray.mockResolvedValue([]);
+    registry([{ keyword: 'work', name: 'Work' }], false);
+
+    await loadLabels();
+
+    const ids = get(availableLabels).map((l) => l.id);
+    expect(ids).toContain('work');
+    expect(ids).toContain('test');
+  });
+
+  it('skips the full message scan once nothing is left to verify', async () => {
+    hoisted.labelsToArray.mockResolvedValue([
+      { id: 'work', name: 'Work', account: 'user@example.com' },
+    ]);
+    hoisted.messagesToArray.mockResolvedValue([{ id: 'm1', labels: ['work'] }]);
+    registry([{ keyword: 'work', name: 'Work' }]);
+
+    await loadLabels();
+
+    // Everything cached is registered, so the expensive whole-table read that
+    // verifies unregistered keywords never runs.
+    expect(hoisted.messagesToArray).not.toHaveBeenCalled();
+  });
+
+  it('marks keywords found on messages as discovered so they stay reconcilable', async () => {
+    hoisted.labelsToArray.mockResolvedValue([]);
+    availableLabels.set([]);
+
+    await mergeNewLabels([{ id: 'm1', labels: ['adhoc'] }], 'user@example.com');
+
+    const [written] = hoisted.labelsBulkPut.mock.calls.at(-1) ?? [[]];
+    expect(written[0]).toMatchObject({ id: 'adhoc', discovered: true });
   });
 });
 

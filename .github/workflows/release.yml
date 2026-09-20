@@ -385,10 +385,16 @@ jobs:
               done <<< "$draft_assets"
             fi
             gh api -X DELETE "repos/${GH_REPO}/releases/${RELEASE_ID}"
-            echo "Consolidated — pre-existing published release is now canonical"
+            gh api --method PATCH "repos/${GH_REPO}/releases/${OTHER_PUBLISHED}" -f make_latest=true
+            echo "Consolidated — pre-existing published release is now canonical and latest"
           else
-            echo "No conflicting published release; promoting our draft to published"
-            gh api --method PATCH "repos/${GH_REPO}/releases/${RELEASE_ID}" -f draft=false
+            echo "No conflicting published release; promoting our draft to published and marking it latest"
+            # make_latest is explicit rather than left to GitHub's default,
+            # which picks Latest by creation date. A draft created before a
+            # hotfix release and published after it would otherwise not
+            # become Latest, and the updater endpoint follows Latest.
+            gh api --method PATCH "repos/${GH_REPO}/releases/${RELEASE_ID}" \
+              -f draft=false -f make_latest=true
           fi
 
   # ── 4b. Publish the self-hosted F-Droid repository ─────────────────────
@@ -705,3 +711,26 @@ jobs:
           fi
 
           echo "Release $TAG completed cleanly."
+
+      # A green run must end with this tag public and marked Latest: the
+      # desktop updater follows releases/latest, so a release that is
+      # published but not Latest silently strands every installed user on
+      # the previous version. Runs only after the assertions above passed.
+      - name: Verify the release is published and Latest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: v${{ needs.create-release.outputs.version }}
+        run: |
+          set -euo pipefail
+          draft=$(gh api "repos/${GH_REPO}/releases/tags/${TAG}" --jq '.draft')
+          if [ "$draft" != "false" ]; then
+            echo "::error::Release $TAG is still a draft after a green run"
+            exit 1
+          fi
+          latest=$(gh api "repos/${GH_REPO}/releases/latest" --jq '.tag_name')
+          if [ "$latest" != "$TAG" ]; then
+            echo "::error::Release $TAG is published but GitHub's Latest is $latest. The updater endpoint follows Latest; mark $TAG as latest from the release page or re-run publish."
+            exit 1
+          fi
+          echo "$TAG is published and Latest."

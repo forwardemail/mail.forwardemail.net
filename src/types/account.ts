@@ -48,12 +48,23 @@ export interface Label {
   id: string;
   account: string;
   name: string;
+  /** IMAP keyword the label maps to. The settings registry keys on this. */
+  keyword?: string;
+  /** Registry labels flagged hidden are filtered out of pickers. */
+  hidden?: boolean;
   color?: string;
   textColor?: string;
   visible?: boolean;
   order?: number;
   createdAt?: number;
   updatedAt?: number;
+  /**
+   * True when the label was discovered as an IMAP keyword on a message rather
+   * than registered in account settings. Discovered labels are only kept while
+   * a message still carries them, so a keyword that is gone server-side does
+   * not linger in the filter dropdown.
+   */
+  discovered?: boolean;
 }
 
 export interface Contact {
