@@ -6,6 +6,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Mock Remote.request
 const mockRequest = vi.fn();
+// Spy on the IndexedDB cache write search() makes for server hits.
+const mockBulkPut = vi.fn(() => Promise.resolve());
 vi.mock('../../src/utils/remote', () => ({
   Remote: { request: (...args) => mockRequest(...args) },
 }));
@@ -34,7 +36,7 @@ vi.mock('../../src/utils/db', () => ({
         equals: () => ({ toArray: () => Promise.resolve([]) }),
       }),
       bulkGet: () => Promise.resolve([]),
-      bulkPut: () => Promise.resolve(),
+      bulkPut: (...args) => mockBulkPut(...args),
     },
     messageBodies: { bulkGet: () => Promise.resolve([]) },
   },
@@ -100,6 +102,7 @@ describe('Server-side search integration', () => {
   beforeEach(() => {
     _demoMode = false;
     mockRequest.mockReset();
+    mockBulkPut.mockClear();
   });
 
   afterEach(() => {
@@ -176,14 +179,42 @@ describe('Server-side search integration', () => {
       expect(row.to).toContain('Shaun');
     });
 
-    it('should skip server search in demo mode', async () => {
+    it('runs the server search in demo mode without caching the hits', async () => {
+      // Demo messages are neither indexed nor persisted, so the request (which
+      // the demo interceptor answers from memory) is the only search source.
+      // Demo mode is IndexedDB-free, so the hits must not be cached either.
       _demoMode = true;
+      mockRequest.mockResolvedValue([
+        {
+          id: 'demo-1',
+          subject: 'Invoice #2024-0892',
+          from: 'billing@example.com',
+          folder: 'INBOX',
+        },
+      ]);
       const { searchStore } = await import('../../src/stores/searchStore');
 
-      await searchStore.actions.search('test query', { folder: 'INBOX' });
+      const results = await searchStore.actions.search('invoice', { folder: 'INBOX' });
 
-      // Remote.request should NOT have been called
-      expect(mockRequest).not.toHaveBeenCalled();
+      expect(mockRequest).toHaveBeenCalledTimes(1);
+      expect(results.map((r) => r.id)).toEqual(['demo-1']);
+      expect(mockBulkPut).not.toHaveBeenCalled();
+    });
+
+    it('caches server hits outside demo mode', async () => {
+      mockRequest.mockResolvedValue([
+        {
+          id: 'srv-1',
+          subject: 'Invoice #2024-0892',
+          from: 'billing@example.com',
+          folder: 'INBOX',
+        },
+      ]);
+      const { searchStore } = await import('../../src/stores/searchStore');
+
+      await searchStore.actions.search('invoice', { folder: 'INBOX' });
+
+      expect(mockBulkPut).toHaveBeenCalledTimes(1);
     });
 
     it('should map from: operator to API from parameter', async () => {

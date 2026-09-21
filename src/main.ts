@@ -878,12 +878,15 @@ function handleUndoSend(result: UndoSendResult) {
     }) ?? null;
 }
 
-async function refreshSentFolderAfterSend(sentRaw?: unknown) {
+async function refreshSentFolderAfterSend(
+  sentRaw?: unknown,
+  sender: { account?: string | null; sentFolder?: string | null } = {},
+) {
   try {
     const acct = Local.get('email') || 'default';
     const sentFolder = mailboxStore.actions.getSentFolderPath?.() as string | undefined;
     if (!sentFolder) return;
-    if (sentRaw) await mailboxStore.actions.applyOptimisticSentMessage?.(sentRaw);
+    if (sentRaw) await mailboxStore.actions.applyOptimisticSentMessage?.(sentRaw, sender);
     // The optimistic record carries in_reply_to/references, so rebuilding the
     // reply index now (instead of waiting out its 60s TTL) makes the thread
     // count and reply arrow reflect the reply that was just sent.
@@ -940,7 +943,12 @@ if (composeRoot) {
           }
           // A queued (offline) send isn't in Sent yet — the outbox surfaces it
           // when it actually goes out, so only refresh on a real send.
-          if (!result?.queued) refreshSentFolderAfterSend(result?.sentCopy);
+          if (!result?.queued) {
+            refreshSentFolderAfterSend(result?.sentCopy, {
+              account: result?.account,
+              sentFolder: result?.sentFolder,
+            });
+          }
         },
         registerApi(api: typeof composeApi) {
           if (api) {
@@ -1348,6 +1356,8 @@ if (isTauriDesktop) {
             sourceMessageId?: string;
             sentCopyPayload?: Record<string, unknown>;
             sentCopy?: unknown;
+            account?: string | null;
+            sentFolder?: string | null;
             toast?: { message: string; type?: string };
             undoSend?: boolean;
             outboxId?: string;
@@ -1480,7 +1490,12 @@ if (isTauriDesktop) {
       // (offline) send isn't in Sent yet so it's skipped. Awaited because the
       // optimistic Sent record it writes is what the reply index reads, and
       // the list reload below must not race ahead of it.
-      if (!result?.queued) await refreshSentFolderAfterSend(result?.sentCopy);
+      if (!result?.queued) {
+        await refreshSentFolderAfterSend(result?.sentCopy, {
+          account: result?.account,
+          sentFolder: result?.sentFolder,
+        });
+      }
 
       if (result?.archive) {
         const message = get(selectedMessage);

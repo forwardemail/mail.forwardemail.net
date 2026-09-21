@@ -323,6 +323,13 @@ function getDemoData(action, params) {
 
     case 'MessageList':
     case 'Message': {
+      // A search lands here too (searchStore.serverSearch hits /v1/messages
+      // with search/from/to/subject params). Demo messages live only in this
+      // module: they are never indexed or persisted, so this is the one place
+      // a demo search can be answered.
+      if (action === 'MessageList' && isSearchRequest(params)) {
+        return searchDemoMessages(params);
+      }
       const folder = params?.folder || params?.mailbox || params?.path || 'INBOX';
       const page = Number(params?.page) || 1;
       const messages = applyReadState(generateMessages(folder, page));
@@ -365,6 +372,74 @@ function getDemoData(action, params) {
  * Apply tracked read state to generated messages.
  * Adds \Seen flag to any message the user has read during this session.
  */
+// The text-bearing params serverSearch sends (see buildServerSearchParams).
+const SEARCH_TEXT_PARAMS = ['search', 'from', 'to', 'subject'];
+
+function isSearchRequest(params) {
+  return SEARCH_TEXT_PARAMS.some((key) => typeof params?.[key] === 'string' && params[key].trim());
+}
+
+function addressText(value) {
+  if (!value) return '';
+  if (Array.isArray(value)) return value.map(addressText).join(' ');
+  if (typeof value === 'object') return [value.name, value.address].filter(Boolean).join(' ');
+  return String(value);
+}
+
+function allDemoMessages(folderPath) {
+  const out = [];
+  for (let page = 1; page < 50; page += 1) {
+    const batch = generateMessages(folderPath, page);
+    if (!batch.length) break;
+    out.push(...batch);
+  }
+  return applyReadState(out).map((msg) => ({ ...msg, folder: folderPath }));
+}
+
+/**
+ * Filter the generated messages the way /v1/messages would: every word of a
+ * text param must appear in its field (free-text `search` looks at subject,
+ * sender, recipients and body), then the flag/date/folder params narrow it.
+ */
+function searchDemoMessages(params = {}) {
+  const lower = (value) => String(value || '').toLowerCase();
+  const words = (value) => lower(value).split(/\s+/).filter(Boolean);
+  const containsAll = (haystack, needles) => needles.every((word) => haystack.includes(word));
+  const search = words(params.search);
+  const from = words(params.from);
+  const to = words(params.to);
+  const subject = words(params.subject);
+  const since = params.since ? new Date(params.since).getTime() : null;
+  const before = params.before ? new Date(params.before).getTime() : null;
+  const folderPaths = params.folder ? [params.folder] : generateFolders().map((f) => f.path);
+
+  const hits = [];
+  for (const path of folderPaths) {
+    for (const msg of allDemoMessages(path)) {
+      const fromText = lower(addressText(msg.from));
+      const toText = lower(addressText(msg.to));
+      const subjectText = lower(msg.subject);
+      const bodyText = lower(`${msg.intro || ''} ${msg.text || ''}`);
+      const everything = `${subjectText} ${fromText} ${toText} ${bodyText}`;
+      if (search.length && !containsAll(everything, search)) continue;
+      if (from.length && !containsAll(fromText, from)) continue;
+      if (to.length && !containsAll(toText, to)) continue;
+      if (subject.length && !containsAll(subjectText, subject)) continue;
+      const flags = msg.flags || [];
+      if (params.is_unread === true && flags.includes('\\Seen')) continue;
+      if (params.is_flagged === true && !flags.includes('\\Flagged')) continue;
+      if (params.has_attachments === true && !(msg.attachments || []).length) continue;
+      const dateMs = new Date(msg.date).getTime();
+      if (since !== null && dateMs < since) continue;
+      if (before !== null && dateMs > before) continue;
+      hits.push(msg);
+    }
+  }
+  hits.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  const limit = Number(params.limit) || 200;
+  return hits.slice(0, limit);
+}
+
 function applyReadState(messages) {
   return messages.map((msg) => {
     if (_readMessageIds.has(msg.id) && !msg.flags?.includes('\\Seen')) {

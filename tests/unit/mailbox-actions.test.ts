@@ -69,7 +69,10 @@ vi.mock('../../src/utils/remote', () => ({
   Remote: { request: (...a: unknown[]) => hoisted.remoteRequest(...a) },
 }));
 
-vi.mock('../../src/utils/auth', () => ({ getAuthHeader: vi.fn(() => '') }));
+vi.mock('../../src/utils/auth', () => ({
+  getAuthHeader: vi.fn(() => ''),
+  getAuthHeaderForAccount: vi.fn(() => ''),
+}));
 
 vi.mock('../../src/utils/mutation-queue', () => ({
   queueMutation: (...a: unknown[]) => hoisted.queueMutation(...a),

@@ -33,6 +33,7 @@ vi.mock('../../src/utils/remote', () => ({
 
 vi.mock('../../src/utils/auth', () => ({
   getAuthHeader: vi.fn(() => 'Bearer test-token'),
+  getAuthHeaderForAccount: vi.fn(() => 'Bearer test-token'),
 }));
 
 vi.mock('../../src/config', () => ({

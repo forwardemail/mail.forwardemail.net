@@ -332,9 +332,9 @@ const serverSearch = async (
   folder: string | null,
   limit: number,
 ): Promise<SearchResult[]> => {
-  // Skip server search in demo mode — there is no real API
-  if (isDemoMode()) return [];
-
+  // Demo mode is served by the demo interceptor inside Remote.request, and it
+  // is the only search source there: demo messages are never indexed or
+  // persisted, so the local paths below always come back empty.
   const params = buildServerSearchParams(text, filters, folder, limit);
   if (!params) return [];
 
@@ -390,6 +390,10 @@ const search = async (
 ): Promise<SearchResult[]> => {
   const generation = ++searchGeneration;
   await ensureInitialized();
+  // Pin the account for the whole search. `accountId` is a module variable
+  // that switchAccount rewrites, so a search that outlives a switch must not
+  // read it again when it stamps rows for the cache.
+  const searchAccount = accountId;
   const parsed = parseSearchQuery(q || '');
   const { text, filters, ast } = parsed;
   query.set(q || '');
@@ -433,7 +437,7 @@ const search = async (
     try {
       const candidateIds = candidates?.length ? candidates.map((c) => c.id).filter(Boolean) : [];
       const res = await workerClient.search({
-        account: accountId,
+        account: searchAccount,
         query: q,
         folder: effectiveFolder,
         crossFolder: useCrossFolder,
@@ -454,11 +458,11 @@ const search = async (
 
     if (!text) {
       if (useCrossFolder || !effectiveFolder) {
-        localHits = await db.messages.where('account').equals(accountId).toArray();
+        localHits = await db.messages.where('account').equals(searchAccount).toArray();
       } else {
         localHits = await db.messages
           .where('[account+folder]')
-          .equals([accountId, effectiveFolder])
+          .equals([searchAccount, effectiveFolder])
           .toArray();
       }
     } else if (useCrossFolder || !candidates?.length) {
@@ -481,7 +485,7 @@ const search = async (
       const ids = Array.from(new Set((localHits || []).map((h) => h.id).filter(Boolean)));
       if (ids.length) {
         try {
-          const records = await db.messages.bulkGet(ids.map((id) => [accountId, id]));
+          const records = await db.messages.bulkGet(ids.map((id) => [searchAccount, id]));
           const byId = new Map<string, SearchResult>();
           records?.forEach((rec: SearchResult | undefined) => {
             if (rec?.id) byId.set(rec.id, rec);
@@ -507,8 +511,9 @@ const search = async (
   // Wait for server results (best-effort — already running in parallel)
   const serverHits = await serverPromise;
 
-  // A newer search has started — discard these results.
-  if (generation !== searchGeneration) return [];
+  // A newer search has started, or the account changed underneath us (the
+  // server hits were fetched as the old account): discard these results.
+  if (generation !== searchGeneration || searchAccount !== accountId) return [];
 
   // Merge local + server results, then apply client-side filters
   const merged = mergeResults(localHits, serverHits);
@@ -520,8 +525,9 @@ const search = async (
   });
 
   // Also cache any new server-returned messages into IndexedDB so they
-  // appear in subsequent local searches and the message list.
-  if (serverHits.length) {
+  // appear in subsequent local searches and the message list. Demo mode is
+  // IndexedDB-free by design, so its (in-memory) hits are not cached.
+  if (serverHits.length && !isDemoMode()) {
     const localIds = new Set(localHits.map((h) => h.id).filter(Boolean));
     const newFromServer = serverHits.filter((h) => h.id && !localIds.has(h.id));
     if (newFromServer.length) {
@@ -531,7 +537,7 @@ const search = async (
       try {
         const toCache = newFromServer.map((msg) => ({
           ...msg,
-          account: accountId,
+          account: searchAccount,
           folder: msg.folder || effectiveFolder || 'INBOX',
         }));
         db.messages.bulkPut(toCache).catch(() => {});
@@ -668,6 +674,9 @@ const setIncludeBody = async (value: boolean): Promise<void> => {
 const resetSearchConnection = (): void => {
   syncWorkerConnected = false;
   startupCheckDone = false;
+  // Invalidate any in-flight search so its (old-account) results are dropped
+  // instead of being painted into, and cached under, the next account.
+  searchGeneration += 1;
 };
 
 /**

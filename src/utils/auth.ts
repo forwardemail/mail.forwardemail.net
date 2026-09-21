@@ -1,4 +1,4 @@
-import { Local } from './storage.js';
+import { Local, Accounts } from './storage.js';
 
 export interface AuthOptions {
   allowApiKey?: boolean;
@@ -37,6 +37,34 @@ export const buildAliasAuthHeader = (
 
 export const buildApiKeyAuthHeader = (apiKey: string | null | undefined): string =>
   buildBasicHeader(apiKey && isValidCredential(apiKey) ? `${apiKey}:` : '');
+
+/**
+ * Auth header for one specific account, independent of which account is active.
+ *
+ * Requests that were started for account A but complete after the user has
+ * switched to B must still authenticate as A. Reading the active credentials at
+ * send time is what let B's mail get fetched and then filed under A. Returns an
+ * empty string when the account has no usable credentials (signed out, or its
+ * stored credential is an encrypted blob while the app is locked); callers
+ * should skip the request rather than fall back to the active account.
+ */
+export const getAuthHeaderForAccount = (email: string | null | undefined): string => {
+  const active = Local.get('email');
+  if (!email || email === 'default' || email === active) {
+    return getAuthHeader({ allowApiKey: true });
+  }
+  let accounts: Array<{ email?: string; aliasAuth?: string | null; apiKey?: string | null }> = [];
+  try {
+    accounts = Accounts.getAll() || [];
+  } catch {
+    accounts = [];
+  }
+  const match = accounts.find((a) => a?.email === email);
+  if (!match) return '';
+  if (isValidCredential(match.aliasAuth, true)) return buildAliasAuthHeader(match.aliasAuth);
+  if (isValidCredential(match.apiKey)) return buildApiKeyAuthHeader(match.apiKey);
+  return '';
+};
 
 export const getAuthHeader = ({
   allowApiKey = true,

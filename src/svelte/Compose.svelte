@@ -2751,6 +2751,10 @@
         sourceMessageId: msgIdToDelete,
         sentCopyPayload,
         sentCopy: optimisticSent,
+        // The account this window sent as. The main window may be showing a
+        // different account by the time it applies the optimistic Sent copy.
+        account: Local.get('email') || null,
+        sentFolder: nativeWindow ? nativeSentFolder || null : null,
         toast: nativeWindow ? { message: 'Message sent', type: 'success' } : undefined,
       });
       if (nativeWindow) closeNativeWindow();

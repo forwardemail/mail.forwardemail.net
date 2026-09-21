@@ -132,7 +132,12 @@ export const Remote = {
 
     // Handle authorization
     if (!options.skipAuth && this.shouldAuthorize(action)) {
-      if (options.apiKey) {
+      if (options.authHeader) {
+        // Caller-bound credentials (see getAuthHeaderForAccount). Used by
+        // account-scoped loads so a request that outlives an account switch
+        // keeps authenticating as the account it was started for.
+        headers.Authorization = options.authHeader;
+      } else if (options.apiKey) {
         headers.Authorization = buildApiKeyAuthHeader(options.apiKey);
       } else {
         headers.Authorization = getAuthHeader({ allowApiKey: false, required: true });

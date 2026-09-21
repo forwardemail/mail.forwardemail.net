@@ -72,7 +72,10 @@ vi.mock('../../src/stores/mailboxActions', () => ({ selectedConversation: writab
 
 // --- heavy / side-effecting deps stubbed so the store module imports ---
 vi.mock('../../src/utils/remote', () => ({ Remote: { request: vi.fn().mockResolvedValue({}) } }));
-vi.mock('../../src/utils/auth', () => ({ getAuthHeader: vi.fn(() => 'auth') }));
+vi.mock('../../src/utils/auth', () => ({
+  getAuthHeader: vi.fn(() => 'auth'),
+  getAuthHeaderForAccount: vi.fn(() => 'auth'),
+}));
 vi.mock('../../src/utils/storage', () => ({
   Local: { get: vi.fn(() => 'demo@forwardemail.net'), set: vi.fn(), remove: vi.fn() },
   Session: { get: vi.fn(), set: vi.fn(), remove: vi.fn() },

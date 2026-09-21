@@ -67,7 +67,7 @@ import { normalizeLayoutMode } from './settingsRegistry';
 import { warn } from '../utils/logger.ts';
 import { folderMessageCache } from './folder-message-cache';
 import { isOnline } from '../utils/network-status';
-import { getAuthHeader } from '../utils/auth';
+import { getAuthHeader, getAuthHeaderForAccount } from '../utils/auth';
 import { noteLightweightListResponse, lightweightListSupported } from '../utils/api-capabilities';
 import {
   isValidDexieKeyFallback,
@@ -247,6 +247,8 @@ const createMailboxStore = () => {
           // These records are persisted to db.messages, so they must carry
           // recipients. Gate lightweight on this server returning address
           // fields, otherwise the reply index is seeded from empty envelopes.
+          const authHeader = getAuthHeaderForAccount(account as string);
+          if (!authHeader) throw new Error(`No credentials available for ${account}`);
           const res = await Remote.request(
             'MessageList',
             {
@@ -254,7 +256,7 @@ const createMailboxStore = () => {
               limit: 200,
               ...(lightweightListSupported() ? { lightweight: true } : {}),
             },
-            { method: 'GET', pathOverride: '/v1/messages' },
+            { method: 'GET', pathOverride: '/v1/messages', authHeader },
           );
           const items = Array.isArray(res) ? res : res?.data || res?.messages || [];
           if (items.length) {
@@ -921,10 +923,18 @@ const createMailboxStore = () => {
           // fall through to the main-thread Remote request below
         }
       }
+      // Bind the request to the account this load started for. The worker
+      // path files credentials per account, but this fallback used to read
+      // whatever alias was active at send time, so an account switch during
+      // the worker attempt fetched the new account's page and cached it under
+      // the old one.
+      const authHeader = getAuthHeaderForAccount(account);
+      if (!authHeader) throw new Error(`No credentials available for ${account}`);
       const res = await Remote.request('MessageList', params, {
         method: 'GET',
         pathOverride: '/v1/messages',
         timeout: 60_000,
+        authHeader,
       });
 
       return { source: 'main', res };
@@ -1350,6 +1360,10 @@ const createMailboxStore = () => {
     // different account's Sent folder — the only tracker of the three that can
     // put another mailbox's mail on screen, and the one that was missing here.
     pendingInsertTracker.clear();
+    // Drop any in-flight search so its results cannot land in the next
+    // account's list; the store's search generation is otherwise only bumped
+    // by a newer search.
+    searchMessagesGeneration += 1;
     // Clear folder TTL cache so the next loadFolders() does a fresh fetch
     // instead of returning stale/empty data from a previous session.
     folderLoadState.clear();
@@ -1480,12 +1494,22 @@ const createMailboxStore = () => {
   // tracker (so a reload during the indexer-lag window re-injects it instead of
   // pruning it), and prepend it to the live list when Sent is on screen. The
   // real copy overwrites it by id once the sync catches up.
-  const applyOptimisticSentMessage = async (raw: unknown) => {
+  const applyOptimisticSentMessage = async (
+    raw: unknown,
+    options: { account?: string | null; sentFolder?: string | null } = {},
+  ) => {
     try {
       if (!raw) return null;
       const src = raw as Record<string, unknown>;
-      const account = (Local.get('email') as string) || 'default';
-      const sentFolder = getSentFolderPath() as string;
+      const active = (Local.get('email') as string) || 'default';
+      // The compose window sends as its own tab-scoped account, which on
+      // desktop can differ from the account the main window is showing. A
+      // copy sent as B must never enter A's tracker, list, or cache partition:
+      // when the sender is not the active account, persist it under the
+      // sender only and leave the screen alone.
+      const account = options.account || active;
+      const foreign = account !== active;
+      const sentFolder = (foreign ? options.sentFolder : getSentFolderPath()) as string;
       if (!sentFolder) return null;
 
       const envelope = normalizeMessageForCache(src, sentFolder, account);
@@ -1502,7 +1526,7 @@ const createMailboxStore = () => {
       envelope.__optimistic = true;
 
       // Protect from the next loadMessages prune + re-inject into its replace.
-      pendingInsertTracker.add(envelope);
+      if (!foreign) pendingInsertTracker.add(envelope);
 
       // Persist so it survives navigation/reload until the real sync replaces it
       // (same id -> bulkPut overwrite, no duplicate). Best-effort: the cache is
@@ -1512,6 +1536,8 @@ const createMailboxStore = () => {
       } catch {
         // Cache write is best-effort; the tracker still keeps it on screen.
       }
+
+      if (foreign) return envelope;
 
       // If the user is looking at Sent, show it now (dedup by id). `current` is
       // already the processed live list, so just prepend the fresh envelope.

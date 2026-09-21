@@ -16,6 +16,7 @@ const h = vi.hoisted(() => ({
   online: true,
   activeEmail: 'a@test.com',
   remoteRequest: vi.fn().mockResolvedValue({ Result: { List: [] } }),
+  syncRequest: vi.fn().mockRejectedValue(new Error('no worker')),
   cachedMessages: [] as Record<string, unknown>[],
 }));
 
@@ -67,14 +68,18 @@ vi.mock('../../src/utils/db', () => {
   };
 });
 vi.mock('../../src/stores/mailboxActions', () => ({ selectedConversation: writable(null) }));
-vi.mock('../../src/utils/auth', () => ({ getAuthHeader: vi.fn(() => 'auth') }));
+vi.mock('../../src/utils/auth', () => ({
+  getAuthHeader: vi.fn(() => 'auth'),
+  // Credentials keyed by the account a load was started for, not the active one.
+  getAuthHeaderForAccount: vi.fn((email: string) => `auth:${email}`),
+}));
 vi.mock('../../src/utils/storage', () => ({
   Local: { get: vi.fn(() => h.activeEmail), set: vi.fn(), remove: vi.fn() },
   Session: { get: vi.fn(), set: vi.fn(), remove: vi.fn() },
   Accounts: { getAll: () => [], getActive: () => null, setActive: vi.fn() },
 }));
 vi.mock('../../src/utils/sync-worker-client.js', () => ({
-  sendSyncRequest: vi.fn().mockRejectedValue(new Error('no worker')),
+  sendSyncRequest: (...a: unknown[]) => h.syncRequest(...a),
   onSyncTaskComplete: vi.fn(),
 }));
 vi.mock('../../src/utils/cache-manager', () => ({
@@ -103,6 +108,7 @@ vi.mock('../../src/stores/settingsRegistry', () => ({
 }));
 
 const { mailboxStore } = await import('../../src/stores/mailboxStore');
+const { db } = await import('../../src/utils/db');
 const { messages } = await import('../../src/stores/messageStore');
 const { folders, selectedFolder } = await import('../../src/stores/folderStore');
 
@@ -152,6 +158,7 @@ beforeEach(() => {
   h.activeEmail = 'a@test.com';
   h.cachedMessages = [];
   h.remoteRequest.mockReset().mockResolvedValue({ Result: { List: [] } });
+  h.syncRequest.mockReset().mockRejectedValue(new Error('no worker'));
   folders.set([{ path: SENT, name: SENT, specialUse: '\\Sent' }] as never);
   selectedFolder.set(SENT);
   messages.set([] as never);
@@ -196,5 +203,69 @@ describe('optimistic Sent insert across an account change', () => {
 
     expect(idsOnScreen()).toEqual(['b-1']);
     expect(idsOnScreen()).not.toContain('sent-1');
+  });
+});
+
+describe('main-thread message list fallback across an account change', () => {
+  it('authenticates as the account the load was started for', async () => {
+    // The race: the sync worker attempt is still pending (it can wait up to
+    // 30s) when the user switches accounts, then it fails and loadMessages
+    // falls back to a main-thread Remote.request. That request is built while
+    // B is active, but it must authenticate as A, the account this load is
+    // for, because its rows are cached under A.
+    let failWorker!: (e: unknown) => void;
+    h.syncRequest.mockImplementation(
+      () =>
+        new Promise((_, reject) => {
+          failWorker = reject;
+        }),
+    );
+    h.remoteRequest.mockResolvedValue(serverListWith('a-1'));
+
+    const pending = mailboxStore.actions.loadMessages();
+    await vi.waitFor(() => expect(h.syncRequest).toHaveBeenCalled());
+    h.activeEmail = 'b@test.com';
+    failWorker(new Error('no worker'));
+    await pending;
+
+    // Every list request this load makes (the page and any address-shape
+    // retry) must carry A's credentials, never the now-active B's.
+    expect(h.remoteRequest).toHaveBeenCalled();
+    for (const call of h.remoteRequest.mock.calls) {
+      const [, , options] = call as [string, unknown, { authHeader?: string }];
+      expect(options.authHeader).toBe('auth:a@test.com');
+    }
+  });
+});
+
+describe('optimistic Sent copy sent as a different account', () => {
+  it('is cached under the sender and kept off the active account screen', async () => {
+    const put = (db.messages.put as unknown as { mock: { calls: unknown[][] } }).mock;
+    put.calls.length = 0;
+
+    const envelope = await mailboxStore.actions.applyOptimisticSentMessage(
+      sentMessage('sent-b', 'b@test.com'),
+      { account: 'b@test.com', sentFolder: SENT },
+    );
+    expect(envelope?.id).toBe('sent-b');
+
+    await flushRaf();
+    expect(idsOnScreen()).not.toContain('sent-b');
+    expect(put.calls).toHaveLength(1);
+    expect((put.calls[0][0] as { account: string }).account).toBe('b@test.com');
+
+    // Nor may the tracker re-inject it into the active account's next load.
+    h.remoteRequest.mockResolvedValue(serverListWith('a-1'));
+    await mailboxStore.actions.loadMessages();
+    await flushRaf();
+    expect(idsOnScreen()).toEqual(['a-1']);
+  });
+
+  it('needs the sender-side Sent folder when the sender is not active', async () => {
+    const envelope = await mailboxStore.actions.applyOptimisticSentMessage(
+      sentMessage('sent-b', 'b@test.com'),
+      { account: 'b@test.com' },
+    );
+    expect(envelope).toBeNull();
   });
 });

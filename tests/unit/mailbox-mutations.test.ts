@@ -57,7 +57,10 @@ vi.mock('../../src/utils/db', () => {
 });
 // shared boilerplate to make the store module importable
 vi.mock('../../src/stores/mailboxActions', () => ({ selectedConversation: writable(null) }));
-vi.mock('../../src/utils/auth', () => ({ getAuthHeader: vi.fn(() => 'auth') }));
+vi.mock('../../src/utils/auth', () => ({
+  getAuthHeader: vi.fn(() => 'auth'),
+  getAuthHeaderForAccount: vi.fn(() => 'auth'),
+}));
 vi.mock('../../src/utils/storage', () => ({
   Local: { get: vi.fn(() => 'me@test.com'), set: vi.fn(), remove: vi.fn() },
   Session: { get: vi.fn(), set: vi.fn(), remove: vi.fn() },
