@@ -836,10 +836,15 @@ jobs:
           path: ${{ env.IPA_PATH }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
+      # The temporary keychain is not removed here. Since v6 the
+      # import-codesign-certs action deletes the keychain it created in its
+      # own post step, and that step fails the job with exit code 50 when
+      # the keychain is already gone. Deleting it here turned a fully
+      # successful v0.14.5 iOS build into a red job after the IPA had been
+      # uploaded to TestFlight and the release.
       - name: Clean up signing artifacts
         if: always()
         run: |
           rm -f /tmp/profile.mobileprovision
           rm -f "$HOME/Library/MobileDevice/Provisioning Profiles"/*.mobileprovision || true
           rm -rf "$HOME/.appstoreconnect/private_keys" || true
-          security delete-keychain signing_temp.keychain-db 2>/dev/null || true
