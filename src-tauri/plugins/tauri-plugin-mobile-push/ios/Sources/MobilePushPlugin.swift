@@ -4,54 +4,136 @@ import UserNotifications
 import Tauri
 import ObjectiveC
 
+// MARK: - Result codes shared with src/commands.rs
+
+/// Returned by `mobile_push_request_permission`.
+private let PERMISSION_GRANTED: Int32 = 1
+/// The user was asked and declined.
+private let PERMISSION_DENIED: Int32 = 0
+/// Permission was denied earlier. iOS never shows the prompt again; the user
+/// has to re-enable notifications in the Settings app.
+private let PERMISSION_PREVIOUSLY_DENIED: Int32 = 2
+/// requestAuthorization reported an error (message written to the buffer).
+private let PERMISSION_ERROR: Int32 = 3
+/// No answer before the timeout.
+private let PERMISSION_TIMEOUT: Int32 = -2
+
+/// Returned (negative) by `mobile_push_get_device_token`.
+private let TOKEN_ERROR: Int32 = -1
+private let TOKEN_TIMEOUT: Int32 = -2
+private let TOKEN_SIMULATOR: Int32 = -3
+
+private let LAST_TOKEN_DEFAULTS_KEY = "net.forwardemail.mobile-push.apns-token"
+
 // MARK: - Token Fetcher (thread-safe async token retrieval)
 
 /// Fetches an APNs device token by registering for remote notifications
 /// and blocking until the AppDelegate callback fires.
-private class TokenFetcher {
+private final class TokenFetcher {
     let semaphore = DispatchSemaphore(value: 0)
-    var token: String?
-    var error: String?
+    private let lock = NSLock()
+    private var settled = false
+    private(set) var token: String?
+    private(set) var error: String?
 
     func resolve(_ tokenString: String) {
-        self.token = tokenString
+        lock.lock()
+        defer { lock.unlock() }
+        guard !settled else { return }
+        settled = true
+        token = tokenString
         semaphore.signal()
     }
 
     func reject(_ errorMessage: String) {
-        self.error = errorMessage
+        lock.lock()
+        defer { lock.unlock() }
+        guard !settled else { return }
+        settled = true
+        error = errorMessage
         semaphore.signal()
     }
 }
 
-/// The active token fetcher — set during getDeviceToken, read by AppDelegate callbacks.
-/// Access is serialized: only one getToken call can be in-flight at a time (guarded by tokenLock).
+/// The in-flight fetcher. Written from the Tauri IPC thread and read from the
+/// main thread (APNs callbacks), so every access goes through `fetcherLock`.
 private var activeTokenFetcher: TokenFetcher?
+private let fetcherLock = NSLock()
+/// Serializes whole getDeviceToken calls: one registration at a time.
 private let tokenLock = NSLock()
 
-// MARK: - AppDelegate method injection
+private func setActiveFetcher(_ fetcher: TokenFetcher?) {
+    fetcherLock.lock()
+    activeTokenFetcher = fetcher
+    fetcherLock.unlock()
+}
 
-/// Whether we've already injected APNs methods into the AppDelegate class.
-private var apnsDelegateSetUp = false
+private func currentFetcher() -> TokenFetcher? {
+    fetcherLock.lock()
+    defer { fetcherLock.unlock() }
+    return activeTokenFetcher
+}
+
+/// Every APNs token delivery goes through here, whichever path it arrived by
+/// (ObjC +load injection, the Swift fallback injection, or a host post).
+private func deliverToken(_ tokenString: String) {
+    NSLog("[mobile-push] APNs token received: %@...", String(tokenString.prefix(16)))
+    UserDefaults.standard.set(tokenString, forKey: LAST_TOKEN_DEFAULTS_KEY)
+    currentFetcher()?.resolve(tokenString)
+    MobilePushPlugin.instance?.handleTokenString(tokenString)
+}
+
+private func deliverTokenError(_ message: String) {
+    NSLog("[mobile-push] APNs registration failed: %@", message)
+    currentFetcher()?.reject(message)
+}
+
+private func tokenHex(_ data: Data) -> String {
+    return data.map { String(format: "%02.2hhx", $0) }.joined()
+}
+
+/// Copy a UTF-8 message into a caller-owned C buffer (always NUL-terminated).
+private func writeCString(_ message: String, _ buffer: UnsafeMutablePointer<CChar>?, _ bufferLen: Int32) {
+    guard let buffer = buffer, bufferLen > 0 else { return }
+    let bytes = Array(message.utf8.prefix(Int(bufferLen) - 1))
+    for (i, b) in bytes.enumerated() {
+        buffer[i] = CChar(bitPattern: b)
+    }
+    buffer[bytes.count] = 0
+}
+
+// MARK: - Notification observers and UNUserNotificationCenter delegate
 
 /// Configured foreground presentation options. Set via FFI at plugin init.
-/// Defaults to banner + list + sound + badge for back-compat with 0.1.3 and
-/// earlier, which hardcoded this behavior.
 private var configuredForegroundPresentation: UNNotificationPresentationOptions =
     [.banner, .list, .sound, .badge]
 
 /// UNUserNotificationCenter delegate for foreground notification handling.
-/// `willPresent` fires only when the app is in the foreground; backgrounded
-/// and locked states bypass this delegate entirely and iOS shows the system
-/// banner natively.
-private class PushNotificationHandler: NSObject, UNUserNotificationCenterDelegate {
+///
+/// iOS allows exactly one delegate. tauri-plugin-notification installs its
+/// own for LOCAL notifications (the ones the app shows itself, and whose taps
+/// drive its onAction callback). Replacing it outright silently broke those
+/// taps, so anything that is not a remote push is forwarded to the delegate
+/// that was installed before this one.
+private final class PushNotificationHandler: NSObject, UNUserNotificationCenterDelegate {
     static let shared = PushNotificationHandler()
+    var previousDelegate: UNUserNotificationCenterDelegate?
+
+    private func isRemote(_ notification: UNNotification) -> Bool {
+        return notification.request.trigger is UNPushNotificationTrigger
+    }
 
     func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
+        if !isRemote(notification),
+           let previous = previousDelegate,
+           previous.responds(to: #selector(UNUserNotificationCenterDelegate.userNotificationCenter(_:willPresent:withCompletionHandler:))) {
+            previous.userNotificationCenter?(center, willPresent: notification, withCompletionHandler: completionHandler)
+            return
+        }
         MobilePushPlugin.instance?.handleNotification(notification.request.content.userInfo)
         completionHandler(configuredForegroundPresentation)
     }
@@ -61,95 +143,40 @@ private class PushNotificationHandler: NSObject, UNUserNotificationCenterDelegat
         didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
+        if !isRemote(response.notification),
+           let previous = previousDelegate,
+           previous.responds(to: #selector(UNUserNotificationCenterDelegate.userNotificationCenter(_:didReceive:withCompletionHandler:))) {
+            previous.userNotificationCenter?(center, didReceive: response, withCompletionHandler: completionHandler)
+            return
+        }
         MobilePushPlugin.instance?.handleNotificationTap(response.notification.request.content.userInfo)
         completionHandler()
     }
 }
 
-/// Sets up APNs delegate methods and notification observers.
-///
-/// APNs callback methods (didRegisterForRemoteNotificationsWithDeviceToken: etc.)
-/// are now injected by TaoWindowCapture.m at +load time via a setDelegate: swizzle.
-/// This ensures the methods exist BEFORE UIApplication builds its respondsToSelector:
-/// cache — eliminating the need for any delegate reassignment (which crashes on iOS 26
-/// because setting delegate=nil tears down the scene lifecycle).
-///
-/// This function only sets up the NotificationCenter observers and UNUserNotificationCenter
-/// delegate. The actual APNs methods are in ObjC (TaoWindowCapture.m) and post
-/// NSNotifications that we observe here.
+private var observersInstalled = false
+private var notificationDelegateInstalled = false
+private var appDelegateFallbackChecked = false
+
+/// Register the NotificationCenter observers that carry APNs callbacks from
+/// TaoWindowCapture.m. These need no app delegate, so they are installed as
+/// early as possible (plugin load) rather than lazily: a token refresh that
+/// iOS delivers at launch used to arrive before anything was listening.
 ///
 /// Must be called on the main thread.
-private func setupApnsDelegateInternal() {
-    guard !apnsDelegateSetUp else { return }
+private func installObserversIfNeeded() {
+    guard !observersInstalled else { return }
+    observersInstalled = true
 
-    guard let delegate = UIApplication.shared.delegate else {
-        NSLog("[mobile-push] setupApnsDelegate: no UIApplication.delegate found")
-        return
-    }
-
-    let cls: AnyClass = type(of: delegate)
-    NSLog("[mobile-push] setupApnsDelegate: delegate class = %@", NSStringFromClass(cls))
-
-    // Verify that TaoWindowCapture.m already injected the APNs methods at +load time.
-    // If not (e.g., inject script didn't run), fall back to adding them here + reassign.
-    let didRegisterSel = sel_registerName("application:didRegisterForRemoteNotificationsWithDeviceToken:")
-    let methodsAlreadyInjected = class_respondsToSelector(cls, didRegisterSel)
-
-    if methodsAlreadyInjected {
-        NSLog("[mobile-push] APNs methods already present on %@ (injected by TaoWindowCapture +load)", NSStringFromClass(cls))
-    } else {
-        NSLog("[mobile-push] APNs methods NOT found — injecting as fallback")
-
-        // Fallback: inject methods here (same as before)
-        let didRegisterBlock: @convention(block) (AnyObject, UIApplication, NSData) -> Void = { _, _, tokenNSData in
-            let tokenData = tokenNSData as Data
-            let tokenString = tokenData.map { String(format: "%02.2hhx", $0) }.joined()
-            NSLog("[mobile-push] APNs token received: %@...", String(tokenString.prefix(16)))
-            activeTokenFetcher?.resolve(tokenString)
-            MobilePushPlugin.instance?.handleToken(tokenData)
-        }
-        let didRegisterImp = imp_implementationWithBlock(didRegisterBlock as Any)
-        class_addMethod(cls, didRegisterSel, didRegisterImp, "v@:@@")
-
-        let didFailSel = sel_registerName("application:didFailToRegisterForRemoteNotificationsWithError:")
-        let didFailBlock: @convention(block) (AnyObject, UIApplication, NSError) -> Void = { _, _, error in
-            NSLog("[mobile-push] APNs registration failed: %@", error.localizedDescription)
-            activeTokenFetcher?.reject(error.localizedDescription)
-            MobilePushPlugin.instance?.handleTokenError(error as Error)
-        }
-        let didFailImp = imp_implementationWithBlock(didFailBlock as Any)
-        class_addMethod(cls, didFailSel, didFailImp, "v@:@@")
-
-        // Must reassign delegate to flush UIApplication's cache.
-        // On iOS 26+ this is risky but we have no choice in fallback mode.
-        if #available(iOS 26, *) {
-            // On iOS 26, re-assign same object (not nil) — this MAY flush the cache
-            // depending on Apple's implementation. It's our best effort fallback.
-            UIApplication.shared.delegate = delegate
-            NSLog("[mobile-push] iOS 26 fallback: re-assigned delegate (same object)")
-        } else {
-            UIApplication.shared.delegate = nil
-            UIApplication.shared.delegate = delegate
-            NSLog("[mobile-push] Re-assigned UIApplication.delegate to flush cache")
-        }
-    }
-
-    // Set UNUserNotificationCenter delegate for foreground handling + tap handling
-    UNUserNotificationCenter.current().delegate = PushNotificationHandler.shared
-    NSLog("[mobile-push] Set UNUserNotificationCenter.delegate")
-
-    // Listen for NotificationCenter-based token delivery as a fallback.
-    // If the host app implements AppDelegate.swift and posts APNsTokenReceived
-    // (as documented in the README), this observer resolves the token fetcher.
     NotificationCenter.default.addObserver(
         forName: Notification.Name("APNsTokenReceived"),
         object: nil,
         queue: nil
     ) { notification in
-        if let token = notification.userInfo?["token"] as? String {
-            NSLog("[mobile-push] Token received via NotificationCenter: %@...", String(token.prefix(16)))
-            activeTokenFetcher?.resolve(token)
-            MobilePushPlugin.instance?.trigger("token-received", data: ["token": token])
+        if let token = notification.userInfo?["token"] as? String, !token.isEmpty {
+            deliverToken(token)
+        } else if let data = notification.userInfo?["tokenData"] as? Data {
+            deliverToken(tokenHex(data))
         }
     }
     NotificationCenter.default.addObserver(
@@ -157,17 +184,15 @@ private func setupApnsDelegateInternal() {
         object: nil,
         queue: nil
     ) { notification in
-        if let error = notification.userInfo?["error"] as? String {
-            NSLog("[mobile-push] Registration failed via NotificationCenter: %@", error)
-            activeTokenFetcher?.reject(error)
-        }
+        let message = (notification.userInfo?["error"] as? String) ?? "Unknown APNs registration error"
+        deliverTokenError(message)
     }
     NotificationCenter.default.addObserver(
         forName: Notification.Name("PushNotificationReceived"),
         object: nil,
         queue: nil
     ) { notification in
-        if let userInfo = notification.userInfo as? [AnyHashable: Any] {
+        if let userInfo = notification.userInfo {
             MobilePushPlugin.instance?.handleNotification(userInfo)
         }
     }
@@ -176,12 +201,75 @@ private func setupApnsDelegateInternal() {
         object: nil,
         queue: nil
     ) { notification in
-        if let userInfo = notification.userInfo as? [AnyHashable: Any] {
+        if let userInfo = notification.userInfo {
             MobilePushPlugin.instance?.handleNotificationTap(userInfo)
         }
     }
+    NSLog("[mobile-push] NotificationCenter observers installed")
+}
 
-    apnsDelegateSetUp = true
+/// Install the UNUserNotificationCenter delegate, remembering whichever one
+/// was there before (see PushNotificationHandler).
+///
+/// Must be called on the main thread.
+private func installNotificationDelegateIfNeeded() {
+    guard !notificationDelegateInstalled else { return }
+    notificationDelegateInstalled = true
+    let center = UNUserNotificationCenter.current()
+    if let existing = center.delegate, !(existing === PushNotificationHandler.shared) {
+        PushNotificationHandler.shared.previousDelegate = existing
+    }
+    center.delegate = PushNotificationHandler.shared
+    NSLog("[mobile-push] Set UNUserNotificationCenter.delegate (previous forwarded: %@)",
+          PushNotificationHandler.shared.previousDelegate == nil ? "no" : "yes")
+}
+
+/// Fallback for builds where TaoWindowCapture.m did not run (for example a
+/// project generated without scripts/inject-ios-scene-delegate.cjs): add the
+/// APNs callbacks to the app delegate class at runtime.
+///
+/// Must be called on the main thread.
+private func ensureAppDelegateCallbacks() {
+    guard !appDelegateFallbackChecked else { return }
+    guard let delegate = UIApplication.shared.delegate else {
+        // Retry on the next call; the delegate is normally present by the time
+        // JS can invoke anything.
+        NSLog("[mobile-push] ensureAppDelegateCallbacks: no UIApplication.delegate yet")
+        return
+    }
+    appDelegateFallbackChecked = true
+
+    let cls: AnyClass = type(of: delegate)
+    let didRegisterSel = sel_registerName("application:didRegisterForRemoteNotificationsWithDeviceToken:")
+    if class_respondsToSelector(cls, didRegisterSel) {
+        NSLog("[mobile-push] APNs callbacks present on %@", NSStringFromClass(cls))
+        return
+    }
+
+    NSLog("[mobile-push] APNs callbacks missing on %@ — injecting fallback", NSStringFromClass(cls))
+    let didRegisterBlock: @convention(block) (AnyObject, UIApplication, NSData) -> Void = { _, _, tokenNSData in
+        deliverToken(tokenHex(tokenNSData as Data))
+    }
+    _ = class_addMethod(cls, didRegisterSel, imp_implementationWithBlock(didRegisterBlock as Any), "v@:@@")
+
+    let didFailSel = sel_registerName("application:didFailToRegisterForRemoteNotificationsWithError:")
+    let didFailBlock: @convention(block) (AnyObject, UIApplication, NSError) -> Void = { _, _, error in
+        deliverTokenError(error.localizedDescription)
+    }
+    _ = class_addMethod(cls, didFailSel, imp_implementationWithBlock(didFailBlock as Any), "v@:@@")
+
+    // UIApplication caches respondsToSelector: when the delegate is set.
+    // Re-assigning the SAME object refreshes that cache; assigning nil first
+    // tears down the scene lifecycle on iOS 26, so never do that.
+    UIApplication.shared.delegate = delegate
+}
+
+private func onMain(_ work: @escaping () -> Void) {
+    if Thread.isMainThread {
+        work()
+    } else {
+        DispatchQueue.main.sync(execute: work)
+    }
 }
 
 // MARK: - Direct FFI functions (bypass PluginManager dispatch)
@@ -189,7 +277,6 @@ private func setupApnsDelegateInternal() {
 /// Configure what iOS shows when a notification arrives while the app is
 /// foreground. `options` is the `UNNotificationPresentationOptions` bitmask
 /// assembled on the Rust side from `ForegroundPresentationOptions`.
-/// Called once from the Rust plugin setup after `register_ios_plugin`.
 @_cdecl("mobile_push_set_foreground_presentation")
 func setForegroundPresentation(_ options: UInt32) {
     configuredForegroundPresentation =
@@ -197,92 +284,154 @@ func setForegroundPresentation(_ options: UInt32) {
     NSLog("[mobile-push] Foreground presentation set: %u", options)
 }
 
-/// Request notification permission. Blocks until the user responds (30s timeout).
-/// Returns 1 if granted, 0 if denied or error.
+/// Request notification permission.
+///
+/// Reads the current authorization first: iOS only ever shows the system
+/// prompt while the status is `.notDetermined`, so a previous "Don't Allow"
+/// is reported as PERMISSION_PREVIOUSLY_DENIED instead of looking like a
+/// prompt that silently never appeared.
+///
+/// Called on a background thread; blocks until the user answers or
+/// `timeoutSecs` elapses. Error text (if any) is written to `errBuffer`.
 @_cdecl("mobile_push_request_permission")
-func requestPermissionDirect() -> Int32 {
-    let sem = DispatchSemaphore(value: 0)
-    var granted = false
+func requestPermissionDirect(
+    _ timeoutSecs: Int32,
+    _ errBuffer: UnsafeMutablePointer<CChar>?,
+    _ errBufferLen: Int32
+) -> Int32 {
+    let center = UNUserNotificationCenter.current()
 
-    UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound]) { result, error in
-        if let error = error {
-            NSLog("[mobile-push] requestAuthorization error: %@", error.localizedDescription)
-        }
-        granted = result
-        sem.signal()
+    let settingsSem = DispatchSemaphore(value: 0)
+    var status: UNAuthorizationStatus = .notDetermined
+    center.getNotificationSettings { settings in
+        status = settings.authorizationStatus
+        settingsSem.signal()
+    }
+    if settingsSem.wait(timeout: .now() + 10) == .timedOut {
+        writeCString("Timed out reading notification settings", errBuffer, errBufferLen)
+        return PERMISSION_TIMEOUT
     }
 
-    let result = sem.wait(timeout: .now() + 30)
-    if result == .timedOut {
-        NSLog("[mobile-push] requestAuthorization timed out")
-        return 0
+    var alreadyGranted = status == .authorized || status == .provisional
+    if #available(iOS 14.0, *), status == .ephemeral {
+        alreadyGranted = true
+    }
+    if alreadyGranted {
+        NSLog("[mobile-push] Notification permission already granted (status=%ld)", status.rawValue)
+        return PERMISSION_GRANTED
+    }
+    if status == .denied {
+        NSLog("[mobile-push] Notification permission previously denied; iOS will not prompt again")
+        return PERMISSION_PREVIOUSLY_DENIED
+    }
+
+    let sem = DispatchSemaphore(value: 0)
+    var granted = false
+    var requestError: String?
+
+    // Ask from the main queue so the system alert is tied to the foreground
+    // scene; iOS queues it until the app is active if it is not yet.
+    DispatchQueue.main.async {
+        NSLog("[mobile-push] Requesting notification authorization (system prompt)")
+        center.requestAuthorization(options: [.alert, .badge, .sound]) { result, error in
+            if let error = error {
+                requestError = error.localizedDescription
+            }
+            granted = result
+            sem.signal()
+        }
+    }
+
+    let timeout = max(Int(timeoutSecs), 10)
+    if sem.wait(timeout: .now() + .seconds(timeout)) == .timedOut {
+        NSLog("[mobile-push] requestAuthorization timed out after %ds", timeout)
+        writeCString("No answer to the notification permission prompt", errBuffer, errBufferLen)
+        return PERMISSION_TIMEOUT
+    }
+
+    if let requestError = requestError {
+        NSLog("[mobile-push] requestAuthorization error: %@", requestError)
+        writeCString(requestError, errBuffer, errBufferLen)
+        return granted ? PERMISSION_GRANTED : PERMISSION_ERROR
     }
 
     NSLog("[mobile-push] Permission %@", granted ? "granted" : "denied")
-    return granted ? 1 : 0
+    return granted ? PERMISSION_GRANTED : PERMISSION_DENIED
 }
 
 /// Get the APNs device token. Blocks until the token is received or timeout.
-/// Writes the hex token string (null-terminated) to buffer.
-/// Returns: >0 = token length, -1 = error, -2 = timeout.
+/// Writes the hex token (NUL-terminated) to `buffer`, or the failure reason
+/// to `errBuffer`.
+/// Returns: >0 token length, -1 error, -2 timeout, -3 simulator.
 @_cdecl("mobile_push_get_device_token")
-func getDeviceTokenDirect(_ buffer: UnsafeMutablePointer<CChar>, _ bufferLen: Int32, _ timeoutSecs: Int32) -> Int32 {
-    // Serialize concurrent calls
+func getDeviceTokenDirect(
+    _ buffer: UnsafeMutablePointer<CChar>,
+    _ bufferLen: Int32,
+    _ timeoutSecs: Int32,
+    _ errBuffer: UnsafeMutablePointer<CChar>?,
+    _ errBufferLen: Int32
+) -> Int32 {
     tokenLock.lock()
     defer { tokenLock.unlock() }
 
-    // Ensure APNs delegate is set up
-    if !apnsDelegateSetUp {
-        if Thread.isMainThread {
-            setupApnsDelegateInternal()
-        } else {
-            DispatchQueue.main.sync {
-                setupApnsDelegateInternal()
-            }
-        }
+    #if targetEnvironment(simulator)
+    // registerForRemoteNotifications raises on the iOS 26 simulator instead
+    // of failing gracefully.
+    writeCString("APNs is not available in the iOS Simulator", errBuffer, errBufferLen)
+    return TOKEN_SIMULATOR
+    #else
+    onMain {
+        installObserversIfNeeded()
+        installNotificationDelegateIfNeeded()
+        ensureAppDelegateCallbacks()
     }
 
     let fetcher = TokenFetcher()
-    activeTokenFetcher = fetcher
+    setActiveFetcher(fetcher)
+    defer { setActiveFetcher(nil) }
 
-    // Register for remote notifications (must be on main thread).
-    // Skip on simulator — registerForRemoteNotifications crashes on iOS 26
-    // simulator because APNs is unavailable and the call triggers a fatal
-    // exception rather than a graceful failure.
     DispatchQueue.main.async {
         NSLog("[mobile-push] Calling registerForRemoteNotifications...")
-        #if !targetEnvironment(simulator)
         UIApplication.shared.registerForRemoteNotifications()
-        #else
-        NSLog("[mobile-push] Skipping registerForRemoteNotifications (simulator)")
-        #endif
     }
 
-    // Wait for the token
     let timeout = max(Int(timeoutSecs), 5)
     let result = fetcher.semaphore.wait(timeout: .now() + .seconds(timeout))
-    activeTokenFetcher = nil
 
+    var resolvedToken: String?
     if result == .timedOut {
-        NSLog("[mobile-push] Token request timed out after %ds", timeout)
-        return -2
+        // iOS normally answers every registerForRemoteNotifications call, but
+        // on a flaky network the callback can take a long time. A token from an
+        // earlier successful registration is still the device's token while
+        // the app remains registered, so prefer it over failing outright.
+        var registered = false
+        onMain { registered = UIApplication.shared.isRegisteredForRemoteNotifications }
+        if registered, let cached = UserDefaults.standard.string(forKey: LAST_TOKEN_DEFAULTS_KEY), !cached.isEmpty {
+            NSLog("[mobile-push] Token callback timed out after %ds; using cached token", timeout)
+            resolvedToken = cached
+        } else {
+            NSLog("[mobile-push] Token request timed out after %ds", timeout)
+            writeCString(
+                "Apple Push Notification service did not answer within \(timeout) seconds. Check the network connection and try again.",
+                errBuffer, errBufferLen)
+            return TOKEN_TIMEOUT
+        }
+    } else if let error = fetcher.error {
+        writeCString(error, errBuffer, errBufferLen)
+        return TOKEN_ERROR
+    } else {
+        resolvedToken = fetcher.token
     }
 
-    if let error = fetcher.error {
-        NSLog("[mobile-push] Token error: %@", error)
-        return -1
+    guard let token = resolvedToken, !token.isEmpty else {
+        writeCString("APNs returned an empty device token", errBuffer, errBufferLen)
+        return TOKEN_ERROR
     }
 
-    guard let token = fetcher.token else {
-        NSLog("[mobile-push] Token is nil after semaphore signal")
-        return -1
-    }
-
-    // Write token to buffer
     let bytes = Array(token.utf8)
     guard bytes.count < Int(bufferLen) else {
-        NSLog("[mobile-push] Token too long for buffer: %d >= %d", bytes.count, bufferLen)
-        return -1
+        writeCString("APNs device token is too long (\(bytes.count) bytes)", errBuffer, errBufferLen)
+        return TOKEN_ERROR
     }
     for (i, b) in bytes.enumerated() {
         buffer[i] = CChar(bitPattern: b)
@@ -291,6 +440,28 @@ func getDeviceTokenDirect(_ buffer: UnsafeMutablePointer<CChar>, _ bufferLen: In
 
     NSLog("[mobile-push] Token (%d chars) written to buffer", bytes.count)
     return Int32(bytes.count)
+    #endif
+}
+
+/// Open this app's page in the Settings app, where a previously denied
+/// notification permission can be re-enabled. Returns 1 when iOS accepted
+/// the request.
+@_cdecl("mobile_push_open_settings")
+func openSettingsDirect() -> Int32 {
+    let sem = DispatchSemaphore(value: 0)
+    var opened = false
+    DispatchQueue.main.async {
+        guard let url = URL(string: UIApplication.openSettingsURLString) else {
+            sem.signal()
+            return
+        }
+        UIApplication.shared.open(url, options: [:]) { success in
+            opened = success
+            sem.signal()
+        }
+    }
+    _ = sem.wait(timeout: .now() + 10)
+    return opened ? 1 : 0
 }
 
 // MARK: - Plugin class (kept for event system + lifecycle)
@@ -298,16 +469,20 @@ func getDeviceTokenDirect(_ buffer: UnsafeMutablePointer<CChar>, _ bufferLen: In
 public class MobilePushPlugin: Plugin {
     public static var instance: MobilePushPlugin?
     private weak var pluginWebView: WKWebView?
+
     override public func load(webview: WKWebView) {
         MobilePushPlugin.instance = self
         self.pluginWebView = webview
+        onMain {
+            installObserversIfNeeded()
+        }
         NSLog("[mobile-push] Plugin loaded (webview ready)")
     }
+
     // MARK: - PluginManager command handlers (kept as fallback)
-    // These handle commands routed through run_mobile_plugin / PluginManager.
-    // Currently bypassed by the direct FFI functions above.
+    // Commands are served by the direct FFI functions above; these only run if
+    // a call ever falls through to run_mobile_plugin.
     @objc override public func requestPermissions(_ invoke: Invoke) {
-        NSLog("[mobile-push] requestPermissions via PluginManager")
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound]) { granted, error in
             if let error = error {
                 invoke.reject(error.localizedDescription)
@@ -316,74 +491,49 @@ public class MobilePushPlugin: Plugin {
             invoke.resolve(["granted": granted])
         }
     }
+
     @objc public func getToken(_ invoke: Invoke) {
-        NSLog("[mobile-push] getToken via PluginManager")
-        DispatchQueue.main.async {
-            #if !targetEnvironment(simulator)
-            UIApplication.shared.registerForRemoteNotifications()
-            #else
-            NSLog("[mobile-push] Skipping registerForRemoteNotifications (simulator)")
-            #endif
-        }
-        // Token arrives via handleToken() callback from AppDelegate
+        invoke.reject("getToken is served by the direct FFI path")
     }
-    // MARK: - Callbacks from AppDelegate injection
-    public func handleToken(_ token: Data) {
-        let tokenString = token.map { String(format: "%02.2hhx", $0) }.joined()
-        NSLog("[mobile-push] handleToken: %@...", String(tokenString.prefix(16)))
-        activeTokenFetcher?.resolve(tokenString)
-        // Plugin.trigger() is broken (register_listener no-op prevents Swift
-        // listener registry from being populated). Dispatch via JS directly.
+
+    // MARK: - Callbacks
+
+    public func handleTokenString(_ tokenString: String) {
+        // Plugin.trigger() never reaches JS (register_listener is a no-op, so
+        // the Swift listener registry stays empty). Dispatch a DOM event.
         emitToWebView("mobile-push:token-received", json: "{\"token\":\"\(tokenString)\"}")
-        self.trigger("token-received", data: ["token": tokenString])
     }
+
+    /// Kept for source compatibility with hosts that call it directly.
+    public func handleToken(_ token: Data) {
+        deliverToken(tokenHex(token))
+    }
+
     public func handleTokenError(_ error: Error) {
-        NSLog("[mobile-push] handleTokenError: %@", error.localizedDescription)
-        activeTokenFetcher?.reject(error.localizedDescription)
+        deliverTokenError(error.localizedDescription)
     }
+
     public func handleNotification(_ userInfo: [AnyHashable: Any]) {
-        // Wrap in {data: ...} to match Android shape. The JS dispatchPushPayload
-        // reads notification.data — without this wrapper iOS payloads are dropped.
+        // Wrap in {data: ...} to match the Android shape read by
+        // dispatchPushPayload in src/utils/push-notifications.js.
         let jsonPayload = serializeUserInfo(userInfo)
         emitToWebView("mobile-push:notification-received", json: "{\"data\":\(jsonPayload)}")
-        // Keep legacy trigger for any future fix to Plugin listener registry
-        var data: JSObject = [:]
-        for (key, value) in userInfo {
-            guard let stringKey = key as? String else { continue }
-            if let stringValue = value as? String {
-                data[stringKey] = stringValue
-            } else if let numberValue = value as? NSNumber {
-                data[stringKey] = numberValue.intValue
-            }
-        }
-        self.trigger("notification-received", data: data)
     }
+
     public func handleNotificationTap(_ userInfo: [AnyHashable: Any]) {
         let jsonPayload = serializeUserInfo(userInfo)
         emitToWebView("mobile-push:notification-tapped", json: "{\"data\":\(jsonPayload)}")
-        // Keep legacy trigger
-        var data: JSObject = [:]
-        for (key, value) in userInfo {
-            guard let stringKey = key as? String else { continue }
-            if let stringValue = value as? String {
-                data[stringKey] = stringValue
-            } else if let numberValue = value as? NSNumber {
-                data[stringKey] = numberValue.intValue
-            }
-        }
-        self.trigger("notification-tapped", data: data)
     }
-    // MARK: - Direct JS event dispatch (bypasses broken Plugin.trigger)
-    /// Dispatch a custom DOM event to the webview. This bypasses the Tauri
-    /// Plugin listener registry which is broken because register_listener
-    /// is a no-op (see commands.rs).
+
+    // MARK: - Direct JS event dispatch
+
     private func emitToWebView(_ eventName: String, json: String) {
-        guard let webView = self.pluginWebView else {
-            NSLog("[mobile-push] emitToWebView: no webview reference")
-            return
-        }
         let js = "window.dispatchEvent(new CustomEvent('\(eventName)',{detail:\(json)}))"
-        DispatchQueue.main.async {
+        DispatchQueue.main.async { [weak self] in
+            guard let webView = self?.pluginWebView else {
+                NSLog("[mobile-push] emitToWebView: no webview reference")
+                return
+            }
             webView.evaluateJavaScript(js) { _, error in
                 if let error = error {
                     NSLog("[mobile-push] emitToWebView failed: %@", error.localizedDescription)
@@ -391,15 +541,22 @@ public class MobilePushPlugin: Plugin {
             }
         }
     }
-    /// Serialize APNs userInfo to a JSON string, handling nested objects,
-    /// arrays, booleans — not just String/NSNumber like the old code.
+
+    /// Serialize APNs userInfo to JSON, dropping anything JSONSerialization
+    /// cannot represent (it raises an Objective-C exception, which would
+    /// crash the app, rather than throwing a Swift error).
     private func serializeUserInfo(_ userInfo: [AnyHashable: Any]) -> String {
         var filtered: [String: Any] = [:]
         for (key, value) in userInfo {
             guard let stringKey = key as? String else { continue }
-            filtered[stringKey] = value
+            if JSONSerialization.isValidJSONObject([stringKey: value]) {
+                filtered[stringKey] = value
+            } else {
+                filtered[stringKey] = String(describing: value)
+            }
         }
-        guard let jsonData = try? JSONSerialization.data(withJSONObject: filtered, options: []),
+        guard JSONSerialization.isValidJSONObject(filtered),
+              let jsonData = try? JSONSerialization.data(withJSONObject: filtered, options: []),
               let jsonString = String(data: jsonData, encoding: .utf8) else {
             return "{}"
         }
@@ -411,9 +568,8 @@ public class MobilePushPlugin: Plugin {
 
 @_cdecl("init_plugin_mobile_push")
 func initPlugin() -> Plugin {
-    // NOTE: Do NOT call setupApnsDelegateInternal() here.
-    // During plugin init, UIApplication.shared.delegate may not be set yet
-    // (Tao creates it dynamically and we run before didFinishLaunchingWithOptions completes).
-    // The delegate setup happens lazily on the first getDeviceToken call.
+    // The app delegate may not exist yet here (Tao creates it during launch),
+    // so delegate work stays lazy. Observers need no delegate and are set up
+    // in load(webview:).
     return MobilePushPlugin()
 }

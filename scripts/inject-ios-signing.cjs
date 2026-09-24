@@ -133,6 +133,31 @@ if (/^\s*CODE_SIGN_ENTITLEMENTS:/m.test(projYml)) {
 // empty .entitlements file, so our aps-environment never reaches the binary.
 // Rewrite it to point to our ForwardEmail-iOS.entitlements file.
 const entitlementsPathRegex = /(\bentitlements:\s*\n\s*path:\s*).+\.entitlements/m;
+// `tauri ios build` does not always sign through Xcode's settings: when App
+// Store Connect API credentials are in the environment it archives unsigned
+// and then signs the binary itself with
+// <project>/<scheme>_iOS/<scheme>_iOS.entitlements, the file Tauri generated.
+// Keep that file identical to ours so aps-environment survives either path.
+const generatedEntitlementsMatch = projYml.match(
+  /\bentitlements:\s*\n\s*path:\s*(.+\.entitlements)/m,
+);
+const generatedEntitlementsRel = generatedEntitlementsMatch?.[1]
+  ?.trim()
+  .replace(/^["']|["']$/g, '');
+if (generatedEntitlementsRel && generatedEntitlementsRel !== iosEntitlementsName) {
+  const generatedEntitlementsPath = path.join(appleDir, generatedEntitlementsRel);
+  fs.mkdirSync(path.dirname(generatedEntitlementsPath), { recursive: true });
+  fs.writeFileSync(generatedEntitlementsPath, iosEntitlements);
+  console.log(`Wrote aps-environment into ${generatedEntitlementsRel} as well`);
+}
+// Same file, found directly, for re-runs where project.yml already points at
+// ours and the match above no longer names Tauri's file.
+for (const entry of fs.readdirSync(appleDir)) {
+  const candidate = path.join(appleDir, entry, `${entry}.entitlements`);
+  if (entry.endsWith('_iOS') && fs.existsSync(candidate)) {
+    fs.writeFileSync(candidate, iosEntitlements);
+  }
+}
 if (entitlementsPathRegex.test(projYml)) {
   const rewritten = projYml.replace(entitlementsPathRegex, `$1${iosEntitlementsName}`);
   if (rewritten !== projYml) {

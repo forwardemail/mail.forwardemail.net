@@ -3,15 +3,7 @@ description = "Default permissions for the mobile-push plugin"
 permissions = [
   "allow-request-permission",
   "allow-get-token",
-  "allow-register-listener"
+  "allow-register-listener",
+  "allow-remove-listener",
+  "allow-open-settings"
 ]
-
-[[permission]]
-identifier = "allow-request-permission"
-description = "Allows requesting push notification permission"
-commands.allow = ["request_permission"]
-
-[[permission]]
-identifier = "allow-get-token"
-description = "Allows retrieving the push notification device token"
-commands.allow = ["get_token"]

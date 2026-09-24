@@ -659,6 +659,13 @@ jobs:
           echo "IPA_PATH=$NEW" >> "$GITHUB_ENV"
           echo "Produced: $NEW"
 
+      # A missing aps-environment entitlement (or a profile without Push
+      # Notifications) does not fail the build; it only shows up on devices as
+      # a push registration that never completes. Stop the release instead.
+      - name: Verify APNs entitlement (built IPA)
+        if: steps.check.outputs.enabled == 'true'
+        run: bash scripts/verify-ios-push-entitlement.sh "$IPA_PATH" production
+
       - name: Repack IPA with unique CFBundleVersion (re-sign)
         if: steps.check.outputs.enabled == 'true'
         env:
@@ -740,6 +747,10 @@ jobs:
           (cd "$WORK" && zip -qry -X "$REPACK" Payload)
           mv "$REPACK" "$IPA_PATH"
           echo "Repacked IPA at: $IPA_PATH"
+
+      - name: Verify APNs entitlement (re-signed IPA)
+        if: steps.check.outputs.enabled == 'true'
+        run: bash scripts/verify-ios-push-entitlement.sh "$IPA_PATH" production
 
       # SLSA build provenance for the final re-signed IPA — same binary that
       # ships to TestFlight + GitHub release. Must run AFTER the repack, since

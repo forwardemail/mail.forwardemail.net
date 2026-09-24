@@ -101,6 +101,14 @@ function isValidToken(token, provider) {
  * @param {string} platform - 'ios' | 'android' | 'apns' | 'fcm' | 'unified-push'
  * @returns {Promise<{id: string, aliasId: string}|null>} the registration
  */
+// Why the last registerPushToken call failed ({ status, message }), or null
+// after a success. Lets Settings explain a server-side rejection.
+let lastTokenRegistrationError = null;
+
+export function getLastTokenRegistrationError() {
+  return lastTokenRegistrationError ? { ...lastTokenRegistrationError } : null;
+}
+
 export async function registerPushToken(token, platform) {
   const provider = platform === 'ios' ? 'apns' : platform === 'android' ? 'fcm' : platform;
 
@@ -131,20 +139,31 @@ export async function registerPushToken(token, platform) {
 
     if (!response.ok) {
       console.warn('[background-service] Token registration failed:', response.status);
+      let message = '';
+      try {
+        const body = await response.json();
+        if (typeof body?.message === 'string') message = body.message.slice(0, 300);
+      } catch {
+        // Non-JSON error body; the status code is enough.
+      }
+      lastTokenRegistrationError = { status: response.status, message };
       return null;
     }
 
     const registration = await response.json();
     if (!registration || typeof registration.id !== 'string' || !registration.id) {
       console.warn('[background-service] Token registration returned no ID');
+      lastTokenRegistrationError = { status: response.status, message: 'No registration ID' };
       return null;
     }
 
+    lastTokenRegistrationError = null;
     pushToken = token;
     pushRegistrationId = registration.id;
     return { id: registration.id, aliasId: readAliasId(registration) };
   } catch (err) {
     console.warn('[background-service] Token registration error:', err);
+    lastTokenRegistrationError = { status: 0, message: String(err?.message || err || '') };
     return null;
   }
 }

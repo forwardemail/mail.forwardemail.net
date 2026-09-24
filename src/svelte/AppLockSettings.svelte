@@ -399,7 +399,7 @@
           id="lock-on-minimize"
         />
         <Label for="lock-on-minimize" class="text-sm font-normal">
-          Lock when app is minimized or hidden
+          Lock when app is minimized or hidden for 30 seconds
         </Label>
       </div>
 

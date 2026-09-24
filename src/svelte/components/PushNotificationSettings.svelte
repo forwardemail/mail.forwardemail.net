@@ -16,6 +16,7 @@
   import {
     deregisterCurrentDevicePush,
     getPushNotificationStatus,
+    openNotificationSettings,
     registerCurrentDevicePush,
     removePushRegistration,
     reregisterCurrentDevicePush,
@@ -49,6 +50,12 @@
   let loading = $state(true);
   let activeAction = $state('');
   let error = $state('');
+  // Native or server reason behind the last failed action, shown under the
+  // summary so a failure is diagnosable instead of a generic retry prompt.
+  let errorDetail = $state('');
+  // Set when iOS will no longer show the permission prompt, so the only way
+  // forward is the Settings app.
+  let showOpenSettings = $state(false);
   let confirmationOpen = $state(false);
   let confirmation = $state<Confirmation | null>(null);
   let refreshSequence = 0;
@@ -124,6 +131,14 @@
         return 'Push notifications are unavailable in demo mode.';
       case 'permission-denied':
         return 'Notification permission was not granted. Enable it in system settings and try again.';
+      case 'permission-blocked':
+        return 'Notifications are turned off for Forward Email. Turn on Allow Notifications in Settings, then register again.';
+      case 'token-unavailable':
+        return 'This device could not obtain a push token from the platform notification service.';
+      case 'server-rejected':
+        return 'Forward Email did not accept this device registration.';
+      case 'registration-timeout':
+        return 'Push registration took too long to complete. Check your connection and try again.';
       case 'distributor-required':
         return 'Choose a UnifiedPush distributor before registering.';
       case 'server-unavailable':
@@ -157,18 +172,35 @@
     status = result.status;
     if (result.ok) {
       error = '';
+      errorDetail = '';
+      showOpenSettings = false;
       toasts?.show?.(successMessage, 'success');
       return;
     }
 
     error = actionError(result.code);
+    errorDetail =
+      typeof result.detail === 'string' && result.detail && result.detail !== error
+        ? result.detail
+        : '';
+    showOpenSettings =
+      result.status?.platform === 'ios' &&
+      (result.code === 'permission-blocked' || result.code === 'permission-denied');
     toasts?.show?.(error, 'error');
+  };
+
+  const openSystemSettings = async () => {
+    if (!(await openNotificationSettings())) {
+      error = 'Open the Settings app, choose Forward Email, then Notifications.';
+    }
   };
 
   const runAction = async (name: string, operation: () => Promise<void>) => {
     if (activeAction) return;
     activeAction = name;
     error = '';
+    errorDetail = '';
+    showOpenSettings = false;
     try {
       await operation();
     } catch (err) {
@@ -324,7 +356,20 @@
     {#if error}
       <Alert.Root variant="destructive">
         <AlertCircle class="h-4 w-4" />
-        <Alert.Description>{error}</Alert.Description>
+        <Alert.Description>
+          <p>{error}</p>
+          {#if errorDetail}
+            <p class="mt-1 break-words font-mono text-xs" data-testid="push-error-detail">
+              {errorDetail}
+            </p>
+          {/if}
+          {#if showOpenSettings}
+            <Button class="mt-3" size="sm" variant="outline" onclick={openSystemSettings}>
+              <ExternalLink class="mr-2 h-4 w-4" />
+              Open Settings
+            </Button>
+          {/if}
+        </Alert.Description>
       </Alert.Root>
     {/if}
 

@@ -9,6 +9,7 @@ const push = vi.hoisted(() => ({
   deregister: vi.fn(),
   getStatus: vi.fn(),
   listener: null as (() => void) | null,
+  openSettings: vi.fn(),
   register: vi.fn(),
   remove: vi.fn(),
   reregister: vi.fn(),
@@ -21,6 +22,7 @@ const push = vi.hoisted(() => ({
 vi.mock('../../src/utils/push-notifications.js', () => ({
   deregisterCurrentDevicePush: (...args: unknown[]) => push.deregister(...args),
   getPushNotificationStatus: (...args: unknown[]) => push.getStatus(...args),
+  openNotificationSettings: (...args: unknown[]) => push.openSettings(...args),
   registerCurrentDevicePush: (...args: unknown[]) => push.register(...args),
   removePushRegistration: (...args: unknown[]) => push.remove(...args),
   reregisterCurrentDevicePush: (...args: unknown[]) => push.reregister(...args),
@@ -145,6 +147,64 @@ describe('<PushNotificationSettings />', () => {
 
     await waitFor(() => expect(push.register).toHaveBeenCalledTimes(1));
     expect(screen.getByText('Active')).toBeInTheDocument();
+  });
+
+  it('shows the native reason when iOS registration fails', async () => {
+    const empty = makeStatus({
+      initialized: false,
+      localTokenPresent: false,
+      localTokenFingerprint: null,
+      currentRegistration: null,
+      health: 'not-registered',
+    });
+    push.getStatus.mockResolvedValue(empty);
+    push.register.mockResolvedValue({
+      ok: false,
+      code: 'token-unavailable',
+      detail:
+        'APNs registration failed: no valid "aps-environment" entitlement string found for application',
+      status: empty,
+    });
+
+    render(PushNotificationSettings, { props: { openExternal: vi.fn() } });
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Register this device' }));
+
+    expect(
+      await screen.findByText(
+        'This device could not obtain a push token from the platform notification service.',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId('push-error-detail')).toHaveTextContent('aps-environment');
+    expect(screen.queryByRole('button', { name: 'Open Settings' })).toBeNull();
+  });
+
+  it('offers the Settings app when iOS notifications were turned off', async () => {
+    const blocked = makeStatus({
+      permission: 'not-granted',
+      initialized: false,
+      localTokenPresent: false,
+      localTokenFingerprint: null,
+      currentRegistration: null,
+      health: 'permission-not-granted',
+    });
+    push.getStatus.mockResolvedValue(blocked);
+    push.register.mockResolvedValue({
+      ok: false,
+      code: 'permission-blocked',
+      detail: 'Notifications for Forward Email are turned off in iOS Settings.',
+      status: blocked,
+    });
+    push.openSettings.mockResolvedValue(true);
+
+    render(PushNotificationSettings, { props: { openExternal: vi.fn() } });
+
+    await fireEvent.click(
+      await screen.findByRole('button', { name: 'Allow & register this device' }),
+    );
+    await fireEvent.click(await screen.findByRole('button', { name: 'Open Settings' }));
+
+    await waitFor(() => expect(push.openSettings).toHaveBeenCalledTimes(1));
   });
 
   it('supports Android FCM and switches to an installed UnifiedPush distributor', async () => {

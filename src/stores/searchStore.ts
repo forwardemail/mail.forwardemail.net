@@ -15,6 +15,7 @@ import { isDemoMode } from '../utils/demo-mode';
 import type { Message, SearchStats, SearchResult } from '../types';
 import { warn } from '../utils/logger.ts';
 import { buildServerSearchParams, mergeResults } from './search-helpers';
+import { isVaultLocked } from '../utils/crypto-store.js';
 
 export interface SearchHealth {
   healthy: boolean;
@@ -84,6 +85,29 @@ let workerClient: SearchWorkerClient | null = null;
 let syncWorkerConnected = false;
 let startupCheckDone = false;
 
+// While App Lock holds the vault shut the local cache is unreadable: sealed
+// messages come back without subject or sender, the persisted index cannot be
+// loaded, and every index write fails with DbLockedError. Building or checking
+// the index in that state produced an empty index, a "rebuild" of blank rows
+// and then a "Search index build failed" toast that sat behind the lock screen
+// until the user unlocked. Search work is deferred until the vault opens and
+// resumed by resumeAfterUnlock().
+const vaultLocked = (): boolean => {
+  try {
+    return isVaultLocked();
+  } catch {
+    return false;
+  }
+};
+
+// Errors that mean "not now" rather than "broken": the vault was locked, or
+// the worker was replaced (account switch, recovery) mid-operation. They are
+// retried later and never shown to the user.
+const isTransientIndexError = (err: unknown): boolean => {
+  const message = err instanceof Error ? err.message : String(err ?? '');
+  return /database is locked|DB_LOCKED|DbLockedError|worker terminated/i.test(message);
+};
+
 // Incremented on every search() call — results from stale generations are
 // discarded so rapid typing doesn't let an earlier query overwrite a later one.
 let searchGeneration = 0;
@@ -110,12 +134,38 @@ const ensureMainThreadService = async (): Promise<void> => {
   refreshStats();
 };
 
+// The in-flight initialization, shared by concurrent callers for the same
+// account. Without it a second caller saw the freshly created worker, returned
+// before `init` had even been sent, and raced the startup health check.
+let initInFlight: Promise<void> | null = null;
+let initInFlightAccount = '';
+
 const ensureInitialized = async (
   account: string = Local.get('email') || 'default',
 ): Promise<void> => {
   const normalizedAccount = account || 'default';
+  if (initInFlight && initInFlightAccount === normalizedAccount) return initInFlight;
   if (workerClient && accountId === normalizedAccount) return;
+  // Nothing useful can be indexed or checked while the vault is locked, and a
+  // locked cold start does not even know the account yet (the email is
+  // encrypted), so it would spin up a worker for "default" and throw it away
+  // on unlock. resumeAfterUnlock() picks this up.
+  if (vaultLocked()) return;
 
+  const pending = initializeFor(normalizedAccount);
+  initInFlight = pending;
+  initInFlightAccount = normalizedAccount;
+  try {
+    await pending;
+  } finally {
+    if (initInFlight === pending) {
+      initInFlight = null;
+      initInFlightAccount = '';
+    }
+  }
+};
+
+const initializeFor = async (normalizedAccount: string): Promise<void> => {
   // Terminate old worker before creating new one to prevent parallel execution
   if (workerClient) {
     try {
@@ -125,6 +175,9 @@ const ensureInitialized = async (
     }
     workerClient = null;
     syncWorkerConnected = false; // Reset port flag so new connection is established
+    // The startup health check belongs to the account it ran for. A new
+    // account needs its own, or its index is never rebuilt.
+    startupCheckDone = false;
   }
 
   accountId = normalizedAccount;
@@ -172,6 +225,11 @@ const ensureInitialized = async (
 // Check index health on startup and trigger rebuild or incremental sync if needed
 const runStartupCheck = async (): Promise<void> => {
   if (!workerClient) return;
+  if (vaultLocked()) {
+    // Re-run after unlock instead of judging an unreadable cache.
+    startupCheckDone = false;
+    return;
+  }
 
   try {
     const healthResult = await workerClient.getHealth({
@@ -198,7 +256,27 @@ const runStartupCheck = async (): Promise<void> => {
       health.set(newHealth);
     }
   } catch (err) {
+    if (isTransientIndexError(err)) startupCheckDone = false;
     warn('[searchStore] Startup health check failed', err);
+  }
+};
+
+/**
+ * Pick up search work deferred while the vault was locked. Called by the
+ * unlock path in main.ts. Silent: success is not news, and a failure here is
+ * retried by the next health check rather than shown over a fresh unlock.
+ */
+const resumeAfterUnlock = async (): Promise<void> => {
+  if (vaultLocked()) return;
+  const account = Local.get('email') || 'default';
+  try {
+    await ensureInitialized(account);
+    if (workerClient && !startupCheckDone) {
+      startupCheckDone = true;
+      await runStartupCheck();
+    }
+  } catch (err) {
+    warn('[searchStore] resume after unlock failed', err);
   }
 };
 
@@ -252,6 +330,9 @@ const syncMissingMessages = async (): Promise<{ stats?: SearchStats } | null> =>
 
 const indexMessages = async (messages: Message[] = []): Promise<void> => {
   if (!messages?.length) return;
+  // Locked: the records are sealed and index writes would fail. The health
+  // check after unlock indexes whatever arrived in the meantime.
+  if (vaultLocked()) return;
   await ensureInitialized();
   if (workerClient) {
     try {
@@ -295,6 +376,7 @@ const indexMessages = async (messages: Message[] = []): Promise<void> => {
 
 const removeFromIndex = async (ids: string[] = []): Promise<void> => {
   if (!ids?.length) return;
+  if (vaultLocked()) return;
   await ensureInitialized();
   if (workerClient) {
     try {
@@ -553,6 +635,10 @@ const search = async (
 
 const rebuildFromCache = async (options: RebuildOptions = {}): Promise<{ count: number }> => {
   const { silent = false } = options;
+  if (vaultLocked()) {
+    startupCheckDone = false;
+    return { count: 0 };
+  }
   loading.set(true);
   indexProgress.set({ active: true, current: 0, total: 0, message: 'Preparing index rebuild...' });
 
@@ -626,7 +712,13 @@ const rebuildFromCache = async (options: RebuildOptions = {}): Promise<{ count: 
   } catch (err) {
     warn('[searchStore] rebuildFromCache failed', err);
     indexProgress.set({ active: false, current: 0, total: 0, message: '' });
-    indexToastsRef?.show?.('Search index build failed', 'error');
+    if (isTransientIndexError(err)) {
+      // Locked vault or a worker swapped out underneath the rebuild: the next
+      // health check (after unlock, or for the new account) rebuilds again.
+      startupCheckDone = false;
+    } else {
+      indexToastsRef?.show?.('Search index build failed', 'error');
+    }
     throw err;
   } finally {
     loading.set(false);
@@ -723,6 +815,7 @@ export const searchStore = {
     getWorkerClient,
     resetSearchConnection,
     terminateWorker,
+    resumeAfterUnlock,
   },
 };
 

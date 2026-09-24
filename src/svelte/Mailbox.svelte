@@ -5277,10 +5277,15 @@
     });
     // Initialize search store for saved search suggestions
     // Only initialize when the mailbox is active (isActive) to prevent
-    // sync-worker connection errors on the login page.
+    // sync-worker connection errors on the login page. Waits for appReady like
+    // the loads above: before that, App Lock may still hold the vault shut and
+    // the account (encrypted email) is not known yet, so the index would be
+    // built for the wrong account from unreadable records.
     if (isActive) {
-      searchStore?.actions?.ensureInitialized?.().then(() => {
-        searchStore?.actions?.refreshSavedSearches?.();
+      appReady.then(() => {
+        searchStore?.actions?.ensureInitialized?.().then(() => {
+          searchStore?.actions?.refreshSavedSearches?.();
+        });
       });
     }
     const closeHandler = (e) => {

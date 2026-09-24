@@ -303,10 +303,30 @@ describe('inject-ios-scene-delegate.cjs', () => {
       ),
       'utf8',
     );
-    expect(plugin).toContain('#if !targetEnvironment(simulator)');
-    const matches = plugin.match(/#if !targetEnvironment\(simulator\)/g);
-    expect(matches).not.toBeNull();
-    expect(matches!.length).toBeGreaterThanOrEqual(2);
+    // registerForRemoteNotifications raises on the iOS 26 simulator, so every
+    // call must be compiled out of simulator builds: either inside
+    // `#if !targetEnvironment(simulator)` or in the `#else` branch of
+    // `#if targetEnvironment(simulator)`.
+    const calls = [...plugin.matchAll(/registerForRemoteNotifications\(\)/g)];
+    expect(calls.length).toBeGreaterThan(0);
+    for (const call of calls) {
+      const before = plugin.slice(0, call.index);
+      const directives = [...before.matchAll(/^\s*#(if [^\n]*|else|endif)\s*$/gm)].map((m) =>
+        m[1].trim(),
+      );
+      // Walk back to the innermost open conditional around the call.
+      const stack: string[] = [];
+      for (const directive of directives) {
+        if (directive.startsWith('if ')) stack.push(directive);
+        else if (directive === 'else') stack.push(`else:${stack.pop()}`);
+        else stack.pop();
+      }
+      const innermost = stack[stack.length - 1];
+      expect(
+        innermost === 'if !targetEnvironment(simulator)' ||
+          innermost === 'else:if targetEnvironment(simulator)',
+      ).toBe(true);
+    }
   });
 
   // ─── Plist fallback injection test ──────────────────────────────────────────

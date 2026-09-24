@@ -12,7 +12,7 @@
  */
 
 import { getLockPrefs } from './crypto-store.js';
-import { isTauri, isTauriMobile } from './platform.js';
+import { isTauri, isTauriMobile, nativePlatform } from './platform.js';
 
 const ACTIVITY_EVENTS = [
   'mousedown',
@@ -195,6 +195,15 @@ function start(onLock) {
  * lock timer while the user is typing in one of them.
  */
 async function setupTauriListeners() {
+  // On iOS, window focus is not a minimize signal: it drops for Control
+  // Center, notification banners, Face ID and system alerts while the app is
+  // still on screen. SceneDelegate.swift reports real background entry
+  // instead. Android has no such native events and keeps using focus/blur.
+  if (isTauriMobile && nativePlatform === 'ios') {
+    setupNativeLifecycleListeners();
+    return;
+  }
+
   try {
     const { getCurrentWindow } = await import('@tauri-apps/api/window');
     const appWindow = getCurrentWindow();
@@ -251,12 +260,6 @@ async function setupTauriListeners() {
   } catch {
     // Not in Tauri context or event API unavailable
   }
-
-  // On mobile, also listen for native lifecycle events dispatched by
-  // SceneDelegate.swift (iOS) which are more reliable than tauri://focus/blur
-  if (isTauriMobile) {
-    setupNativeLifecycleListeners();
-  }
 }
 
 /**
@@ -264,6 +267,9 @@ async function setupTauriListeners() {
  * and Android activity lifecycle. These are custom DOM events injected via
  * evaluateJavaScript from the native side, providing a reliable signal that
  * the app has actually gone to/from background (not just lost window focus).
+ * `fe:app-background` fires only on a real background entry; the transient
+ * "inactive" state (Control Center, system sheets) is `fe:app-inactive` and is
+ * deliberately ignored here.
  */
 function setupNativeLifecycleListeners() {
   const handleBackground = () => {

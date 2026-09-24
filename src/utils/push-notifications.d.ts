@@ -65,6 +65,9 @@ export type PushManagementCode =
   | 'authentication-required'
   | 'demo-mode'
   | 'permission-denied'
+  | 'permission-blocked'
+  | 'token-unavailable'
+  | 'server-rejected'
   | 'distributor-required'
   | 'server-unavailable'
   | 'registration-failed'
@@ -74,6 +77,8 @@ export type PushManagementCode =
 export interface PushManagementResult {
   ok: boolean;
   code: PushManagementCode;
+  /** Native or server reason for a failure, when one is known. */
+  detail?: string;
   status: PushNotificationStatus;
 }
 
@@ -86,6 +91,8 @@ export function initPushNotifications(): Promise<boolean>;
 export function syncPushNotifications(): Promise<boolean>;
 export function cleanupPushNotifications(): Promise<boolean>;
 export function getPushNotificationStatus(): Promise<PushNotificationStatus>;
+export function getLastPushRegistrationFailure(): { code: string; detail: string } | null;
+export function openNotificationSettings(): Promise<boolean>;
 export function subscribePushStatus(listener: () => void): () => void;
 export function registerCurrentDevicePush(): Promise<PushManagementResult>;
 export function deregisterCurrentDevicePush(): Promise<PushManagementResult>;

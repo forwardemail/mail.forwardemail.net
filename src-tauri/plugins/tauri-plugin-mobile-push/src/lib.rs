@@ -138,10 +138,7 @@ impl Builder {
 
     /// Configure how notifications are presented when the app is in the
     /// foreground on iOS. No effect on Android or desktop.
-    pub fn ios_foreground_presentation(
-        mut self,
-        options: ForegroundPresentationOptions,
-    ) -> Self {
+    pub fn ios_foreground_presentation(mut self, options: ForegroundPresentationOptions) -> Self {
         self.ios_foreground_presentation = options;
         self
     }
@@ -153,7 +150,9 @@ impl Builder {
             .invoke_handler(tauri::generate_handler![
                 commands::request_permission,
                 commands::get_token,
-                commands::register_listener
+                commands::register_listener,
+                commands::remove_listener,
+                commands::open_settings
             ])
             .setup(move |app, api| {
                 #[cfg(mobile)]

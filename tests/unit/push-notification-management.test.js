@@ -465,4 +465,61 @@ describe('push notification status and management', () => {
       vi.useRealTimers();
     }
   });
+
+  describe('iOS registration failures carry their reason', () => {
+    beforeEach(() => {
+      localStore.set('alias_auth', ALIAS_AUTH);
+      localStore.set('email', 'user@example.com');
+      setUserAgent('ForwardEmail/1.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)');
+    });
+
+    it('reports notifications turned off in Settings instead of a silent missing prompt', async () => {
+      apnsPermissionMock.mockResolvedValue({ granted: false, status: 'previously-denied' });
+      isPermissionGrantedMock.mockResolvedValue(false);
+      const { registerCurrentDevicePush } = await import('../../src/utils/push-notifications.js');
+
+      const result = await registerCurrentDevicePush();
+
+      expect(result.ok).toBe(false);
+      expect(result.code).toBe('permission-blocked');
+      expect(result.detail).toMatch(/turned off in iOS Settings/);
+      expect(apnsGetTokenMock).not.toHaveBeenCalled();
+      expect(registerServerMock).not.toHaveBeenCalled();
+    });
+
+    it('passes the APNs error through when the token cannot be obtained', async () => {
+      apnsGetTokenMock.mockRejectedValue(
+        'APNs registration failed: no valid "aps-environment" entitlement string found for application',
+      );
+      const { registerCurrentDevicePush } = await import('../../src/utils/push-notifications.js');
+
+      const result = await registerCurrentDevicePush();
+
+      expect(result).toMatchObject({ ok: false, code: 'token-unavailable' });
+      expect(result.detail).toContain('aps-environment');
+      expect(registerServerMock).not.toHaveBeenCalled();
+    });
+
+    it('reports a server rejection of the device token', async () => {
+      registerServerMock.mockResolvedValue(null);
+      const { registerCurrentDevicePush } = await import('../../src/utils/push-notifications.js');
+
+      const result = await registerCurrentDevicePush();
+
+      expect(result).toMatchObject({ ok: false, code: 'server-rejected' });
+      expect(result.detail).toMatch(/did not accept|rejected/);
+    });
+
+    it('registers once permission and token are available', async () => {
+      listServerMock.mockResolvedValue([
+        createRegistration({ platform: 'apns', token: APNS_TOKEN, deviceName: 'iPhone' }),
+      ]);
+      const { registerCurrentDevicePush } = await import('../../src/utils/push-notifications.js');
+
+      const result = await registerCurrentDevicePush();
+
+      expect(result).toMatchObject({ ok: true, code: 'registered' });
+      expect(registerServerMock).toHaveBeenCalledWith(APNS_TOKEN, 'ios');
+    });
+  });
 });

@@ -10,7 +10,7 @@
  * <input type="file"> behavior.
  */
 
-import { isTauriDesktop } from './platform.js';
+import { isTauriDesktop, nativePlatform } from './platform.js';
 
 // The bundled tauri-plugin-dialog file picker uses rfd 0.16, whose
 // NSOpenPanel/NSSavePanel bindings are NON-nullable: rfd calls
@@ -33,8 +33,17 @@ import { isTauriDesktop } from './platform.js';
 // download.ts), which build the panel with a nullable `msg_send!` and degrade
 // to a graceful error instead of aborting when the OS returns nil. Non-macOS
 // desktop keeps the plugin — rfd's nil-panic is macOS-specific.
-const isMacOS =
-  typeof navigator !== 'undefined' && /Mac|iPhone|iPad/i.test(navigator.platform || '');
+//
+// Only real macOS qualifies. The old navigator.platform test also matched
+// "iPhone"/"iPad" (and iPadOS reports "MacIntel"), which sent every iOS
+// attachment download to the macOS-only `save_file_macos` command. That
+// command is not registered on iOS, so saving an attachment always failed
+// there. Inside Tauri the OS plugin's platform is authoritative.
+const isMacOS = nativePlatform
+  ? nativePlatform === 'macos'
+  : typeof navigator !== 'undefined' &&
+    /Mac/i.test(navigator.platform || '') &&
+    !(typeof navigator.maxTouchPoints === 'number' && navigator.maxTouchPoints > 1);
 
 export const isMacOSPlatform = isMacOS;
 

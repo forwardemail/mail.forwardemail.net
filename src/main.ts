@@ -101,7 +101,7 @@ import {
   setTerminateWorkersCallback,
   terminateDbWorker,
 } from './utils/db';
-import { markBootstrapReady, markAppReady } from './utils/bootstrap-ready.js';
+import { appReady, markBootstrapReady, markAppReady } from './utils/bootstrap-ready.js';
 import { installRuntimeErrorNotifier } from './utils/runtime-error-notifier';
 import { initPerfObservers } from './utils/perf-logger.ts';
 import { attemptRecovery } from './utils/db-recovery';
@@ -2112,6 +2112,15 @@ async function showLockScreen(): Promise<void> {
         } catch (err) {
           console.warn('[app-lock] post-unlock resume failed:', err);
         }
+
+        // Search indexing is deferred while the vault is locked (the cache is
+        // unreadable then). Pick it up now that the key is back — after
+        // bootstrap has settled the account and database on a cold start.
+        void appReady
+          .then(() => searchStore.actions.resumeAfterUnlock?.())
+          .catch((err: unknown) => {
+            console.warn('[app-lock] search resume after unlock failed:', err);
+          });
 
         resolve();
       },

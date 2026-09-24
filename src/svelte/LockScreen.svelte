@@ -43,12 +43,39 @@
   const MAX_ATTEMPTS = 10;
   const LOCKOUT_DURATIONS = [0, 0, 0, 30, 60, 120, 300, 600, 1800, 3600];
 
+  // Everything behind the overlay is made inert while it is up. Blurring
+  // stray focus (trapFocus below) was not enough: an open dialog's focus trap
+  // (compose, settings sheets) pulled focus straight back, trapFocus blurred it
+  // again, and the two fought on every keypad tap, which is what made PIN
+  // entry skip and lag. Inert content cannot take focus or input at all.
+  const KEEP_INTERACTIVE = new Set(['app-lock-overlay', 'fe-fallback-recovery']);
+  let inertedElements = [];
+
+  function makeBackgroundInert() {
+    const overlay = document.getElementById('app-lock-overlay');
+    for (const element of Array.from(document.body?.children || [])) {
+      if (KEEP_INTERACTIVE.has(element.id)) continue;
+      if (overlay && element.contains(overlay)) continue;
+      if (element.hasAttribute('inert')) continue;
+      element.setAttribute('inert', '');
+      inertedElements.push(element);
+    }
+  }
+
+  function restoreBackground() {
+    for (const element of inertedElements) {
+      element.removeAttribute('inert');
+    }
+    inertedElements = [];
+  }
+
   onMount(async () => {
     // Immediately blur any focused element (e.g., TipTap editor) so keystrokes
     // don't leak into the app behind the lock overlay.
     if (document.activeElement && document.activeElement !== document.body) {
       document.activeElement.blur();
     }
+    makeBackgroundInert();
 
     const prefs = getLockPrefs();
     maxLength = prefs.pinLength || 6;
@@ -79,7 +106,7 @@
   function trapFocus(event) {
     const overlay = document.getElementById('app-lock-overlay');
     if (overlay && !overlay.contains(event.target)) {
-      event.target.blur();
+      event.target?.blur?.();
     }
   }
   window.addEventListener('focusin', trapFocus, true);
@@ -87,6 +114,7 @@
   onDestroy(() => {
     if (lockoutTimer) clearInterval(lockoutTimer);
     window.removeEventListener('focusin', trapFocus, true);
+    restoreBackground();
   });
 
   function getLockoutDuration(attemptCount) {
@@ -256,6 +284,27 @@
     }
   }
 
+  // Keypad buttons act on pointerdown rather than click. On iOS a click only
+  // fires after the finger lifts and WebKit's tap recognizer has decided the
+  // touch was not a double-tap or scroll, so quick PIN entry dropped or
+  // delayed digits. The click that still follows a handled pointerdown is
+  // ignored; clicks with no preceding pointer (assistive tech) still work.
+  let lastPointerPressAt = 0;
+  const CLICK_AFTER_POINTER_MS = 1000;
+
+  function pressKey(action, event) {
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
+    if (event.currentTarget?.disabled) return;
+    event.preventDefault();
+    lastPointerPressAt = Date.now();
+    action();
+  }
+
+  function clickKey(action) {
+    if (Date.now() - lastPointerPressAt < CLICK_AFTER_POINTER_MS) return;
+    action();
+  }
+
   function handleKeydown(event) {
     // Block ALL keystrokes from reaching elements behind the lock overlay
     // (e.g., TipTap editor in an open compose window)
@@ -333,6 +382,7 @@
               {#if showPasskeyOption}
                 <button
                   class="numpad-key special"
+                  type="button"
                   onclick={handlePasskeyAuth}
                   disabled={loading || lockoutUntil > Date.now()}
                   aria-label="Unlock with passkey"
@@ -359,7 +409,9 @@
             {:else if key === 'backspace'}
               <button
                 class="numpad-key special"
-                onclick={handleBackspace}
+                type="button"
+                onpointerdown={(event) => pressKey(handleBackspace, event)}
+                onclick={() => clickKey(handleBackspace)}
                 disabled={loading || pin.length === 0}
                 aria-label="Delete last digit"
               >
@@ -381,7 +433,9 @@
             {:else}
               <button
                 class="numpad-key digit"
-                onclick={() => handleDigit(key)}
+                type="button"
+                onpointerdown={(event) => pressKey(() => handleDigit(key), event)}
+                onclick={() => clickKey(() => handleDigit(key))}
                 disabled={loading || lockoutUntil > Date.now()}
                 aria-label={key}
               >
@@ -403,6 +457,7 @@
   .lock-screen {
     position: fixed;
     inset: 0;
+    touch-action: manipulation;
     z-index: 99999;
     display: flex;
     align-items: center;
@@ -538,6 +593,9 @@
     justify-content: center;
     transition: all 0.1s ease;
     -webkit-tap-highlight-color: transparent;
+    /* No double-tap-to-zoom recognizer, so every tap registers promptly. */
+    touch-action: manipulation;
+    -webkit-touch-callout: none;
   }
 
   .numpad-key.digit {

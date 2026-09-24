@@ -31,6 +31,7 @@ import { isDemoMode } from './demo-mode.js';
 import { isTauriMobile } from './platform.js';
 import { Local, Accounts } from './storage';
 import {
+  getLastTokenRegistrationError,
   listPushTokens,
   registerPushToken,
   registerPushTokenForAccount,
@@ -58,13 +59,53 @@ const NATIVE_PUSH_TIMEOUT_MS = 15_000;
 
 // Permission prompts show a system dialog and wait on a human decision, so
 // they get a much longer budget. This only guards against a hung bridge call,
-// not against a user taking their time with the dialog.
+// not against a user taking their time with the dialog. The iOS native side
+// gives up at 110 seconds, so its answer always arrives first.
 const PERMISSION_PROMPT_TIMEOUT_MS = 120_000;
+
+// iOS token retrieval. The native side waits up to 25 seconds for the APNs
+// callback and then reports why it failed; this budget is longer so that
+// reason reaches the UI instead of a bare JS timeout racing it.
+const IOS_TOKEN_TIMEOUT_MS = 35_000;
 
 class PushTimeoutError extends Error {
   constructor(operation, ms) {
     super(`${operation} timed out after ${ms}ms`);
     this.name = 'PushTimeoutError';
+  }
+}
+
+/**
+ * A registration step failed for a reason worth showing the user: the
+ * permission was refused, APNs rejected the app, the server declined the
+ * token. `code` is a PushManagementCode, `detail` is human-readable.
+ */
+class PushRegistrationError extends Error {
+  constructor(code, detail) {
+    super(detail || code);
+    this.name = 'PushRegistrationError';
+    this.code = code;
+    this.detail = detail || '';
+  }
+}
+
+// Why the most recent native registration attempt failed. Cleared at the
+// start of every attempt; read by the Settings management actions so they can
+// say more than "did not complete".
+let lastRegistrationFailure = null;
+
+function recordRegistrationFailure(code, detail) {
+  lastRegistrationFailure = { code, detail: typeof detail === 'string' ? detail : '' };
+}
+
+function describeError(error) {
+  if (!error) return '';
+  if (typeof error === 'string') return error;
+  if (typeof error.message === 'string' && error.message) return error.message;
+  try {
+    return String(error);
+  } catch {
+    return '';
   }
 }
 
@@ -635,10 +676,21 @@ function pruneStaleRegistrations(currentAccounts) {
 
 // ── Token Acquisition & Registration ──────────────────────────────────────
 
-async function registerNativeToken(getToken, platform) {
-  const token = await withTimeout(getToken(), NATIVE_PUSH_TIMEOUT_MS, 'getToken');
+async function registerNativeToken(getToken, platform, timeoutMs = NATIVE_PUSH_TIMEOUT_MS) {
+  let token;
+  try {
+    token = await withTimeout(getToken(), timeoutMs, 'getToken');
+  } catch (error) {
+    if (error instanceof PushTimeoutError) throw error;
+    // Tauri rejects with the native reason as a plain string, for example
+    // "APNs registration failed: no valid aps-environment entitlement string
+    // found for application".
+    throw new PushRegistrationError('token-unavailable', describeError(error));
+  }
+
   if (!isValidNativeToken(token)) {
     console.warn('[push] Native push provider returned an invalid token');
+    recordRegistrationFailure('token-unavailable', 'The device returned an invalid push token.');
     return false;
   }
 
@@ -646,7 +698,25 @@ async function registerNativeToken(getToken, platform) {
   await reconcileAllAccounts(token, platform);
 
   // Consider registration successful if the token was stored (at least one account registered)
-  return Local.get(TOKEN_STORAGE_KEY) === token;
+  if (Local.get(TOKEN_STORAGE_KEY) === token) return true;
+
+  let serverError = null;
+  try {
+    serverError = getLastTokenRegistrationError();
+  } catch {
+    // Diagnostics only; fall back to the generic message.
+  }
+  let detail =
+    'Forward Email did not accept this device token. Check the connection and try again.';
+  if (serverError?.status) {
+    detail = `Forward Email rejected the device token (HTTP ${serverError.status}${
+      serverError.message ? `: ${serverError.message}` : ''
+    }).`;
+  } else if (serverError?.message) {
+    detail = `Could not reach Forward Email to register this device (${serverError.message}).`;
+  }
+  recordRegistrationFailure('server-rejected', detail);
+  return false;
 }
 
 async function handleTokenRefresh(token, platform) {
@@ -661,13 +731,7 @@ async function handleTokenRefresh(token, platform) {
 }
 
 async function initializeIosPush() {
-  const {
-    getToken,
-    onNotificationReceived,
-    onNotificationTapped,
-    onTokenRefresh,
-    requestPermission,
-  } = await import('tauri-plugin-mobile-push-api');
+  const { getToken, requestPermission } = await import('tauri-plugin-mobile-push-api');
 
   const permission = await withTimeout(
     requestPermission(),
@@ -675,17 +739,34 @@ async function initializeIosPush() {
     'iOS requestPermission',
   );
   if (!permission?.granted) {
-    console.info('[push] iOS notification permission was not granted');
-    return false;
+    // `status` comes from MobilePushPlugin.swift. "previously-denied" is the
+    // case where iOS will never show the prompt again, which used to look
+    // like a prompt that silently failed to appear.
+    const status = typeof permission?.status === 'string' ? permission.status : 'denied';
+    console.info('[push] iOS notification permission was not granted:', status);
+    if (status === 'previously-denied') {
+      throw new PushRegistrationError(
+        'permission-blocked',
+        'Notifications for Forward Email are turned off in iOS Settings.',
+      );
+    }
+    if (status === 'denied') {
+      throw new PushRegistrationError('permission-denied', 'Notification permission was declined.');
+    }
+    throw new PushRegistrationError(
+      'registration-failed',
+      permission?.error || `Notification permission request ended with status "${status}".`,
+    );
   }
 
-  if (!(await registerNativeToken(getToken, 'ios'))) return false;
+  if (!(await registerNativeToken(getToken, 'ios', IOS_TOKEN_TIMEOUT_MS))) return false;
 
-  // The Tauri Plugin listener registry is broken on iOS: the register_listener
-  // command is a no-op (returns Ok(()) without populating the Swift-side
-  // listener map), so Plugin.trigger() never delivers events. As a workaround,
-  // MobilePushPlugin.swift dispatches custom DOM events directly via
-  // evaluateJavaScript. Listen for those here.
+  // The Tauri plugin listener registry does not work for this plugin on iOS
+  // (register_listener is a Rust no-op, so the Swift registry stays empty and
+  // Plugin.trigger() never reaches JS). MobilePushPlugin.swift dispatches DOM
+  // events via evaluateJavaScript instead, and those are the only delivery
+  // path. addPluginListener is deliberately not called: it only created IPC
+  // channels that never fire.
   const handleReceived = (e) => {
     dispatchPushPayload(e.detail, false, true);
   };
@@ -694,36 +775,17 @@ async function initializeIosPush() {
   };
   const handleTokenEvent = (e) => {
     const token = e.detail?.token;
-    if (token) handleTokenRefresh(token, 'ios');
+    if (token) {
+      handleTokenRefresh(token, 'ios').catch((error) => {
+        console.warn('[push] iOS token refresh registration failed:', error);
+      });
+    }
   };
   window.addEventListener('mobile-push:notification-received', handleReceived);
   window.addEventListener('mobile-push:notification-tapped', handleTapped);
   window.addEventListener('mobile-push:token-received', handleTokenEvent);
 
-  // Also try the standard addPluginListener path (will work if Tauri fixes
-  // the listener registry in a future version).
-  let tokenRefreshListener, receivedListener, tappedListener;
-  try {
-    tokenRefreshListener = await onTokenRefresh(async ({ token }) => {
-      await handleTokenRefresh(token, 'ios');
-    });
-    // displayedBySystem=true: APNs alert field causes iOS to auto-display
-    // the notification, so the client must not show a duplicate.
-    receivedListener = await onNotificationReceived((notification) => {
-      dispatchPushPayload(notification, false, true);
-    });
-    tappedListener = await onNotificationTapped((notification) => {
-      dispatchPushPayload(notification, true, true);
-    });
-  } catch {
-    // Expected to fail silently due to register_listener no-op
-  }
-
   nativeListenerCleanups = [
-    tokenRefreshListener,
-    receivedListener,
-    tappedListener,
-    // DOM event cleanup
     {
       unregister() {
         window.removeEventListener('mobile-push:notification-received', handleReceived);
@@ -731,8 +793,23 @@ async function initializeIosPush() {
         window.removeEventListener('mobile-push:token-received', handleTokenEvent);
       },
     },
-  ].filter(Boolean);
+  ];
   return true;
+}
+
+/**
+ * Open this app's page in the iOS Settings app, where notifications that were
+ * turned off can be re-enabled. Resolves false where that is not possible.
+ */
+export async function openNotificationSettings() {
+  if (!isTauriMobile || getMobilePlatform() !== 'ios') return false;
+  try {
+    const { invoke } = await import('@tauri-apps/api/core');
+    return Boolean(await invoke('plugin:mobile-push|open_settings'));
+  } catch (error) {
+    console.warn('[push] Unable to open iOS Settings:', error);
+    return false;
+  }
 }
 
 async function initializeAndroidFcmPush() {
@@ -890,12 +967,14 @@ async function initializeAndroidPush() {
 }
 
 async function initializePushNotifications() {
+  lastRegistrationFailure = null;
   await removeNativeListeners();
   await removeUnifiedPushListeners();
 
   const platform = getMobilePlatform();
   if (!platform) {
     console.warn('[push] Unable to determine mobile platform');
+    recordRegistrationFailure('unsupported', 'Unable to determine the mobile platform.');
     return false;
   }
 
@@ -911,10 +990,26 @@ async function initializePushNotifications() {
   } catch (error) {
     const isTimeout = error instanceof PushTimeoutError;
     console.warn(`[push] Native push initialization ${isTimeout ? 'timed out' : 'failed'}:`, error);
-    if (isTimeout) throw error;
+    if (isTimeout) {
+      recordRegistrationFailure('registration-timeout', describeError(error));
+      throw error;
+    }
+    if (error instanceof PushRegistrationError) {
+      recordRegistrationFailure(error.code, error.detail);
+    } else {
+      recordRegistrationFailure('registration-failed', describeError(error));
+    }
   }
 
   return false;
+}
+
+/**
+ * Why the most recent native registration attempt failed, or null.
+ * @returns {{ code: string, detail: string } | null}
+ */
+export function getLastPushRegistrationFailure() {
+  return lastRegistrationFailure ? { ...lastRegistrationFailure } : null;
 }
 
 /**
@@ -1168,6 +1263,19 @@ function getRegistrationFailureCode(status) {
   return 'registration-failed';
 }
 
+/**
+ * Pick the most specific failure: the native attempt's own reason when there
+ * is one, otherwise what the status snapshot implies.
+ */
+function getRegistrationFailure(status) {
+  const recorded = getLastPushRegistrationFailure();
+  if (recorded && recorded.code !== 'registration-failed') {
+    return { code: recorded.code, detail: recorded.detail };
+  }
+  const code = getRegistrationFailureCode(status);
+  return { code, detail: recorded?.detail || '' };
+}
+
 async function removeCurrentPushRegistration(initialStatus) {
   const activeEmail = Local.get('email');
   const localRegistrationId = getActiveRegistrationId();
@@ -1205,7 +1313,12 @@ export function registerCurrentDevicePush() {
     } catch (error) {
       if (error instanceof PushTimeoutError) {
         const status = await getPushNotificationStatus();
-        return { ok: false, code: 'registration-timeout', status };
+        return {
+          ok: false,
+          code: 'registration-timeout',
+          detail: getLastPushRegistrationFailure()?.detail || '',
+          status,
+        };
       }
 
       throw error;
@@ -1213,11 +1326,9 @@ export function registerCurrentDevicePush() {
 
     const status = await getPushNotificationStatus();
     const ok = status.health === 'active';
-    return {
-      ok,
-      code: ok ? 'registered' : getRegistrationFailureCode(status),
-      status,
-    };
+    return ok
+      ? { ok, code: 'registered', status }
+      : { ok, ...getRegistrationFailure(status), status };
   });
 }
 
@@ -1258,7 +1369,12 @@ export function reregisterCurrentDevicePush() {
     } catch (error) {
       if (error instanceof PushTimeoutError) {
         const status = await getPushNotificationStatus();
-        return { ok: false, code: 'registration-timeout', status };
+        return {
+          ok: false,
+          code: 'registration-timeout',
+          detail: getLastPushRegistrationFailure()?.detail || '',
+          status,
+        };
       }
 
       throw error;
@@ -1266,11 +1382,9 @@ export function reregisterCurrentDevicePush() {
 
     const status = await getPushNotificationStatus();
     const ok = status.health === 'active';
-    return {
-      ok,
-      code: ok ? 'reregistered' : getRegistrationFailureCode(status),
-      status,
-    };
+    return ok
+      ? { ok, code: 'reregistered', status }
+      : { ok, ...getRegistrationFailure(status), status };
   });
 }
 

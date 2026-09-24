@@ -7,6 +7,8 @@ Default permissions for the mobile-push plugin
 - `allow-request-permission`
 - `allow-get-token`
 - `allow-register-listener`
+- `allow-remove-listener`
+- `allow-open-settings`
 
 ## Permission Table
 
@@ -46,6 +48,32 @@ Denies the get_token command without any pre-configured scope.
 <tr>
 <td>
 
+`mobile-push:allow-open-settings`
+
+</td>
+<td>
+
+Enables the open_settings command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`mobile-push:deny-open-settings`
+
+</td>
+<td>
+
+Denies the open_settings command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `mobile-push:allow-register-listener`
 
 </td>
@@ -72,6 +100,32 @@ Denies the register_listener command without any pre-configured scope.
 <tr>
 <td>
 
+`mobile-push:allow-remove-listener`
+
+</td>
+<td>
+
+Enables the remove_listener command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`mobile-push:deny-remove-listener`
+
+</td>
+<td>
+
+Denies the remove_listener command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `mobile-push:allow-request-permission`
 
 </td>
@@ -91,32 +145,6 @@ Enables the request_permission command without any pre-configured scope.
 <td>
 
 Denies the request_permission command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`mobile-push:allow-request-permission`
-
-</td>
-<td>
-
-Allows requesting push notification permission
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`mobile-push:allow-get-token`
-
-</td>
-<td>
-
-Allows retrieving the push notification device token
 
 </td>
 </tr>

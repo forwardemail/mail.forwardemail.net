@@ -1,5 +1,6 @@
 import UIKit
 import WebKit
+import ObjectiveC
 
 /// A UIWindowSceneDelegate that bridges tao 0.34.x (which lacks scene lifecycle
 /// support) with iOS 26's mandatory scene lifecycle.
@@ -23,6 +24,12 @@ class TaoSceneDelegate: UIResponder, UIWindowSceneDelegate {
 
     var window: UIWindow?
     private static var hasFixedViewport = false
+
+    /// Navigation-delegate classes that already reload on content-process
+    /// termination (see installRendererRecovery).
+    private static var recoveryInstalledClasses = Set<ObjectIdentifier>()
+    /// Last renderer recovery reload, to avoid reload loops.
+    private static var lastRecoveryReload: Date?
 
     func scene(
         _ scene: UIScene,
@@ -155,6 +162,8 @@ class TaoSceneDelegate: UIResponder, UIWindowSceneDelegate {
             return
         }
 
+        installRendererRecovery(on: webView)
+
         let frame = webView.frame
         NSLog("[SceneDelegate:fix] WKWebView frame=(%g,%g,%g,%g)",
               frame.origin.x, frame.origin.y, frame.size.width, frame.size.height)
@@ -231,6 +240,69 @@ class TaoSceneDelegate: UIResponder, UIWindowSceneDelegate {
 
     // MARK: - Scene Lifecycle (app foreground/background)
 
+    // MARK: - WebContent process recovery
+
+    /// WKWebView renders in a separate WebContent process that iOS kills
+    /// under memory pressure (most often while the app is in the background,
+    /// but also in the foreground on a heavy page). WKWebView then tells its
+    /// navigation delegate and waits: nothing is drawn and no input is handled
+    /// until someone reloads. Wry forwards that callback only to a handler
+    /// Tauri 2.10 never installs, so the app froze on whatever frame was last
+    /// on screen — typically the lock screen — until it was force-quit.
+    ///
+    /// Replace the (empty) callback on wry's navigation-delegate class with a
+    /// reload. Idempotent per class.
+    private func installRendererRecovery(on webView: WKWebView) {
+        guard let navigationDelegate = webView.navigationDelegate,
+              let cls = object_getClass(navigationDelegate) else {
+            return
+        }
+        let key = ObjectIdentifier(cls)
+        guard !TaoSceneDelegate.recoveryInstalledClasses.contains(key) else { return }
+        TaoSceneDelegate.recoveryInstalledClasses.insert(key)
+
+        let selector = sel_registerName("webViewWebContentProcessDidTerminate:")
+        let block: @convention(block) (AnyObject, WKWebView) -> Void = { _, terminatedWebView in
+            NSLog("[SceneDelegate] WebContent process terminated")
+            TaoSceneDelegate.recoverRenderer(terminatedWebView, reason: "process terminated")
+        }
+        _ = class_replaceMethod(cls, selector, imp_implementationWithBlock(block as Any), "v@:@")
+        NSLog("[SceneDelegate] Renderer recovery installed on %@", NSStringFromClass(cls))
+    }
+
+    /// Reload a webview whose content process is gone. Rate-limited so a page
+    /// that dies again immediately is not reloaded in a tight loop.
+    private static func recoverRenderer(_ webView: WKWebView, reason: String) {
+        DispatchQueue.main.async {
+            let now = Date()
+            if let last = lastRecoveryReload, now.timeIntervalSince(last) < 5 {
+                NSLog("[SceneDelegate] Skipping renderer reload (%@): reloaded %.1fs ago",
+                      reason, now.timeIntervalSince(last))
+                return
+            }
+            lastRecoveryReload = now
+            NSLog("[SceneDelegate] Reloading webview (%@)", reason)
+            if webView.url != nil {
+                webView.reload()
+            } else {
+                webView.reloadFromOrigin()
+            }
+        }
+    }
+
+    /// Belt and braces for the delegate hook: when the app comes back to the
+    /// foreground, ask the page for a trivial value. A terminated content
+    /// process answers with WKError.webContentProcessTerminated.
+    private func checkRendererAlive(_ webView: WKWebView) {
+        webView.evaluateJavaScript("1") { _, error in
+            guard let nsError = error as NSError? else { return }
+            if nsError.domain == WKErrorDomain,
+               nsError.code == WKError.Code.webContentProcessTerminated.rawValue {
+                TaoSceneDelegate.recoverRenderer(webView, reason: "liveness check")
+            }
+        }
+    }
+
     func sceneDidBecomeActive(_ scene: UIScene) {
         NSLog("[SceneDelegate] sceneDidBecomeActive")
         // Dispatch a custom event to JS so the inactivity timer knows the app
@@ -241,14 +313,17 @@ class TaoSceneDelegate: UIResponder, UIWindowSceneDelegate {
 
     func sceneWillResignActive(_ scene: UIScene) {
         NSLog("[SceneDelegate] sceneWillResignActive")
-        // Dispatch a custom event to JS so the inactivity timer can start the
-        // lock-on-minimize grace period immediately.
-        dispatchLifecycleEvent(name: "fe:app-background")
+        // Resigning active is NOT going to the background: it also happens
+        // for Control Center, the notification shade, Face ID / passkey
+        // sheets and system permission alerts, all while the app stays on
+        // screen. Treating it as a minimize started the lock-on-minimize
+        // grace period under the user, so a slow passkey or permission prompt
+        // locked the app mid-use. Report it separately.
+        dispatchLifecycleEvent(name: "fe:app-inactive")
     }
 
     func sceneDidEnterBackground(_ scene: UIScene) {
         NSLog("[SceneDelegate] sceneDidEnterBackground")
-        // Belt-and-suspenders: also fire on full background entry
         dispatchLifecycleEvent(name: "fe:app-background")
     }
 
@@ -289,11 +364,24 @@ class TaoSceneDelegate: UIResponder, UIWindowSceneDelegate {
             return
         }
 
+        installRendererRecovery(on: webView)
+
         let js = "window.dispatchEvent(new CustomEvent('\(name)',{detail:{ts:Date.now()}}))"
         webView.evaluateJavaScript(js) { _, error in
             if let error = error {
                 NSLog("[SceneDelegate] Failed to dispatch %@: %@", name, error.localizedDescription)
+                // Coming back to a page whose content process died while
+                // backgrounded: reload instead of leaving a frozen frame.
+                let nsError = error as NSError
+                if name == "fe:app-foreground",
+                   nsError.domain == WKErrorDomain,
+                   nsError.code == WKError.Code.webContentProcessTerminated.rawValue {
+                    TaoSceneDelegate.recoverRenderer(webView, reason: "foreground dispatch failed")
+                }
             }
+        }
+        if name == "fe:app-foreground" {
+            checkRendererAlive(webView)
         }
     }
 }

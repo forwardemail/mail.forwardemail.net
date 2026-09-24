@@ -139,6 +139,14 @@ The shared `src-tauri/Entitlements.plist` remains free of `aps-environment` beca
 
 Use `scripts/ios-build.sh` for signed builds. Release automation uses these Actions secrets: `APPLE_TEAM_ID`, `IOS_CERTIFICATE_BASE64`, `IOS_CERTIFICATE_PASSWORD`, `IOS_PROVISIONING_PROFILE_BASE64`, `APP_STORE_CONNECT_API_KEY`, `APP_STORE_CONNECT_KEY_ID`, and `APP_STORE_CONNECT_ISSUER_ID`.
 
+A missing entitlement does not fail the build. It only shows up on devices as a registration that never completes. The release workflow therefore runs `scripts/verify-ios-push-entitlement.sh` on the built and on the re-signed IPA, and stops the release when the signed app or its embedded provisioning profile lacks `aps-environment`. The same check works locally:
+
+```bash
+bash scripts/verify-ios-push-entitlement.sh path/to/app.ipa production
+```
+
+When registration fails on a device, **Settings → Push notifications** shows the reason reported by iOS or the server, for example `no valid "aps-environment" entitlement string found for application`. iOS shows the permission prompt only once; after **Don't Allow**, the same screen offers **Open Settings** instead.
+
 ## Android UnifiedPush configuration
 
 The first-party Tauri plugin under `src-tauri/plugins/tauri-plugin-unified-push` uses the stable UnifiedPush Android connector. It performs distributor discovery, explicit user-driven distributor selection, VAPID-bound registration, callback persistence, subscription rotation, message acknowledgment, foreground event forwarding, and background native notification display.
