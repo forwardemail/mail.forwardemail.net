@@ -8,7 +8,7 @@
 
   interface Props {
     visible?: boolean;
-    mode?: 'create' | 'edit';
+    mode?: 'create' | 'edit' | 'adopt';
     name?: string;
     color?: string;
     keyword?: string;
@@ -36,7 +36,9 @@
     onClearError = () => {},
   }: Props = $props();
 
-  const title = $derived(mode === 'edit' ? 'Edit label' : 'New label');
+  const title = $derived(
+    mode === 'edit' ? 'Edit label' : mode === 'adopt' ? 'Add label to settings' : 'New label',
+  );
 
   const handleOpenChange = (open: boolean) => {
     if (!open) onClose();
@@ -47,9 +49,14 @@
   <Dialog.Content class="sm:max-w-md" showCloseButton={showClose}>
     <Dialog.Header>
       <Dialog.Title>{title}</Dialog.Title>
-      {#if mode === 'edit'}
+      {#if mode === 'edit' || mode === 'adopt'}
         <Dialog.Description>
           Keyword: <code class="rounded bg-muted px-1.5 py-0.5 text-sm">{keyword}</code>
+          {#if mode === 'adopt'}
+            <span class="block mt-1">
+              Messages already carrying this keyword will show the name and color you pick.
+            </span>
+          {/if}
         </Dialog.Description>
       {/if}
     </Dialog.Header>

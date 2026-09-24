@@ -1598,9 +1598,12 @@ export const mergeNewLabels = async (messages, account) => {
       if (!key || existingIds.has(key)) continue;
       if (isHiddenLabel(key)) continue;
       existingIds.add(key);
+      // Raw keyword as the name, same as the loadLabels scan and a label
+      // created from Settings. Prettifying here gave the same keyword two
+      // different names depending on which path found it first.
       newLabels.push({
         id: key,
-        name: key.replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim() || key,
+        name: key,
         color: colorFor(key),
         account,
         // Discovered from a message keyword, not registered in settings.
@@ -1710,6 +1713,139 @@ export const deleteLabel = async (keyword) => {
     toastsRef?.show?.(msg, 'error');
     return { success: false, error: msg };
   }
+};
+
+/**
+ * Promote a discovered keyword (one seen on messages but absent from the
+ * account label registry) into a managed label. Keeps the keyword as-is so
+ * messages already carrying it match the new definition; only name and color
+ * are chosen by the user.
+ */
+export const adoptDiscoveredLabel = async (
+  keyword: string,
+  options: { name?: string; color?: string; reload?: boolean } = {},
+) => {
+  const { name, color = '', reload = true } = options || {};
+  const keywordCheck = validateLabelName(keyword);
+  if (!keywordCheck.ok) {
+    toastsRef?.show?.(keywordCheck.error, 'error');
+    return { success: false, error: keywordCheck.error };
+  }
+  const nameCheck = validateLabelName(name || keywordCheck.value);
+  if (!nameCheck.ok) {
+    toastsRef?.show?.(nameCheck.error, 'error');
+    return { success: false, error: nameCheck.error };
+  }
+  try {
+    const res = await createSettingsLabel({
+      keyword: keywordCheck.value,
+      name: nameCheck.value,
+      color: color || undefined,
+    });
+    if (!res?.success) {
+      if (res?.blocked) return { success: false, blocked: true };
+      const msg = res?.error || 'Failed to add label';
+      toastsRef?.show?.(msg, 'error');
+      return { success: false, error: msg };
+    }
+    if (reload) {
+      await loadLabels();
+      toastsRef?.show?.(`Added label ${nameCheck.value}`, 'success');
+    }
+    return { success: true, label: res.label };
+  } catch (err: unknown) {
+    warn('adoptDiscoveredLabel failed', err);
+    if (isDemoBlockedError(err)) return { success: false, blocked: true };
+    const msg = (err as Error)?.message || 'Failed to add label';
+    toastsRef?.show?.(msg, 'error');
+    return { success: false, error: msg };
+  }
+};
+
+// Max concurrent per-message label updates when stripping a discovered keyword.
+export const DISCOVERED_LABEL_REMOVE_CONCURRENCY = 4;
+
+/**
+ * Strip a discovered keyword from every cached message that carries it. A
+ * discovered label has no registry entry to delete, so removing it from the
+ * messages is the only way to make it go away; loadLabels then drops it on
+ * the next reconcile because nothing carries it anymore.
+ *
+ * Each message goes through contextLabel so the change is optimistic, cached,
+ * indexed, and queued for retry when offline, exactly like a manual untag.
+ */
+export const removeDiscoveredLabel = async (keyword: string) => {
+  const account = Local.get('email') || 'default';
+  const target = canonicalizeLabelKeyword(keyword);
+  if (!target) return { success: false, error: 'Label is required', removed: 0, failed: 0 };
+  type CachedMessage = { id?: string | number; labels?: unknown[] };
+  let carriers: CachedMessage[] = [];
+  try {
+    const all = await db.messages
+      .where('account')
+      .equals(account)
+      .toArray()
+      .catch(() => []);
+    carriers = ((all || []) as CachedMessage[]).filter((m) =>
+      (m?.labels || []).some((l) => canonicalizeLabelKeyword(l) === target),
+    );
+  } catch (err) {
+    warn('removeDiscoveredLabel scan failed', err);
+  }
+
+  let removed = 0;
+  let failed = 0;
+  let cursor = 0;
+  const next = async () => {
+    while (true) {
+      const idx = cursor++;
+      if (idx >= carriers.length) return;
+      if ((Local.get('email') || 'default') !== account) return;
+      try {
+        await contextLabel(carriers[idx], target, { action: 'remove', silent: true });
+        removed += 1;
+      } catch (err) {
+        failed += 1;
+        warn('removeDiscoveredLabel message update failed', err);
+      }
+    }
+  };
+  const workers = Math.min(DISCOVERED_LABEL_REMOVE_CONCURRENCY, carriers.length);
+  await Promise.all(Array.from({ length: workers }, next));
+
+  if ((Local.get('email') || 'default') !== account) {
+    return { success: false, error: 'Account changed', removed, failed };
+  }
+
+  if (failed === 0) {
+    // Drop it eagerly so the filter dropdown updates now; the reconcile in
+    // loadLabels would otherwise wait for the next authoritative registry
+    // fetch, which never comes while offline.
+    const remaining = ((get(availableLabels) || []) as Array<{ id?: string }>).filter(
+      (l) => canonicalizeLabelKeyword(l?.id) !== target,
+    );
+    availableLabels.set(remaining);
+    try {
+      const rows = await db.labels
+        .where('account')
+        .equals(account)
+        .toArray()
+        .catch(() => []);
+      for (const row of (rows || []) as Array<{ id?: string }>) {
+        if (canonicalizeLabelKeyword(row?.id) !== target) continue;
+        await db.labels.delete([account, row.id]).catch(() => {});
+      }
+    } catch (err) {
+      warn('removeDiscoveredLabel cache prune failed', err);
+    }
+    toastsRef?.show?.(
+      removed === 1 ? `Removed label from 1 message` : `Removed label from ${removed} messages`,
+      'success',
+    );
+  } else {
+    toastsRef?.show?.(`Removed label from ${removed} messages, ${failed} failed`, 'error');
+  }
+  return { success: failed === 0, removed, failed };
 };
 
 /**

@@ -81,6 +81,10 @@
     createLabel as createMailboxLabel,
     updateLabel as updateMailboxLabel,
     deleteLabel as deleteMailboxLabel,
+    loadLabels as loadMailboxLabels,
+    availableLabels,
+    adoptDiscoveredLabel,
+    removeDiscoveredLabel,
     switchAccount,
     signOut as mailboxSignOut,
     syncProgress,
@@ -103,7 +107,6 @@
     localSettingsVersion,
     getSettingDefinition,
     SETTING_SCOPES,
-    fetchLabels as fetchSettingsLabels,
     settingsActions,
   } from '../stores/settingsStore';
   import { mailboxStore } from '../stores/mailboxStore';
@@ -113,7 +116,11 @@
   import { DEFAULT_SPAM_REPORT_ADDRESS, isValidReportAddress } from '../utils/spam-report.js';
   import { config } from '../config.js';
   import { getFonts, loadFont, getFontFamily } from '../utils/font-loader.js';
-  import { LABEL_PALETTE, pickLabelColor as pickLabelColorFromPalette } from '../utils/labels.js';
+  import {
+    LABEL_PALETTE,
+    canonicalizeLabelKeyword,
+    pickLabelColor as pickLabelColorFromPalette,
+  } from '../utils/labels.js';
   import FeedbackModal from './FeedbackModal.svelte';
   import LabelModal from './components/LabelModal.svelte';
   import GetStartedCard from './components/GetStartedCard.svelte';
@@ -367,14 +374,17 @@
     }
   };
   const settingsLabelsStore = asStore(settingsLabels);
+  const availableLabelsStore = asStore(availableLabels);
   let labelsLoading = $state(false);
   let labelsDeleting = $state('');
+  let discoveredRemoving = $state('');
+  let discoveredAddingAll = $state(false);
   const labelPalette = LABEL_PALETTE;
   let labelPaletteIndex = 0;
   let labelModalVisible = $state(false);
   let labelModalSaving = $state(false);
   let labelModalError = $state('');
-  let labelModalMode = $state<'create' | 'edit'>('create');
+  let labelModalMode = $state<'create' | 'edit' | 'adopt'>('create');
   let labelModalKeyword = $state('');
   let labelModalName = $state('');
   let labelModalColor = $state('');
@@ -860,10 +870,31 @@
     ($settingsLabelsStore || []).filter((label: unknown) => getLabelKey(label as LabelItem)),
   );
 
+  interface DiscoveredLabel {
+    id: string;
+    name?: string;
+    color?: string;
+    discovered?: boolean;
+  }
+
+  // Keywords seen on messages (set by another client, a filter, or the API)
+  // that have no entry in the account label registry. The mailbox filter and
+  // label menus already show these; this list lets Settings manage them too.
+  const discoveredLabels = $derived.by(() => {
+    const registered = new Set(
+      labelsList.map((l: LabelItem) => canonicalizeLabelKeyword(getLabelKey(l))),
+    );
+    return (($availableLabelsStore || []) as DiscoveredLabel[])
+      .filter((l) => l?.discovered && l?.id && !registered.has(canonicalizeLabelKeyword(l.id)))
+      .sort((a, b) => a.id.localeCompare(b.id));
+  });
+
   const loadLabelsList = async () => {
     labelsLoading = true;
     try {
-      await fetchSettingsLabels(true);
+      // Fetches the registry and reconciles discovered keywords in one pass,
+      // so both lists on this page are fresh.
+      await loadMailboxLabels();
     } catch (err) {
       setError((err as Error)?.message || 'Failed to load labels.');
     } finally {
@@ -887,6 +918,18 @@
     labelModalKeyword = key;
     labelModalName = label?.name || key;
     labelModalColor = label?.color || '';
+    labelModalError = '';
+    labelModalVisible = true;
+  };
+
+  const openAdoptLabelModal = (label: DiscoveredLabel) => {
+    if (!label?.id) return;
+    labelModalMode = 'adopt';
+    labelModalKeyword = label.id;
+    // Prefill with the keyword itself, not the display name: a cached name
+    // may contain spaces, which the validator rejects.
+    labelModalName = label.id;
+    labelModalColor = label.color || pickLabelColor();
     labelModalError = '';
     labelModalVisible = true;
   };
@@ -918,6 +961,16 @@
         if (!res?.success) {
           if (res?.blocked) return;
           labelModalError = res?.error || 'Failed to update label.';
+          return;
+        }
+      } else if (labelModalMode === 'adopt') {
+        const res = await adoptDiscoveredLabel(labelModalKeyword, {
+          name: validation.value,
+          color: (labelModalColor || '').trim() || undefined,
+        });
+        if (!res?.success) {
+          if (res?.blocked) return;
+          labelModalError = res?.error || 'Failed to add label.';
           return;
         }
       } else {
@@ -958,6 +1011,53 @@
       setMutationError(err, 'Failed to delete label.');
     } finally {
       labelsDeleting = '';
+    }
+  };
+
+  // Registers every discovered keyword as-is (name = keyword, current color).
+  // Runs one at a time: each add rewrites the whole label_settings map on the
+  // server, so parallel calls would clobber each other.
+  const adoptAllDiscoveredLabels = async () => {
+    const pending = discoveredLabels.slice();
+    if (!pending.length) return;
+    discoveredAddingAll = true;
+    let added = 0;
+    try {
+      for (const label of pending) {
+        const res = await adoptDiscoveredLabel(label.id, {
+          name: label.id,
+          color: label.color,
+          reload: false,
+        });
+        if (res?.blocked) return;
+        if (res?.success) added += 1;
+      }
+      await loadMailboxLabels();
+      if (added) setSuccess(added === 1 ? 'Added 1 label.' : `Added ${added} labels.`);
+    } catch (err) {
+      setMutationError(err, 'Failed to add labels.');
+    } finally {
+      discoveredAddingAll = false;
+    }
+  };
+
+  const removeDiscovered = async (label: DiscoveredLabel) => {
+    const key = label?.id;
+    if (!key) return;
+    if (
+      !confirm(
+        `Remove "${key}" from every message that carries it? Other clients or the API can add it again later.`,
+      )
+    )
+      return;
+    discoveredRemoving = key;
+    try {
+      const res = await removeDiscoveredLabel(key);
+      if (!res?.success && res?.error) setError(res.error);
+    } catch (err) {
+      setMutationError(err, 'Failed to remove label.');
+    } finally {
+      discoveredRemoving = '';
     }
   };
 
@@ -2653,6 +2753,67 @@
                 <p class="text-sm text-muted-foreground">No labels yet.</p>
               {/if}
             </div>
+            {#if discoveredLabels.length}
+              <div class="space-y-2 pt-2">
+                <div class="flex items-center justify-between">
+                  <div>
+                    <span class="text-sm text-muted-foreground">Found in mail</span>
+                    <p class="text-xs text-muted-foreground">
+                      Keywords on your messages that are not in your labels yet, set by another
+                      client, a filter, or the API. Add one to give it a name and color here.
+                    </p>
+                  </div>
+                  {#if discoveredLabels.length > 1}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onclick={adoptAllDiscoveredLabels}
+                      disabled={discoveredAddingAll}
+                    >
+                      {discoveredAddingAll ? 'Adding...' : 'Add all'}
+                    </Button>
+                  {/if}
+                </div>
+                {#each discoveredLabels as label (label.id)}
+                  <div
+                    class="flex items-center justify-between border border-dashed border-border p-2"
+                  >
+                    <div class="flex items-center gap-3">
+                      <div
+                        class="h-4 w-4"
+                        style="background: {label.color || 'var(--fg-muted)'}"
+                      ></div>
+                      <div>
+                        <div class="font-medium">{label.id}</div>
+                        <div class="text-xs text-muted-foreground">
+                          Keyword: <code class="bg-muted px-1">{label.id}</code>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="flex gap-1">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onclick={() => openAdoptLabelModal(label)}
+                        disabled={discoveredAddingAll}
+                      >
+                        Add
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onclick={() => removeDiscovered(label)}
+                        disabled={discoveredRemoving === label.id || discoveredAddingAll}
+                        aria-label="Remove from messages"
+                        title="Remove from messages"
+                      >
+                        <X class="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </div>
+                {/each}
+              </div>
+            {/if}
           </Card.Content>
         </Card.Root>
       {/if}

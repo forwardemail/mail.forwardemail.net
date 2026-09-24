@@ -137,10 +137,14 @@ vi.mock('../../src/utils/i18n', () => ({
 
 vi.mock('../../src/utils/labels.js', () => ({
   LABEL_PALETTE: ['#fff'],
+  canonicalizeLabelKeyword: (value: unknown) =>
+    String(value ?? '')
+      .trim()
+      .toLowerCase(),
 }));
 
 vi.mock('../../src/utils/label-validation.ts', () => ({
-  validateLabelName: vi.fn(() => ({ ok: true })),
+  validateLabelName: vi.fn((name: string) => ({ ok: true, value: (name || '').trim() })),
 }));
 
 vi.mock('../../src/config', () => ({
@@ -206,6 +210,7 @@ vi.mock('../../src/stores/searchStore', () => ({
       rebuildFromCache: vi.fn().mockResolvedValue(undefined),
       resetSearchConnection: vi.fn(),
       ensureInitialized: vi.fn().mockResolvedValue(undefined),
+      indexMessages: vi.fn().mockResolvedValue(undefined),
     },
   },
 }));
@@ -326,6 +331,8 @@ import {
   getMessageBodyForReply,
   loadLabels,
   mergeNewLabels,
+  adoptDiscoveredLabel,
+  removeDiscoveredLabel,
   FOLDER_FLAG_FETCH_CONCURRENCY,
   availableLabels,
   currentAccount,
@@ -774,6 +781,106 @@ describe('loadLabels registry reconciliation (phantom label)', () => {
 
     const [written] = hoisted.labelsBulkPut.mock.calls.at(-1) ?? [[]];
     expect(written[0]).toMatchObject({ id: 'adhoc', discovered: true });
+  });
+
+  it('names an incrementally discovered keyword the same way the full scan does', async () => {
+    // Both discovery paths used to disagree: the scan kept "human-approval"
+    // while the incremental merge produced "human approval", so the same
+    // keyword showed up under two different names depending on timing.
+    hoisted.labelsToArray.mockResolvedValue([]);
+    availableLabels.set([]);
+
+    await mergeNewLabels([{ id: 'm1', labels: ['human-approval'] }], 'user@example.com');
+
+    expect(get(availableLabels)[0]).toMatchObject({ id: 'human-approval', name: 'human-approval' });
+  });
+});
+
+describe('discovered labels in Settings', () => {
+  const settingsStore = async () => await import('../../src/stores/settingsStore');
+
+  beforeEach(() => {
+    hoisted.fetchLabelsWithSource.mockResolvedValue({ labels: [], authoritative: true });
+  });
+
+  it('adoptDiscoveredLabel registers the keyword unchanged with the chosen name and color', async () => {
+    const { createLabel } = await settingsStore();
+    vi.mocked(createLabel).mockResolvedValue({ success: true, label: {} } as never);
+
+    const res = await adoptDiscoveredLabel('need-payment', { name: 'Payment', color: '#123' });
+
+    expect(res.success).toBe(true);
+    expect(createLabel).toHaveBeenCalledWith({
+      keyword: 'need-payment',
+      name: 'Payment',
+      color: '#123',
+    });
+  });
+
+  it('adoptDiscoveredLabel falls back to the keyword as the name', async () => {
+    const { createLabel } = await settingsStore();
+    vi.mocked(createLabel).mockResolvedValue({ success: true, label: {} } as never);
+
+    await adoptDiscoveredLabel('smtp-upgrade', {});
+
+    expect(createLabel).toHaveBeenCalledWith(
+      expect.objectContaining({ keyword: 'smtp-upgrade', name: 'smtp-upgrade' }),
+    );
+  });
+
+  it('adoptDiscoveredLabel surfaces a registry failure instead of reloading', async () => {
+    const { createLabel } = await settingsStore();
+    vi.mocked(createLabel).mockResolvedValue({ success: false, error: 'nope' } as never);
+
+    const res = await adoptDiscoveredLabel('x', {});
+
+    expect(res).toEqual({ success: false, error: 'nope' });
+    expect(hoisted.fetchLabelsWithSource).not.toHaveBeenCalled();
+  });
+
+  it('removeDiscoveredLabel strips the keyword from every carrier and drops it from the store', async () => {
+    hoisted.messagesToArray.mockResolvedValue([
+      { id: 'm1', uid: 1, labels: ['test-123', 'bug'] },
+      { id: 'm2', uid: 2, labels: ['bug'] },
+      // Server-side keywords are lowercase; the cached row may not be.
+      { id: 'm3', uid: 3, labels: ['TEST-123'] },
+    ]);
+    hoisted.remoteRequest.mockResolvedValue({});
+    hoisted.labelsToArray.mockResolvedValue([]);
+    availableLabels.set([
+      { id: 'bug', name: 'bug' },
+      { id: 'test-123', name: 'test-123', discovered: true },
+    ]);
+
+    const res = await removeDiscoveredLabel('test-123');
+
+    expect(res).toEqual({ success: true, removed: 2, failed: 0 });
+    const puts = hoisted.remoteRequest.mock.calls
+      .filter(([name]) => name === 'MessageUpdate')
+      .map(([, body, opts]) => [opts.pathOverride, body.labels]);
+    // The other keyword on m1 survives; m2 never carried it and is untouched.
+    expect(puts).toEqual(
+      expect.arrayContaining([
+        ['/v1/messages/m1', ['bug']],
+        ['/v1/messages/m3', []],
+      ]),
+    );
+    expect(puts).toHaveLength(2);
+    expect(get(availableLabels).map((l) => l.id)).toEqual(['bug']);
+  });
+
+  it('removeDiscoveredLabel keeps the label listed when any message update failed', async () => {
+    hoisted.messagesToArray.mockResolvedValue([{ id: 'm1', uid: 1, labels: ['test-123'] }]);
+    // contextLabel queues a failed PUT for retry rather than throwing, so a
+    // hard failure has to come from the queue itself.
+    hoisted.remoteRequest.mockRejectedValue(new Error('boom'));
+    hoisted.queueMutation.mockRejectedValueOnce(new Error('queue full'));
+    availableLabels.set([{ id: 'test-123', name: 'test-123', discovered: true }]);
+
+    const res = await removeDiscoveredLabel('test-123');
+
+    expect(res).toMatchObject({ success: false, failed: 1 });
+    expect(get(availableLabels).map((l) => l.id)).toContain('test-123');
   });
 });
 
