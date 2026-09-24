@@ -109,5 +109,8 @@ opt-level = "s"
 # Keep debug info in the binary so production crash reports symbolicate
 # without requiring a separate dSYM lookup. macOS still generates a
 # .dSYM bundle alongside the build for cleaner reports.
+# Android is the exception: Gradle strips the .so and packages the symbols
+# out of band (scripts/inject-android-native-symbols.cjs), because APKs
+# store native libraries uncompressed and Play never strips them.
 strip = "none"
 debug = "line-tables-only"

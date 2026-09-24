@@ -78,13 +78,15 @@ The exact desktop asset basenames are listed in the matrix above. Tauri also upl
 
 ### Android
 
-| File                                      | Description                                                                                             |
-| ----------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `forwardemail-mail_<version>_android.apk` | Signed sideloadable APK containing both FCM and UnifiedPush; users may select a UnifiedPush distributor |
-| `forwardemail-mail_<version>_android.aab` | The same dual-provider application as an Android App Bundle for Google Play                             |
-| `forwardemail-mail_<version>_fdroid.apk`  | Signed Google-free UnifiedPush-only APK for the self-hosted F-Droid repository and Obtainium            |
+| File                                      | Description                                                                                                                       |
+| ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `forwardemail-mail_<version>_android.apk` | Signed sideloadable APK (arm64-v8a + armeabi-v7a) containing both FCM and UnifiedPush; users may select a UnifiedPush distributor |
+| `forwardemail-mail_<version>_android.aab` | The same dual-provider application as an Android App Bundle (all ABIs) for Google Play                                            |
+| `forwardemail-mail_<version>_fdroid.apk`  | Signed Google-free UnifiedPush-only APK (arm64-v8a + armeabi-v7a) for the self-hosted F-Droid repository and Obtainium            |
 
 Built by [`release-mobile.yml`](../.github/workflows/release-mobile.yml). The dual-provider Android release job requires Android signing secrets, Firebase client configuration, and the matching VAPID public key before toolchain setup (see [SECRETS.md](./SECRETS.md#generating-the-android-keystore)). The separate `android-fdroid` job uses the same Android release certificate and `pnpm tauri:android:build:fdroid`, but excludes Firebase and Google Play Services.
+
+The sideloadable APKs are universal APKs, so every ABI they contain is downloaded by every user; they ship only the two ARM ABIs that real devices use. The AAB keeps x86 and x86_64 as well because Play serves each device only its matching split. In all three, the Rust library is stripped by Gradle and its debug symbols are packaged separately (`scripts/inject-android-native-symbols.cjs`): inside the AAB for Play Console crash symbolication, and as the `android-native-debug-symbols` workflow artifact for tombstones from sideloaded installs.
 
 ### Additional distribution channels
 

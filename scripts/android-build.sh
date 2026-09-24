@@ -63,6 +63,7 @@ node scripts/configure-android-push.cjs
 node scripts/configure-mobile-camera.cjs
 node scripts/configure-mobile-display-name.cjs
 node scripts/inject-android-signing.cjs
+node scripts/inject-android-native-symbols.cjs
 node scripts/inject-android-mainactivity.cjs
 
 # macOS ships bash 3.2, where `set -u` treats an empty array expansion as an

@@ -171,7 +171,17 @@ jobs:
       - name: Inject signing config into build.gradle.kts
         run: node scripts/inject-android-signing.cjs
 
-      - name: Build Android (release, signed, FCM + UnifiedPush)
+      # Two Gradle invocations on purpose. The AAB keeps all four ABIs because
+      # Play only serves the split matching the device, so x86 costs users
+      # nothing there. The sideloaded APK is a universal APK, and every ABI in
+      # it is downloaded by every user, so it carries only the two ARM ABIs
+      # that real devices use. The Rust targets are cached between the two
+      # runs; the second only repackages.
+      #
+      # scripts/inject-android-native-symbols.cjs (run by android-build.sh)
+      # makes Gradle strip the Rust library and package its symbols out of
+      # band, which is what keeps these under 20 MB per ABI.
+      - name: Build Android AAB (release, signed, FCM + UnifiedPush, all ABIs)
         env:
           NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.0.12077973
           ANDROID_KEYSTORE: /tmp/keystore.jks
@@ -182,7 +192,31 @@ jobs:
           GOOGLE_SERVICES_JSON: /tmp/google-services.json
           VAPID_PUBLIC_KEY: ${{ vars.VAPID_PUBLIC_KEY }}
           REQUIRE_PUSH_CONFIG: 1
-        run: pnpm tauri:android:build
+        run: pnpm tauri:android:build --aab
+
+      - name: Build Android APK (release, signed, FCM + UnifiedPush, ARM only)
+        env:
+          NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.0.12077973
+          ANDROID_KEYSTORE: /tmp/keystore.jks
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_PUSH_PROVIDER: both
+          GOOGLE_SERVICES_JSON: /tmp/google-services.json
+          VAPID_PUBLIC_KEY: ${{ vars.VAPID_PUBLIC_KEY }}
+          REQUIRE_PUSH_CONFIG: 1
+        run: pnpm tauri:android:build --apk --target aarch64 --target armv7
+
+      # The unstripped symbols for every ABI. Play gets its own copy inside
+      # the AAB; this one is for symbolicating tombstones from the sideloaded
+      # APK (ndk-stack / llvm-symbolizer).
+      - name: Upload native debug symbols
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: android-native-debug-symbols
+          path: src-tauri/gen/android/app/build/outputs/native-debug-symbols/**/native-debug-symbols.zip
+          if-no-files-found: error
+          retention-days: 90
 
       - name: Rename APK with version
         id: artifacts
@@ -191,8 +225,9 @@ jobs:
           VERSION="${VERSION#v}"
           APK_DIR="src-tauri/gen/android/app/build/outputs/apk"
           AAB_DIR="src-tauri/gen/android/app/build/outputs/bundle"
-          # A release publishes exactly one APK and one AAB. Both contain the
-          # FCM and UnifiedPush integrations; runtime selects the provider.
+          # A release publishes exactly one APK (arm64-v8a + armeabi-v7a) and
+          # one AAB (all ABIs). Both contain the FCM and UnifiedPush
+          # integrations; runtime selects the provider.
           mapfile -t APKS < <(find "$APK_DIR" -name '*.apk' -type f)
           mapfile -t AABS < <(find "$AAB_DIR" -name '*.aab' -type f)
           if [ ${#APKS[@]} -ne 1 ] || [ ${#AABS[@]} -ne 1 ]; then
@@ -400,7 +435,9 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
           VAPID_PUBLIC_KEY: ${{ vars.VAPID_PUBLIC_KEY }}
           REQUIRE_PUSH_CONFIG: 1
-        run: pnpm tauri:android:build:fdroid
+        # Universal APK with the two ARM ABIs only; see the note on the Play
+        # job above. No AAB is needed for this distribution channel.
+        run: pnpm tauri:android:build:fdroid --apk --target aarch64 --target armv7
 
       - name: Rename Google-free APK with version
         id: apk
