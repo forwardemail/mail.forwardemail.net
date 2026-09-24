@@ -38,7 +38,11 @@ module.exports = {
     {
       // Fonts load lazily and rarely change; cache on first use so a chosen
       // custom font keeps working offline without precaching the whole set.
-      urlPattern: /\.(?:woff2?|ttf|otf)$/,
+      // Same-origin only. The email reader is a srcdoc iframe, which shares
+      // this service worker, so a cross-origin pattern also stored every web
+      // font a message referenced.
+      urlPattern: ({ sameOrigin, url }) =>
+        sameOrigin && /\.(?:woff2?|ttf|otf)$/i.test(url.pathname),
       handler: 'CacheFirst',
       options: {
         cacheName: 'fonts-v1',
@@ -47,12 +51,18 @@ module.exports = {
           maxAgeSeconds: 365 * 24 * 60 * 60, // 1 year; font files are content-hashed
         },
         cacheableResponse: {
-          statuses: [0, 200],
+          statuses: [200],
         },
       },
     },
     {
-      urlPattern: /\.(?:png|jpg|jpeg|svg|gif|ico)$/,
+      // Same-origin only. Matching any origin cached the remote images and
+      // tracking pixels of every message read: unencrypted on disk (App Lock
+      // encrypts the mail cache, not Cache Storage), and as opaque responses,
+      // each of which browsers charge megabytes of storage quota for, crowding
+      // out the IndexedDB mail cache.
+      urlPattern: ({ sameOrigin, url }) =>
+        sameOrigin && /\.(?:png|jpg|jpeg|svg|gif|ico)$/i.test(url.pathname),
       handler: 'CacheFirst',
       options: {
         cacheName: `images-${CACHE_VERSION}`,
@@ -61,13 +71,14 @@ module.exports = {
           maxAgeSeconds: 30 * 24 * 60 * 60, // 30 days
         },
         cacheableResponse: {
-          statuses: [0, 200],
+          statuses: [200],
         },
       },
     },
     {
       // App icons: Reduced from 1 year to 30 days for branding updates
-      urlPattern: /\/icons\/.*\.(?:png|svg|ico)$/i,
+      urlPattern: ({ sameOrigin, url }) =>
+        sameOrigin && /\/icons\/.*\.(?:png|svg|ico)$/i.test(url.pathname),
       handler: 'CacheFirst',
       options: {
         cacheName: `app-icons-${CACHE_VERSION}`,
@@ -76,7 +87,7 @@ module.exports = {
           maxAgeSeconds: 30 * 24 * 60 * 60, // 30 days (reduced from 1 year)
         },
         cacheableResponse: {
-          statuses: [0, 200],
+          statuses: [200],
         },
       },
     },

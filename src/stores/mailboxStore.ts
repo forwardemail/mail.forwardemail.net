@@ -1216,34 +1216,44 @@ const createMailboxStore = () => {
         // becomes durable: a mismatch here files one account's mail under
         // another's partition, which survives reloads and does not self-heal.
         assertAccountScoped('mailboxStore.loadMessages', account, merged);
-        await db.transaction('rw', db.messages, db.messageBodies, async () => {
-          if (merged.length) {
-            await db.messages.bulkPut(
-              merged.map((msg) => ({
-                ...msg,
-                account,
-                updatedAt: Date.now(),
-              })),
-            );
-          }
-          if (shouldPrune && !queueReadFailed) {
-            tracer.stage('cache_prune_start');
-            const serverIds = new Set(merged.map((msg) => msg.id).filter(Boolean));
-            // Protect optimistically-inserted Sent messages from the prune too,
-            // until the server's list reports them.
-            const pendingIds = new Set([
-              ...getPendingDeleteIds(),
-              ...pendingInsertTracker.getIds(),
-            ]);
-            prunedIds = computePrunedIds(cachedPage, { serverIds, pendingIds, queuedIds });
-            if (prunedIds.length) {
-              const pairs = prunedIds.map((id) => [account, id]);
-              await db.messages.bulkDelete(pairs);
-              await db.messageBodies.bulkDelete(pairs);
+        // The list on screen already came from the network (messages.set
+        // above); writing it to the cache is best-effort. A failed write —
+        // most often App Lock engaging mid-load, which makes sealed writes
+        // throw DbLockedError — used to abort the whole load and show
+        // "Database is locked: ..." as the mailbox error.
+        try {
+          await db.transaction('rw', db.messages, db.messageBodies, async () => {
+            if (merged.length) {
+              await db.messages.bulkPut(
+                merged.map((msg) => ({
+                  ...msg,
+                  account,
+                  updatedAt: Date.now(),
+                })),
+              );
             }
-            tracer.stage('cache_prune_end', { count: prunedIds.length });
-          }
-        });
+            if (shouldPrune && !queueReadFailed) {
+              tracer.stage('cache_prune_start');
+              const serverIds = new Set(merged.map((msg) => msg.id).filter(Boolean));
+              // Protect optimistically-inserted Sent messages from the prune too,
+              // until the server's list reports them.
+              const pendingIds = new Set([
+                ...getPendingDeleteIds(),
+                ...pendingInsertTracker.getIds(),
+              ]);
+              prunedIds = computePrunedIds(cachedPage, { serverIds, pendingIds, queuedIds });
+              if (prunedIds.length) {
+                const pairs = prunedIds.map((id) => [account, id]);
+                await db.messages.bulkDelete(pairs);
+                await db.messageBodies.bulkDelete(pairs);
+              }
+              tracer.stage('cache_prune_end', { count: prunedIds.length });
+            }
+          });
+        } catch (cacheErr) {
+          prunedIds = [];
+          warn('[mailboxStore] Message list cache write skipped', cacheErr);
+        }
         if (prunedIds.length) {
           // Search index removal lives outside the Dexie tx — awaiting a
           // non-Dexie promise inside a tx aborts it.

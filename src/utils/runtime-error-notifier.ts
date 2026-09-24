@@ -60,6 +60,22 @@ export function isTestHarnessNoise(message: unknown): boolean {
   );
 }
 
+/**
+ * App Lock holds the encrypted cache shut, so background writes that land
+ * while it is locked (a sync tick, a WebSocket update) fail with DbLockedError
+ * by design and are redone after unlock. Reporting them told the user
+ * "Something went wrong" every time the app locked.
+ */
+export function isLockedDatabaseError(reason: unknown): boolean {
+  if (reason && typeof reason === 'object') {
+    const { code, name } = reason as { code?: unknown; name?: unknown };
+    if (code === 'DB_LOCKED' || name === 'DbLockedError') return true;
+  }
+  const message =
+    (reason as { message?: unknown } | undefined)?.message ?? (reason as unknown) ?? '';
+  return /Database is locked: at-rest encryption is enabled/i.test(String(message));
+}
+
 function isResourceLoadError(event: ErrorLike): boolean {
   const target = event.target as { tagName?: string } | null | undefined;
   return !!target && typeof target === 'object' && typeof target.tagName === 'string';
@@ -103,11 +119,17 @@ export function installRuntimeErrorNotifier(
     const message =
       (e.error as { message?: unknown } | undefined)?.message ?? e.message ?? 'unknown error';
     if (isChunkLoadMessage(message) || isTestHarnessNoise(message)) return;
+    if (isLockedDatabaseError(e.error ?? message)) return;
     notify();
   };
 
   const onRejection = (event: Event) => {
     const reason = (event as unknown as { reason?: unknown }).reason;
+    if (isLockedDatabaseError(reason)) {
+      // Expected while locked; keep it out of the console as an uncaught error.
+      event.preventDefault?.();
+      return;
+    }
     const message = (reason as { message?: unknown } | undefined)?.message ?? String(reason ?? '');
     if (isChunkLoadMessage(message) || isTestHarnessNoise(message)) return;
     notify();

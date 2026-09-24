@@ -26,6 +26,7 @@ let overlay: HTMLElement;
 beforeEach(() => {
   vi.clearAllMocks();
   sessionStorage.clear();
+  localStorage.removeItem('webmail_lockout');
   appRoot = document.createElement('div');
   appRoot.id = 'mailbox-root';
   appRoot.innerHTML = '<button id="behind">Behind</button>';
@@ -101,5 +102,27 @@ describe('<LockScreen />', () => {
 
     unmount();
     expect(appRoot.hasAttribute('inert')).toBe(false);
+  });
+
+  it('keeps the lockout after the app is relaunched', async () => {
+    lock.unlockWithPin.mockResolvedValue(false);
+    const first = render(LockScreen, { target: overlay });
+
+    // Three wrong PINs trigger the first 30 s lockout.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      for (const value of ['0', '0', '0', '0']) {
+        await tap(digit(value));
+      }
+      await waitFor(() => expect(lock.unlockWithPin).toHaveBeenCalledTimes(attempt + 1));
+    }
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Too many attempts'));
+
+    // A relaunch starts with a fresh sessionStorage.
+    first.unmount();
+    sessionStorage.clear();
+    render(LockScreen, { target: overlay });
+
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Too many attempts'));
+    expect(digit('1')).toBeDisabled();
   });
 });

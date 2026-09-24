@@ -103,15 +103,37 @@ export const parseMailto = (input = '') => {
   return result;
 };
 
+const escapeHtml = (value) =>
+  String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
+/**
+ * RFC 6068 bodies are plain text. Compose treats `body` as editor HTML, so a
+ * link such as `mailto:x@y?body=<a href=...>` used to arrive as live markup.
+ * Escape it and keep the line structure as paragraphs and line breaks.
+ */
+export const mailtoBodyToHtml = (text = '') => {
+  const normalized = String(text || '').replace(/\r\n?/g, '\n');
+  if (!normalized.trim()) return '';
+  return normalized
+    .split(/\n{2,}/)
+    .map((paragraph) => `<p>${escapeHtml(paragraph).replace(/\n/g, '<br>')}</p>`)
+    .join('');
+};
+
 export const mailtoToPrefill = (parsed = {}) => {
-  const body = parsed.body || '';
+  const text = parsed.body || '';
   return {
     to: parsed.to || [],
     cc: parsed.cc || [],
     bcc: parsed.bcc || [],
     subject: parsed.subject || '',
-    text: body,
-    body,
+    text,
+    body: mailtoBodyToHtml(text),
     replyTo: parsed.replyTo || '',
     inReplyTo: parsed.inReplyTo || '',
     mailto: parsed,

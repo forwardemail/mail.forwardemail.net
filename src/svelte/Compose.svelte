@@ -946,11 +946,17 @@
       clearRecipientSuggestions();
       return;
     }
-    if (!contactOptions.length && !contactOptionsLoaded && !contactOptionsLoading) {
-      loadContactOptions().then(() => {
-        updateRecipientSuggestions(field, query);
+    if (!contactOptionsLoaded) {
+      // The address book may still be loading (Compose starts the load when
+      // it opens). Refresh once it arrives, as long as the person is still
+      // typing in this field and has not moved to another one.
+      void loadContactOptions().then(() => {
+        const current = (getRecipientInputValue(field) ?? '').trim();
+        if (!current) return;
+        if (showAddressBook && showAddressBook !== field) return;
+        updateRecipientSuggestions(field, current);
       });
-      return;
+      if (!contactOptions.length) return;
     }
     const contacts = normalizeContactList(contactOptions);
     if (!contacts.length) {

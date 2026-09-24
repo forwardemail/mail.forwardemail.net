@@ -50,16 +50,14 @@
 
 {#if visible}
   <div
-    class="fixed bottom-4 left-1/2 z-50 -translate-x-1/2 transform"
+    class="fe-bottom-overlay fixed bottom-4 left-1/2 z-50 w-[calc(100vw-2rem)] max-w-lg -translate-x-1/2 transform"
     role="alert"
     aria-live="polite"
   >
-    <div
-      class="flex max-w-lg flex-col gap-2 rounded-lg border border-border bg-card px-4 py-3 shadow-lg"
-    >
+    <div class="flex flex-col gap-2 rounded-lg border border-border bg-card px-4 py-3 shadow-lg">
       <div class="flex items-center gap-3">
         <Mail class="h-5 w-5 shrink-0 text-fg-link" />
-        <p class="text-sm">Set Forward Email as your default email app?</p>
+        <p class="min-w-0 flex-1 text-sm">Set Forward Email as your default email app?</p>
         <div class="flex shrink-0 gap-2">
           <Button size="sm" onclick={handleSetDefault}>Set as default</Button>
           <Button size="sm" variant="ghost" onclick={handleDismiss} aria-label="Dismiss">

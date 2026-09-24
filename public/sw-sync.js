@@ -788,6 +788,41 @@
     await postToClients({ type: 'mutationQueueProcessed' });
   };
 
+  // Runtime image/font caches once matched every origin, so they filled up
+  // with remote email images and tracking pixels (stored unencrypted, and as
+  // opaque responses that browsers charge heavily against storage quota).
+  // The routes are same-origin now; drop what the old ones stored.
+  const purgeCrossOriginRuntimeEntries = async () => {
+    try {
+      const names = await caches.keys();
+      await Promise.all(
+        names
+          .filter((name) => /^(images-|app-icons-|fonts-)/.test(name))
+          .map(async (name) => {
+            const cache = await caches.open(name);
+            const requests = await cache.keys();
+            await Promise.all(
+              requests
+                .filter((request) => {
+                  try {
+                    return new URL(request.url).origin !== self.location.origin;
+                  } catch {
+                    return true;
+                  }
+                })
+                .map((request) => cache.delete(request)),
+            );
+          }),
+      );
+    } catch (err) {
+      LOG && console.warn('[SW] runtime cache cleanup failed', err);
+    }
+  };
+
+  self.addEventListener('activate', (event) => {
+    event.waitUntil(purgeCrossOriginRuntimeEntries());
+  });
+
   // Background Sync event — fired when connectivity returns
   self.addEventListener('sync', (event) => {
     if (event.tag === 'mutation-queue') {

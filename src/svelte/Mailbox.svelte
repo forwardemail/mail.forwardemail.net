@@ -2251,15 +2251,24 @@
         const queryPart = queryIndex > 0 ? hashContent.slice(queryIndex + 1) : '';
         const filterState = parseFilterState(queryPart);
 
+        // A hand-edited or truncated link (e.g. "#INBOX%E0") must not throw
+        // out of hash routing; fall back to the raw text.
+        const decode = (value: string) => {
+          try {
+            return decodeURIComponent(value);
+          } catch {
+            return value;
+          }
+        };
         const slashIndex = pathPart.indexOf('/');
         if (slashIndex > 0) {
           // Format: #FOLDER/MESSAGE_ID?params
-          const folder = decodeURIComponent(pathPart.slice(0, slashIndex));
-          const messageId = decodeURIComponent(pathPart.slice(slashIndex + 1));
+          const folder = decode(pathPart.slice(0, slashIndex));
+          const messageId = decode(pathPart.slice(slashIndex + 1));
           return { folder, messageId, filterState };
         } else {
           // Format: #FOLDER?params (folder only)
-          const folder = decodeURIComponent(pathPart);
+          const folder = decode(pathPart);
           return { folder, messageId: null, filterState };
         }
       }

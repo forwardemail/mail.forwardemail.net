@@ -69,7 +69,7 @@
 </script>
 
 <div
-  class="fixed bottom-4 right-4 flex flex-col gap-2"
+  class="fe-bottom-overlay fixed bottom-4 right-4 flex max-w-[calc(100vw-2rem)] flex-col gap-2"
   style="z-index: 10010;"
   aria-live="polite"
   data-testid="toast-list"

@@ -230,10 +230,17 @@ export function createWebSocketClient(opts = {}) {
           console.warn('[ws] Rejected oversized blob message:', data.size, 'bytes');
           return null;
         }
-        return data.arrayBuffer().then((buf) => {
-          if (wantsMsgpackr && msgpackrAvailable && unpack) return unpack(buf);
-          return JSON.parse(new TextDecoder().decode(buf));
-        });
+        return data
+          .arrayBuffer()
+          .then((buf) => {
+            if (wantsMsgpackr && msgpackrAvailable && unpack) return unpack(buf);
+            return JSON.parse(new TextDecoder().decode(buf));
+          })
+          .catch((err) => {
+            // The synchronous try/catch below cannot see this async failure.
+            console.error('[ws] Failed to parse message:', err);
+            return null;
+          });
       }
 
       return JSON.parse(String(data));

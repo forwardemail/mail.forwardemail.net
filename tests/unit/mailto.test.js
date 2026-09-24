@@ -82,7 +82,25 @@ describe('mailtoToPrefill', () => {
     expect(prefill.cc).toEqual(['bob@x.com']);
     expect(prefill.subject).toBe('Test');
     expect(prefill.text).toBe('Content');
-    expect(prefill.body).toBe('Content');
+    expect(prefill.body).toBe('<p>Content</p>');
+  });
+
+  it('treats the body as plain text, never as markup', () => {
+    const parsed = parseMailto(
+      'mailto:a@x.com?body=%3Cimg%20src%3Dx%20onerror%3Dalert(1)%3E%20%26%20%3Ca%20href%3D%22javascript%3Aalert(1)%22%3Eclick%3C%2Fa%3E',
+    );
+    const prefill = mailtoToPrefill(parsed);
+    expect(prefill.text).toBe(
+      '<img src=x onerror=alert(1)> & <a href="javascript:alert(1)">click</a>',
+    );
+    expect(prefill.body).not.toContain('<img');
+    expect(prefill.body).not.toContain('<a ');
+    expect(prefill.body).toContain('&lt;img src=x onerror=alert(1)&gt; &amp;');
+  });
+
+  it('keeps line breaks and paragraphs from the plain-text body', () => {
+    const prefill = mailtoToPrefill(parseMailto('mailto:a@x.com?body=Hi%0D%0Athere%0A%0ABye'));
+    expect(prefill.body).toBe('<p>Hi<br>there</p><p>Bye</p>');
   });
 
   it('returns defaults for empty parsed object', () => {

@@ -114,6 +114,30 @@ describe('SearchService coalesced persistence', () => {
     expect(putSpy).toHaveBeenCalledTimes(1);
   });
 
+  it('a scheduled write that fails (locked database) does not reject and is retried', async () => {
+    const unhandled = vi.fn();
+    process.on('unhandledRejection', unhandled);
+    try {
+      const svc = new SearchService({ account: 'u@example.com' });
+      const locked = Object.assign(new Error('Database is locked'), { name: 'DbLockedError' });
+      putSpy.mockRejectedValueOnce(locked);
+
+      svc.addEntry(doc('1', 'x'));
+      svc.schedulePersist();
+      await vi.advanceTimersByTimeAsync(SearchService.PERSIST_DEBOUNCE_MS + 10);
+      await vi.runAllTimersAsync();
+      expect(putSpy).toHaveBeenCalledTimes(1);
+      expect(unhandled).not.toHaveBeenCalled();
+
+      // After unlock, the next flush writes the pending index.
+      await svc.flush();
+      expect(putSpy).toHaveBeenCalledTimes(2);
+      expect((putSpy.mock.calls[1][0] as PutRecord).data).toHaveLength(1);
+    } finally {
+      process.off('unhandledRejection', unhandled);
+    }
+  });
+
   it('persisted blob round-trips back through loadFromCache', async () => {
     const svc = new SearchService({ account: 'u@example.com' });
     svc.addEntry(doc('1', 'searchable subject'));

@@ -9,13 +9,19 @@ export async function setupAuthenticatedMailbox(page) {
   // Set auth tokens in localStorage before navigating
   // Uses the webmail_ prefix that the storage layer expects
   await page.addInitScript(() => {
-    localStorage.setItem('webmail_authToken', 'mock-auth-token-12345');
-    localStorage.setItem('webmail_email', 'test@example.com');
-    localStorage.setItem('webmail_alias_auth', 'test@example.com:mock-password');
-    // Tab-scoped keys (also checked via sessionStorage)
-    sessionStorage.setItem('alias_auth', 'test@example.com:mock-password');
-    sessionStorage.setItem('email', 'test@example.com');
-    sessionStorage.setItem('authToken', 'mock-auth-token-12345');
+    // Init scripts also run inside the sandboxed email iframe, where storage
+    // access throws. That is expected there, not an app error.
+    try {
+      localStorage.setItem('webmail_authToken', 'mock-auth-token-12345');
+      localStorage.setItem('webmail_email', 'test@example.com');
+      localStorage.setItem('webmail_alias_auth', 'test@example.com:mock-password');
+      // Tab-scoped keys (also checked via sessionStorage)
+      sessionStorage.setItem('alias_auth', 'test@example.com:mock-password');
+      sessionStorage.setItem('email', 'test@example.com');
+      sessionStorage.setItem('authToken', 'mock-auth-token-12345');
+    } catch {
+      // sandboxed frame
+    }
   });
 
   // Mock API endpoints — the app calls https://api.forwardemail.net/v1/...

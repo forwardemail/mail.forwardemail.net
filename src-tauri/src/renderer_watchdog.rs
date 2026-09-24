@@ -163,7 +163,7 @@ pub fn start(app: AppHandle) {
                 TickAction::Ping(seq) => {
                     // A dead content process makes this a no-op; the silence
                     // is the signal.
-                    let _ = window.eval(&format!(
+                    let _ = window.eval(format!(
                         "window.__feHeartbeat && window.__feHeartbeat({seq})"
                     ));
                 }

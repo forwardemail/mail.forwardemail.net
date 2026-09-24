@@ -9,6 +9,7 @@
  */
 
 import { DARK_SURFACE } from './dark-surface';
+import { REMOTE_IMAGES_BLOCKED_MARKER } from './remote-images-marker';
 
 const SCRIPT_URL = '/email-iframe.js';
 
@@ -37,6 +38,12 @@ export function buildIframeSrcdoc(
 ): string {
   const bodyClass = isDarkMode ? 'fe-iframe-dark' : 'fe-iframe-light';
   const origin = parentOrigin();
+  // Remote images blocked: enforce it in the document itself, so nothing the
+  // sanitizer's rewrite misses (srcset, CSS url(), background=, poster=) can
+  // reach the network either.
+  const remoteBlocked = !plainText && emailHtml.includes(REMOTE_IMAGES_BLOCKED_MARKER);
+  const imgSrc = remoteBlocked ? 'data: blob:' : 'data: https: http:';
+  const fontSrc = remoteBlocked ? 'data:' : 'data: https:';
   const scriptSrc = `${origin}${SCRIPT_URL}`;
   const content = plainText
     ? `<pre class="fe-email-plaintext">${linkifyEscapedText(escapeForPreText(emailHtml))}</pre>`
@@ -47,7 +54,7 @@ export function buildIframeSrcdoc(
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data: https: http:; font-src data: https:; script-src ${origin};">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src ${imgSrc}; font-src ${fontSrc}; script-src ${origin}; form-action 'none'; base-uri 'none';">
   <style>
     ${getResetStyles()}
     ${getAppearanceStyles()}

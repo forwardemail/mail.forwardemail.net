@@ -245,8 +245,12 @@ export class SearchService {
     if (this._persistTimer) return;
     this._persistTimer = setTimeout(() => {
       this._persistTimer = null;
-      // Ignore the returned promise; callers that need durability use flush().
-      void this.flush();
+      // Callers that need durability use flush(). A failed write (for
+      // example while App Lock has the database locked) stays pending and is
+      // retried by the next schedulePersist() or flush().
+      this.flush().catch((error) => {
+        warn('[SearchService] Deferred index write failed', error);
+      });
     }, SearchService.PERSIST_DEBOUNCE_MS);
   }
 
@@ -267,9 +271,15 @@ export class SearchService {
     }
     if (!this._persistPending) return;
     this._persistPending = false;
-    this._persistInFlight = this.persist().finally(() => {
-      this._persistInFlight = null;
-    });
+    this._persistInFlight = this.persist()
+      .catch((error) => {
+        // Keep the write pending so the next flush retries it.
+        this._persistPending = true;
+        throw error;
+      })
+      .finally(() => {
+        this._persistInFlight = null;
+      });
     return this._persistInFlight;
   }
 

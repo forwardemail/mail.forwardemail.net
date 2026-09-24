@@ -223,3 +223,63 @@ test.describe('Mailbox — folder navigation', () => {
     await expect(inboxBtn).toContainText(/\d+/);
   });
 });
+
+// ── Mobile overlays ─────────────────────────────────────────────────────────
+
+// Bottom-anchored overlays (the "default email app" banner and toasts) used to
+// sit on top of the mobile tab bar, so Search/Compose/Settings could not be
+// tapped until they were dismissed.
+
+const TABS = ['Inbox', 'Search', 'Compose', 'Settings'];
+
+async function tabIsHitTarget(page, label) {
+  const tab = page.locator('.fe-mobile-tabbar').getByLabel(label);
+  const box = await tab.boundingBox();
+  if (!box) return false;
+  return page.evaluate(
+    ({ x, y }) => {
+      const hit = document.elementFromPoint(x, y);
+      return Boolean(hit?.closest('.fe-mobile-tabbar'));
+    },
+    { x: box.x + box.width / 2, y: box.y + box.height / 2 },
+  );
+}
+
+test.describe('Mobile — bottom overlays leave the tab bar usable', () => {
+  test.beforeEach(async ({ page }, testInfo) => {
+    test.skip(!isMobileProject(testInfo), 'mobile layout only');
+    await setupAuthenticatedMailbox(page);
+    await navigateToMailbox(page);
+  });
+
+  test('no default-app banner on touch devices', async ({ page }) => {
+    // The banner appeared 2 s after load.
+    await page.waitForTimeout(2_500);
+    await expect(page.getByText('Set Forward Email as your default email app?')).toHaveCount(0);
+    for (const label of TABS) {
+      expect(await tabIsHitTarget(page, label), `${label} tab is covered`).toBe(true);
+    }
+  });
+
+  test('toasts render above the tab bar', async ({ page }) => {
+    // Add an entry to the app's own toast list so the check covers its real
+    // positioning rules, independent of which actions happen to toast.
+    await page.evaluate(() => {
+      const list = document.querySelector('[data-testid="toast-list"]');
+      if (!list) throw new Error('toast list not mounted');
+      const toast = document.createElement('div');
+      toast.setAttribute('data-testid', 'toast');
+      toast.style.cssText = 'height:64px;width:90vw;background:#fff';
+      toast.textContent = 'Test toast';
+      list.appendChild(toast);
+    });
+
+    const toastBox = await page.getByTestId('toast').last().boundingBox();
+    const barBox = await page.locator('.fe-mobile-tabbar').boundingBox();
+    expect(toastBox && barBox).toBeTruthy();
+    expect(toastBox.y + toastBox.height).toBeLessThanOrEqual(barBox.y);
+    for (const label of TABS) {
+      expect(await tabIsHitTarget(page, label), `${label} tab is covered`).toBe(true);
+    }
+  });
+});

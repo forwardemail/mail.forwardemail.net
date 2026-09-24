@@ -118,3 +118,37 @@ describe('installRuntimeErrorNotifier', () => {
     expect(() => target.fire('error', { message: 'x', error: new Error('x') })).not.toThrow();
   });
 });
+
+describe('locked-database rejections', () => {
+  it('are expected while App Lock is engaged and never toast', async () => {
+    const { installRuntimeErrorNotifier } = await import('../../src/utils/runtime-error-notifier');
+    const target = new EventTarget();
+    const show = vi.fn();
+    installRuntimeErrorNotifier({ show }, { target: target as never, intervalMs: 0 });
+
+    const locked = Object.assign(
+      new Error('Database is locked: at-rest encryption is enabled and no key is available'),
+      { name: 'DbLockedError', code: 'DB_LOCKED' },
+    );
+    const event = Object.assign(new Event('unhandledrejection', { cancelable: true }), {
+      reason: locked,
+    });
+    target.dispatchEvent(event);
+    // Across a worker boundary only the message survives.
+    target.dispatchEvent(
+      Object.assign(new Event('unhandledrejection', { cancelable: true }), {
+        reason: new Error(locked.message),
+      }),
+    );
+
+    expect(show).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(true);
+
+    target.dispatchEvent(
+      Object.assign(new Event('unhandledrejection', { cancelable: true }), {
+        reason: new Error('real bug'),
+      }),
+    );
+    expect(show).toHaveBeenCalledTimes(1);
+  });
+});

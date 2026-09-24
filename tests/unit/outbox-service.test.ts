@@ -207,6 +207,81 @@ describe('processOutbox', () => {
   });
 });
 
+describe('processOutbox never sends the same email twice by guesswork', () => {
+  const pending = (overrides: Record<string, unknown> = {}) => ({
+    account: 'me@test.com',
+    id: 'a',
+    status: 'pending',
+    retryCount: 0,
+    nextRetryAt: 0,
+    emailData: email,
+    ...overrides,
+  });
+
+  const drain = async () => {
+    vi.useFakeTimers();
+    const p = processOutbox();
+    await vi.runAllTimersAsync();
+    return p;
+  };
+
+  it('stops after a client timeout instead of resending a possibly delivered email', async () => {
+    h.remoteRequest.mockRejectedValue(
+      Object.assign(new Error('Request timeout'), { status: 408, isClientTimeout: true }),
+    );
+    h.outbox.set('a', pending());
+
+    await drain();
+
+    const item = await getOutboxItem('a');
+    expect(item).toMatchObject({ status: 'failed' });
+    expect(String(item!.lastError)).toMatch(/may have been sent/i);
+    expect(h.remoteRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not retry a message the server rejected outright', async () => {
+    h.remoteRequest.mockRejectedValue(
+      Object.assign(new Error('Invalid recipient'), { status: 400 }),
+    );
+    h.outbox.set('a', pending());
+
+    await drain();
+
+    expect(await getOutboxItem('a')).toMatchObject({
+      status: 'failed',
+      lastError: 'Invalid recipient',
+    });
+  });
+
+  it.each([401, 429, 503])('keeps retrying after a %i', async (status) => {
+    h.remoteRequest.mockRejectedValue(Object.assign(new Error('later'), { status }));
+    h.outbox.set('a', pending());
+
+    await drain();
+
+    expect(await getOutboxItem('a')).toMatchObject({ status: 'pending', retryCount: 1 });
+  });
+
+  it('surfaces a send the app was killed in the middle of', async () => {
+    h.outbox.set('a', pending({ status: 'sending', updatedAt: Date.now() - 10 * 60 * 1000 }));
+
+    await drain();
+
+    const item = await getOutboxItem('a');
+    expect(item).toMatchObject({ status: 'failed' });
+    expect(String(item!.lastError)).toMatch(/may have been sent/i);
+    expect(h.remoteRequest).not.toHaveBeenCalled();
+  });
+
+  it('leaves a send that is still in flight elsewhere alone', async () => {
+    h.outbox.set('a', pending({ status: 'sending', updatedAt: Date.now() - 5_000 }));
+
+    await drain();
+
+    expect(await getOutboxItem('a')).toMatchObject({ status: 'sending' });
+  });
+});
+
 describe('processOutbox account binding', () => {
   // The drain loop awaits a network send plus a 500ms pause per item, so the
   // user can switch accounts part-way through it. Sending is authenticated by

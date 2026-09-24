@@ -270,10 +270,21 @@ class ErrorLogger {
    * Export logs for download
    */
   exportLogs(): ExportedLogs {
+    // Exporting is how a user reports a problem; a corrupt stored entry must
+    // not make the export itself fail.
+    const readStored = (key: string) => {
+      if (!hasStorage) return [];
+      try {
+        const parsed = JSON.parse(sessionStorage.getItem(key) || '[]');
+        return Array.isArray(parsed) ? parsed : [];
+      } catch {
+        return [];
+      }
+    };
     return {
       logs: this.sessionLogs,
-      apiErrors: hasStorage ? JSON.parse(sessionStorage.getItem(API_ERROR_KEY) || '[]') : [],
-      dbErrors: hasStorage ? JSON.parse(sessionStorage.getItem(DB_ERROR_KEY) || '[]') : [],
+      apiErrors: readStored(API_ERROR_KEY),
+      dbErrors: readStored(DB_ERROR_KEY),
       timestamp: new Date().toISOString(),
       userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : '',
       url: hasWindow ? window.location.href : '',

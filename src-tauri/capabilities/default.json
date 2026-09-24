@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/tauri-v2.0.0/crates/tauri-cli/capabilities-schema.json",
   "identifier": "default",
-  "description": "Least-privilege capabilities for the Forward Email app. Only the permissions actually used by the frontend are granted.",
+  "description": "Least-privilege capabilities for the Forward Email app. Only the permissions actually used by the frontend are granted. File read, write and remove carry no static path scope: a path becomes usable only after the user picks it in a native open/save panel (tauri-plugin-dialog and file_picker_macos.rs add it to the fs scope), plus the app's own temp files for Open Original.",
   "windows": ["main", "compose-*"],
   "permissions": [
     "core:default",
@@ -43,29 +43,12 @@
     "core:menu:default",
     "dialog:allow-save",
     "dialog:allow-open",
-    "fs:allow-temp-write",
-    {
-      "identifier": "fs:allow-read-file",
-      "allow": [{ "path": "**" }]
-    },
+    "fs:allow-read-file",
     {
       "identifier": "fs:allow-write-file",
-      "allow": [
-        { "path": "$HOME/**" },
-        { "path": "$DOWNLOAD/**" },
-        { "path": "$DOCUMENT/**" },
-        { "path": "$DESKTOP/**" }
-      ]
+      "allow": [{ "path": "$TEMP/forwardemail-original-*" }]
     },
-    {
-      "identifier": "fs:allow-remove",
-      "allow": [
-        { "path": "$HOME/**" },
-        { "path": "$DOWNLOAD/**" },
-        { "path": "$DOCUMENT/**" },
-        { "path": "$DESKTOP/**" }
-      ]
-    },
+    "fs:allow-remove",
     {
       "identifier": "opener:allow-open-path",
       "allow": [

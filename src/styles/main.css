@@ -393,3 +393,13 @@ input[type='range'] {
 :root:not(.dark) input[type='datetime-local'] {
   color-scheme: light;
 }
+
+/* Bottom-anchored overlays (toasts, the default-app banner) clear the mobile
+ * bottom tab bar instead of covering Inbox/Search/Compose/Settings. The bar is
+ * 56px plus the home-indicator inset (MobileTabBar.svelte) and only exists
+ * below the md breakpoint. */
+@media (max-width: 767.98px) {
+  body:has(.fe-mobile-tabbar) .fe-bottom-overlay {
+    bottom: calc(56px + env(safe-area-inset-bottom, 0px) + 0.75rem);
+  }
+}

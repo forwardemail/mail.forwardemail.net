@@ -382,7 +382,9 @@ async function processIndexQueue(account: string): Promise<void> {
     // (which a worker teardown could skip). Fire-and-forget; the in-memory
     // index is already up to date for queries.
     const service = services.get(account)?.service;
-    void service?.flush?.();
+    service?.flush?.()?.catch((err: unknown) => {
+      console.warn('[search.worker] index write failed', err);
+    });
   }
 }
 

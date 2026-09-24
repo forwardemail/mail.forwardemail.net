@@ -24,6 +24,19 @@ use objc2::ClassType;
 use objc2::MainThreadMarker;
 use objc2_app_kit::{NSApplication, NSModalResponseOK, NSOpenPanel, NSSavePanel};
 use objc2_foundation::NSString;
+use tauri_plugin_fs::FsExt;
+
+/// Grant the webview's fs plugin access to exactly the path the user chose.
+///
+/// tauri-plugin-dialog does this for its own panels. These replacement panels
+/// must do the same, or the capability file has to allow every path on disk
+/// (it used to: read `**`, write/remove `$HOME/**`), which hands any script
+/// running in the webview the user's whole home directory.
+fn grant_path(handle: &tauri::AppHandle, path: &str) {
+    if let Err(e) = handle.fs_scope().allow_file(path) {
+        log::warn!("[file-picker] could not add chosen path to fs scope: {}", e);
+    }
+}
 
 /// Construct an `NSOpenPanel` safely.
 ///
@@ -56,7 +69,7 @@ fn create_open_panel(mtm: MainThreadMarker) -> Option<Retained<NSOpenPanel>> {
 }
 
 #[tauri::command]
-pub fn pick_files_macos(multiple: bool) -> Result<Vec<String>, String> {
+pub fn pick_files_macos(handle: tauri::AppHandle, multiple: bool) -> Result<Vec<String>, String> {
     let mtm = MainThreadMarker::new()
         .ok_or_else(|| "pick_files_macos must be invoked on the main thread".to_string())?;
 
@@ -84,7 +97,9 @@ pub fn pick_files_macos(multiple: bool) -> Result<Vec<String>, String> {
     for i in 0..count {
         let url = urls.objectAtIndex(i);
         if let Some(path) = url.path() {
-            paths.push(path.to_string());
+            let path = path.to_string();
+            grant_path(&handle, &path);
+            paths.push(path);
         }
     }
 
@@ -116,7 +131,10 @@ fn create_save_panel(mtm: MainThreadMarker) -> Option<Retained<NSSavePanel>> {
 /// Returns Ok(Some(path)) when the user saves, Ok(None) when the user
 /// cancels, and Err when the panel could not be constructed.
 #[tauri::command]
-pub fn save_file_macos(default_filename: Option<String>) -> Result<Option<String>, String> {
+pub fn save_file_macos(
+    handle: tauri::AppHandle,
+    default_filename: Option<String>,
+) -> Result<Option<String>, String> {
     let mtm = MainThreadMarker::new()
         .ok_or_else(|| "save_file_macos must be invoked on the main thread".to_string())?;
 
@@ -140,5 +158,8 @@ pub fn save_file_macos(default_filename: Option<String>) -> Result<Option<String
 
     let url = panel.URL();
     let path = url.and_then(|u| u.path()).map(|s| s.to_string());
+    if let Some(path) = &path {
+        grant_path(&handle, path);
+    }
     Ok(path)
 }

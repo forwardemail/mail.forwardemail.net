@@ -69,4 +69,31 @@ test.describe('CardDAV contacts with multiple email addresses', () => {
       page.getByTestId('compose-modal').getByText('info@tinokremer.nl', { exact: true }),
     ).toBeVisible();
   });
+
+  test('shows suggestions typed before the address book finished loading', async ({ page }) => {
+    // Hold the contacts response until the address has been typed.
+    let release;
+    const released = new Promise((resolve) => {
+      release = resolve;
+    });
+    await page.route('**/v1/contacts**', async (route) => {
+      if (route.request().method() === 'GET') await released;
+      await route.fallback();
+    });
+
+    await page.goto('/mailbox');
+    await page.getByRole('button', { name: 'Compose' }).first().click();
+    const to = page.locator('input[placeholder="To"]');
+    await expect(to).toBeVisible();
+    await to.fill('info@tinokremer.nl');
+    await expect(page.locator('.contact-suggestions')).toHaveCount(0);
+
+    release();
+
+    await expect(
+      page
+        .locator('.contact-suggestions')
+        .getByRole('button', { name: /Tino Kremer.*info@tinokremer\.nl/i }),
+    ).toBeVisible();
+  });
 });

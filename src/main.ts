@@ -3215,6 +3215,16 @@ globalThis.addEventListener('popstate', () => {
 });
 
 // Handle hash-based deep links (e.g., /mailbox#compose=user@example.com or /mailbox#INBOX/12345)
+// Hash links arrive from other apps, bookmarks and hand edits. A malformed
+// percent-escape must not throw out of the hashchange handler.
+const safeDecode = (value: string): string => {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+};
+
 handleHashActions = function () {
   const hash = globalThis.location.hash || '';
   // ── mailto: handler deep-link ──────────────────────────────────────────
@@ -3227,7 +3237,7 @@ handleHashActions = function () {
     const raw = hash.slice('#compose?mailto='.length);
     // The browser percent-encodes the entire mailto: URI when substituting
     // %s, so a single decodeURIComponent recovers the original RFC 6068 URL.
-    const mailtoUrl = decodeURIComponent(raw).trim();
+    const mailtoUrl = safeDecode(raw).trim();
     if (mailtoUrl) {
       const current = currentRoute();
       if (current !== 'mailbox') {
@@ -3243,8 +3253,8 @@ handleHashActions = function () {
     history.replaceState({ route: currentRoute() }, '', globalThis.location.pathname);
   } else if (hash.startsWith('#compose=') || hash.startsWith('#mailto=')) {
     const rawValue = hash.startsWith('#compose=')
-      ? decodeURIComponent(hash.replace('#compose=', ''))
-      : decodeURIComponent(hash.replace('#mailto=', ''));
+      ? safeDecode(hash.replace('#compose=', ''))
+      : safeDecode(hash.replace('#mailto=', ''));
     const value = (rawValue || '').trim();
     if (value) {
       const current = currentRoute();
@@ -3273,7 +3283,7 @@ handleHashActions = function () {
     // Clear hash to avoid repeat
     history.replaceState({ route: currentRoute() }, '', globalThis.location.pathname);
   } else if (hash.startsWith('#addevent=')) {
-    const addr = decodeURIComponent(hash.replace('#addevent=', ''));
+    const addr = safeDecode(hash.replace('#addevent=', ''));
     // Only set route if not already on calendar
     const current = currentRoute();
     if (current !== 'calendar') {
@@ -3289,7 +3299,7 @@ handleHashActions = function () {
     // Clear hash to avoid repeat
     history.replaceState({ route: currentRoute() }, '', globalThis.location.pathname);
   } else if (hash.startsWith('#search=')) {
-    const term = decodeURIComponent(hash.replace('#search=', ''));
+    const term = safeDecode(hash.replace('#search=', ''));
     // Only set route if not already on mailbox
     const current = currentRoute();
     if (current !== 'mailbox') {

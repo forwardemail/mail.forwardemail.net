@@ -36,6 +36,23 @@ export const getExternalBrowserOverride = ({
   return normalizeExternalBrowserOverride(nextValue);
 };
 
+// Schemes an email link or UI action may hand to the system. Anything else —
+// javascript:, data:, file:, blob:, vbscript:, or an arbitrary app scheme — is
+// refused here as well as by the sanitizer. On the web a `javascript:` URL
+// passed to window.open runs in a new window that shares this origin, and
+// with it the stored credentials.
+const ALLOWED_EXTERNAL_PROTOCOLS = new Set(['http:', 'https:', 'mailto:', 'tel:']);
+
+export function isAllowedExternalUrl(url) {
+  if (typeof url !== 'string' || !url.trim()) return false;
+  try {
+    const parsed = new URL(url.trim());
+    return ALLOWED_EXTERNAL_PROTOCOLS.has(parsed.protocol.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
 export async function openExternalUrl(
   url,
   {
@@ -49,6 +66,11 @@ export async function openExternalUrl(
     log = console.warn,
   } = {},
 ) {
+  if (!isAllowedExternalUrl(url)) {
+    log?.('[external-links] refused to open a URL with a disallowed scheme');
+    return { mode: 'blocked' };
+  }
+
   if (!tauri) {
     windowOpen?.(url, '_blank', 'noopener,noreferrer');
     return { mode: 'window-open' };

@@ -240,7 +240,9 @@ const runStartupCheck = async (): Promise<void> => {
 
     // If index is empty but messages exist, trigger full rebuild
     if (healthResult.needsRebuild) {
-      await rebuildFromCache({ silent: false });
+      // Automatic background maintenance: no success toast. It used to pop
+      // up on every fresh install and cover the mobile tab bar.
+      await rebuildFromCache({ silent: true });
     } else if (healthResult.needsIncrementalSync) {
       // If some messages are missing, do incremental sync (faster than full rebuild)
       const syncResult = await workerClient.syncMissingMessages({

@@ -250,7 +250,13 @@ export function parseMailtoFromHash(hash) {
   const content = hash.startsWith('#') ? hash.slice(1) : hash;
   if (!content.startsWith('compose?mailto=')) return null;
 
-  const mailtoUrl = decodeURIComponent(content.slice('compose?mailto='.length));
+  let mailtoUrl;
+  try {
+    mailtoUrl = decodeURIComponent(content.slice('compose?mailto='.length));
+  } catch {
+    // A malformed escape (e.g. "%E0%A4%A") must not throw out of hash routing.
+    return null;
+  }
   if (!mailtoUrl.toLowerCase().startsWith('mailto:')) return null;
 
   return { mailtoUrl };
@@ -286,8 +292,21 @@ export async function resolveMailtoFromHash(hash) {
  * @param {string} account - Current user email
  * @returns {boolean}
  */
+/**
+ * Phones and tablets have no "default email app" setting a web page can
+ * change, and the banner there sat on top of the bottom tab bar.
+ */
+function isTouchPrimaryDevice() {
+  try {
+    return Boolean(globalThis.matchMedia?.('(hover: none) and (pointer: coarse)')?.matches);
+  } catch {
+    return false;
+  }
+}
+
 export function shouldShowMailtoPrompt(account) {
   if (!isMailtoHandlerSupported()) return false;
+  if (isTouchPrimaryDevice()) return false;
   if (hasPromptBeenShown(account)) return false;
   // Don't show if we already know we're the default
   if (getRegistrationStatusSync() === 'default') return false;

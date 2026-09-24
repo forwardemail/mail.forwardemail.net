@@ -702,11 +702,34 @@ fn setup_menu(app: &tauri::App) -> Result<Menu<tauri::Wry>, Box<dyn std::error::
 
 // ── Deep-link URL validation ─────────────────────────────────────────────────
 
+/// Longest deep link accepted. Real mailto: links are far shorter; the cap
+/// keeps a hostile link from pushing megabytes through IPC and the compose
+/// parser (the frontend truncates to 2048 characters anyway).
+const MAX_DEEP_LINK_LEN: usize = 8192;
+
+/// Cold-start queue bound: links beyond this are dropped rather than growing
+/// memory while the frontend is not yet draining the queue.
+const MAX_PENDING_DEEP_LINKS: usize = 32;
+
 /// Validates that a deep-link URL uses an allowed scheme.
-/// Only `mailto:` and `forwardemail:` are permitted.
+/// Only `mailto:` and `forwardemail:` are permitted, without control
+/// characters and within MAX_DEEP_LINK_LEN.
 fn is_valid_deep_link(url: &str) -> bool {
+    if url.len() > MAX_DEEP_LINK_LEN || url.chars().any(|c| c.is_control()) {
+        return false;
+    }
     let trimmed = url.trim().to_lowercase();
     trimmed.starts_with("mailto:") || trimmed.starts_with("forwardemail:")
+}
+
+fn push_pending_deep_links(queue: &mut Vec<String>, urls: Vec<String>) {
+    for url in urls {
+        if queue.len() >= MAX_PENDING_DEEP_LINKS {
+            log::warn!("[deep-link] pending queue full; dropping link");
+            break;
+        }
+        queue.push(url);
+    }
 }
 
 // ── App Entry Point ──────────────────────────────────────────────────────────
@@ -1074,7 +1097,7 @@ pub fn run() {
                     if !safe_urls.is_empty() {
                         if let Some(state) = app.try_state::<PendingDeepLinks>() {
                             let mut queue = state.0.lock().unwrap_or_else(|e| e.into_inner());
-                            queue.extend(safe_urls);
+                            push_pending_deep_links(&mut queue, safe_urls);
                         }
                     }
                 }
@@ -1094,7 +1117,7 @@ pub fn run() {
                         // Also push to pending queue as a safety net
                         if let Some(state) = handle.try_state::<PendingDeepLinks>() {
                             let mut queue = state.0.lock().unwrap_or_else(|e| e.into_inner());
-                            queue.extend(safe_urls.clone());
+                            push_pending_deep_links(&mut queue, safe_urls.clone());
                         }
                         let _ =
                             handle.emit("deep-link-received", DeepLinkPayload { urls: safe_urls });
@@ -1132,4 +1155,40 @@ pub fn run() {
                 }
             }
         });
+}
+
+#[cfg(test)]
+mod deep_link_tests {
+    use super::*;
+
+    #[test]
+    fn accepts_allowed_schemes() {
+        assert!(is_valid_deep_link("mailto:a@example.com"));
+        assert!(is_valid_deep_link("MAILTO:a@example.com?subject=hi"));
+        assert!(is_valid_deep_link("forwardemail://mailbox"));
+    }
+
+    #[test]
+    fn rejects_other_schemes_oversized_and_control_characters() {
+        assert!(!is_valid_deep_link("https://example.com"));
+        assert!(!is_valid_deep_link("file:///etc/passwd"));
+        assert!(!is_valid_deep_link("javascript:alert(1)"));
+        assert!(!is_valid_deep_link(&format!(
+            "mailto:{}",
+            "a".repeat(MAX_DEEP_LINK_LEN)
+        )));
+        assert!(!is_valid_deep_link(
+            "mailto:a@example.com\nbcc=evil@example.com"
+        ));
+    }
+
+    #[test]
+    fn pending_queue_is_bounded() {
+        let mut queue = Vec::new();
+        let urls: Vec<String> = (0..100)
+            .map(|i| format!("mailto:{i}@example.com"))
+            .collect();
+        push_pending_deep_links(&mut queue, urls);
+        assert_eq!(queue.len(), MAX_PENDING_DEEP_LINKS);
+    }
 }

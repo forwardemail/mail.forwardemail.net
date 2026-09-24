@@ -125,7 +125,15 @@ describe('buildOriginalViewerPage', () => {
     const page = buildOriginalViewerPage({ raw: '</script><script>alert(1)</script>' });
     // Only the page's own closing </script> tag remains literal; the data's are escaped.
     expect(page.split('</script>').length - 1).toBe(1);
-    expect(page).toContain('<\\/script>');
+    expect(page).toContain('\\u003c/script>');
+  });
+
+  it('keeps the viewer script intact when the source opens an HTML comment', () => {
+    const page = buildOriginalViewerPage({ raw: '<!--<script>x</script>' });
+    const script = page.slice(page.indexOf('<script>') + '<script>'.length);
+    // No "<" from the data reaches the script body, so "<!--" cannot change
+    // how the HTML parser finds the closing tag.
+    expect(script.slice(0, script.indexOf('</script>'))).not.toContain('<!--');
   });
 
   it('includes dark-surface tokens only when not in light mode', () => {
@@ -266,5 +274,21 @@ describe('buildServerDraftPrefill', () => {
       sourceMessageId: 'x',
       serverDraftId: 'x',
     });
+  });
+});
+
+describe('buildOriginalViewerPage hardening', () => {
+  it('keeps hostile message source inside the data, not the page', async () => {
+    const { buildOriginalViewerPage } = await import('../../src/stores/mailbox-actions-helpers');
+    const hostile =
+      'Subject: x\n\n</script><script>window.pwned=1</script><img src=https://t.example/p>';
+    const page = buildOriginalViewerPage({ raw: hostile, headers: '', subject: '<b>&</b>' });
+
+    // Exactly one script element: the viewer's own.
+    expect(page.match(/<script>/g)).toHaveLength(1);
+    expect(page).not.toContain('</script><script>window.pwned');
+    // Remote fetches (tracking pixels in a decrypted HTML body) are refused.
+    expect(page).toMatch(/Content-Security-Policy" content="[^"]*img-src data:;/);
+    expect(page).toContain('<h1>&lt;b&gt;&amp;&lt;/b&gt;</h1>');
   });
 });

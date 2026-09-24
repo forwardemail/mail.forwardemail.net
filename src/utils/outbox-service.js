@@ -484,6 +484,32 @@ async function sendOutboxItem(item) {
   } catch (err) {
     const errorMessage = err.message || 'Send failed';
     const newRetryCount = (item.retryCount || 0) + 1;
+    const status = Number(err?.status) || 0;
+
+    // Gave up waiting for the server's answer: the message may well have been
+    // accepted. Resending automatically is how people end up sending the same
+    // email twice, so stop and let the user check Sent before retrying.
+    if (err?.isClientTimeout === true) {
+      await db.outbox.update([account, item.id], {
+        status: 'failed',
+        retryCount: newRetryCount,
+        lastError: UNCONFIRMED_SEND_MESSAGE,
+        updatedAt: Date.now(),
+      });
+      return { success: false, error: UNCONFIRMED_SEND_MESSAGE };
+    }
+
+    // The server rejected the message itself (bad recipient, too large, ...).
+    // Retrying the identical request cannot succeed.
+    if (isPermanentSendError(status)) {
+      await db.outbox.update([account, item.id], {
+        status: 'failed',
+        retryCount: newRetryCount,
+        lastError: errorMessage,
+        updatedAt: Date.now(),
+      });
+      return { success: false, error: errorMessage };
+    }
 
     if (newRetryCount >= MAX_RETRIES) {
       // Max retries reached - mark as failed
@@ -509,6 +535,52 @@ async function sendOutboxItem(item) {
   }
 }
 
+const UNCONFIRMED_SEND_MESSAGE =
+  'The server did not confirm this message in time. It may have been sent; check Sent before retrying.';
+
+// Longer than the send request timeout (30 s) plus margin, so an item another
+// tab is still sending is not mistaken for an abandoned one.
+const STALE_SENDING_MS = 2 * 60 * 1000;
+
+/**
+ * 4xx responses that mean the request itself is unacceptable. Auth failures,
+ * timeouts and rate limits are not in this set: those can succeed later.
+ */
+function isPermanentSendError(status) {
+  return status >= 400 && status < 500 && ![401, 403, 408, 425, 429].includes(status);
+}
+
+/**
+ * Items left in 'sending' by a send that never finished: the app was killed
+ * or the page reloaded mid-request (routine on iOS). Nothing ever picked them
+ * up again, so they sat in the outbox as "sending" forever. Whether the server
+ * got them is unknown, so they are surfaced as failed rather than resent.
+ */
+async function recoverInterruptedSends() {
+  const account = getAccount();
+  const cutoff = Date.now() - STALE_SENDING_MS;
+  try {
+    const items = await db.outbox
+      .where('[account+id]')
+      .between([account, ''], [account, '\uffff'])
+      .toArray();
+    const stale = items.filter(
+      (item) => item.status === 'sending' && (item.updatedAt || 0) <= cutoff,
+    );
+    for (const item of stale) {
+      await db.outbox.update([account, item.id], {
+        status: 'failed',
+        lastError: UNCONFIRMED_SEND_MESSAGE,
+        updatedAt: Date.now(),
+      });
+    }
+    return stale.length;
+  } catch (err) {
+    console.warn('[OutboxService] Could not recover interrupted sends:', err);
+    return 0;
+  }
+}
+
 /**
  * Process all pending outbox items
  */
@@ -527,6 +599,7 @@ export async function processOutbox() {
   const results = { processed: 0, sent: 0, failed: 0 };
 
   try {
+    await recoverInterruptedSends();
     const pending = await getPendingOutbox();
 
     for (const item of pending) {

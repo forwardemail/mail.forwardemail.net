@@ -96,7 +96,13 @@ export const buildOriginalViewerPage = ({
 
   // Create script content as a separate blob to avoid CSP inline script issues
   const scriptContent = `
-    const DATA = ${JSON.stringify({ raw, headers, decrypted, filename })};
+    const DATA = ${JSON.stringify({ raw, headers, decrypted, filename })
+      // Every "<" as a JS escape: message source containing "<!--<script>"
+      // would otherwise switch the HTML parser into script-data escape states
+      // and leave this <script> unterminated.
+      .replace(/</g, '\\u003c')
+      .replace(/\u2028/g, '\\u2028')
+      .replace(/\u2029/g, '\\u2029')};
 
     const headersEl = document.getElementById('headers');
     const rawEl = document.getElementById('raw');
@@ -183,6 +189,10 @@ export const buildOriginalViewerPage = ({
 <html lang="en">
 <head>
   <meta charset="utf-8" />
+  <!-- The page's only script is the viewer below; the decrypted body renders
+       in a script-less sandboxed frame that inherits this policy, so it cannot
+       fetch remote images (tracking pixels) or submit forms either. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; frame-src 'self' about: data: blob:; form-action 'none'; base-uri 'none'" />
   <title>Original message</title>
   <style>
     /* Base styles (light mode) */
@@ -220,7 +230,7 @@ export const buildOriginalViewerPage = ({
 </head>
 <body>
   <header>
-    <h1>${subject ? subject.replace(/</g, '&lt;').replace(/>/g, '&gt;') : 'Original message'}</h1>
+    <h1>${subject ? subject.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') : 'Original message'}</h1>
     <button id="download">Download .eml</button>
     <button id="copyRaw">Copy raw message</button>
   </header>

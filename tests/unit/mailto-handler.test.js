@@ -483,3 +483,11 @@ describe('shouldShowMailtoPrompt', () => {
     expect(shouldShowMailtoPrompt('bob@example.com')).toBe(true);
   });
 });
+
+describe('parseMailtoFromHash with malformed escapes', () => {
+  it('returns null instead of throwing on a broken percent-escape', async () => {
+    const { parseMailtoFromHash } = await import('../../src/utils/mailto-handler.js');
+    expect(() => parseMailtoFromHash('#compose?mailto=mailto%3Aa%40b.com%E0%A4%A')).not.toThrow();
+    expect(parseMailtoFromHash('#compose?mailto=mailto%3Aa%40b.com%E0%A4%A')).toBeNull();
+  });
+});

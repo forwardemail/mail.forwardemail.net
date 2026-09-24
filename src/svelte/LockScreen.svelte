@@ -86,9 +86,13 @@
       showPasskeyOption = true;
     }
 
-    // Restore lockout state from sessionStorage
+    // Restore lockout state. Kept in localStorage, not sessionStorage: a
+    // session-scoped counter reset whenever the app was relaunched (or the
+    // page reloaded after a crash), which made the escalating lockout free to
+    // bypass for anyone guessing the PIN.
     try {
-      const lockoutData = sessionStorage.getItem('webmail_lockout');
+      const lockoutData =
+        localStorage.getItem('webmail_lockout') ?? sessionStorage.getItem('webmail_lockout');
       if (lockoutData) {
         const parsed = JSON.parse(lockoutData);
         attempts = parsed.attempts || 0;
@@ -151,7 +155,12 @@
 
   function saveLockoutState() {
     try {
-      sessionStorage.setItem(
+      sessionStorage.removeItem('webmail_lockout');
+    } catch {
+      // ignore
+    }
+    try {
+      localStorage.setItem(
         'webmail_lockout',
         JSON.stringify({
           attempts,

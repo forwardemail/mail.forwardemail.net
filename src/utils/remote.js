@@ -282,6 +282,9 @@ export const Remote = {
         requestCircuit.recordFailure();
         const err = new Error('Request timeout');
         err.status = 408;
+        // Distinguishes "we gave up waiting" (the server may still have acted
+        // on the request) from an HTTP 408 the server actually returned.
+        err.isClientTimeout = true;
         logApiError(action, method.toUpperCase(), 408, err);
         throw err;
       } else {

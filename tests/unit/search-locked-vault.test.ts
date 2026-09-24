@@ -130,7 +130,7 @@ describe('search store while App Lock holds the vault', () => {
 
     await store.actions.resumeAfterUnlock();
     expect(h.rebuild).toHaveBeenCalledTimes(2);
-    expect(h.toast).toHaveBeenCalledWith(expect.stringContaining('Search index built'), 'success');
+    expect(h.toast).not.toHaveBeenCalled();
     expect(h.toast).not.toHaveBeenCalledWith('Search index build failed', 'error');
   });
 

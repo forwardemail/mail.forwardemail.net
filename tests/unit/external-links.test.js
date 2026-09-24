@@ -237,3 +237,43 @@ describe('external-links', () => {
     cleanup();
   });
 });
+
+describe('openExternalUrl scheme allowlist', () => {
+  it.each([
+    'javascript:alert(document.cookie)',
+    ' JavaScript:alert(1)',
+    'data:text/html,<script>alert(1)</script>',
+    'file:///etc/passwd',
+    'vbscript:msgbox(1)',
+    'ms-settings:privacy',
+    'not a url',
+    '',
+  ])('refuses %j on the web and in Tauri', async (url) => {
+    const { openExternalUrl } = await import('../../src/utils/external-links.js');
+    const windowOpen = vi.fn();
+    const openUrl = vi.fn();
+
+    await expect(
+      openExternalUrl(url, { tauri: false, windowOpen, log: () => {} }),
+    ).resolves.toEqual({
+      mode: 'blocked',
+    });
+    await expect(
+      openExternalUrl(url, { tauri: true, openUrl, browserOverride: '', log: () => {} }),
+    ).resolves.toEqual({ mode: 'blocked' });
+    expect(windowOpen).not.toHaveBeenCalled();
+    expect(openUrl).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'https://example.com/a?b=c',
+    'http://example.com',
+    'mailto:a@example.com',
+    'tel:+15555550100',
+  ])('opens %j', async (url) => {
+    const { openExternalUrl } = await import('../../src/utils/external-links.js');
+    const windowOpen = vi.fn();
+    await openExternalUrl(url, { tauri: false, windowOpen });
+    expect(windowOpen).toHaveBeenCalledWith(url, '_blank', 'noopener,noreferrer');
+  });
+});

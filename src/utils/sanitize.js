@@ -1,5 +1,6 @@
 import DOMPurify from 'dompurify';
 import { Local } from './storage';
+import { REMOTE_IMAGES_BLOCKED_MARKER } from './remote-images-marker.ts';
 
 /**
  * Detect if an image is likely a tracking pixel
@@ -55,6 +56,13 @@ function isTrackingPixel(attributes) {
  * declaration can be put back when the reader unblocks remote images.
  */
 const CSS_BLOCKED_URL_MARKER = 'fe-blocked-url:';
+
+export { REMOTE_IMAGES_BLOCKED_MARKER };
+
+// Remote references the <img src> rewrite does not rewrite, checked on the
+// sanitized output so the "load images" control is offered for them too.
+const OTHER_REMOTE_IMAGE_REFS =
+  /\s(?:srcset|background|poster)\s*=\s*["']?[^"'>]*https?:|url\(\s*['"]?https?:/i;
 
 /**
  * Sanitize the contents of an email <style> block.
@@ -300,6 +308,14 @@ export function sanitizeHtml(html, { blockRemoteImages, blockTrackingPixels } = 
       activeCssContext = null;
     }
 
+    if (blockRemoteImages === true && typeof sanitized === 'string' && sanitized) {
+      if (OTHER_REMOTE_IMAGE_REFS.test(sanitized)) {
+        hasBlockedImages = true;
+        if (blockedRemoteImageCount === 0) blockedRemoteImageCount = 1;
+      }
+      sanitized += REMOTE_IMAGES_BLOCKED_MARKER;
+    }
+
     return { html: sanitized, hasBlockedImages, trackingPixelCount, blockedRemoteImageCount };
   } catch (error) {
     console.error('DOMPurify sanitize failed:', error);
@@ -448,7 +464,8 @@ export function restoreBlockedImages(html, { includeTrackingPixels = false } = {
       (match, originalUrl) => (isSafeImageUrl(originalUrl) ? `url("${originalUrl}")` : match),
     );
 
-    return withCssUrls;
+    // The user chose to load images: lift the reader's image CSP too.
+    return withCssUrls.split(REMOTE_IMAGES_BLOCKED_MARKER).join('');
   } catch (error) {
     console.error('Failed to restore images:', error);
     return html;
