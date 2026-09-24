@@ -132,7 +132,6 @@ if (/^\s*CODE_SIGN_ENTITLEMENTS:/m.test(projYml)) {
 // settings.base CODE_SIGN_ENTITLEMENTS. Tauri generates this pointing to an
 // empty .entitlements file, so our aps-environment never reaches the binary.
 // Rewrite it to point to our ForwardEmail-iOS.entitlements file.
-const entitlementsPathRegex = /(\bentitlements:\s*\n\s*path:\s*).+\.entitlements/m;
 // `tauri ios build` does not always sign through Xcode's settings: when App
 // Store Connect API credentials are in the environment it archives unsigned
 // and then signs the binary itself with
@@ -158,13 +157,36 @@ for (const entry of fs.readdirSync(appleDir)) {
     fs.writeFileSync(candidate, iosEntitlements);
   }
 }
-if (entitlementsPathRegex.test(projYml)) {
-  const rewritten = projYml.replace(entitlementsPathRegex, `$1${iosEntitlementsName}`);
+// xcodegen REWRITES the file named by `entitlements.path` from
+// `entitlements.properties` on every `xcodegen generate`, and `properties`
+// defaults to an empty dictionary. Pointing `path` at our file without
+// `properties` therefore made the xcodegen run below overwrite it with `{}`,
+// and Xcode signed the app with no aps-environment (the profile granting it
+// does not fail the build). Declare the entitlement in project.yml so every
+// regeneration -- this script, inject-ios-scene-delegate.cjs, or tauri --
+// writes it.
+const entitlementsBlockRegex = /^( *)entitlements:[ \t]*\n(?:\1 +.*\n)*/m;
+const entitlementsBlockMatch = projYml.match(entitlementsBlockRegex);
+if (entitlementsBlockMatch) {
+  const indent = entitlementsBlockMatch[1];
+  const entitlementsBlock = [
+    `${indent}entitlements:`,
+    `${indent}  path: ${iosEntitlementsName}`,
+    `${indent}  properties:`,
+    `${indent}    aps-environment: ${apsEnvironment}`,
+    '',
+  ].join('\n');
+  const rewritten = projYml.replace(entitlementsBlockRegex, entitlementsBlock);
   if (rewritten !== projYml) {
     projYml = rewritten;
     modified = true;
-    console.log(`Rewrote entitlements.path to ${iosEntitlementsName} in project.yml`);
+    console.log(
+      `Set entitlements.path=${iosEntitlementsName} and properties.aps-environment=${apsEnvironment} in project.yml`,
+    );
   }
+} else {
+  console.error('Could not find the iOS target entitlements block in project.yml');
+  process.exit(1);
 }
 
 if (modified) {
@@ -176,6 +198,24 @@ if (modified) {
     console.warn('xcodegen not available — tauri will regenerate xcodeproj on build');
   }
 }
+
+// The entitlements file Xcode signs with must still carry aps-environment
+// after xcodegen has run; fail here rather than ship an app that cannot
+// register for push (verify-ios-push-entitlement.sh checks the signed IPA).
+const signedEntitlements = fs.existsSync(iosEntitlementsPath)
+  ? fs.readFileSync(iosEntitlementsPath, 'utf8')
+  : '';
+if (
+  !new RegExp(`<key>aps-environment</key>\\s*<string>${apsEnvironment}</string>`).test(
+    signedEntitlements,
+  )
+) {
+  console.error(
+    `${iosEntitlementsName} does not contain aps-environment=${apsEnvironment} after xcodegen`,
+  );
+  process.exit(1);
+}
+console.log(`Verified ${iosEntitlementsName} contains aps-environment=${apsEnvironment}`);
 
 // ── 2. Write ExportOptions.plist ─────────────────────────────────────────
 const profileMapping = profileName
