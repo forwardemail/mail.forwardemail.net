@@ -4,7 +4,7 @@ This repository contains the Forward Email Webmail client, a client-only PWA bui
 
 ## Prerequisites
 
-- Node.js 20+
+- Node.js 22+
 - pnpm 9.0.0+
 
 ## Project Structure

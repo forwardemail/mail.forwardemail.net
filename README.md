@@ -421,7 +421,7 @@ src/
 
 ### Prerequisites
 
-- Node.js 20+
+- Node.js 22+
 - pnpm 9.0.0+
 - [Rust](https://rustup.rs/) and [Tauri v2 prerequisites](https://v2.tauri.app/start/prerequisites/) (for desktop/mobile development)
 

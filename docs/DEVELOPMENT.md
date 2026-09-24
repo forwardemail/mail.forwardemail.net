@@ -6,7 +6,7 @@ This guide covers development for both desktop and mobile applications, which ar
 
 1.  **Install Rust**: Follow the instructions at [rustup.rs](https://rustup.rs/).
 2.  **Install Tauri Prerequisites**: Follow the official guide for your operating system at [tauri.app/v2/guides/getting-started/prerequisites](https://tauri.app/v2/guides/getting-started/prerequisites). This includes dependencies for both desktop and mobile development (e.g., Android Studio, Xcode). For iOS, also install CocoaPods: `brew install cocoapods`.
-3.  **Install Node.js and pnpm**: We recommend using Node.js 20+ and pnpm 9+.
+3.  **Install Node.js and pnpm**: We recommend using Node.js 22+ and pnpm 9+.
 
 ## Getting Started
 

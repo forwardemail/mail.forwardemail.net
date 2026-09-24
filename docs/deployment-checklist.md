@@ -16,7 +16,7 @@ flowchart LR
 
 - Cloudflare account with a domain configured
 - GitHub repository with Actions enabled
-- Node.js 20+ and pnpm 9+ installed locally
+- Node.js 22+ and pnpm 9+ installed locally
 
 ---
 

@@ -63,10 +63,10 @@ describe('distribution workflow contracts', () => {
     expect(fdroidWorkflow).toContain('FDROID_KEYSTORE_PASSWORD');
     expect(fdroidWorkflow).toContain('fdroid/public');
     expect(fdroidWorkflow).toContain('fingerprint.txt');
-    expect(fdroidWorkflow).toMatch(/actions\/configure-pages@[0-9a-f]{40} # v5/);
+    expect(fdroidWorkflow).toMatch(/actions\/configure-pages@[0-9a-f]{40} # v6/);
     expect(fdroidWorkflow).toContain('needs: build');
     expect(fdroidWorkflow).toContain('name: github-pages');
-    expect(fdroidWorkflow).toMatch(/actions\/deploy-pages@[0-9a-f]{40} # v4/);
+    expect(fdroidWorkflow).toMatch(/actions\/deploy-pages@[0-9a-f]{40} # v5/);
   });
 
   it('keeps the Homebrew updater opt-in and targeted at the protected release environment', () => {
@@ -78,6 +78,6 @@ describe('distribution workflow contracts', () => {
     expect(homebrewWorkflow).toContain('sha256sum');
     expect(homebrewWorkflow).toContain('Casks/forward-email.rb');
     // Receives the cross-repository write token, so it is SHA-pinned.
-    expect(homebrewWorkflow).toMatch(/peter-evans\/create-pull-request@[0-9a-f]{40} # v7/);
+    expect(homebrewWorkflow).toMatch(/peter-evans\/create-pull-request@[0-9a-f]{40} # v8/);
   });
 });

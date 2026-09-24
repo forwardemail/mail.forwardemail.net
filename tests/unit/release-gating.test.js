@@ -144,17 +144,34 @@ describe('release asset upload resilience', () => {
 });
 
 describe('latest release promotion', () => {
-  it('marks the release Latest explicitly when publishing and when consolidating', () => {
+  it('publishes first and marks Latest in a separate call', () => {
+    // make_latest sent on the PATCH that flips draft=false is silently
+    // dropped (GitHub validates it against the draft), which is how v0.14.0
+    // through v0.14.4 all published without becoming Latest.
     const publish = jobBlock(releaseWorkflow, 'publish');
-    expect(publish).toContain('-f draft=false -f make_latest=true');
-    expect(publish).toContain('releases/${OTHER_PUBLISHED}" -f make_latest=true');
+    expect(publish).not.toContain('-f draft=false -f make_latest=true');
+    expect(publish).toContain('releases/${RELEASE_ID}" -f draft=false');
+    expect(publish).toContain('releases/${TARGET_ID}" -f make_latest=true');
+    // Both branches feed the same make_latest call.
+    expect(publish).toContain('TARGET_ID="$OTHER_PUBLISHED"');
+    expect(publish).toContain('TARGET_ID="$RELEASE_ID"');
   });
 
-  it('fails a green run whose tag is not published and Latest', () => {
+  it('does not report publish as done until releases/latest reflects the tag', () => {
+    const publish = jobBlock(releaseWorkflow, 'publish');
+    expect(publish).toContain("releases/latest\" --jq '.tag_name'");
+    expect(publish).toContain('if [ "$latest" = "$TAG" ]; then');
+    expect(publish).toContain('after marking it latest');
+    expect(publish).toContain('exit 1');
+  });
+
+  it('repairs Latest from the summary before failing a green run', () => {
     const summary = jobBlock(releaseWorkflow, 'release-summary');
     expect(summary).toContain('- name: Verify the release is published and Latest');
     expect(summary).toContain("releases/tags/${TAG}\" --jq '.draft'");
     expect(summary).toContain("releases/latest\" --jq '.tag_name'");
-    expect(summary).toContain('if [ "$latest" != "$TAG" ]; then');
+    // Self-heal covers the np-published path, where the publish job is skipped.
+    expect(summary).toContain('releases/${release_id}" -f make_latest=true');
+    expect(summary).toContain('even after marking it latest');
   });
 });
