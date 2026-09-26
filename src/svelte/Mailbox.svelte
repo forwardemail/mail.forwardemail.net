@@ -553,6 +553,14 @@
     localStorage.setItem('fe:card-view', String(cardView));
   }
   let searchActiveStore = storeToStore(source.state?.searchActive, false);
+  // Set when a load gives up with nothing to show (e.g. folders timed out on a
+  // slow link). Without surfacing it the list just read as empty.
+  let listError = storeToStore(source.state?.error, '');
+  const retryListLoad = () => {
+    source.state?.error?.set?.('');
+    source.state?.loading?.set?.(true);
+    mailboxView?.load?.();
+  };
   let searchingStore = storeToStore(source.state?.searching, false);
   let filteredConversations = storeToStore(source.state?.filteredConversations, []);
   let filteredMessages = storeToStore(source.state?.filteredMessages, []);
@@ -7601,7 +7609,11 @@
                     </div>
                   {:else if showEmptyState}
                     <div class="flex flex-col items-center justify-center py-16 text-center">
-                      {#if $searchActiveStore}
+                      {#if $listError}
+                        <h3>Couldn't load this mailbox</h3>
+                        <p class="text-sm text-muted-foreground">{$listError}</p>
+                        <Button class="mt-4" size="sm" onclick={retryListLoad}>Retry</Button>
+                      {:else if $searchActiveStore}
                         <svg
                           class="h-12 w-12 text-muted-foreground mb-4"
                           viewBox="0 0 24 24"

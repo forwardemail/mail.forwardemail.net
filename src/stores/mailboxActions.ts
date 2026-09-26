@@ -261,7 +261,16 @@ export const load = async () => {
       warn('syncSettings background refresh failed', err);
     });
 
-    // loadFolders must complete before loadMessages (sets selectedFolder)
+    // loadMessages needs a selected folder. When the cache already supplied one
+    // (account switch, warm start), start it now instead of waiting on the
+    // network folder fetch, which on a slow link held the list empty for as long
+    // as that request took. Otherwise loadFolders sets it first.
+    const earlyMessages =
+      get(mailboxStore.state.selectedFolder) && get(mailboxStore.state.folders)?.length
+        ? mailboxStore.actions.loadMessages()
+        : null;
+    earlyMessages?.catch?.(() => {});
+
     const foldersResult = await mailboxStore.actions.loadFolders().then(
       () => ({ status: 'fulfilled' }),
       (err) => ({ status: 'rejected', reason: err }),
@@ -288,7 +297,7 @@ export const load = async () => {
     // filter dropdown, not message rendering. No reason to serialize them.
     const [labelsResult, messagesResult] = await Promise.allSettled([
       loadLabels(),
-      mailboxStore.actions.loadMessages(),
+      earlyMessages || mailboxStore.actions.loadMessages(),
     ]);
     if (labelsResult.status === 'rejected') {
       warn('[load] loadLabels failed, continuing without labels', labelsResult.reason);
@@ -2381,7 +2390,10 @@ const performAccountSwitch = async (email) => {
   if (cached.folders.length) {
     mailboxStore.state.folders.set(cached.folders);
     mailboxStore.state.selectedFolder.set(cached.defaultFolder);
-    mailboxStore.state.loading.set(false);
+    // Cached folders do not mean cached messages. Clearing loading with an
+    // empty list showed "No messages" for as long as the network took, which on
+    // a slow link read as a blank page.
+    mailboxStore.state.loading.set(!cached.messages.length);
   } else {
     mailboxStore.state.folders.set([]);
     mailboxStore.state.selectedFolder.set('');

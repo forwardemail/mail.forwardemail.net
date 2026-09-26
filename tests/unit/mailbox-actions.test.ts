@@ -575,6 +575,51 @@ describe('switchAccount leading-edge debounce', () => {
   });
 });
 
+describe('switchAccount on a slow connection', () => {
+  const flushCooldown = () => new Promise((resolve) => setTimeout(resolve, 310));
+
+  beforeEach(() => {
+    // Accounts.setActive swaps the tab-scoped email that load() reads.
+    hoisted.accountsSetActive.mockImplementation((email: string) => {
+      hoisted.localStore.set('email', email);
+      return true;
+    });
+    // The network folder fetch never answers within the test.
+    hoisted.loadFolders.mockImplementation(() => new Promise(() => {}));
+    hoisted.foldersToArray.mockResolvedValue([{ path: 'INBOX' }]);
+  });
+
+  it('keeps the list loading when the account has cached folders but no cached messages', async () => {
+    hoisted.messagesToArray.mockResolvedValue([]);
+
+    switchAccount({ email: 'slow-1@example.com' });
+
+    await vi.waitFor(() => expect(get(mailboxStore.state.selectedFolder)).toBe('INBOX'));
+    expect(get(mailboxStore.state.loading)).toBe(true);
+    await flushCooldown();
+  });
+
+  it('shows cached messages without a loading state', async () => {
+    hoisted.messagesToArray.mockResolvedValue([{ id: 'm1', folder: 'INBOX' }]);
+
+    switchAccount({ email: 'slow-2@example.com' });
+
+    await vi.waitFor(() => expect(get(mailboxStore.state.messages)).toHaveLength(1));
+    expect(get(mailboxStore.state.loading)).toBe(false);
+    await flushCooldown();
+  });
+
+  it('starts loading messages without waiting for the network folder list', async () => {
+    hoisted.messagesToArray.mockResolvedValue([]);
+
+    switchAccount({ email: 'slow-3@example.com' });
+
+    await vi.waitFor(() => expect(hoisted.loadFolders).toHaveBeenCalled());
+    await vi.waitFor(() => expect(hoisted.loadMessages).toHaveBeenCalledTimes(1));
+    await flushCooldown();
+  });
+});
+
 describe('reply / forward helpers', () => {
   it('addReplyPrefix adds and dedupes Re:', () => {
     expect(addReplyPrefix('Hi')).toBe('Re: Hi');
