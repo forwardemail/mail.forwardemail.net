@@ -36,6 +36,7 @@
   </screenshots>
   <!-- scripts/sync-version.cjs prepends a release entry on every version bump. -->
   <releases>
+    <release version="0.14.7" date="2026-09-26"/>
     <release version="0.14.6" date="2026-09-24"/>
     <release version="0.14.5" date="2026-09-24"/>
     <release version="0.14.4" date="2026-09-24"/>
