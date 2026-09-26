@@ -2468,8 +2468,9 @@
                 Add from another device
               </Card.Title>
               <Card.Description>
-                Scan the pairing code shown by Forward Email on your computer to copy an account,
-                its PGP keys and its settings onto this phone.
+                Scan either QR code shown with your alias password to sign in, or the Sync to
+                another device code from Forward Email on your computer to also copy PGP keys and
+                settings.
               </Card.Description>
             </Card.Header>
             <Card.Content>

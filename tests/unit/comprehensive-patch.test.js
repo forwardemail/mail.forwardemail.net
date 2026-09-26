@@ -1090,8 +1090,14 @@ describe('Large mailbox bootstrap timeout regressions', () => {
   });
 
   it('should use a longer folders timeout during login bootstrap', () => {
-    expect(loginSrc).toContain('const LOGIN_FOLDERS_TIMEOUT_MS = 120_000');
-    expect(loginSrc).toMatch(
+    // The sign-in request lives in the helper shared by the form and setup QR codes.
+    const signInSrc = fs.readFileSync(
+      path.resolve(__dirname, '../../src/utils/alias-sign-in.ts'),
+      'utf8',
+    );
+    expect(loginSrc).toContain('signInWithAliasPassword(');
+    expect(signInSrc).toContain('const LOGIN_FOLDERS_TIMEOUT_MS = 120_000');
+    expect(signInSrc).toMatch(
       /Remote\.request\([\s\S]*'Folders'[\s\S]*timeout:\s*LOGIN_FOLDERS_TIMEOUT_MS/,
     );
   });

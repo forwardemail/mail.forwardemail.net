@@ -27,7 +27,7 @@ const path = require('path');
 const root = path.resolve(__dirname, '..');
 
 const CAMERA_USAGE_DESCRIPTION =
-  'Forward Email uses the camera to scan a pairing code shown by another device.';
+  'Forward Email uses the camera to scan account setup and device sync QR codes.';
 
 /**
  * Every iOS privacy usage description the app declares, injected per-key so a

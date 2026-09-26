@@ -10,6 +10,10 @@
    * Nothing is written until the user taps Add. Installing sign-in credentials
    * and private keys because a camera saw a pattern is not something to do
    * silently.
+   *
+   * It also accepts the account setup codes forwardemail.net shows for Apple
+   * Mail and Thunderbird Mobile, so users can scan whichever code they have.
+   * Those carry only a sign-in and go through the normal sign-in check.
    */
   import { onDestroy } from 'svelte';
   import { Button } from '$lib/components/ui/button';
@@ -38,6 +42,9 @@
   import { summarizePgpKeys } from '../../utils/device-sync/pgp-summary';
   import type { PgpKeySummary } from '../../utils/device-sync/pgp-summary';
   import { Local } from '../../utils/storage.js';
+  import { fetchAppleProfileCredentials, parseAccountQr } from '../../utils/device-sync/account-qr';
+  import type { AccountQr } from '../../utils/device-sync/account-qr';
+  import { signInWithAliasPassword } from '../../utils/alias-sign-in';
 
   let {
     onCancel,
@@ -57,6 +64,8 @@
     | 'code'
     | 'unlocking'
     | 'confirm'
+    | 'account'
+    | 'signing-in'
     | 'applying'
     | 'done'
     | 'failed';
@@ -69,6 +78,7 @@
   let bundle = $state<DeviceSyncBundle | null>(null);
   let plan = $state<ImportPlan | null>(null);
   let keySummaries = $state<PgpKeySummary[]>([]);
+  let accountQr = $state<AccountQr | null>(null);
   let video = $state<HTMLVideoElement | null>(null);
   let codeInput = $state('');
   let codeError = $state('');
@@ -185,6 +195,15 @@
 
   const onValue = (value: string) => {
     if (phase !== 'scanning') return;
+
+    const account = parseAccountQr(value);
+    if (account) {
+      teardown();
+      accountQr = account;
+      phase = 'account';
+      return;
+    }
+
     const result = collector.accept(value);
     if (!result.accepted && !result.restarted) return;
 
@@ -198,6 +217,7 @@
     error = '';
     collector.reset();
     assembled = null;
+    accountQr = null;
     codeInput = '';
     codeError = '';
     received = 0;
@@ -264,6 +284,23 @@
     }
   };
 
+  const signInFromAccountQr = async () => {
+    if (!accountQr) return;
+    const qr = accountQr;
+    phase = 'signing-in';
+    try {
+      const creds =
+        qr.kind === 'apple-profile'
+          ? await fetchAppleProfileCredentials(qr)
+          : { email: qr.email, password: qr.password };
+      await signInWithAliasPassword(creds.email, creds.password, { staySignedIn: true });
+      phase = 'done';
+      onDone({ account: creds.email });
+    } catch (cause) {
+      fail((cause as Error)?.message || 'Could not sign in with that code. Try again.');
+    }
+  };
+
   const cancel = () => {
     teardown();
     onCancel();
@@ -306,7 +343,7 @@
 
     <footer class="space-y-1 p-4 text-center">
       <p class="text-sm">
-        {phase === 'starting' ? 'Starting the camera…' : 'Point at the code on your computer'}
+        {phase === 'starting' ? 'Starting the camera…' : 'Point at a Forward Email setup code'}
       </p>
       {#if total > 1}
         <p class="text-sm text-muted-foreground" aria-live="polite">
@@ -314,7 +351,8 @@
         </p>
       {/if}
       <p class="text-xs text-muted-foreground">
-        On your computer: Settings → Sync to another device
+        Either QR code from your alias password works, as does Settings → Sync to another device on
+        your computer.
       </p>
     </footer>
   {:else if phase === 'code' || phase === 'unlocking'}
@@ -426,10 +464,30 @@
       <Button variant="ghost" class="flex-1" onclick={cancel}>Cancel</Button>
       <Button class="flex-1" onclick={confirm}>Add account</Button>
     </footer>
-  {:else if phase === 'applying' || phase === 'opening'}
+  {:else if phase === 'account' && accountQr}
+    <div class="flex flex-1 flex-col justify-center gap-4 p-6">
+      <div class="space-y-1">
+        <h2 class="text-lg font-semibold">Sign in to this account?</h2>
+        <p class="break-all font-medium">{accountQr.email}</p>
+        <p class="text-sm text-muted-foreground">
+          This code signs this device in to the account. It does not carry PGP keys or settings; use
+          Sync to another device on your computer for those.
+        </p>
+      </div>
+    </div>
+
+    <footer class="flex gap-2 border-t border-border p-4">
+      <Button variant="ghost" class="flex-1" onclick={cancel}>Cancel</Button>
+      <Button class="flex-1" onclick={signInFromAccountQr}>Sign in</Button>
+    </footer>
+  {:else if phase === 'applying' || phase === 'opening' || phase === 'signing-in'}
     <div class="flex flex-1 items-center justify-center p-4">
       <p class="text-sm text-muted-foreground">
-        {phase === 'opening' ? 'Reading the code…' : 'Saving…'}
+        {phase === 'opening'
+          ? 'Reading the code…'
+          : phase === 'signing-in'
+            ? 'Signing in…'
+            : 'Saving…'}
       </p>
     </div>
   {:else if phase === 'done'}

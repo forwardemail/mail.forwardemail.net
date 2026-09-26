@@ -10,10 +10,9 @@
   import QrCodeIcon from '@lucide/svelte/icons/qr-code';
   import ScanPairingCode from './components/ScanPairingCode.svelte';
   import { isTauriMobile } from '../utils/platform.js';
-  import { Remote } from '../utils/remote';
-  import { buildAliasAuthHeader } from '../utils/auth.ts';
+  import { signInWithAliasPassword } from '../utils/alias-sign-in';
   import { Local, Accounts } from '../utils/storage';
-  import { activateDemoMode, isDemoMode, cleanupDemoAccount } from '../utils/demo-mode';
+  import { activateDemoMode, isDemoMode } from '../utils/demo-mode';
   import { DEMO_EMAIL, DEMO_ALIAS_AUTH } from '../utils/demo-data';
 
   interface Props {
@@ -32,7 +31,6 @@
   let loginLockoutUntil = 0;
   const MAX_LOGIN_ATTEMPTS = 5;
   const LOGIN_LOCKOUT_MS = 30_000; // 30 seconds
-  const LOGIN_FOLDERS_TIMEOUT_MS = 120_000;
 
   // Check if we're in "add account" mode via URL parameter
   const getIsAddingAccount = () =>
@@ -226,43 +224,8 @@
     submitError = '';
     submitErrorAdditional = '';
 
-    const authHeader = buildAliasAuthHeader(`${trimmedEmail}:${password}`);
-
     try {
-      const result = await Remote.request(
-        'Folders',
-        {},
-        {
-          method: 'GET',
-          skipAuth: true,
-          headers: { Authorization: authHeader },
-          timeout: LOGIN_FOLDERS_TIMEOUT_MS,
-        },
-      );
-
-      if (!result) {
-        submitError = 'Login failed. Please try again.';
-        return;
-      }
-
-      // If the user was in demo mode, clean up all demo state before
-      // setting up the real account.  This prevents the demo account
-      // from lingering in the Accounts list and its cache from leaking.
-      if (isDemoMode()) {
-        await cleanupDemoAccount();
-      }
-
-      Accounts.init();
-      Accounts.add(trimmedEmail, { aliasAuth: `${trimmedEmail}:${password}` }, signMe);
-      Accounts.setActive(trimmedEmail);
-
-      // Store preference for next login
-      Local.set('signMe', signMe ? '1' : '0');
-      // Always set email in Local for API compatibility
-      Local.set('email', trimmedEmail);
-      Local.set('alias_auth', `${trimmedEmail}:${password}`);
-      Local.remove('api_token');
-      Local.remove('locale');
+      await signInWithAliasPassword(trimmedEmail, password, { staySignedIn: signMe });
 
       // Clear form fields after successful login
       email = '';
@@ -400,10 +363,11 @@
           data-testid="scan-pairing-btn"
         >
           <QrCodeIcon class="mr-2 h-4 w-4" />
-          Scan a code from another device
+          Scan a setup code
         </Button>
         <p class="mt-2 text-center text-xs text-muted-foreground">
-          Copy an account, its PGP keys and its settings from Forward Email on your computer.
+          Use either QR code shown with your alias password, or Sync to another device in Forward
+          Email on your computer to also bring PGP keys and settings.
         </p>
       {/if}
     </Card.Content>

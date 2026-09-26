@@ -8,7 +8,6 @@
   let mailboxSubscriptions: Unsubscriber[] = [];
   import { mailService, getPgpKeysVersion, pgpKeysVersion } from '../stores/mailService';
   import { isTauri } from '../utils/platform.js';
-  import { readableForeground } from '../utils/contrast';
   import { searchStore } from '../stores/searchStore';
   import { Remote } from '../utils/remote';
   import { isDemoBlockedError, isDemoMode } from '../utils/demo-mode';
@@ -139,6 +138,7 @@
   } from '../stores/conversationStore';
   import FolderContextMenu from './components/FolderContextMenu.svelte';
   import FolderActionModal from './components/FolderActionModal.svelte';
+  import LabelChip from './components/LabelChip.svelte';
   import LabelModal from './components/LabelModal.svelte';
   import KeyboardShortcutsModal from './components/KeyboardShortcutsModal.svelte';
 
@@ -7160,14 +7160,7 @@
                                           <!-- Render the tag even when its definition isn't loaded
                                                (e.g. not yet synced on this client) so persisted
                                                labels never silently vanish; fall back to the keyword. -->
-                                          <span
-                                            class="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] truncate max-w-[80px]"
-                                            style={def?.color
-                                              ? `background:${def.color}; color:${readableForeground(def.color)};`
-                                              : ''}
-                                          >
-                                            {def?.name || def?.label || def?.value || lbl}
-                                          </span>
+                                          <LabelChip keyword={lbl} {def} />
                                         {/if}
                                       {/each}
                                       {#if conv.labels.length > 3}
@@ -7292,14 +7285,7 @@
                                           <!-- Render the tag even when its definition isn't loaded
                                                (e.g. not yet synced on this client) so persisted
                                                labels never silently vanish; fall back to the keyword. -->
-                                          <span
-                                            class="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] truncate max-w-[80px]"
-                                            style={def?.color
-                                              ? `background:${def.color}; color:${readableForeground(def.color)};`
-                                              : ''}
-                                          >
-                                            {def?.name || def?.label || def?.value || lbl}
-                                          </span>
+                                          <LabelChip keyword={lbl} {def} />
                                         {/if}
                                       {/each}
                                       {#if conv.labels.length > 3}
@@ -7479,24 +7465,10 @@
                                   <div class="flex items-center gap-1 mt-0.5">
                                     {#each msg.labels.slice(0, 4) as lbl}
                                       {#if typeof lbl === 'string' && lbl && lbl !== '[]'}
-                                        {#if labelMap.get(lbl)}
-                                          <span
-                                            class="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] truncate max-w-[80px]"
-                                            style={labelMap.get(lbl).color
-                                              ? `background:${labelMap.get(lbl).color}; color:${readableForeground(labelMap.get(lbl).color)};`
-                                              : ''}
-                                          >
-                                            {labelMap.get(lbl).name ||
-                                              labelMap.get(lbl).label ||
-                                              labelMap.get(lbl).value ||
-                                              lbl}
-                                          </span>
-                                        {:else}
-                                          <span
-                                            class="inline-flex items-center px-1.5 py-0.5 text-[10px] bg-secondary text-secondary-foreground truncate max-w-[80px]"
-                                            >{lbl}</span
-                                          >
-                                        {/if}
+                                        <LabelChip
+                                          keyword={lbl}
+                                          def={labelMap.get(canonicalizeLabelKeyword(lbl))}
+                                        />
                                       {/if}
                                     {/each}
                                   </div>
@@ -7596,24 +7568,10 @@
                                   <div class="flex items-center gap-1">
                                     {#each msg.labels.slice(0, 4) as lbl}
                                       {#if typeof lbl === 'string' && lbl && lbl !== '[]'}
-                                        {#if labelMap.get(lbl)}
-                                          <span
-                                            class="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] truncate max-w-[80px]"
-                                            style={labelMap.get(lbl).color
-                                              ? `background:${labelMap.get(lbl).color}; color:${readableForeground(labelMap.get(lbl).color)};`
-                                              : ''}
-                                          >
-                                            {labelMap.get(lbl).name ||
-                                              labelMap.get(lbl).label ||
-                                              labelMap.get(lbl).value ||
-                                              lbl}
-                                          </span>
-                                        {:else}
-                                          <span
-                                            class="inline-flex items-center px-1.5 py-0.5 text-[10px] bg-secondary text-secondary-foreground truncate max-w-[80px]"
-                                            >{lbl}</span
-                                          >
-                                        {/if}
+                                        <LabelChip
+                                          keyword={lbl}
+                                          def={labelMap.get(canonicalizeLabelKeyword(lbl))}
+                                        />
                                       {/if}
                                     {/each}
                                   </div>
@@ -8272,33 +8230,11 @@
                         <div class="flex flex-wrap gap-1.5 mt-2">
                           {#each $selectedMessage.labels as lbl}
                             {#if typeof lbl === 'string' && lbl && lbl !== '[]'}
-                              {#if labelMap.get(lbl)}
-                                {#if labelMap.get(lbl).color}
-                                  <span
-                                    class="inline-flex items-center px-2 py-0.5 rounded-full text-xs truncate max-w-[150px]"
-                                    style={`background:${labelMap.get(lbl).color}; color:${readableForeground(labelMap.get(lbl).color)};`}
-                                  >
-                                    {labelMap.get(lbl).name ||
-                                      labelMap.get(lbl).label ||
-                                      labelMap.get(lbl).value ||
-                                      lbl}
-                                  </span>
-                                {:else}
-                                  <span
-                                    class="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-secondary text-secondary-foreground truncate max-w-[150px]"
-                                  >
-                                    {labelMap.get(lbl).name ||
-                                      labelMap.get(lbl).label ||
-                                      labelMap.get(lbl).value ||
-                                      lbl}
-                                  </span>
-                                {/if}
-                              {:else}
-                                <span
-                                  class="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-secondary text-secondary-foreground truncate max-w-[150px]"
-                                  >{lbl}</span
-                                >
-                              {/if}
+                              <LabelChip
+                                keyword={lbl}
+                                def={labelMap.get(canonicalizeLabelKeyword(lbl))}
+                                size="md"
+                              />
                             {/if}
                           {/each}
                         </div>
