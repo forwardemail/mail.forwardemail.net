@@ -31,6 +31,7 @@ const hoisted = vi.hoisted(() => {
       destroy: vi.fn(),
     })),
     loadFolders: vi.fn().mockResolvedValue(undefined),
+    hydrateFoldersFromCache: vi.fn().mockResolvedValue(false),
     loadMessages: vi.fn().mockResolvedValue(undefined),
     startInitialSync: vi.fn(),
     queueBodiesForFolder: vi.fn(),
@@ -188,6 +189,7 @@ vi.mock('../../src/stores/mailboxStore', () => {
       state,
       actions: {
         loadFolders: (...a: unknown[]) => hoisted.loadFolders(...a),
+        hydrateFoldersFromCache: (...a: unknown[]) => hoisted.hydrateFoldersFromCache(...a),
         loadMessages: (...a: unknown[]) => hoisted.loadMessages(...a),
         addPendingFlagMutation: (...a: unknown[]) => hoisted.addPendingFlagMutation(...a),
         updateFolderUnreadCounts: (...a: unknown[]) => hoisted.updateFolderUnreadCounts(...a),
@@ -318,6 +320,7 @@ import {
   toggleRead,
   toggleStar,
   switchAccount,
+  load,
   addReplyPrefix,
   addForwardPrefix,
   buildForwardQuotedBody,
@@ -617,6 +620,41 @@ describe('switchAccount on a slow connection', () => {
     await vi.waitFor(() => expect(hoisted.loadFolders).toHaveBeenCalled());
     await vi.waitFor(() => expect(hoisted.loadMessages).toHaveBeenCalledTimes(1));
     await flushCooldown();
+  });
+});
+
+describe('load() on a cold launch over a slow connection', () => {
+  beforeEach(() => {
+    mailboxStore.state.selectedFolder.set('');
+    // The network folder fetch never answers within the test.
+    hoisted.loadFolders.mockImplementation(() => new Promise(() => {}));
+    // The cache read fills the store the way the real action does.
+    hoisted.hydrateFoldersFromCache.mockImplementation(async () => {
+      mailboxStore.state.folders.set([{ path: 'INBOX' }]);
+      mailboxStore.state.selectedFolder.set('INBOX');
+      return true;
+    });
+  });
+
+  // The folder fetch never settles, so each test uses its own account: load()
+  // hands a second caller for the same account the load already in flight.
+  it('loads cached messages without waiting for the network folder list', async () => {
+    hoisted.localStore.set('email', 'cold-1@example.com');
+    void load();
+
+    await vi.waitFor(() => expect(hoisted.loadMessages).toHaveBeenCalledTimes(1));
+    expect(hoisted.hydrateFoldersFromCache).toHaveBeenCalledWith('cold-1@example.com');
+  });
+
+  it('skips the cache read when folders are already on screen', async () => {
+    hoisted.localStore.set('email', 'cold-2@example.com');
+    mailboxStore.state.folders.set([{ path: 'INBOX' }]);
+    mailboxStore.state.selectedFolder.set('INBOX');
+
+    void load();
+
+    await vi.waitFor(() => expect(hoisted.loadMessages).toHaveBeenCalledTimes(1));
+    expect(hoisted.hydrateFoldersFromCache).not.toHaveBeenCalled();
   });
 });
 

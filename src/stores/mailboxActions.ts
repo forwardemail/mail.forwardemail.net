@@ -265,6 +265,14 @@ export const load = async () => {
     // (account switch, warm start), start it now instead of waiting on the
     // network folder fetch, which on a slow link held the list empty for as long
     // as that request took. Otherwise loadFolders sets it first.
+    //
+    // A cold launch starts with no folders in the store, so read them from the
+    // cache here. Without this the cached mail stayed hidden behind the network
+    // folder fetch on every launch, not just on an account switch.
+    if (!get(mailboxStore.state.folders)?.length) {
+      await mailboxStore.actions.hydrateFoldersFromCache?.(nextAccount);
+      if (thisGeneration !== loadGeneration) return;
+    }
     const earlyMessages =
       get(mailboxStore.state.selectedFolder) && get(mailboxStore.state.folders)?.length
         ? mailboxStore.actions.loadMessages()

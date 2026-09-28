@@ -438,6 +438,30 @@ const createMailboxStore = () => {
     }
   };
 
+  // Show the cached folder list and pick a default folder (INBOX) without
+  // touching the network. Returns true when the cache had folders. A failed read
+  // is only logged: IndexedDB is a cache, and the network fetch can still fill
+  // the list.
+  const hydrateFoldersFromCache = async (account = Local.get('email') || 'default') => {
+    let cached = [];
+    try {
+      cached = await db.folders.where('account').equals(account).toArray();
+    } catch (cacheErr) {
+      warn('folder cache read failed; continuing to source', cacheErr);
+      return false;
+    }
+    if (!cached?.length) return false;
+    if ((Local.get('email') || 'default') !== account) return false;
+    const mappedCached = buildFolderList(cached);
+    folders.set(mappedCached);
+    if (!get(selectedFolder)) {
+      const inbox = mappedCached.find((f) => f.path?.toUpperCase?.() === 'INBOX');
+      const defaultFolder = inbox?.path || mappedCached[0]?.path;
+      if (defaultFolder) selectedFolder.set(defaultFolder);
+    }
+    return true;
+  };
+
   const loadFolders = async (options = {}) => {
     // Bail early when no credentials are available (e.g. on the login page).
     // Settings.svelte is always mounted and its currentAccount subscription
@@ -490,23 +514,7 @@ const createMailboxStore = () => {
     if (!force && state.lastFetchAt && Date.now() - state.lastFetchAt < FOLDERS_CACHE_TTL) {
       // TTL still valid but store may be empty (blanked by resetMailboxStateForAccount)
       const currentFolders = get(folders);
-      if (!currentFolders?.length) {
-        // Hydrate from IndexedDB cache (~5ms local read, no network)
-        const cached = await db.folders.where('account').equals(account).toArray();
-        if (cached?.length) {
-          const mappedCached = buildFolderList(cached);
-          folders.set(mappedCached);
-          // Only set default folder if none is currently selected
-          const currentFolder = get(selectedFolder);
-          if (!currentFolder || currentFolder === '') {
-            const inbox = mappedCached.find((f) => f.path?.toUpperCase?.() === 'INBOX');
-            const defaultFolder = inbox?.path || mappedCached[0]?.path;
-            if (defaultFolder) {
-              selectedFolder.set(defaultFolder);
-            }
-          }
-        }
-      }
+      if (!currentFolders?.length) await hydrateFoldersFromCache(account);
       return;
     }
 
@@ -519,26 +527,7 @@ const createMailboxStore = () => {
         // otherwise a transient worker stall leaves the sidebar with zero
         // folders even though the list is available from the server (or, in
         // demo mode, the synchronous demo interceptor).
-        let cached = [];
-        try {
-          cached = await db.folders.where('account').equals(account).toArray();
-        } catch (cacheErr) {
-          warn('loadFolders cache read failed; continuing to source', cacheErr);
-        }
-        if (cached?.length) {
-          const mappedCached = buildFolderList(cached);
-          folders.set(mappedCached);
-
-          // Set default folder from cache if none selected
-          const currentFolder = get(selectedFolder);
-          if ((!currentFolder || currentFolder === '') && mappedCached.length) {
-            const inbox = mappedCached.find((f) => f.path?.toUpperCase?.() === 'INBOX');
-            const defaultFolder = inbox?.path || mappedCached[0]?.path;
-            if (defaultFolder) {
-              selectedFolder.set(defaultFolder);
-            }
-          }
-
+        if (await hydrateFoldersFromCache(account)) {
           // Update unread counts from cached messages
           updateFolderUnreadCounts();
         }
@@ -1355,7 +1344,20 @@ const createMailboxStore = () => {
         // loading.set(false) behind !isStaleRequest, which can strand the
         // skeleton (loading=true) when concurrent demo-entry loaders flip the
         // selected folder mid-flight. Clear it here as a backstop.
-        if (get(loading)) loading.set(false);
+        //
+        // If the account or folder moved on while we waited, nothing has loaded
+        // that view yet (it would own the in-flight slot otherwise). Clearing
+        // loading there settled it on an empty list, which on a slow cold launch
+        // showed "Inbox Zero" over cached mail until load() caught up. Load the
+        // view that is on screen instead.
+        if (get(loading)) {
+          const viewNow = get(selectedFolder);
+          const viewMovedOn =
+            (Local.get('email') || 'default') !== account ||
+            viewNow?.toUpperCase() !== folder?.toUpperCase();
+          if (viewMovedOn && viewNow) void loadMessages().catch(() => {});
+          else loading.set(false);
+        }
       }
     }
   };
@@ -2933,6 +2935,7 @@ const createMailboxStore = () => {
       folderOperationInProgress,
     },
     actions: {
+      hydrateFoldersFromCache,
       loadFolders,
       loadMessages,
       refreshReplyTargets,
