@@ -125,6 +125,7 @@
   import LabelModal from './components/LabelModal.svelte';
   import GetStartedCard from './components/GetStartedCard.svelte';
   import PushNotificationSettings from './components/PushNotificationSettings.svelte';
+  import NewMailNotificationSettings from './components/NewMailNotificationSettings.svelte';
 
   interface ToastApi {
     show?: (message: string, type?: string) => void;
@@ -2022,6 +2023,7 @@
             <Card.Description>Choose which system notifications this app shows.</Card.Description>
           </Card.Header>
           <Card.Content class="space-y-4">
+            <NewMailNotificationSettings {toasts} {isTauri} />
             <label class="flex items-center gap-3">
               <Checkbox bind:checked={notifyAppUpdates} onCheckedChange={toggleNotifyAppUpdates} />
               <span>Notify when the app updates</span>

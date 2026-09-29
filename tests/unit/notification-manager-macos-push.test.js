@@ -4,10 +4,12 @@
 // showed the alert, and the app then draws nothing, or its own notification.
 
 vi.mock('../../src/utils/platform.js', () => ({
+  isTauriMobile: false,
   isTauri: false,
   isTauriMacOS: true,
 }));
 vi.mock('../../src/utils/notification-bridge.js', () => ({
+  getPermissionState: vi.fn(() => Promise.resolve('granted')),
   notify: vi.fn(() => Promise.resolve()),
   requestPermission: vi.fn(() => Promise.resolve('granted')),
 }));

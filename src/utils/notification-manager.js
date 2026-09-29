@@ -19,8 +19,8 @@
  */
 
 import { WS_EVENTS } from './websocket-client';
-import { isTauri, isTauriMacOS } from './platform.js';
-import { notify, requestPermission } from './notification-bridge.js';
+import { isTauri, isTauriMacOS, isTauriMobile } from './platform.js';
+import { getPermissionState, notify, requestPermission } from './notification-bridge.js';
 import { setBadgeCount as tauriBadge } from './tauri-bridge.js';
 import { isDemoMode } from './demo-mode.js';
 import { updateFaviconBadge } from './favicon-badge.js';
@@ -353,6 +353,11 @@ function isDuplicate(tag) {
 
 let permissionGranted = false;
 
+/**
+ * Ask for notification permission. On the web this must run from a click or
+ * key handler (Settings, or the offer toast below); browsers ignore or
+ * auto-deny a request no user action started.
+ */
 export async function requestNotificationPermission() {
   if (isDemoMode()) {
     permissionGranted = false;
@@ -364,24 +369,167 @@ export async function requestNotificationPermission() {
   return permissionGranted;
 }
 
+/** 'granted' | 'denied' | 'default' | 'unsupported', without prompting. */
+export async function getNotificationPermissionState() {
+  if (isDemoMode()) return 'unsupported';
+  try {
+    return await getPermissionState();
+  } catch {
+    return 'unsupported';
+  }
+}
+
+const PERMISSION_OFFERED_KEY = 'notification_permission_offered';
+
+/**
+ * Called once the realtime connection is up. The native apps ask for
+ * permission directly, as before. On the web a prompt nobody clicked for is
+ * blocked, so the app offers it in a toast instead: its button is the user
+ * action the browser needs. The offer is made once per device; Settings keeps
+ * a permanent button.
+ */
+export async function initNotificationPermission() {
+  if (isDemoMode()) return false;
+  if (isTauri) return requestNotificationPermission();
+
+  const state = await getNotificationPermissionState();
+  if (state === 'granted') {
+    permissionGranted = true;
+    return true;
+  }
+  if (state !== 'default' || Local.get(PERMISSION_OFFERED_KEY) || !_toasts?.show) return false;
+
+  // The app often starts in a background tab or window. An offer made there
+  // expires unseen and uses up the only one, so wait until the user is here.
+  if (!userIsInApp()) {
+    whenUserReturns(() => {
+      initNotificationPermission().catch(() => {});
+    });
+    return false;
+  }
+
+  Local.set(PERMISSION_OFFERED_KEY, '1');
+  _toasts.show(
+    'Get a notification when new mail arrives while Forward Email is in the background.',
+    'info',
+    15000,
+    {
+      label: 'Turn on',
+      callback() {
+        requestNotificationPermission()
+          .then((granted) => {
+            _toasts?.show?.(
+              granted
+                ? 'Notifications are on.'
+                : 'Notifications are off. You can turn them on in Settings.',
+              granted ? 'success' : 'info',
+            );
+          })
+          .catch(() => {});
+      },
+    },
+  );
+  return false;
+}
+
 // ── Show Notification ───────────────────────────────────────────────────────
 
+/**
+ * Show a system notification. Resolves true when one was handed to the OS
+ * (or was a duplicate of one already shown), false when it could not be:
+ * no permission, no notification support, or the OS call failed.
+ */
 async function showNotification({ title, body, tag, icon, data, channelId }) {
   try {
-    if (!permissionGranted) {
+    if (isDemoMode()) return false;
+    if (!isTauri) {
+      // Re-read every time: the user can revoke or grant it at any moment,
+      // and asking without a click would be ignored anyway.
+      permissionGranted = (await getNotificationPermissionState()) === 'granted';
+      if (!permissionGranted) return false;
+    } else if (!permissionGranted) {
       const granted = await requestNotificationPermission();
-      if (!granted) return;
+      if (!granted) return false;
     }
 
-    if (isDuplicate(tag)) return;
+    if (isDuplicate(tag)) return true;
 
-    await notify({ title, body, tag, icon, data, channelId });
+    return (await notify({ title, body, tag, icon, data, channelId })) !== false;
   } catch (err) {
     // Swallow errors to prevent unhandled rejections from crashing iOS
     // WKWebView.  Callers (handleMailboxCreated, handleNewRelease, etc.)
     // invoke this without await, so any rejection would be unhandled.
     console.warn('[notification-manager] showNotification failed:', err);
+    return false;
   }
+}
+
+// ── Mail that arrived while nobody could be told ────────────────────────────
+//
+// When the app is in the background and no system notification can be shown
+// (permission not granted, notifications unsupported, the OS call failed),
+// the message is remembered and summarised in a toast as soon as the user
+// comes back, so new mail is never announced to an empty room.
+
+const MAX_MISSED = 50;
+let missedMessages = [];
+let missedListenersInstalled = false;
+
+function userIsInApp() {
+  const visible = typeof document === 'undefined' || document.visibilityState === 'visible';
+  // A phone app on screen is in use even when its web view is not the native
+  // first responder (document.hasFocus() can be false then), so focus only
+  // counts on the web and the desktop apps, where windows sit side by side.
+  return visible && (isTauriMobile || appHasFocus());
+}
+
+function flushMissedMessages() {
+  if (!missedMessages.length || !userIsInApp() || !_toasts?.show) return;
+  const missed = missedMessages;
+  missedMessages = [];
+  const latest = missed[missed.length - 1];
+  const message =
+    missed.length === 1
+      ? `New email from ${latest.displayName}: ${latest.subject}`
+      : `${missed.length} new emails while you were away. Latest from ${latest.displayName}: ${latest.subject}`;
+  _toasts.show(message, 'info', 10000, {
+    label: 'View',
+    callback() {
+      openNotificationTarget(latest.target);
+    },
+  });
+}
+
+function installMissedListeners() {
+  if (missedListenersInstalled || typeof window === 'undefined') return;
+  missedListenersInstalled = true;
+  const flushSoon = () => setTimeout(flushMissedMessages, 0);
+  window.addEventListener('focus', flushSoon);
+  document.addEventListener('visibilitychange', flushSoon);
+}
+
+/** Run `callback` once, the next time the user is in the app. */
+function whenUserReturns(callback) {
+  if (typeof window === 'undefined') return;
+  const check = () => {
+    setTimeout(() => {
+      if (!userIsInApp()) return;
+      window.removeEventListener('focus', check);
+      document.removeEventListener('visibilitychange', check);
+      callback();
+    }, 0);
+  };
+  window.addEventListener('focus', check);
+  document.addEventListener('visibilitychange', check);
+}
+
+function rememberMissedMessage(entry) {
+  // The same message can arrive twice (a replayed socket event, or push and
+  // socket copies the coalescer did not pair); count it once.
+  if (entry.tag && missedMessages.some((missed) => missed.tag === entry.tag)) return;
+  missedMessages.push(entry);
+  if (missedMessages.length > MAX_MISSED) missedMessages = missedMessages.slice(-MAX_MISSED);
+  installMissedListeners();
 }
 
 // ── Badge Count ─────────────────────────────────────────────────────────────
@@ -872,7 +1020,12 @@ async function _handleNewMessageInner(data, { suppressVisual = false, source = '
   // Foreground: show in-app toast only (seamless, non-intrusive).
   // Background: show OS notification only (user sees it in notification shade).
   // suppressVisual=true: OS already displayed via push — do nothing visual.
-  const appVisible = typeof document !== 'undefined' && document.visibilityState === 'visible';
+  //
+  // "Foreground" means the page is visible AND its window has focus. A
+  // desktop window left open behind another app, or a browser tab that is
+  // visible while the user works elsewhere, is visible but unfocused: a toast
+  // there is seen by nobody, so it gets the system notification instead.
+  const appVisible = userIsInApp();
 
   // The server marks an event suppressAlert when an earlier push already
   // alerted the user for this message (the tmp storage sync-back path). The
@@ -915,13 +1068,23 @@ async function _handleNewMessageInner(data, { suppressVisual = false, source = '
 
     // Background: show OS notification (no toast — user won't see it).
     // Gmail-style format: sender name as title, subject plus preview as body.
-    showNotification({
+    const shown = await showNotification({
       title: displayName,
       body: safeSnippet ? `${safeSubject}\n${safeSnippet}` : safeSubject,
       tag: safeTag,
       channelId: 'new-mail',
       data: openTarget,
     });
+    // No system notification possible: tell the user when they come back.
+    if (!shown) {
+      rememberMissedMessage({
+        tag: safeTag,
+        displayName,
+        subject: safeSubject,
+        target: openTarget,
+      });
+      flushMissedMessages();
+    }
   }
 }
 
@@ -1181,7 +1344,33 @@ function loadSystemPushAlertCheck() {
     });
 }
 
+// In the desktop apps the native window's focus is authoritative: the web
+// view's document.hasFocus() can lag behind it (WebView2 and WebKitGTK right
+// after activating the window from the taskbar, for example). null until
+// Tauri has answered, and on the web.
+let nativeWindowFocused = null;
+let nativeFocusTracking = false;
+
+function trackNativeWindowFocus() {
+  if (nativeFocusTracking || !isTauri || isTauriMobile) return;
+  nativeFocusTracking = true;
+  import('@tauri-apps/api/window')
+    .then(async ({ getCurrentWindow }) => {
+      const win = getCurrentWindow();
+      await win.onFocusChanged(({ payload: focused }) => {
+        nativeWindowFocused = focused === true;
+        if (nativeWindowFocused) setTimeout(flushMissedMessages, 0);
+      });
+      nativeWindowFocused = (await win.isFocused()) === true;
+    })
+    .catch(() => {
+      // Fall back to document.hasFocus().
+      nativeWindowFocused = null;
+    });
+}
+
 function appHasFocus() {
+  if (nativeWindowFocused !== null) return nativeWindowFocused;
   return typeof document !== 'undefined' && typeof document.hasFocus === 'function'
     ? document.hasFocus()
     : true;
@@ -1212,6 +1401,7 @@ export function connectNotifications(wsClient) {
 
   const unsubs = [];
   loadSystemPushAlertCheck();
+  trackNativeWindowFocus();
   const coalescer = createRealtimeEventCoalescer({
     onEvent: routeNotificationEvent,
     shouldHoldSocketEvent,
@@ -1261,6 +1451,7 @@ export function connectMultiAccountNotifications(wsManager) {
 
   const unsubs = [];
   loadSystemPushAlertCheck();
+  trackNativeWindowFocus();
   const coalescer = createRealtimeEventCoalescer({
     onEvent: routeNotificationEvent,
     shouldHoldSocketEvent,
@@ -1287,4 +1478,23 @@ export function connectMultiAccountNotifications(wsManager) {
       if (typeof unsub === 'function') unsub();
     }
   };
+}
+
+/**
+ * Show a sample system notification, for the Settings "Test" button.
+ * Resolves false when none could be shown (no permission, unsupported, or
+ * the OS refused it).
+ */
+export async function showTestNotification() {
+  if ((await getNotificationPermissionState()) !== 'granted') return false;
+  try {
+    const shown = await notify({
+      title: 'Forward Email',
+      body: 'Notifications are working. New mail will appear like this.',
+      tag: `notification-test-${Date.now()}`,
+    });
+    return shown !== false;
+  } catch {
+    return false;
+  }
 }

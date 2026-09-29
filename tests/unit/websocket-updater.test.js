@@ -26,7 +26,10 @@ const mockRequestNotificationPermission = vi.fn();
 vi.mock('../../src/utils/notification-manager', () => ({
   connectNotifications: vi.fn(() => vi.fn()),
   connectMultiAccountNotifications: (...args) => mockConnectMultiAccountNotifications(...args),
-  requestNotificationPermission: (...args) => mockRequestNotificationPermission(...args),
+  initNotificationPermission: (...args) => {
+    mockRequestNotificationPermission(...args);
+    return Promise.resolve(false);
+  },
 }));
 
 // Mock demo-mode helper

@@ -70,12 +70,12 @@ const NATIVE_PUSH_TIMEOUT_MS = 15_000;
 // native sides give up at 110 seconds, so their answer always arrives first.
 const PERMISSION_PROMPT_TIMEOUT_MS = 120_000;
 
-// APNs token retrieval (iOS and macOS). The native side waits up to 25
-// seconds for the APNs callback and then reports why it failed; on macOS the
-// main-thread steps around that wait add up to 8 more (macos.rs). This budget
-// is longer than all of it so that reason reaches the UI instead of a bare JS
-// timeout racing it.
-const APNS_TOKEN_TIMEOUT_MS = 45_000;
+// APNs token retrieval (iOS and macOS). iOS waits up to 25 seconds for the
+// APNs callback. macOS waits up to 40 (after 15 it registers again once) and
+// then spends up to 4 more on the main thread explaining a failure
+// (macos.rs). This budget is longer than all of it so the native reason
+// reaches the UI instead of a bare JS timeout racing it.
+const APNS_TOKEN_TIMEOUT_MS = 60_000;
 
 class PushTimeoutError extends Error {
   constructor(operation, ms) {
@@ -896,6 +896,52 @@ async function handleTokenRefresh(token, platform) {
  *
  * @param {'ios' | 'macos'} platform
  */
+// APNs can answer after getToken has given up. The native side keeps that
+// token (and answers the next getToken with it at once) and announces it with
+// a mobile-push:token-received event. Until registration succeeds, that event
+// finishes the registration instead of waiting for the user to try again.
+let lateApnsTokenListener = null;
+
+function watchForLateApnsToken(platform) {
+  if (lateApnsTokenListener || typeof window === 'undefined') return;
+  const onToken = (event) => {
+    const token = event?.detail?.token;
+    if (!token) return;
+    // A registration is still running: look again once it has settled, or
+    // this token would be dropped (the native side does not announce it
+    // twice).
+    if (initializationPromise) {
+      const retry = () => setTimeout(() => onToken(event), 0);
+      initializationPromise.then(retry, retry);
+      return;
+    }
+    if (initialized) {
+      // Registration finished with a different token than this later one.
+      if (Local.get(TOKEN_STORAGE_KEY) !== token) {
+        handleTokenRefresh(token, platform)
+          .catch((error) => console.warn('[push] Late APNs token registration failed:', error))
+          .finally(() => notifyPushStatusChanged());
+      }
+      return;
+    }
+    stopWatchingForLateApnsToken();
+    console.info('[push] APNs answered after registration gave up; registering now');
+    syncPushNotifications()
+      .catch((error) => {
+        console.warn('[push] Registration with the late APNs token failed:', error);
+      })
+      .finally(() => notifyPushStatusChanged());
+  };
+  lateApnsTokenListener = onToken;
+  window.addEventListener('mobile-push:token-received', lateApnsTokenListener);
+}
+
+function stopWatchingForLateApnsToken() {
+  if (!lateApnsTokenListener) return;
+  window.removeEventListener('mobile-push:token-received', lateApnsTokenListener);
+  lateApnsTokenListener = null;
+}
+
 async function initializeApnsPush(platform) {
   const isMac = platform === 'macos';
   const label = isMac ? 'macOS' : 'iOS';
@@ -938,9 +984,13 @@ async function initializeApnsPush(platform) {
     );
   }
 
+  // Permission is granted from here on, so a token APNs sends late is one
+  // this device can use.
+  watchForLateApnsToken(registrationPlatform);
   if (!(await registerNativeToken(getToken, registrationPlatform, APNS_TOKEN_TIMEOUT_MS))) {
     return false;
   }
+  stopWatchingForLateApnsToken();
 
   // The Tauri plugin listener registry does not work for this plugin
   // (register_listener is a Rust no-op, so the Swift registry stays empty and
@@ -1271,6 +1321,7 @@ export async function cleanupPushNotifications() {
   const pendingInitialization = initializationPromise;
   if (pendingInitialization) await pendingInitialization.catch(() => {});
 
+  stopWatchingForLateApnsToken();
   await removeNativeListeners();
   await removeUnifiedPushListeners();
 

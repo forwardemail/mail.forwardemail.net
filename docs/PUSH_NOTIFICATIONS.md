@@ -165,13 +165,27 @@ The release workflow then runs `scripts/macos-push-signing.sh prepare` before th
 
 The app registers its token as an `apns` registration for every signed-in account, like iOS. While the user is in the app, the native side tells macOS not to draw the alert and the page shows its own notice; otherwise macOS draws it and the page draws nothing (the WebSocket copy of the event waits up to three seconds for the push to say which).
 
-If APNs never answers a registration, Settings shows why after 25 seconds, for example `Apple Push Notification service did not answer within 25 seconds (delegate TaoAppDelegateParent (handles the token); bundle net.forwardemail.mail; aps-environment production; registered no)`:
+If APNs does not answer within 15 seconds, the plugin unregisters and registers again once per launch, through `-registerForRemoteNotificationTypes:` this time. A repeated registration may never be called back, and a registration that stalled in `apsd` stays stalled. If that gets no answer either, Settings shows why after 40 seconds, for example `Apple Push Notification service did not answer within 40 seconds (delegate TaoAppDelegateParent (handles the token); bundle net.forwardemail.mail; aps-environment production; registered yes)`. `registered yes` only means AppKit considers the app registered; Apple documents it as unrelated to connectivity, so it does not mean a token was issued.
+
+A token that arrives after the page stopped waiting is not lost. The plugin keeps it for the rest of the launch and announces it, and the page finishes the registration without another click.
+
+Reading the reason:
 
 - `delegate … (does not handle the token)` or `delegate none`: AppKit has nowhere to deliver the token. The plugin adds the callbacks to the app delegate at setup and again before every registration.
 - `bundle com.apple.Terminal (Info.plist: net.forwardemail.mail)`: `-[NSBundle bundleIdentifier]` has been replaced, so APNs was asked for another app's topic. tauri-plugin-notification's macOS backend (mac-notification-sys) does this on the first local notification when Launch Services does not know the app; the plugin restores the real identifier before registering and logs `restored bundle identifier`.
-- Everything as expected: the Mac is not reaching APNs. Check `log stream --predicate 'process == "apsd"'` while registering, and that outbound TCP 5223 (or 443) to `*.push.apple.com` is allowed.
+- Everything as expected: the Mac is not reaching APNs, or `apsd` is refusing the app. Run `log stream --info --debug --predicate 'process == "apsd"'` in Terminal, click **Register this device**, and look for lines naming `net.forwardemail.mail`: `not connected` means no connection to APNs (check that outbound TCP 5223, or 443, to `*.push.apple.com` is not blocked by a VPN, proxy or firewall); a rejected topic or entitlement means the signing does not match the profile.
 
 A second registration started while one is waiting shares its answer rather than queueing behind it.
+
+## Notifications from the WebSocket
+
+On every platform the app also hears about new mail over its WebSocket connection while it runs. On Windows, Linux and the web that is the only source. `src/utils/notification-manager.js` decides what to show:
+
+- **The user is in the app** (the page is visible and its window has focus): an in-app toast, no system notification. On phones, being on screen is enough.
+- **The app is open but not in use** (hidden, minimized, or a visible window or tab behind another app): a system notification, through the Tauri notification plugin in the desktop and mobile apps and the service worker (or `new Notification()`) in the browser.
+- **No system notification is possible** (permission not granted, no notification support, or the OS refused it): the message is remembered, and a toast summarising what arrived is shown as soon as the user comes back to the app.
+
+Browsers ignore or auto-deny a permission request that no click started, so the web app never asks on its own. It offers the permission once per device in a toast with a **Turn on** button, and **Settings → General → Notifications → New mail notifications** shows the current state with **Allow notifications** and **Send a test notification** buttons. The desktop and mobile apps ask directly, as before.
 
 ## Opening a notification
 

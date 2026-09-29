@@ -26,7 +26,7 @@
 use std::collections::VecDeque;
 use std::ffi::{c_char, c_void, CStr};
 use std::ptr::NonNull;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -34,10 +34,10 @@ use block2::{DynBlock, RcBlock};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, Bool, ProtocolObject, Sel};
 use objc2::{define_class, msg_send, sel, AllocAnyThread, ClassType, MainThreadMarker};
-use objc2_app_kit::{NSApplication, NSWorkspace};
+use objc2_app_kit::{NSApplication, NSRemoteNotificationType, NSWorkspace};
 use objc2_foundation::{
-    NSBundle, NSData, NSDictionary, NSError, NSJSONSerialization, NSJSONWritingOptions,
-    NSObject, NSObjectProtocol, NSString, NSURL, NSUserDefaults,
+    NSBundle, NSData, NSDictionary, NSError, NSJSONSerialization, NSJSONWritingOptions, NSObject,
+    NSObjectProtocol, NSString, NSUserDefaults, NSURL,
 };
 use objc2_user_notifications::{
     UNAuthorizationOptions, UNAuthorizationStatus, UNNotification,
@@ -57,6 +57,11 @@ const SETTINGS_TIMEOUT: Duration = Duration::from_secs(10);
 /// timeout). Kept short so the whole call, with the APNs wait, still answers
 /// before the page gives up (APNS_TOKEN_TIMEOUT_MS in push-notifications.js).
 const TOKEN_MAIN_THREAD_TIMEOUT: Duration = Duration::from_secs(4);
+
+/// How long the first registration may go unanswered before `get_token`
+/// unregisters and registers again (once per launch). The rest of the
+/// caller's budget is spent waiting on that second registration.
+const FIRST_REGISTRATION_WAIT: Duration = Duration::from_secs(15);
 
 /// A push can reach the app twice while it runs: through the UN delegate
 /// (`willPresentNotification:`) and through the app delegate
@@ -153,6 +158,12 @@ static NEXT_TOKEN_WAITER: AtomicU64 = AtomicU64::new(1);
 static RECENT_PAYLOADS: Mutex<VecDeque<(Instant, String)>> = Mutex::new(VecDeque::new());
 /// Taps the page has not taken yet (JSON `{"data": userInfo}` each).
 static PENDING_TAPS: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
+/// The token APNs gave this process, including one that arrived after the
+/// `get_token` call that asked for it had given up. Later calls answer with
+/// it at once instead of registering and waiting again.
+static SESSION_TOKEN: Mutex<Option<String>> = Mutex::new(None);
+/// The unregister-and-register-again recovery runs at most once per launch.
+static RECOVERY_ATTEMPTED: AtomicBool = AtomicBool::new(false);
 
 fn emit(event: &'static str, detail: String) {
     if let Some(emitter) = EMITTER.get() {
@@ -193,12 +204,18 @@ fn store_user_defaults_token(token: &str) {
 }
 
 fn token_hex(data: &NSData) -> String {
-    data.to_vec().iter().map(|byte| format!("{byte:02x}")).collect()
+    data.to_vec()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 fn deliver_token(token: String) {
     log::info!("[mobile-push] APNs token received ({} chars)", token.len());
     store_user_defaults_token(&token);
+    if let Ok(mut session) = SESSION_TOKEN.lock() {
+        *session = Some(token.clone());
+    }
     answer_token_waiters(Ok(token.clone()));
     let detail = serde_json::json!({ "token": token }).to_string();
     emit("mobile-push:token-received", detail);
@@ -246,8 +263,9 @@ fn user_info_json(user_info: &NSDictionary) -> String {
 }
 
 fn dictionary_value(dictionary: &AnyObject, key: &str) -> Option<Retained<AnyObject>> {
-    let is_dictionary: bool =
-        unsafe { msg_send![dictionary, isKindOfClass: NSDictionary::<AnyObject, AnyObject>::class()] };
+    let is_dictionary: bool = unsafe {
+        msg_send![dictionary, isKindOfClass: NSDictionary::<AnyObject, AnyObject>::class()]
+    };
     if !is_dictionary {
         return None;
     }
@@ -530,8 +548,7 @@ fn ensure_app_delegate_callbacks(mtm: MainThreadMarker) -> Result<String, String
     let register = sel!(application:didRegisterForRemoteNotificationsWithDeviceToken:);
     let fail = sel!(application:didFailToRegisterForRemoteNotificationsWithError:);
     let receive = sel!(application:didReceiveRemoteNotification:);
-    if responds_to(object, register) && responds_to(object, fail) && responds_to(object, receive)
-    {
+    if responds_to(object, register) && responds_to(object, fail) && responds_to(object, receive) {
         return Ok(class_name);
     }
 
@@ -729,9 +746,9 @@ pub(crate) fn request_permission<R: Runtime>(
         Ok((true, _)) => PermissionOutcome::Granted,
         Ok((false, Some(message))) => PermissionOutcome::Error(message),
         Ok((false, None)) => PermissionOutcome::Denied,
-        Err(_) => {
-            PermissionOutcome::Timeout("No answer to the notification permission prompt".to_string())
-        }
+        Err(_) => PermissionOutcome::Timeout(
+            "No answer to the notification permission prompt".to_string(),
+        ),
     }
 }
 
@@ -824,7 +841,11 @@ fn registration_diagnostics(mtm: MainThreadMarker) -> String {
             format!(
                 "{} ({})",
                 object.class().name().to_string_lossy(),
-                if handles { "handles the token" } else { "does not handle the token" }
+                if handles {
+                    "handles the token"
+                } else {
+                    "does not handle the token"
+                }
             )
         }
         None => "none".to_string(),
@@ -838,17 +859,32 @@ fn registration_diagnostics(mtm: MainThreadMarker) -> String {
     format!(
         "delegate {delegate}; bundle {bundle}; aps-environment {}; registered {}",
         aps_environment().unwrap_or("none"),
-        if app.isRegisteredForRemoteNotifications() { "yes" } else { "no" }
+        if app.isRegisteredForRemoteNotifications() {
+            "yes"
+        } else {
+            "no"
+        }
     )
 }
 
-pub(crate) fn get_token<R: Runtime>(app: &AppHandle<R>, timeout: Duration) -> Result<String, String> {
+pub(crate) fn get_token<R: Runtime>(
+    app: &AppHandle<R>,
+    timeout: Duration,
+) -> Result<String, String> {
     if !is_push_capable() {
         return Err(format!(
             "APNs is unavailable: this build is not signed with {APS_ENTITLEMENT}"
         ));
     }
 
+    // APNs already answered in this launch, possibly after an earlier call
+    // had given up waiting. That token is current until APNs sends another.
+    if let Some(token) = SESSION_TOKEN.lock().ok().and_then(|token| token.clone()) {
+        log::info!("[mobile-push] using the APNs token received earlier in this launch");
+        return Ok(token);
+    }
+
+    let deadline = Instant::now() + timeout;
     let id = NEXT_TOKEN_WAITER.fetch_add(1, Ordering::Relaxed);
     let (sender, receiver) = mpsc::channel();
     let starts_registration = {
@@ -887,9 +923,92 @@ pub(crate) fn get_token<R: Runtime>(app: &AppHandle<R>, timeout: Duration) -> Re
             log::info!("[mobile-push] waiting for the APNs registration already in progress");
         }
 
-        match receiver.recv_timeout(timeout) {
-            Ok(result) => result,
-            Err(_) => {
+        // The first registration gets a short wait when a recovery is still
+        // possible; otherwise the whole budget.
+        let recovery_possible = starts_registration && !RECOVERY_ATTEMPTED.load(Ordering::SeqCst);
+        let first_wait = if recovery_possible {
+            FIRST_REGISTRATION_WAIT.min(timeout)
+        } else {
+            timeout
+        };
+        let mut answer = receiver.recv_timeout(first_wait).ok();
+
+        // A Mac that APNs registered before keeps its token while AppKit
+        // still reports it registered. Answer with that instead of tearing a
+        // working registration down on a slow network.
+        if answer.is_none() && recovery_possible {
+            if let Some(token) = user_defaults_token() {
+                let registered = on_main_thread(app, TOKEN_MAIN_THREAD_TIMEOUT, |mtm| {
+                    NSApplication::sharedApplication(mtm).isRegisteredForRemoteNotifications()
+                })
+                .unwrap_or(false);
+                if registered {
+                    log::info!(
+                        "[mobile-push] no APNs answer after {}s; using the token from an earlier registration",
+                        first_wait.as_secs()
+                    );
+                    if let Ok(mut session) = SESSION_TOKEN.lock() {
+                        *session = Some(token.clone());
+                    }
+                    // Callers that joined this registration get it too.
+                    answer_token_waiters(Ok(token.clone()));
+                    answer = Some(Ok(token));
+                }
+            }
+        }
+
+        // No answer: register again from scratch, once per launch. An app
+        // that AppKit already reports as registered may never be called back
+        // for a repeated registration, and a registration that stalled in
+        // apsd stays stalled; unregistering discards both. The second
+        // registration goes through -registerForRemoteNotificationTypes:, the
+        // older entry point, in case the newer one is what stalled.
+        if answer.is_none() && recovery_possible && !RECOVERY_ATTEMPTED.swap(true, Ordering::SeqCst)
+        {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining > TOKEN_MAIN_THREAD_TIMEOUT {
+                let restarted = on_main_thread(app, TOKEN_MAIN_THREAD_TIMEOUT, |mtm| {
+                    let before = registration_diagnostics(mtm);
+                    let ns_app = NSApplication::sharedApplication(mtm);
+                    ns_app.unregisterForRemoteNotifications();
+                    restore_bundle_identifier();
+                    let delegate = ensure_app_delegate_callbacks(mtm);
+                    if delegate.is_ok() {
+                        #[allow(deprecated)]
+                        ns_app.registerForRemoteNotificationTypes(
+                            NSRemoteNotificationType::Alert
+                                | NSRemoteNotificationType::Badge
+                                | NSRemoteNotificationType::Sound,
+                        );
+                    }
+                    (before, delegate)
+                });
+                match restarted {
+                    Ok((before, Ok(_))) => log::warn!(
+                        "[mobile-push] no APNs answer after {}s ({before}); registering again",
+                        first_wait.as_secs()
+                    ),
+                    Ok((before, Err(message))) => log::warn!(
+                        "[mobile-push] no APNs answer ({before}) and could not register again: {message}"
+                    ),
+                    Err(message) => {
+                        log::warn!("[mobile-push] could not register again: {message}")
+                    }
+                }
+                answer = receiver
+                    .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                    .ok();
+            }
+        } else if answer.is_none() && first_wait < timeout {
+            // The recovery ran in a concurrent call; wait out the budget.
+            answer = receiver
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .ok();
+        }
+
+        match answer {
+            Some(result) => result,
+            None => {
                 let diagnostics = on_main_thread(app, TOKEN_MAIN_THREAD_TIMEOUT, |mtm| {
                     (
                         NSApplication::sharedApplication(mtm).isRegisteredForRemoteNotifications(),
@@ -900,17 +1019,28 @@ pub(crate) fn get_token<R: Runtime>(app: &AppHandle<R>, timeout: Duration) -> Re
                     Ok(pair) => pair,
                     Err(message) => (false, message),
                 };
-                log::warn!("[mobile-push] no APNs answer after {}s: {detail}", timeout.as_secs());
+                log::warn!(
+                    "[mobile-push] no APNs answer after {}s: {detail}",
+                    timeout.as_secs()
+                );
                 // A token from an earlier registration is still this Mac's
                 // token while the app stays registered, so prefer it over
                 // failing on a slow network (same as the Swift side).
                 let result = match user_defaults_token() {
                     Some(token) if registered => {
                         log::info!("[mobile-push] token callback timed out; using cached token");
+                        if let Ok(mut session) = SESSION_TOKEN.lock() {
+                            *session = Some(token.clone());
+                        }
                         Ok(token)
                     }
+                    // Signing and the callbacks are checked by now (they are
+                    // in `detail`), so what is left is the Mac's connection
+                    // to APNs, which apsd makes for every app.
                     _ => Err(format!(
-                        "Apple Push Notification service did not answer within {} seconds ({detail})",
+                        "Apple Push Notification service did not answer within {} seconds ({detail}). \
+                         If this repeats, check that this Mac can reach Apple's push servers \
+                         (TCP port 5223 to *.push.apple.com, not blocked by a VPN, proxy or firewall).",
                         timeout.as_secs()
                     )),
                 };

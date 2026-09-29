@@ -56,6 +56,7 @@ vi.mock('../../src/utils/background-service.js', () => ({
 }));
 
 vi.mock('../../src/utils/notification-bridge.js', () => ({
+  getPermissionState: vi.fn(() => Promise.resolve('granted')),
   requestPermission: vi.fn().mockResolvedValue('granted'),
 }));
 
@@ -249,6 +250,83 @@ describe('macOS APNs push', () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+
+    it('waits out the slowest native answer (register again after 15s, 40s in all)', async () => {
+      const nativeReason =
+        'Apple Push Notification service did not answer within 40 seconds (registered yes)';
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      try {
+        signIn();
+        // 40 seconds of waiting plus three main-thread steps of up to 4 each.
+        apnsGetTokenMock.mockImplementation(
+          () => new Promise((_, reject) => setTimeout(() => reject(nativeReason), 52_000)),
+        );
+        const { registerCurrentDevicePush } = await loadPush();
+
+        const pending = registerCurrentDevicePush();
+        await vi.advanceTimersByTimeAsync(52_000);
+        const result = await pending;
+
+        expect(result.code).toBe('token-unavailable');
+        expect(result.detail).toBe(nativeReason);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('finishes registering when APNs answers after getToken gave up', async () => {
+      signIn();
+      listServerMock.mockResolvedValue([serverRecord()]);
+      apnsGetTokenMock.mockRejectedValueOnce(
+        'Apple Push Notification service did not answer within 40 seconds (registered yes)',
+      );
+      const { registerCurrentDevicePush, getPushNotificationStatus } = await loadPush();
+
+      const failed = await registerCurrentDevicePush();
+      expect(failed).toMatchObject({ ok: false, code: 'token-unavailable' });
+      expect(registerServerMock).not.toHaveBeenCalled();
+
+      // The token arrives later. The native side keeps it and answers the
+      // next getToken with it straight away.
+      apnsGetTokenMock.mockResolvedValue(APNS_TOKEN);
+      window.dispatchEvent(
+        new CustomEvent('mobile-push:token-received', { detail: { token: APNS_TOKEN } }),
+      );
+
+      await vi.waitFor(() => expect(registerServerMock).toHaveBeenCalledWith(APNS_TOKEN, 'apns'));
+      await vi.waitFor(async () =>
+        expect(await getPushNotificationStatus()).toMatchObject({ health: 'active' }),
+      );
+      // The second attempt asks again; with permission granted that returns at once.
+      expect(apnsPermissionMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('keeps a newer token that arrives while registration is still running', async () => {
+      signIn();
+      listServerMock.mockResolvedValue([serverRecord()]);
+      const NEWER_TOKEN = 'cd'.repeat(32);
+      let answerGetToken;
+      apnsGetTokenMock.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            answerGetToken = resolve;
+          }),
+      );
+      const { registerCurrentDevicePush } = await loadPush();
+
+      const pending = registerCurrentDevicePush();
+      await vi.waitFor(() => expect(answerGetToken).toBeTypeOf('function'));
+      // The recovery registration answers with a new token while the first
+      // answer is still being registered.
+      window.dispatchEvent(
+        new CustomEvent('mobile-push:token-received', { detail: { token: NEWER_TOKEN } }),
+      );
+      answerGetToken(APNS_TOKEN);
+      await pending;
+
+      await vi.waitFor(() => expect(registerServerMock).toHaveBeenCalledWith(NEWER_TOKEN, 'apns'));
+      expect(localStore.get('push_notification_token')).toBe(NEWER_TOKEN);
     });
 
     it('passes the native displayedBySystem flag through and marks taps', async () => {

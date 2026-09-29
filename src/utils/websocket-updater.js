@@ -27,7 +27,7 @@ import { startInitialSync } from './sync-controller';
 import { createReleaseWatcher, WS_EVENTS } from './websocket-client';
 import {
   connectMultiAccountNotifications,
-  requestNotificationPermission,
+  initNotificationPermission,
 } from './notification-manager';
 import { isDemoMode } from './demo-mode.js';
 import { fetchLabels } from '../stores/settingsStore';
@@ -348,7 +348,7 @@ function createWebSocketUpdater() {
 
         // Connect notification manager for ALL accounts via the manager
         notifCleanup = connectMultiAccountNotifications(wsManager);
-        requestNotificationPermission();
+        initNotificationPermission().catch(() => {});
 
         startFallbackPoll();
       }

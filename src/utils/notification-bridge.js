@@ -99,6 +99,9 @@ function navigateToNotification(data) {
 /**
  * Request notification permission on the current platform.
  * Returns 'granted', 'denied', or 'default'.
+ *
+ * On the web, call this from a click or key handler: browsers ignore or
+ * auto-deny a request that no user action started.
  */
 export async function requestPermission() {
   if (isTauri) {
@@ -108,7 +111,37 @@ export async function requestPermission() {
   // Web
   if (typeof Notification === 'undefined') return 'denied';
   if (Notification.permission === 'granted') return 'granted';
-  return Notification.requestPermission();
+  try {
+    // Safari before 15 only supports the callback form.
+    const result = await new Promise((resolve, reject) => {
+      const maybePromise = Notification.requestPermission(resolve);
+      if (maybePromise && typeof maybePromise.then === 'function') {
+        maybePromise.then(resolve, reject);
+      }
+    });
+    return result === 'granted' || result === 'denied' ? result : 'default';
+  } catch {
+    return 'default';
+  }
+}
+
+/**
+ * The current notification permission, without prompting:
+ * 'granted' | 'denied' | 'default' | 'unsupported'.
+ */
+export async function getPermissionState() {
+  if (isTauri) {
+    const mod = await ensureTauriNotification();
+    if (!mod) return 'unsupported';
+    try {
+      return (await mod.isPermissionGranted()) ? 'granted' : 'default';
+    } catch {
+      return 'default';
+    }
+  }
+  if (typeof Notification === 'undefined') return 'unsupported';
+  const state = Notification.permission;
+  return state === 'granted' || state === 'denied' ? state : 'default';
 }
 
 /**
@@ -121,6 +154,7 @@ export async function requestPermission() {
  * @param {string} [options.tag]     - de-duplication tag
  * @param {Object} [options.data]    - arbitrary data attached to the notification
  * @param {string} [options.channelId] - Android notification channel
+ * @returns {Promise<boolean>} whether a system notification was handed to the OS
  */
 export async function notify({ title, body, icon, tag, data, channelId, number }) {
   // Sanitise all string inputs
@@ -128,7 +162,7 @@ export async function notify({ title, body, icon, tag, data, channelId, number }
   const safeBody = sanitize(body, MAX_BODY_LENGTH);
   const safeTag = sanitize(tag, MAX_TAG_LENGTH);
 
-  if (!safeTitle) return; // Title is required
+  if (!safeTitle) return false; // Title is required
 
   if (isTauri) {
     const safeChannel = channelId && ALLOWED_CHANNEL_IDS.has(channelId) ? channelId : undefined;
@@ -272,10 +306,10 @@ function stableNotificationId(tag) {
 
 async function _notifyTauri({ title, body, channelId, data, number, tag }) {
   const mod = await ensureTauriNotification();
-  if (!mod) return;
+  if (!mod) return false;
   try {
     const granted = await mod.isPermissionGranted();
-    if (!granted) return;
+    if (!granted) return false;
     const payload = { title, body: body || '', actionTypeId: 'default-mail' };
     if (typeof tag === 'string' && tag) payload.id = stableNotificationId(tag);
     if (channelId) payload.channelId = channelId;
@@ -290,41 +324,62 @@ async function _notifyTauri({ title, body, channelId, data, number, tag }) {
     }
     mod.sendNotification(payload);
     if (data) trackNotification(data);
+    return true;
   } catch (err) {
     console.warn('[notification-bridge] Tauri notification failed:', err);
+    return false;
   }
 }
 
 // ── Web implementation ──────────────────────────────────────────────────────
 
-function _notifyWeb({ title, body, icon, tag, data }) {
+const WEB_NOTIFICATION_ICON = '/icons/icon-192.png';
+const SERVICE_WORKER_READY_TIMEOUT_MS = 3000;
+
+async function _notifyWeb({ title, body, icon, tag, data }) {
   if (typeof Notification === 'undefined' || Notification.permission !== 'granted') {
-    return;
+    return false;
   }
 
   // The service worker's notificationclick handler (public/sw-sync.js) reads
   // the target from data.target, so it needs no copy of the parsing here.
   const target = notificationDataToTarget(data);
   const payload = { ...(data && typeof data === 'object' ? data : {}), target };
+  const options = { body, icon: icon || WEB_NOTIFICATION_ICON, tag, data: payload };
 
-  // Prefer SW-based notification for persistence (survives tab close)
-  if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
-    navigator.serviceWorker.ready.then((reg) => {
-      reg.showNotification(title, { body, icon, tag, data: payload });
-    });
-    return;
+  // Prefer SW-based notification for persistence (survives tab close). It is
+  // also the only kind Chrome on Android allows.
+  if (typeof navigator !== 'undefined' && navigator.serviceWorker?.controller) {
+    try {
+      const registration = await Promise.race([
+        navigator.serviceWorker.ready,
+        new Promise((resolve) => setTimeout(() => resolve(null), SERVICE_WORKER_READY_TIMEOUT_MS)),
+      ]);
+      if (registration?.showNotification) {
+        await registration.showNotification(title, options);
+        return true;
+      }
+    } catch (err) {
+      console.warn('[notification-bridge] Service worker notification failed:', err);
+    }
   }
 
   // Fallback to basic Notification API, which has no service worker to
   // handle the click: do it here.
-  const notification = new Notification(title, { body, icon, tag, data: payload });
-  notification.onclick = () => {
-    try {
-      window.focus();
-    } catch {
-      // ignore
-    }
-    notification.close();
-    if (target) openNotificationTarget(target);
-  };
+  try {
+    const notification = new Notification(title, options);
+    notification.onclick = () => {
+      try {
+        window.focus();
+      } catch {
+        // ignore
+      }
+      notification.close();
+      if (target) openNotificationTarget(target);
+    };
+    return true;
+  } catch (err) {
+    console.warn('[notification-bridge] Notification failed:', err);
+    return false;
+  }
 }

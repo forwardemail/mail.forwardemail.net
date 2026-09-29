@@ -27,6 +27,14 @@ import { afterEach, describe, expect, it } from 'vitest';
 const script = resolve(process.cwd(), 'scripts', 'windows-signing.cjs');
 const SIGNED_MARK = '\nFAKE-SIGNATURE';
 
+// A stand-in eSigner TOTP secret: base64, as SSL.com issues it. Built at run
+// time so no secret-shaped literal sits in the source for scanners to flag.
+const FAKE_TOTP = Buffer.from('forward email test fixture').toString('base64');
+// The same value as it arrives when pasted with spaces.
+const FAKE_TOTP_PASTED = FAKE_TOTP.replace(/(.{8})/g, '$1 ').trim();
+// The URL-safe alphabet, which CodeSignTool's decoder rejects.
+const FAKE_TOTP_URL_SAFE = `${FAKE_TOTP.slice(0, 10)}-${FAKE_TOTP.slice(10, 20)}_`;
+
 const FAKE_JAVA = `#!/usr/bin/env node
 const fs = require('fs');
 const args = process.argv.slice(2);
@@ -126,7 +134,7 @@ function createFixture({ plan = {} } = {}) {
     ESIGNER_PASSWORD: 'p@ss "word" 1',
     ESIGNER_CREDENTIAL_ID: '8b072e22-7685-4771-b5c6-48e46614915f',
     // Base64, as SSL.com issues it; spaces from a copy and paste are dropped.
-    ESIGNER_TOTP_SECRET: 'Qk5sd2Jt dHNaV3Rs Y214dmNHVT0=',
+    ESIGNER_TOTP_SECRET: FAKE_TOTP_PASTED,
     CODESIGNTOOL_DIR: toolDir,
     CODESIGNTOOL_JAVA: tool(bin, 'java', FAKE_JAVA),
     WINDOWS_SIGN_POWERSHELL: tool(bin, 'powershell', FAKE_POWERSHELL),
@@ -193,7 +201,7 @@ describe('windows-signing sign', () => {
       '-username=release@forwardemail.net',
       '-password=p@ss "word" 1',
       '-credential_id=8b072e22-7685-4771-b5c6-48e46614915f',
-      '-totp_secret=Qk5sd2JtdHNaV3RsY214dmNHVT0=',
+      `-totp_secret=${FAKE_TOTP}`,
       `-input_file_path=${exe}`,
       '-override',
     ]);
@@ -204,7 +212,7 @@ describe('windows-signing sign', () => {
     expect(entry.subject).toContain('Forward Email LLC');
     // The Tauri bundler prints this output; secrets must not be in it.
     expect(result.output).not.toContain('p@ss');
-    expect(result.output).not.toContain('Qk5sd2JtdHNaV3RsY214dmNHVT0=');
+    expect(result.output).not.toContain(FAKE_TOTP);
   });
 
   it('fails when CodeSignTool prints an error but exits 0', () => {
@@ -556,7 +564,7 @@ describe('windows-signing setup', () => {
   it('rejects a URL-safe secret that CodeSignTool cannot decode', () => {
     const s = setupFixture({});
 
-    const result = s.run({ ESIGNER_TOTP_SECRET: 'Qk5sd2JtdHNa-V3RsY214_dmNHVT0' });
+    const result = s.run({ ESIGNER_TOTP_SECRET: FAKE_TOTP_URL_SAFE });
 
     expect(result.status).toBe(1);
     expect(result.output).toContain('does not look like the eSigner secret code');

@@ -27,8 +27,13 @@ const PERMISSION_TIMEOUT_SECS: i32 = 110;
 /// How long to wait for the APNs registration callback. The JS side waits a
 /// little longer (TOKEN_TIMEOUT_MS) so a slow APNs answer is reported with
 /// the native reason instead of a bare JS timeout.
-#[cfg(any(target_os = "ios", target_os = "macos"))]
+#[cfg(target_os = "ios")]
 const TOKEN_TIMEOUT_SECS: i32 = 25;
+
+/// macOS waits longer: after 15 seconds without an answer it unregisters and
+/// registers again once (macos.rs), then waits for that registration.
+#[cfg(target_os = "macos")]
+const MACOS_TOKEN_TIMEOUT_SECS: u64 = 40;
 
 #[cfg(target_os = "ios")]
 const ERR_BUFFER_LEN: usize = 512;
@@ -213,7 +218,10 @@ pub(crate) async fn get_token<R: Runtime>(_app: AppHandle<R>) -> Result<TokenRes
     {
         let app = _app.clone();
         let outcome = tauri::async_runtime::spawn_blocking(move || {
-            crate::macos::get_token(&app, std::time::Duration::from_secs(TOKEN_TIMEOUT_SECS as u64))
+            crate::macos::get_token(
+                &app,
+                std::time::Duration::from_secs(MACOS_TOKEN_TIMEOUT_SECS),
+            )
         })
         .await
         .map_err(|e| io_error(format!("Token request task failed: {e}")))?;
@@ -311,8 +319,9 @@ pub(crate) async fn take_pending_taps<R: Runtime>(
     {
         let json = tauri::async_runtime::spawn_blocking(|| {
             let mut buffer = vec![0 as std::os::raw::c_char; TAPS_BUFFER_LEN];
-            let len =
-                unsafe { mobile_push_take_pending_taps(buffer.as_mut_ptr(), TAPS_BUFFER_LEN as i32) };
+            let len = unsafe {
+                mobile_push_take_pending_taps(buffer.as_mut_ptr(), TAPS_BUFFER_LEN as i32)
+            };
             if len > 0 {
                 Some(c_buffer_to_string(&buffer[..len as usize]))
             } else {

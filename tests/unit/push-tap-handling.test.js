@@ -38,6 +38,7 @@ vi.mock('../../src/utils/background-service.js', () => ({
 }));
 
 vi.mock('../../src/utils/notification-bridge.js', () => ({
+  getPermissionState: vi.fn(() => Promise.resolve('granted')),
   requestPermission: vi.fn(() => Promise.resolve('granted')),
 }));
 

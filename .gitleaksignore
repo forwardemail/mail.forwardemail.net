@@ -1,0 +1,19 @@
+# Known false positives already in history, so a full-history scan (new
+# branches, force pushes) passes. Each line is a gitleaks fingerprint; none
+# of these values is a real credential. Fix new findings instead of adding
+# them here unless the value is a placeholder or test fixture.
+
+# made-up eSigner TOTP secret in a test (now built at run time)
+766ac7f6db2926bb0a7f6693dafd09299d24d79f:tests/unit/windows-signing.test.js:generic-api-key:196
+# made-up eSigner TOTP secret in a test (now built at run time)
+766ac7f6db2926bb0a7f6693dafd09299d24d79f:tests/unit/windows-signing.test.js:generic-api-key:559
+# placeholder PGP key block ("AAAA") in a test
+d047ea29645deddeabfd1a61d7c72538d5ac3cbb:tests/unit/device-sync-bundle.test.ts:private-key:75
+# fake APNs token in a test
+9de410562273c27de4928b084fcdd7d162174e37:tests/unit/push-notification-management.test.js:generic-api-key:89
+# fake API key the log redaction test must hide
+cf1c384710d6592a8b39bf646d2542b8c076fc6a:tests/fixtures/redaction-cases.json:generic-api-key:37
+# YOUR_AUTH_TOKEN placeholder in a curl example
+c603083ad97ee83a0a43a65568004e90cd39d234:docs/PUSH_NOTIFICATIONS.md:curl-auth-header:312
+# API_TOKEN placeholder in a curl example
+ed4187ef243d631070a76b6b6d5bc62449a33e80:README.md:curl-auth-header:272

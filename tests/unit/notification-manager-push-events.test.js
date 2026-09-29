@@ -1,7 +1,12 @@
 // Notification Manager – native push and WebSocket coalescing regressions.
 
-vi.mock('../../src/utils/platform.js', () => ({ isTauriMacOS: false, isTauri: false }));
+vi.mock('../../src/utils/platform.js', () => ({
+  isTauriMobile: false,
+  isTauriMacOS: false,
+  isTauri: false,
+}));
 vi.mock('../../src/utils/notification-bridge.js', () => ({
+  getPermissionState: vi.fn(() => Promise.resolve('granted')),
   notify: vi.fn(() => Promise.resolve()),
   requestPermission: vi.fn(() => Promise.resolve('granted')),
 }));
