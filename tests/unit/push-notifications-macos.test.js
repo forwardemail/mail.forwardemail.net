@@ -217,6 +217,40 @@ describe('macOS APNs push', () => {
       expect(registerServerMock).not.toHaveBeenCalled();
     });
 
+    it('shows the native reason when APNs never answers, not a bare timeout', async () => {
+      // macos.rs waits 25 seconds for the APNs callback and spends up to 8
+      // more on the main thread around it before it explains the failure.
+      // The page used to give up at 35 seconds, so that explanation (which
+      // says why the Mac got no token) could lose the race to "getToken timed
+      // out after 35000ms".
+      const nativeReason =
+        'Apple Push Notification service did not answer within 25 seconds ' +
+        '(delegate TaoAppDelegateParent (handles the token); bundle net.forwardemail.mail; ' +
+        'aps-environment production; registered no)';
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      try {
+        signIn();
+        apnsGetTokenMock.mockImplementation(
+          () =>
+            new Promise((_, reject) => {
+              setTimeout(() => reject(nativeReason), 38_000);
+            }),
+        );
+        const { registerCurrentDevicePush } = await loadPush();
+
+        const pending = registerCurrentDevicePush();
+        await vi.advanceTimersByTimeAsync(38_000);
+        const result = await pending;
+
+        expect(result.ok).toBe(false);
+        expect(result.code).toBe('token-unavailable');
+        expect(result.detail).toBe(nativeReason);
+        expect(registerServerMock).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('passes the native displayedBySystem flag through and marks taps', async () => {
       signIn();
       const { initPushTapHandling, syncPushNotifications } = await loadPush();

@@ -165,6 +165,14 @@ The release workflow then runs `scripts/macos-push-signing.sh prepare` before th
 
 The app registers its token as an `apns` registration for every signed-in account, like iOS. While the user is in the app, the native side tells macOS not to draw the alert and the page shows its own notice; otherwise macOS draws it and the page draws nothing (the WebSocket copy of the event waits up to three seconds for the push to say which).
 
+If APNs never answers a registration, Settings shows why after 25 seconds, for example `Apple Push Notification service did not answer within 25 seconds (delegate TaoAppDelegateParent (handles the token); bundle net.forwardemail.mail; aps-environment production; registered no)`:
+
+- `delegate … (does not handle the token)` or `delegate none`: AppKit has nowhere to deliver the token. The plugin adds the callbacks to the app delegate at setup and again before every registration.
+- `bundle com.apple.Terminal (Info.plist: net.forwardemail.mail)`: `-[NSBundle bundleIdentifier]` has been replaced, so APNs was asked for another app's topic. tauri-plugin-notification's macOS backend (mac-notification-sys) does this on the first local notification when Launch Services does not know the app; the plugin restores the real identifier before registering and logs `restored bundle identifier`.
+- Everything as expected: the Mac is not reaching APNs. Check `log stream --predicate 'process == "apsd"'` while registering, and that outbound TCP 5223 (or 443) to `*.push.apple.com` is allowed.
+
+A second registration started while one is waiting shares its answer rather than queueing behind it.
+
 ## Opening a notification
 
 Tapping or clicking a notification opens the message it is about, in its own account, on every platform: an APNs alert (iOS, macOS), an FCM or UnifiedPush notification (Android), a notification the app drew itself (desktop and mobile), a web notification (the service worker's `notificationclick`), and the in-app toast. Everything goes through `src/utils/notification-open.ts`:

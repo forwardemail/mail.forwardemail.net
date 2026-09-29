@@ -71,10 +71,11 @@ const NATIVE_PUSH_TIMEOUT_MS = 15_000;
 const PERMISSION_PROMPT_TIMEOUT_MS = 120_000;
 
 // APNs token retrieval (iOS and macOS). The native side waits up to 25
-// seconds for the APNs callback and then reports why it failed; this budget
-// is longer so that reason reaches the UI instead of a bare JS timeout racing
-// it.
-const APNS_TOKEN_TIMEOUT_MS = 35_000;
+// seconds for the APNs callback and then reports why it failed; on macOS the
+// main-thread steps around that wait add up to 8 more (macos.rs). This budget
+// is longer than all of it so that reason reaches the UI instead of a bare JS
+// timeout racing it.
+const APNS_TOKEN_TIMEOUT_MS = 45_000;
 
 class PushTimeoutError extends Error {
   constructor(operation, ms) {

@@ -26,6 +26,7 @@
 use std::collections::VecDeque;
 use std::ffi::{c_char, c_void, CStr};
 use std::ptr::NonNull;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -51,6 +52,11 @@ const MAIN_WINDOW_LABEL: &str = "main";
 
 /// How long a query to UNUserNotificationCenter or the main thread may take.
 const SETTINGS_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Main-thread steps of `get_token` (registering, and the checks after a
+/// timeout). Kept short so the whole call, with the APNs wait, still answers
+/// before the page gives up (APNS_TOKEN_TIMEOUT_MS in push-notifications.js).
+const TOKEN_MAIN_THREAD_TIMEOUT: Duration = Duration::from_secs(4);
 
 /// A push can reach the app twice while it runs: through the UN delegate
 /// (`willPresentNotification:`) and through the app delegate
@@ -136,10 +142,14 @@ type WindowRaiser = Box<dyn Fn() + Send + Sync>;
 
 static EMITTER: OnceLock<Emitter> = OnceLock::new();
 static RAISE_MAIN_WINDOW: OnceLock<WindowRaiser> = OnceLock::new();
-/// The in-flight `get_token` call, if any.
-static TOKEN_WAITER: Mutex<Option<mpsc::Sender<Result<String, String>>>> = Mutex::new(None);
-/// One registration at a time, like the Swift side's `tokenLock`.
-static TOKEN_LOCK: Mutex<()> = Mutex::new(());
+type TokenSender = mpsc::Sender<Result<String, String>>;
+
+/// `get_token` calls waiting for the APNs callback. A call that arrives while
+/// one registration is in flight waits for that one's answer instead of
+/// queueing behind it: queued calls used to outlast the page's timeout, so
+/// every retry after a slow first attempt failed with a bare JS timeout.
+static TOKEN_WAITERS: Mutex<Vec<(u64, TokenSender)>> = Mutex::new(Vec::new());
+static NEXT_TOKEN_WAITER: AtomicU64 = AtomicU64::new(1);
 static RECENT_PAYLOADS: Mutex<VecDeque<(Instant, String)>> = Mutex::new(VecDeque::new());
 /// Taps the page has not taken yet (JSON `{"data": userInfo}` each).
 static PENDING_TAPS: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
@@ -189,21 +199,25 @@ fn token_hex(data: &NSData) -> String {
 fn deliver_token(token: String) {
     log::info!("[mobile-push] APNs token received ({} chars)", token.len());
     store_user_defaults_token(&token);
-    if let Ok(waiter) = TOKEN_WAITER.lock() {
-        if let Some(sender) = waiter.as_ref() {
-            let _ = sender.send(Ok(token.clone()));
-        }
-    }
+    answer_token_waiters(Ok(token.clone()));
     let detail = serde_json::json!({ "token": token }).to_string();
     emit("mobile-push:token-received", detail);
 }
 
 fn deliver_token_error(message: String) {
     log::warn!("[mobile-push] APNs registration failed: {message}");
-    if let Ok(waiter) = TOKEN_WAITER.lock() {
-        if let Some(sender) = waiter.as_ref() {
-            let _ = sender.send(Err(message));
-        }
+    answer_token_waiters(Err(message));
+}
+
+/// Answer every waiting `get_token` call and clear the list, so the next call
+/// starts a new registration.
+fn answer_token_waiters(result: Result<String, String>) {
+    let waiters: Vec<(u64, TokenSender)> = match TOKEN_WAITERS.lock() {
+        Ok(mut waiters) => waiters.drain(..).collect(),
+        Err(_) => return,
+    };
+    for (_, sender) in waiters {
+        let _ = sender.send(result.clone());
     }
 }
 
@@ -495,45 +509,73 @@ fn add_method(class: &AnyClass, selector: Sel, imp: objc2::runtime::Imp, types: 
     }
 }
 
-fn install_app_delegate_callbacks(mtm: MainThreadMarker) {
+const DID_REGISTER: &str = "application:didRegisterForRemoteNotificationsWithDeviceToken:";
+
+/// Make sure the current NSApplication delegate answers the APNs callbacks,
+/// adding them to its class if it does not. Runs at plugin setup and again
+/// before every registration: AppKit delivers the token only to the delegate
+/// it has when the answer arrives, and a delegate without these methods drops
+/// it silently, which the page sees as a registration that never finishes.
+///
+/// Returns the delegate's class name, for diagnostics.
+fn ensure_app_delegate_callbacks(mtm: MainThreadMarker) -> Result<String, String> {
     let app = NSApplication::sharedApplication(mtm);
     let Some(delegate) = app.delegate() else {
-        log::warn!("[mobile-push] NSApplication has no delegate; APNs callbacks not installed");
-        return;
+        return Err("NSApplication has no delegate".to_string());
     };
     let object: &AnyObject = ProtocolObject::as_ref(&*delegate);
     let class = object.class();
+    let class_name = class.name().to_string_lossy().into_owned();
+
+    let register = sel!(application:didRegisterForRemoteNotificationsWithDeviceToken:);
+    let fail = sel!(application:didFailToRegisterForRemoteNotificationsWithError:);
+    let receive = sel!(application:didReceiveRemoteNotification:);
+    if responds_to(object, register) && responds_to(object, fail) && responds_to(object, receive)
+    {
+        return Ok(class_name);
+    }
 
     type Callback<T> = extern "C-unwind" fn(&AnyObject, Sel, &NSApplication, &T);
     unsafe {
-        add_method(
-            class,
-            sel!(application:didRegisterForRemoteNotificationsWithDeviceToken:),
-            std::mem::transmute::<Callback<NSData>, objc2::runtime::Imp>(did_register),
-            c"v@:@@",
-        );
-        add_method(
-            class,
-            sel!(application:didFailToRegisterForRemoteNotificationsWithError:),
-            std::mem::transmute::<Callback<NSError>, objc2::runtime::Imp>(did_fail_to_register),
-            c"v@:@@",
-        );
-        add_method(
-            class,
-            sel!(application:didReceiveRemoteNotification:),
-            std::mem::transmute::<Callback<NSDictionary>, objc2::runtime::Imp>(
-                did_receive_remote_notification,
-            ),
-            c"v@:@@",
-        );
+        if !responds_to(object, register) {
+            add_method(
+                class,
+                register,
+                std::mem::transmute::<Callback<NSData>, objc2::runtime::Imp>(did_register),
+                c"v@:@@",
+            );
+        }
+        if !responds_to(object, fail) {
+            add_method(
+                class,
+                fail,
+                std::mem::transmute::<Callback<NSError>, objc2::runtime::Imp>(did_fail_to_register),
+                c"v@:@@",
+            );
+        }
+        if !responds_to(object, receive) {
+            add_method(
+                class,
+                receive,
+                std::mem::transmute::<Callback<NSDictionary>, objc2::runtime::Imp>(
+                    did_receive_remote_notification,
+                ),
+                c"v@:@@",
+            );
+        }
     }
 
     // NSApplication may cache which optional delegate methods exist when the
     // delegate is assigned; assigning it again refreshes that. Tao keeps its
     // own strong reference to the delegate, so clearing it releases nothing.
-    // This runs from plugin setup, before the app finishes launching.
     app.setDelegate(None);
     app.setDelegate(Some(&delegate));
+
+    if !responds_to(object, register) {
+        return Err(format!("{class_name} does not accept {DID_REGISTER}"));
+    }
+    log::info!("[mobile-push] APNs callbacks added to {class_name}");
+    Ok(class_name)
 }
 
 /// Install the APNs callbacks. Called from plugin setup on the main thread,
@@ -582,7 +624,11 @@ pub(crate) fn init<R: Runtime>(app: &AppHandle<R>) {
         });
     }));
 
-    install_app_delegate_callbacks(mtm);
+    // Nothing logged here reaches the log file: this plugin is set up before
+    // tauri-plugin-log. get_token checks and logs the same state again.
+    if let Err(message) = ensure_app_delegate_callbacks(mtm) {
+        log::warn!("[mobile-push] APNs callbacks not installed: {message}");
+    }
     install_notification_delegate();
     log::info!(
         "[mobile-push] macOS remote push ready (aps-environment={})",
@@ -702,6 +748,100 @@ pub(crate) fn permission_state() -> &'static str {
     }
 }
 
+/// The main bundle's identifier as AppKit reports it, and as Info.plist
+/// declares it.
+fn bundle_identifiers() -> (String, String) {
+    let bundle = NSBundle::mainBundle();
+    let reported = bundle
+        .bundleIdentifier()
+        .map(|id| id.to_string())
+        .unwrap_or_default();
+    let declared = bundle
+        .objectForInfoDictionaryKey(&NSString::from_str("CFBundleIdentifier"))
+        .and_then(|value| value.downcast::<NSString>().ok())
+        .map(|id| id.to_string())
+        .unwrap_or_default();
+    (reported, declared)
+}
+
+/// Undo mac-notification-sys's replacement of -[NSBundle bundleIdentifier]
+/// when it misreports this app.
+///
+/// tauri-plugin-notification shows local notifications on macOS through
+/// mac-notification-sys, which on the first one exchanges
+/// -[NSBundle bundleIdentifier] with its own -__bundleIdentifier for the rest
+/// of the process. That answers the identifier it was given only if Launch
+/// Services knows an app with it (it may not for a copy run from the disk
+/// image, a translocated copy, or a fresh install), and "com.apple.Terminal"
+/// otherwise. AppKit asks APNs for a token for the main bundle's identifier,
+/// so it then asks for Terminal's topic, which this app is not entitled to,
+/// and neither registration callback ever arrives.
+///
+/// Exchanging the two implementations again restores the real identifier.
+/// Local notifications are unaffected: a bundled app posts them as itself.
+fn restore_bundle_identifier() {
+    let (reported, declared) = bundle_identifiers();
+    if declared.is_empty() || reported == declared {
+        return;
+    }
+    let class = NSBundle::class();
+    let (Some(current), Some(replaced)) = (
+        class.instance_method(sel!(bundleIdentifier)),
+        class.instance_method(sel!(__bundleIdentifier)),
+    ) else {
+        log::warn!(
+            "[mobile-push] main bundle reports {reported}, Info.plist declares {declared}; not restored"
+        );
+        return;
+    };
+    // SAFETY: both are NSBundle methods with the signature
+    // `-(NSString *)`, and this runs on the main thread (as the original
+    // exchange did), so no other thread is mid-call through either one.
+    unsafe { current.exchange_implementation(replaced) };
+    let (restored, _) = bundle_identifiers();
+    if restored == declared {
+        log::info!("[mobile-push] restored bundle identifier {declared} (was {reported})");
+    } else {
+        // Not the exchange this expects: put it back the way it was.
+        unsafe { current.exchange_implementation(replaced) };
+        log::warn!(
+            "[mobile-push] main bundle reports {reported}, Info.plist declares {declared}; not restored"
+        );
+    }
+}
+
+/// What the app looks like to APNs, for the error the page shows when no
+/// answer arrives. Runs on the main thread.
+fn registration_diagnostics(mtm: MainThreadMarker) -> String {
+    let app = NSApplication::sharedApplication(mtm);
+    let delegate = match app.delegate() {
+        Some(delegate) => {
+            let object: &AnyObject = ProtocolObject::as_ref(&*delegate);
+            let handles = responds_to(
+                object,
+                sel!(application:didRegisterForRemoteNotificationsWithDeviceToken:),
+            );
+            format!(
+                "{} ({})",
+                object.class().name().to_string_lossy(),
+                if handles { "handles the token" } else { "does not handle the token" }
+            )
+        }
+        None => "none".to_string(),
+    };
+    let (reported, declared) = bundle_identifiers();
+    let bundle = if reported == declared {
+        reported
+    } else {
+        format!("{reported} (Info.plist: {declared})")
+    };
+    format!(
+        "delegate {delegate}; bundle {bundle}; aps-environment {}; registered {}",
+        aps_environment().unwrap_or("none"),
+        if app.isRegisteredForRemoteNotifications() { "yes" } else { "no" }
+    )
+}
+
 pub(crate) fn get_token<R: Runtime>(app: &AppHandle<R>, timeout: Duration) -> Result<String, String> {
     if !is_push_capable() {
         return Err(format!(
@@ -709,45 +849,84 @@ pub(crate) fn get_token<R: Runtime>(app: &AppHandle<R>, timeout: Duration) -> Re
         ));
     }
 
-    let _serial = TOKEN_LOCK
-        .lock()
-        .map_err(|_| "Token lock poisoned".to_string())?;
+    let id = NEXT_TOKEN_WAITER.fetch_add(1, Ordering::Relaxed);
     let (sender, receiver) = mpsc::channel();
-    *TOKEN_WAITER
-        .lock()
-        .map_err(|_| "Token waiter poisoned".to_string())? = Some(sender);
+    let starts_registration = {
+        let mut waiters = TOKEN_WAITERS
+            .lock()
+            .map_err(|_| "Token waiters poisoned".to_string())?;
+        waiters.push((id, sender));
+        waiters.len() == 1
+    };
 
     let outcome = (|| {
-        on_main_thread(app, SETTINGS_TIMEOUT, |mtm| {
-            NSApplication::sharedApplication(mtm).registerForRemoteNotifications();
-        })?;
+        if starts_registration {
+            let started = on_main_thread(app, TOKEN_MAIN_THREAD_TIMEOUT, |mtm| {
+                restore_bundle_identifier();
+                let delegate = ensure_app_delegate_callbacks(mtm);
+                if delegate.is_ok() {
+                    NSApplication::sharedApplication(mtm).registerForRemoteNotifications();
+                }
+                delegate
+            })
+            .and_then(|delegate| delegate);
+            match started {
+                Ok(delegate) => log::info!(
+                    "[mobile-push] registering for remote notifications (delegate {delegate}, aps-environment {})",
+                    aps_environment().unwrap_or("none")
+                ),
+                Err(message) => {
+                    let message = format!("Could not register with APNs: {message}");
+                    log::warn!("[mobile-push] {message}");
+                    // Callers that joined this registration get the same answer.
+                    answer_token_waiters(Err(message.clone()));
+                    return Err(message);
+                }
+            }
+        } else {
+            log::info!("[mobile-push] waiting for the APNs registration already in progress");
+        }
 
         match receiver.recv_timeout(timeout) {
             Ok(result) => result,
             Err(_) => {
+                let diagnostics = on_main_thread(app, TOKEN_MAIN_THREAD_TIMEOUT, |mtm| {
+                    (
+                        NSApplication::sharedApplication(mtm).isRegisteredForRemoteNotifications(),
+                        registration_diagnostics(mtm),
+                    )
+                });
+                let (registered, detail) = match diagnostics {
+                    Ok(pair) => pair,
+                    Err(message) => (false, message),
+                };
+                log::warn!("[mobile-push] no APNs answer after {}s: {detail}", timeout.as_secs());
                 // A token from an earlier registration is still this Mac's
                 // token while the app stays registered, so prefer it over
                 // failing on a slow network (same as the Swift side).
-                let registered = on_main_thread(app, SETTINGS_TIMEOUT, |mtm| {
-                    NSApplication::sharedApplication(mtm).isRegisteredForRemoteNotifications()
-                })
-                .unwrap_or(false);
-                match user_defaults_token() {
+                let result = match user_defaults_token() {
                     Some(token) if registered => {
                         log::info!("[mobile-push] token callback timed out; using cached token");
                         Ok(token)
                     }
                     _ => Err(format!(
-                        "Apple Push Notification service did not answer within {} seconds. Check the network connection and try again.",
+                        "Apple Push Notification service did not answer within {} seconds ({detail})",
                         timeout.as_secs()
                     )),
+                };
+                // Calls that joined this registration get the same answer and
+                // the list empties, so the next call registers afresh instead
+                // of waiting on a registration that is not coming back.
+                if starts_registration {
+                    answer_token_waiters(result.clone());
                 }
+                result
             }
         }
     })();
 
-    if let Ok(mut waiter) = TOKEN_WAITER.lock() {
-        *waiter = None;
+    if let Ok(mut waiters) = TOKEN_WAITERS.lock() {
+        waiters.retain(|(waiter, _)| *waiter != id);
     }
     outcome
 }
