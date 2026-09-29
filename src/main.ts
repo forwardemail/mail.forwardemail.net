@@ -53,6 +53,7 @@ import {
   getOS,
   isTauri,
   isTauriDesktop,
+  isTauriMacOS,
   isTauriMobile,
 } from './utils/platform.js';
 import { initOsTextScale } from './utils/os-text-scale';
@@ -103,6 +104,13 @@ import {
   terminateDbWorker,
 } from './utils/db';
 import { appReady, markBootstrapReady, markAppReady } from './utils/bootstrap-ready.js';
+import {
+  configureNotificationOpen,
+  consumeNotificationTargetFromUrl,
+  deepLinkToTarget,
+  flushPendingNotificationOpen,
+  openNotificationTarget,
+} from './utils/notification-open';
 import { installRuntimeErrorNotifier } from './utils/runtime-error-notifier';
 import { initPerfObservers } from './utils/perf-logger.ts';
 import { attemptRecovery } from './utils/db-recovery';
@@ -490,7 +498,9 @@ if (isTauriDesktop) {
 // Despite the name kept for call-site compatibility, syncPushNotifications()
 // now registers the device token for every account, not just the active one.
 const syncPushForActiveAccount = () => {
-  if (!isTauriMobile) return;
+  // macOS is included: its plugin answers "unsupported" unless the build is
+  // signed for APNs, and syncPushNotifications then returns quietly.
+  if (!isTauriMobile && !isTauriMacOS) return;
 
   import('./utils/push-notifications.js')
     .then(({ syncPushNotifications }) => syncPushNotifications())
@@ -2124,6 +2134,9 @@ async function showLockScreen(): Promise<void> {
           });
 
         resolve();
+
+        // A notification tapped while the app was locked opens now.
+        queueMicrotask(() => void flushPendingNotificationOpen());
       },
       { once: true },
     );
@@ -2176,6 +2189,11 @@ async function bootstrap() {
   if (!root) {
     return;
   }
+
+  // A web notification opened in a new window carries its target in the URL.
+  // Read it before anything below rewrites the URL (the sign-in and App Lock
+  // redirects replace it whole); it is only queued, and opens once ready.
+  consumeNotificationTargetFromUrl();
 
   // App Lock first. The head script in index.html already painted a static
   // cover; mounting the real lock screen now, before the clear-manifest fetch
@@ -2565,6 +2583,32 @@ async function bootstrap() {
     // safely issue API requests.
     markAppReady();
 
+    // Notification taps (and forwardemail:// links) that arrived during boot
+    // or behind the lock screen are held until here: signed in, unlocked, and
+    // the account settled. See utils/notification-open.ts.
+    configureNotificationOpen({
+      isReady: () =>
+        !_lockScreenPromise &&
+        !isVaultLocked() &&
+        Boolean(Local.get('authToken') || Local.get('alias_auth')),
+      switchAccount: (email: string) => mailboxActions.switchAccount(email),
+      navigate: (path: string) => {
+        const current = `${window.location.pathname}${window.location.hash}`;
+        (viewModel as unknown as { navigate: (next: string) => void }).navigate(path);
+        // navigate() only announces a changed hash. Tapping the notification
+        // for the message the URL already names must still open it (it may
+        // have been closed since without the URL changing).
+        if (current === path) {
+          window.dispatchEvent(
+            new HashChangeEvent('hashchange', {
+              oldURL: window.location.href,
+              newURL: window.location.href,
+            }),
+          );
+        }
+      },
+    });
+
     // macOS self-heal: refresh LaunchServices and, if we find stale
     // bundles from a broken 0.10.17–0.10.21 install in the user's home
     // directory, offer to move them to Trash. No-op on non-macOS and
@@ -2796,6 +2840,15 @@ async function bootstrap() {
 
       // Handle forwardemail:// deep links → navigate to the path
       if (trimmed.toLowerCase().startsWith('forwardemail://')) {
+        // Links into a mailbox, the calendar or contacts (notification taps,
+        // among others) go through the notification router: on a cold start
+        // this link is drained during boot, before App Lock is unlocked and
+        // the account is loaded, and navigating then was undone by both.
+        const target = deepLinkToTarget(trimmed);
+        if (target) {
+          openNotificationTarget(target);
+          return;
+        }
         const path = trimmed.replace(/^forwardemail:\/\//i, '/');
         if (viewModel?.navigate && /^\/[a-z]/.test(path)) {
           viewModel.navigate(path);
@@ -2892,6 +2945,24 @@ async function bootstrap() {
       // on the runtime plugin mutex and trip a 10s input ANR on Android.
       // Push registration is not latency sensitive, so waiting is free.
       const schedulePushSync = () => setTimeout(syncPushForActiveAccount, 3000);
+      // Notification taps are read from the native queue independently of
+      // registration (which can take seconds, or never run while signed out),
+      // so a tap that launched the app is not lost. Deferred past page load
+      // for the same onPageLoaded reason as above, but not by much: this is
+      // what the user is waiting on.
+      if (isTauriMobile || isTauriMacOS) {
+        const scheduleTapHandling = () =>
+          setTimeout(() => {
+            import('./utils/push-notifications.js')
+              .then(({ initPushTapHandling }) => initPushTapHandling())
+              .catch((error) => console.warn('[main] Push tap handling failed:', error));
+          }, 500);
+        if (document.readyState === 'complete') {
+          scheduleTapHandling();
+        } else {
+          window.addEventListener('load', scheduleTapHandling, { once: true });
+        }
+      }
       if (document.readyState === 'complete') {
         schedulePushSync();
       } else {
@@ -3094,6 +3165,12 @@ function setupServiceWorkerDbErrorHandler() {
   // Listen from service worker (web)
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.addEventListener('message', async (event) => {
+      // A web notification was clicked while this window was open
+      // (notificationclick in public/sw-sync.js).
+      if (event.data?.type === 'notification-click') {
+        openNotificationTarget(event.data.target);
+        return;
+      }
       handleDbError(event.data);
     });
   }

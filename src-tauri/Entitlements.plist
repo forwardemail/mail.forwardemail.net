@@ -35,6 +35,12 @@
        For iOS, scripts/inject-ios-signing.cjs generates a separate
        ForwardEmail-iOS.entitlements file inside the generated Xcode project
        with the correct development or production aps-environment value.
-       This shared file remains unchanged for macOS distribution. -->
+       This shared file remains unchanged for macOS distribution.
+
+       macOS remote push: release CI runs scripts/macos-push-signing.sh
+       prepare, which writes Entitlements.push.plist (this file plus the APNs
+       entitlements) and embeds a Developer ID provisioning profile that
+       grants them. The entitlement is only valid together with that
+       profile, so it is never added here. -->
 </dict>
 </plist>

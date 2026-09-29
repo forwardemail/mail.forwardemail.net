@@ -1,6 +1,4 @@
-vi.mock('../../src/utils/platform.js', () => ({
-  isTauriMobile: false,
-}));
+vi.mock('../../src/utils/platform.js', () => ({ isTauriMacOS: false, isTauriMobile: false }));
 
 vi.mock('../../src/utils/background-service.js', () => ({
   registerPushToken: vi.fn(),

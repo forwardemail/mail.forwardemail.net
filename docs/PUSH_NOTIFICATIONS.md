@@ -1,18 +1,18 @@
 # Push Notifications Setup Guide
 
-This document describes the Forward Email mobile push architecture and its deployment requirements. The native transports are **APNs on iOS** and one dual-provider Android release containing both **FCM and UnifiedPush**. FCM is the runtime default when configured; users can explicitly select UnifiedPush as the Google-free alternative. Desktop and browser builds support local notification display but do not register a remote push subscription.
+This document describes the Forward Email push architecture and its deployment requirements. The native transports are **APNs on iOS and macOS** and one dual-provider Android release containing both **FCM and UnifiedPush**. FCM is the runtime default when configured; users can explicitly select UnifiedPush as the Google-free alternative. macOS registers for APNs only in release builds signed with a Developer ID provisioning profile that grants Push Notifications (see [macOS application and signing configuration](#macos-application-and-signing-configuration)). Windows, Linux and browser builds support local notification display but do not register a remote push subscription.
 
 ## Support and permission matrix
 
-| Target or profile     | Remote transport                     | Local display                                                | Build and permission source                                                                                                | Status                                             |
-| --------------------- | ------------------------------------ | ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
-| iOS                   | APNs                                 | Tauri notification plugin                                    | iOS-only mobile-push commands, runtime authorization, and generated iOS `aps-environment` entitlement                      | Supported                                          |
-| Android, Google-free  | UnifiedPush                          | Native background notification plus foreground Tauri display | First-party UnifiedPush connector, `POST_NOTIFICATIONS`, `RECEIVE_BOOT_COMPLETED`, and Android-only UnifiedPush capability | Supported; no Firebase or Play Services dependency |
-| Android, dual release | FCM plus user-selectable UnifiedPush | Tauri/native display                                         | FCM Cargo feature and generated FCM capability, plus the always-present UnifiedPush connector                              | Supported; one APK and AAB                         |
-| macOS                 | None                                 | Tauri notification plugin                                    | Shared notification commands; the macOS entitlement intentionally contains no `aps-environment`                            | Local notifications only                           |
-| Windows               | None                                 | Tauri notification plugin                                    | Shared notification commands                                                                                               | Local notifications only                           |
-| Ubuntu/Linux          | None                                 | Desktop notification service                                 | Shared notification commands                                                                                               | Local notifications only                           |
-| Browser/PWA           | None                                 | Web Notifications API                                        | Browser notification permission                                                                                            | Local notifications only; no Web Push subscription |
+| Target or profile     | Remote transport                            | Local display                                                | Build and permission source                                                                                                                                       | Status                                                                                        |
+| --------------------- | ------------------------------------------- | ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| iOS                   | APNs                                        | Tauri notification plugin                                    | iOS-only mobile-push commands, runtime authorization, and generated iOS `aps-environment` entitlement                                                             | Supported                                                                                     |
+| Android, Google-free  | UnifiedPush                                 | Native background notification plus foreground Tauri display | First-party UnifiedPush connector, `POST_NOTIFICATIONS`, `RECEIVE_BOOT_COMPLETED`, and Android-only UnifiedPush capability                                        | Supported; no Firebase or Play Services dependency                                            |
+| Android, dual release | FCM plus user-selectable UnifiedPush        | Tauri/native display                                         | FCM Cargo feature and generated FCM capability, plus the always-present UnifiedPush connector                                                                     | Supported; one APK and AAB                                                                    |
+| macOS                 | APNs (release builds with the push profile) | Tauri notification plugin; system alert for APNs pushes      | macOS mobile-push commands; `Entitlements.push.plist` and an embedded Developer ID provisioning profile, written by `scripts/macos-push-signing.sh` in release CI | Supported when `MACOS_PROVISIONING_PROFILE_BASE64` is set; otherwise local notifications only |
+| Windows               | None                                        | Tauri notification plugin                                    | Shared notification commands                                                                                                                                      | Local notifications only                                                                      |
+| Ubuntu/Linux          | None                                        | Desktop notification service                                 | Shared notification commands                                                                                                                                      | Local notifications only                                                                      |
+| Browser/PWA           | None                                        | Web Notifications API                                        | Browser notification permission                                                                                                                                   | Local notifications only; no Web Push subscription                                            |
 
 > **UnifiedPush is not a manifest permission.** It is a distributor-mediated Android protocol. A compatible distributor application must be installed and selected, and the backend must encrypt each message to the subscription’s endpoint and public keys.
 
@@ -147,6 +147,32 @@ bash scripts/verify-ios-push-entitlement.sh path/to/app.ipa production
 
 When registration fails on a device, **Settings → Push notifications** shows the reason reported by iOS or the server, for example `no valid "aps-environment" entitlement string found for application`. iOS shows the permission prompt only once; after **Don't Allow**, the same screen offers **Open Settings** instead.
 
+## macOS application and signing configuration
+
+macOS uses the same App ID as iOS, `net.forwardemail.mail`, and the same backend APNs key and topic, so the server needs no macOS-specific setting. What macOS needs is signing:
+
+- `com.apple.developer.aps-environment` is a restricted entitlement. A Developer ID (outside the Mac App Store) app may carry it only when the bundle embeds a **Developer ID provisioning profile** that grants it. Signing with the entitlement but without the profile passes codesign and notarization, and then the kernel kills the app at launch; that is what happened in 0.10.17 to 0.10.21 ([postmortem](./desktop-postmortem-macos-entitlements-2026-05-19.md)).
+- `src-tauri/Entitlements.plist` therefore never contains the entitlement. Local, pull request and e2e builds are signed without it, and the app reports push as unavailable in **Settings → Push notifications** ("not signed for Apple Push Notifications"). Notifications still arrive over the WebSocket while the app runs.
+
+To enable remote push in releases:
+
+1. In [Certificates, Identifiers & Profiles → Identifiers](https://developer.apple.com/account/resources/identifiers/list), open `net.forwardemail.mail` and confirm **Push Notifications** is enabled (it is already required for iOS).
+2. Under **Profiles**, create a profile of type **Distribution → Developer ID** for the macOS platform and that App ID, and select the **Developer ID Application** certificate whose `.p12` is stored in `APPLE_CERTIFICATE`.
+3. Download it, base64-encode it (`base64 -i Forward_Email_Developer_ID.provisionprofile | pbcopy`) and store it as the Actions secret `MACOS_PROVISIONING_PROFILE_BASE64`.
+4. Once a release with push has shipped, set the repository variable `MACOS_PUSH_REQUIRED=true` so a missing profile fails the macOS rows instead of shipping without push.
+
+The release workflow then runs `scripts/macos-push-signing.sh prepare` before the build. It checks that the profile is a Developer ID profile for `<APPLE_TEAM_ID>.net.forwardemail.mail`, grants `aps-environment=production`, and is not expired (it warns 90 days ahead: a build whose profile has expired no longer launches, so a renewal has to ship before then). It then writes `src-tauri/Entitlements.push.plist` (the shared entitlements plus the APNs, application-identifier and team-identifier entitlements) and adds the profile to the bundle as `Contents/embedded.provisionprofile`. After signing, `scripts/macos-push-signing.sh verify` checks the embedded profile, the signed entitlements, and that the signing certificate is one the profile lists, and the existing launch test still has to pass.
+
+The app registers its token as an `apns` registration for every signed-in account, like iOS. While the user is in the app, the native side tells macOS not to draw the alert and the page shows its own notice; otherwise macOS draws it and the page draws nothing (the WebSocket copy of the event waits up to three seconds for the push to say which).
+
+## Opening a notification
+
+Tapping or clicking a notification opens the message it is about, in its own account, on every platform: an APNs alert (iOS, macOS), an FCM or UnifiedPush notification (Android), a notification the app drew itself (desktop and mobile), a web notification (the service worker's `notificationclick`), and the in-app toast. Everything goes through `src/utils/notification-open.ts`:
+
+- The tap is held until the app is signed in, App Lock is unlocked and boot has finished, then acted on once. A tap that launches the app is kept natively until the page takes it (`take_pending_taps` on the `mobile-push` plugin for iOS and macOS, and on the `unified-push` plugin for both Android transports, which open the app with the payload on the launch intent).
+- A tap for another signed-in account switches to it first and navigates when the switch has finished.
+- The message is opened by the id in the push payload (`message_id`, the API id), in the folder it arrived in (`mailbox`). When it is not in the loaded page of the list, the mailbox fetches it by id.
+
 ## Android UnifiedPush configuration
 
 The first-party Tauri plugin under `src-tauri/plugins/tauri-plugin-unified-push` uses the stable UnifiedPush Android connector. It performs distributor discovery, explicit user-driven distributor selection, VAPID-bound registration, callback persistence, subscription rotation, message acknowledgment, foreground event forwarding, and background native notification display.
@@ -198,18 +224,19 @@ On sign-out, account replacement, provider change, registration failure, or endp
 
 ## Validation and device smoke tests
 
-| Validation                   | Expected result                                                                                                     |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| Google-free dependency audit | Built dependency graph contains UnifiedPush connector but no Firebase Messaging or Play Services push dependency    |
-| Profile-switch test          | Running Play configuration and then Google-free configuration removes all Firebase files and declarations           |
-| UnifiedPush registration     | Settings shows the selected distributor and backend stores a complete serialized subscription                       |
-| Encrypted delivery           | A backend event reaches the distributor and is decrypted by the connector without plaintext provider payloads       |
-| Background receipt           | Android displays one `new-mail` notification while the webview is suspended                                         |
-| Foreground receipt           | Mailbox state refreshes and only one notification is displayed                                                      |
-| Subscription rotation        | Old backend registration is deleted and the replacement subscription becomes active                                 |
-| Permanent endpoint failure   | `404` or `410` increments/prunes the obsolete registration through the normal failure lifecycle                     |
-| Sign-out/account switch      | Existing server registration, native listeners, and provider state are cleaned up before new credentials initialize |
-| Dual-provider release        | One APK contains FCM and UnifiedPush; an explicit distributor choice persists and takes precedence after restart    |
-| iOS/macOS entitlement split  | iOS signed build has `aps-environment`; shared macOS entitlement does not                                           |
+| Validation                   | Expected result                                                                                                            |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Google-free dependency audit | Built dependency graph contains UnifiedPush connector but no Firebase Messaging or Play Services push dependency           |
+| Profile-switch test          | Running Play configuration and then Google-free configuration removes all Firebase files and declarations                  |
+| UnifiedPush registration     | Settings shows the selected distributor and backend stores a complete serialized subscription                              |
+| Encrypted delivery           | A backend event reaches the distributor and is decrypted by the connector without plaintext provider payloads              |
+| Background receipt           | Android displays one `new-mail` notification while the webview is suspended                                                |
+| Foreground receipt           | Mailbox state refreshes and only one notification is displayed                                                             |
+| Subscription rotation        | Old backend registration is deleted and the replacement subscription becomes active                                        |
+| Permanent endpoint failure   | `404` or `410` increments/prunes the obsolete registration through the normal failure lifecycle                            |
+| Sign-out/account switch      | Existing server registration, native listeners, and provider state are cleaned up before new credentials initialize        |
+| Dual-provider release        | One APK contains FCM and UnifiedPush; an explicit distributor choice persists and takes precedence after restart           |
+| iOS/macOS entitlement split  | iOS signed build has `aps-environment`; shared macOS entitlement does not; only the macOS push build (with profile) has it |
+| Notification tap routing     | Cold start, App Lock and another account: the tapped message opens in its account                                          |
 
 Physical-device tests should cover at least one distributor from the intended F-Droid ecosystem, Android 13+ notification permission, process termination/restart, distributor replacement, network loss, account switch, and notification tap routing. A successful compile alone does not validate distributor behavior.

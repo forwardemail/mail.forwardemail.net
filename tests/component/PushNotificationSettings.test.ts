@@ -207,6 +207,81 @@ describe('<PushNotificationSettings />', () => {
     await waitFor(() => expect(push.openSettings).toHaveBeenCalledTimes(1));
   });
 
+  it('shows macOS APNs status for a Mac registered for push', async () => {
+    push.getStatus.mockResolvedValue(
+      makeStatus({
+        platform: 'macos',
+        currentRegistration: currentRegistration({ deviceName: 'MacBook Pro' }),
+      }),
+    );
+
+    render(PushNotificationSettings, { props: { openExternal: vi.fn() } });
+
+    expect(await screen.findByText('Active')).toBeInTheDocument();
+    expect(screen.getByText('macOS')).toBeInTheDocument();
+    expect(screen.getByText('Apple Push Notification service')).toBeInTheDocument();
+  });
+
+  it('explains a macOS build that is not signed for push without offering registration', async () => {
+    push.getStatus.mockResolvedValue(
+      makeStatus({
+        supported: false,
+        platform: 'macos',
+        provider: null,
+        providerLabel: 'Not selected',
+        permission: 'unsupported',
+        initialized: false,
+        localTokenPresent: false,
+        localTokenFingerprint: null,
+        serverReachable: false,
+        currentRegistration: null,
+        health: 'unsupported',
+      }),
+    );
+
+    render(PushNotificationSettings, { props: { openExternal: vi.fn() } });
+
+    expect(await screen.findByText(/not signed for Apple Push Notifications/i)).toBeInTheDocument();
+    expect(screen.getByText(/still arrive while the app is running/i)).toBeInTheDocument();
+    expect(screen.queryByText(/available only in the native/i)).toBeNull();
+    expect(screen.queryByRole('button', { name: /register this device/i })).toBeNull();
+  });
+
+  it('offers System Settings when macOS notifications were turned off', async () => {
+    const blocked = makeStatus({
+      platform: 'macos',
+      permission: 'not-granted',
+      initialized: false,
+      localTokenPresent: false,
+      localTokenFingerprint: null,
+      currentRegistration: null,
+      health: 'permission-not-granted',
+    });
+    push.getStatus.mockResolvedValue(blocked);
+    push.register.mockResolvedValue({
+      ok: false,
+      code: 'permission-blocked',
+      detail: 'Notifications for Forward Email are turned off in System Settings.',
+      status: blocked,
+    });
+    push.openSettings.mockResolvedValue(false);
+
+    render(PushNotificationSettings, { props: { openExternal: vi.fn() } });
+
+    await fireEvent.click(
+      await screen.findByRole('button', { name: 'Allow & register this device' }),
+    );
+    expect(
+      await screen.findByText(/Allow Notifications in System Settings > Notifications/),
+    ).toBeInTheDocument();
+    await fireEvent.click(await screen.findByRole('button', { name: 'Open Settings' }));
+
+    await waitFor(() => expect(push.openSettings).toHaveBeenCalledTimes(1));
+    expect(
+      await screen.findByText('Open System Settings, choose Notifications, then Forward Email.'),
+    ).toBeInTheDocument();
+  });
+
   it('supports Android FCM and switches to an installed UnifiedPush distributor', async () => {
     const fcm = makeStatus({
       platform: 'android',
@@ -469,7 +544,7 @@ describe('<PushNotificationSettings />', () => {
       expect(screen.getByTestId('push-health-badge')).toHaveTextContent('Unsupported'),
     );
     expect(
-      screen.getByText(/available only in the native Android and iOS apps/i),
+      screen.getByText(/available only in the native Android, iOS, and macOS apps/i),
     ).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /register this device/i })).toBeNull();
     unmount();

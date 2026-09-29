@@ -7,9 +7,7 @@
 
 // ── Mocks ─────────────────────────────────────────────────────────────────
 
-vi.mock('../../src/utils/platform.js', () => ({
-  isTauri: false,
-}));
+vi.mock('../../src/utils/platform.js', () => ({ isTauriMacOS: false, isTauri: false }));
 
 vi.mock('../../src/utils/notification-bridge.js', () => ({
   notify: vi.fn(() => Promise.resolve()),
@@ -308,15 +306,20 @@ describe('notification-manager new message routing payloads', () => {
     });
   });
 
-  it('includes both a mailbox hash path and a Forward Email deep-link URL', async () => {
+  it('points the notification at the message by its list id, in its folder and account', async () => {
+    // The list and the API key messages by id; uid is the IMAP UID. A link
+    // built from the UID matched no row and left the user on the inbox.
+    const { Local } = await import('../../src/utils/storage.js');
+    Local.set('email', 'alice@example.com');
     wsClient.emit('newMessage', {
-      mailbox: 'INBOX',
+      _account: 'alice@example.com',
+      mailbox: 'Work',
       message: {
-        id: 4242,
+        id: '6650f0c2a1b2c3d4e5f60718',
         uid: 4242,
         subject: 'Quarterly update',
         from: {
-          text: 'Alice Example <alice@example.com>',
+          text: 'Bob Example <bob@example.com>',
         },
       },
     });
@@ -324,11 +327,15 @@ describe('notification-manager new message routing payloads', () => {
     await vi.waitFor(() => {
       expect(notify).toHaveBeenCalled();
     });
+    Local.remove('email');
 
     const call = vi.mocked(notify).mock.calls[0][0];
-    expect(call.data.path).toBe('#inbox/4242');
-    expect(call.data.url).toBe('forwardemail://mailbox#inbox/4242');
-    expect(call.title).toContain('Alice Example');
+    expect(call.data).toEqual({
+      account: 'alice@example.com',
+      folder: 'Work',
+      messageId: '6650f0c2a1b2c3d4e5f60718',
+    });
+    expect(call.title).toContain('Bob Example');
   });
 });
 

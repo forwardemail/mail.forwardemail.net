@@ -66,7 +66,7 @@
   } from './mailbox/utils/security-helpers.js';
   import { createPerfTracer } from '../utils/perf-logger.ts';
   import { isLockEnabled, isVaultConfigured } from '../utils/crypto-store.js';
-  import { getMessageApiId } from '../utils/sync-helpers.ts';
+  import { getMessageApiId, normalizeMessageForCache } from '../utils/sync-helpers.ts';
   import { prefetchMessages } from '../utils/sync-controller.js';
   import { getSyncSettings } from '../utils/sync-settings.js';
   import { parseMailto, mailtoToPrefill } from '../utils/mailto';
@@ -2286,15 +2286,35 @@
       return null;
     };
 
+    // Bumped by every navigation, so a slow open-by-id for an earlier link
+    // cannot replace what the user opened since.
+    let messageNavigation = 0;
     const navigateToMessage = (
-      folder: string,
+      linkFolder: string,
       messageId: string | null,
       filterState?: UrlFilterState,
     ) => {
+      const navigation = ++messageNavigation;
+      let folder = linkFolder;
       // Restore filter state from URL
       if (filterState) {
         restoreFilterState(filterState);
       }
+
+      // Match the folder the way IMAP does for INBOX (a link may say inbox)
+      // and to the path the account actually uses for it.
+      // A link may also name the folder by its id.
+      const knownFolders = (get(folders) || []) as Array<{
+        path?: string;
+        id?: unknown;
+        _id?: unknown;
+      }>;
+      const matched =
+        knownFolders.find((f) => f.path === folder) ||
+        knownFolders.find((f) => f.path?.toUpperCase?.() === String(folder).toUpperCase()) ||
+        knownFolders.find((f) => String(f.id ?? f._id ?? '') === String(folder));
+      if (matched?.path) folder = matched.path;
+      else if (String(folder).toUpperCase() === 'INBOX') folder = 'INBOX';
 
       // Ensure we're on the right folder
       const currentFolder = get(selectedFolder);
@@ -2330,14 +2350,60 @@
         return false;
       };
 
-      // Try immediately, then retry a few times as messages load
+      // The message may not be in the list: it is past the first page, or it
+      // arrived after the list was fetched (a notification tap is usually for
+      // the newest mail, which the server indexes a little after delivery).
+      // Open it by id instead of leaving the user on the folder, which is
+      // what a tapped notification used to do.
+      const account = Local.get('email') || '';
+      const openById = async () => {
+        try {
+          const res = await Remote.request(
+            'Message',
+            {},
+            {
+              method: 'GET',
+              pathOverride: `/v1/messages/${encodeURIComponent(messageId)}?folder=${encodeURIComponent(folder)}&raw=false`,
+            },
+          );
+          const raw = res?.Result || res;
+          if (!raw || typeof raw !== 'object' || !isActive) return;
+          // Still the same account and nothing else was opened meanwhile.
+          if (navigation !== messageNavigation) return;
+          if ((Local.get('email') || '') !== account) return;
+          if (trySelect()) return;
+          const envelope = normalizeMessageForCache(
+            raw,
+            (raw as { folder_path?: string }).folder_path || folder,
+            account || undefined,
+          );
+          if (!envelope?.id) return;
+          selectMessage(envelope, { updateUrl: false });
+        } catch (err) {
+          console.warn('[mailbox] could not open linked message', err);
+        }
+      };
+
+      // Try immediately, then as the list loads; give up on the list once it
+      // has finished loading without the message (or after ~6 seconds) and
+      // fetch the message itself.
       if (!trySelect()) {
         let attempts = 0;
-        const maxAttempts = 10;
+        const maxAttempts = 30;
         const intervalId = setInterval(() => {
           attempts++;
-          if (trySelect() || attempts >= maxAttempts) {
+          if (navigation !== messageNavigation) {
             clearInterval(intervalId);
+            return;
+          }
+          if (trySelect()) {
+            clearInterval(intervalId);
+            return;
+          }
+          const listSettled = !get(loading) && attempts >= 3;
+          if (listSettled || attempts >= maxAttempts) {
+            clearInterval(intervalId);
+            void openById();
           }
         }, 200);
       }

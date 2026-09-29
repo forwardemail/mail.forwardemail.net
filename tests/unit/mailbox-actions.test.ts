@@ -6,6 +6,9 @@ import { get, writable } from 'svelte/store';
 const hoisted = vi.hoisted(() => {
   const localStore = new Map<string, string>();
   return {
+    isTauriMobile: false,
+    syncPushNotifications: vi.fn(),
+    initPushNotifications: vi.fn(),
     localStore,
     localGet: vi.fn((key: string) => localStore.get(key) ?? null),
     localSet: vi.fn((key: string, value: string) => {
@@ -96,10 +99,20 @@ vi.mock('../../src/utils/logger.ts', () => ({
 }));
 
 vi.mock('../../src/utils/platform.js', () => ({
+  isTauriMacOS: false,
   isTauri: false,
   isTauriDesktop: false,
-  isTauriMobile: false,
+  get isTauriMobile() {
+    return hoisted.isTauriMobile;
+  },
   swReadyWithTimeout: vi.fn().mockResolvedValue(null),
+}));
+
+vi.mock('../../src/utils/push-notifications.js', () => ({
+  syncPushNotifications: (...a: unknown[]) => hoisted.syncPushNotifications(...a),
+  initPushNotifications: (...a: unknown[]) => hoisted.initPushNotifications(...a),
+  deregisterAccountPush: vi.fn().mockResolvedValue(true),
+  cleanupPushNotifications: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('../../src/utils/download', () => ({
@@ -686,6 +699,37 @@ describe('switchAccount search startup', () => {
     finishFolders();
     await switched;
     await vi.waitFor(() => expect(ensure).toHaveBeenCalledWith('search-1@example.com'));
+    await new Promise((resolve) => setTimeout(resolve, 310));
+  });
+});
+
+describe('switchAccount and push registration', () => {
+  beforeEach(() => {
+    hoisted.accountsSetActive.mockImplementation((email: string) => {
+      hoisted.localStore.set('email', email);
+      return true;
+    });
+    hoisted.loadFolders.mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    hoisted.isTauriMobile = false;
+  });
+
+  it('syncs push for the new account without waiting on it', async () => {
+    // Registration can wait on the permission prompt and the APNs/FCM token
+    // for many seconds; a tapped notification waits for the switch to open
+    // its message, so the switch must not wait on registration.
+    hoisted.isTauriMobile = true;
+    hoisted.syncPushNotifications.mockReset();
+    hoisted.syncPushNotifications.mockImplementation(() => new Promise(() => {}));
+    hoisted.initPushNotifications.mockReset();
+
+    await switchAccount({ email: 'push-1@example.com' });
+
+    await vi.waitFor(() => expect(hoisted.syncPushNotifications).toHaveBeenCalledTimes(1));
+    // The authenticated guard, never a bare init.
+    expect(hoisted.initPushNotifications).not.toHaveBeenCalled();
     await new Promise((resolve) => setTimeout(resolve, 310));
   });
 });

@@ -319,6 +319,18 @@
           "markdownDescription": "Denies the open_settings command without any pre-configured scope."
         },
         {
+          "description": "Enables the permission_state command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-permission-state",
+          "markdownDescription": "Enables the permission_state command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the permission_state command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-permission-state",
+          "markdownDescription": "Denies the permission_state command without any pre-configured scope."
+        },
+        {
           "description": "Enables the register_listener command without any pre-configured scope.",
           "type": "string",
           "const": "allow-register-listener",
@@ -355,10 +367,22 @@
           "markdownDescription": "Denies the request_permission command without any pre-configured scope."
         },
         {
-          "description": "Default permissions for the mobile-push plugin\n#### This default permission set includes:\n\n- `allow-request-permission`\n- `allow-get-token`\n- `allow-register-listener`\n- `allow-remove-listener`\n- `allow-open-settings`",
+          "description": "Enables the take_pending_taps command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-take-pending-taps",
+          "markdownDescription": "Enables the take_pending_taps command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the take_pending_taps command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-take-pending-taps",
+          "markdownDescription": "Denies the take_pending_taps command without any pre-configured scope."
+        },
+        {
+          "description": "Default permissions for the mobile-push plugin\n#### This default permission set includes:\n\n- `allow-request-permission`\n- `allow-get-token`\n- `allow-register-listener`\n- `allow-remove-listener`\n- `allow-open-settings`\n- `allow-permission-state`\n- `allow-take-pending-taps`",
           "type": "string",
           "const": "default",
-          "markdownDescription": "Default permissions for the mobile-push plugin\n#### This default permission set includes:\n\n- `allow-request-permission`\n- `allow-get-token`\n- `allow-register-listener`\n- `allow-remove-listener`\n- `allow-open-settings`"
+          "markdownDescription": "Default permissions for the mobile-push plugin\n#### This default permission set includes:\n\n- `allow-request-permission`\n- `allow-get-token`\n- `allow-register-listener`\n- `allow-remove-listener`\n- `allow-open-settings`\n- `allow-permission-state`\n- `allow-take-pending-taps`"
         }
       ]
     }

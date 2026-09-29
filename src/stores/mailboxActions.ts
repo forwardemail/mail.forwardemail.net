@@ -57,7 +57,13 @@ import { config } from '../config';
 import { createInboxUpdater } from '../utils/websocket-updater';
 import { getWebSocketManager } from '../utils/websocket-manager.js';
 import { i18n } from '../utils/i18n';
-import { isTauri, isTauriDesktop, isTauriMobile, swReadyWithTimeout } from '../utils/platform.js';
+import {
+  isTauri,
+  isTauriDesktop,
+  isTauriMacOS,
+  isTauriMobile,
+  swReadyWithTimeout,
+} from '../utils/platform.js';
 import { downloadFile } from '../utils/download';
 import { warn } from '../utils/logger.ts';
 import { sanitizeHtml } from '../utils/sanitize.js';
@@ -2133,7 +2139,7 @@ export const signOut = async () => {
 
   // Remove only THIS account's push registration (other accounts keep theirs).
   // If this is the LAST account, cleanupPushNotifications() tears down everything.
-  if (isTauriMobile && currentEmail) {
+  if ((isTauriMobile || isTauriMacOS) && currentEmail) {
     try {
       const remainingBeforeRemove = Accounts.getAll().filter((a) => a.email !== currentEmail);
       if (remainingBeforeRemove.length > 0) {
@@ -2500,13 +2506,16 @@ const performAccountSwitch = async (email) => {
   // Per-account push: syncPushNotifications reconciles ALL accounts,
   // so after switching we just ensure the new active account is covered.
   // This is a no-op if the account was already registered with the current token.
-  if (isTauriMobile) {
-    try {
-      const { syncPushNotifications } = await import('../utils/push-notifications.js');
-      await syncPushNotifications();
-    } catch (err) {
-      warn('Failed to sync push after account switch', err);
-    }
+  // Not awaited: when push is not registered yet this can wait on the
+  // permission prompt and the APNs/FCM token for many seconds, and whoever
+  // awaits the switch (a tapped notification opening its message) must not
+  // wait on that.
+  if (isTauriMobile || isTauriMacOS) {
+    import('../utils/push-notifications.js')
+      .then(({ syncPushNotifications }) => syncPushNotifications())
+      .catch((err) => {
+        warn('Failed to sync push after account switch', err);
+      });
   }
 };
 

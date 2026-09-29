@@ -69,10 +69,6 @@ vi.mock('tauri-plugin-remote-push-api', () => ({
     callbacks.received = callback;
     return listenerCleanup;
   }),
-  onNotificationTapped: vi.fn(async (callback) => {
-    callbacks.tapped = callback;
-    return listenerCleanup;
-  }),
 }));
 
 describe('native push tap normalization', () => {
@@ -93,7 +89,9 @@ describe('native push tap normalization', () => {
   it('marks system-displayed only when the FCM message carried a notification block', async () => {
     await expect(initPushNotifications()).resolves.toBe(true);
     expect(callbacks.received).toBeTypeOf('function');
-    expect(callbacks.tapped).toBeTypeOf('function');
+    // Taps are not taken from the FCM plugin: they arrive on the launch
+    // intent and are read by initPushTapHandling (push-tap-handling.test.js).
+    expect(callbacks.tapped).toBeUndefined();
 
     const delivered = [];
     const listener = (event) => delivered.push(event.detail);
@@ -108,8 +106,6 @@ describe('native push tap normalization', () => {
     callbacks.received({ data, notification: { title: 'John', body: 'Hi' } });
     // Data-only push: nothing was drawn, the client stays free to draw.
     callbacks.received({ data });
-    // A tapped notification was by definition drawn by the OS.
-    callbacks.tapped({ data });
 
     globalThis.removeEventListener('fe:push-notification', listener);
     expect(delivered).toEqual([
@@ -119,11 +115,6 @@ describe('native push tap normalization', () => {
       },
       {
         ...data,
-      },
-      {
-        ...data,
-        notificationTapped: true,
-        displayedBySystem: true,
       },
     ]);
   });

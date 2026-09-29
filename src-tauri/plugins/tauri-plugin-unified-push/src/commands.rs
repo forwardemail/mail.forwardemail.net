@@ -53,6 +53,14 @@ pub(crate) async fn drain_messages<R: Runtime>(app: AppHandle<R>) -> Result<Drai
     app.unified_push().drain_messages().await
 }
 
+/// Notification taps (FCM tray or UnifiedPush) that opened the app and have
+/// not been taken by the page yet. See initPushTapHandling in
+/// src/utils/push-notifications.js.
+#[command]
+pub(crate) async fn take_pending_taps<R: Runtime>(app: AppHandle<R>) -> Result<PendingTapsResult> {
+    app.unified_push().take_pending_taps().await
+}
+
 #[command]
 pub(crate) async fn unregister<R: Runtime>(app: AppHandle<R>, instance: String) -> Result<()> {
     app.unified_push()

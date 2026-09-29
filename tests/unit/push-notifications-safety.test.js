@@ -27,9 +27,7 @@ const { localStorageState, localGet, localSet, localRemove } = vi.hoisted(() => 
   };
 });
 
-vi.mock('../../src/utils/platform.js', () => ({
-  isTauriMobile: false,
-}));
+vi.mock('../../src/utils/platform.js', () => ({ isTauriMacOS: false, isTauriMobile: false }));
 
 vi.mock('../../src/utils/background-service.js', () => ({
   listPushTokens: vi.fn().mockResolvedValue([]),

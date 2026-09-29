@@ -7,6 +7,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.util.Base64
@@ -31,8 +32,77 @@ private const val EVENT_MESSAGE = "message-received"
 private const val EVENT_REGISTRATION_FAILED = "registration-failed"
 private const val EVENT_UNREGISTERED = "unregistered"
 private const val EVENT_TEMPORARY_UNAVAILABLE = "temporary-unavailable"
+private const val EVENT_NOTIFICATION_TAPPED = "notification-tapped"
 private const val NOTIFICATION_CHANNEL = "new-mail"
 private const val DEFAULT_INSTANCE = "forward-email"
+
+// Set on the launch intent of the notifications this plugin draws.
+private const val EXTRA_NOTIFICATION_TAP = "net.forwardemail.NOTIFICATION_TAP"
+// Added by Firebase to the launch intent of a tray notification it drew.
+private const val EXTRA_FCM_MESSAGE_ID = "google.message_id"
+// The payload fields that say what a notification is about (the server's
+// buildPayload in forwardemail.net helpers/send-push-notification.js).
+private val TAP_FIELDS = arrayOf("event", "alias_id", "message_id", "mailbox", "notificationId")
+
+/**
+ * Notification taps waiting for the page.
+ *
+ * Tapping a notification opens the app through its launch intent, with the
+ * push payload on it: as data extras for a tray notification Firebase drew,
+ * and as the same extras on the notifications ForwardEmailPushService draws
+ * for UnifiedPush. On a cold start that happens before the page has loaded,
+ * so the payload is kept here until the page drains it (takePendingTaps);
+ * the notification-tapped event is only a wake-up for a page already
+ * running. Nothing read the intent before, so every tap opened the inbox.
+ */
+object NotificationTapStore {
+  private const val MAX_TAPS = 10
+  private val taps = ArrayList<JSONObject>()
+
+  @Synchronized
+  fun add(data: JSONObject) {
+    taps.add(data)
+    while (taps.size > MAX_TAPS) taps.removeAt(0)
+  }
+
+  @Synchronized
+  fun drain(): JSONArray {
+    val result = JSONArray()
+    for (data in taps) result.put(JSONObject().put("data", data))
+    taps.clear()
+    return result
+  }
+
+  /** The payload a notification tap put on this intent, or null. */
+  fun fromIntent(intent: Intent?): JSONObject? {
+    if (intent == null) return null
+    val extras = intent.extras ?: return null
+    // Relaunching from Recents after the process was killed re-delivers the
+    // original intent; that is not a new tap.
+    if ((intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0) return null
+    val ours = extras.getString(EXTRA_NOTIFICATION_TAP) != null
+    val fcm = extras.getString(EXTRA_FCM_MESSAGE_ID) != null
+    if (!ours && !fcm) return null
+    val data = JSONObject()
+    for (field in TAP_FIELDS) {
+      val value = extras.getString(field)
+      if (!value.isNullOrEmpty()) data.put(field, value.take(255))
+    }
+    if (data.length() == 0) return null
+    return data
+  }
+
+  /** Queue the tap on this intent, once. Returns true when there was one. */
+  fun consume(intent: Intent?): Boolean {
+    val data = fromIntent(intent) ?: return false
+    add(data)
+    // So a configuration change (which re-reads the same intent) does not
+    // count it again.
+    intent?.removeExtra(EXTRA_NOTIFICATION_TAP)
+    intent?.removeExtra(EXTRA_FCM_MESSAGE_ID)
+    return true
+  }
+}
 
 @InvokeArg
 class RegistrationArgs {
@@ -60,6 +130,13 @@ class UnifiedPushPlugin(private val activity: Activity) : Plugin(activity) {
     super.load(webView)
     instance = this
     isForeground = true
+    // Cold start: the tap that launched the app is on the launch intent.
+    if (NotificationTapStore.consume(activity.intent)) emitNotificationTapped()
+  }
+
+  // Warm start: the tap is delivered to the running activity.
+  override fun onNewIntent(intent: Intent) {
+    if (NotificationTapStore.consume(intent)) emitNotificationTapped()
   }
 
   override fun onResume() {
@@ -144,6 +221,13 @@ class UnifiedPushPlugin(private val activity: Activity) : Plugin(activity) {
   }
 
   @Command
+  fun takePendingTaps(invoke: Invoke) {
+    val result = JSObject()
+    result.put("taps", NotificationTapStore.drain())
+    invoke.resolve(result)
+  }
+
+  @Command
   fun unregister(invoke: Invoke) {
     val args = invoke.parseArgs(UnregisterArgs::class.java)
     val instanceId = sanitizeInstance(args.instance)
@@ -211,6 +295,10 @@ class UnifiedPushPlugin(private val activity: Activity) : Plugin(activity) {
     emitOnMain(EVENT_UNREGISTERED, JSObject().apply { put("instance", instanceId) })
   }
 
+  private fun emitNotificationTapped() {
+    emitOnMain(EVENT_NOTIFICATION_TAPPED, JSObject())
+  }
+
   fun emitTemporaryUnavailable(instanceId: String) {
     emitOnMain(EVENT_TEMPORARY_UNAVAILABLE, JSObject().apply { put("instance", instanceId) })
   }
@@ -273,30 +361,18 @@ class ForwardEmailPushService : PushService() {
       )
     }
 
-    // Tap-through: deep-link straight to the message when the payload names
-    // one. forwardemail://mailbox#inbox/<uid> is the exact URL the frontend
-    // already routes for in-app notification clicks, so every transport
-    // shares one navigation path - including cold start, which the frontend
-    // drains via get_pending_deep_links. A bare launch intent (the previous
-    // behaviour, kept as fallback) can only open the app at the inbox list.
-    // The uid charset is restricted rather than encoded; anything outside it
-    // falls back instead of building a URL from untrusted payload bytes.
-    val uid = payload.optString("uid").take(64)
-    val tapIntent = if (uid.isNotEmpty() && uid.matches(Regex("[A-Za-z0-9._-]+"))) {
-      android.content.Intent(
-        android.content.Intent.ACTION_VIEW,
-        android.net.Uri.parse("forwardemail://mailbox#inbox/$uid")
-      ).apply {
-        setPackage(packageName)
-        addFlags(
-          android.content.Intent.FLAG_ACTIVITY_NEW_TASK or
-            android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP or
-            android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP
-        )
-      }
-    } else {
-      packageManager.getLaunchIntentForPackage(packageName)?.apply {
-        addFlags(android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP or android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP)
+    // Tap-through: open the app with what the notification is about on the
+    // launch intent, the same way Firebase does for its tray notifications,
+    // so both transports share NotificationTapStore and the page opens the
+    // message in its own account (after App Lock, on a cold start too). The
+    // deep link this used before was built from a "uid" field the server
+    // never sends, so every tap fell back to a bare launch: the inbox.
+    val tapIntent = packageManager.getLaunchIntentForPackage(packageName)?.apply {
+      addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+      putExtra(EXTRA_NOTIFICATION_TAP, "1")
+      for (field in TAP_FIELDS) {
+        val value = payload.optString(field)
+        if (value.isNotEmpty()) putExtra(field, value.take(255))
       }
     }
     val pendingIntent = tapIntent?.let {

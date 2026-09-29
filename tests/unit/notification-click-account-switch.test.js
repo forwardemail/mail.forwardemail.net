@@ -1,6 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 let actionHandler;
+let signedIn = [];
 const localStore = new Map();
 
 vi.mock('../../src/utils/platform.js', () => ({
@@ -15,7 +16,7 @@ vi.mock('../../src/utils/storage.js', () => ({
     remove: (key) => localStore.delete(key),
   },
   Accounts: {
-    getAll: () => [],
+    getAll: () => signedIn.map((email) => ({ email })),
   },
 }));
 
@@ -34,137 +35,114 @@ vi.mock('@tauri-apps/api/window', () => ({
   }),
 }));
 
+// Clicking a notification for another signed-in account used to switch
+// accounts and set the hash 150ms later. The switch itself takes longer and
+// re-selects the new account's inbox, so the user ended up on the inbox.
+// Opening now goes through notification-open.ts, which waits for the switch.
 describe('notification click → account switch', () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-    vi.clearAllMocks();
-    actionHandler = undefined;
-    localStore.clear();
-    localStore.set('email', 'alice@example.com');
-    window.location.hash = '';
-  });
+  let switched;
+  let navigated;
+  let finishSwitch;
+  let ready;
 
-  afterEach(() => {
-    // Flush any pending timers to prevent "window is not defined" after teardown
-    vi.runAllTimers();
-    vi.useRealTimers();
-  });
+  const configure = async () => {
+    const { configureNotificationOpen, __resetNotificationOpenForTests } =
+      await import('../../src/utils/notification-open.ts');
+    __resetNotificationOpenForTests();
+    configureNotificationOpen({
+      isReady: () => ready,
+      switchAccount: (email) => {
+        switched.push(email);
+        return new Promise((resolve) => {
+          finishSwitch = () => {
+            localStore.set('email', email);
+            resolve();
+          };
+        });
+      },
+      navigate: (path) => navigated.push(path),
+    });
+  };
 
-  it('dispatches app:switch-account when notification account differs from active', async () => {
+  const click = async (extra) => {
     const { initTauriNotificationClickHandler } =
       await import('../../src/utils/notification-bridge.js');
     await initTauriNotificationClickHandler();
     expect(typeof actionHandler).toBe('function');
+    actionHandler({ extra });
+    await Promise.resolve();
+  };
 
-    const switchEvents = [];
-    const handler = (event) => switchEvents.push(event.detail);
-    window.addEventListener('app:switch-account', handler);
-
-    // Simulate clicking a notification that belongs to bob's account
-    actionHandler({
-      extra: {
-        path: '#inbox/99',
-        account: 'bob@example.com',
-      },
-    });
-
-    // The switch event is dispatched synchronously
-    expect(switchEvents).toHaveLength(1);
-    expect(switchEvents[0]).toEqual({ email: 'bob@example.com' });
-
-    // Navigation happens after the 150ms delay
-    expect(window.location.hash).toBe('');
-    vi.advanceTimersByTime(200);
-    expect(window.location.hash).toBe('#inbox/99');
-
-    window.removeEventListener('app:switch-account', handler);
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    actionHandler = undefined;
+    localStore.clear();
+    localStore.set('email', 'alice@example.com');
+    signedIn = ['alice@example.com', 'bob@example.com'];
+    switched = [];
+    navigated = [];
+    finishSwitch = undefined;
+    ready = true;
+    await configure();
   });
 
-  it('does NOT dispatch app:switch-account when notification account matches active', async () => {
-    const { initTauriNotificationClickHandler } =
-      await import('../../src/utils/notification-bridge.js');
-    await initTauriNotificationClickHandler();
+  it('switches to the notification account and navigates only once the switch is done', async () => {
+    await click({ account: 'bob@example.com', folder: 'INBOX', messageId: 'm-99' });
 
-    const switchEvents = [];
-    const handler = (event) => switchEvents.push(event.detail);
-    window.addEventListener('app:switch-account', handler);
+    expect(switched).toEqual(['bob@example.com']);
+    // The switch has not finished: navigating now is what used to be undone.
+    expect(navigated).toEqual([]);
 
-    // Simulate clicking a notification for the SAME account
-    actionHandler({
-      extra: {
-        path: '#inbox/42',
-        account: 'alice@example.com',
-      },
-    });
-
-    // No timer needed — should navigate immediately
-    vi.advanceTimersByTime(10);
-    window.removeEventListener('app:switch-account', handler);
-
-    expect(switchEvents).toHaveLength(0);
-    expect(window.location.hash).toBe('#inbox/42');
+    finishSwitch();
+    await vi.waitFor(() => expect(navigated).toEqual(['/mailbox#INBOX/m-99']));
   });
 
-  it('navigates after account switch with a short delay', async () => {
-    const { initTauriNotificationClickHandler } =
-      await import('../../src/utils/notification-bridge.js');
-    await initTauriNotificationClickHandler();
-
-    // Simulate clicking a notification for a different account
-    actionHandler({
-      extra: {
-        path: '#inbox/77',
-        account: 'bob@example.com',
-      },
-    });
-
-    // Navigation should NOT happen immediately (waiting for account switch)
-    expect(window.location.hash).toBe('');
-
-    // After the delay, navigation should occur
-    vi.advanceTimersByTime(200);
-    expect(window.location.hash).toBe('#inbox/77');
+  it('does not switch when the notification is for the active account', async () => {
+    await click({ account: 'alice@example.com', folder: 'INBOX', messageId: 'm-42' });
+    expect(switched).toEqual([]);
+    expect(navigated).toEqual(['/mailbox#INBOX/m-42']);
   });
 
-  it('navigates immediately when no account field is present in notification data', async () => {
-    const { initTauriNotificationClickHandler } =
-      await import('../../src/utils/notification-bridge.js');
-    await initTauriNotificationClickHandler();
-
-    // Simulate clicking a notification without account info (legacy behavior)
-    actionHandler({
-      extra: {
-        path: '#inbox/55',
-      },
-    });
-
-    // Should navigate immediately since no account switching needed
-    expect(window.location.hash).toBe('#inbox/55');
-  });
-
-  it('handles case-insensitive account comparison', async () => {
+  it('compares accounts case-insensitively', async () => {
     localStore.set('email', 'Alice@Example.COM');
-    const { initTauriNotificationClickHandler } =
-      await import('../../src/utils/notification-bridge.js');
-    await initTauriNotificationClickHandler();
+    await click({ account: 'alice@example.com', folder: 'INBOX', messageId: 'm-10' });
+    expect(switched).toEqual([]);
+    expect(navigated).toEqual(['/mailbox#INBOX/m-10']);
+  });
 
-    const switchEvents = [];
-    const handler = (event) => switchEvents.push(event.detail);
-    window.addEventListener('app:switch-account', handler);
+  it('opens older notifications that only carry a path', async () => {
+    await click({ path: '#inbox/55' });
+    expect(navigated).toEqual(['/mailbox#INBOX/55']);
+  });
 
-    // Same account but different case — should NOT switch
-    actionHandler({
-      extra: {
-        path: '#inbox/10',
-        account: 'alice@example.com',
-      },
-    });
+  it('ignores a notification for an account that is no longer signed in', async () => {
+    signedIn = ['alice@example.com'];
+    await click({ account: 'carol@example.com', folder: 'INBOX', messageId: 'm-1' });
+    expect(switched).toEqual([]);
+    expect(navigated).toEqual([]);
+  });
 
-    vi.advanceTimersByTime(10);
-    window.removeEventListener('app:switch-account', handler);
+  it('holds a click made while the app is locked until it is unlocked', async () => {
+    ready = false;
+    await click({ account: 'alice@example.com', folder: 'INBOX', messageId: 'm-7' });
+    expect(navigated).toEqual([]);
 
-    expect(switchEvents).toHaveLength(0);
-    expect(window.location.hash).toBe('#inbox/10');
+    ready = true;
+    const { flushPendingNotificationOpen } = await import('../../src/utils/notification-open.ts');
+    await flushPendingNotificationOpen();
+    expect(navigated).toEqual(['/mailbox#INBOX/m-7']);
+  });
+
+  it('lets the newest click win when one arrives during an account switch', async () => {
+    await click({ account: 'bob@example.com', folder: 'INBOX', messageId: 'm-old' });
+    expect(switched).toEqual(['bob@example.com']);
+    await click({ account: 'alice@example.com', folder: 'INBOX', messageId: 'm-new' });
+
+    finishSwitch();
+    // bob is now active, so the newer click (for alice) switches back.
+    await vi.waitFor(() => expect(switched).toEqual(['bob@example.com', 'alice@example.com']));
+    finishSwitch();
+    await vi.waitFor(() => expect(navigated).toEqual(['/mailbox#INBOX/m-new']));
   });
 });
 

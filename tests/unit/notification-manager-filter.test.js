@@ -14,9 +14,7 @@
  * the bridge would call on a real platform.
  */
 
-vi.mock('../../src/utils/platform.js', () => ({
-  isTauri: false,
-}));
+vi.mock('../../src/utils/platform.js', () => ({ isTauriMacOS: false, isTauri: false }));
 vi.mock('../../src/utils/notification-bridge.js', () => ({
   notify: vi.fn(() => Promise.resolve()),
   requestPermission: vi.fn(() => Promise.resolve('granted')),

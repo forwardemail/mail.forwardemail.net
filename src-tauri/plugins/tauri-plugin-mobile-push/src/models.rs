@@ -17,3 +17,10 @@ pub struct PermissionResponse {
 pub struct TokenResponse {
     pub token: String,
 }
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct PermissionStateResponse {
+    /// "granted" | "denied" | "prompt" | "unsupported" | "unknown".
+    /// "unsupported" on macOS means the build is not signed for push.
+    pub state: String,
+}

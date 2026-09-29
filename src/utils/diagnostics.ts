@@ -18,7 +18,7 @@
  *    facts and check outcomes. Bug reports get pasted into Slack/email.
  */
 
-import { isTauri, isTauriDesktop, isTauriMobile, getPlatform } from './platform.js';
+import { isTauri, isTauriDesktop, isTauriMacOS, isTauriMobile, getPlatform } from './platform.js';
 import { DB_NAME } from './db-constants';
 
 export type DiagnosticStatus = 'pass' | 'fail' | 'warn' | 'skip';
@@ -407,11 +407,13 @@ export const checkQrDecoder = (): Promise<DiagnosticResult> =>
 /**
  * Push registration as this device sees it, from local state only. No
  * network: the Settings push card already does the server comparison. The
- * provider tells support which delivery path to look at. Mobile only.
+ * provider tells support which delivery path to look at. Mobile and macOS.
  */
 export const checkPushRegistration = (): Promise<DiagnosticResult> =>
   runCheck('push-registration', 'Push registration', async () => {
-    if (!isTauriMobile) return { status: 'skip', message: 'Only checked on phones' };
+    if (!isTauriMobile && !isTauriMacOS) {
+      return { status: 'skip', message: 'Only checked in the mobile and macOS apps' };
+    }
     const push = await import('./push-notifications.js');
     const hasToken = Boolean(push.getStoredPushToken());
     const provider = push.getActivePushProvider();

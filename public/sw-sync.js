@@ -830,6 +830,60 @@
     }
   });
 
+  // Clicking a web notification. The page draws these through
+  // registration.showNotification (notification-bridge.js) with the target it
+  // points at in data.target ({ account, folder, messageId, appPath }).
+  // Without this handler a click only closed the notification. An open app
+  // window is focused and told what to open; otherwise a new window opens
+  // with the target in its URL (notification-open.ts reads it at start).
+  const NOTIFICATION_URL_MAX = 2048;
+  const notificationTargetUrl = (target) => {
+    const scope = self.registration?.scope || self.location.origin + '/';
+    const url = new URL('mailbox', scope);
+    if (target && typeof target === 'object') {
+      try {
+        const json = JSON.stringify({
+          account: target.account,
+          folder: target.folder,
+          messageId: target.messageId,
+          appPath: target.appPath,
+        });
+        if (json.length <= NOTIFICATION_URL_MAX) url.searchParams.set('fe_notify', json);
+      } catch {
+        // open the mailbox without a target
+      }
+    }
+    return url.href;
+  };
+
+  self.addEventListener('notificationclick', (event) => {
+    const target = event.notification?.data?.target || null;
+    event.notification?.close?.();
+    event.waitUntil(
+      (async () => {
+        const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+        const origin = self.location.origin;
+        const client = windows.find((c) => {
+          try {
+            return new URL(c.url).origin === origin;
+          } catch {
+            return false;
+          }
+        });
+        if (client) {
+          try {
+            await client.focus();
+          } catch {
+            // focus can be refused; the message still gets there
+          }
+          client.postMessage({ type: 'notification-click', target });
+          return;
+        }
+        if (self.clients.openWindow) await self.clients.openWindow(notificationTargetUrl(target));
+      })(),
+    );
+  });
+
   self.addEventListener('message', (event) => {
     const data = event.data || {};
     if (!data.type) return;

@@ -65,3 +65,20 @@ version = "2"
 [build-dependencies.tauri-plugin]
 version = "2"
 features = ["build"]
+
+# macOS: direct APNs registration (src/macos.rs). Inert unless the running
+# bundle is signed with com.apple.developer.aps-environment.
+[target.'cfg(target_os = "macos")'.dependencies.block2]
+version = "0.6"
+
+[target.'cfg(target_os = "macos")'.dependencies.objc2]
+version = "0.6"
+
+[target.'cfg(target_os = "macos")'.dependencies.objc2-app-kit]
+version = "0.3"
+
+[target.'cfg(target_os = "macos")'.dependencies.objc2-foundation]
+version = "0.3"
+
+[target.'cfg(target_os = "macos")'.dependencies.objc2-user-notifications]
+version = "0.3"

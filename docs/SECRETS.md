@@ -32,6 +32,8 @@ Open **Settings → Secrets and variables → Actions** in the GitHub repository
 | `APPLE_ID`                           | Secret   | Yes for macOS rows  | Apple ID email used for notarization                                                                                  |
 | `APPLE_PASSWORD`                     | Secret   | Yes for macOS rows  | App-specific password used for notarization                                                                           |
 | `APPLE_TEAM_ID`                      | Secret   | Yes for macOS rows  | Apple Developer Team ID used by desktop notarization and shared with iOS                                              |
+| `MACOS_PROVISIONING_PROFILE_BASE64`  | Secret   | For macOS push      | Base64 Developer ID provisioning profile granting Push Notifications; see docs/PUSH_NOTIFICATIONS.md                  |
+| `MACOS_PUSH_REQUIRED`                | Variable | No                  | Set to `true` once the profile exists so a missing profile fails the macOS rows instead of shipping without push      |
 | `WINDOWS_CERTIFICATE`                | Secret   | Not yet provisioned | Base64-encoded exportable `.pfx`; imported into the runner cert store and its thumbprint written to `tauri.conf.json` |
 | `WINDOWS_CERTIFICATE_PASSWORD`       | Secret   | Not yet provisioned | Password used when exporting the Windows `.pfx`                                                                       |
 | `WINDOWS_SIGNING_REQUIRED`           | Variable | No                  | Set to `true` after the certificate exists so a missing secret fails the Windows rows instead of shipping unsigned    |

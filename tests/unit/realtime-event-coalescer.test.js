@@ -2,6 +2,7 @@ import {
   createRealtimeEventCoalescer,
   getRealtimeEventKey,
   PUSH_COALESCE_MS,
+  SOCKET_HOLD_FOR_PUSH_MS,
   TRANSPORT_DEDUP_TTL_MS,
 } from '../../src/utils/realtime-event-coalescer.js';
 
@@ -287,5 +288,137 @@ describe('realtime event transport coalescer', () => {
     expect(onEvent).not.toHaveBeenCalled();
     expect(coalescer.handleWebSocket('newMessage', payload)).toBe(false);
     expect(coalescer.handlePush(payload)).toBe(false);
+  });
+
+  describe('holding a socket event for a push the system may draw (macOS)', () => {
+    const payload = {
+      _account: 'user@example.com',
+      notification_id: 'held-1',
+      message: { uid: 7 },
+    };
+    const holdNewMessage = (eventName) => eventName === 'newMessage';
+
+    it('consumes the socket copy without a visual when the push was shown by the system', () => {
+      const onEvent = vi.fn();
+      const coalescer = createRealtimeEventCoalescer({
+        onEvent,
+        shouldHoldSocketEvent: holdNewMessage,
+      });
+
+      expect(coalescer.handleWebSocket('newMessage', payload)).toBe(true);
+      expect(onEvent).not.toHaveBeenCalled();
+
+      expect(
+        coalescer.handlePush({ ...payload, event: 'newMessage', displayedBySystem: true }),
+      ).toBe(true);
+      expect(onEvent).toHaveBeenCalledTimes(1);
+      expect(onEvent).toHaveBeenCalledWith('newMessage', payload, {
+        source: 'websocket',
+        suppressVisual: true,
+      });
+
+      vi.advanceTimersByTime(SOCKET_HOLD_FOR_PUSH_MS + PUSH_COALESCE_MS);
+      expect(onEvent).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps the visual when the push arrives but the system did not show it', () => {
+      const onEvent = vi.fn();
+      const coalescer = createRealtimeEventCoalescer({
+        onEvent,
+        shouldHoldSocketEvent: holdNewMessage,
+      });
+
+      coalescer.handleWebSocket('newMessage', payload);
+      coalescer.handlePush({ ...payload, event: 'newMessage' });
+
+      expect(onEvent).toHaveBeenCalledTimes(1);
+      expect(onEvent).toHaveBeenCalledWith('newMessage', payload, {
+        source: 'websocket',
+        suppressVisual: false,
+      });
+    });
+
+    it('falls back to the socket copy when no push arrives in time', () => {
+      const onEvent = vi.fn();
+      const coalescer = createRealtimeEventCoalescer({
+        onEvent,
+        shouldHoldSocketEvent: holdNewMessage,
+      });
+
+      coalescer.handleWebSocket('newMessage', payload);
+      vi.advanceTimersByTime(SOCKET_HOLD_FOR_PUSH_MS - 1);
+      expect(onEvent).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(1);
+      expect(onEvent).toHaveBeenCalledWith('newMessage', payload, {
+        source: 'websocket',
+        suppressVisual: false,
+      });
+
+      // A late push is a duplicate by then.
+      expect(coalescer.handlePush({ ...payload, event: 'newMessage' })).toBe(false);
+      vi.advanceTimersByTime(PUSH_COALESCE_MS);
+      expect(onEvent).toHaveBeenCalledTimes(1);
+    });
+
+    it('ignores a duplicate socket copy while one is held', () => {
+      const onEvent = vi.fn();
+      const coalescer = createRealtimeEventCoalescer({
+        onEvent,
+        shouldHoldSocketEvent: holdNewMessage,
+      });
+
+      expect(coalescer.handleWebSocket('newMessage', payload)).toBe(true);
+      expect(coalescer.handleWebSocket('newMessage', payload)).toBe(false);
+      vi.advanceTimersByTime(SOCKET_HOLD_FOR_PUSH_MS);
+      expect(onEvent).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not hold events the caller does not ask to hold', () => {
+      const onEvent = vi.fn();
+      const coalescer = createRealtimeEventCoalescer({
+        onEvent,
+        shouldHoldSocketEvent: holdNewMessage,
+      });
+      const flags = {
+        _account: 'user@example.com',
+        mailbox: 'INBOX',
+        uids: [7],
+        flags: ['\\Seen'],
+        action: 'add',
+      };
+
+      coalescer.handleWebSocket('flagsUpdated', flags);
+      expect(onEvent).toHaveBeenCalledWith('flagsUpdated', flags, {
+        source: 'websocket',
+        suppressVisual: false,
+      });
+    });
+
+    it('treats a throwing hold check as no hold', () => {
+      const onEvent = vi.fn();
+      const coalescer = createRealtimeEventCoalescer({
+        onEvent,
+        shouldHoldSocketEvent: () => {
+          throw new Error('boom');
+        },
+      });
+
+      coalescer.handleWebSocket('newMessage', payload);
+      expect(onEvent).toHaveBeenCalledTimes(1);
+    });
+
+    it('cancels held socket events on cleanup', () => {
+      const onEvent = vi.fn();
+      const coalescer = createRealtimeEventCoalescer({
+        onEvent,
+        shouldHoldSocketEvent: holdNewMessage,
+      });
+
+      coalescer.handleWebSocket('newMessage', payload);
+      coalescer.destroy();
+      vi.advanceTimersByTime(SOCKET_HOLD_FOR_PUSH_MS);
+      expect(onEvent).not.toHaveBeenCalled();
+    });
   });
 });

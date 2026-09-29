@@ -243,6 +243,40 @@ jobs:
           fi
           echo "All Apple signing/notary secrets present for ${{ matrix.label }}."
 
+      # Remote push on macOS (docs/PUSH_NOTIFICATIONS.md). The APNs entitlement
+      # is restricted: a Developer ID app may carry it only when the bundle
+      # embeds a Developer ID provisioning profile that grants it, otherwise
+      # the kernel kills the app at launch even though codesign and
+      # notarization succeed (docs/desktop-postmortem-macos-entitlements-2026-05-19.md).
+      # With MACOS_PROVISIONING_PROFILE_BASE64 set, this validates the profile
+      # and switches the bundle to Entitlements.push.plist plus an embedded
+      # profile. Without it the release ships as before: no APNs entitlement,
+      # notifications only while the app is running. Set repo variable
+      # MACOS_PUSH_REQUIRED=true to fail closed once the profile exists.
+      - name: Prepare macOS push signing (APNs)
+        id: macos_push
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          MACOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.MACOS_PROVISIONING_PROFILE_BASE64 }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          MACOS_PUSH_REQUIRED: ${{ vars.MACOS_PUSH_REQUIRED }}
+        run: |
+          set -euo pipefail
+          if [ -z "$MACOS_PROVISIONING_PROFILE_BASE64" ]; then
+            if [ "$MACOS_PUSH_REQUIRED" = "true" ]; then
+              echo "::error::MACOS_PUSH_REQUIRED=true but MACOS_PROVISIONING_PROFILE_BASE64 is not set. See docs/PUSH_NOTIFICATIONS.md."
+              exit 1
+            fi
+            echo "::warning::MACOS_PROVISIONING_PROFILE_BASE64 is not set. ${{ matrix.label }} ships without remote push; notifications arrive only while the app is running."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          PROFILE="$RUNNER_TEMP/forwardemail-developer-id.provisionprofile"
+          echo "$MACOS_PROVISIONING_PROFILE_BASE64" | base64 --decode > "$PROFILE"
+          scripts/macos-push-signing.sh prepare "$PROFILE" "$APPLE_TEAM_ID"
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+
       # Windows Authenticode signing. tauri-action does not read
       # WINDOWS_CERTIFICATE; Tauri signs only when
       # bundle.windows.certificateThumbprint names a certificate that is
@@ -376,15 +410,19 @@ jobs:
       #   1. codesign authority is the Forward Email LLC Developer ID.
       #   2. spctl reports "Notarized Developer ID" — Gatekeeper would
       #      accept it.
-      #   3. Entitlement allowlist: nothing outside the known-good set is
-      #      embedded. Specifically refuses aps-environment, the entitlement
-      #      that broke 0.10.17–0.10.21.
+      #   3. Entitlements: without the push profile, refuses aps-environment,
+      #      the entitlement that broke 0.10.17–0.10.21. With it, requires the
+      #      APNs entitlement, the embedded profile, and a signing certificate
+      #      the profile lists (scripts/macos-push-signing.sh verify).
       #   4. Launch-survives test: exec the binary and verify it lives ≥3s
       #      without being SIGKILLed. Catches taskgated rejection that
       #      codesign and spctl don't see.
       - name: Verify macOS bundle (codesign + entitlements + launch)
         if: runner.os == 'macOS'
         shell: bash
+        env:
+          MACOS_PUSH_ENABLED: ${{ steps.macos_push.outputs.enabled }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -u
           APP="src-tauri/target/${{ matrix.target }}/release/bundle/macos/Forward Email.app"
@@ -419,10 +457,15 @@ jobs:
             exit 1
           fi
 
-          echo "=== 3. entitlement allowlist ==="
+          echo "=== 3. entitlements ==="
           codesign -d --entitlements - "$APP" 2>&1 | tee /tmp/ents.out
-          if grep -q "aps-environment" /tmp/ents.out; then
-            echo "::error::aps-environment entitlement present on macOS Developer ID bundle. The Forward Email LLC cert is not APNs-authorized; the kernel will SIGKILL on launch. See docs/desktop-postmortem-macos-entitlements-2026-05-19.md"
+          if [ "${MACOS_PUSH_ENABLED:-}" = "true" ]; then
+            if ! scripts/macos-push-signing.sh verify "$APP" src-tauri/ForwardEmail-DeveloperID.provisionprofile "$APPLE_TEAM_ID"; then
+              echo "::error::The APNs-enabled bundle failed verification. See the errors above and docs/PUSH_NOTIFICATIONS.md."
+              exit 1
+            fi
+          elif grep -q "aps-environment" /tmp/ents.out; then
+            echo "::error::aps-environment entitlement present on a macOS Developer ID bundle without an embedded provisioning profile; the kernel will SIGKILL on launch. See docs/desktop-postmortem-macos-entitlements-2026-05-19.md"
             exit 1
           fi
 

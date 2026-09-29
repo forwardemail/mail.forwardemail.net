@@ -7,6 +7,8 @@ pub use models::*;
 
 #[cfg(desktop)]
 mod desktop;
+#[cfg(target_os = "macos")]
+mod macos;
 #[cfg(mobile)]
 mod mobile;
 
@@ -152,7 +154,9 @@ impl Builder {
                 commands::get_token,
                 commands::register_listener,
                 commands::remove_listener,
-                commands::open_settings
+                commands::open_settings,
+                commands::permission_state,
+                commands::take_pending_taps
             ])
             .setup(move |app, api| {
                 #[cfg(mobile)]
@@ -160,6 +164,12 @@ impl Builder {
                 #[cfg(desktop)]
                 let mobile_push = desktop::init(app, api)?;
                 app.manage(mobile_push);
+
+                // macOS: install the APNs delegate callbacks now, before the
+                // app finishes launching, so a notification that launches the
+                // app is not lost. No-op unless the build is signed for push.
+                #[cfg(target_os = "macos")]
+                macos::init(app);
 
                 // Push the configured foreground options into the Swift
                 // runtime now that `register_ios_plugin` has initialized it.

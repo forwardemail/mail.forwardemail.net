@@ -30,9 +30,7 @@ vi.mock('../../src/utils/demo-mode.js', () => ({
   isDemoMode: isDemoModeMock,
 }));
 
-vi.mock('../../src/utils/platform.js', () => ({
-  isTauriMobile: true,
-}));
+vi.mock('../../src/utils/platform.js', () => ({ isTauriMacOS: false, isTauriMobile: true }));
 
 vi.mock('../../src/utils/storage', () => ({
   Local: {

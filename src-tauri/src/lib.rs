@@ -834,9 +834,11 @@ pub fn run() {
         builder = builder.plugin(tauri_plugin_haptics::init());
     }
 
-    // Direct APNs tokens on iOS. This crate must not be compiled on Android,
-    // where its current Rust command shim returns empty/no-op responses.
-    #[cfg(target_os = "ios")]
+    // Direct APNs tokens on iOS and macOS. This crate must not be compiled on
+    // Android, where its current Rust command shim returns empty/no-op
+    // responses. On macOS it stays inert (its commands answer "unsupported")
+    // unless the bundle is signed with the APNs entitlement.
+    #[cfg(any(target_os = "ios", target_os = "macos"))]
     {
         builder = builder.plugin(tauri_plugin_mobile_push::init());
     }

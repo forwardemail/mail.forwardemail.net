@@ -1,5 +1,5 @@
 export type PushProvider = 'apns' | 'fcm' | 'unified-push';
-export type PushPlatform = 'ios' | 'android';
+export type PushPlatform = 'ios' | 'android' | 'macos';
 export type PushPermissionStatus = 'granted' | 'not-granted' | 'unknown' | 'unsupported';
 export type PushHealth =
   | 'active'
@@ -89,7 +89,9 @@ export interface PushNavigationAction {
 
 export function initPushNotifications(): Promise<boolean>;
 export function syncPushNotifications(): Promise<boolean>;
+export function initPushTapHandling(): Promise<void>;
 export function cleanupPushNotifications(): Promise<boolean>;
+export function deregisterAccountPush(email: string, aliasAuth?: string): Promise<boolean>;
 export function getPushNotificationStatus(): Promise<PushNotificationStatus>;
 export function getLastPushRegistrationFailure(): { code: string; detail: string } | null;
 export function openNotificationSettings(): Promise<boolean>;
@@ -99,8 +101,10 @@ export function deregisterCurrentDevicePush(): Promise<PushManagementResult>;
 export function reregisterCurrentDevicePush(): Promise<PushManagementResult>;
 export function removePushRegistration(registrationId: string): Promise<PushManagementResult>;
 export function getStoredPushToken(): string | null;
-export function getPushPlatform(): 'ios' | 'android' | PushProvider | null;
+export function getPushPlatform(): PushPlatform | PushProvider | null;
 export function getActivePushProvider(): PushProvider | null;
+export function isSystemPushAlertExpected(eventName: string, data: unknown): boolean;
+export function __resetPushTapHandlingForTests(): void;
 export function isPushInitialized(): boolean;
 export function getAndroidPushProviderPreference(): 'fcm' | 'unified-push';
 export function selectFcmPushProvider(): Promise<boolean>;

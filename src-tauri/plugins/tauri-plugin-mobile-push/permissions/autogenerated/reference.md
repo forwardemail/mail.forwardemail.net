@@ -9,6 +9,8 @@ Default permissions for the mobile-push plugin
 - `allow-register-listener`
 - `allow-remove-listener`
 - `allow-open-settings`
+- `allow-permission-state`
+- `allow-take-pending-taps`
 
 ## Permission Table
 
@@ -67,6 +69,32 @@ Enables the open_settings command without any pre-configured scope.
 <td>
 
 Denies the open_settings command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`mobile-push:allow-permission-state`
+
+</td>
+<td>
+
+Enables the permission_state command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`mobile-push:deny-permission-state`
+
+</td>
+<td>
+
+Denies the permission_state command without any pre-configured scope.
 
 </td>
 </tr>
@@ -145,6 +173,32 @@ Enables the request_permission command without any pre-configured scope.
 <td>
 
 Denies the request_permission command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`mobile-push:allow-take-pending-taps`
+
+</td>
+<td>
+
+Enables the take_pending_taps command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`mobile-push:deny-take-pending-taps`
+
+</td>
+<td>
+
+Denies the take_pending_taps command without any pre-configured scope.
 
 </td>
 </tr>

@@ -48,7 +48,7 @@
   import Download from '@lucide/svelte/icons/download';
   import ChevronDown from '@lucide/svelte/icons/chevron-down';
   import ExternalLink from '@lucide/svelte/icons/external-link';
-  import { isTauri, isTauriDesktop, isTauriMobile } from '../utils/platform.js';
+  import { isTauri, isTauriDesktop, isTauriMacOS, isTauriMobile } from '../utils/platform.js';
   import { openExternalUrl, supportsExternalBrowserOverride } from '../utils/external-links.js';
 
   const openExternal = async (url: string) => {
@@ -2012,7 +2012,7 @@
           </Card.Content>
         </Card.Root>
 
-        {#if isTauriMobile}
+        {#if isTauriMobile || isTauriMacOS}
           <PushNotificationSettings {toasts} {openExternal} />
         {/if}
 

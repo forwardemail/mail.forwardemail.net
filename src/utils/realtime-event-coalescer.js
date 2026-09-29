@@ -10,6 +10,9 @@
  */
 
 export const PUSH_COALESCE_MS = 1500;
+// How long a socket event waits for its push copy where the system may draw
+// the push itself (macOS; see shouldHoldSocketEvent below).
+export const SOCKET_HOLD_FOR_PUSH_MS = 3000;
 export const TRANSPORT_DEDUP_TTL_MS = 5 * 60 * 1000;
 export const MAX_TRANSPORT_DEDUP_ENTRIES = 500;
 
@@ -208,6 +211,12 @@ function getLegacyEventKey(eventName, data) {
  * @param {(eventName: string, data: Object, context: Object) => void} options.onEvent
  * @param {() => boolean} [options.isVisible] Deprecated — no longer used internally.
  * @param {number} [options.pushCoalesceMs]
+ * @param {(eventName: string, data: Object) => boolean} [options.shouldHoldSocketEvent]
+ *   Return true to hold a socket event until its push copy arrives (or
+ *   socketHoldMs passes), because the system may draw that push itself. On
+ *   macOS the socket copy usually wins the race; shown at once, the app and
+ *   the system would both notify.
+ * @param {number} [options.socketHoldMs]
  * @returns {{handleWebSocket: Function, handlePush: Function, destroy: Function}}
  */
 export function createRealtimeEventCoalescer({
@@ -215,11 +224,14 @@ export function createRealtimeEventCoalescer({
   // eslint-disable-next-line no-unused-vars
   isVisible = () => document.visibilityState === 'visible',
   pushCoalesceMs = PUSH_COALESCE_MS,
+  shouldHoldSocketEvent = () => false,
+  socketHoldMs = SOCKET_HOLD_FOR_PUSH_MS,
 }) {
   if (typeof onEvent !== 'function') throw new TypeError('onEvent must be a function');
 
   const seenEvents = new Map();
   const pendingPushEvents = new Map();
+  const heldSocketEvents = new Map();
   let destroyed = false;
 
   const pruneSeenEvents = (now) => {
@@ -268,6 +280,27 @@ export function createRealtimeEventCoalescer({
     for (const key of entry.keys) pendingPushEvents.delete(key);
   };
 
+  const deleteHeldEntry = (entry) => {
+    for (const key of entry.keys) heldSocketEvents.delete(key);
+  };
+
+  const findHeldEntry = (keys) => {
+    for (const key of keys) {
+      const entry = heldSocketEvents.get(key);
+      if (entry) return entry;
+    }
+
+    return null;
+  };
+
+  const wantsHold = (eventName, data) => {
+    try {
+      return shouldHoldSocketEvent(eventName, data) === true;
+    } catch {
+      return false;
+    }
+  };
+
   const handleWebSocket = (eventName, data) => {
     if (destroyed) return false;
     const keys = getRealtimeEventKeys(eventName, data);
@@ -285,6 +318,26 @@ export function createRealtimeEventCoalescer({
       if (pendingPush.displayedBySystem) {
         return consume('websocket', eventName, data, true);
       }
+
+      return consume('websocket', eventName, data);
+    }
+
+    // Already consumed, or a duplicate of a socket event that is being held.
+    if (hasSeen(keys) || findHeldEntry(keys)) return false;
+
+    if (keys.length > 0 && wantsHold(eventName, data)) {
+      const entry = { timer: null, keys };
+      entry.timer = setTimeout(() => {
+        deleteHeldEntry(entry);
+        consume('websocket', eventName, data);
+      }, socketHoldMs);
+      entry.release = (suppressVisual) => {
+        clearTimeout(entry.timer);
+        deleteHeldEntry(entry);
+        return consume('websocket', eventName, data, suppressVisual);
+      };
+      for (const key of keys) heldSocketEvents.set(key, entry);
+      return true;
     }
 
     return consume('websocket', eventName, data);
@@ -296,6 +349,13 @@ export function createRealtimeEventCoalescer({
     if (typeof eventName !== 'string' || !eventName) return false;
 
     const keys = getRealtimeEventKeys(eventName, data);
+
+    // The socket copy is being held for this push: consume the socket copy
+    // (it carries richer data) now, without a visual when the system showed
+    // the push itself.
+    const held = findHeldEntry(keys);
+    if (held) return held.release(data.displayedBySystem === true);
+
     if (hasSeen(keys) || keys.some((key) => pendingPushEvents.has(key))) return false;
 
     // suppressVisual only when the OS already displayed this notification
@@ -320,6 +380,8 @@ export function createRealtimeEventCoalescer({
     destroyed = true;
     for (const { timer } of pendingPushEvents.values()) clearTimeout(timer);
     pendingPushEvents.clear();
+    for (const { timer } of heldSocketEvents.values()) clearTimeout(timer);
+    heldSocketEvents.clear();
     seenEvents.clear();
   };
 

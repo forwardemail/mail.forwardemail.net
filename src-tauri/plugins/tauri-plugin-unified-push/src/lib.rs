@@ -31,6 +31,7 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             commands::register,
             commands::pick_distributor,
             commands::drain_messages,
+            commands::take_pending_taps,
             commands::unregister
         ])
         .setup(|app, api| {

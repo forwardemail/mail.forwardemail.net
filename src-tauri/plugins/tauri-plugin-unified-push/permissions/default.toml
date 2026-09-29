@@ -5,6 +5,7 @@ permissions = [
   "allow-register",
   "allow-pick-distributor",
   "allow-drain-messages",
+  "allow-take-pending-taps",
   "allow-unregister",
   "allow-registerListener",
   "allow-removeListener",

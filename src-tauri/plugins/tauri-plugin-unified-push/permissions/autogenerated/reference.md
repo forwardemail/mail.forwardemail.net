@@ -8,6 +8,7 @@ Allows the Forward Email Android app to manage UnifiedPush registration, distrib
 - `allow-register`
 - `allow-pick-distributor`
 - `allow-drain-messages`
+- `allow-take-pending-taps`
 - `allow-unregister`
 - `allow-registerListener`
 - `allow-removeListener`
@@ -173,6 +174,32 @@ Enables the removeListener command without any pre-configured scope.
 <td>
 
 Denies the removeListener command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`unified-push:allow-take-pending-taps`
+
+</td>
+<td>
+
+Enables the take_pending_taps command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`unified-push:deny-take-pending-taps`
+
+</td>
+<td>
+
+Denies the take_pending_taps command without any pre-configured scope.
 
 </td>
 </tr>

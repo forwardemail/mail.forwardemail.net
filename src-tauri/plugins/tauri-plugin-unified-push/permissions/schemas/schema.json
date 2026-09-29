@@ -367,6 +367,18 @@
           "markdownDescription": "Denies the removeListener command without any pre-configured scope."
         },
         {
+          "description": "Enables the take_pending_taps command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-take-pending-taps",
+          "markdownDescription": "Enables the take_pending_taps command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the take_pending_taps command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-take-pending-taps",
+          "markdownDescription": "Denies the take_pending_taps command without any pre-configured scope."
+        },
+        {
           "description": "Enables the unregister command without any pre-configured scope.",
           "type": "string",
           "const": "allow-unregister",
@@ -379,10 +391,10 @@
           "markdownDescription": "Denies the unregister command without any pre-configured scope."
         },
         {
-          "description": "Allows the Forward Email Android app to manage UnifiedPush registration, distributor selection, queued messages, and native event listeners.\n#### This default permission set includes:\n\n- `allow-get-state`\n- `allow-register`\n- `allow-pick-distributor`\n- `allow-drain-messages`\n- `allow-unregister`\n- `allow-registerListener`\n- `allow-removeListener`",
+          "description": "Allows the Forward Email Android app to manage UnifiedPush registration, distributor selection, queued messages, and native event listeners.\n#### This default permission set includes:\n\n- `allow-get-state`\n- `allow-register`\n- `allow-pick-distributor`\n- `allow-drain-messages`\n- `allow-take-pending-taps`\n- `allow-unregister`\n- `allow-registerListener`\n- `allow-removeListener`",
           "type": "string",
           "const": "default",
-          "markdownDescription": "Allows the Forward Email Android app to manage UnifiedPush registration, distributor selection, queued messages, and native event listeners.\n#### This default permission set includes:\n\n- `allow-get-state`\n- `allow-register`\n- `allow-pick-distributor`\n- `allow-drain-messages`\n- `allow-unregister`\n- `allow-registerListener`\n- `allow-removeListener`"
+          "markdownDescription": "Allows the Forward Email Android app to manage UnifiedPush registration, distributor selection, queued messages, and native event listeners.\n#### This default permission set includes:\n\n- `allow-get-state`\n- `allow-register`\n- `allow-pick-distributor`\n- `allow-drain-messages`\n- `allow-take-pending-taps`\n- `allow-unregister`\n- `allow-registerListener`\n- `allow-removeListener`"
         }
       ]
     }

@@ -5,5 +5,7 @@ permissions = [
   "allow-get-token",
   "allow-register-listener",
   "allow-remove-listener",
-  "allow-open-settings"
+  "allow-open-settings",
+  "allow-permission-state",
+  "allow-take-pending-taps"
 ]

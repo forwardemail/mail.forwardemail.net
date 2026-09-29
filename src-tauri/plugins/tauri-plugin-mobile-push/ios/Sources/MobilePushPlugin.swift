@@ -155,8 +155,36 @@ private final class PushNotificationHandler: NSObject, UNUserNotificationCenterD
 }
 
 private var observersInstalled = false
-private var notificationDelegateInstalled = false
 private var appDelegateFallbackChecked = false
+
+// MARK: - Pending notification taps
+
+/// Taps the page has not taken yet. A tap is what launches the app on a cold
+/// start, so it arrives before the page has loaded, let alone registered a
+/// listener; with App Lock it may be minutes before the page can act on it.
+/// Each tap waits here until the page drains the queue
+/// (`mobile_push_take_pending_taps`). The DOM event sent at tap time is only
+/// a wake-up for a page that is already running.
+private var pendingTaps: [String] = []
+private let pendingTapsLock = NSLock()
+private let MAX_PENDING_TAPS = 10
+
+private func enqueueTap(_ json: String) {
+    pendingTapsLock.lock()
+    pendingTaps.append(json)
+    if pendingTaps.count > MAX_PENDING_TAPS {
+        pendingTaps.removeFirst(pendingTaps.count - MAX_PENDING_TAPS)
+    }
+    pendingTapsLock.unlock()
+}
+
+private func takeTaps() -> [String] {
+    pendingTapsLock.lock()
+    defer { pendingTapsLock.unlock() }
+    let taps = pendingTaps
+    pendingTaps.removeAll()
+    return taps
+}
 
 /// Register the NotificationCenter observers that carry APNs callbacks from
 /// TaoWindowCapture.m. These need no app delegate, so they are installed as
@@ -211,12 +239,20 @@ private func installObserversIfNeeded() {
 /// Install the UNUserNotificationCenter delegate, remembering whichever one
 /// was there before (see PushNotificationHandler).
 ///
+/// This runs when the plugin loads, during launch. It used to wait for the
+/// first token request, several seconds after boot and only for a signed-in,
+/// unlocked app; until then tauri-plugin-notification's delegate was the only
+/// one, and it drops remote notifications. A tap that launched or resumed the
+/// app before that point was lost and the app opened on the inbox.
+///
+/// Idempotent: if another delegate has been set since (a plugin that loaded
+/// later), it is wrapped again rather than replaced.
+///
 /// Must be called on the main thread.
 private func installNotificationDelegateIfNeeded() {
-    guard !notificationDelegateInstalled else { return }
-    notificationDelegateInstalled = true
     let center = UNUserNotificationCenter.current()
-    if let existing = center.delegate, !(existing === PushNotificationHandler.shared) {
+    if let existing = center.delegate, existing === PushNotificationHandler.shared { return }
+    if let existing = center.delegate {
         PushNotificationHandler.shared.previousDelegate = existing
     }
     center.delegate = PushNotificationHandler.shared
@@ -443,6 +479,30 @@ func getDeviceTokenDirect(
     #endif
 }
 
+/// Drain the taps the page has not taken yet, as a JSON array of payloads
+/// (each `{"data": userInfo}`), NUL-terminated in `buffer`.
+/// Returns the byte length, 0 when there are none, or -1 when the buffer is
+/// too small (the taps are put back).
+@_cdecl("mobile_push_take_pending_taps")
+func takePendingTapsDirect(_ buffer: UnsafeMutablePointer<CChar>, _ bufferLen: Int32) -> Int32 {
+    let taps = takeTaps()
+    if taps.isEmpty {
+        if bufferLen > 0 { buffer[0] = 0 }
+        return 0
+    }
+    let json = "[" + taps.joined(separator: ",") + "]"
+    let bytes = Array(json.utf8)
+    guard bytes.count < Int(bufferLen) else {
+        for tap in taps { enqueueTap(tap) }
+        return -1
+    }
+    for (i, b) in bytes.enumerated() {
+        buffer[i] = CChar(bitPattern: b)
+    }
+    buffer[bytes.count] = 0
+    return Int32(bytes.count)
+}
+
 /// Open this app's page in the Settings app, where a previously denied
 /// notification permission can be re-enabled. Returns 1 when iOS accepted
 /// the request.
@@ -475,6 +535,7 @@ public class MobilePushPlugin: Plugin {
         self.pluginWebView = webview
         onMain {
             installObserversIfNeeded()
+            installNotificationDelegateIfNeeded()
         }
         NSLog("[mobile-push] Plugin loaded (webview ready)")
     }
@@ -521,8 +582,11 @@ public class MobilePushPlugin: Plugin {
     }
 
     public func handleNotificationTap(_ userInfo: [AnyHashable: Any]) {
-        let jsonPayload = serializeUserInfo(userInfo)
-        emitToWebView("mobile-push:notification-tapped", json: "{\"data\":\(jsonPayload)}")
+        let payload = "{\"data\":\(serializeUserInfo(userInfo))}"
+        enqueueTap(payload)
+        // Wake-up for a page that is already running; it drains the queue.
+        // The payload rides along for pages from before the queue existed.
+        emitToWebView("mobile-push:notification-tapped", json: payload)
     }
 
     // MARK: - Direct JS event dispatch

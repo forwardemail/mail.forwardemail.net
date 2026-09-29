@@ -15,6 +15,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../src/utils/platform.js', () => ({
+  isTauriMacOS: false,
   isTauri: false,
   isTauriDesktop: false,
   isTauriMobile: false,

@@ -9,6 +9,8 @@ fn main() {
         "register_listener",
         "remove_listener",
         "open_settings",
+        "permission_state",
+        "take_pending_taps",
     ])
     .android_path("android")
     .ios_path("ios")

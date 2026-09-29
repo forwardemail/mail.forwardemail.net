@@ -4,7 +4,9 @@ use tauri::{
     AppHandle, Runtime,
 };
 
-use crate::models::{DrainMessagesResult, RegisterRequest, UnifiedPushState, UnregisterRequest};
+use crate::models::{
+    DrainMessagesResult, PendingTapsResult, RegisterRequest, UnifiedPushState, UnregisterRequest,
+};
 
 pub fn init<R: Runtime, C: DeserializeOwned>(
     _app: &AppHandle<R>,
@@ -49,6 +51,13 @@ impl<R: Runtime> UnifiedPush<R> {
     pub async fn drain_messages(&self) -> crate::Result<DrainMessagesResult> {
         self.0
             .run_mobile_plugin_async("drainMessages", ())
+            .await
+            .map_err(Into::into)
+    }
+
+    pub async fn take_pending_taps(&self) -> crate::Result<PendingTapsResult> {
+        self.0
+            .run_mobile_plugin_async("takePendingTaps", ())
             .await
             .map_err(Into::into)
     }

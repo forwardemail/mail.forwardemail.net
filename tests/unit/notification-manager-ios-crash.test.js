@@ -20,9 +20,7 @@
 
 // ── Mocks ─────────────────────────────────────────────────────────────────
 
-vi.mock('../../src/utils/platform.js', () => ({
-  isTauri: true,
-}));
+vi.mock('../../src/utils/platform.js', () => ({ isTauriMacOS: false, isTauri: true }));
 
 vi.mock('../../src/utils/notification-bridge.js', () => ({
   notify: vi.fn(() => Promise.resolve()),

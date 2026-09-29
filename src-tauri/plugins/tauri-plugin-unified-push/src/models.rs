@@ -33,6 +33,14 @@ pub struct DrainMessagesResult {
     pub messages: Vec<QueuedMessage>,
 }
 
+/// Notification taps that opened the app and have not been taken by the
+/// page yet; each is `{ "data": { event, alias_id, message_id, mailbox } }`.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingTapsResult {
+    pub taps: Vec<serde_json::Value>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RegisterRequest {

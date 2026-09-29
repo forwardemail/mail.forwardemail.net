@@ -2,18 +2,15 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 
 const MAIN_PATH = path.resolve(process.cwd(), 'src/main.ts');
-const MAILBOX_ACTIONS_PATH = path.resolve(process.cwd(), 'src/stores/mailboxActions.ts');
 const SETTINGS_PATH = path.resolve(process.cwd(), 'src/svelte/Settings.svelte');
 
 describe('mobile push registration lifecycle wiring', () => {
   let mainSource;
-  let mailboxActionsSource;
   let settingsSource;
 
   beforeAll(async () => {
-    [mainSource, mailboxActionsSource, settingsSource] = await Promise.all([
+    [mainSource, settingsSource] = await Promise.all([
       readFile(MAIN_PATH, 'utf8'),
-      readFile(MAILBOX_ACTIONS_PATH, 'utf8'),
       readFile(SETTINGS_PATH, 'utf8'),
     ]);
   });
@@ -53,15 +50,8 @@ describe('mobile push registration lifecycle wiring', () => {
     expect(nativeLifecycleBlock.match(/syncPushForActiveAccount\(\);/g)).toHaveLength(1);
   });
 
-  it('uses the authenticated synchronization guard after account switching', () => {
-    expect(mailboxActionsSource).toContain(
-      "const { syncPushNotifications } = await import('../utils/push-notifications.js');",
-    );
-    expect(mailboxActionsSource).toContain('await syncPushNotifications();');
-    expect(mailboxActionsSource).not.toContain(
-      "const { initPushNotifications } = await import('../utils/push-notifications.js');",
-    );
-  });
+  // Account switching: covered by behaviour in mailbox-actions.test.ts
+  // ('switchAccount and push registration').
 
   it('mounts the cross-platform management surface and removes Android-only duplicate state', () => {
     expect(settingsSource).toContain(

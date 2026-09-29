@@ -19,7 +19,7 @@
  */
 
 import { WS_EVENTS } from './websocket-client';
-import { isTauri } from './platform.js';
+import { isTauri, isTauriMacOS } from './platform.js';
 import { notify, requestPermission } from './notification-bridge.js';
 import { setBadgeCount as tauriBadge } from './tauri-bridge.js';
 import { isDemoMode } from './demo-mode.js';
@@ -31,6 +31,7 @@ import { extractEmail } from './address.ts';
 import { Local } from './storage.js';
 import { isActiveAccount, sameAccount } from './account-scope.ts';
 import { createRealtimeEventCoalescer } from './realtime-event-coalescer.js';
+import { openNotificationTarget } from './notification-open.ts';
 
 // ── In-app toast reference ─────────────────────────────────────────────────
 // Set from main.ts via setNotificationToasts() — same pattern as
@@ -241,25 +242,7 @@ function buildContactNotificationData(data) {
   return payload;
 }
 
-// Allowed prefixes for notification data.path
-const ALLOWED_PATH_PREFIXES = [
-  '#inbox',
-  '#folders',
-  '#calendar',
-  '#contacts',
-  '#settings',
-  '#notes',
-];
 const ALLOWED_APP_PATH_PREFIXES = ['/calendar', '/contacts', '/mailbox/settings'];
-
-function sanitizePath(path) {
-  if (typeof path !== 'string') return '#inbox';
-  const cleaned = sanitize(path, MAX_PATH_LEN);
-  if (ALLOWED_PATH_PREFIXES.some((prefix) => cleaned.startsWith(prefix))) {
-    return cleaned;
-  }
-  return '#inbox'; // Default to inbox for unknown paths
-}
 
 function sanitizeAppPath(path) {
   if (typeof path !== 'string') return '';
@@ -850,6 +833,18 @@ async function _handleNewMessageInner(data, { suppressVisual = false, source = '
   const tagIdentity = uid || msg.message_id || msg.header_message_id || msg.MessageId || Date.now();
   const safeTag = sanitize(`new-message-${accountEmail}-${tagIdentity}`, MAX_TAG_LEN);
 
+  // What opening this notification shows: the message by the id the list and
+  // the API use (the same id prependNewMessageToStore gives the row), in the
+  // folder it arrived in, for the account it belongs to. `uid` is the IMAP
+  // UID when the event carries one, which no list row is keyed by, so a link
+  // built from it found nothing and left the user on the inbox.
+  const openAccount = data?._account || Local.get('email') || '';
+  const openTarget = {
+    account: openAccount,
+    folder: mailbox || 'INBOX',
+    messageId: firstNonEmpty(msg?.id, msg?.Uid, msg?.uid, uid),
+  };
+
   // Optimistically inject the envelope into the message list if the user is
   // currently viewing the affected folder. Without this, the WS broadcast
   // arrives before the backend indexer makes the message queryable, so the
@@ -891,23 +886,13 @@ async function _handleNewMessageInner(data, { suppressVisual = false, source = '
     // OS already showed this notification via push (FCM/APNs) — skip all visuals.
   } else if (appVisible) {
     // Foreground: in-app toast only — no OS notification interruption.
-    const toastAccount = data?._account || Local.get('email') || '';
     _toasts?.show?.(`New email from ${displayName}: ${safeSubject}`, 'info', 5000, {
       label: 'View',
       callback() {
-        // The gate above means this is normally the active account already, so
-        // the switch is a no-op — kept for the case where the user switches
-        // accounts during the toast's five-second lifetime.
-        if (toastAccount && !isActiveAccount(toastAccount)) {
-          globalThis.dispatchEvent(
-            new CustomEvent('app:switch-account', { detail: { email: toastAccount } }),
-          );
-          setTimeout(() => {
-            globalThis.location.hash = `inbox/${uid}`;
-          }, 150);
-        } else {
-          globalThis.location.hash = `inbox/${uid}`;
-        }
+        // The gate above means this is normally the active account already;
+        // the router still switches if the user changed accounts during the
+        // toast's five-second lifetime.
+        openNotificationTarget(openTarget);
       },
     });
   } else {
@@ -935,12 +920,7 @@ async function _handleNewMessageInner(data, { suppressVisual = false, source = '
       body: safeSnippet ? `${safeSubject}\n${safeSnippet}` : safeSubject,
       tag: safeTag,
       channelId: 'new-mail',
-      data: {
-        path: sanitizePath(`#inbox/${uid}`),
-        url: `forwardemail://mailbox#inbox/${encodeURIComponent(String(uid))}`,
-        uid,
-        account: data?._account || Local.get('email') || '',
-      },
+      data: openTarget,
     });
   }
 }
@@ -1183,6 +1163,41 @@ function routeNotificationEvent(eventName, data, options) {
 
 // ── Wire Up ─────────────────────────────────────────────────────────────────
 
+// macOS can draw an APNs alert while the app is running, and the WebSocket
+// copy of the same event usually arrives first. The coalescer holds that
+// socket copy briefly so the push can say whether the system already showed
+// it; otherwise both the app and the system would notify. Loaded lazily, like
+// every other push-notifications.js use here, and only on macOS.
+let systemPushAlertExpected = null;
+
+function loadSystemPushAlertCheck() {
+  if (!isTauriMacOS || systemPushAlertExpected) return;
+  import('./push-notifications.js')
+    .then(({ isSystemPushAlertExpected }) => {
+      systemPushAlertExpected = isSystemPushAlertExpected;
+    })
+    .catch(() => {
+      // Without the check nothing is held; socket events are shown as before.
+    });
+}
+
+function appHasFocus() {
+  return typeof document !== 'undefined' && typeof document.hasFocus === 'function'
+    ? document.hasFocus()
+    : true;
+}
+
+/**
+ * Hold a socket event for its push copy only while the app is not focused:
+ * macOS draws the alert itself then. When the user is in the app the native
+ * side suppresses the system alert and the page shows its own notice, so
+ * there is nothing to wait for.
+ */
+function shouldHoldSocketEvent(eventName, data) {
+  if (!systemPushAlertExpected || appHasFocus()) return false;
+  return systemPushAlertExpected(eventName, data) === true;
+}
+
 /**
  * Connect a WebSocket client's events to the notification system.
  *
@@ -1196,8 +1211,10 @@ export function connectNotifications(wsClient) {
   }
 
   const unsubs = [];
+  loadSystemPushAlertCheck();
   const coalescer = createRealtimeEventCoalescer({
     onEvent: routeNotificationEvent,
+    shouldHoldSocketEvent,
   });
 
   for (const eventName of ROUTED_NOTIFICATION_EVENTS) {
@@ -1243,8 +1260,10 @@ export function connectMultiAccountNotifications(wsManager) {
   }
 
   const unsubs = [];
+  loadSystemPushAlertCheck();
   const coalescer = createRealtimeEventCoalescer({
     onEvent: routeNotificationEvent,
+    shouldHoldSocketEvent,
   });
 
   for (const eventName of ROUTED_NOTIFICATION_EVENTS) {

@@ -3,6 +3,7 @@ const COMMANDS: &[&str] = &[
     "register",
     "pick_distributor",
     "drain_messages",
+    "take_pending_taps",
     "unregister",
     "registerListener",
     "removeListener",

@@ -16,7 +16,7 @@
  */
 
 import { isTauri, isTauriMobile } from './platform.js';
-import { Local } from './storage.js';
+import { notificationDataToTarget, openNotificationTarget } from './notification-open.ts';
 
 // Android-specific detection. tauri-plugin-notification @ 2.3.x has known
 // breakage on Android (tauri-apps/plugins-workspace#2341): cancelAll throws,
@@ -70,53 +70,28 @@ let _lastNotificationData = null;
 let _lastNotificationTime = 0;
 const NOTIFICATION_CLICK_WINDOW_MS = 10_000;
 
+// A remote push tap is being handled (push-notifications.js): the window
+// gains focus because of that tap, and the focus fallback below opening the
+// app's own last notification as well would navigate twice.
+if (typeof window !== 'undefined') {
+  window.addEventListener('fe:push-tap', () => {
+    _lastNotificationData = null;
+  });
+}
+
 function trackNotification(data) {
   if (!data) return;
   _lastNotificationData = data;
   _lastNotificationTime = Date.now();
 }
 
+// Opening goes through notification-open.ts, which switches account first
+// when the notification is for another signed-in account and waits for App
+// Lock and boot. (Switching and then navigating 150ms later lost the
+// navigation: the switch itself re-selects the new account's inbox.)
 function navigateToNotification(data) {
-  // If the notification is for a different account, switch first
-  const targetAccount = data?.account;
-  if (targetAccount && typeof targetAccount === 'string') {
-    const activeAccount = (Local.get('email') || '').toLowerCase();
-    if (activeAccount && targetAccount.toLowerCase() !== activeAccount) {
-      window.dispatchEvent(
-        new CustomEvent('app:switch-account', { detail: { email: targetAccount } }),
-      );
-      // Give the account switch a moment to settle before navigating
-      setTimeout(() => _performNavigation(data), 150);
-      return;
-    }
-  }
-  _performNavigation(data);
-}
-
-function _performNavigation(data) {
-  const url = data?.url;
-  if (typeof url === 'string' && url.toLowerCase().startsWith('forwardemail://')) {
-    window.dispatchEvent(new CustomEvent('app:deep-link', { detail: { url } }));
-    return;
-  }
-
-  const path = data?.path;
-  if (path && typeof path === 'string') {
-    const normalizedHash = path.startsWith('#') ? path : `#${path}`;
-    const previousHref = window.location.href;
-    const nextHash = normalizedHash.slice(1);
-    if (window.location.hash === normalizedHash) {
-      window.dispatchEvent(
-        new HashChangeEvent('hashchange', {
-          oldURL: previousHref,
-          newURL: previousHref,
-        }),
-      );
-      return;
-    }
-
-    window.location.hash = nextHash;
-  }
+  const target = notificationDataToTarget(data);
+  if (target) openNotificationTarget(target);
 }
 
 // ── Public API ──────────────────────────────────────────────────────────────
@@ -308,10 +283,9 @@ async function _notifyTauri({ title, body, channelId, data, number, tag }) {
     if (typeof number === 'number' && number > 0) payload.number = number;
     if (data && typeof data === 'object') {
       const extra = {};
-      if (data.path) extra.path = String(data.path);
-      if (data.uid) extra.uid = String(data.uid);
-      if (data.url) extra.url = String(data.url);
-      if (data.account) extra.account = String(data.account);
+      for (const key of ['account', 'folder', 'messageId', 'appPath', 'path', 'url']) {
+        if (data[key]) extra[key] = String(data[key]);
+      }
       if (Object.keys(extra).length) payload.extra = extra;
     }
     mod.sendNotification(payload);
@@ -328,14 +302,29 @@ function _notifyWeb({ title, body, icon, tag, data }) {
     return;
   }
 
+  // The service worker's notificationclick handler (public/sw-sync.js) reads
+  // the target from data.target, so it needs no copy of the parsing here.
+  const target = notificationDataToTarget(data);
+  const payload = { ...(data && typeof data === 'object' ? data : {}), target };
+
   // Prefer SW-based notification for persistence (survives tab close)
   if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
     navigator.serviceWorker.ready.then((reg) => {
-      reg.showNotification(title, { body, icon, tag, data });
+      reg.showNotification(title, { body, icon, tag, data: payload });
     });
     return;
   }
 
-  // Fallback to basic Notification API
-  new Notification(title, { body, icon, tag, data });
+  // Fallback to basic Notification API, which has no service worker to
+  // handle the click: do it here.
+  const notification = new Notification(title, { body, icon, tag, data: payload });
+  notification.onclick = () => {
+    try {
+      window.focus();
+    } catch {
+      // ignore
+    }
+    notification.close();
+    if (target) openNotificationTarget(target);
+  };
 }

@@ -9,6 +9,7 @@
   import BellOff from '@lucide/svelte/icons/bell-off';
   import CheckCircle from '@lucide/svelte/icons/check-circle';
   import ExternalLink from '@lucide/svelte/icons/external-link';
+  import Laptop from '@lucide/svelte/icons/laptop';
   import RefreshCw from '@lucide/svelte/icons/refresh-cw';
   import Smartphone from '@lucide/svelte/icons/smartphone';
   import Trash2 from '@lucide/svelte/icons/trash-2';
@@ -53,8 +54,8 @@
   // Native or server reason behind the last failed action, shown under the
   // summary so a failure is diagnosable instead of a generic retry prompt.
   let errorDetail = $state('');
-  // Set when iOS will no longer show the permission prompt, so the only way
-  // forward is the Settings app.
+  // Set when iOS or macOS will no longer show the permission prompt, so the
+  // only way forward is the system settings app.
   let showOpenSettings = $state(false);
   let confirmationOpen = $state(false);
   let confirmation = $state<Confirmation | null>(null);
@@ -123,6 +124,8 @@
     }).format(date);
   };
 
+  const isMacOS = () => status?.platform === 'macos';
+
   const actionError = (code: PushManagementCode) => {
     switch (code) {
       case 'authentication-required':
@@ -132,7 +135,9 @@
       case 'permission-denied':
         return 'Notification permission was not granted. Enable it in system settings and try again.';
       case 'permission-blocked':
-        return 'Notifications are turned off for Forward Email. Turn on Allow Notifications in Settings, then register again.';
+        return isMacOS()
+          ? 'Notifications are turned off for Forward Email. Turn on Allow Notifications in System Settings > Notifications, then register again.'
+          : 'Notifications are turned off for Forward Email. Turn on Allow Notifications in Settings, then register again.';
       case 'token-unavailable':
         return 'This device could not obtain a push token from the platform notification service.';
       case 'server-rejected':
@@ -146,7 +151,9 @@
       case 'deregistration-failed':
         return 'The registration could not be removed completely. Refresh the status and try again.';
       case 'unsupported':
-        return 'Native push notifications are not supported on this platform.';
+        return isMacOS()
+          ? 'This build of Forward Email is not signed for Apple Push Notifications.'
+          : 'Native push notifications are not supported on this platform.';
       default:
         return 'Push registration did not complete. Refresh the status and try again.';
     }
@@ -184,14 +191,16 @@
         ? result.detail
         : '';
     showOpenSettings =
-      result.status?.platform === 'ios' &&
+      (result.status?.platform === 'ios' || result.status?.platform === 'macos') &&
       (result.code === 'permission-blocked' || result.code === 'permission-denied');
     toasts?.show?.(error, 'error');
   };
 
   const openSystemSettings = async () => {
     if (!(await openNotificationSettings())) {
-      error = 'Open the Settings app, choose Forward Email, then Notifications.';
+      error = isMacOS()
+        ? 'Open System Settings, choose Notifications, then Forward Email.'
+        : 'Open the Settings app, choose Forward Email, then Notifications.';
     }
   };
 
@@ -378,7 +387,13 @@
         <Alert.Root>
           <AlertCircle class="h-4 w-4" />
           <Alert.Description>
-            Push notification controls are available only in the native Android and iOS apps.
+            {#if status.platform === 'macos'}
+              This build of Forward Email is not signed for Apple Push Notifications. New mail
+              notifications still arrive while the app is running.
+            {:else}
+              Push notification controls are available only in the native Android, iOS, and macOS
+              apps.
+            {/if}
           </Alert.Description>
         </Alert.Root>
       {:else if !status.authenticated}
@@ -417,12 +432,18 @@
             Platform
           </dt>
           <dd class="mt-1 flex items-center gap-2 font-medium">
-            <Smartphone class="h-4 w-4 text-muted-foreground" />
+            {#if status.platform === 'macos'}
+              <Laptop class="h-4 w-4 text-muted-foreground" />
+            {:else}
+              <Smartphone class="h-4 w-4 text-muted-foreground" />
+            {/if}
             {status.platform === 'ios'
               ? 'iOS'
               : status.platform === 'android'
                 ? 'Android'
-                : 'Unsupported'}
+                : status.platform === 'macos'
+                  ? 'macOS'
+                  : 'Unsupported'}
           </dd>
         </div>
         <div class="rounded-md border p-3">

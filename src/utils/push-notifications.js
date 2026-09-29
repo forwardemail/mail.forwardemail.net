@@ -1,11 +1,13 @@
 /**
  * Forward Email – Native Push Notification Manager
  *
- * Uses direct APNs device tokens through tauri-plugin-mobile-push on iOS,
- * and either FCM or Google-free UnifiedPush subscriptions on Android.
- * Desktop builds intentionally do not initialize a mobile remote-push plugin;
- * they receive real-time events over WebSocket and may display local system
- * notifications through notification-manager.js.
+ * Uses direct APNs device tokens through tauri-plugin-mobile-push on iOS and
+ * macOS, and either FCM or Google-free UnifiedPush subscriptions on Android.
+ * macOS registers only when the build is signed for APNs (the plugin answers
+ * "unsupported" otherwise). Windows and Linux do not use remote push; like
+ * macOS while the app is running, they receive real-time events over
+ * WebSocket and display local system notifications through
+ * notification-manager.js.
  *
  * ## Per-Account Push Registration Model
  *
@@ -28,7 +30,7 @@
  */
 
 import { isDemoMode } from './demo-mode.js';
-import { isTauriMobile } from './platform.js';
+import { isTauriMacOS, isTauriMobile } from './platform.js';
 import { Local, Accounts } from './storage';
 import {
   getLastTokenRegistrationError,
@@ -39,6 +41,7 @@ import {
   unregisterPushTokenForAccount,
 } from './background-service.js';
 import { requestPermission as requestNotificationPermission } from './notification-bridge.js';
+import { openNotificationTarget, pushDataToTarget } from './notification-open.ts';
 import {
   drainUnifiedPushMessages,
   getUnifiedPushState,
@@ -52,6 +55,10 @@ import {
   unregisterUnifiedPush,
 } from './unified-push.js';
 
+// Platforms whose native layer can register for remote push. The macOS
+// plugin still answers "unsupported" when the build is not signed for APNs.
+const isNativePushPlatform = isTauriMobile || isTauriMacOS;
+
 // Timeout for native push bridge calls such as token retrieval and listener
 // setup. If one hangs (common on Android when Google Play Services is
 // unavailable), the UI should recover gracefully instead of freezing.
@@ -59,14 +66,15 @@ const NATIVE_PUSH_TIMEOUT_MS = 15_000;
 
 // Permission prompts show a system dialog and wait on a human decision, so
 // they get a much longer budget. This only guards against a hung bridge call,
-// not against a user taking their time with the dialog. The iOS native side
-// gives up at 110 seconds, so its answer always arrives first.
+// not against a user taking their time with the dialog. The iOS and macOS
+// native sides give up at 110 seconds, so their answer always arrives first.
 const PERMISSION_PROMPT_TIMEOUT_MS = 120_000;
 
-// iOS token retrieval. The native side waits up to 25 seconds for the APNs
-// callback and then reports why it failed; this budget is longer so that
-// reason reaches the UI instead of a bare JS timeout racing it.
-const IOS_TOKEN_TIMEOUT_MS = 35_000;
+// APNs token retrieval (iOS and macOS). The native side waits up to 25
+// seconds for the APNs callback and then reports why it failed; this budget
+// is longer so that reason reaches the UI instead of a bare JS timeout racing
+// it.
+const APNS_TOKEN_TIMEOUT_MS = 35_000;
 
 class PushTimeoutError extends Error {
   constructor(operation, ms) {
@@ -297,9 +305,16 @@ function getActiveRegistrationId() {
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
-function getMobilePlatform() {
+/**
+ * The native platform push registers from: 'android' | 'ios' | 'macos', or null.
+ * macOS comes only from the Tauri OS plugin: iPadOS also reports a Macintosh
+ * user agent, so the user-agent fallback never answers 'macos'.
+ */
+function getNativePushPlatform() {
   const nativePlatform = globalThis.window?.__TAURI_OS_PLUGIN_INTERNALS__?.platform;
-  if (nativePlatform === 'android' || nativePlatform === 'ios') return nativePlatform;
+  if (nativePlatform === 'android' || nativePlatform === 'ios' || nativePlatform === 'macos') {
+    return nativePlatform;
+  }
 
   const userAgent = navigator.userAgent.toLowerCase();
   if (userAgent.includes('android')) return 'android';
@@ -312,7 +327,7 @@ function isValidNativeToken(token) {
 }
 
 function normalizePushProvider(platform) {
-  if (platform === 'ios' || platform === 'apns') return 'apns';
+  if (platform === 'ios' || platform === 'macos' || platform === 'apns') return 'apns';
   if (platform === 'android' || platform === 'fcm') return 'fcm';
   if (platform === 'unified-push') return 'unified-push';
   return null;
@@ -410,14 +425,43 @@ function getCurrentPushProvider() {
   if (storedProvider) return storedProvider;
   if (activeNativeProvider) return activeNativeProvider;
 
-  const platform = getMobilePlatform();
-  if (platform === 'ios') return 'apns';
+  const platform = getNativePushPlatform();
+  if (platform === 'ios' || platform === 'macos') return 'apns';
   if (platform !== 'android') return null;
   if (ANDROID_PROVIDER === 'fcm' || ANDROID_PROVIDER === 'unified-push') return ANDROID_PROVIDER;
   return getAndroidPushProviderPreference();
 }
 
+/**
+ * macOS notification authorization, read without prompting. The plugin
+ * answers "unsupported" when the build is not signed for APNs.
+ * tauri-plugin-notification cannot be asked here: on desktop it always
+ * reports granted.
+ */
+async function getMacOSPermissionState() {
+  try {
+    const { invoke } = await import('@tauri-apps/api/core');
+    const result = await withTimeout(
+      invoke('plugin:mobile-push|permission_state'),
+      NATIVE_PUSH_TIMEOUT_MS,
+      'macOS permission_state',
+    );
+    return typeof result?.state === 'string' ? result.state : 'unknown';
+  } catch {
+    // An older native build without the command cannot register either.
+    return 'unsupported';
+  }
+}
+
 async function getNotificationPermissionStatus() {
+  if (isTauriMacOS) {
+    const state = await getMacOSPermissionState();
+    if (state === 'granted') return 'granted';
+    if (state === 'denied' || state === 'prompt') return 'not-granted';
+    if (state === 'unsupported') return 'unsupported';
+    return 'unknown';
+  }
+
   if (!isTauriMobile) return 'unsupported';
 
   try {
@@ -458,6 +502,113 @@ function dispatchPushPayload(notification, tapped = false, displayedBySystem = f
   };
   window.dispatchEvent(new CustomEvent('fe:push-notification', { detail }));
   window.dispatchEvent(new CustomEvent('fe:push', { detail }));
+
+  // A tap opens what the notification is about, in its own account. Before,
+  // the tap only fed the data pipeline above and nothing navigated, so every
+  // tapped push landed wherever the app happened to be (usually the inbox).
+  if (tapped) {
+    const target = pushDataToTarget(data, account);
+    if (target) openNotificationTarget(target);
+  }
+}
+
+// ── Notification taps ─────────────────────────────────────────────────────
+//
+// A tap can arrive before any of the registration code below has run: it is
+// what launches the app on a cold start, and registration waits for boot, the
+// permission prompt and the token (seconds, or never when the user is signed
+// out or the app is locked). So taps are handled from boot, independently of
+// registration. The native side keeps every tap in a queue until the page
+// takes it (take_pending_taps) and fires an event as a wake-up; the page
+// always drains the queue rather than trusting the event, so a tap is handled
+// once whether the page was listening at the time or not.
+
+const MAX_TAPS_PER_DRAIN = 10;
+let tapHandlingInstalled = false;
+let tapDrainInFlight = null;
+let iosTapListener = null;
+
+function handleTappedPayloads(list) {
+  const taps = Array.isArray(list) ? list.slice(-MAX_TAPS_PER_DRAIN) : [];
+  // The window gains focus because of this tap; notification-bridge's focus
+  // fallback must not also open the app's own last notification.
+  if (taps.length) window.dispatchEvent(new CustomEvent('fe:push-tap'));
+  for (const tap of taps) {
+    const data = tap && typeof tap === 'object' && tap.data ? tap.data : tap;
+    if (data && typeof data === 'object') dispatchPushPayload({ data }, true, true);
+  }
+}
+
+async function takePendingTaps(plugin) {
+  const { invoke } = await import('@tauri-apps/api/core');
+  const result = await invoke(`plugin:${plugin}|take_pending_taps`);
+  if (Array.isArray(result)) return result;
+  return Array.isArray(result?.taps) ? result.taps : [];
+}
+
+function drainTaps(plugin, fallback = null) {
+  if (tapDrainInFlight) {
+    // Drain again once the current one finishes: the event that got us here
+    // may be for a tap the running drain did not see.
+    tapDrainInFlight = tapDrainInFlight.then(() => drainTaps(plugin, fallback));
+    return tapDrainInFlight;
+  }
+  tapDrainInFlight = takePendingTaps(plugin)
+    .then(handleTappedPayloads)
+    .catch((error) => {
+      // A native build from before take_pending_taps: use what the event
+      // carried, which is all an older build offers.
+      if (fallback) handleTappedPayloads([fallback]);
+      else console.warn('[push] Could not read pending notification taps:', error);
+    })
+    .finally(() => {
+      tapDrainInFlight = null;
+    });
+  return tapDrainInFlight;
+}
+
+/**
+ * Start handling notification taps. Called once at boot on iOS, Android and
+ * macOS, before and regardless of push registration.
+ */
+export async function initPushTapHandling() {
+  if (!isNativePushPlatform || tapHandlingInstalled) return;
+  const platform = getNativePushPlatform();
+  if (platform !== 'ios' && platform !== 'android' && platform !== 'macos') return;
+  tapHandlingInstalled = true;
+
+  if (platform === 'ios' || platform === 'macos') {
+    // MobilePushPlugin.swift (iOS) and macos.rs dispatch DOM events (see
+    // initializeApnsPush). On a macOS build that is not signed for APNs the
+    // queue is simply always empty.
+    iosTapListener = (event) => {
+      void drainTaps('mobile-push', event?.detail || null);
+    };
+    window.addEventListener('mobile-push:notification-tapped', iosTapListener);
+    await drainTaps('mobile-push');
+    return;
+  }
+
+  // Android: FCM tray notifications and UnifiedPush notifications both open
+  // the app with the payload on the launch intent; the unified-push plugin
+  // (present in every Android build) collects it.
+  try {
+    const { addPluginListener } = await import('@tauri-apps/api/core');
+    await addPluginListener('unified-push', 'notification-tapped', () => {
+      void drainTaps('unified-push');
+    });
+  } catch (error) {
+    console.warn('[push] Could not listen for notification taps:', error);
+  }
+  await drainTaps('unified-push');
+}
+
+/** Test helper: undo initPushTapHandling. */
+export function __resetPushTapHandlingForTests() {
+  if (iosTapListener) window.removeEventListener('mobile-push:notification-tapped', iosTapListener);
+  iosTapListener = null;
+  tapHandlingInstalled = false;
+  tapDrainInFlight = null;
 }
 
 async function removeNativeListeners() {
@@ -730,24 +881,51 @@ async function handleTokenRefresh(token, platform) {
   console.info(`[push] Refreshed ${platform} token for all accounts`);
 }
 
-async function initializeIosPush() {
+/**
+ * Register for APNs through tauri-plugin-mobile-push (iOS and macOS).
+ *
+ * The two platforms share the plugin's command and DOM-event contract. They
+ * differ in what the token is stored as (iOS registrations keep the legacy
+ * 'ios' platform key, which background-service maps to 'apns') and in who
+ * draws an alert: on iOS the system always does; on macOS the native side
+ * reports it per push in `displayedBySystem`, because while the user is in
+ * the app the page shows its own notice instead.
+ *
+ * Taps are handled separately, from boot (initPushTapHandling).
+ *
+ * @param {'ios' | 'macos'} platform
+ */
+async function initializeApnsPush(platform) {
+  const isMac = platform === 'macos';
+  const label = isMac ? 'macOS' : 'iOS';
+  const registrationPlatform = isMac ? 'apns' : 'ios';
   const { getToken, requestPermission } = await import('tauri-plugin-mobile-push-api');
 
   const permission = await withTimeout(
     requestPermission(),
     PERMISSION_PROMPT_TIMEOUT_MS,
-    'iOS requestPermission',
+    `${label} requestPermission`,
   );
   if (!permission?.granted) {
-    // `status` comes from MobilePushPlugin.swift. "previously-denied" is the
-    // case where iOS will never show the prompt again, which used to look
-    // like a prompt that silently failed to appear.
+    // `status` comes from MobilePushPlugin.swift (iOS) or macos.rs (macOS).
+    // "previously-denied" is the case where the OS will never show the prompt
+    // again, which used to look like a prompt that silently failed to appear.
     const status = typeof permission?.status === 'string' ? permission.status : 'denied';
-    console.info('[push] iOS notification permission was not granted:', status);
+    console.info(`[push] ${label} notification permission was not granted:`, status);
+    if (status === 'unsupported') {
+      throw new PushRegistrationError(
+        'unsupported',
+        isMac
+          ? 'This build of Forward Email is not signed for Apple Push Notifications.'
+          : 'Apple Push Notifications are not available on this device.',
+      );
+    }
     if (status === 'previously-denied') {
       throw new PushRegistrationError(
         'permission-blocked',
-        'Notifications for Forward Email are turned off in iOS Settings.',
+        isMac
+          ? 'Notifications for Forward Email are turned off in System Settings.'
+          : 'Notifications for Forward Email are turned off in iOS Settings.',
       );
     }
     if (status === 'denied') {
@@ -759,37 +937,35 @@ async function initializeIosPush() {
     );
   }
 
-  if (!(await registerNativeToken(getToken, 'ios', IOS_TOKEN_TIMEOUT_MS))) return false;
+  if (!(await registerNativeToken(getToken, registrationPlatform, APNS_TOKEN_TIMEOUT_MS))) {
+    return false;
+  }
 
-  // The Tauri plugin listener registry does not work for this plugin on iOS
+  // The Tauri plugin listener registry does not work for this plugin
   // (register_listener is a Rust no-op, so the Swift registry stays empty and
-  // Plugin.trigger() never reaches JS). MobilePushPlugin.swift dispatches DOM
-  // events via evaluateJavaScript instead, and those are the only delivery
-  // path. addPluginListener is deliberately not called: it only created IPC
-  // channels that never fire.
+  // Plugin.trigger() never reaches JS). The native side dispatches DOM events
+  // (evaluateJavaScript on iOS, eval on macOS) instead, and those are the only
+  // delivery path. addPluginListener is deliberately not called: it only
+  // created IPC channels that never fire.
   const handleReceived = (e) => {
-    dispatchPushPayload(e.detail, false, true);
-  };
-  const handleTapped = (e) => {
-    dispatchPushPayload(e.detail, true, true);
+    const displayedBySystem = isMac ? e.detail?.displayedBySystem === true : true;
+    dispatchPushPayload(e.detail, false, displayedBySystem);
   };
   const handleTokenEvent = (e) => {
     const token = e.detail?.token;
     if (token) {
-      handleTokenRefresh(token, 'ios').catch((error) => {
-        console.warn('[push] iOS token refresh registration failed:', error);
+      handleTokenRefresh(token, registrationPlatform).catch((error) => {
+        console.warn(`[push] ${label} token refresh registration failed:`, error);
       });
     }
   };
   window.addEventListener('mobile-push:notification-received', handleReceived);
-  window.addEventListener('mobile-push:notification-tapped', handleTapped);
   window.addEventListener('mobile-push:token-received', handleTokenEvent);
 
   nativeListenerCleanups = [
     {
       unregister() {
         window.removeEventListener('mobile-push:notification-received', handleReceived);
-        window.removeEventListener('mobile-push:notification-tapped', handleTapped);
         window.removeEventListener('mobile-push:token-received', handleTokenEvent);
       },
     },
@@ -798,28 +974,27 @@ async function initializeIosPush() {
 }
 
 /**
- * Open this app's page in the iOS Settings app, where notifications that were
- * turned off can be re-enabled. Resolves false where that is not possible.
+ * Open this app's notification settings (the iOS Settings app, or the
+ * Notifications pane of System Settings on macOS), where notifications that
+ * were turned off can be re-enabled. Resolves false where that is not
+ * possible.
  */
 export async function openNotificationSettings() {
-  if (!isTauriMobile || getMobilePlatform() !== 'ios') return false;
+  const platform = getNativePushPlatform();
+  const supported = (isTauriMobile && platform === 'ios') || (isTauriMacOS && platform === 'macos');
+  if (!supported) return false;
   try {
     const { invoke } = await import('@tauri-apps/api/core');
     return Boolean(await invoke('plugin:mobile-push|open_settings'));
   } catch (error) {
-    console.warn('[push] Unable to open iOS Settings:', error);
+    console.warn('[push] Unable to open notification settings:', error);
     return false;
   }
 }
 
 async function initializeAndroidFcmPush() {
-  const {
-    getToken,
-    onNotificationReceived,
-    onNotificationTapped,
-    onTokenRefresh,
-    requestPermission,
-  } = await import('tauri-plugin-remote-push-api');
+  const { getToken, onNotificationReceived, onTokenRefresh, requestPermission } =
+    await import('tauri-plugin-remote-push-api');
 
   const permission = await withTimeout(
     requestPermission(),
@@ -843,11 +1018,10 @@ async function initializeAndroidFcmPush() {
   const receivedListener = await onNotificationReceived((notification) => {
     dispatchPushPayload(notification, false, notification?.notification != null);
   });
-  const tappedListener = await onNotificationTapped((notification) => {
-    dispatchPushPayload(notification, true, true);
-  });
+  // Taps are handled from boot by initPushTapHandling (the tray notification
+  // opens the app with the payload on its launch intent).
 
-  nativeListenerCleanups = [tokenRefreshListener, receivedListener, tappedListener];
+  nativeListenerCleanups = [tokenRefreshListener, receivedListener];
   activeNativeProvider = 'fcm';
   return true;
 }
@@ -971,19 +1145,32 @@ async function initializePushNotifications() {
   await removeNativeListeners();
   await removeUnifiedPushListeners();
 
-  const platform = getMobilePlatform();
+  const platform = getNativePushPlatform();
   if (!platform) {
     console.warn('[push] Unable to determine mobile platform');
     recordRegistrationFailure('unsupported', 'Unable to determine the mobile platform.');
     return false;
   }
 
+  // A macOS build without the APNs entitlement (local, test, or a release
+  // built without the Developer ID provisioning profile) is a normal state,
+  // not a failure worth a warning on every launch.
+  if (platform === 'macos' && (await getMacOSPermissionState()) === 'unsupported') {
+    recordRegistrationFailure(
+      'unsupported',
+      'This build of Forward Email is not signed for Apple Push Notifications.',
+    );
+    return false;
+  }
+
   try {
-    const initializedNative =
-      platform === 'ios' ? await initializeIosPush() : await initializeAndroidPush();
+    const usesApns = platform === 'ios' || platform === 'macos';
+    const initializedNative = usesApns
+      ? await initializeApnsPush(platform)
+      : await initializeAndroidPush();
     if (initializedNative) {
       initialized = true;
-      activeNativeProvider = platform === 'ios' ? 'apns' : activeNativeProvider;
+      activeNativeProvider = usesApns ? 'apns' : activeNativeProvider;
       console.info(`[push] Initialized native ${activeNativeProvider} push`);
       return true;
     }
@@ -1019,7 +1206,7 @@ export function getLastPushRegistrationFailure() {
  * @returns {Promise<boolean>} true when APNs, FCM, or UnifiedPush registered
  */
 export async function initPushNotifications() {
-  if (!isTauriMobile) return false;
+  if (!isNativePushPlatform) return false;
   if (initialized) return true;
   if (initializationPromise) return initializationPromise;
 
@@ -1032,12 +1219,13 @@ export async function initPushNotifications() {
 }
 
 /**
- * Synchronize remote push when a real alias-authenticated mobile account is active.
+ * Synchronize remote push when a real alias-authenticated account is active in
+ * the mobile or macOS app.
  * Safe to invoke after login, during bootstrap, and whenever the app resumes.
  * Registers push for ALL signed-in accounts, not just the active one.
  */
 export async function syncPushNotifications() {
-  if (!isTauriMobile || isDemoMode() || !Local.get('alias_auth')) return false;
+  if (!isNativePushPlatform || isDemoMode() || !Local.get('alias_auth')) return false;
   return initPushNotifications();
 }
 
@@ -1126,8 +1314,10 @@ export async function cleanupPushNotifications() {
 // ── Status & Health ───────────────────────────────────────────────────────
 
 function createBasePushStatus() {
-  const platform = getMobilePlatform();
-  const supported = isTauriMobile && (platform === 'ios' || platform === 'android');
+  const platform = getNativePushPlatform();
+  const supported =
+    (isTauriMobile && (platform === 'ios' || platform === 'android')) ||
+    (isTauriMacOS && platform === 'macos');
   const authenticated = Boolean(Local.get('alias_auth'));
   const demo = isDemoMode();
   const provider = supported ? getCurrentPushProvider() : null;
@@ -1163,6 +1353,17 @@ export async function getPushNotificationStatus() {
   const status = createBasePushStatus();
   if (!status.supported) return status;
 
+  // A macOS build that is not signed for APNs has nothing to manage. Keep the
+  // platform so Settings can say why instead of implying an unsupported OS.
+  const permission = await getNotificationPermissionStatus();
+  if (status.platform === 'macos' && permission === 'unsupported') {
+    status.supported = false;
+    status.provider = null;
+    status.providerLabel = getPushProviderLabel(null);
+    status.permission = 'unsupported';
+    return status;
+  }
+
   const localToken = Local.get(TOKEN_STORAGE_KEY);
   const localRegistrationId = getActiveRegistrationId();
   const localProvider = normalizePushProvider(Local.get(TOKEN_PLATFORM_KEY)) || status.provider;
@@ -1170,7 +1371,7 @@ export async function getPushNotificationStatus() {
   status.localTokenFingerprint = status.localTokenPresent
     ? await getTokenFingerprint(localProvider, localToken)
     : null;
-  status.permission = await getNotificationPermissionStatus();
+  status.permission = permission;
 
   // Show which accounts have active registrations
   const registrations = getAccountRegistrations();
@@ -1428,7 +1629,7 @@ export function getStoredPushToken() {
 }
 
 export function getPushPlatform() {
-  return Local.get(TOKEN_PLATFORM_KEY) || getMobilePlatform();
+  return Local.get(TOKEN_PLATFORM_KEY) || getNativePushPlatform();
 }
 
 /**
@@ -1442,6 +1643,26 @@ export function getActivePushProvider() {
   const record = getAccountRegistrations()[email];
   if (!record || !record.regId) return null;
   return normalizePushProvider(record.platform);
+}
+
+/**
+ * Whether an APNs copy of this realtime event is on its way and macOS may
+ * draw it as a system alert. Only newMessage events are sent as alerts, and
+ * only accounts registered on this Mac receive them. notification-manager
+ * holds the WebSocket copy briefly when this is true, so the push can report
+ * whether the system already showed it (see realtime-event-coalescer).
+ *
+ * @param {string} eventName
+ * @param {Object} data - realtime payload, tagged with `_account`
+ * @returns {boolean}
+ */
+export function isSystemPushAlertExpected(eventName, data) {
+  if (!isTauriMacOS || !initialized || activeNativeProvider !== 'apns') return false;
+  if (eventName !== 'newMessage') return false;
+  const account = (typeof data?._account === 'string' && data._account) || Local.get('email') || '';
+  if (!account) return false;
+  const record = getAccountRegistrations()[account];
+  return Boolean(record?.regId) && normalizePushProvider(record.platform) === 'apns';
 }
 
 export function isPushInitialized() {

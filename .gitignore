@@ -44,6 +44,9 @@ src-tauri/capabilities/android-fcm.generated.json
 *.keystore
 *.p12
 *.mobileprovision
+*.provisionprofile
+# written by scripts/macos-push-signing.sh prepare (release CI only)
+src-tauri/Entitlements.push.plist
 *.p8
 google-services.json
 firebase-service-account*.json
