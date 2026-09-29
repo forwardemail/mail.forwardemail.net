@@ -759,7 +759,10 @@ const setIncludeBody = async (value: boolean): Promise<void> => {
       // ignore
     }
   }
-  await ensureInitialized(accountId);
+  // No account after terminateWorker() (an account switch in progress): the
+  // switch starts search for the new account once its mailbox has loaded, and
+  // starting one here would build an index for the account being left.
+  if (accountId) await ensureInitialized(accountId);
 };
 
 /**
@@ -788,6 +791,9 @@ const terminateWorker = (): void => {
   syncWorkerConnected = false;
   startupCheckDone = false;
   searchService = null;
+  // forget the account too, so nothing restarts search for it implicitly
+  // (the next ensureInitialized names the account it wants)
+  accountId = '';
 };
 
 export const searchStore = {

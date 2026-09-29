@@ -56,6 +56,7 @@ import {
   isTauriMobile,
 } from './utils/platform.js';
 import { initOsTextScale } from './utils/os-text-scale';
+import { installViewportGuard } from './utils/viewport-guard';
 import { openComposeWindow, initComposeWindowListener } from './utils/compose-window';
 import {
   isLockEnabled,
@@ -2197,6 +2198,15 @@ async function bootstrap() {
     initOsTextScale();
   } catch {
     /* text stays at the default scale */
+  }
+
+  // Repair a layout viewport that came back wider than the phone (after the
+  // WebContent process was killed and the page reloaded), which otherwise
+  // renders the desktop layout on a phone. No-op off the mobile apps.
+  try {
+    installViewportGuard();
+  } catch {
+    /* the native side repairs the viewport as well */
   }
 
   // Request durable IndexedDB storage (best-effort, non-blocking). Without this,

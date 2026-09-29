@@ -2,6 +2,7 @@ import { writable, derived, get } from 'svelte/store';
 import Dexie from 'dexie';
 import { Remote } from '../utils/remote';
 import { Local, Session, Accounts } from '../utils/storage';
+import { withDeadline } from '../utils/with-deadline';
 import { db } from '../utils/db';
 import { mailboxStore } from './mailboxStore';
 import { searchStore } from './searchStore';
@@ -314,6 +315,27 @@ export const load = async () => {
       warn('[load] loadMessages failed', messagesResult.reason);
     }
     if (thisGeneration !== loadGeneration) return;
+
+    // Backstop for the skeleton. Every list load clears `loading` when it
+    // settles, but one that was superseded (an account switch reset the
+    // in-flight request) or cut short leaves it set; with an empty list and
+    // nothing in flight, nothing would ever clear it and the inbox sat on its
+    // skeleton for good. Settle it here and offer Retry instead.
+    const listStuck = () =>
+      get(mailboxStore.state.loading) &&
+      !(get(mailboxStore.state.messages) || []).length &&
+      !mailboxStore.actions.hasInFlightMessageLoad?.();
+    if (listStuck() && get(mailboxStore.state.selectedFolder)) {
+      warn('[load] list still loading with nothing in flight; loading it again');
+      await mailboxStore.actions.loadMessages().catch(() => {});
+      if (thisGeneration !== loadGeneration) return;
+    }
+    if (listStuck()) {
+      mailboxStore.state.loading.set(false);
+      if (!get(mailboxStore.state.error)) {
+        mailboxStore.state.error.set('Unable to load messages.');
+      }
+    }
 
     // Incrementally index any new labels from the freshly loaded messages
     const loadedMsgs = get(mailboxStore.state.messages) || [];
@@ -2351,7 +2373,26 @@ const performAccountSwitch = async (email) => {
 
   // PHASE 1: Pre-read Account B's cached data from IndexedDB BEFORE blanking the UI.
   // This allows an atomic swap from Account A → Account B with no blank state.
-  const cached = await preloadAccountCache(email);
+  // Bounded: IndexedDB can stall after iOS suspends the app, and an unbounded
+  // wait here left the previous account on screen with nothing loading. On a
+  // stall the switch continues without the cache and load() fetches.
+  const cached = await withDeadline(
+    preloadAccountCache(email),
+    4000,
+    'account cache preload',
+  ).catch((err) => {
+    warn('[switchAccount] cached data unavailable, loading from the network', err);
+    return {
+      folders: [],
+      defaultFolder: 'INBOX',
+      messages: [],
+      settings: null,
+      settingsLabels: [],
+      labels: [],
+    };
+  });
+  // A newer switch started while the cache was read: let it win.
+  if ((Local.get('email') || '') !== email) return;
 
   // Multi-account WebSocket: do NOT destroy the updater on account switch.
   // All accounts keep their WebSocket connections alive. Just reconcile
@@ -2435,14 +2476,26 @@ const performAccountSwitch = async (email) => {
   toastsRef?.show?.(`Switched to ${email}`, 'info');
 
   // PHASE 4: Deferred non-blocking work
-  // Reset search store — don't await, init lazily on first search
+  // Reset search: drop the previous account's search worker and its index
+  // now, and start this account's only after the mailbox has loaded. Doing
+  // both alongside load() doubled the memory held during the switch, which on
+  // iOS is when the web content process was killed (the app flashing blank,
+  // then coming back to an inbox that never loaded).
   searchStore.actions.resetSearchConnection();
-  searchStore.actions.ensureInitialized(email).catch(() => {});
+  searchStore.actions.terminateWorker?.();
 
   // PHASE 5: Full load with network refresh (non-blocking for cached accounts)
   // Note: we don't clearSettings() here because cached settings were already applied
   // above and load() -> syncSettings() will refresh from network in the background.
-  await load();
+  try {
+    await load();
+  } finally {
+    // Search starts once the list is up (see PHASE 4), for the account that is
+    // still active by then.
+    if ((Local.get('email') || '') === email) {
+      searchStore.actions.ensureInitialized(email).catch(() => {});
+    }
+  }
 
   // Per-account push: syncPushNotifications reconciles ALL accounts,
   // so after switching we just ensure the new active account is covered.

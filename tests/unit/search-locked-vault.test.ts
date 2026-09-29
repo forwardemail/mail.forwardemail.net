@@ -166,3 +166,31 @@ describe('search store while App Lock holds the vault', () => {
     expect(h.rebuild).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('account switch', () => {
+  beforeEach(() => {
+    h.locked = false;
+    h.clients.length = 0;
+    h.email = 'user@example.com';
+    h.health.mockResolvedValue({ healthy: true, needsRebuild: false });
+  });
+
+  it('does not restart search for the account being left', async () => {
+    const store = await loadStore();
+    await store.actions.ensureInitialized('old@example.com');
+    const before = h.clients.length;
+
+    // the switch tears search down, then load() sets the body flag
+    h.email = 'new@example.com';
+    store.actions.terminateWorker();
+    await store.actions.setIncludeBody(false);
+
+    const started = h.clients.slice(before);
+    expect(started).toHaveLength(0);
+
+    // the switch then starts search for the new account
+    await store.actions.ensureInitialized('new@example.com');
+    const newest = h.clients.at(-1);
+    expect(newest?.init).toHaveBeenCalledWith('new@example.com', false);
+  });
+});

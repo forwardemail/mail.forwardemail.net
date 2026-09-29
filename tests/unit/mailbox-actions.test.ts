@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { get, writable } from 'svelte/store';
 
 // --- hoisted mocks --------------------------------------------------------
@@ -211,6 +211,7 @@ vi.mock('../../src/stores/searchStore', () => ({
       setIncludeBody: vi.fn().mockResolvedValue(undefined),
       rebuildFromCache: vi.fn().mockResolvedValue(undefined),
       resetSearchConnection: vi.fn(),
+      terminateWorker: vi.fn(),
       ensureInitialized: vi.fn().mockResolvedValue(undefined),
       indexMessages: vi.fn().mockResolvedValue(undefined),
     },
@@ -620,6 +621,72 @@ describe('switchAccount on a slow connection', () => {
     await vi.waitFor(() => expect(hoisted.loadFolders).toHaveBeenCalled());
     await vi.waitFor(() => expect(hoisted.loadMessages).toHaveBeenCalledTimes(1));
     await flushCooldown();
+  });
+});
+
+describe('switchAccount when the local cache stops answering', () => {
+  beforeEach(() => {
+    hoisted.accountsSetActive.mockImplementation((email: string) => {
+      hoisted.localStore.set('email', email);
+      return true;
+    });
+    hoisted.loadFolders.mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    hoisted.foldersToArray.mockReset();
+    hoisted.foldersToArray.mockResolvedValue([]);
+  });
+
+  it('still switches and loads the new account', async () => {
+    // After iOS suspends or kills the web process, IndexedDB can stop
+    // answering. The switch waited on it before doing anything, so the old
+    // account stayed on screen and nothing loaded.
+    vi.useFakeTimers();
+    hoisted.loadFolders.mockClear();
+    hoisted.foldersToArray.mockImplementation(() => new Promise(() => {}));
+
+    const switched = switchAccount({ email: 'stalled-1@example.com' });
+    await vi.advanceTimersByTimeAsync(4500);
+
+    expect(get(mailboxStore.state.messages)).toEqual([]);
+    await vi.waitFor(() => expect(hoisted.loadFolders).toHaveBeenCalled());
+    await vi.advanceTimersByTimeAsync(400);
+    await switched;
+  });
+});
+
+describe('switchAccount search startup', () => {
+  beforeEach(() => {
+    hoisted.accountsSetActive.mockImplementation((email: string) => {
+      hoisted.localStore.set('email', email);
+      return true;
+    });
+    hoisted.loadFolders.mockResolvedValue(undefined);
+  });
+
+  it('starts the new account search only after the mailbox has loaded', async () => {
+    const { searchStore } = await import('../../src/stores/searchStore');
+    const ensure = searchStore.actions.ensureInitialized as ReturnType<typeof vi.fn>;
+    ensure.mockClear();
+    let finishFolders!: () => void;
+    hoisted.loadFolders.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          finishFolders = resolve;
+        }),
+    );
+
+    const switched = switchAccount({ email: 'search-1@example.com' });
+    await vi.waitFor(() => expect(finishFolders).toBeTypeOf('function'));
+    // the switch is still loading: no second search index in memory yet
+    expect(ensure).not.toHaveBeenCalled();
+
+    finishFolders();
+    await switched;
+    await vi.waitFor(() => expect(ensure).toHaveBeenCalledWith('search-1@example.com'));
+    await new Promise((resolve) => setTimeout(resolve, 310));
   });
 });
 

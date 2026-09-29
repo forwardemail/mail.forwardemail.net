@@ -471,3 +471,212 @@ export function restoreBlockedImages(html, { includeTrackingPixels = false } = {
     return html;
   }
 }
+
+// A reference that leaves the device: http(s) or protocol-relative.
+const REMOTE_REF = /^\s*(?:https?:)?\/\//i;
+
+// CSS functions that make the browser fetch something.
+const CSS_FETCH_FN =
+  /(?:url|image-set|-webkit-image-set|image|cross-fade|-webkit-cross-fade|element|src)\s*\(/i;
+
+// Elements that load a resource on their own, or embed another document.
+// The quote shows text and images; none of these belong in it.
+const QUOTE_FORBID_TAGS = [
+  'style',
+  'script',
+  'link',
+  'meta',
+  'base',
+  'video',
+  'audio',
+  'source',
+  'track',
+  'embed',
+  'object',
+  'iframe',
+  'frame',
+  'frameset',
+  'input',
+  'image',
+  'use',
+  'feimage',
+];
+
+/**
+ * Decode CSS escapes (`\\72` → `r`, `\\(` → `(`) and drop comments, the
+ * way the browser does before it looks for `url(`.
+ */
+function decodeCss(value) {
+  return String(value)
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\\([0-9a-f]{1,6})\s?/gi, (_m, hex) => {
+      const code = Number.parseInt(hex, 16);
+      return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : '';
+    })
+    .replace(/\\(.)/g, '$1');
+}
+
+/**
+ * Split a style attribute into declarations on the semicolons that are not
+ * inside quotes or parentheses (a data: URL carries its own semicolon).
+ */
+function splitDeclarations(style) {
+  const parts = [];
+  let depth = 0;
+  let quote = '';
+  let current = '';
+  for (let i = 0; i < style.length; i++) {
+    const ch = style[i];
+    if (ch === '\\') {
+      current += ch + (style[i + 1] || '');
+      i++;
+      continue;
+    }
+    if (quote) {
+      if (ch === quote) quote = '';
+    } else if (ch === '"' || ch === "'") {
+      quote = ch;
+    } else if (ch === '(') {
+      depth++;
+    } else if (ch === ')') {
+      depth = Math.max(0, depth - 1);
+    } else if (ch === ';' && depth === 0) {
+      parts.push(current);
+      current = '';
+      continue;
+    }
+    current += ch;
+  }
+  if (current.trim()) parts.push(current);
+  return parts;
+}
+
+/**
+ * True when a declaration makes the browser fetch anything other than an
+ * inline data: resource.
+ */
+function declarationFetches(declaration) {
+  const decoded = decodeCss(declaration);
+  if (!CSS_FETCH_FN.test(decoded)) return false;
+  // every fetch in it must be a data: URL for it to stay
+  const withoutData = decoded.replace(
+    /(?:url|image-set|-webkit-image-set|image|cross-fade|-webkit-cross-fade|element|src)\s*\(\s*(['"]?)\s*data:[^)]*\)/gi,
+    '',
+  );
+  return CSS_FETCH_FN.test(withoutData);
+}
+
+/**
+ * Remove the declarations of an inline style that fetch something remote,
+ * keeping the rest (layout, colours). Returns null when nothing is left.
+ */
+function stripFetchingDeclarations(style) {
+  const kept = splitDeclarations(style).filter((d) => !declarationFetches(d));
+  const out = kept
+    .map((d) => d.trim())
+    .filter(Boolean)
+    .join('; ');
+  return out || null;
+}
+
+function isHiddenOrTiny(el) {
+  const width = Number.parseInt(el.getAttribute('width') || '', 10);
+  const height = Number.parseInt(el.getAttribute('height') || '', 10);
+  if ((Number.isFinite(width) && width <= 2) || (Number.isFinite(height) && height <= 2))
+    return true;
+  const style = decodeCss(el.getAttribute('style') || '').toLowerCase();
+  if (/display\s*:\s*none|visibility\s*:\s*hidden|opacity\s*:\s*0(?:[;\s]|$)/.test(style))
+    return true;
+  const sw = style.match(/(?:^|[;\s])width\s*:\s*(\d+(?:\.\d+)?)px/);
+  const sh = style.match(/(?:^|[;\s])height\s*:\s*(\d+(?:\.\d+)?)px/);
+  return Boolean((sw && Number(sw[1]) <= 2) || (sh && Number(sh[1]) <= 2));
+}
+
+/**
+ * Sanitize the original message quoted in a reply or forward.
+ *
+ * The compose window renders the quote straight into the app's own DOM, not
+ * in the sandboxed reader iframe, so anything left in it that points at a
+ * remote host is fetched the moment Reply or Forward is pressed. That tells the
+ * sender their message was replied to or forwarded, when, and from where,
+ * without the recipient ever having chosen to load images.
+ *
+ * Images follow the reader's rules (tracking pixels blocked by default, other
+ * remote images when the user blocks them), decided here on the parsed
+ * document rather than by pattern matching the source, which crafted markup
+ * can mislead. Everything else that could load something is removed: media,
+ * embeds, frames, form images and SVG references (QUOTE_FORBID_TAGS), remote
+ * srcset/background/poster attributes, and every inline style declaration
+ * that fetches anything but a data: URL (after decoding CSS escapes, which is
+ * how `u\\72l(` hides a `url(`). The quote keeps its text and layout; the
+ * original HTML is still what is sent.
+ *
+ * The HTML is only ever parsed in an inert document here (DOMParser and
+ * DOMPurify both use one), so nothing is requested before the caller inserts
+ * the result.
+ *
+ * @param {string} html - The original message HTML
+ * @param {object} [options]
+ * @param {boolean} [options.blockRemoteImages] - Block remote images (default: user preference)
+ * @param {boolean} [options.blockTrackingPixels] - Block tracking pixels (default: user preference, on)
+ * @returns {string} Safe HTML for display in the compose window
+ */
+export function sanitizeQuotedHtml(html, options = {}) {
+  if (!html || typeof html !== 'string') return '';
+
+  let { blockRemoteImages, blockTrackingPixels } = options;
+  if (blockRemoteImages === undefined)
+    blockRemoteImages = Local.get('block_remote_images') === 'true';
+  if (blockTrackingPixels === undefined)
+    blockTrackingPixels = Local.get('block_tracking_pixels') !== 'false';
+
+  const purified = DOMPurify.sanitize(html, {
+    FORBID_TAGS: QUOTE_FORBID_TAGS,
+    ADD_ATTR: ['data-original-src', 'data-tracking-pixel'],
+  });
+  if (!purified || typeof DOMParser === 'undefined') return '';
+
+  // Edit in an inert document: an element created by the live document starts
+  // fetching its src even while detached, which is exactly what this prevents.
+  const doc = new DOMParser().parseFromString(purified, 'text/html');
+  if (!doc.body) return '';
+
+  for (const el of doc.body.querySelectorAll('*')) {
+    const style = el.getAttribute('style');
+    if (style) {
+      const cleaned = stripFetchingDeclarations(style);
+      if (cleaned === null) el.removeAttribute('style');
+      else if (cleaned !== style.trim()) el.setAttribute('style', cleaned);
+    }
+
+    for (const attr of ['background', 'poster', 'lowsrc', 'dynsrc', 'longdesc']) {
+      const value = el.getAttribute(attr);
+      if (value && REMOTE_REF.test(value)) el.removeAttribute(attr);
+    }
+
+    // srcset candidates are fetched in preference to src
+    if (el.hasAttribute('srcset') && /(?:https?:)?\/\//i.test(el.getAttribute('srcset') || ''))
+      el.removeAttribute('srcset');
+
+    if (el.tagName === 'IMG') {
+      const src = el.getAttribute('src') || '';
+      if (REMOTE_REF.test(src)) {
+        const pixel = isHiddenOrTiny(el);
+        if ((pixel && blockTrackingPixels) || (!pixel && blockRemoteImages)) {
+          el.removeAttribute('src');
+          el.setAttribute('data-original-src', src);
+          if (pixel) el.setAttribute('data-tracking-pixel', 'true');
+        }
+      } else if (
+        src &&
+        !/^\s*(?:data:|cid:|blob:)/i.test(src) &&
+        /^\s*[a-z][a-z0-9+.-]*:/i.test(src)
+      ) {
+        // any other scheme (ftp:, file:, …) has no business loading here
+        el.removeAttribute('src');
+      }
+    }
+  }
+
+  return doc.body.innerHTML;
+}

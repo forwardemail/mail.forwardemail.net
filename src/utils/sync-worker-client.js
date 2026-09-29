@@ -6,6 +6,7 @@ import { getAuthHeader } from './auth.ts';
 import { createPendingRequests } from './pending-requests.js';
 import { warn } from './logger.ts';
 import { isDemoMode } from './demo-mode';
+import { withDeadline } from './with-deadline';
 
 let worker = null;
 let workerReady = false;
@@ -232,7 +233,15 @@ export async function sendSyncRequest(
     throw new Error('Demo mode: sync worker bypassed');
   }
 
-  const instance = await ensureSyncWorkerReady();
+  // The deadline covers getting the worker ready too: that step waits on the
+  // database worker, which can stall after iOS suspends the app, and a stall
+  // here held callers (the message list among them) past their own timeout,
+  // before their fallback to a direct request could run.
+  const startedAt = Date.now();
+  const instance = timeout
+    ? await withDeadline(ensureSyncWorkerReady(), timeout, `Sync worker for "${action}"`)
+    : await ensureSyncWorkerReady();
+  if (timeout) timeout = Math.max(1, timeout - (Date.now() - startedAt));
   const requestId = `r-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const promise = pendingRequests.add(requestId);
   instance.postMessage({ type: 'request', requestId, action, payload });

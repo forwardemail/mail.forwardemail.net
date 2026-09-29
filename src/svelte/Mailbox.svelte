@@ -72,6 +72,7 @@
   import { parseMailto, mailtoToPrefill } from '../utils/mailto';
   import MailtoPrompt from './components/MailtoPrompt.svelte';
   import { isTauriMobile } from '../utils/platform.js';
+  import { getLayoutWidth, onLayoutWidthChange } from '../utils/viewport-guard';
   import { openExternalUrl } from '../utils/external-links.js';
   import { onBackButton, triggerHaptic } from '../utils/tauri-bridge.js';
   import {
@@ -1111,7 +1112,9 @@
   const BREAKPOINT_CLASSIC_MOBILE = 900; // classic layout switches to fullscreen at this width
   const BREAKPOINT_TABLET = 1024; // tablets
   // Reactive viewport width for proper layout updates on resize
-  let viewportWidth = $state(typeof window !== 'undefined' ? window.innerWidth : 1200);
+  // getLayoutWidth: window.innerWidth, except on a phone whose layout viewport
+  // came back wider than the screen (see viewport-guard.ts)
+  let viewportWidth = $state(getLayoutWidth());
   const isMobileViewport = () => viewportWidth <= BREAKPOINT_MOBILE;
   const isClassicMobileViewport = () => viewportWidth <= BREAKPOINT_CLASSIC_MOBILE;
   const isTabletViewport = () =>
@@ -2475,8 +2478,8 @@
     const handleResize = () => {
       if (typeof window === 'undefined') return;
       // Update reactive viewport width for layout calculations
-      viewportWidth = window.innerWidth;
-      const small = window.innerWidth <= 900;
+      viewportWidth = getLayoutWidth();
+      const small = viewportWidth <= 900;
       showHeaderShortcuts = !small;
       if (small) {
         source.state?.sidebarOpen?.set?.(false);
@@ -2575,6 +2578,9 @@
     mailboxStore?.actions?.loadExpandedState?.();
 
     window.addEventListener('resize', handleResize);
+    // also re-measure when the viewport guard repairs a broken layout
+    // viewport or returns from the background, which may not fire resize
+    const stopLayoutWidth = onLayoutWidthChange(() => handleResize());
     window.addEventListener('resize', handleTooltipScrollResize);
     window.addEventListener('scroll', handleTooltipScrollResize, true);
     document.addEventListener('click', handleClickOutside);
@@ -2633,6 +2639,7 @@
     return () => {
       themeUnsub?.();
       window.removeEventListener('resize', handleResize);
+      stopLayoutWidth();
       window.removeEventListener('resize', handleTooltipScrollResize);
       window.removeEventListener('scroll', handleTooltipScrollResize, true);
       window.removeEventListener('popstate', handleLocationChange);

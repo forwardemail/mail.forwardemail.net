@@ -1,5 +1,13 @@
 import { writable, get } from 'svelte/store';
 import Dexie from 'dexie';
+import { getLayoutWidth } from '../utils/viewport-guard';
+import { withDeadline } from '../utils/with-deadline';
+
+// The message and folder cache is local, so a healthy read takes milliseconds.
+// After iOS suspends or kills the web process, IndexedDB can stop answering
+// without failing; waiting on it then held the list on its loading skeleton
+// for good. Past this deadline the cache is skipped and the network used.
+const CACHE_READ_DEADLINE_MS = 4000;
 import { Remote } from '../utils/remote';
 import { hasMorePages } from '../utils/pagination.js';
 import { isDemoBlockedError, isDemoMode } from '../utils/demo-mode';
@@ -149,7 +157,7 @@ const invalidateFolderInMemCache = (account, folder) => {
   }
 };
 
-const isMobileViewport = () => typeof window !== 'undefined' && window.innerWidth <= 900;
+const isMobileViewport = () => typeof window !== 'undefined' && getLayoutWidth() <= 900;
 
 // IndexedDB reader injected into the mergeMissing* backfills (which live in
 // mailbox-store-helpers so their logic can be unit-tested with a mock bulkGet).
@@ -445,7 +453,11 @@ const createMailboxStore = () => {
   const hydrateFoldersFromCache = async (account = Local.get('email') || 'default') => {
     let cached = [];
     try {
-      cached = await db.folders.where('account').equals(account).toArray();
+      cached = await withDeadline(
+        db.folders.where('account').equals(account).toArray(),
+        CACHE_READ_DEADLINE_MS,
+        'folder cache read',
+      );
     } catch (cacheErr) {
       warn('folder cache read failed; continuing to source', cacheErr);
       return false;
@@ -771,12 +783,17 @@ const createMailboxStore = () => {
             .where('[account+folder+date]')
             .between([account, folder, Dexie.minKey], [account, folder, Dexie.maxKey], true, true);
           const ordered = currentSort === 'newest' ? range.reverse() : range;
-          pageSlice = await ordered.offset(startIdx).limit(limit).toArray();
+          pageSlice = await withDeadline(
+            ordered.offset(startIdx).limit(limit).toArray(),
+            CACHE_READ_DEADLINE_MS,
+            'message cache read',
+          );
         } else {
-          const cached = await db.messages
-            .where('[account+folder]')
-            .equals([account, folder])
-            .toArray();
+          const cached = await withDeadline(
+            db.messages.where('[account+folder]').equals([account, folder]).toArray(),
+            CACHE_READ_DEADLINE_MS,
+            'message cache read',
+          );
           const sorted = sortMessages(cached, currentSort);
           pageSlice = sorted.slice(startIdx, startIdx + limit);
         }
@@ -820,10 +837,11 @@ const createMailboxStore = () => {
           });
           if (isBasicQuery) {
             try {
-              const totalCount = await db.messages
-                .where('[account+folder]')
-                .equals([account, folder])
-                .count();
+              const totalCount = await withDeadline(
+                db.messages.where('[account+folder]').equals([account, folder]).count(),
+                CACHE_READ_DEADLINE_MS,
+                'message cache count',
+              );
               // The cached count alone caps pagination at whatever's been
               // synced locally — on desktop that stalls infinite scroll well
               // before the folder's real end. Also consult the folder's
@@ -2935,6 +2953,7 @@ const createMailboxStore = () => {
       folderOperationInProgress,
     },
     actions: {
+      hasInFlightMessageLoad: () => Boolean(inFlightMessageListRequest),
       hydrateFoldersFromCache,
       loadFolders,
       loadMessages,

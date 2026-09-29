@@ -1823,21 +1823,9 @@ describe('round-2 fix regression guards', () => {
     });
   });
 
-  describe('RawHtmlQuote sanitize config (forward CSP font-src fix)', () => {
-    const composeSrc = fs.readFileSync(
-      path.resolve(__dirname, '../../src/svelte/Compose.svelte'),
-      'utf8',
-    );
-
-    it('forbids <style>/<script> instead of allowing <style> through', () => {
-      // ADD_TAGS: ['style'] let forwarded emails' <style>/@font-face blocks
-      // (e.g. Gmail calendar invites embedding fonts.gstatic.com) straight
-      // into the compose window's DOM, which compose.html's CSP then blocked
-      // (font-src has no https:), surfacing as a console CSP violation.
-      expect(composeSrc).not.toMatch(/ADD_TAGS:\s*\[\s*'style'\s*\]/);
-      expect(composeSrc).toMatch(/FORBID_TAGS:\s*\[\s*'style'/);
-    });
-  });
+  // The RawHtmlQuote sanitize config (forward CSP font-src fix) is covered by
+  // behaviour in raw-html-quote-sanitize.test.ts, which runs the sanitizer
+  // Compose.svelte uses (sanitizeQuotedHtml) on <style>/@font-face input.
 
   describe('macOS compose-window close animation disabled (WebKit ScrollingTree crash fix)', () => {
     // Crash report: EXC_BAD_ACCESS in WebCore::ScrollingTree::takePendingScrollUpdates,

@@ -30,6 +30,11 @@ class TaoSceneDelegate: UIResponder, UIWindowSceneDelegate {
     private static var recoveryInstalledClasses = Set<ObjectIdentifier>()
     /// Last renderer recovery reload, to avoid reload loops.
     private static var lastRecoveryReload: Date?
+    /// True while a frame cycle is in flight. Foreground activation fires
+    /// twice (will-enter-foreground and did-become-active) and a recovery
+    /// reload can schedule one too; two overlapping cycles would capture each
+    /// other's shrunken frame and leave the webview a pixel short.
+    private static var isCyclingViewport = false
 
     func scene(
         _ scene: UIScene,
@@ -163,10 +168,53 @@ class TaoSceneDelegate: UIResponder, UIWindowSceneDelegate {
         }
 
         installRendererRecovery(on: webView)
+        TaoSceneDelegate.cycleViewport(webView, attempt: 1, cycles: 1, allowReload: true)
+    }
+
+    /// Cycle the WKWebView frame (shrink by 1px, then restore) so WebKit
+    /// recalculates the CSS viewport, then check window.innerWidth against the
+    /// webview's width. When it is still wrong: reload once if allowed (only
+    /// at launch), otherwise cycle again, up to three times.
+    ///
+    /// Also used after every renderer recovery reload. A page reloaded after
+    /// its WebContent process was killed can come back with the wrong layout
+    /// viewport, and the app then renders its desktop layout on a phone (a
+    /// search box, toolbar and folder count in the header instead of the
+    /// mobile bar), until it is force-quit.
+    static func cycleViewport(
+        _ webView: WKWebView,
+        attempt: Int,
+        cycles: Int,
+        allowReload: Bool,
+        continuing: Bool = false
+    ) {
+        // One repair at a time: a new request while one is in flight is
+        // dropped (the running one checks the result itself). Steps of the
+        // running repair pass continuing: true.
+        if !continuing {
+            if isCyclingViewport { return }
+            isCyclingViewport = true
+        }
+        let finish = { isCyclingViewport = false }
+
+        // Wait for the page to finish loading before fixing the viewport.
+        // If we fix it while loading, the viewport might get reset again.
+        if webView.isLoading && attempt < 60 {
+            NSLog("[SceneDelegate:fix] WKWebView still loading, waiting... (attempt %d)", attempt)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                cycleViewport(webView, attempt: attempt + 1, cycles: cycles,
+                              allowReload: allowReload, continuing: true)
+            }
+            return
+        }
 
         let frame = webView.frame
-        NSLog("[SceneDelegate:fix] WKWebView frame=(%g,%g,%g,%g)",
-              frame.origin.x, frame.origin.y, frame.size.width, frame.size.height)
+        guard frame.size.width > 1, frame.size.height > 1 else {
+            finish()
+            return
+        }
+        NSLog("[SceneDelegate:fix] WKWebView frame=(%g,%g,%g,%g) cycle %d",
+              frame.origin.x, frame.origin.y, frame.size.width, frame.size.height, cycles)
 
         // Technique: Cycle the frame by shrinking 1px then restoring.
         // This forces WKWebView to invalidate its internal viewport cache.
@@ -196,31 +244,82 @@ class TaoSceneDelegate: UIResponder, UIWindowSceneDelegate {
 
             // Verify the viewport is correct via JS
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                webView.evaluateJavaScript("JSON.stringify({w:window.innerWidth,h:window.innerHeight})") { result, error in
-                    if let json = result as? String {
-                        NSLog("[SceneDelegate:fix] Viewport after frame cycle: %@", json)
-
-                        // Parse the viewport dimensions
-                        if let data = json.data(using: .utf8),
-                           let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                           let w = dict["w"] as? Double,
-                           let h = dict["h"] as? Double {
-
-                            let expectedWidth = Double(frame.size.width)
-                            // If viewport is still wrong (more than 10% off), do a reload
-                            if abs(w - expectedWidth) > expectedWidth * 0.1 {
-                                NSLog("[SceneDelegate:fix] Viewport still wrong (w=%g, expected=%g), reloading...", w, expectedWidth)
-                                webView.reload()
-                            } else {
-                                NSLog("[SceneDelegate:fix] Viewport correct, no reload needed")
+                viewportIsCorrect(webView) { correct in
+                    guard let correct = correct else {
+                        // The page could not be asked (no content process).
+                        // The renderer recovery hook handles a dead process.
+                        if allowReload {
+                            NSLog("[SceneDelegate:fix] Viewport check failed, reloading")
+                            webView.reload()
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                                cycleViewport(webView, attempt: 1, cycles: 1,
+                                              allowReload: false, continuing: true)
                             }
+                        } else {
+                            finish()
                         }
-                    } else if let error = error {
-                        NSLog("[SceneDelegate:fix] JS error: %@", error.localizedDescription)
-                        // If we can't check, do a reload as fallback
+                        return
+                    }
+                    if correct {
+                        NSLog("[SceneDelegate:fix] Viewport correct")
+                        finish()
+                        return
+                    }
+                    if allowReload {
+                        NSLog("[SceneDelegate:fix] Viewport still wrong, reloading...")
                         webView.reload()
+                        // The reload can come back wrong as well; check it
+                        // again, this time without another reload.
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                            cycleViewport(webView, attempt: 1, cycles: 1,
+                                          allowReload: false, continuing: true)
+                        }
+                    } else if cycles < 3 {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                            cycleViewport(webView, attempt: 1, cycles: cycles + 1,
+                                          allowReload: false, continuing: true)
+                        }
+                    } else {
+                        NSLog("[SceneDelegate:fix] Viewport still wrong after %d cycles", cycles)
+                        finish()
                     }
                 }
+            }
+        }
+    }
+
+    /// Ask the page whether its CSS viewport matches the webview (within 10%).
+    /// Calls back with nil when the page cannot be asked.
+    static func viewportIsCorrect(_ webView: WKWebView, completion: @escaping (Bool?) -> Void) {
+        let expectedWidth = Double(webView.frame.size.width)
+        webView.evaluateJavaScript("JSON.stringify({w:window.innerWidth,h:window.innerHeight})") { result, error in
+            if let error = error {
+                NSLog("[SceneDelegate:fix] JS error: %@", error.localizedDescription)
+                completion(nil)
+                return
+            }
+            guard let json = result as? String,
+                  let data = json.data(using: .utf8),
+                  let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let w = dict["w"] as? Double,
+                  expectedWidth > 1 else {
+                completion(nil)
+                return
+            }
+            NSLog("[SceneDelegate:fix] Viewport: %@ (webview width %g)", json, expectedWidth)
+            completion(abs(w - expectedWidth) <= expectedWidth * 0.1)
+        }
+    }
+
+    /// Check the viewport and repair it only when it is wrong. Used when the
+    /// app returns to the foreground, where cycling the frame unconditionally
+    /// would be wasted work on every activation.
+    static func ensureViewport(_ webView: WKWebView) {
+        if webView.isLoading { return }
+        viewportIsCorrect(webView) { correct in
+            if correct == false {
+                NSLog("[SceneDelegate:fix] Viewport wrong on activation, repairing")
+                cycleViewport(webView, attempt: 1, cycles: 1, allowReload: false)
             }
         }
     }
@@ -286,6 +385,13 @@ class TaoSceneDelegate: UIResponder, UIWindowSceneDelegate {
                 webView.reload()
             } else {
                 webView.reloadFromOrigin()
+            }
+            // The fresh content process can lay the page out at the wrong
+            // viewport width (the launch-time fix below only ever ran once),
+            // which rendered the desktop layout on a phone. Check it again once
+            // the reload has started, and repair it without another reload.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                cycleViewport(webView, attempt: 1, cycles: 1, allowReload: false)
             }
         }
     }
@@ -382,6 +488,7 @@ class TaoSceneDelegate: UIResponder, UIWindowSceneDelegate {
         }
         if name == "fe:app-foreground" {
             checkRendererAlive(webView)
+            TaoSceneDelegate.ensureViewport(webView)
         }
     }
 }

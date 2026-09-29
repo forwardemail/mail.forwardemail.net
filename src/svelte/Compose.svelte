@@ -12,7 +12,6 @@
   import Color from '@tiptap/extension-color';
   import FontFamily from '@tiptap/extension-font-family';
   import Image from '@tiptap/extension-image';
-  import DOMPurify from 'dompurify';
 
   // Custom FontSize extension to add fontSize support to TextStyle
   const FontSize = Extension.create({
@@ -69,7 +68,7 @@
   import TableCell from '@tiptap/extension-table-cell';
   import TableHeader from '@tiptap/extension-table-header';
   import { bufferToDataUrl, extractTextContent } from '../utils/mime-utils.js';
-  import { htmlToPlainText } from '../utils/sanitize.js';
+  import { htmlToPlainText, sanitizeQuotedHtml } from '../utils/sanitize.js';
   import { hasRichFormatting } from '../utils/compose-format';
   import { buildEncryptedPayload } from '../utils/pgp-send';
   import { recipientKeyCoverage } from '../utils/pgp-recipients';
@@ -444,7 +443,10 @@
           try {
             const decoded = decodeRawHtml((currentNode.attrs.raw as string) || '');
             if (decoded && isValidDecodedHtml(decoded)) {
-              inner.innerHTML = DOMPurify.sanitize(decoded, { FORBID_TAGS: ['style', 'script'] });
+              // The quote renders in the app's own DOM, so remote content is
+              // neutralized first (see sanitizeQuotedHtml); the original HTML
+              // in attrs.raw is still what is sent.
+              inner.innerHTML = sanitizeQuotedHtml(decoded);
             } else {
               // Fallback: render plain text of the decoded quote (attrs.raw is the
               // bare base64, not an HTML string, so extractRawQuoteText can't parse it).
