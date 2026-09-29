@@ -14,26 +14,26 @@ release run on **2026-09-13**.
 Every `v*` tag already ships signed macOS, Linux, Android, and iOS binaries to
 GitHub Releases, uploads the IPA to TestFlight, uploads the AAB to the Google
 Play internal track, and deploys the web app. What is left for v1 is accounts,
-store listings, one Windows certificate, and paperwork.
+store listings, the Windows eSigner secrets, and paperwork.
 
-| Channel                        | Built by CI            | Signed                                 | Published today                     | State             |
-| ------------------------------ | ---------------------- | -------------------------------------- | ----------------------------------- | ----------------- |
-| Web / PWA                      | Yes                    | n/a                                    | Cloudflare R2 + Worker on every tag | Live              |
-| GitHub Releases                | Yes                    | macOS notarized, Android + iOS signed  | Every tag, with SHA256SUMS and SLSA | Live              |
-| Desktop auto-update            | Yes                    | minisign `.sig` + `latest.json`        | Every tag                           | Live              |
-| Windows installers             | Yes                    | **Unsigned** (no certificate yet)      | GitHub Releases                     | Live, SmartScreen |
-| iOS App Store                  | Yes                    | Apple Distribution                     | TestFlight only                     | Pending listing   |
-| Google Play                    | Yes                    | Upload key                             | Internal track only                 | Pending listing   |
-| Android sideload / Obtainium   | Yes                    | Release key                            | `_fdroid.apk` on every release      | Live              |
-| Self-hosted F-Droid repository | Yes                    | Index key not created                  | Opt-in lane, off                    | Dark              |
-| Snap Store                     | Yes                    | Store signs on upload                  | Opt-in lane, off; name unregistered | Dark              |
-| Homebrew tap                   | n/a                    | Reuses the DMGs                        | Opt-in lane, off; tap repo missing  | Dark              |
-| Mac App Store                  | No                     | Needs Mac App Distribution + Installer | None                                | Not built         |
-| Microsoft Store                | No                     | Needs Authenticode                     | None                                | Not built         |
-| winget                         | No                     | Recommended, not required              | None                                | Not built         |
-| Flathub                        | Dispatch-only PR build | n/a                                    | None                                | Deferred past v1  |
-| F-Droid official catalog       | n/a                    | n/a                                    | n/a                                 | Ineligible (BUSL) |
-| homebrew-cask (core)           | n/a                    | n/a                                    | n/a                                 | Not yet notable   |
+| Channel                        | Built by CI            | Signed                                 | Published today                     | State                                 |
+| ------------------------------ | ---------------------- | -------------------------------------- | ----------------------------------- | ------------------------------------- |
+| Web / PWA                      | Yes                    | n/a                                    | Cloudflare R2 + Worker on every tag | Live                                  |
+| GitHub Releases                | Yes                    | macOS notarized, Android + iOS signed  | Every tag, with SHA256SUMS and SLSA | Live                                  |
+| Desktop auto-update            | Yes                    | minisign `.sig` + `latest.json`        | Every tag                           | Live                                  |
+| Windows installers             | Yes                    | SSL.com certificate via eSigner        | GitHub Releases                     | Live, SmartScreen reputation building |
+| iOS App Store                  | Yes                    | Apple Distribution                     | TestFlight only                     | Pending listing                       |
+| Google Play                    | Yes                    | Upload key                             | Internal track only                 | Pending listing                       |
+| Android sideload / Obtainium   | Yes                    | Release key                            | `_fdroid.apk` on every release      | Live                                  |
+| Self-hosted F-Droid repository | Yes                    | Index key not created                  | Opt-in lane, off                    | Dark                                  |
+| Snap Store                     | Yes                    | Store signs on upload                  | Opt-in lane, off; name unregistered | Dark                                  |
+| Homebrew tap                   | n/a                    | Reuses the DMGs                        | Opt-in lane, off; tap repo missing  | Dark                                  |
+| Mac App Store                  | No                     | Needs Mac App Distribution + Installer | None                                | Not built                             |
+| Microsoft Store                | No                     | Needs Authenticode                     | None                                | Not built                             |
+| winget                         | No                     | Recommended, not required              | None                                | Not built                             |
+| Flathub                        | Dispatch-only PR build | n/a                                    | None                                | Deferred past v1                      |
+| F-Droid official catalog       | n/a                    | n/a                                    | n/a                                 | Ineligible (BUSL)                     |
+| homebrew-cask (core)           | n/a                    | n/a                                    | n/a                                 | Not yet notable                       |
 
 Notes:
 
@@ -65,16 +65,16 @@ environment the docs describe. See the note in
 
 ### Still needed
 
-| Account or credential                | Unlocks                            | Owner        | Notes                                                                                                                                     |
-| ------------------------------------ | ---------------------------------- | ------------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| Windows code-signing certificate     | Signed installers, Microsoft Store | Owner        | Azure Trusted Signing (about $10/month, US orgs) or an OV certificate. Procedure in SECRETS.md. Then set `WINDOWS_SIGNING_REQUIRED=true`. |
-| Snapcraft publisher + name           | Snap Store                         | Owner        | Free. `snapcraft register forwardemail-mail`, then `snapcraft export-login` scoped to that snap and the stable channel.                   |
-| F-Droid repository index key         | Self-hosted F-Droid repo           | Release eng. | Self-generated PKCS#12, alias `forwardemail-fdroid-repo`. Publish the fingerprint only after the first Pages deploy.                      |
-| Homebrew tap repository + token      | Homebrew                           | Owner        | Create `forwardemail/homebrew-forwardemail` from `homebrew/`; fine-grained PAT with Contents and Pull requests write.                     |
-| Mac App Store certificates + profile | Mac App Store                      | Owner        | Mac App Distribution and Mac Installer Distribution certificates, Mac App Store provisioning profile.                                     |
-| Microsoft Partner Center             | Microsoft Store                    | Owner        | Registration is free for companies. Publisher name must differ from the product name (already `Forward Email LLC`).                       |
-| Demo reviewer account                | Apple and Google review            | Support      | A dedicated alias seeded with mail, contacts, and calendar. Both reviews require working credentials for an email client.                 |
-| `MATRIX_TOKEN` (optional)            | Release notifications              | Anyone       | Not set; the notify job succeeds without sending.                                                                                         |
+| Account or credential                | Unlocks                            | Owner        | Notes                                                                                                                                                                                                   |
+| ------------------------------------ | ---------------------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Windows eSigner secrets              | Signed installers, Microsoft Store | Owner        | SSL.com certificate enrolled in eSigner with the OTP app; `ESIGNER_USERNAME`, `ESIGNER_PASSWORD`, `ESIGNER_CREDENTIAL_ID`, `ESIGNER_TOTP_SECRET` in the `release` environment. Procedure in SECRETS.md. |
+| Snapcraft publisher + name           | Snap Store                         | Owner        | Free. `snapcraft register forwardemail-mail`, then `snapcraft export-login` scoped to that snap and the stable channel.                                                                                 |
+| F-Droid repository index key         | Self-hosted F-Droid repo           | Release eng. | Self-generated PKCS#12, alias `forwardemail-fdroid-repo`. Publish the fingerprint only after the first Pages deploy.                                                                                    |
+| Homebrew tap repository + token      | Homebrew                           | Owner        | Create `forwardemail/homebrew-forwardemail` from `homebrew/`; fine-grained PAT with Contents and Pull requests write.                                                                                   |
+| Mac App Store certificates + profile | Mac App Store                      | Owner        | Mac App Distribution and Mac Installer Distribution certificates, Mac App Store provisioning profile.                                                                                                   |
+| Microsoft Partner Center             | Microsoft Store                    | Owner        | Registration is free for companies. Publisher name must differ from the product name (already `Forward Email LLC`).                                                                                     |
+| Demo reviewer account                | Apple and Google review            | Support      | A dedicated alias seeded with mail, contacts, and calendar. Both reviews require working credentials for an email client.                                                                               |
+| `MATRIX_TOKEN` (optional)            | Release notifications              | Anyone       | Not set; the notify job succeeds without sending.                                                                                                                                                       |
 
 ## Store policy notes
 
@@ -149,7 +149,7 @@ Ordered so nothing goes to external review before the pipeline is trustworthy.
 
 ### Phase 2. Accounts and credentials (owner tasks, parallel with Phase 1)
 
-- [ ] Windows certificate stored as `release` secrets; `WINDOWS_SIGNING_REQUIRED=true`
+- [ ] SSL.com eSigner secrets (`ESIGNER_*`) stored as `release` secrets; Windows rows fail closed without them
 - [ ] Snapcraft publisher account, `forwardemail-mail` registered, `SNAPCRAFT_STORE_CREDENTIALS`
 - [ ] F-Droid index keystore generated offline; `FDROID_KEYSTORE_BASE64` + `FDROID_KEYSTORE_PASSWORD`; backup kept
 - [ ] `forwardemail/homebrew-forwardemail` created from `homebrew/`; `HOMEBREW_TAP_TOKEN`

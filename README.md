@@ -276,7 +276,7 @@ Our implementation supports a wide range of authenticators for Passkey-based App
 
 ### Tamper-Proof Builds
 
-All builds are handled by public [GitHub Actions](https://github.com/features/actions) workflows directly from the source code. macOS builds are signed with an Apple Developer ID certificate and notarized, Android and iOS builds are signed with their platform release keys, and every desktop bundle carries a SLSA build-provenance attestation you can check with `gh attestation verify`. Windows installers are not yet Authenticode-signed (a certificate is being provisioned; see [Release Readiness](./docs/release-readiness.md)), so Windows shows a SmartScreen prompt on first install. The [Tauri](https://github.com/tauri-apps/tauri) updater uses Ed25519 signatures to verify every update package on all three desktop platforms. Mailbox content and WebSocket updates travel directly between the app and Forward Email. Platform delivery infrastructure is used only where the operating system requires it: APNs on iOS, FCM or a user-selected UnifiedPush distributor on Android, and GitHub Releases for desktop update packages. Forward Email does not add advertising, analytics, or tracking intermediaries to those paths.
+All builds are handled by public [GitHub Actions](https://github.com/features/actions) workflows directly from the source code. macOS builds are signed with an Apple Developer ID certificate and notarized, Android and iOS builds are signed with their platform release keys, and every desktop bundle carries a SLSA build-provenance attestation you can check with `gh attestation verify`. Windows installers are Authenticode-signed with Forward Email's SSL.com certificate through eSigner, whose hardware security module holds the signing key, and every signature is timestamped. The [Tauri](https://github.com/tauri-apps/tauri) updater uses Ed25519 signatures to verify every update package on all three desktop platforms. Mailbox content and WebSocket updates travel directly between the app and Forward Email. Platform delivery infrastructure is used only where the operating system requires it: APNs on iOS, FCM or a user-selected UnifiedPush distributor on Android, and GitHub Releases for desktop update packages. Forward Email does not add advertising, analytics, or tracking intermediaries to those paths.
 
 ## Features
 
@@ -600,8 +600,10 @@ For exact secret generation, GitHub environment setup, and platform-specific sig
 | `APPLE_ID`                                            | Apple ID for notarization                                                               |
 | `APPLE_PASSWORD`                                      | App-specific password for notarization                                                  |
 | `APPLE_TEAM_ID`                                       | Apple Developer Team ID                                                                 |
-| `WINDOWS_CERTIFICATE`                                 | Base64-encoded exportable Windows `.pfx` code-signing certificate                       |
-| `WINDOWS_CERTIFICATE_PASSWORD`                        | Password used to export the Windows `.pfx`                                              |
+| `ESIGNER_USERNAME`                                    | SSL.com account username for eSigner Windows code signing                               |
+| `ESIGNER_PASSWORD`                                    | SSL.com account password                                                                |
+| `ESIGNER_CREDENTIAL_ID`                               | eSigner credential ID of the Windows code-signing certificate                           |
+| `ESIGNER_TOTP_SECRET`                                 | eSigner secret code for one-time passwords (automated signing)                          |
 | `ANDROID_KEYSTORE_BASE64`                             | Android signing keystore (base64)                                                       |
 | `ANDROID_KEYSTORE_PASSWORD`                           | Password for the Android keystore                                                       |
 | `ANDROID_KEY_ALIAS`                                   | Android signing key alias                                                               |
@@ -623,18 +625,21 @@ All secrets above except `MATRIX_TOKEN` belong in the **`release`** environment.
 
 **GitHub Variables:**
 
-| Variable                    | Description                                                                          |
-| --------------------------- | ------------------------------------------------------------------------------------ |
-| `R2_BUCKET`                 | R2 bucket name for static assets                                                     |
-| `IOS_SIGNING_IDENTITY`      | Optional iOS signing identity override; defaults to `Apple Distribution`             |
-| `VAPID_PUBLIC_KEY`          | Required public half of the backend VAPID pair embedded in Android release builds    |
-| `PLAY_TRACK`                | Optional Google Play track; defaults to `internal`                                   |
-| `ALLOW_NO_UPDATER`          | Emergency desktop override; `true` permits release artifacts without updater signing |
-| `PUBLISH_SNAP_STORE`        | Optional; set to `true` after Snap Store credentials and listing approval are ready  |
-| `PUBLISH_FDROID_REPOSITORY` | Optional; set to `true` after F-Droid key and GitHub Pages are configured            |
-| `PUBLISH_HOMEBREW_TAP`      | Optional; set to `true` after the separate Homebrew tap and token are configured     |
+| Variable                    | Description                                                                                 |
+| --------------------------- | ------------------------------------------------------------------------------------------- |
+| `R2_BUCKET`                 | R2 bucket name for static assets                                                            |
+| `IOS_SIGNING_IDENTITY`      | Optional iOS signing identity override; defaults to `Apple Distribution`                    |
+| `VAPID_PUBLIC_KEY`          | Required public half of the backend VAPID pair embedded in Android release builds           |
+| `PLAY_TRACK`                | Optional Google Play track; defaults to `internal`                                          |
+| `ALLOW_NO_UPDATER`          | Emergency desktop override; `true` permits release artifacts without updater signing        |
+| `ALLOW_UNSIGNED_WINDOWS`    | Emergency override; `true` permits unsigned Windows installers when `ESIGNER_*` are missing |
+| `WINDOWS_PUBLISHER`         | Optional; certificate legal name when it differs from `Forward Email LLC`                   |
+| `WINDOWS_SIGN_NSIS_PLUGINS` | Optional; `false` skips signing the NSIS plugin DLLs to save eSigner signings               |
+| `PUBLISH_SNAP_STORE`        | Optional; set to `true` after Snap Store credentials and listing approval are ready         |
+| `PUBLISH_FDROID_REPOSITORY` | Optional; set to `true` after F-Droid key and GitHub Pages are configured                   |
+| `PUBLISH_HOMEBREW_TAP`      | Optional; set to `true` after the separate Homebrew tap and token are configured            |
 
-`ALLOW_NO_UPDATER` is a break-glass repository variable, not a normal release setting. Leave it unset so desktop releases fail closed when `TAURI_SIGNING_PRIVATE_KEY` is missing.
+`ALLOW_NO_UPDATER` and `ALLOW_UNSIGNED_WINDOWS` are break-glass repository variables, not normal release settings. Leave them unset so desktop releases fail closed when `TAURI_SIGNING_PRIVATE_KEY` or the Windows eSigner secrets are missing.
 
 For generation steps, storage locations, required/optional status, and exact setup instructions, see [docs/SECRETS.md](./docs/SECRETS.md) and the [distribution publishing guide](./docs/distribution-publishing.md).
 

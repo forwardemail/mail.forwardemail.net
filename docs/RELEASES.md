@@ -118,14 +118,14 @@ skips when its signing and App Store Connect values are unavailable. Desktop sig
 notarization remain conditional on their platform credentials. See the workflow-specific
 requirements below before creating a release tag.
 
-| Platform     | Signing                           | Notes                                                                                                                                                                                                                          |
-| ------------ | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| macOS        | Apple Developer ID + notarization | Users won't see Gatekeeper warnings                                                                                                                                                                                            |
-| Windows      | Authenticode certificate          | **Not yet provisioned.** Installers ship unsigned until `WINDOWS_CERTIFICATE` exists; the workflow warns per row and fails closed once `WINDOWS_SIGNING_REQUIRED=true` is set. Reputation still builds over time after signing |
-| Linux        | None needed                       | `.deb` and `.rpm` work unsigned; trust is handled by the host package flow                                                                                                                                                     |
-| Android      | Self-managed keystore (`.jks`)    | Required for Play Store; optional for APK                                                                                                                                                                                      |
-| iOS          | Apple Distribution + ASC API key  | Required for TestFlight — job skips gracefully when secrets aren't set                                                                                                                                                         |
-| Auto-updater | Ed25519 key                       | Required for `.sig` files                                                                                                                                                                                                      |
+| Platform     | Signing                           | Notes                                                                                                                                                                 |
+| ------------ | --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| macOS        | Apple Developer ID + notarization | Users won't see Gatekeeper warnings                                                                                                                                   |
+| Windows      | SSL.com certificate via eSigner   | Signed in CI through eSigner cloud signing; the Windows rows fail closed without the `ESIGNER_*` secrets. SmartScreen reputation still builds over time after signing |
+| Linux        | None needed                       | `.deb` and `.rpm` work unsigned; trust is handled by the host package flow                                                                                            |
+| Android      | Self-managed keystore (`.jks`)    | Required for Play Store; optional for APK                                                                                                                             |
+| iOS          | Apple Distribution + ASC API key  | Required for TestFlight — job skips gracefully when secrets aren't set                                                                                                |
+| Auto-updater | Ed25519 key                       | Required for `.sig` files                                                                                                                                             |
 
 See [SECRETS.md](./SECRETS.md) for the full list of required secrets, [desktop-ci-secrets.md](./desktop-ci-secrets.md) for desktop signing setup, and [ios-setup.md](./ios-setup.md) for the iOS signing and TestFlight flow.
 

@@ -50,19 +50,6 @@ describe('release gating contracts', () => {
     expect(gate).not.toContain('pnpm test --');
   });
 
-  it('imports the Windows certificate into the runner store and fails closed on demand', () => {
-    expect(desktopWorkflow).toContain('- name: Import Windows code-signing certificate');
-    expect(desktopWorkflow).toContain('Import-PfxCertificate');
-    expect(desktopWorkflow).toContain('$conf.bundle.windows.certificateThumbprint = $thumbprint');
-    expect(desktopWorkflow).toContain("$env:WINDOWS_SIGNING_REQUIRED -eq 'true'");
-    // tauri-action never read these; passing them there only looked like signing.
-    const buildStep = desktopWorkflow.slice(
-      desktopWorkflow.indexOf('- name: Build and release Tauri app'),
-      desktopWorkflow.indexOf('- name: Build Snap package'),
-    );
-    expect(buildStep).not.toContain('WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}');
-  });
-
   it('does not hand the signing secrets to workflows that reference none', () => {
     // Match the YAML key on its own line; the explanatory comments in those
     // jobs mention the phrase and must not satisfy or fail this check.

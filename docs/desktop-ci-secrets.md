@@ -65,20 +65,22 @@ This orchestrates the WebView E2E gate, draft GitHub Release creation, desktop a
 
 All secrets should be added to the **`release`** GitHub environment.
 
-| Secret                               | Required | Description                                                       | How to Obtain                                                           |
-| ------------------------------------ | -------- | ----------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| `TAURI_SIGNING_PRIVATE_KEY`          | Yes      | Minisign private key for updater signatures                       | `pnpm tauri signer generate` (see above)                                |
-| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Yes      | Password for the signing private key                              | Set during `signer generate`                                            |
-| `APPLE_CERTIFICATE`                  | Yes      | Base64-encoded macOS `.p12` certificate                           | Export from Keychain Access                                             |
-| `APPLE_CERTIFICATE_PASSWORD`         | Yes      | Password for the `.p12` certificate                               | Set during export                                                       |
-| `APPLE_SIGNING_IDENTITY`             | Yes      | Signing identity string (e.g. `Developer ID Application: ...`)    | `security find-identity -v -p codesigning`                              |
-| `APPLE_ID`                           | Yes      | Apple ID email for notarization                                   | Apple Developer account                                                 |
-| `APPLE_PASSWORD`                     | Yes      | App-specific password for notarization                            | [appleid.apple.com](https://appleid.apple.com) → App-Specific Passwords |
-| `APPLE_TEAM_ID`                      | Yes      | Apple Developer Team ID                                           | [developer.apple.com](https://developer.apple.com) → Membership         |
-| `WINDOWS_CERTIFICATE`                | Not yet  | Base64-encoded exportable Windows `.pfx` code-signing certificate | Exported from the Windows cert store or your certificate issuer         |
-| `WINDOWS_CERTIFICATE_PASSWORD`       | Not yet  | Password used when exporting the Windows `.pfx`                   | Set during `.pfx` export                                                |
+| Secret                               | Required | Description                                                    | How to Obtain                                                           |
+| ------------------------------------ | -------- | -------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `TAURI_SIGNING_PRIVATE_KEY`          | Yes      | Minisign private key for updater signatures                    | `pnpm tauri signer generate` (see above)                                |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Yes      | Password for the signing private key                           | Set during `signer generate`                                            |
+| `APPLE_CERTIFICATE`                  | Yes      | Base64-encoded macOS `.p12` certificate                        | Export from Keychain Access                                             |
+| `APPLE_CERTIFICATE_PASSWORD`         | Yes      | Password for the `.p12` certificate                            | Set during export                                                       |
+| `APPLE_SIGNING_IDENTITY`             | Yes      | Signing identity string (e.g. `Developer ID Application: ...`) | `security find-identity -v -p codesigning`                              |
+| `APPLE_ID`                           | Yes      | Apple ID email for notarization                                | Apple Developer account                                                 |
+| `APPLE_PASSWORD`                     | Yes      | App-specific password for notarization                         | [appleid.apple.com](https://appleid.apple.com) → App-Specific Passwords |
+| `APPLE_TEAM_ID`                      | Yes      | Apple Developer Team ID                                        | [developer.apple.com](https://developer.apple.com) → Membership         |
+| `ESIGNER_USERNAME`                   | Yes      | SSL.com account username (eSigner)                             | SSL.com sign-in                                                         |
+| `ESIGNER_PASSWORD`                   | Yes      | SSL.com account password                                       | SSL.com sign-in                                                         |
+| `ESIGNER_CREDENTIAL_ID`              | Yes      | eSigner credential ID of the code-signing certificate          | SSL.com → Orders → certificate details → SIGNING CREDENTIALS            |
+| `ESIGNER_TOTP_SECRET`                | Yes      | eSigner secret code for one-time passwords                     | Shown with the eSigner QR code (PIN → Show QR Code)                     |
 
-The desktop workflow also reads the repository variable `ALLOW_NO_UPDATER`. Leave it unset during normal releases: the workflow fails closed when `TAURI_SIGNING_PRIVATE_KEY` is missing. Setting `ALLOW_NO_UPDATER=true` is an emergency override that deliberately produces release artifacts without updater signatures.
+The desktop workflow also reads the repository variables `ALLOW_UNSIGNED_WINDOWS`, `WINDOWS_PUBLISHER` and `WINDOWS_SIGN_NSIS_PLUGINS` (see [SECRETS.md](./SECRETS.md#windows-code-signing-secrets)) and `ALLOW_NO_UPDATER`. Leave it unset during normal releases: the workflow fails closed when `TAURI_SIGNING_PRIVATE_KEY` is missing. Setting `ALLOW_NO_UPDATER=true` is an emergency override that deliberately produces release artifacts without updater signatures.
 
 **Note:** `GITHUB_TOKEN` is provided automatically by GitHub Actions — do not add it manually.
 
@@ -93,7 +95,7 @@ The macOS matrix rows fail closed unless all six Apple signing and notarization 
 
 ## Windows Code Signing
 
-**Not yet provisioned.** Windows installers currently ship unsigned; the release workflow warns on every Windows row. The procedure, certificate options, and the `WINDOWS_SIGNING_REQUIRED` fail-closed switch are documented in [SECRETS.md](./SECRETS.md#windows-code-signing-secrets). In short: `release-desktop.yml` imports the base64 `.pfx` from `WINDOWS_CERTIFICATE` into the runner certificate store and writes its thumbprint into `bundle.windows.certificateThumbprint`, which is what makes the Tauri bundler sign the MSI and NSIS installers. A cloud signer such as Azure Trusted Signing needs `bundle.windows.signCommand` instead.
+Windows installers are signed with an SSL.com certificate through eSigner cloud signing; the key stays at SSL.com and CI needs no manual step. `release-desktop.yml` runs `scripts/windows-signing.cjs setup`, which sets `bundle.windows.signCommand` so the Tauri bundler signs the app binary, NSIS plugins and uninstaller, and the `.msi` and `-setup.exe`. A later step verifies every installer and the executables inside it. The Windows rows fail closed without the four `ESIGNER_*` secrets. Setup, signing volume and troubleshooting: [SECRETS.md](./SECRETS.md#windows-code-signing-secrets).
 
 ## Verifying Artifacts
 

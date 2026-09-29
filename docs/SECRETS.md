@@ -22,23 +22,27 @@ Open **Settings → Secrets and variables → Actions** in the GitHub repository
 
 ### Desktop signing and updater secrets
 
-| Name                                 | Type     | Required            | Purpose                                                                                                               |
-| ------------------------------------ | -------- | ------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `TAURI_SIGNING_PRIVATE_KEY`          | Secret   | Yes                 | Private key used to sign Tauri updater bundles and generate `.sig` files                                              |
-| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Secret   | Yes                 | Password chosen when generating the updater private key                                                               |
-| `APPLE_CERTIFICATE`                  | Secret   | Yes for macOS rows  | Base64-encoded macOS `.p12` certificate for desktop code signing                                                      |
-| `APPLE_CERTIFICATE_PASSWORD`         | Secret   | Yes for macOS rows  | Password used when exporting the macOS `.p12`                                                                         |
-| `APPLE_SIGNING_IDENTITY`             | Secret   | Yes for macOS rows  | macOS signing identity string such as `Developer ID Application: ...`                                                 |
-| `APPLE_ID`                           | Secret   | Yes for macOS rows  | Apple ID email used for notarization                                                                                  |
-| `APPLE_PASSWORD`                     | Secret   | Yes for macOS rows  | App-specific password used for notarization                                                                           |
-| `APPLE_TEAM_ID`                      | Secret   | Yes for macOS rows  | Apple Developer Team ID used by desktop notarization and shared with iOS                                              |
-| `MACOS_PROVISIONING_PROFILE_BASE64`  | Secret   | For macOS push      | Base64 Developer ID provisioning profile granting Push Notifications; see docs/PUSH_NOTIFICATIONS.md                  |
-| `MACOS_PUSH_REQUIRED`                | Variable | No                  | Set to `true` once the profile exists so a missing profile fails the macOS rows instead of shipping without push      |
-| `WINDOWS_CERTIFICATE`                | Secret   | Not yet provisioned | Base64-encoded exportable `.pfx`; imported into the runner cert store and its thumbprint written to `tauri.conf.json` |
-| `WINDOWS_CERTIFICATE_PASSWORD`       | Secret   | Not yet provisioned | Password used when exporting the Windows `.pfx`                                                                       |
-| `WINDOWS_SIGNING_REQUIRED`           | Variable | No                  | Set to `true` after the certificate exists so a missing secret fails the Windows rows instead of shipping unsigned    |
+| Name                                 | Type     | Required             | Purpose                                                                                                          |
+| ------------------------------------ | -------- | -------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `TAURI_SIGNING_PRIVATE_KEY`          | Secret   | Yes                  | Private key used to sign Tauri updater bundles and generate `.sig` files                                         |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Secret   | Yes                  | Password chosen when generating the updater private key                                                          |
+| `APPLE_CERTIFICATE`                  | Secret   | Yes for macOS rows   | Base64-encoded macOS `.p12` certificate for desktop code signing                                                 |
+| `APPLE_CERTIFICATE_PASSWORD`         | Secret   | Yes for macOS rows   | Password used when exporting the macOS `.p12`                                                                    |
+| `APPLE_SIGNING_IDENTITY`             | Secret   | Yes for macOS rows   | macOS signing identity string such as `Developer ID Application: ...`                                            |
+| `APPLE_ID`                           | Secret   | Yes for macOS rows   | Apple ID email used for notarization                                                                             |
+| `APPLE_PASSWORD`                     | Secret   | Yes for macOS rows   | App-specific password used for notarization                                                                      |
+| `APPLE_TEAM_ID`                      | Secret   | Yes for macOS rows   | Apple Developer Team ID used by desktop notarization and shared with iOS                                         |
+| `MACOS_PROVISIONING_PROFILE_BASE64`  | Secret   | For macOS push       | Base64 Developer ID provisioning profile granting Push Notifications; see docs/PUSH_NOTIFICATIONS.md             |
+| `MACOS_PUSH_REQUIRED`                | Variable | No                   | Set to `true` once the profile exists so a missing profile fails the macOS rows instead of shipping without push |
+| `ESIGNER_USERNAME`                   | Secret   | Yes for Windows rows | SSL.com account username (eSigner cloud signing)                                                                 |
+| `ESIGNER_PASSWORD`                   | Secret   | Yes for Windows rows | SSL.com account password                                                                                         |
+| `ESIGNER_CREDENTIAL_ID`              | Secret   | Yes for Windows rows | eSigner credential ID of the code-signing certificate                                                            |
+| `ESIGNER_TOTP_SECRET`                | Secret   | Yes for Windows rows | eSigner secret code shown with the certificate's QR code (not a 6-digit code, not the PIN)                       |
+| `WINDOWS_PUBLISHER`                  | Variable | No                   | Legal name on the certificate when it differs from `bundle.publisher` (`Forward Email LLC`)                      |
+| `WINDOWS_SIGN_NSIS_PLUGINS`          | Variable | No                   | Set to `false` to skip signing the NSIS plugin DLLs (saves 10 signings per release)                              |
+| `ALLOW_UNSIGNED_WINDOWS`             | Variable | No                   | Break-glass: `true` ships unsigned Windows installers when the eSigner secrets are missing                       |
 
-The updater signing key is required for normal production desktop releases. The workflow fails closed when `TAURI_SIGNING_PRIVATE_KEY` is absent unless the break-glass `ALLOW_NO_UPDATER=true` repository variable is set; that override intentionally omits updater artifacts and should not be left enabled. Every macOS release row also fails closed unless all six Apple signing and notarization secrets above are present.
+The updater signing key is required for normal production desktop releases. The workflow fails closed when `TAURI_SIGNING_PRIVATE_KEY` is absent unless the break-glass `ALLOW_NO_UPDATER=true` repository variable is set; that override intentionally omits updater artifacts and should not be left enabled. Every macOS release row also fails closed unless all six Apple signing and notarization secrets above are present, and every Windows row fails closed unless all four eSigner secrets are present (break-glass: `ALLOW_UNSIGNED_WINDOWS=true`).
 
 ### Mobile signing secrets
 
@@ -151,51 +155,66 @@ Use the matching **Developer ID Application** entry as `APPLE_SIGNING_IDENTITY`.
 
 ### Windows code-signing secrets
 
-**Current state (2026-09-13): no Windows certificate is provisioned, so the Windows installers on GitHub Releases ship unsigned and Windows shows a SmartScreen prompt on first install.** The workflow prints a warning on each Windows row until the secrets below exist. Set the repository variable `WINDOWS_SIGNING_REQUIRED=true` after provisioning so a missing secret fails the release instead of silently shipping unsigned again.
+Windows installers are Authenticode-signed with an SSL.com code-signing certificate through **eSigner**, SSL.com's cloud signing service. The private key of a publicly trusted code-signing certificate must stay in a hardware security module, so there is no `.pfx` to export: eSigner keeps the key, and CI signs through it without any manual step.
 
-How signing works in CI: `tauri-action` does not read `WINDOWS_CERTIFICATE`. The `Import Windows code-signing certificate` step in `release-desktop.yml` decodes the `.pfx`, imports it into the runner's `Cert:\CurrentUser\My` store with `Import-PfxCertificate`, and writes the resulting thumbprint into `bundle.windows.certificateThumbprint` in `tauri.conf.json` so the Tauri bundler signs the MSI and NSIS installers with `signtool`. That is the only path the two secrets support.
+| Name                        | Type                | Purpose                                                                                  |
+| --------------------------- | ------------------- | ---------------------------------------------------------------------------------------- |
+| `ESIGNER_USERNAME`          | `release` secret    | SSL.com account username                                                                 |
+| `ESIGNER_PASSWORD`          | `release` secret    | SSL.com account password                                                                 |
+| `ESIGNER_CREDENTIAL_ID`     | `release` secret    | eSigner credential ID of the code-signing certificate                                    |
+| `ESIGNER_TOTP_SECRET`       | `release` secret    | eSigner secret code for one-time passwords, so signing needs no phone                    |
+| `WINDOWS_PUBLISHER`         | Repository variable | Optional. Certificate legal name when it is not `Forward Email LLC`                      |
+| `WINDOWS_SIGN_NSIS_PLUGINS` | Repository variable | Optional. `false` skips the NSIS plugin DLLs                                             |
+| `ALLOW_UNSIGNED_WINDOWS`    | Repository variable | Optional break-glass. `true` lets a release without the secrets ship unsigned installers |
 
-| Name                           | Type                | Purpose                                                                |
-| ------------------------------ | ------------------- | ---------------------------------------------------------------------- |
-| `WINDOWS_CERTIFICATE`          | `release` secret    | One-line base64 of an exportable code-signing `.pfx`                   |
-| `WINDOWS_CERTIFICATE_PASSWORD` | `release` secret    | Password used when the `.pfx` was exported                             |
-| `WINDOWS_SIGNING_REQUIRED`     | Repository variable | Set to `true` once the certificate exists; missing secret fails closed |
+#### How signing works in CI
 
-#### Choosing a certificate
+1. `Setup Java (CodeSignTool)` installs Temurin 21. SSL.com's CodeSignTool is a Java program.
+2. `Configure Windows signing (SSL.com eSigner)` runs `scripts/windows-signing.cjs setup`. It checks the secrets, downloads the pinned CodeSignTool release and checks its SHA-256, and confirms the credentials with `credential_info`, which does not use up a signing. Then it sets `bundle.windows.signCommand` in `tauri.conf.json`. If the secrets are wrong, the row fails here, before the Rust build.
+3. During `tauri build`, the bundler calls `scripts/windows-signing.cjs sign <file>` for each file it signs: the app binary (once per installer type), the NSIS plugin DLLs, the NSIS uninstaller, and the finished `.msi` and `-setup.exe`. CodeSignTool hashes the file locally, eSigner signs the hash, and the signature is timestamped by `ts.ssl.com`. The script then confirms each file has a valid, timestamped signature from the expected publisher. If signing fails, the build fails. Transient errors are retried. After a refused login, or a one-time password refused in four separate 30-second windows, signing stops for the rest of the job, so retries cannot lock the account. The script also refuses to sign an NSIS installer whose uninstaller was not signed, so such an installer is never uploaded.
+4. `Verify Windows signatures` runs `scripts/windows-signing.cjs verify` on the bundle directory. It checks every installer and, where the runner can unpack it (7-Zip for NSIS, `msiexec` for MSI), every executable inside it. It also reads the signing log to confirm that the uninstaller in the shipped NSIS installer was signed; NSIS ignores the exit code of the uninstaller signing command. If a Windows row fails, `Show Windows signing log` prints the reason, because the Tauri bundler hides the signing command's output.
 
-- **Azure Trusted Signing** (about $10/month, available to US organizations) does not issue an exportable `.pfx`; it signs through a cloud service. To use it, configure `bundle.windows.signCommand` in `tauri.conf.json` to call `trusted-signing-cli` (or `signtool` with the Trusted Signing dlib) and store the Azure credentials as secrets instead of the two above. Since 2024 an EV certificate gives no SmartScreen advantage over OV or Trusted Signing; reputation builds from download volume either way.
-- **OV certificate from a CA** with an exportable key works with the `.pfx` flow below. New certificates issued after 2026-03-01 are limited to 458 days of validity, so plan an annual rotation.
+The WiX extension DLLs that Tauri also passes to the signing command run only on the build machine, so they are skipped.
 
-#### Export from the Windows certificate store
+#### Signing volume
 
-If the certificate is already installed in `Cert:\CurrentUser\My` and is exportable, export it with a password you choose:
+eSigner plans include a fixed number of signings per month, and unused signings carry over. A normal release uses about 18:
 
-```powershell
-$PfxPassword = ConvertTo-SecureString -String 'choose-a-strong-password' -Force -AsPlainText
-Export-PfxCertificate \
-  -Cert Cert:\CurrentUser\My\<THUMBPRINT> \
-  -FilePath .\forwardemail-windows.pfx \
-  -Password $PfxPassword
-```
+| Row           | Signed files                                                                    | Signings |
+| ------------- | ------------------------------------------------------------------------------- | -------- |
+| Windows-x64   | app binary ×2 (MSI and NSIS), 5 NSIS plugins, uninstaller, `.msi`, `-setup.exe` | 10       |
+| Windows-arm64 | app binary, 5 NSIS plugins, uninstaller, `-setup.exe`                           | 8        |
 
-#### Convert a `.cer` plus private key into `.pfx`
+`WINDOWS_SIGN_NSIS_PLUGINS=false` brings a release down to 8 signings. Re-running a failed Windows row signs everything again. The `Verify Windows signatures` step prints the number of signings each row used.
 
-```bash
-openssl pkcs12 -export \
-  -out forwardemail-windows.pfx \
-  -inkey private-key.key \
-  -in certificate.cer
-```
+#### One-time setup
 
-The export password becomes `WINDOWS_CERTIFICATE_PASSWORD`.
+1. **Enroll the certificate in eSigner.** In the SSL.com account, open **Orders**, then the code-signing certificate's **details**. Under **eSigner Cloud Signing Enrollment**, choose **OTP APP** as the second factor, set a 4-digit PIN, and click **create OTP and issue certificate**. Skip this step if the certificate already shows **eSigner active** with the OTP app. Signing by SMS needs a person to type the code, so a certificate enrolled with **OTP SMS** must be switched to the OTP app; SSL.com support can do this if the page does not offer it.
+2. **Copy the secret code.** eSigner shows a QR code together with a **secret code**. Save the secret code; it becomes `ESIGNER_TOTP_SECRET`. You can also scan the QR code into an authenticator app for manual signing, since both use the same secret. To see the code again, enter the PIN and click **Show QR Code** on the same page. **Reset QR Code** issues a new secret and invalidates the old one, so update the GitHub secret after a reset.
+3. **Copy the credential ID.** The **SIGNING CREDENTIALS** section of the order lists the **eSigner credential ID**, a UUID such as `8b072e22-7685-4771-b5c6-48e46614915f`. It becomes `ESIGNER_CREDENTIAL_ID`. With CodeSignTool installed locally, `CodeSignTool get_credential_ids -username=... -password=...` prints it as well.
+4. **Add the secrets.** In GitHub, open **Settings → Environments → release** and add `ESIGNER_USERNAME`, `ESIGNER_PASSWORD`, `ESIGNER_CREDENTIAL_ID` and `ESIGNER_TOTP_SECRET`. Use the username and password you sign in to SSL.com with.
+5. **Check the publisher name.** The workflow requires the certificate's CN or O to equal `bundle.publisher` in `src-tauri/tauri.conf.json` (`Forward Email LLC`). If the certificate shows a different legal name, for example `Forward Email, LLC`, set the repository variable `WINDOWS_PUBLISHER` to that exact name.
+6. **Pick a plan with enough signings.** At about 18 signings per release, pick the eSigner tier for the number of releases you expect each month. Change tiers in the SSL.com account.
+7. **Release.** The next release signs automatically. On Windows, confirm the result:
 
-#### Base64-encode the `.pfx`
+   ```powershell
+   Get-AuthenticodeSignature '.\Forward Email_<version>_x64-setup.exe' | Format-List Status, SignerCertificate, TimeStamperCertificate
+   ```
 
-```powershell
-[Convert]::ToBase64String([IO.File]::ReadAllBytes('forwardemail-windows.pfx'))
-```
+   `Status` must be `Valid`, and the signer must be Forward Email.
 
-Store the one-line output as `WINDOWS_CERTIFICATE`, then set `WINDOWS_SIGNING_REQUIRED=true` and verify the next release's `-setup.exe` and `.msi` with `Get-AuthenticodeSignature` before updating the README.
+#### Troubleshooting
+
+- **`eSigner rejected the credentials`** in the configure step: wrong `ESIGNER_USERNAME`, `ESIGNER_PASSWORD` or `ESIGNER_CREDENTIAL_ID`.
+- **`authorization grant is invalid`**: SSL.com rejected the username or password. The configure step checks these first, so seeing this while signing means the password changed during the run.
+- **An OTP error while signing**: `ESIGNER_TOTP_SECRET` is wrong or was reset. Copy the current secret code again.
+- **`does not look like the eSigner secret code`**: `ESIGNER_TOTP_SECRET` holds a 6-digit code or the PIN instead of the secret code.
+- **`signed by "…", not "Forward Email LLC"`**: set `WINDOWS_PUBLISHER` to the name on the certificate.
+- **Signing stops with a balance or quota error**: the plan is out of signings. Upgrade the tier or wait for the next month, then re-run the Windows rows.
+
+#### SmartScreen
+
+A valid signature is necessary but not sufficient. SmartScreen builds reputation from download history, for each file and for the signing publisher. A new certificate can still show "Windows protected your PC" on early downloads until enough people have installed signed releases. Keep signing every release with the same certificate so that reputation carries over. EV certificates no longer skip this step. Publishing to the Microsoft Store avoids the prompt entirely. See [SmartScreen reputation for Windows app developers](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/smartscreen-reputation).
 
 ### Android signing keystore
 

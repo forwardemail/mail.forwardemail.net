@@ -225,13 +225,13 @@ The CI/CD workflows implement the following supply chain protections.
 
 All release binaries are code-signed.
 
-| Platform | Signing Method                       | Verification                              |
-| -------- | ------------------------------------ | ----------------------------------------- |
-| macOS    | Apple Developer ID + Notarization    | Gatekeeper verifies on first launch       |
-| Windows  | EV Code Signing Certificate          | SmartScreen trusts signed binaries        |
-| Linux    | Tauri updater signature (.sig files) | Verified by the built-in updater          |
-| Android  | Android Keystore (release key)       | Play Store and APK signature verification |
-| iOS      | Apple Distribution Certificate       | App Store and device-level verification   |
+| Platform | Signing Method                        | Verification                                               |
+| -------- | ------------------------------------- | ---------------------------------------------------------- |
+| macOS    | Apple Developer ID + Notarization     | Gatekeeper verifies on first launch                        |
+| Windows  | SSL.com certificate via eSigner (HSM) | Authenticode; SmartScreen reputation builds from downloads |
+| Linux    | Tauri updater signature (.sig files)  | Verified by the built-in updater                           |
+| Android  | Android Keystore (release key)        | Play Store and APK signature verification                  |
+| iOS      | Apple Distribution Certificate        | App Store and device-level verification                    |
 
 SHA-256 checksums for all release artifacts are generated and attached to each GitHub Release as `SHA256SUMS.txt`.
 

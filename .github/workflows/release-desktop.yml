@@ -277,51 +277,36 @@ jobs:
           scripts/macos-push-signing.sh prepare "$PROFILE" "$APPLE_TEAM_ID"
           echo "enabled=true" >> "$GITHUB_OUTPUT"
 
-      # Windows Authenticode signing. tauri-action does not read
-      # WINDOWS_CERTIFICATE; Tauri signs only when
-      # bundle.windows.certificateThumbprint names a certificate that is
-      # already installed in the runner's certificate store (or when a
-      # signCommand is configured). Import the .pfx here and write its
-      # thumbprint into tauri.conf.json so the bundler actually signs.
-      # Until a certificate exists this step warns and the installers ship
-      # unsigned; set repo variable WINDOWS_SIGNING_REQUIRED=true once the
-      # certificate is provisioned so a missing secret fails closed instead.
-      - name: Import Windows code-signing certificate
+      # Windows Authenticode signing through SSL.com eSigner. The private key
+      # lives in SSL.com's cloud HSM (publicly trusted code-signing keys may
+      # not be exported), so there is no .pfx to import. The setup
+      # step downloads the pinned CodeSignTool, checks the credentials without
+      # spending a signing, and sets bundle.windows.signCommand so the Tauri
+      # bundler signs the app binary, NSIS plugins and uninstaller, and the
+      # .msi and -setup.exe through scripts/windows-signing.cjs. Every
+      # signature is checked (valid, publisher, timestamp) as it is made.
+      # Fails closed when the secrets are missing; repository variable
+      # ALLOW_UNSIGNED_WINDOWS=true is the break-glass for an unsigned build.
+      # See docs/SECRETS.md#windows-code-signing-secrets.
+      - name: Setup Java (CodeSignTool)
         if: runner.os == 'Windows'
-        shell: pwsh
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Configure Windows signing (SSL.com eSigner)
+        id: windows_signing
+        if: runner.os == 'Windows'
+        shell: bash
         env:
-          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
-          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
-          WINDOWS_SIGNING_REQUIRED: ${{ vars.WINDOWS_SIGNING_REQUIRED }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          if ([string]::IsNullOrEmpty($env:WINDOWS_CERTIFICATE)) {
-            if ($env:WINDOWS_SIGNING_REQUIRED -eq 'true') {
-              Write-Host "::error::WINDOWS_SIGNING_REQUIRED=true but WINDOWS_CERTIFICATE is not set. Refusing to ship unsigned Windows installers for ${{ matrix.label }}."
-              exit 1
-            }
-            Write-Host "::warning::WINDOWS_CERTIFICATE is not set. ${{ matrix.label }} installers will ship UNSIGNED (SmartScreen warnings). Provision the certificate per docs/SECRETS.md."
-            exit 0
-          }
-          if ([string]::IsNullOrEmpty($env:WINDOWS_CERTIFICATE_PASSWORD)) {
-            Write-Host "::error::WINDOWS_CERTIFICATE is set but WINDOWS_CERTIFICATE_PASSWORD is empty."
-            exit 1
-          }
-          $pfxPath = Join-Path $env:RUNNER_TEMP 'forwardemail-windows.pfx'
-          [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
-          $password = ConvertTo-SecureString -String $env:WINDOWS_CERTIFICATE_PASSWORD -Force -AsPlainText
-          $cert = Import-PfxCertificate -FilePath $pfxPath -CertStoreLocation Cert:\CurrentUser\My -Password $password
-          Remove-Item -Force $pfxPath
-          $thumbprint = $cert.Thumbprint
-          if ([string]::IsNullOrEmpty($thumbprint)) {
-            Write-Host "::error::Import-PfxCertificate returned no thumbprint."
-            exit 1
-          }
-          $confPath = 'src-tauri/tauri.conf.json'
-          $conf = Get-Content -Raw $confPath | ConvertFrom-Json
-          $conf.bundle.windows.certificateThumbprint = $thumbprint
-          $conf | ConvertTo-Json -Depth 32 | Set-Content -Path $confPath -Encoding utf8
-          Write-Host "Imported Windows code-signing certificate ($($cert.Subject)); thumbprint written to tauri.conf.json."
+          ESIGNER_USERNAME: ${{ secrets.ESIGNER_USERNAME }}
+          ESIGNER_PASSWORD: ${{ secrets.ESIGNER_PASSWORD }}
+          ESIGNER_CREDENTIAL_ID: ${{ secrets.ESIGNER_CREDENTIAL_ID }}
+          ESIGNER_TOTP_SECRET: ${{ secrets.ESIGNER_TOTP_SECRET }}
+          WINDOWS_PUBLISHER: ${{ vars.WINDOWS_PUBLISHER }}
+          ALLOW_UNSIGNED_WINDOWS: ${{ vars.ALLOW_UNSIGNED_WINDOWS }}
+        run: node scripts/windows-signing.cjs setup
 
       - name: Build and release Tauri app
         # v0.6.2: adds `retryAttempts`, which re-tries a failed build and each
@@ -343,8 +328,14 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          # Windows signing is configured by the import step above, which
-          # writes the certificate thumbprint into tauri.conf.json.
+          # Windows signing: the bundler runs scripts/windows-signing.cjs
+          # (configured by the eSigner step above), which needs these. Empty
+          # on macOS and Linux rows, where nothing reads them.
+          ESIGNER_USERNAME: ${{ runner.os == 'Windows' && secrets.ESIGNER_USERNAME || '' }}
+          ESIGNER_PASSWORD: ${{ runner.os == 'Windows' && secrets.ESIGNER_PASSWORD || '' }}
+          ESIGNER_CREDENTIAL_ID: ${{ runner.os == 'Windows' && secrets.ESIGNER_CREDENTIAL_ID || '' }}
+          ESIGNER_TOTP_SECRET: ${{ runner.os == 'Windows' && secrets.ESIGNER_TOTP_SECRET || '' }}
+          WINDOWS_SIGN_NSIS_PLUGINS: ${{ vars.WINDOWS_SIGN_NSIS_PLUGINS }}
         with:
           tagName: ${{ steps.release_meta.outputs.tag_name }}
           releaseName: ${{ steps.release_meta.outputs.release_name }}
@@ -484,6 +475,30 @@ jobs:
             echo "Searching for matching crash log…"
             log show --predicate 'process == "forwardemail-desktop" AND messageType == fault' --last 1m 2>/dev/null | head -40 || true
             exit 1
+          fi
+
+      # Check what actually ships: every .msi and -setup.exe must carry a
+      # valid, timestamped Forward Email signature, and so must the app and
+      # uninstaller inside them. The signing log catches an unsigned NSIS
+      # uninstaller, which NSIS would otherwise embed without complaint.
+      - name: Verify Windows signatures
+        if: runner.os == 'Windows' && steps.windows_signing.outputs.enabled == 'true'
+        shell: bash
+        env:
+          WINDOWS_SIGN_NSIS_PLUGINS: ${{ vars.WINDOWS_SIGN_NSIS_PLUGINS }}
+        run: node scripts/windows-signing.cjs verify "src-tauri/target/${{ matrix.target }}/release/bundle"
+
+      # The Tauri bundler logs the signing command's output only at debug
+      # level, so a failed signing shows no reason in the build step. The
+      # signing log has it (secrets redacted).
+      - name: Show Windows signing log
+        if: failure() && runner.os == 'Windows'
+        shell: bash
+        run: |
+          if [ -n "${WINDOWS_SIGN_LOG:-}" ] && [ -s "$WINDOWS_SIGN_LOG" ]; then
+            cat "$WINDOWS_SIGN_LOG"
+          else
+            echo "No Windows signing log was written."
           fi
 
       # SLSA build provenance attestation. Publishes a signed attestation

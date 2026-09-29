@@ -176,7 +176,7 @@ GitHub Releases assets use `objects.githubusercontent.com` / `release-assets.git
 - **Build fails with MSVC errors** — Install Visual Studio Build Tools with the "Desktop development with C++" workload.
 - **Windows arm64 build fails at link time** — Ensure the Visual Studio ARM64 C++ build tools are installed before targeting `aarch64-pc-windows-msvc`.
 - **"Set as default" only opens Settings** — This is expected on modern Windows. The app can hand off to the system Default apps experience for `mailto`, but it cannot silently claim the handler itself.
-- **SmartScreen or Defender warns on install** — Signing materially helps, but reputation still depends on the certificate and download history. Workflow changes alone do not eliminate those warnings for a new installer.
+- **SmartScreen or Defender warns on install** — Release installers are signed, but SmartScreen reputation for a new certificate builds from download history, so early releases can still show the prompt. Local builds are unsigned.
 
 ### General
 

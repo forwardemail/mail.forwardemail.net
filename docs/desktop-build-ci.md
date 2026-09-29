@@ -19,7 +19,7 @@ The workflow uses native GitHub-hosted runners for each architecture, including 
 
 1. **Build** — Compiles and bundles the Tauri desktop app for each target in the matrix.
 2. **Sign** — Requires the Tauri updater signing key and produces updater signatures for normal releases. The build fails closed when the key is absent unless the emergency repository variable `ALLOW_NO_UPDATER=true` is set intentionally; platform signing also runs where its required secrets are present.
-3. **Windows trust** — Code signing improves Microsoft Defender and SmartScreen trust, but reputation still depends on the shipped certificate and download history; workflow changes alone cannot remove those warnings.
+3. **Windows trust** — Windows rows sign through SSL.com eSigner (`scripts/windows-signing.cjs`) and fail closed without the `ESIGNER_*` secrets; a later step verifies every installer and the executables inside it. Signing improves Microsoft Defender and SmartScreen trust, but reputation still depends on the certificate and download history.
 4. **Upload** — Pushes the generated artifacts into the draft GitHub Release associated with the desktop tag.
 
 Dependency vulnerabilities are surfaced by GitHub's Dependabot alerts on the repository rather than as an in-workflow gate.

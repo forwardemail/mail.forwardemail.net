@@ -121,7 +121,7 @@ Refs: [tauri discussion#8524](https://github.com/tauri-apps/tauri/discussions/85
 
 ## 12. Distribution, signing, store review
 
-- **Windows**: OV cert still shows SmartScreen warnings; EV cert gets instant rep. Plan ~$300–$600/yr.
+- **Windows**: signing is required but SmartScreen still warns until the publisher and file build reputation from downloads. EV certificates no longer skip this. Releases are signed through SSL.com eSigner (docs/SECRETS.md#windows-code-signing-secrets).
 - **macOS**: notarization mandatory for outside-App-Store distribution; App Store adds sandbox + entitlements review.
 - **Linux**: AppImage GPG signatures aren't auto-verified; prefer Flatpak/Snap for trust + sandboxing, or rely on the distro's `.deb/.rpm` signed repo flow.
 - **App Store (iOS)** — email apps face extra scrutiny around:
