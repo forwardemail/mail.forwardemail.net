@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount, onDestroy, tick } from 'svelte';
   import { readable, type Readable, type Unsubscriber } from 'svelte/store';
   import { Local } from '../utils/storage';
   import { keyboardShortcuts } from '../utils/keyboard-shortcuts';
@@ -592,6 +592,16 @@
 
   let subscriptions: Unsubscriber[] = [];
 
+  // The notification cards live inside General, so the Get Started card (and a
+  // #notifications deep link) lands on General and scrolls down to them.
+  let notificationsAnchor = $state<HTMLElement | null>(null);
+
+  const showNotificationSettings = async () => {
+    section = 'general';
+    await tick();
+    notificationsAnchor?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
   onMount(() => {
     loadFromStorage();
     loadShortcuts();
@@ -600,6 +610,8 @@
     const hash = window.location.hash?.slice(1) || '';
     if (hash === 'security' || hash === 'accounts') {
       section = 'privacy';
+    } else if (hash === 'notifications') {
+      void showNotificationSettings();
     } else if (sectionIds.has(hash)) {
       section = hash;
     }
@@ -1956,9 +1968,13 @@
     <div class="mx-auto max-w-4xl space-y-6">
       {#if section === 'general'}
         <GetStartedCard
-          onNavigate={(id) => {
-            section = id;
-            history.replaceState(null, '', `#${id}`);
+          onNavigate={(target) => {
+            history.replaceState(null, '', `#${target}`);
+            if (target === 'notifications') {
+              void showNotificationSettings();
+            } else {
+              section = target;
+            }
           }}
         />
 
@@ -2014,27 +2030,32 @@
           </Card.Content>
         </Card.Root>
 
-        {#if isTauriMobile || isTauriMacOS || (!isTauri && hasWebPushKey())}
-          <PushNotificationSettings {toasts} {openExternal} />
-        {/if}
+        <div bind:this={notificationsAnchor} class="scroll-mt-4 space-y-6">
+          {#if isTauriMobile || isTauriMacOS || (!isTauri && hasWebPushKey())}
+            <PushNotificationSettings {toasts} {openExternal} />
+          {/if}
 
-        <Card.Root>
-          <Card.Header>
-            <Card.Title>Notifications</Card.Title>
-            <Card.Description>Choose which system notifications this app shows.</Card.Description>
-          </Card.Header>
-          <Card.Content class="space-y-4">
-            <NewMailNotificationSettings {toasts} {isTauri} />
-            <label class="flex items-center gap-3">
-              <Checkbox bind:checked={notifyAppUpdates} onCheckedChange={toggleNotifyAppUpdates} />
-              <span>Notify when the app updates</span>
-            </label>
-            <p class="text-sm text-muted-foreground">
-              Shows a system notification when a new version of the app is available or installed.
-              Turning this off does not affect new mail notifications.
-            </p>
-          </Card.Content>
-        </Card.Root>
+          <Card.Root>
+            <Card.Header>
+              <Card.Title>Notifications</Card.Title>
+              <Card.Description>Choose which system notifications this app shows.</Card.Description>
+            </Card.Header>
+            <Card.Content class="space-y-4">
+              <NewMailNotificationSettings {toasts} {isTauri} />
+              <label class="flex items-center gap-3">
+                <Checkbox
+                  bind:checked={notifyAppUpdates}
+                  onCheckedChange={toggleNotifyAppUpdates}
+                />
+                <span>Notify when the app updates</span>
+              </label>
+              <p class="text-sm text-muted-foreground">
+                Shows a system notification when a new version of the app is available or installed.
+                Turning this off does not affect new mail notifications.
+              </p>
+            </Card.Content>
+          </Card.Root>
+        </div>
 
         <!-- In-app account deletion (App Store 5.1.1(v) / Google Play). Distinct
              from "Sign out", which only removes the account from this device. -->

@@ -23,13 +23,14 @@
   /**
    * The card stays routing-agnostic: the empty inbox navigates to the settings
    * page while Settings itself just switches sections, so each host passes the
-   * behavior in.
+   * behavior in. 'notifications' is an anchor inside the General section, not a
+   * section of its own, so hosts scroll to it rather than switching.
    */
   let {
     onNavigate,
     visible = $bindable(false),
   }: {
-    onNavigate: (sectionId: 'general' | 'appearance') => void;
+    onNavigate: (target: 'notifications' | 'appearance') => void;
     /** Reports whether the card is showing, so a host can adjust its own copy. */
     visible?: boolean;
   } = $props();
@@ -53,14 +54,12 @@
   const steps = $derived([
     {
       id: 'notifications' as const,
-      section: 'general' as const,
       label: 'Enable notifications',
       description: 'Get notified when new mail arrives on this device.',
       complete: notificationsComplete,
     },
     {
       id: 'appearance' as const,
-      section: 'appearance' as const,
       label: 'Personalize appearance',
       description: 'Pick a theme, layout, and density that suit you.',
       complete: themeComplete,
@@ -117,7 +116,7 @@
             </div>
           </div>
           {#if !step.complete}
-            <Button variant="outline" size="sm" onclick={() => onNavigate(step.section)}>
+            <Button variant="outline" size="sm" onclick={() => onNavigate(step.id)}>
               Open settings
             </Button>
           {/if}

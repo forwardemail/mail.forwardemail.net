@@ -7755,7 +7755,7 @@
                         <div class="w-full max-w-md px-4 text-left">
                           <GetStartedCard
                             bind:visible={getStartedVisible}
-                            onNavigate={(id) => navigate(`/mailbox/settings#${id}`)}
+                            onNavigate={(target) => navigate(`/mailbox/settings#${target}`)}
                           />
                         </div>
                       {:else if isDraftFolder($selectedFolder)}
