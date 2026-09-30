@@ -192,6 +192,62 @@ emailPurify.addHook('afterSanitizeAttributes', (node) => {
   }
 });
 
+// One attribute of a tag, split the way the HTML parser splits it: a name
+// (anything up to whitespace, "/", ">" or "=", quotes included; a leading "="
+// is part of it), then an optional double-quoted, single-quoted or unquoted
+// value. Walking the tag one attribute at a time means "style=" written
+// inside another attribute's value is never taken for one.
+const TAG_ATTRIBUTE =
+  /\s*((?:=|[^\s/>=])[^\s/>=]*)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?|\s*\/|\s+/y;
+
+/**
+ * Remove attributes from the attribute text of a tag.
+ * @param {string} attributes - Everything between "<img" and ">"
+ * @param {string[]} names - Lowercase names to remove
+ * @returns {{ attributes: string, removed: Record<string, string> }} The
+ *   remaining text, and the raw value of each removed attribute
+ */
+function takeAttributes(attributes, names) {
+  const removed = {};
+  let kept = '';
+  TAG_ATTRIBUTE.lastIndex = 0;
+  while (TAG_ATTRIBUTE.lastIndex < attributes.length) {
+    const start = TAG_ATTRIBUTE.lastIndex;
+    const m = TAG_ATTRIBUTE.exec(attributes);
+    if (!m || m[0] === '') {
+      // Not reachable with the pattern above; if it ever is, keep the rest
+      // but never an attribute that loads something
+      kept += attributes.slice(start).replace(/\s(?:src|srcset)\s*=\s*["']?[^"'\s>]+["']?/gi, '');
+      break;
+    }
+    const name = m[1]?.toLowerCase();
+    if (name && names.includes(name)) {
+      if (!(name in removed)) removed[name] = m[2] ?? m[3] ?? m[4] ?? '';
+    } else {
+      kept += m[0];
+    }
+  }
+  return { attributes: kept, removed };
+}
+
+const BLOCKED_IMAGE_PLACEHOLDER_STYLE =
+  'display: inline-block; min-width: 100px; min-height: 100px; background: #f3f4f6; border: 2px dashed #d1d5db; border-radius: 8px; padding: 8px; color: #6b7280; font-size: 12px; text-align: center;';
+
+/**
+ * Make raw attribute text from the email safe to place inside "…".
+ * Entities the email already wrote (&amp; in a URL) are left as they are, so
+ * the value is encoded once rather than twice.
+ * @param {string} value - Attribute text as it appears in the source
+ * @returns {string}
+ */
+function toAttributeValue(value) {
+  return String(value)
+    .replace(/&(?![a-z][a-z\d]*;|#\d+;|#x[\da-f]+;)/gi, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
 /**
  * Sanitize HTML email content with optional image blocking
  * @param {string} html - Raw HTML to sanitize
@@ -226,10 +282,8 @@ export function sanitizeHtml(html, { blockRemoteImages, blockTrackingPixels } = 
     if (blockRemoteImages || blockTrackingPixels) {
       processedHtml = processedHtml.replace(/<img([^>]*)>/gi, (match, attributes) => {
         // Extract src attribute (handles both single and double quotes, and no quotes)
-        const srcMatch = attributes.match(/\ssrc\s*=\s*["']?([^"'\s>]+)["']?/i);
-        if (!srcMatch) return match; // No src, keep as-is
-
-        const src = srcMatch[1];
+        const { src } = takeAttributes(attributes, ['src']).removed;
+        if (!src) return match; // No src, keep as-is
 
         // Keep data URIs as-is (inline images)
         if (src.startsWith('data:')) {
@@ -256,33 +310,37 @@ export function sanitizeHtml(html, { blockRemoteImages, blockTrackingPixels } = 
         if (shouldBlock) {
           hasBlockedImages = true;
 
-          // Remove existing src attribute
-          let newAttributes = attributes.replace(/\ssrc\s*=\s*["']?[^"'\s>]+["']?/gi, '');
+          // Take out src, and style so it can be kept for when images load.
+          // A pixel also loses srcset: it would load once the user loads the
+          // other images, even though the pixel itself stays blocked.
+          const taken = takeAttributes(
+            attributes,
+            isPixel ? ['src', 'style', 'srcset'] : ['src', 'style'],
+          );
+          const newAttributes = taken.attributes ? ` ${taken.attributes.trim()}` : '';
+          const originalStyle =
+            'style' in taken.removed ? toAttributeValue(taken.removed.style) : '';
 
           // Extract alt text if present
           const altMatch = attributes.match(/\salt\s*=\s*["']([^"']*)["']/i);
           const alt =
             altMatch?.[1] || (isPixel ? 'Tracking pixel blocked' : 'Image blocked for privacy');
 
-          // HTML-encode src and alt to prevent attribute injection before DOMPurify
-          const safeSrc = src
-            .replace(/&/g, '&amp;')
-            .replace(/"/g, '&quot;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;');
-          const safeAlt = alt
-            .replace(/&/g, '&amp;')
-            .replace(/"/g, '&quot;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;');
+          // Values stay HTML-encoded exactly once to prevent attribute injection
+          // before DOMPurify (the source is already encoded: &amp; stays &amp;)
+          const safeSrc = toAttributeValue(src);
+          const safeAlt = toAttributeValue(alt);
+          const keptStyle = originalStyle ? ` data-original-style="${originalStyle}"` : '';
 
           if (isPixel) {
             // Hide tracking pixels completely
-            return `<img${newAttributes} data-original-src="${safeSrc}" data-tracking-pixel="true" alt="${safeAlt}" style="display: none;">`;
-          } else {
-            // Visible placeholder for regular images
-            return `<img${newAttributes} data-original-src="${safeSrc}" alt="${safeAlt}" style="display: inline-block; min-width: 100px; min-height: 100px; background: #f3f4f6; border: 2px dashed #d1d5db; border-radius: 8px; padding: 8px; color: #6b7280; font-size: 12px; text-align: center;">`;
+            return `<img${newAttributes} data-original-src="${safeSrc}"${keptStyle} data-tracking-pixel="true" alt="${safeAlt}" style="display: none;">`;
           }
+
+          // An image with its own style keeps it (its layout is what holds the
+          // space); one without gets the visible placeholder
+          const style = originalStyle || BLOCKED_IMAGE_PLACEHOLDER_STYLE;
+          return `<img${newAttributes} data-original-src="${safeSrc}"${keptStyle} alt="${safeAlt}" style="${style}">`;
         }
 
         return match;
@@ -298,7 +356,7 @@ export function sanitizeHtml(html, { blockRemoteImages, blockTrackingPixels } = 
         USE_PROFILES: { html: true },
         ADD_TAGS: ['style'],
         ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto|tel|ftp):|[^a-z]|[a-z+.-]+(?:[^a-z+.-:]|$))/i,
-        ADD_ATTR: ['data-original-src', 'data-tracking-pixel'],
+        ADD_ATTR: ['data-original-src', 'data-original-style', 'data-tracking-pixel'],
       });
       if (activeCssContext.blockedCount > 0) {
         hasBlockedImages = true;
@@ -427,45 +485,46 @@ export function restoreBlockedImages(html, { includeTrackingPixels = false } = {
   if (!html) return '';
 
   try {
-    // Pattern excludes tracking pixels unless explicitly requested
-    const pattern = includeTrackingPixels
-      ? /<img([^>]*)data-original-src=["']([^"']+)["']([^>]*)>/gi
-      : /<img([^>]*)data-original-src=["']([^"']+)["'](?![^>]*data-tracking-pixel="true")([^>]*)>/gi;
+    // Edit a parsed, inert copy rather than matching tags as text. A
+    // <template> does not load images and, unlike a parsed document, keeps a
+    // leading <style> where it is instead of moving it into <head>.
+    const template = new DOMParser()
+      .parseFromString('<!doctype html><title></title>', 'text/html')
+      .createElement('template');
+    template.innerHTML = html;
 
-    const restoredHtml = html.replace(pattern, (match, before, originalSrc, after) => {
+    for (const img of template.content.querySelectorAll('img[data-original-src]')) {
+      if (!includeTrackingPixels && img.getAttribute('data-tracking-pixel') === 'true') continue;
+
       // Validate URL before restoring - block javascript: and other dangerous URIs
-      if (!isSafeImageUrl(originalSrc)) {
-        return match; // Keep blocked if URL is unsafe
-      }
+      const src = img.getAttribute('data-original-src');
+      if (!isSafeImageUrl(src)) continue;
 
-      // HTML-encode the src to prevent attribute injection
-      const safeSrc = originalSrc
-        .replace(/&/g, '&amp;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#39;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;');
-
-      // Remove placeholder styles and data attributes
-      const cleanBefore = before
-        .replace(/style=["'][^"']*["']\s*/gi, '')
-        .replace(/data-tracking-pixel=["']true["']\s*/gi, '');
-      const cleanAfter = after
-        .replace(/style=["'][^"']*["']\s*/gi, '')
-        .replace(/data-tracking-pixel=["']true["']\s*/gi, '');
-      // Restore the original src with sanitized URL
-      return `<img${cleanBefore}src="${safeSrc}"${cleanAfter}>`;
-    });
+      // Swap the placeholder style back for the image's own, kept aside while
+      // it was blocked
+      const originalStyle = img.getAttribute('data-original-style');
+      if (originalStyle) img.setAttribute('style', originalStyle);
+      else img.removeAttribute('style');
+      img.removeAttribute('data-original-src');
+      img.removeAttribute('data-original-style');
+      img.removeAttribute('data-tracking-pixel');
+      img.setAttribute('src', src);
+    }
 
     // Put back the CSS backgrounds sanitizeEmailCss neutralized, so unblocking
-    // restores a <style> sheet's imagery too and not just <img> tags.
-    const withCssUrls = restoredHtml.replace(
-      new RegExp(`/\\*${CSS_BLOCKED_URL_MARKER}([^*]+)\\*/\\s*none`, 'g'),
-      (match, originalUrl) => (isSafeImageUrl(originalUrl) ? `url("${originalUrl}")` : match),
-    );
+    // restores a <style> sheet's imagery too and not just <img> tags. Only
+    // stylesheet text holds real markers: one written into an attribute by
+    // the email is left alone, as the quotes put back here would end the
+    // attribute early.
+    const cssMarker = new RegExp(`/\\*${CSS_BLOCKED_URL_MARKER}([^*]+)\\*/\\s*none`, 'g');
+    for (const style of template.content.querySelectorAll('style')) {
+      style.textContent = style.textContent.replace(cssMarker, (match, originalUrl) =>
+        isSafeImageUrl(originalUrl) ? `url("${originalUrl}")` : match,
+      );
+    }
 
     // The user chose to load images: lift the reader's image CSP too.
-    return withCssUrls.split(REMOTE_IMAGES_BLOCKED_MARKER).join('');
+    return template.innerHTML.split(REMOTE_IMAGES_BLOCKED_MARKER).join('');
   } catch (error) {
     console.error('Failed to restore images:', error);
     return html;

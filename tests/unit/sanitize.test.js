@@ -195,6 +195,38 @@ describe('restoreBlockedImages', () => {
     expect(restored).toContain('data:image/png;base64,abc');
     expect(restored).toContain('src="https://cdn.example.com/img.jpg"');
   });
+
+  it("keeps the image's own style after blocking and loading", () => {
+    const { html } = sanitizeHtml(
+      '<p>Hi</p><img src="https://cdn.example.com/logo.png" width="32" height="32" alt="" style="vertical-align: middle; margin-right: 8px">',
+      { blockRemoteImages: true },
+    );
+    const restored = restoreBlockedImages(html);
+    expect(restored).toContain('style="vertical-align: middle; margin-right: 8px"');
+    expect(restored).not.toContain('data-original-style');
+    expect(restored.match(/\sstyle=/g)).toHaveLength(1);
+  });
+
+  it('keeps image URLs with query strings intact after blocking and loading', () => {
+    const { html } = sanitizeHtml(
+      '<p>Hi</p><img src="https://cdn.example.com/i.png?w=600&amp;h=300" alt="Banner">',
+      { blockRemoteImages: true },
+    );
+    const restored = restoreBlockedImages(html);
+    expect(restored).toContain('src="https://cdn.example.com/i.png?w=600&amp;h=300"');
+    const img = new DOMParser().parseFromString(restored, 'text/html').querySelector('img');
+    expect(img.getAttribute('src')).toBe('https://cdn.example.com/i.png?w=600&h=300');
+  });
+
+  it('only puts back blocked CSS urls inside stylesheets', () => {
+    const { html } = sanitizeHtml(
+      '<p title="/*fe-blocked-url:https://x.example/a onmouseover=alert(1) b*/none">Hi</p><img src="https://cdn.example.com/i.png">',
+      { blockRemoteImages: true },
+    );
+    const restored = restoreBlockedImages(html);
+    const p = new DOMParser().parseFromString(restored, 'text/html').querySelector('p');
+    expect(p.getAttributeNames()).toEqual(['title']);
+  });
 });
 
 describe('htmlToPlainText', () => {
