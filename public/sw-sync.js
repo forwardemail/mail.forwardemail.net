@@ -856,6 +856,141 @@
     return url.href;
   };
 
+  // ── Web Push (browser build) ──────────────────────────────────────────
+  //
+  // The server sends RFC 8291 encrypted JSON: { event, title, body, alias_id,
+  // message_id, mailbox, ... } (buildPayload in forwardemail.net). Silent
+  // events are never sent to browsers. The page shares which account each
+  // alias ID belongs to (push-accounts message) so a click opens the right
+  // mailbox; it is kept in Cache Storage because the worker can be stopped
+  // between pushes.
+  const PUSH_META_CACHE = 'fe-push-meta-v1';
+  const PUSH_ACCOUNTS_KEY = new URL(
+    '__fe-push-accounts',
+    self.registration?.scope || self.location.origin + '/',
+  ).href;
+  const PUSH_TEXT_MAX = 255;
+
+  const savePushAccounts = async (accounts) => {
+    try {
+      const cache = await caches.open(PUSH_META_CACHE);
+      const clean = {};
+      if (accounts && typeof accounts === 'object') {
+        for (const [aliasId, email] of Object.entries(accounts)) {
+          if (typeof aliasId === 'string' && typeof email === 'string' && email.includes('@')) {
+            clean[aliasId.slice(0, 64)] = email.slice(0, 320);
+          }
+        }
+      }
+      await cache.put(
+        PUSH_ACCOUNTS_KEY,
+        new Response(JSON.stringify(clean), { headers: { 'Content-Type': 'application/json' } }),
+      );
+    } catch (err) {
+      LOG && console.warn('[SW] could not store push accounts', err);
+    }
+  };
+
+  const readPushAccounts = async () => {
+    try {
+      const cache = await caches.open(PUSH_META_CACHE);
+      const response = await cache.match(PUSH_ACCOUNTS_KEY);
+      return response ? await response.json() : {};
+    } catch {
+      return {};
+    }
+  };
+
+  const pushText = (value) =>
+    typeof value === 'string'
+      ? value
+          // eslint-disable-next-line no-control-regex
+          .replace(/[\u0000-\u001F\u007F]/g, ' ')
+          .trim()
+          .slice(0, PUSH_TEXT_MAX)
+      : '';
+
+  // Where a clicked push notification leads (same shape the page uses).
+  const pushTarget = (data, account) => {
+    const event = pushText(data.event);
+    const id = pushText(data.message_id);
+    const base = account ? { account } : {};
+    if (/^calendar/i.test(event)) return { ...base, appPath: '/calendar' };
+    if (/^(?:contact|addressBook)/i.test(event)) return { ...base, appPath: '/contacts' };
+    return { ...base, folder: pushText(data.mailbox) || 'INBOX', ...(id ? { messageId: id } : {}) };
+  };
+
+  // Chromium and Firefox (outside iOS) do not require a notification while a
+  // window of the site is focused, and the page shows its own in-app toast
+  // then. WebKit (Safari, and every browser and Home Screen app on iOS and
+  // iPadOS) revokes subscriptions whose pushes show no notification, so
+  // anything not positively identified as Blink or Gecko always shows one.
+  const mayStayQuietWhenFocused = () => {
+    const ua = self.navigator?.userAgent || '';
+    return /(?:Chrome|Chromium|Firefox)\//.test(ua) && !/iPhone|iPad|iPod/.test(ua);
+  };
+
+  self.addEventListener('push', (event) => {
+    let data = {};
+    try {
+      data = event.data ? event.data.json() : {};
+    } catch {
+      data = {};
+    }
+    if (!data || typeof data !== 'object') data = {};
+    if (data.silent === true || data.silent === 'true') return;
+
+    event.waitUntil(
+      (async () => {
+        if (mayStayQuietWhenFocused()) {
+          const windows = await self.clients.matchAll({
+            type: 'window',
+            includeUncontrolled: true,
+          });
+          if (windows.some((client) => client.focused && client.visibilityState === 'visible')) {
+            return;
+          }
+        }
+
+        const accounts = await readPushAccounts();
+        const aliasId = pushText(data.alias_id);
+        const account = aliasId && typeof accounts[aliasId] === 'string' ? accounts[aliasId] : '';
+        const title = pushText(data.title) || 'New message';
+        const body = pushText(data.body);
+        const id = pushText(data.message_id);
+        await self.registration.showNotification(title, {
+          body,
+          icon: '/icons/icon-192.png',
+          // one notification per message, even if the push is retried
+          tag: id ? `push-${id}` : undefined,
+          data: { target: pushTarget(data, account) },
+        });
+      })(),
+    );
+  });
+
+  // The browser rotated the subscription: subscribe again with the same key
+  // and tell open windows so they register the new one with the server.
+  self.addEventListener('pushsubscriptionchange', (event) => {
+    event.waitUntil(
+      (async () => {
+        try {
+          const applicationServerKey = event.oldSubscription?.options?.applicationServerKey;
+          if (applicationServerKey && !event.newSubscription) {
+            await self.registration.pushManager.subscribe({
+              userVisibleOnly: true,
+              applicationServerKey,
+            });
+          }
+        } catch (err) {
+          LOG && console.warn('[SW] push resubscribe failed', err);
+        }
+        const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+        windows.forEach((client) => client.postMessage({ type: 'push-subscription-changed' }));
+      })(),
+    );
+  });
+
   self.addEventListener('notificationclick', (event) => {
     const target = event.notification?.data?.target || null;
     event.notification?.close?.();
@@ -906,6 +1041,9 @@
           lastSyncAt: manifest?.lastSyncAt || null,
         });
       });
+    } else if (data.type === 'push-accounts') {
+      const saved = savePushAccounts(data.accounts);
+      if (event.waitUntil) event.waitUntil(saved);
     } else if (data.type === 'close-idb') {
       // Main app is about to call indexedDB.deleteDatabase() for recovery.
       // Close every tracked handle so the delete isn't blocked by us.

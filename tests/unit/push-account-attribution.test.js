@@ -21,7 +21,7 @@ const { registerPushTokenMock, registerForAccountMock, callbacks, listenerCleanu
   }),
 );
 
-vi.mock('../../src/utils/platform.js', () => ({ isTauriMobile: true }));
+vi.mock('../../src/utils/platform.js', () => ({ isTauri: true, isTauriMobile: true }));
 
 vi.mock('../../src/utils/background-service.js', () => ({
   listPushTokens: vi.fn().mockResolvedValue([]),

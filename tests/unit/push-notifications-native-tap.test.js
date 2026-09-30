@@ -15,6 +15,7 @@ const { callbacks, listenerCleanup, registerPushTokenMock, unregisterPushTokenMo
 );
 
 vi.mock('../../src/utils/platform.js', () => ({
+  isTauri: true,
   isTauriMobile: true,
 }));
 

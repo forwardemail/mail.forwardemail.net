@@ -30,7 +30,7 @@
  */
 
 import { isDemoMode } from './demo-mode.js';
-import { isTauriMacOS, isTauriMobile } from './platform.js';
+import { isTauri, isTauriMacOS, isTauriMobile } from './platform.js';
 import { Local, Accounts } from './storage';
 import {
   getLastTokenRegistrationError,
@@ -54,10 +54,25 @@ import {
   serializeUnifiedPushSubscription,
   unregisterUnifiedPush,
 } from './unified-push.js';
+import {
+  getWebPushPermission,
+  isWebPushSupported,
+  requestWebPushPermission,
+  shareAccountsWithServiceWorker,
+  subscribeWebPush,
+  unsubscribeWebPush,
+} from './web-push.js';
 
 // Platforms whose native layer can register for remote push. The macOS
 // plugin still answers "unsupported" when the build is not signed for APNs.
 const isNativePushPlatform = isTauriMobile || isTauriMacOS;
+
+// The browser build registers a Web Push subscription instead (web-push.js).
+// Evaluated lazily: the service worker and Notification API are only known
+// once the page runs.
+function isWebPushPlatform() {
+  return !isNativePushPlatform && isWebPushSupported();
+}
 
 // Timeout for native push bridge calls such as token retrieval and listener
 // setup. If one hangs (common on Android when Google Play Services is
@@ -331,6 +346,7 @@ function normalizePushProvider(platform) {
   if (platform === 'ios' || platform === 'macos' || platform === 'apns') return 'apns';
   if (platform === 'android' || platform === 'fcm') return 'fcm';
   if (platform === 'unified-push') return 'unified-push';
+  if (platform === 'web' || platform === 'web-push') return 'web-push';
   return null;
 }
 
@@ -338,6 +354,7 @@ function getPushProviderLabel(provider) {
   if (provider === 'apns') return 'Apple Push Notification Service';
   if (provider === 'fcm') return 'Firebase Cloud Messaging';
   if (provider === 'unified-push') return 'UnifiedPush';
+  if (provider === 'web-push') return 'Web Push (this browser)';
   return 'Not selected';
 }
 
@@ -422,6 +439,7 @@ async function sanitizePushRegistration(record, localRegistrationId, localProvid
 }
 
 function getCurrentPushProvider() {
+  if (isWebPushPlatform()) return 'web-push';
   const storedProvider = normalizePushProvider(Local.get(TOKEN_PLATFORM_KEY));
   if (storedProvider) return storedProvider;
   if (activeNativeProvider) return activeNativeProvider;
@@ -455,6 +473,13 @@ async function getMacOSPermissionState() {
 }
 
 async function getNotificationPermissionStatus() {
+  if (isWebPushPlatform()) {
+    const permission = getWebPushPermission();
+    if (permission === 'granted') return 'granted';
+    if (permission === 'unsupported') return 'unsupported';
+    return 'not-granted';
+  }
+
   if (isTauriMacOS) {
     const state = await getMacOSPermissionState();
     if (state === 'granted') return 'granted';
@@ -1191,8 +1216,75 @@ async function initializeAndroidPush() {
   return initializeUnifiedPush();
 }
 
+/**
+ * Subscribe this browser and register the subscription for every signed-in
+ * account. Never prompts: permission is asked for from the Settings click
+ * (registerCurrentDevicePush), because browsers ignore a prompt that is not
+ * tied to a user gesture.
+ */
+async function initializeWebPush() {
+  if (getWebPushPermission() !== 'granted') {
+    throw new PushRegistrationError(
+      'permission-denied',
+      getWebPushPermission() === 'denied'
+        ? 'Notifications are blocked for this site. Allow them in the browser site settings, then try again.'
+        : 'Notification permission has not been granted.',
+    );
+  }
+
+  const token = await withTimeout(
+    subscribeWebPush(),
+    NATIVE_PUSH_TIMEOUT_MS,
+    'Web Push subscription',
+  );
+  await reconcileAllAccounts(token, 'web-push');
+  if (!getActiveRegistrationId()) {
+    throw new PushRegistrationError(
+      'registration-failed',
+      getLastTokenRegistrationError()?.message ||
+        'The server did not accept this browser subscription.',
+    );
+  }
+  shareWebPushAccounts();
+  return true;
+}
+
+// The service worker names the account in a clicked notification from this map.
+function shareWebPushAccounts() {
+  const map = {};
+  for (const [email, reg] of Object.entries(getAccountRegistrations() || {})) {
+    if (email !== '__active_session__' && reg?.aliasId && reg.platform === 'web-push') {
+      map[reg.aliasId] = email;
+    }
+  }
+  shareAccountsWithServiceWorker(map);
+}
+
 async function initializePushNotifications() {
   lastRegistrationFailure = null;
+
+  if (isWebPushPlatform()) {
+    try {
+      await initializeWebPush();
+      initialized = true;
+      activeNativeProvider = 'web-push';
+      console.info('[push] Initialized Web Push');
+      return true;
+    } catch (error) {
+      console.warn('[push] Web Push initialization failed:', error);
+      if (error instanceof PushTimeoutError) {
+        recordRegistrationFailure('registration-timeout', describeError(error));
+        throw error;
+      }
+      if (error instanceof PushRegistrationError) {
+        recordRegistrationFailure(error.code, error.detail);
+      } else {
+        recordRegistrationFailure('registration-failed', describeError(error));
+      }
+      return false;
+    }
+  }
+
   await removeNativeListeners();
   await removeUnifiedPushListeners();
 
@@ -1257,7 +1349,7 @@ export function getLastPushRegistrationFailure() {
  * @returns {Promise<boolean>} true when APNs, FCM, or UnifiedPush registered
  */
 export async function initPushNotifications() {
-  if (!isNativePushPlatform) return false;
+  if (!isNativePushPlatform && !isWebPushPlatform()) return false;
   if (initialized) return true;
   if (initializationPromise) return initializationPromise;
 
@@ -1276,8 +1368,25 @@ export async function initPushNotifications() {
  * Registers push for ALL signed-in accounts, not just the active one.
  */
 export async function syncPushNotifications() {
-  if (!isNativePushPlatform || isDemoMode() || !Local.get('alias_auth')) return false;
+  if (isDemoMode() || !Local.get('alias_auth')) return false;
+  if (isWebPushPlatform()) {
+    // A browser only registers once the user has allowed notifications from
+    // Settings; at boot it just keeps an existing registration current.
+    if (getWebPushPermission() !== 'granted') return false;
+    return initPushNotifications();
+  }
+  if (!isNativePushPlatform) return false;
   return initPushNotifications();
+}
+
+/**
+ * The service worker saw the browser rotate the push subscription
+ * (pushsubscriptionchange). Register the new one for every account.
+ */
+export async function handleWebPushSubscriptionChange() {
+  if (!isWebPushPlatform()) return false;
+  initialized = false;
+  return syncPushNotifications();
 }
 
 /**
@@ -1309,6 +1418,8 @@ export async function deregisterAccountPush(email, aliasAuth) {
   }
 
   removeAccountRegistration(email);
+  // the service worker should no longer open this account's notifications
+  if (isWebPushPlatform()) shareWebPushAccounts();
   notifyPushStatusChanged();
   return removed;
 }
@@ -1346,6 +1457,13 @@ export async function cleanupPushNotifications() {
     }),
   );
 
+  // Only a browser that allowed notifications can hold a subscription; skip
+  // the service worker round trip otherwise so sign-out stays instant.
+  if (isWebPushPlatform() && getWebPushPermission() === 'granted') {
+    await unsubscribeWebPush();
+    shareAccountsWithServiceWorker({});
+  }
+
   if (activeNativeProvider === 'unified-push') {
     try {
       await unregisterUnifiedPush();
@@ -1366,8 +1484,12 @@ export async function cleanupPushNotifications() {
 // ── Status & Health ───────────────────────────────────────────────────────
 
 function createBasePushStatus() {
-  const platform = getNativePushPlatform();
+  const web = isWebPushPlatform();
+  // The browser build reports "web" even when this browser cannot receive
+  // push, so Settings can say why (the user-agent guess would say iOS).
+  const platform = isTauri ? getNativePushPlatform() : 'web';
   const supported =
+    web ||
     (isTauriMobile && (platform === 'ios' || platform === 'android')) ||
     (isTauriMacOS && platform === 'macos');
   const authenticated = Boolean(Local.get('alias_auth'));
@@ -1378,7 +1500,7 @@ function createBasePushStatus() {
     supported,
     authenticated,
     demo,
-    platform: supported ? platform : null,
+    platform: supported || !isTauri ? platform : null,
     provider,
     providerLabel: getPushProviderLabel(provider),
     androidProviderMode: supported && platform === 'android' ? ANDROID_PROVIDER : null,
@@ -1556,7 +1678,12 @@ async function removeCurrentPushRegistration(initialStatus) {
 }
 
 export function registerCurrentDevicePush() {
+  // Browsers only show the permission prompt for a user gesture, so ask
+  // before anything else is awaited (this runs inside the Settings click).
+  const permissionRequest =
+    isWebPushPlatform() && getWebPushPermission() === 'default' ? requestWebPushPermission() : null;
   return runPushManagement(async () => {
+    if (permissionRequest) await permissionRequest;
     const initialStatus = await getPushNotificationStatus();
     const guardCode = getManagementGuardCode(initialStatus);
     if (guardCode) return { ok: false, code: guardCode, status: initialStatus };
@@ -1607,7 +1734,10 @@ export function deregisterCurrentDevicePush() {
 }
 
 export function reregisterCurrentDevicePush() {
+  const permissionRequest =
+    isWebPushPlatform() && getWebPushPermission() === 'default' ? requestWebPushPermission() : null;
   return runPushManagement(async () => {
+    if (permissionRequest) await permissionRequest;
     const initialStatus = await getPushNotificationStatus();
     const guardCode = getManagementGuardCode(initialStatus);
     if (guardCode) return { ok: false, code: guardCode, status: initialStatus };

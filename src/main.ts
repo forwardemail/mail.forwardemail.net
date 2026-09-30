@@ -499,8 +499,11 @@ if (isTauriDesktop) {
 // now registers the device token for every account, not just the active one.
 const syncPushForActiveAccount = () => {
   // macOS is included: its plugin answers "unsupported" unless the build is
-  // signed for APNs, and syncPushNotifications then returns quietly.
-  if (!isTauriMobile && !isTauriMacOS) return;
+  // signed for APNs, and syncPushNotifications then returns quietly. The
+  // browser build keeps its Web Push subscription current (only once the
+  // user has allowed notifications). Windows and Linux apps have no remote
+  // push; their WebSocket covers notifications while they run.
+  if (isTauri && !isTauriMobile && !isTauriMacOS) return;
 
   import('./utils/push-notifications.js')
     .then(({ syncPushNotifications }) => syncPushNotifications())
@@ -3169,6 +3172,13 @@ function setupServiceWorkerDbErrorHandler() {
       // (notificationclick in public/sw-sync.js).
       if (event.data?.type === 'notification-click') {
         openNotificationTarget(event.data.target);
+        return;
+      }
+      // The browser replaced the Web Push subscription; register the new one.
+      if (event.data?.type === 'push-subscription-changed') {
+        import('./utils/push-notifications.js')
+          .then(({ handleWebPushSubscriptionChange }) => handleWebPushSubscriptionChange())
+          .catch((error) => console.warn('[main] Web Push re-registration failed:', error));
         return;
       }
       handleDbError(event.data);

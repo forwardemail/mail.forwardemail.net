@@ -125,6 +125,7 @@
   import LabelModal from './components/LabelModal.svelte';
   import GetStartedCard from './components/GetStartedCard.svelte';
   import PushNotificationSettings from './components/PushNotificationSettings.svelte';
+  import { hasWebPushKey } from '../utils/web-push.js';
   import NewMailNotificationSettings from './components/NewMailNotificationSettings.svelte';
 
   interface ToastApi {
@@ -2013,7 +2014,7 @@
           </Card.Content>
         </Card.Root>
 
-        {#if isTauriMobile || isTauriMacOS}
+        {#if isTauriMobile || isTauriMacOS || (!isTauri && hasWebPushKey())}
           <PushNotificationSettings {toasts} {openExternal} />
         {/if}
 

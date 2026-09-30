@@ -33,11 +33,15 @@ wss://api.forwardemail.net/v1/ws
 
 Append `?msgpackr=true` for binary framing.
 
-**Authentication** uses Basic Auth via URL userinfo (browser WebSocket API does not support custom headers):
+**Authentication** is the first message. Browsers cannot set headers on a WebSocket handshake, and the server rejects credentials in the URL (`?username=`, `?password=`, `?token=`) with `400` because URLs are logged. The client connects with `?auth=message` and sends the alias credentials as its first message (a JSON text frame, within 5 seconds):
 
 ```
-wss://user%40domain.com:alias-password@api.forwardemail.net/v1/ws
+wss://api.forwardemail.net/v1/ws?auth=message
+→ {"event":"auth","username":"you@example.com","password":"…"}
+← {"event":"connected","aliasId":"…"}
 ```
+
+The server sends nothing before it accepts the credentials. It closes the connection with `4400` (malformed message), `4401` (wrong credentials) or `4403` (the account may not connect), which stop reconnecting; any other close (`1013` try again later, `4408` no message in time, `4429` too many connections or failed attempts) is retried with backoff. When the alias password or API token changes, the server closes open connections with `4001`; the client reconnects, and stops with `4401` if the stored password is no longer valid.
 
 Unauthenticated connections receive only broadcast events (`newRelease`).
 
@@ -137,7 +141,8 @@ Inbound messages are rate-limited to 200 messages per minute. Excess messages ar
 
 - **Backoff**: Exponential with jitter (1s initial, 60s max)
 - **Hard cap**: 50 attempts before giving up (dispatches `_maxReconnectsReached`)
-- **No reconnect** on close codes `1000` (normal), `4401` (auth required), or `4403` (auth failed)
+- **No reconnect** on close codes `1000` (normal), `4400` (malformed first message), `4401` (wrong credentials), or `4403` (not allowed)
+- **Reset** of the backoff and attempt counter once the server sends `connected`
 - **Credential change**: Closes and reconnects automatically
 
 ## Usage
@@ -177,8 +182,13 @@ ws.destroy();
 | ---------- | ----------------------- |
 | `1000`     | Normal closure          |
 | `4000`     | Client ping timeout     |
-| `4401`     | Authentication required |
-| `4403`     | Authentication failed   |
+| `1013`     | Try again later         |
+| `4001`     | Credentials changed     |
+| `4400`     | Malformed first message |
+| `4401`     | Wrong credentials       |
+| `4403`     | Not allowed             |
+| `4408`     | No first message        |
+| `4429`     | Too many connections    |
 
 ## Related Documentation
 

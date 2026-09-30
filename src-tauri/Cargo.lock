@@ -1317,6 +1317,7 @@ dependencies = [
  "tauri-plugin-window-state",
  "time",
  "tokio",
+ "windows-registry",
 ]
 
 [[package]]

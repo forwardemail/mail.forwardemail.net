@@ -2,9 +2,7 @@
  * Forward Email – WebSocket Client
  *
  * Connects to wss://api.forwardemail.net/v1/ws with:
- *   - Basic Auth via URL userinfo (browser WebSocket limitation)
- *   - Fallback: query parameters (?username=, ?password=) for environments
- *     where URL userinfo is stripped (e.g. some proxy setups)
+ *   - The alias credentials in the first message (?auth=message)
  *   - Optional msgpackr binary framing (?msgpackr=true)
  *   - Exponential backoff reconnection with jitter
  *   - Server-initiated ping/pong keep-alive (responds to server pings)
@@ -17,22 +15,18 @@
  *   - Server sends { event: 'ping' } every 30s; client responds { event: 'pong' }
  *   - Client messages (except pong) are silently ignored by the server
  *
- * Authentication (per api-websocket-handler.js _authenticate()):
- *   The server supports three authentication methods:
- *     1. Authorization header (HTTP Basic Auth) — preferred
- *     2. Query params ?username=&password= — fallback for browser clients
- *     3. Query param ?token= (with ?alias_id=) — API token auth
- *   The server prefers the Authorization header but explicitly falls back
- *   to query parameters for browser WebSocket clients that cannot set
- *   custom headers on the upgrade request.
- *
- *   This client uses URL userinfo (user:pass@host) which browsers
- *   automatically translate into an Authorization header.  If userinfo
- *   is not supported by the environment, it falls back to query params.
+ * Authentication:
+ *   Browsers cannot set headers on a WebSocket handshake, and the server
+ *   rejects credentials in the URL (?username=, ?password=, ?token=) because
+ *   URLs are logged.  The client connects with ?auth=message and sends
+ *   { event: 'auth', username, password } as its first message; the server
+ *   sends nothing until it answers with { event: 'connected', aliasId }, or
+ *   closes the connection (4400 malformed, 4401 wrong credentials, 4403 not
+ *   allowed: not retried; anything else: retried with backoff).
  *
  * Hardening:
  *   - Enforces wss:// only (never ws://).
- *   - Credentials are passed via URL userinfo but never logged or exposed.
+ *   - Credentials only travel in the first message, never in a URL.
  *   - Reconnection has a hard cap on total attempts to prevent infinite loops.
  *   - Inbound messages are validated: type-checked, size-limited.
  *   - Rate limiting on inbound messages to prevent flood attacks.
@@ -114,6 +108,9 @@ const BACKOFF_MULTIPLIER = 2;
 const JITTER_MAX_MS = 2_000;
 const PING_TIMEOUT_MS = 45_000; // Close if no ping received within 45s (server sends every 30s)
 const MAX_RECONNECT_ATTEMPTS = 50;
+// Close codes after which reconnecting cannot help (malformed first message,
+// wrong credentials, not allowed); the credentials must change first
+const NO_RETRY_CLOSE_CODES = new Set([4400, 4401, 4403]);
 
 // ── Message Rate Limiting ──────────────────────────────────────────────────
 const MAX_MESSAGES_PER_MINUTE = 200;
@@ -148,29 +145,24 @@ export function createWebSocketClient(opts = {}) {
   let rateLimitWindowStart = Date.now();
 
   // Reset reconnect counter when the browser comes back online
+  // A handshake is under way
+  function isConnecting() {
+    return socket?.readyState === 0;
+  }
+
   function handleOnline() {
     if (destroyed) return;
     reconnectAttempts = 0;
     backoff = INITIAL_BACKOFF_MS;
     // If not currently connected, trigger a reconnect immediately
-    if (!connected && !reconnectTimer) {
+    if (!connected && !reconnectTimer && !isConnecting()) {
       scheduleReconnect();
     }
   }
   window.addEventListener('online', handleOnline);
 
   /**
-   * Build the WebSocket URL with authentication.
-   *
-   * The server (api-websocket-handler.js _authenticate()) supports:
-   *   1. Authorization header (HTTP Basic Auth) — preferred
-   *   2. Query params ?username=&password= — browser fallback
-   *   3. Query param ?token= with ?alias_id= — API token auth
-   *
-   * We use URL userinfo (user:pass@host) which browsers automatically
-   * convert into an Authorization header.  This is the preferred method.
-   * The query param fallback exists on the server for environments where
-   * URL userinfo is stripped by proxies.
+   * Build the WebSocket URL (never with credentials; see the 'open' handler).
    */
   function buildURL() {
     const base = opts.apiBase || config.apiBase || 'https://api.forwardemail.net';
@@ -355,22 +347,22 @@ export function createWebSocketClient(opts = {}) {
 
     console.info('[ws] Connecting...');
 
-    try {
-      // Browser WebSocket API does not support custom headers, so we pass
-      // credentials via query params.  The server's _authenticate() reads
-      // query.username / query.password when the Authorization header is
-      // absent (see api-websocket-handler.js).
-      let connectURL = url;
-      if (opts.email && opts.password) {
-        const u = new URL(url);
-        u.searchParams.set('username', opts.email);
-        u.searchParams.set('password', opts.password);
-        connectURL = u.toString();
-      }
+    // Browsers cannot set an Authorization header on a WebSocket handshake,
+    // and the server rejects credentials in the URL (they end up in logs), so
+    // the credentials are sent as the first message instead (see 'open').
+    const withCredentials = Boolean(opts.email && opts.password);
+    let connectURL = url;
+    if (withCredentials) {
+      const u = new URL(url);
+      u.searchParams.set('auth', 'message');
+      connectURL = u.toString();
+    }
 
-      socket = new WebSocket(connectURL);
+    let ws;
+    try {
+      ws = new WebSocket(connectURL);
       if (wantsMsgpackr && msgpackrAvailable) {
-        socket.binaryType = 'arraybuffer';
+        ws.binaryType = 'arraybuffer';
       }
     } catch (err) {
       console.error('[ws] Connection error:', err);
@@ -378,11 +370,44 @@ export function createWebSocketClient(opts = {}) {
       return;
     }
 
-    socket.addEventListener('open', () => {
+    // A replaced socket (reconnect, credential change) can still fire close
+    // or error afterwards; only the current socket may change state.
+    const previous = socket;
+    socket = ws;
+    connected = false;
+    authenticated = false;
+    clearPingTimeout();
+    if (previous && previous.readyState < 2) {
+      try {
+        previous.close(1000, 'Replaced');
+      } catch {
+        // ignore
+      }
+    }
+
+    ws.addEventListener('open', () => {
+      if (socket !== ws) return;
       console.info('[ws] Connected');
+      if (withCredentials) {
+        // Always a JSON text frame (the server accepts nothing else here),
+        // whatever encoding the events use.
+        try {
+          ws.send(
+            JSON.stringify({
+              event: 'auth',
+              username: opts.email,
+              password: opts.password,
+            }),
+          );
+        } catch (err) {
+          console.warn('[ws] Could not send credentials:', err?.message || err);
+        }
+      }
       connected = true;
       authenticated = false;
-      reconnectAttempts = 0;
+      // (the reconnect counter and backoff reset once the server accepts the
+      // connection, see 'connected': a server that keeps closing it right
+      // away must not be retried without backoff)
       messageCount = 0;
       rateLimitWindowStart = Date.now();
       // Don't start ping timeout here — wait for auth response or first ping.
@@ -390,14 +415,16 @@ export function createWebSocketClient(opts = {}) {
       dispatch('_connected', {});
     });
 
-    socket.addEventListener('message', async (event) => {
+    ws.addEventListener('message', async (event) => {
+      if (socket !== ws) return;
       // Rate limit check
       if (isRateLimited()) {
         return;
       }
 
       const parsed = await parseMessage(event.data);
-      if (!parsed) return;
+      // replaced while a Blob was being read
+      if (socket !== ws || !parsed) return;
 
       // Server sends flat objects: { event, timestamp, ...fields }
       const eventName = parsed.event || parsed.type;
@@ -428,6 +455,8 @@ export function createWebSocketClient(opts = {}) {
           return;
 
         case 'connected':
+          reconnectAttempts = 0;
+          backoff = INITIAL_BACKOFF_MS;
           // Server sends { event: 'connected', aliasId } on successful auth,
           // or { event: 'connected', broadcastOnly: true } for unauthenticated.
           if (parsed.aliasId && !parsed.broadcastOnly) {
@@ -453,7 +482,8 @@ export function createWebSocketClient(opts = {}) {
       dispatch(eventName, payload);
     });
 
-    socket.addEventListener('close', (event) => {
+    ws.addEventListener('close', (event) => {
+      if (socket !== ws) return;
       console.info(`[ws] Closed: code=${event.code}`);
       connected = false;
       authenticated = false;
@@ -462,7 +492,10 @@ export function createWebSocketClient(opts = {}) {
 
       // Don't reconnect on normal closure or auth failure
       if (event.code === 1000) return;
-      if (event.code === 4401 || event.code === 4403) {
+      // 4001: the server closed it because the credentials changed; the
+      // reconnect below authenticates again, which closes with 4401 (and
+      // stops) if the stored password is no longer valid
+      if (NO_RETRY_CLOSE_CODES.has(event.code)) {
         console.warn('[ws] Authentication failed, not reconnecting');
         dispatch('_authFailed', { code: event.code });
         return;
@@ -471,7 +504,8 @@ export function createWebSocketClient(opts = {}) {
       scheduleReconnect();
     });
 
-    socket.addEventListener('error', () => {
+    ws.addEventListener('error', () => {
+      if (socket !== ws) return;
       // The browser Error event carries no useful detail (it's opaque for
       // security reasons).  Log connection context instead so developers
       // can correlate failures with network/auth state.
@@ -540,10 +574,11 @@ export function createWebSocketClient(opts = {}) {
       opts.email = email;
       opts.password = password;
       reconnectAttempts = 0;
-      if (socket) {
-        socket.close(1000, 'Credentials updated');
-      }
-      // Reconnect will happen automatically via the close handler
+      backoff = INITIAL_BACKOFF_MS;
+      if (destroyed) return;
+      // connect() replaces (and closes) the current socket; a normal close
+      // does not trigger the reconnect path by itself.
+      connect();
     },
 
     /**
@@ -560,7 +595,7 @@ export function createWebSocketClient(opts = {}) {
      * Safe to call when already connected (no-op).
      */
     reconnect() {
-      if (destroyed || connected) return;
+      if (destroyed || connected || isConnecting()) return;
       reconnectAttempts = 0;
       backoff = INITIAL_BACKOFF_MS;
       connect();

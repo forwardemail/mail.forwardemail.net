@@ -202,85 +202,175 @@ const WINDOWS_MAIL_CLIENT_NAME: &str = "Forward Email";
 #[cfg(all(desktop, target_os = "windows"))]
 const WINDOWS_MAILTO_PROGID: &str = "net.forwardemail.mail.mailto";
 
+// Registry writes go through the Win32 registry API (windows-registry, the
+// crate tauri-plugin-deep-link already uses). Spawning reg.exe once per value
+// flashed a console window a dozen times and, from the GUI process, could fail
+// with 0xc0000142 before every value was written, which left Forward Email
+// missing from Default apps.
 #[cfg(all(desktop, target_os = "windows"))]
-fn add_windows_registry_value(key: &str, name: Option<&str>, data: &str) -> Result<(), String> {
-    let mut command = std::process::Command::new("reg");
-    command.arg("add").arg(key);
-
-    if let Some(name) = name {
-        command.arg("/v").arg(name);
-    } else {
-        command.arg("/ve");
-    }
-
-    let output = command
-        .arg("/t")
-        .arg("REG_SZ")
-        .arg("/d")
-        .arg(data)
-        .arg("/f")
-        .output()
-        .map_err(|e| format!("failed to launch reg.exe for {}: {}", key, e))?;
-
-    if output.status.success() {
-        return Ok(());
-    }
-
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let detail = if !stderr.is_empty() { stderr } else { stdout };
-    Err(format!("reg add {} failed: {}", key, detail))
+fn set_windows_registry_string(key: &str, name: &str, data: &str) -> Result<(), String> {
+    windows_registry::CURRENT_USER
+        .create(key)
+        .and_then(|k| k.set_string(name, data))
+        .map_err(|e| format!("could not write HKCU\\{}: {}", key, e))
 }
 
+#[cfg(all(desktop, target_os = "windows"))]
+#[link(name = "shell32")]
+extern "system" {
+    fn SHChangeNotify(
+        w_event_id: i32,
+        u_flags: u32,
+        dw_item1: *const std::ffi::c_void,
+        dw_item2: *const std::ffi::c_void,
+    );
+}
+
+/// Register Forward Email as a mail client for the current user so it is
+/// listed under Settings > Apps > Default apps (by name and for MAILTO).
+/// Idempotent and quick; it also refreshes the executable path after an
+/// update moves the app.
 #[cfg(all(desktop, target_os = "windows"))]
 fn register_windows_mail_client() -> Result<(), String> {
     let exe_path =
         std::env::current_exe().map_err(|e| format!("current_exe unavailable: {}", e))?;
-    let exe = exe_path.display().to_string();
+    let exe = dunce_simplified(&exe_path);
     let command = format!("\"{}\" \"%1\"", exe);
-    let classes_key = format!(r"HKCU\Software\Classes\{}", WINDOWS_MAILTO_PROGID);
-    let mail_client_key = format!(r"HKCU\Software\Clients\Mail\{}", WINDOWS_MAIL_CLIENT_NAME);
+    let icon = format!("{},0", exe);
+    let classes_key = format!(r"Software\Classes\{}", WINDOWS_MAILTO_PROGID);
+    let mail_client_key = format!(r"Software\Clients\Mail\{}", WINDOWS_MAIL_CLIENT_NAME);
     let capabilities_key = format!(r"{}\Capabilities", mail_client_key);
-    let url_associations_key = format!(r"{}\URLAssociations", capabilities_key);
-    let startmenu_key = format!(r"{}\Startmenu", capabilities_key);
 
-    add_windows_registry_value(&classes_key, None, "URL:Forward Email MailTo Protocol")?;
-    add_windows_registry_value(&classes_key, Some("URL Protocol"), "")?;
-    add_windows_registry_value(&format!(r"{}\DefaultIcon", classes_key), None, &exe)?;
-    add_windows_registry_value(
-        &format!(r"{}\shell\open\command", classes_key),
-        None,
-        &command,
-    )?;
+    // Nothing to do when the registration already points at this executable;
+    // rewriting it (and notifying the shell) on every launch would make
+    // Explorer refresh its association cache for no reason.
+    let read = |key: &str, name: &str| {
+        windows_registry::CURRENT_USER
+            .open(key)
+            .and_then(|k| k.get_string(name))
+            .ok()
+    };
+    let current = read(&format!(r"{}\shell\open\command", classes_key), "")
+        .map(|value| value == command)
+        .unwrap_or(false)
+        && read(&format!(r"{}\URLAssociations", capabilities_key), "mailto").as_deref()
+            == Some(WINDOWS_MAILTO_PROGID)
+        && read(r"Software\RegisteredApplications", WINDOWS_MAIL_CLIENT_NAME).is_some();
+    if current {
+        return Ok(());
+    }
 
-    add_windows_registry_value(&mail_client_key, None, WINDOWS_MAIL_CLIENT_NAME)?;
-    add_windows_registry_value(
-        &format!(r"{}\shell\open\command", mail_client_key),
-        None,
-        &command,
+    // ProgID the MAILTO association points at
+    set_windows_registry_string(&classes_key, "", "URL:Forward Email MailTo Protocol")?;
+    set_windows_registry_string(&classes_key, "URL Protocol", "")?;
+    set_windows_registry_string(
+        &classes_key,
+        "FriendlyTypeName",
+        "Forward Email MailTo Protocol",
     )?;
-    add_windows_registry_value(
-        &capabilities_key,
-        Some("ApplicationName"),
+    set_windows_registry_string(&format!(r"{}\DefaultIcon", classes_key), "", &icon)?;
+    set_windows_registry_string(
+        &format!(r"{}\Application", classes_key),
+        "ApplicationName",
         WINDOWS_MAIL_CLIENT_NAME,
     )?;
-    add_windows_registry_value(
-        &capabilities_key,
-        Some("ApplicationDescription"),
-        "Forward Email - Privacy-focused email client",
+    set_windows_registry_string(
+        &format!(r"{}\Application", classes_key),
+        "ApplicationIcon",
+        &icon,
     )?;
-    add_windows_registry_value(&url_associations_key, Some("mailto"), WINDOWS_MAILTO_PROGID)?;
-    add_windows_registry_value(&startmenu_key, Some("Mail"), WINDOWS_MAIL_CLIENT_NAME)?;
-    add_windows_registry_value(
-        r"HKCU\Software\RegisteredApplications",
-        Some(WINDOWS_MAIL_CLIENT_NAME),
+    set_windows_registry_string(
+        &format!(r"{}\shell\open\command", classes_key),
+        "",
+        &command,
+    )?;
+
+    // Mail client and its capabilities (what Default apps lists)
+    set_windows_registry_string(&mail_client_key, "", WINDOWS_MAIL_CLIENT_NAME)?;
+    set_windows_registry_string(&format!(r"{}\DefaultIcon", mail_client_key), "", &icon)?;
+    set_windows_registry_string(
+        &format!(r"{}\shell\open\command", mail_client_key),
+        "",
+        &format!("\"{}\"", exe),
+    )?;
+    set_windows_registry_string(
+        &capabilities_key,
+        "ApplicationName",
+        WINDOWS_MAIL_CLIENT_NAME,
+    )?;
+    set_windows_registry_string(
+        &capabilities_key,
+        "ApplicationDescription",
+        "Private, open-source email for your own domain.",
+    )?;
+    set_windows_registry_string(&capabilities_key, "ApplicationIcon", &icon)?;
+    set_windows_registry_string(
+        &format!(r"{}\URLAssociations", capabilities_key),
+        "mailto",
+        WINDOWS_MAILTO_PROGID,
+    )?;
+    set_windows_registry_string(
+        &format!(r"{}\StartMenu", capabilities_key),
+        "Mail",
+        WINDOWS_MAIL_CLIENT_NAME,
+    )?;
+    set_windows_registry_string(
+        r"Software\RegisteredApplications",
+        WINDOWS_MAIL_CLIENT_NAME,
         &format!(
             r"Software\Clients\Mail\{}\Capabilities",
             WINDOWS_MAIL_CLIENT_NAME
         ),
     )?;
 
+    // Tell Explorer and Settings that associations changed so the new entry
+    // shows up without signing out.
+    const SHCNE_ASSOCCHANGED: i32 = 0x0800_0000;
+    const SHCNF_IDLIST: u32 = 0;
+    unsafe {
+        SHChangeNotify(
+            SHCNE_ASSOCCHANGED,
+            SHCNF_IDLIST,
+            std::ptr::null(),
+            std::ptr::null(),
+        );
+    }
+
     Ok(())
+}
+
+/// `C:\Program Files\...` rather than the `\\?\C:\...` form current_exe() can
+/// return, which the shell does not accept in an open command.
+#[cfg(all(desktop, target_os = "windows"))]
+fn dunce_simplified(path: &std::path::Path) -> String {
+    let text = path.display().to_string();
+    if let Some(rest) = text.strip_prefix(r"\\?\") {
+        if !rest.starts_with(r"UNC\") {
+            return rest.to_string();
+        }
+    }
+    text
+}
+
+/// The ProgID Windows opens mailto: links with for this user, from the
+/// per-user choice Settings writes.
+#[cfg(all(desktop, target_os = "windows"))]
+fn windows_mailto_user_choice() -> Option<String> {
+    // Current Windows 11 builds keep the effective choice in UserChoiceLatest
+    // and may leave a stale UserChoice beside it.
+    let base = r"Software\Microsoft\Windows\Shell\Associations\UrlAssociations\mailto";
+    [
+        format!(r"{}\UserChoiceLatest\ProgId", base),
+        format!(r"{}\UserChoice", base),
+    ]
+    .iter()
+    .find_map(|key| {
+        windows_registry::CURRENT_USER
+            .open(key)
+            .and_then(|k| k.get_string("ProgId"))
+            .ok()
+            .filter(|value| !value.is_empty())
+    })
 }
 
 /// Check if this app is the default mailto: handler.
@@ -326,26 +416,30 @@ async fn is_default_mailto_handler_impl(_app: &tauri::AppHandle) -> Result<Mailt
 async fn is_default_mailto_handler_impl(app: &tauri::AppHandle) -> Result<MailtoStatus, String> {
     use tauri_plugin_deep_link::DeepLinkExt;
 
-    match app.deep_link().is_registered("mailto") {
-        Ok(true) => Ok(MailtoStatus {
-            // Windows does not allow silently changing the default mail app.
-            // `register()` makes the app eligible in Settings, but it does not
-            // prove that MAILTO is currently assigned to this app.
-            status: "registered".to_string(),
-            current_handler: String::new(),
-        }),
-        Ok(false) => Ok(MailtoStatus {
-            status: "not_default".to_string(),
-            current_handler: String::new(),
-        }),
-        Err(e) => {
-            log::warn!("deep-link is_registered check failed: {}", e);
-            Ok(MailtoStatus {
-                status: "unknown".to_string(),
-                current_handler: String::new(),
-            })
-        }
+    // Windows does not let an app change the default silently, but it does
+    // record the user's choice, so "default" can be told from "registered".
+    let choice = windows_mailto_user_choice().unwrap_or_default();
+    if choice.eq_ignore_ascii_case(WINDOWS_MAILTO_PROGID) {
+        return Ok(MailtoStatus {
+            status: "default".to_string(),
+            current_handler: choice,
+        });
     }
+
+    let registered = windows_registry::CURRENT_USER
+        .open(r"Software\RegisteredApplications")
+        .and_then(|k| k.get_string(WINDOWS_MAIL_CLIENT_NAME))
+        .is_ok()
+        || app.deep_link().is_registered("mailto").unwrap_or(false);
+
+    Ok(MailtoStatus {
+        status: if registered {
+            "registered".to_string()
+        } else {
+            "not_default".to_string()
+        },
+        current_handler: choice,
+    })
 }
 
 #[cfg(all(desktop, target_os = "linux"))]
@@ -443,26 +537,35 @@ async fn set_default_mailto_handler_impl(
 async fn set_default_mailto_handler_impl(
     app: &tauri::AppHandle,
 ) -> Result<SetMailtoResult, String> {
-    use tauri_plugin_deep_link::DeepLinkExt;
-
     if let Err(e) = register_windows_mail_client() {
-        log::warn!("windows mail client registration metadata failed: {}", e);
-    }
-
-    if let Err(e) = app.deep_link().register("mailto") {
-        log::error!("deep-link register failed: {}", e);
+        log::error!("windows mail client registration failed: {}", e);
         return Ok(SetMailtoResult {
             method: "error".to_string(),
             message: format!("Failed to register Forward Email with Windows: {}", e),
         });
     }
 
-    let instructions = "Windows Settings has been opened. Search for MAILTO under Default apps, then choose Forward Email from the handler list. If Forward Email does not appear under the application search yet, the MAILTO link-type search is the correct fallback on Windows.";
-
-    match app
-        .opener()
-        .open_url("ms-settings:defaultapps", None::<&str>)
+    if windows_mailto_user_choice()
+        .map(|choice| choice.eq_ignore_ascii_case(WINDOWS_MAILTO_PROGID))
+        .unwrap_or(false)
     {
+        return Ok(SetMailtoResult {
+            method: "registered".to_string(),
+            message: "Forward Email is your default email app.".to_string(),
+        });
+    }
+
+    // Windows 11 opens Forward Email's own page in Default apps (with its
+    // MAILTO entry) for registeredAppUser; Windows 10 ignores the parameter
+    // and opens Default apps.
+    let instructions = "Windows Settings has been opened to Forward Email's default apps page. Select MAILTO and choose Forward Email. If a list of all apps opens instead, search for Forward Email, or search for MAILTO under link types.";
+    let page = "ms-settings:defaultapps?registeredAppUser=Forward%20Email";
+    let opened = app.opener().open_url(page, None::<&str>).or_else(|_| {
+        app.opener()
+            .open_url("ms-settings:defaultapps", None::<&str>)
+    });
+
+    match opened {
         Ok(_) => Ok(SetMailtoResult {
             method: "open_mail_settings".to_string(),
             message: instructions.to_string(),
@@ -472,7 +575,7 @@ async fn set_default_mailto_handler_impl(
             Ok(SetMailtoResult {
                 method: "open_mail_settings".to_string(),
                 message: format!(
-                    "Forward Email has been registered with Windows. Open Windows Settings > Apps > Default apps, search for MAILTO, and choose Forward Email from that handler list. ({})",
+                    "Forward Email has been registered with Windows. Open Settings > Apps > Default apps, choose Forward Email, and set it for MAILTO. ({})",
                     e
                 ),
             })
@@ -973,6 +1076,18 @@ pub fn run() {
                 });
 
                 setup_tray(app)?;
+
+                // List Forward Email as a mail client in Windows Default apps
+                // from the first launch (per user, no prompt), the way an
+                // installer would. Choosing it as the default stays with the
+                // user in Settings.
+                // (release builds only: a dev build would register target\debug)
+                #[cfg(all(target_os = "windows", not(debug_assertions)))]
+                std::thread::spawn(|| {
+                    if let Err(e) = register_windows_mail_client() {
+                        log::warn!("windows mail client registration failed: {}", e);
+                    }
+                });
 
                 // Reload the main webview if its content process stops
                 // answering. See renderer_watchdog.rs for the why.

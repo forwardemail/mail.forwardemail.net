@@ -64,12 +64,21 @@ let onBackgroundCallbacks = [];
 /**
  * Validate a push notification token or serialized UnifiedPush subscription.
  */
+// 'Web browser' reads better than 'web-push' in the registered devices list.
+function deviceName(provider) {
+  const label = provider === 'web-push' ? 'Web browser' : provider;
+  return `${label} (${navigator.userAgent})`.slice(0, 255);
+}
+
 function isValidToken(token, provider) {
   if (typeof token !== 'string' || token.length === 0 || token.length > TOKEN_MAX_LENGTH) {
     return false;
   }
 
-  if (provider !== 'unified-push') return /^[\w:_\-./]+$/.test(token);
+  // UnifiedPush and browser Web Push both carry an RFC 8291 subscription.
+  if (provider !== 'unified-push' && provider !== 'web-push') {
+    return /^[\w:_\-./]+$/.test(token);
+  }
 
   try {
     const subscription = JSON.parse(token);
@@ -98,7 +107,7 @@ function isValidToken(token, provider) {
  * accounts an `alias_id` belongs to.
  *
  * @param {string} token - Device token or serialized UnifiedPush subscription
- * @param {string} platform - 'ios' | 'android' | 'apns' | 'fcm' | 'unified-push'
+ * @param {string} platform - 'ios' | 'android' | 'apns' | 'fcm' | 'unified-push' | 'web-push'
  * @returns {Promise<{id: string, aliasId: string}|null>} the registration
  */
 // Why the last registerPushToken call failed ({ status, message }), or null
@@ -112,7 +121,7 @@ export function getLastTokenRegistrationError() {
 export async function registerPushToken(token, platform) {
   const provider = platform === 'ios' ? 'apns' : platform === 'android' ? 'fcm' : platform;
 
-  if (!['apns', 'fcm', 'unified-push'].includes(provider)) {
+  if (!['apns', 'fcm', 'unified-push', 'web-push'].includes(provider)) {
     console.warn('[background-service] Invalid push provider:', platform);
     return null;
   }
@@ -133,7 +142,7 @@ export async function registerPushToken(token, platform) {
       body: JSON.stringify({
         token,
         platform: provider,
-        device_name: `${provider} (${navigator.userAgent})`.slice(0, 255),
+        device_name: deviceName(provider),
       }),
     });
 
@@ -184,13 +193,13 @@ function readAliasId(registration) {
  * instead of reading from the active session.
  *
  * @param {string} token - Device token or serialized UnifiedPush subscription
- * @param {string} platform - 'ios' | 'android' | 'apns' | 'fcm' | 'unified-push'
+ * @param {string} platform - 'ios' | 'android' | 'apns' | 'fcm' | 'unified-push' | 'web-push'
  * @param {string} aliasAuth - The alias auth credential (email:password format)
  * @returns {Promise<{id: string, aliasId: string}|null>} the registration
  */
 export async function registerPushTokenForAccount(token, platform, aliasAuth) {
   const provider = platform === 'ios' ? 'apns' : platform === 'android' ? 'fcm' : platform;
-  if (!['apns', 'fcm', 'unified-push'].includes(provider)) {
+  if (!['apns', 'fcm', 'unified-push', 'web-push'].includes(provider)) {
     console.warn('[background-service] Invalid push provider:', platform);
     return null;
   }
@@ -209,7 +218,7 @@ export async function registerPushTokenForAccount(token, platform, aliasAuth) {
       body: JSON.stringify({
         token,
         platform: provider,
-        device_name: `${provider} (${navigator.userAgent})`.slice(0, 255),
+        device_name: deviceName(provider),
       }),
     });
     if (!response.ok) {

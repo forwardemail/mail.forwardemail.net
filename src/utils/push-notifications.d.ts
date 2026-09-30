@@ -1,5 +1,5 @@
-export type PushProvider = 'apns' | 'fcm' | 'unified-push';
-export type PushPlatform = 'ios' | 'android' | 'macos';
+export type PushProvider = 'apns' | 'fcm' | 'unified-push' | 'web-push';
+export type PushPlatform = 'ios' | 'android' | 'macos' | 'web';
 export type PushPermissionStatus = 'granted' | 'not-granted' | 'unknown' | 'unsupported';
 export type PushHealth =
   | 'active'
@@ -89,6 +89,7 @@ export interface PushNavigationAction {
 
 export function initPushNotifications(): Promise<boolean>;
 export function syncPushNotifications(): Promise<boolean>;
+export function handleWebPushSubscriptionChange(): Promise<boolean>;
 export function initPushTapHandling(): Promise<void>;
 export function cleanupPushNotifications(): Promise<boolean>;
 export function deregisterAccountPush(email: string, aliasAuth?: string): Promise<boolean>;

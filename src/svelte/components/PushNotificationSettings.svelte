@@ -125,6 +125,7 @@
   };
 
   const isMacOS = () => status?.platform === 'macos';
+  const isWeb = () => status?.platform === 'web';
 
   const actionError = (code: PushManagementCode) => {
     switch (code) {
@@ -133,13 +134,17 @@
       case 'demo-mode':
         return 'Push notifications are unavailable in demo mode.';
       case 'permission-denied':
-        return 'Notification permission was not granted. Enable it in system settings and try again.';
+        return isWeb()
+          ? 'Notifications are blocked for this site. Allow them in the browser site settings (the icon next to the address bar), then try again.'
+          : 'Notification permission was not granted. Enable it in system settings and try again.';
       case 'permission-blocked':
         return isMacOS()
           ? 'Notifications are turned off for Forward Email. Turn on Allow Notifications in System Settings > Notifications, then register again.'
           : 'Notifications are turned off for Forward Email. Turn on Allow Notifications in Settings, then register again.';
       case 'token-unavailable':
-        return 'This device could not obtain a push token from the platform notification service.';
+        return isWeb()
+          ? 'This browser could not subscribe to its push service.'
+          : 'This device could not obtain a push token from the platform notification service.';
       case 'server-rejected':
         return 'Forward Email did not accept this device registration.';
       case 'registration-timeout':
@@ -153,7 +158,9 @@
       case 'unsupported':
         return isMacOS()
           ? 'This build of Forward Email is not signed for Apple Push Notifications.'
-          : 'Native push notifications are not supported on this platform.';
+          : isWeb()
+            ? 'This browser cannot receive push notifications.'
+            : 'Native push notifications are not supported on this platform.';
       default:
         return 'Push registration did not complete. Refresh the status and try again.';
     }
@@ -390,6 +397,10 @@
             {#if status.platform === 'macos'}
               This build of Forward Email is not signed for Apple Push Notifications. New mail
               notifications still arrive while the app is running.
+            {:else if status.platform === 'web'}
+              This browser cannot receive push notifications. On iPhone and iPad, add Forward Email
+              to the Home Screen from Safari first. New mail notifications still appear while the
+              app is open.
             {:else}
               Push notification controls are available only in the native Android, iOS, and macOS
               apps.
@@ -418,6 +429,9 @@
             {#if status.provider === 'unified-push'}
               UnifiedPush can keep data synchronized, but Android may not display notifications
               until notification permission is enabled in system settings.
+            {:else if status.platform === 'web'}
+              Registering asks this browser for permission to show notifications. If they are
+              blocked, allow them in the browser site settings and try again.
             {:else}
               Registration will request notification permission. If it remains denied, enable it in
               system settings and try again.
@@ -432,7 +446,7 @@
             Platform
           </dt>
           <dd class="mt-1 flex items-center gap-2 font-medium">
-            {#if status.platform === 'macos'}
+            {#if status.platform === 'macos' || status.platform === 'web'}
               <Laptop class="h-4 w-4 text-muted-foreground" />
             {:else}
               <Smartphone class="h-4 w-4 text-muted-foreground" />
@@ -443,7 +457,9 @@
                 ? 'Android'
                 : status.platform === 'macos'
                   ? 'macOS'
-                  : 'Unsupported'}
+                  : status.platform === 'web'
+                    ? 'This browser'
+                    : 'Unsupported'}
           </dd>
         </div>
         <div class="rounded-md border p-3">

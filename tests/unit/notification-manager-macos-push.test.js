@@ -5,7 +5,7 @@
 
 vi.mock('../../src/utils/platform.js', () => ({
   isTauriMobile: false,
-  isTauri: false,
+  isTauri: true,
   isTauriMacOS: true,
 }));
 vi.mock('../../src/utils/notification-bridge.js', () => ({

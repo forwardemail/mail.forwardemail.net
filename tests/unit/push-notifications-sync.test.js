@@ -25,6 +25,7 @@ vi.mock('../../src/utils/demo-mode.js', () => ({
 }));
 
 vi.mock('../../src/utils/platform.js', () => ({
+  isTauri: true,
   isTauriMobile: true,
 }));
 

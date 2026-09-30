@@ -85,6 +85,11 @@ objc2 = "0.6"
 tauri-plugin-remote-push = { path = "plugins/tauri-plugin-remote-push", optional = true }
 tauri-plugin-unified-push = { path = "plugins/tauri-plugin-unified-push" }
 
+# Windows: per-user mail client registration for Default apps (the same
+# crate tauri-plugin-deep-link uses, already in Cargo.lock).
+[target.'cfg(windows)'.dependencies]
+windows-registry = "0.5"
+
 # macOS-only: Objective-C bindings for dock badge + the custom NSOpenPanel
 # wrapper that works around the rfd 0.16 / objc2-app-kit 0.3.2 panic on
 # macOS 26 Tahoe (the upstream openPanel binding is non-nullable but the

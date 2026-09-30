@@ -1,6 +1,6 @@
 # Push Notifications Setup Guide
 
-This document describes the Forward Email push architecture and its deployment requirements. The native transports are **APNs on iOS and macOS** and one dual-provider Android release containing both **FCM and UnifiedPush**. FCM is the runtime default when configured; users can explicitly select UnifiedPush as the Google-free alternative. macOS registers for APNs only in release builds signed with a Developer ID provisioning profile that grants Push Notifications (see [macOS application and signing configuration](#macos-application-and-signing-configuration)). Windows, Linux and browser builds support local notification display but do not register a remote push subscription.
+This document describes the Forward Email push architecture and its deployment requirements. The native transports are **APNs on iOS and macOS** and one dual-provider Android release containing both **FCM and UnifiedPush**. FCM is the runtime default when configured; users can explicitly select UnifiedPush as the Google-free alternative. macOS registers for APNs only in release builds signed with a Developer ID provisioning profile that grants Push Notifications (see [macOS application and signing configuration](#macos-application-and-signing-configuration)). Browsers register a **Web Push** subscription with the same VAPID key pair. The Windows and Linux apps display local notifications from the WebSocket while they run and do not register a remote push subscription.
 
 ## Support and permission matrix
 
@@ -12,7 +12,7 @@ This document describes the Forward Email push architecture and its deployment r
 | macOS                 | APNs (release builds with the push profile) | Tauri notification plugin; system alert for APNs pushes      | macOS mobile-push commands; `Entitlements.push.plist` and an embedded Developer ID provisioning profile, written by `scripts/macos-push-signing.sh` in release CI | Supported when `MACOS_PROVISIONING_PROFILE_BASE64` is set; otherwise local notifications only |
 | Windows               | None                                        | Tauri notification plugin                                    | Shared notification commands                                                                                                                                      | Local notifications only                                                                      |
 | Ubuntu/Linux          | None                                        | Desktop notification service                                 | Shared notification commands                                                                                                                                      | Local notifications only                                                                      |
-| Browser/PWA           | None                                        | Web Notifications API                                        | Browser notification permission                                                                                                                                   | Local notifications only; no Web Push subscription                                            |
+| Browser/PWA           | Web Push (VAPID)                            | Service worker (`public/sw-sync.js`)                         | Browser notification permission, asked from **Settings → Push notifications**; `VAPID_PUBLIC_KEY` in the web build                                                | Supported in Chromium, Firefox and Safari; on iOS/iPadOS only when added to the Home Screen   |
 
 > **UnifiedPush is not a manifest permission.** It is a distributor-mediated Android protocol. A compatible distributor application must be installed and selected, and the backend must encrypt each message to the subscription’s endpoint and public keys.
 
@@ -110,7 +110,9 @@ pnpm exec web-push generate-vapid-keys
 | Private key               | `VAPID_PRIVATE_KEY` | Never copy to this repository, Actions, APK, AAB, or CI logs                                        |
 | Contact URI               | `VAPID_SUBJECT`     | Backend only; normally `mailto:support@forwardemail.net` or an HTTPS URL controlled by the operator |
 
-The public and private values must remain a matched pair. Changing the VAPID pair requires Android clients to create new UnifiedPush subscriptions. The public key is intentionally embedded in Android artifacts; the private key remains a backend-only production secret.
+The public and private values must remain a matched pair. Changing the VAPID pair requires Android clients to create new UnifiedPush subscriptions; browsers notice the new key and subscribe again on their next start.
+
+The web build reads the same `VAPID_PUBLIC_KEY` Actions variable (the Build steps in `deploy.yml` and `release.yml`). Without it the web app shows push as unsupported. The public key is intentionally embedded in Android artifacts; the private key remains a backend-only production secret.
 
 A complete backend example is:
 
@@ -177,9 +179,15 @@ Reading the reason:
 
 A second registration started while one is waiting shares its answer rather than queueing behind it.
 
+## Web Push in the browser
+
+`src/utils/web-push.js` subscribes the browser with `pushManager.subscribe({ userVisibleOnly: true, applicationServerKey })` and registers the subscription with `POST /v1/push-tokens` as platform `web-push` for every signed-in account. The permission prompt is shown only from the **Register** button in Settings, because browsers ignore prompts that no click started; once allowed, each start keeps the registration current without prompting.
+
+The server encrypts new-mail alerts with RFC 8291 and signs them with VAPID, like UnifiedPush. Silent events are never sent to browsers (Safari revokes subscriptions that receive pushes without a notification). The service worker shows the alert unless a window of the app is focused in a Chromium or Firefox browser (WebKit, which includes every browser on iOS, always gets one) and opens the message in its account when clicked; the page tells the worker which account each alias ID belongs to. While Web Push is registered, a hidden tab does not also draw the WebSocket copy of the alert.
+
 ## Notifications from the WebSocket
 
-On every platform the app also hears about new mail over its WebSocket connection while it runs. On Windows, Linux and the web that is the only source. `src/utils/notification-manager.js` decides what to show:
+On every platform the app also hears about new mail over its WebSocket connection while it runs. On Windows and Linux that is the only source, and in a browser without Web Push. `src/utils/notification-manager.js` decides what to show:
 
 - **The user is in the app** (the page is visible and its window has focus): an in-app toast, no system notification. On phones, being on screen is enough.
 - **The app is open but not in use** (hidden, minimized, or a visible window or tab behind another app): a system notification, through the Tauri notification plugin in the desktop and mobile apps and the service worker (or `new Notification()`) in the browser.

@@ -366,6 +366,13 @@ export async function requestNotificationPermission() {
 
   const result = await requestPermission();
   permissionGranted = result === 'granted';
+  // In a browser, allowing notifications is also what Web Push waits for;
+  // subscribe now rather than on the next start.
+  if (permissionGranted && !isTauri) {
+    import('./push-notifications.js')
+      .then(({ syncPushNotifications }) => syncPushNotifications())
+      .catch(() => {});
+  }
   return permissionGranted;
 }
 
@@ -1060,7 +1067,10 @@ async function _handleNewMessageInner(data, { suppressVisual = false, source = '
     if (source === 'websocket') {
       try {
         const { getActivePushProvider } = await import('./push-notifications.js');
-        if (getActivePushProvider() === 'fcm') return;
+        // A browser registered for Web Push gets the same alert from its
+        // service worker (public/sw-sync.js), which also covers closed tabs.
+        const provider = getActivePushProvider();
+        if (provider === 'fcm' || provider === 'web-push') return;
       } catch {
         // Push module unavailable (web build without push) - draw as usual.
       }

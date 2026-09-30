@@ -21,12 +21,39 @@
   let instructionMessage = $state(null);
   let visible = $state(false);
 
-  onMount(async () => {
+  onMount(() => {
     supported = isMailtoHandlerSupported();
-    if (supported) {
-      status = await getRegistrationStatus();
-    }
     visible = supported;
+    if (!supported) return undefined;
+    getRegistrationStatus().then((next) => {
+      status = next;
+    });
+
+    // The choice is made in the system settings window; check again when the
+    // user comes back to Forward Email.
+    // focus and visibilitychange both fire on return: one check at a time,
+    // and only the newest answer is kept
+    let latest = 0;
+    let pending = null;
+    const refresh = () => {
+      if (document.visibilityState === 'hidden' || pending) return;
+      const request = ++latest;
+      pending = getRegistrationStatus()
+        .then((next) => {
+          if (request !== latest) return;
+          status = next;
+          if (next === 'default') instructionMessage = null;
+        })
+        .finally(() => {
+          pending = null;
+        });
+    };
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', refresh);
+    return () => {
+      window.removeEventListener('focus', refresh);
+      document.removeEventListener('visibilitychange', refresh);
+    };
   });
 
   async function handleRegister() {
@@ -84,8 +111,8 @@
         {:else if status === 'registered'}
           <HelpCircle class="h-4 w-4 text-fg-link" />
           <span class="text-fg-link">
-            Forward Email is registered with Windows, but Windows still needs you to choose it for
-            the MAILTO link type in Default apps.
+            Forward Email is listed in Windows Default apps. Choose it for MAILTO to open mailto:
+            links with it.
           </span>
         {:else if status === 'declined'}
           <AlertCircle class="h-4 w-4 text-state-caution" />
@@ -125,7 +152,7 @@
         {:else if status === 'default'}
           Re-register as default
         {:else if status === 'registered'}
-          Open Windows mail settings again
+          Open Windows Default apps
         {:else}
           Set as default email app
         {/if}
@@ -133,8 +160,8 @@
 
       <p class="text-xs text-muted-foreground">
         When registered, clicking mailto: links on any website will open Forward Email to compose a
-        new message. On Windows, if Forward Email does not appear under the application search, use
-        the MAILTO link-type search instead and choose Forward Email from that handler list.
+        new message. On Windows the choice is made in Settings &gt; Apps &gt; Default apps &gt;
+        Forward Email, under MAILTO.
       </p>
     </Card.Content>
   </Card.Root>

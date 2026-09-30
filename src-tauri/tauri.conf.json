@@ -66,6 +66,7 @@
       },
       "nsis": {
         "displayLanguageSelector": true,
+        "installerHooks": "windows/installer-hooks.nsh",
         "installerIcon": "icons/icon.ico",
         "languages": ["English"],
         "headerImage": null,

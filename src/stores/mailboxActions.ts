@@ -2139,7 +2139,7 @@ export const signOut = async () => {
 
   // Remove only THIS account's push registration (other accounts keep theirs).
   // If this is the LAST account, cleanupPushNotifications() tears down everything.
-  if ((isTauriMobile || isTauriMacOS) && currentEmail) {
+  if ((isTauriMobile || isTauriMacOS || !isTauri) && currentEmail) {
     try {
       const remainingBeforeRemove = Accounts.getAll().filter((a) => a.email !== currentEmail);
       if (remainingBeforeRemove.length > 0) {
@@ -2510,7 +2510,7 @@ const performAccountSwitch = async (email) => {
   // permission prompt and the APNs/FCM token for many seconds, and whoever
   // awaits the switch (a tapped notification opening its message) must not
   // wait on that.
-  if (isTauriMobile || isTauriMacOS) {
+  if (isTauriMobile || isTauriMacOS || !isTauri) {
     import('../utils/push-notifications.js')
       .then(({ syncPushNotifications }) => syncPushNotifications())
       .catch((err) => {
