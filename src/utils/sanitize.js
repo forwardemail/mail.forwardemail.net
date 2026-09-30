@@ -80,6 +80,8 @@ const OTHER_REMOTE_IMAGE_REFS =
  *   - Comments — they can hide the two items above from these checks.
  *   - @import — the iframe CSP refuses remote stylesheets anyway; dropping the
  *     rule avoids a failed request on every message.
+ *   - @font-face with a remote src — the reader's CSP (inherited by the
+ *     message frame) allows only its own fonts, so these can never load.
  *   - expression() / behavior: — inert in the engines we ship, free to drop.
  *   - position: fixed — leaves the flow, so it contributes nothing to the
  *     height we measure and can leave an invisible layer over the message.
@@ -101,6 +103,15 @@ export function sanitizeEmailCss(css, { blockRemoteUrls = false } = {}) {
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .replace(/<\//g, '')
     .replace(/@import\b[^;}]*;?/gi, '')
+    // A remote web font only fails with a console error per file (see
+    // above). A rule that also embeds the font as a data: URL is kept: the
+    // browser uses that source and never asks for the remote one.
+    .replace(/@font-face\s*\{(?:[^}"']|"[^"]*"|'[^']*')*\}/gi, (rule) =>
+      /url\(\s*['"]?\s*(?:[a-z][a-z\d+.-]*:)?\/\//i.test(rule) &&
+      !/url\(\s*['"]?\s*data:/i.test(rule)
+        ? ''
+        : rule,
+    )
     .replace(/expression\s*\(/gi, '(')
     .replace(/behavior\s*:[^;}]*/gi, '')
     .replace(/position\s*:\s*fixed/gi, 'position: static')

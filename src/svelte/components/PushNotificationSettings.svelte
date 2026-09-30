@@ -147,6 +147,8 @@
           : 'This device could not obtain a push token from the platform notification service.';
       case 'server-rejected':
         return 'Forward Email did not accept this device registration.';
+      case 'push-service-unavailable':
+        return 'This browser could not reach its push service, so it cannot notify you while Forward Email is closed. New mail notifications still appear while Forward Email is open. In Brave, turn on "Use Google services for push messaging" in Settings > Privacy and security. A VPN, firewall or content blocker can also block it.';
       case 'registration-timeout':
         return 'Push registration took too long to complete. Check your connection and try again.';
       case 'distributor-required':

@@ -72,6 +72,7 @@ export type PushManagementCode =
   | 'server-unavailable'
   | 'registration-failed'
   | 'registration-timeout'
+  | 'push-service-unavailable'
   | 'deregistration-failed';
 
 export interface PushManagementResult {
@@ -95,6 +96,7 @@ export function cleanupPushNotifications(): Promise<boolean>;
 export function deregisterAccountPush(email: string, aliasAuth?: string): Promise<boolean>;
 export function getPushNotificationStatus(): Promise<PushNotificationStatus>;
 export function getLastPushRegistrationFailure(): { code: string; detail: string } | null;
+export function canReceiveWebPush(): Promise<boolean>;
 export function openNotificationSettings(): Promise<boolean>;
 export function subscribePushStatus(listener: () => void): () => void;
 export function registerCurrentDevicePush(): Promise<PushManagementResult>;

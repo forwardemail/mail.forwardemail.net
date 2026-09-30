@@ -1066,11 +1066,15 @@ async function _handleNewMessageInner(data, { suppressVisual = false, source = '
     // data-only FCM migration removes this special case.
     if (source === 'websocket') {
       try {
-        const { getActivePushProvider } = await import('./push-notifications.js');
+        const push = await import('./push-notifications.js');
+        const provider = push.getActivePushProvider();
+        if (provider === 'fcm') return;
         // A browser registered for Web Push gets the same alert from its
         // service worker (public/sw-sync.js), which also covers closed tabs.
-        const provider = getActivePushProvider();
-        if (provider === 'fcm' || provider === 'web-push') return;
+        // Unless it cannot receive pushes (its push service is unreachable,
+        // or it has no subscription): then this connection is the only way
+        // the alert arrives.
+        if (provider === 'web-push' && (await push.canReceiveWebPush())) return;
       } catch {
         // Push module unavailable (web build without push) - draw as usual.
       }

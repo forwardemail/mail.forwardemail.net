@@ -56,6 +56,7 @@ import {
 } from './unified-push.js';
 import {
   getWebPushPermission,
+  getWebPushSubscription,
   isWebPushSupported,
   requestWebPushPermission,
   shareAccountsWithServiceWorker,
@@ -1217,6 +1218,24 @@ async function initializeAndroidPush() {
 }
 
 /**
+ * Name why pushManager.subscribe() failed. Chromium browsers reject with an
+ * AbortError ("Registration failed - push service error") when the browser
+ * cannot register with its own push service: Brave with Google push messaging
+ * turned off, Chromium builds without Google services, or a network, VPN or
+ * blocker that stops the connection. Nothing the server or the key can fix.
+ */
+function classifyWebPushSubscribeError(error) {
+  if (error instanceof PushTimeoutError || error instanceof PushRegistrationError) return error;
+  const detail = describeError(error);
+  if (error?.name === 'NotAllowedError')
+    return new PushRegistrationError('permission-denied', detail);
+  if (error?.name === 'AbortError' || /push service/i.test(detail)) {
+    return new PushRegistrationError('push-service-unavailable', detail);
+  }
+  return error;
+}
+
+/**
  * Subscribe this browser and register the subscription for every signed-in
  * account. Never prompts: permission is asked for from the Settings click
  * (registerCurrentDevicePush), because browsers ignore a prompt that is not
@@ -1232,11 +1251,12 @@ async function initializeWebPush() {
     );
   }
 
-  const token = await withTimeout(
-    subscribeWebPush(),
-    NATIVE_PUSH_TIMEOUT_MS,
-    'Web Push subscription',
-  );
+  let token;
+  try {
+    token = await withTimeout(subscribeWebPush(), NATIVE_PUSH_TIMEOUT_MS, 'Web Push subscription');
+  } catch (error) {
+    throw classifyWebPushSubscribeError(error);
+  }
   await reconcileAllAccounts(token, 'web-push');
   if (!getActiveRegistrationId()) {
     throw new PushRegistrationError(
@@ -1849,6 +1869,20 @@ export function isSystemPushAlertExpected(eventName, data) {
 
 export function isPushInitialized() {
   return initialized;
+}
+
+/**
+ * Whether this browser's service worker can receive Web Push. False when the
+ * browser reported that it cannot reach its push service, or when it holds
+ * no subscription at all; then a stored registration is stale and the live
+ * connection has to show new mail. Setup that is still running, or that
+ * failed for another reason (the server, a timeout), does not count: the
+ * existing subscription keeps delivering, and treating it as broken would
+ * show every alert twice.
+ */
+export async function canReceiveWebPush() {
+  if (lastRegistrationFailure?.code === 'push-service-unavailable') return false;
+  return Boolean(await getWebPushSubscription());
 }
 
 export function getAndroidPushProviderPreference() {

@@ -207,6 +207,7 @@ describe('web push in the browser build', () => {
       accounts: { 'alias-me': EMAIL, 'alias-other': OTHER },
     });
     expect(push.getActivePushProvider()).toBe('web-push');
+    await expect(push.canReceiveWebPush()).resolves.toBe(true);
   });
 
   it('never prompts or subscribes on its own before the user allows notifications', async () => {
@@ -237,6 +238,23 @@ describe('web push in the browser build', () => {
     expect(status.platform).toBe('web');
     const result = await push.registerCurrentDevicePush();
     expect(result).toMatchObject({ ok: false, code: 'unsupported' });
+  });
+
+  it('names a browser that cannot reach its push service and registers nothing', async () => {
+    const { state } = installBrowser({ permission: 'granted' });
+    const registration = await navigator.serviceWorker.ready;
+    // what Chromium rejects with when it cannot register with FCM (Brave
+    // with Google push messaging off, a blocked network)
+    registration.pushManager.subscribe = async () => {
+      throw new DOMException('Registration failed - push service error', 'AbortError');
+    };
+    const { push } = await loadModule();
+
+    const result = await push.registerCurrentDevicePush();
+    expect(result).toMatchObject({ ok: false, code: 'push-service-unavailable' });
+    expect(result.detail).toBe('Registration failed - push service error');
+    expect(state.requests.filter((r) => r.method === 'POST')).toHaveLength(0);
+    await expect(push.canReceiveWebPush()).resolves.toBe(false);
   });
 
   it('replaces a subscription made with an old VAPID key', async () => {

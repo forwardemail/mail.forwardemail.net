@@ -41,6 +41,30 @@ describe('sanitizeEmailCss', () => {
     expect(css).toContain('a{padding:4px}');
   });
 
+  it('drops remote web fonts and keeps embedded ones', () => {
+    const css =
+      "@font-face{font-family:'Remote';src:url('https://example.com/a.woff2') format('woff2')}" +
+      '@font-face{font-family:Proto;src:url(//example.com/b.woff)}' +
+      '@font-face{font-family:Inline;src:url(data:font/woff2;base64,AAAA)}' +
+      'p{font-family:Remote,Inline,sans-serif}';
+    const { css: out } = sanitizeEmailCss(css);
+    expect(out).not.toContain('example.com');
+    expect(out).toContain('font-family:Inline;src:url(data:font/woff2;base64,AAAA)');
+    expect(out).toContain('p{font-family:Remote,Inline,sans-serif}');
+  });
+
+  it('keeps a font rule that embeds the font before a remote fallback', () => {
+    const css =
+      "@font-face{font-family:Both;src:url(data:font/woff2;base64,AAAA) format('woff2'),url(https://example.com/c.woff)}";
+    expect(sanitizeEmailCss(css).css).toBe(css);
+  });
+
+  it('removes the whole remote font rule when its url contains a brace', () => {
+    const css =
+      "@media screen{@font-face{font-family:X;src:url('https://example.com/d.woff?v=}')}.y{margin:0}}";
+    expect(sanitizeEmailCss(css).css).toBe('@media screen{.y{margin:0}}');
+  });
+
   it('strips comments so they cannot hide an at-rule from these checks', () => {
     const { css } = sanitizeEmailCss('/* @import url(https://evil.test/x.css); */ a{color:red}');
     expect(css).not.toMatch(/@import/i);

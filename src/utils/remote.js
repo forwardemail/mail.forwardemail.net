@@ -209,6 +209,11 @@ export const Remote = {
     } else {
       // For POST/PUT/DELETE, send as JSON body
       kyOptions.json = params || {};
+      // No caller reads more than the id back from a message update, and
+      // without this the server rebuilds and parses the whole message
+      // (attachments included) for every flag change, which is what made
+      // "mark as read" on a large message time out.
+      if (action === 'MessageUpdate') kyOptions.searchParams = { lightweight: 'true' };
     }
 
     try {

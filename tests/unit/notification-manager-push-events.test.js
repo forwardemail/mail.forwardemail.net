@@ -63,8 +63,10 @@ vi.mock('../../src/utils/address.ts', () => ({
 // Controls the backgrounded-WS visual skip: 'fcm' means the OS tray owns
 // background alerts, null means no push registration.
 let mockPushProvider = null;
+let mockCanReceiveWebPush = false;
 vi.mock('../../src/utils/push-notifications.js', () => ({
   getActivePushProvider: () => mockPushProvider,
+  canReceiveWebPush: async () => mockCanReceiveWebPush,
 }));
 
 import {
@@ -100,6 +102,7 @@ describe('notification-manager push event listener', () => {
     vi.useFakeTimers();
     vi.clearAllMocks();
     mockPushProvider = null;
+    mockCanReceiveWebPush = false;
     // Simulate background so handleNewMessage fires OS notification (not toast)
     Object.defineProperty(document, 'visibilityState', {
       value: 'hidden',
@@ -331,6 +334,42 @@ describe('notification-manager push event listener', () => {
 
     await vi.waitFor(() => expect(getBadgeCount()).toBe(1));
     expect(notify).not.toHaveBeenCalled();
+  });
+
+  it('skips the background visual for a WS newMessage when Web Push can deliver it', async () => {
+    mockPushProvider = 'web-push';
+    mockCanReceiveWebPush = true;
+    wsClient.emit('newMessage', {
+      notification_id: '123e4567-e89b-12d3-a456-426614174013',
+      mailbox: 'INBOX',
+      message: {
+        uid: 'ws-skip-web-1',
+        from: { text: 'Sender <sender@example.com>' },
+        subject: 'Web Push owns this',
+      },
+    });
+
+    await vi.waitFor(() => expect(getBadgeCount()).toBe(1));
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it('draws the background visual when a stored Web Push registration cannot deliver', async () => {
+    // The browser cannot reach its push service (or has no subscription), so
+    // the live connection is the only alert.
+    mockPushProvider = 'web-push';
+    mockCanReceiveWebPush = false;
+    wsClient.emit('newMessage', {
+      notification_id: '123e4567-e89b-12d3-a456-426614174014',
+      mailbox: 'INBOX',
+      message: {
+        uid: 'ws-draw-web-1',
+        from: { text: 'Sender <sender@example.com>' },
+        subject: 'No push service',
+      },
+    });
+
+    await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
+    expect(notify.mock.calls[0][0].body).toContain('No push service');
   });
 
   it('removes the listener and cancels pending fallback work on cleanup', async () => {
