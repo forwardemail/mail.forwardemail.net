@@ -290,6 +290,73 @@ describe('realtime event transport coalescer', () => {
     expect(coalescer.handlePush(payload)).toBe(false);
   });
 
+  describe('distinct server events that share a legacy identity', () => {
+    // The server gives every send its own notification_id. A legacy identity
+    // only names "this message's \\Seen flag" or "a move from INBOX to Trash",
+    // so it must not swallow a later, different event that has its own id.
+    const flagChange = (id, action) => ({
+      notification_id: id,
+      _account: 'alice@example.com',
+      mailbox: 'inbox-id',
+      uids: [5],
+      flags: ['\\Seen'],
+      action,
+    });
+
+    it('delivers read, unread and read again of one message', () => {
+      const onEvent = vi.fn();
+      const coalescer = createRealtimeEventCoalescer({ onEvent, isVisible: () => true });
+
+      expect(coalescer.handleWebSocket('flagsUpdated', flagChange('n1', 'add'))).toBe(true);
+      expect(coalescer.handleWebSocket('flagsUpdated', flagChange('n2', 'remove'))).toBe(true);
+      expect(coalescer.handleWebSocket('flagsUpdated', flagChange('n3', 'add'))).toBe(true);
+      expect(onEvent).toHaveBeenCalledTimes(3);
+    });
+
+    it('still merges the WebSocket and push copies of one flag change', () => {
+      const onEvent = vi.fn();
+      const coalescer = createRealtimeEventCoalescer({ onEvent, isVisible: () => true });
+
+      coalescer.handleWebSocket('flagsUpdated', flagChange('n1', 'add'));
+      coalescer.handlePush({ event: 'flagsUpdated', ...flagChange('n1', 'add') });
+      vi.advanceTimersByTime(PUSH_COALESCE_MS);
+
+      expect(onEvent).toHaveBeenCalledTimes(1);
+    });
+
+    it('delivers every move between the same two folders', () => {
+      const onEvent = vi.fn();
+      const coalescer = createRealtimeEventCoalescer({ onEvent, isVisible: () => true });
+      // the payload the server sends for a MOVE
+      const move = (id, uid) => ({
+        notification_id: id,
+        sourceMailbox: 'inbox-id',
+        destinationMailbox: 'trash-id',
+        destinationPath: 'Trash',
+        sourceUid: [uid],
+        destinationUid: [uid + 100],
+      });
+
+      expect(coalescer.handleWebSocket('messagesMoved', move('m1', 1))).toBe(true);
+      expect(coalescer.handleWebSocket('messagesMoved', move('m2', 2))).toBe(true);
+      expect(onEvent).toHaveBeenCalledTimes(2);
+
+      // a second producer of the first move is still collapsed
+      expect(coalescer.handleWebSocket('messagesMoved', move('m3', 1))).toBe(false);
+      expect(onEvent).toHaveBeenCalledTimes(2);
+    });
+
+    it('delivers two edits of one calendar event', () => {
+      const onEvent = vi.fn();
+      const coalescer = createRealtimeEventCoalescer({ onEvent, isVisible: () => true });
+      const edit = (id) => ({ notification_id: id, eventId: 'event-1', calendarId: 'cal-1' });
+
+      expect(coalescer.handleWebSocket('calendarEventUpdated', edit('c1'))).toBe(true);
+      expect(coalescer.handleWebSocket('calendarEventUpdated', edit('c2'))).toBe(true);
+      expect(onEvent).toHaveBeenCalledTimes(2);
+    });
+  });
+
   describe('holding a socket event for a push the system may draw (macOS)', () => {
     const payload = {
       _account: 'user@example.com',

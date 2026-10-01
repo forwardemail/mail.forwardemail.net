@@ -81,6 +81,7 @@
   import { Local } from '../utils/storage';
   import { db } from '../utils/db';
   import { getMessageApiId } from '../utils/sync-helpers';
+  import { flagChangeBody } from '../utils/message-changes';
   import { extractDisplayName, isValidEmail } from '../utils/address.ts';
   import { MAX_SCHEDULE_LEAD_MS, queueEmail, scheduleEmail } from '../utils/outbox-service';
   import { saveSentCopy, buildOptimisticSentSource } from '../utils/sent-copy.js';
@@ -2415,11 +2416,10 @@
         .equals([account, replyToMessageId])
         .modify({ flags: newFlags });
       // Sync to server
-      await Remote.request(
-        'MessageUpdate',
-        { flags: newFlags, folder: replyToMessageFolder || msg.folder },
-        { method: 'PUT', pathOverride: `/v1/messages/${encodeURIComponent(replyToMessageId)}` },
-      );
+      await Remote.request('MessageUpdate', flagChangeBody(newFlags, { add: ['\\Answered'] }), {
+        method: 'PUT',
+        pathOverride: `/v1/messages/${encodeURIComponent(replyToMessageId)}`,
+      });
     } catch (err) {
       console.warn('[Compose] Failed to set \\Answered flag on original message:', err);
     }

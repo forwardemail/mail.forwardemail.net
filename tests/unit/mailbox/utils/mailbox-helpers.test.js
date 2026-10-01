@@ -8,6 +8,7 @@ import {
   dedupeMessages,
   resolveDeleteTargets,
   nextCandidate,
+  getVisibleFolders,
 } from '../../../../src/svelte/mailbox/utils/mailbox-helpers';
 import { get } from 'svelte/store';
 
@@ -320,5 +321,34 @@ describe('mailbox-helpers', () => {
 
       expect(result.id).toBe('msg-2');
     });
+  });
+});
+
+describe('getVisibleFolders', () => {
+  const folders = [
+    { path: 'INBOX', level: 0 },
+    { path: 'Work', level: 0 },
+    { path: 'Work/Clients', level: 1 },
+    { path: 'Work/Clients/Acme', level: 2 },
+    // its parent "Old" was deleted; IMAP keeps the folders below it
+    { path: 'Old/2024', level: 1 },
+  ];
+  const paths = (list) => list.map((folder) => folder.path);
+
+  it('shows a subfolder when its parents are expanded', () => {
+    expect(paths(getVisibleFolders(folders, new Set()))).toEqual(['INBOX', 'Work', 'Old/2024']);
+    expect(paths(getVisibleFolders(folders, new Set(['Work'])))).toEqual([
+      'INBOX',
+      'Work',
+      'Work/Clients',
+      'Old/2024',
+    ]);
+    expect(paths(getVisibleFolders(folders, new Set(['Work', 'Work/Clients'])))).toEqual(
+      paths(folders),
+    );
+  });
+
+  it('shows a subfolder whose parent is not a folder, which cannot be expanded', () => {
+    expect(paths(getVisibleFolders(folders, new Set()))).toContain('Old/2024');
   });
 });

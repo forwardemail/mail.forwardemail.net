@@ -204,6 +204,8 @@ export function draftHasContent(data) {
   );
 }
 
+const DRAFT_FLAGS = ['\\Draft', '\\Seen'];
+
 function buildDraftPayload(draft) {
   const from = draft.from || Local.get('email') || '';
   const payload = {
@@ -238,10 +240,14 @@ async function syncDraftToServer(draft) {
       pathOverride: `/v1/messages/${encodeURIComponent(draft.serverId)}`,
     });
   } else {
-    response = await Remote.request('MessageCreate', payload, {
-      method: 'POST',
-      pathOverride: '/v1/messages',
-    });
+    // saved read and flagged as a draft, as mail clients save drafts, so the
+    // Drafts folder does not show it as unread in IMAP clients (an update
+    // leaves the flags alone)
+    response = await Remote.request(
+      'MessageCreate',
+      { ...payload, flags: DRAFT_FLAGS },
+      { method: 'POST', pathOverride: '/v1/messages' },
+    );
   }
   const serverId =
     response?.id ||

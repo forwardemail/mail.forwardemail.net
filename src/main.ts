@@ -1467,6 +1467,7 @@ if (isTauriDesktop) {
           markMessageAnsweredInStore(origId);
           try {
             const { Remote } = await import('./utils/remote');
+            const { flagChangeBody } = await import('./utils/message-changes');
             const { db } = await import('./utils/db');
             const account = (await import('./utils/storage')).Local.get('email') || 'default';
             const records = await db.messages
@@ -1484,11 +1485,7 @@ if (isTauriDesktop) {
                   .modify({ flags: newFlags });
                 await Remote.request(
                   'MessageUpdate',
-                  {
-                    flags: newFlags,
-                    folder:
-                      (result.sentCopyPayload.replyToMessageFolder as string) || message.folder,
-                  },
+                  flagChangeBody(newFlags, { add: [String.raw`\Answered`] }),
                   { method: 'PUT', pathOverride: `/v1/messages/${encodeURIComponent(origId)}` },
                 );
               }

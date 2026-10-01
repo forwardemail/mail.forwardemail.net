@@ -23,6 +23,7 @@ import {
   toKey,
   accountKey,
   coerceLabelList,
+  hasServerLabels,
   hasFromValue,
   hasMeaningfulDraft,
   buildDraftPayload,
@@ -222,7 +223,9 @@ async function syncDraftRecord(draft, account) {
       Authorization: requireAuth(account),
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify(payload),
+    // a new draft is saved read and flagged as a draft, as mail clients save
+    // drafts (an update leaves the flags alone)
+    body: JSON.stringify(draft.serverId ? payload : { ...payload, flags: ['\\Draft', '\\Seen'] }),
   });
   if (!res.ok) {
     const text = await res.text();
@@ -1553,7 +1556,7 @@ async function fetchMessagePage(payload = {}) {
   }
 
   const normalized = [];
-  const labelPresence = [];
+  const labelPresence: boolean[] = [];
   for (const item of list) {
     const record = normalizeMessageForCache(item, folder, account);
     if (!record?.id) continue;
@@ -1578,7 +1581,7 @@ async function fetchMessagePage(payload = {}) {
         item?.nodemailer?.headers?.References ||
         null,
     });
-    labelPresence.push(incomingLabels.length > 0);
+    labelPresence.push(hasServerLabels(item) || incomingLabels.length > 0);
   }
 
   let toStore = normalized;
@@ -1599,8 +1602,7 @@ async function fetchMessagePage(payload = {}) {
       });
       const fallbackRecords = fallbackKeys.length ? await db.messages.bulkGet(fallbackKeys) : [];
       toStore = normalized.map((msg, idx) => {
-        const incoming = coerceLabelList(msg.labels);
-        if (incoming.length > 0) return msg;
+        if (labelPresence[idx]) return msg;
         const existing = existingRecords[idx];
         const existingLabels = coerceLabelList(existing?.labels);
         if (existingLabels.length) {

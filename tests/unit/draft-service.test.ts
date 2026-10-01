@@ -115,6 +115,19 @@ describe('saveDraft', () => {
     );
   });
 
+  // as mail clients save drafts, so IMAP clients do not show the Drafts
+  // folder as unread; an update leaves the flags alone
+  it('creates a draft read and flagged as a draft, and updates do not set flags', async () => {
+    h.remoteRequest.mockResolvedValue({ id: 'srv-1' });
+    await saveDraft(content);
+    expect(h.remoteRequest.mock.calls[0][1]).toMatchObject({ flags: ['\\Draft', '\\Seen'] });
+
+    h.remoteRequest.mockClear();
+    await saveDraft({ ...content, id: 'draft_1', serverId: 'srv-1' });
+    expect(h.remoteRequest.mock.calls[0][0]).toBe('MessageUpdate');
+    expect(h.remoteRequest.mock.calls[0][1]).not.toHaveProperty('flags');
+  });
+
   it('falls back to "pending" with lastError when the server sync fails', async () => {
     h.remoteRequest.mockRejectedValue(new Error('500'));
     const saved = await saveDraft(content);

@@ -157,9 +157,10 @@ export const mergeMissingLabels = async (
     const indices = [];
     const fallbackKeys = [];
     const fallbackIndex = new Map();
+    // labelPresence says which messages came with their labels from the
+    // server (an empty list included); only the others take them from the cache
     list.forEach((msg, idx) => {
-      const incoming = coerceLabelList(msg.labels);
-      if (!labelPresence[idx] || incoming.length === 0) {
+      if (!labelPresence[idx]) {
         lookup.push([account, msg.id]);
         indices.push(idx);
       }

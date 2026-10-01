@@ -58,6 +58,20 @@ export function decodeLabelBuffer(value: unknown): string[] | null {
   return [];
 }
 
+/**
+ * Whether a message from the API says what its labels are. The list endpoint
+ * returns them as a list, empty when the message has none, and that is the
+ * answer: a label removed on another device or in Thunderbird has to go away
+ * here too, rather than come back from the cache. Older servers sent the
+ * stored bytes instead (see decodeLabelBuffer), which only decode now and
+ * then, so for those an empty result still falls back to the cached labels.
+ */
+export function hasServerLabels(raw: unknown): boolean {
+  return (
+    Boolean(raw) && typeof raw === 'object' && Array.isArray((raw as { labels?: unknown }).labels)
+  );
+}
+
 export function coerceLabelList(value: unknown): string[] {
   const normalizeLabel = (label: unknown) => {
     const normalized = String(label ?? '').trim();
@@ -99,6 +113,9 @@ export interface DraftLike {
   }>;
   folder?: string;
   serverId?: string | null;
+  replyTo?: string;
+  inReplyTo?: string | null;
+  references?: string | string[] | null;
 }
 
 export function hasMeaningfulDraft(draft: DraftLike): boolean {
@@ -117,6 +134,11 @@ export function buildDraftPayload(draft: DraftLike) {
     to: draft.to || [],
     cc: draft.cc || [],
     bcc: draft.bcc || [],
+    // as draft-service.js sends them, so a draft saved here still answers
+    // the message it replies to
+    replyTo: draft.replyTo || undefined,
+    inReplyTo: draft.inReplyTo || undefined,
+    references: draft.references || undefined,
     subject: draft.subject || '',
     html: draft.isPlainText ? undefined : draft.body || '',
     text: draft.isPlainText ? draft.body || '' : undefined,

@@ -225,6 +225,15 @@ describe('mergeMissingLabels', () => {
     expect(out).toEqual([{ id: '1', labels: ['cached'] }]);
   });
 
+  it('keeps an empty list the server sent rather than the cached labels', async () => {
+    // the labels were removed in Thunderbird or on another device
+    const bulkGet = mockBulkGet({ '1': { labels: ['stale'] } });
+    const list = [{ id: '1', labels: [] }];
+    const out = await mergeMissingLabels(bulkGet, 'acct', list, [true]);
+    expect(out).toEqual([{ id: '1', labels: [] }]);
+    expect(bulkGet).not.toHaveBeenCalled();
+  });
+
   it('leaves the message untouched when the cache has nothing useful', async () => {
     const bulkGet = mockBulkGet({}); // record undefined
     const out = await mergeMissingLabels(bulkGet, 'acct', [{ id: '1' }], [false]);

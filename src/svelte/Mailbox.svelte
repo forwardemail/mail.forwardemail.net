@@ -44,6 +44,7 @@
     dedupeMessages as dedupeMessagesHelper,
     resolveDeleteTargets as resolveDeleteTargetsHelper,
     nextCandidate as nextCandidateHelper,
+    getVisibleFolders,
   } from './mailbox/utils/mailbox-helpers.js';
   import {
     getFromDisplay,
@@ -67,6 +68,7 @@
   import { createPerfTracer } from '../utils/perf-logger.ts';
   import { isLockEnabled, isVaultConfigured } from '../utils/crypto-store.js';
   import { getMessageApiId, normalizeMessageForCache } from '../utils/sync-helpers.ts';
+  import { flagChangeBody } from '../utils/message-changes';
   import { prefetchMessages } from '../utils/sync-controller.js';
   import { getSyncSettings } from '../utils/sync-settings.js';
   import { parseMailto, mailtoToPrefill } from '../utils/mailto';
@@ -3644,23 +3646,7 @@
   // Folder management helpers
   let folderActionModal = $state(null);
 
-  const visibleFolders = $derived.by(() => {
-    const all = $folders || [];
-    const expanded = $expandedFolders;
-
-    return all.filter((folder: { level?: number; path?: string }) => {
-      if ((folder.level || 0) === 0) return true; // Root level always visible
-
-      // Check all parent folders are expanded
-      const path = folder.path || '';
-      const parts = path.split('/');
-      for (let i = 1; i < parts.length; i++) {
-        const parentPath = parts.slice(0, i).join('/');
-        if (!expanded.has(parentPath)) return false;
-      }
-      return true;
-    });
-  });
+  const visibleFolders = $derived.by(() => getVisibleFolders($folders || [], $expandedFolders));
 
   const hasChildren = (folder) => {
     if (!folder || !$folders) return false;
@@ -4085,14 +4071,10 @@
         reloadMessages();
         return;
       }
-      await Remote.request(
-        'MessageUpdate',
-        { flags: updated.flags },
-        {
-          method: 'PUT',
-          pathOverride: `/v1/messages/${encodeURIComponent(apiId)}`,
-        },
-      );
+      await Remote.request('MessageUpdate', flagChangeBody(updated.flags, { remove: ['\\Seen'] }), {
+        method: 'PUT',
+        pathOverride: `/v1/messages/${encodeURIComponent(apiId)}`,
+      });
       const account = Local.get('email') || 'default';
       const changes = { is_unread: true, is_unread_index: 1, flags: updated.flags };
       await db.messages.where('[account+id]').equals([account, updated.id]).modify(changes);
@@ -4769,7 +4751,7 @@
       }
       await Remote.request(
         'MessageUpdate',
-        { flags: updated.flags },
+        flagChangeBody(updated.flags, newIsUnread ? { remove: ['\\Seen'] } : { add: ['\\Seen'] }),
         {
           method: 'PUT',
           pathOverride: `/v1/messages/${encodeURIComponent(apiId)}`,
@@ -4840,14 +4822,10 @@
         reloadMessages();
         return;
       }
-      await Remote.request(
-        'MessageUpdate',
-        { flags: updated.flags },
-        {
-          method: 'PUT',
-          pathOverride: `/v1/messages/${encodeURIComponent(apiId)}`,
-        },
-      );
+      await Remote.request('MessageUpdate', flagChangeBody(updated.flags, { add: ['\\Seen'] }), {
+        method: 'PUT',
+        pathOverride: `/v1/messages/${encodeURIComponent(apiId)}`,
+      });
       const account = Local.get('email') || 'default';
       const changes = { is_unread: false, is_unread_index: 0, flags: updated.flags };
       await db.messages.where('[account+id]').equals([account, updated.id]).modify(changes);

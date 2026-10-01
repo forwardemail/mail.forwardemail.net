@@ -2,6 +2,7 @@ import { db } from './db';
 import { Local } from './storage';
 import { isActiveAccount } from './account-scope.ts';
 import { Remote } from './remote';
+import { flagChangeBody } from './message-changes.ts';
 import { writable } from 'svelte/store';
 import { saveSentCopy } from './sent-copy.js';
 import { warn } from './logger.ts';
@@ -332,11 +333,10 @@ async function recordSentSideEffects(item, account) {
           .where('[account+id]')
           .equals([account, origMsgId])
           .modify({ flags: newFlags });
-        await Remote.request(
-          'MessageUpdate',
-          { flags: newFlags, folder: item.emailData._replyToMessageFolder || msg.folder },
-          { method: 'PUT', pathOverride: `/v1/messages/${encodeURIComponent(origMsgId)}` },
-        );
+        await Remote.request('MessageUpdate', flagChangeBody(newFlags, { add: ['\\Answered'] }), {
+          method: 'PUT',
+          pathOverride: `/v1/messages/${encodeURIComponent(origMsgId)}`,
+        });
       }
     }
   } catch (flagErr) {

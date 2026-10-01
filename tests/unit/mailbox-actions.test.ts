@@ -467,6 +467,22 @@ describe('toggleRead', () => {
     expect(hoisted.queueMutation).not.toHaveBeenCalled();
   });
 
+  // the flags here can be out of date: only \Seen is changed on the server,
+  // so a flag another client set in the meantime is not undone, and no
+  // folder is sent, which would move back a message moved elsewhere
+  it('sends what changed with the whole list, and no folder', async () => {
+    const msg = { id: '1', apiId: 'srv-1', is_unread: false, flags: ['\\Seen'], folder: 'INBOX' };
+    mailboxStore.state.messages.set([msg]);
+    hoisted.remoteRequest.mockResolvedValueOnce({});
+
+    await toggleRead(msg);
+
+    expect(hoisted.remoteRequest.mock.calls[0][1]).toEqual({
+      flags: [],
+      flags_remove: ['\\Seen'],
+    });
+  });
+
   it('queues the mutation when offline', async () => {
     hoisted.isOnline.mockReturnValue(false);
     const msg = {
@@ -538,6 +554,12 @@ describe('toggleStar', () => {
     const updated = get(mailboxStore.state.messages)[0];
     expect(updated.is_starred).toBe(true);
     expect(updated.flags as string[]).toContain('\\Flagged');
+
+    // only \Flagged is changed on the server
+    expect(hoisted.remoteRequest.mock.calls[0][1]).toEqual({
+      flags: ['\\Flagged'],
+      flags_add: ['\\Flagged'],
+    });
   });
 
   it('propagates the change to selectedMessage when it matches', async () => {

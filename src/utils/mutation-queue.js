@@ -8,6 +8,7 @@ import { warn } from './logger.ts';
 import { isOnline } from './network-status';
 import { swReadyWithTimeout, isTauri } from './platform.js';
 import { exponentialBackoff } from './backoff.js';
+import { labelChangeBody, queuedToggleBody } from './message-changes.ts';
 
 /**
  * Offline Mutation Queue
@@ -174,27 +175,14 @@ async function executeMutation(mutation) {
   const { type, payload } = mutation;
 
   switch (type) {
-    case 'toggleRead': {
-      const flags = payload.isUnread
-        ? (payload.flags || []).filter((f) => f !== '\\Seen')
-        : [...(payload.flags || []), '\\Seen'];
-      await Remote.request(
-        'MessageUpdate',
-        { flags, folder: payload.folder },
-        { method: 'PUT', pathOverride: `/v1/messages/${encodeURIComponent(payload.messageId)}` },
-      );
-      return true;
-    }
-
+    // isUnread and isStarred are the state before the toggle (see
+    // queuedToggleBody): a queued "mark as read" was sent as "mark as unread"
+    case 'toggleRead':
     case 'toggleStar': {
-      const flags = payload.isStarred
-        ? (payload.flags || []).filter((f) => f !== '\\Flagged')
-        : [...(payload.flags || []), '\\Flagged'];
-      await Remote.request(
-        'MessageUpdate',
-        { flags, folder: payload.folder },
-        { method: 'PUT', pathOverride: `/v1/messages/${encodeURIComponent(payload.messageId)}` },
-      );
+      await Remote.request('MessageUpdate', queuedToggleBody(type, payload), {
+        method: 'PUT',
+        pathOverride: `/v1/messages/${encodeURIComponent(payload.messageId)}`,
+      });
       return true;
     }
 
@@ -217,7 +205,7 @@ async function executeMutation(mutation) {
     case 'label': {
       await Remote.request(
         'MessageUpdate',
-        { labels: payload.labels },
+        labelChangeBody(payload.labels, payload.previousLabels),
         { method: 'PUT', pathOverride: `/v1/messages/${encodeURIComponent(payload.messageId)}` },
       );
       return true;

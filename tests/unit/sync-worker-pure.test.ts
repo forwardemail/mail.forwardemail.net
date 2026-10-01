@@ -5,6 +5,7 @@ import {
   accountKey,
   coerceLabelList,
   decodeLabelBuffer,
+  hasServerLabels,
   hasFromValue,
   hasMeaningfulDraft,
   buildDraftPayload,
@@ -159,6 +160,26 @@ describe('sync worker pure helpers', () => {
 
     it('defaults folder to Drafts', () => {
       expect(buildDraftPayload({}).folder).toBe('Drafts');
+    });
+
+    it('keeps the headers of the message a draft replies to', () => {
+      const p = buildDraftPayload({ inReplyTo: '<a@b>', references: '<a@b>', replyTo: 'r@b.c' });
+      expect(p).toMatchObject({ inReplyTo: '<a@b>', references: '<a@b>', replyTo: 'r@b.c' });
+    });
+  });
+
+  describe('hasServerLabels', () => {
+    // a label removed on another device comes back as an empty list, which
+    // has to replace the cached labels rather than be filled from them
+    it('is true when the server sent a list, empty or not', () => {
+      expect(hasServerLabels({ labels: [] })).toBe(true);
+      expect(hasServerLabels({ labels: ['work'] })).toBe(true);
+    });
+
+    it('is false for the stored bytes older servers sent, or no labels', () => {
+      expect(hasServerLabels({ labels: { type: 'Buffer', data: [91, 93] } })).toBe(false);
+      expect(hasServerLabels({})).toBe(false);
+      expect(hasServerLabels(null)).toBe(false);
     });
   });
 

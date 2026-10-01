@@ -132,3 +132,26 @@ export const nextCandidate = ({
   // Default: go below (standard behavior)
   return below;
 };
+
+/**
+ * Folders shown in the folder list: the top level, and the folders whose
+ * parents are all expanded. A parent that is not itself a folder (deleted
+ * while its subfolders stayed, as IMAP keeps them, or never created) cannot
+ * be expanded, so it does not hide the folders below it.
+ *
+ * @param {Array<{ path?: string, level?: number }>} folders
+ * @param {Set<string>} expanded - paths of the expanded folders
+ */
+export const getVisibleFolders = (folders = [], expanded = new Set()) => {
+  const paths = new Set(folders.map((folder) => folder?.path).filter(Boolean));
+  return folders.filter((folder) => {
+    if ((folder?.level || 0) === 0) return true;
+    const parts = (folder?.path || '').split('/');
+    for (let i = 1; i < parts.length; i++) {
+      const parentPath = parts.slice(0, i).join('/');
+      if (paths.has(parentPath) && !expanded.has(parentPath)) return false;
+    }
+
+    return true;
+  });
+};

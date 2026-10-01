@@ -28,6 +28,8 @@ import { sortMessages, normalizeSortDate, getMessageUidValue } from '../utils/me
 import { decodeMimeHeader } from '../utils/mime-utils.js';
 import { validateFolderName } from '../utils/folder-validation.ts';
 import { queueMutation, getQueuedMessageIds } from '../utils/mutation-queue';
+import { flagChangeBody } from '../utils/message-changes';
+import { hasServerLabels } from '../workers/sync-pure';
 import { nextCandidate } from '../svelte/mailbox/utils/mailbox-helpers.js';
 import { selectedConversation } from './mailboxActions';
 import {
@@ -1070,7 +1072,7 @@ const createMailboxStore = () => {
         const mappedMsg = mapServerMessage(m, folder, account, normalizeSubjectMemoized);
         if (!mappedMsg) continue;
         mapped.push(mappedMsg);
-        labelPresence.push(coerceLabelList(mappedMsg.labels).length > 0);
+        labelPresence.push(hasServerLabels(m) || coerceLabelList(mappedMsg.labels).length > 0);
       }
       tracer.stage('map_end', { count: mapped.length });
 
@@ -2522,17 +2524,24 @@ const createMailboxStore = () => {
         { method: 'PUT', pathOverride: `/v1/folders/${encodeURIComponent(folder.id)}` },
       );
 
-      // Update IndexedDB cache
-      await db.folders
-        .where('[account+path]')
-        .equals([account, oldPath])
-        .modify({ path: newPath, name: newName });
+      // Update IndexedDB cache. The folders inside it are renamed with it
+      // (the server does that, as IMAP requires), so their cached folders and
+      // messages move to the new path as well.
+      const renamed: Array<{ from: string; to: string; name?: string }> = [
+        { from: oldPath, to: newPath, name: newName },
+        ...folderList
+          .filter((f) => typeof f?.path === 'string' && f.path.startsWith(`${oldPath}/`))
+          .map((f) => ({ from: f.path, to: newPath + f.path.slice(oldPath.length) })),
+      ];
+      for (const { from, to, name } of renamed) {
+        await db.folders
+          .where('[account+path]')
+          .equals([account, from])
+          .modify(name ? { path: to, name } : { path: to });
 
-      // Update messages in this folder
-      await db.messages
-        .where('[account+folder]')
-        .equals([account, oldPath])
-        .modify({ folder: newPath });
+        // Update messages in this folder
+        await db.messages.where('[account+folder]').equals([account, from]).modify({ folder: to });
+      }
 
       // Reload folders
       await loadFolders({ force: true });
@@ -2630,11 +2639,10 @@ const createMailboxStore = () => {
         const nextFlags = flags.includes('\\Seen') ? flags : [...flags, '\\Seen'];
         const apiId = getMessageApiId(m);
         if (apiId) {
-          Remote.request(
-            'MessageUpdate',
-            { flags: nextFlags, folder: m.folder },
-            { method: 'PUT', pathOverride: `/v1/messages/${encodeURIComponent(apiId)}` },
-          ).catch(() => {});
+          Remote.request('MessageUpdate', flagChangeBody(nextFlags, { add: ['\\Seen'] }), {
+            method: 'PUT',
+            pathOverride: `/v1/messages/${encodeURIComponent(apiId)}`,
+          }).catch(() => {});
         }
         if (m.id) {
           addPendingFlagMutation(m.id, { is_unread: false, is_unread_index: 0, flags: nextFlags });
@@ -2670,11 +2678,10 @@ const createMailboxStore = () => {
         const newFlags = [...existingFlags, '\\Seen'];
 
         try {
-          await Remote.request(
-            'MessageUpdate',
-            { flags: newFlags, folder: msg.folder },
-            { method: 'PUT', pathOverride: `/v1/messages/${encodeURIComponent(apiId)}` },
-          );
+          await Remote.request('MessageUpdate', flagChangeBody(newFlags, { add: ['\\Seen'] }), {
+            method: 'PUT',
+            pathOverride: `/v1/messages/${encodeURIComponent(apiId)}`,
+          });
         } catch (err) {
           warn('Failed to mark message as read', msg.id, err);
         }

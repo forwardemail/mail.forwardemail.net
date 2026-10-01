@@ -133,6 +133,67 @@ describe('mutation-queue', () => {
     expect(get(queueModule.mutationQueueCount)).toBe(0);
   });
 
+  // The payload has the state from before the toggle. A queued "mark as read"
+  // (the request failed, or the app was offline) went out as "mark as unread",
+  // so the message turned unread again everywhere once the queue ran.
+  it('sends a queued "mark as read" as read, with only that change', async () => {
+    await queueModule.queueMutation('toggleRead', {
+      messageId: 'm1',
+      isUnread: true,
+      flags: ['\\Flagged'],
+      folder: 'INBOX',
+    });
+    await drainMicrotasks();
+
+    expect(remoteRequestMock).toHaveBeenCalledWith(
+      'MessageUpdate',
+      { flags: ['\\Flagged', '\\Seen'], flags_add: ['\\Seen'] },
+      expect.objectContaining({ method: 'PUT', pathOverride: '/v1/messages/m1' }),
+    );
+  });
+
+  it('sends a queued "mark as unread" and star toggles with only their change', async () => {
+    await queueModule.queueMutation('toggleRead', {
+      messageId: 'm1',
+      isUnread: false,
+      flags: ['\\Seen'],
+      folder: 'INBOX',
+    });
+    await queueModule.queueMutation('toggleStar', {
+      messageId: 'm2',
+      isStarred: false,
+      flags: [],
+      folder: 'INBOX',
+    });
+    await drainMicrotasks();
+
+    expect(remoteRequestMock).toHaveBeenCalledWith(
+      'MessageUpdate',
+      { flags: [], flags_remove: ['\\Seen'] },
+      expect.objectContaining({ pathOverride: '/v1/messages/m1' }),
+    );
+    expect(remoteRequestMock).toHaveBeenCalledWith(
+      'MessageUpdate',
+      { flags: ['\\Flagged'], flags_add: ['\\Flagged'] },
+      expect.objectContaining({ pathOverride: '/v1/messages/m2' }),
+    );
+  });
+
+  it('sends a queued label change as the labels added and removed', async () => {
+    await queueModule.queueMutation('label', {
+      messageId: 'm1',
+      labels: ['work'],
+      previousLabels: ['urgent'],
+    });
+    await drainMicrotasks();
+
+    expect(remoteRequestMock).toHaveBeenCalledWith(
+      'MessageUpdate',
+      { labels: ['work'], labels_add: ['work'], labels_remove: ['urgent'] },
+      expect.objectContaining({ method: 'PUT', pathOverride: '/v1/messages/m1' }),
+    );
+  });
+
   it('retries transient failures with exponential backoff', async () => {
     vi.useFakeTimers();
     remoteRequestMock.mockRejectedValueOnce(new Error('network')).mockResolvedValueOnce({});

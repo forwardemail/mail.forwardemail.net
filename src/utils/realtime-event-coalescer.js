@@ -89,11 +89,33 @@ export function getRealtimeEventKey(eventName, data) {
 }
 
 /**
+ * Events whose legacy identity names something that happens once: a new
+ * message, or messages moved, copied or expunged by UID (a UID is never
+ * reused in its mailbox). The same identity always means the same event, so
+ * it can collapse two producers of it even though each send gets its own
+ * notification_id.
+ *
+ * Every other identity names something that changes again and again: a
+ * message's flags or labels, a calendar event, a contact, a mailbox path.
+ * Read then unread of one message, or two edits of one event, share the
+ * identity, so using it would drop the second change for the whole dedup
+ * window and leave the view stale. Those collapse on notification_id alone
+ * whenever the event has one.
+ */
+const ONE_TIME_EVENTS = new Set([
+  'newMessage',
+  'messagesMoved',
+  'messagesCopied',
+  'messagesExpunged',
+  'newRelease',
+]);
+
+/**
  * Return EVERY key this event answers to: the notification_id key when the
- * payload carries one, plus the legacy identity key. Registering and looking
- * up under both is what lets a push that carries notification_id coalesce
- * with a WebSocket copy that lacks it (or vice versa) on mixed-version
- * deployments.
+ * payload carries one, plus the legacy identity key (see ONE_TIME_EVENTS for
+ * when that is left out). Registering and looking up under both is what lets
+ * a push that carries notification_id coalesce with a WebSocket copy that
+ * lacks it (or vice versa) on mixed-version deployments.
  */
 export function getRealtimeEventKeys(eventName, data) {
   if (typeof eventName !== 'string' || !data || typeof data !== 'object') return [];
@@ -106,7 +128,7 @@ export function getRealtimeEventKeys(eventName, data) {
   if (notificationId) keys.push(`id:${notificationId.slice(0, MAX_KEY_PART_LENGTH)}`);
 
   const legacyKey = getLegacyEventKey(eventName, data);
-  if (legacyKey) keys.push(legacyKey);
+  if (legacyKey && (!notificationId || ONE_TIME_EVENTS.has(eventName))) keys.push(legacyKey);
 
   return keys;
 }
@@ -124,19 +146,35 @@ function getLegacyEventKey(eventName, data) {
         message.messageId,
       );
       break;
-    case 'messagesMoved':
+    // The server names the moved and copied messages in sourceUid and
+    // destinationUid. Without the UIDs every move between the same two
+    // folders had one identity, and each one after the first was dropped.
+    case 'messagesMoved': {
+      const uids = firstNonEmpty(
+        joinValues(data.uids),
+        joinValues(data.sourceUid),
+        joinValues(data.source_uid),
+        data.uid,
+      );
+      if (!uids) return '';
       identity = [
         firstNonEmpty(data.sourceMailbox, data.source_mailbox),
         firstNonEmpty(data.destinationMailbox, data.destination_mailbox),
-        firstNonEmpty(joinValues(data.uids), data.uid),
+        uids,
       ].join('>');
       break;
-    case 'messagesCopied':
-      identity = [
-        firstNonEmpty(data.destinationMailbox, data.destination_mailbox),
-        firstNonEmpty(joinValues(data.uids), data.uid),
-      ].join('>');
+    }
+    case 'messagesCopied': {
+      const uids = firstNonEmpty(
+        joinValues(data.uids),
+        joinValues(data.destinationUid),
+        joinValues(data.destination_uid),
+        data.uid,
+      );
+      if (!uids) return '';
+      identity = [firstNonEmpty(data.destinationMailbox, data.destination_mailbox), uids].join('>');
       break;
+    }
     case 'flagsUpdated':
     case 'labelsUpdated':
       identity = [
@@ -145,12 +183,13 @@ function getLegacyEventKey(eventName, data) {
         firstNonEmpty(joinValues(data.flags), joinValues(data.labels), data.action),
       ].join('>');
       break;
-    case 'messagesExpunged':
-      identity = [
-        firstNonEmpty(data.mailbox, data.path),
-        firstNonEmpty(joinValues(data.uids), data.uid, data.id),
-      ].join('>');
+    case 'messagesExpunged': {
+      // without UIDs this would name every expunge in the mailbox
+      const uids = firstNonEmpty(joinValues(data.uids), data.uid, data.id);
+      if (!uids) return '';
+      identity = [firstNonEmpty(data.mailbox, data.path), uids].join('>');
       break;
+    }
     case 'mailboxCreated':
     case 'mailboxDeleted':
       identity = firstNonEmpty(data.path, data.mailbox?.path, data.mailbox);

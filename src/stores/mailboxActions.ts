@@ -53,6 +53,7 @@ import { resolveSearchBodyIndexing } from '../utils/search-body-indexing.js';
 import { LABEL_PALETTE, canonicalizeLabelKeyword } from '../utils/labels.js';
 import { isHiddenLabel } from '../utils/label-filters';
 import { queueMutation } from '../utils/mutation-queue';
+import { flagChangeBody, labelChangeBody } from '../utils/message-changes';
 import { config } from '../config';
 import { createInboxUpdater } from '../utils/websocket-updater';
 import { getWebSocketManager } from '../utils/websocket-manager.js';
@@ -508,7 +509,7 @@ export const toggleRead = async (msg) => {
   try {
     await Remote.request(
       'MessageUpdate',
-      { flags: newFlags, folder: msg.folder },
+      flagChangeBody(newFlags, isUnread ? { add: ['\\Seen'] } : { remove: ['\\Seen'] }),
       { method: 'PUT', pathOverride: `/v1/messages/${encodeURIComponent(apiId)}` },
     );
   } catch (err) {
@@ -597,7 +598,10 @@ export const toggleStar = async (msg) => {
   try {
     await Remote.request(
       'MessageUpdate',
-      { flags: Array.from(newFlags), folder: msg.folder },
+      flagChangeBody(
+        Array.from(newFlags),
+        isStarred ? { remove: ['\\Flagged'] } : { add: ['\\Flagged'] },
+      ),
       { method: 'PUT', pathOverride: `/v1/messages/${encodeURIComponent(apiId)}` },
     );
   } catch (err) {
@@ -1368,11 +1372,10 @@ export const contextLabel = async (msgOrLabel, labelMaybe, options = {}) => {
   }
 
   try {
-    await Remote.request(
-      'MessageUpdate',
-      { labels: nextLabels },
-      { method: 'PUT', pathOverride: `/v1/messages/${encodeURIComponent(apiId)}` },
-    );
+    await Remote.request('MessageUpdate', labelChangeBody(nextLabels, currentLabels), {
+      method: 'PUT',
+      pathOverride: `/v1/messages/${encodeURIComponent(apiId)}`,
+    });
     if (!silent) {
       const verb =
         action === 'add'

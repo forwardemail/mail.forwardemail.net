@@ -649,6 +649,46 @@
     return fetch(url, { ...options, signal: controller.signal }).finally(() => clearTimeout(timer));
   };
 
+  // Mirrors src/utils/message-changes.ts (this file cannot import it): what
+  // changed is sent next to the whole list, so the server applies only that
+  // and a change another client made in the meantime is not undone. No
+  // folder is sent with it, which the server would take as a move.
+  const listOf = (value) => (Array.isArray(value) ? value : []);
+  const keywordOf = (value) =>
+    String(value ?? '')
+      .trim()
+      .toLowerCase();
+
+  const flagChangeBody = (flags, { add = [], remove = [] } = {}) => {
+    const body = { flags: listOf(flags) };
+    if (listOf(add).length > 0) body.flags_add = listOf(add);
+    if (listOf(remove).length > 0) body.flags_remove = listOf(remove);
+    return body;
+  };
+
+  const labelChangeBody = (labels, previous) => {
+    const body = { labels: listOf(labels) };
+    if (!Array.isArray(previous)) return body;
+    const before = new Set(previous.map(keywordOf).filter(Boolean));
+    const after = new Set(listOf(labels).map(keywordOf).filter(Boolean));
+    const add = [...after].filter((label) => !before.has(label));
+    const remove = [...before].filter((label) => !after.has(label));
+    if (add.length > 0) body.labels_add = add;
+    if (remove.length > 0) body.labels_remove = remove;
+    return body;
+  };
+
+  // isUnread and isStarred are the state before the toggle: an unread
+  // message was marked read, a starred one was unstarred
+  const queuedToggleBody = (type, payload = {}) => {
+    const flag = type === 'toggleRead' ? '\\Seen' : '\\Flagged';
+    const set = type === 'toggleRead' ? Boolean(payload.isUnread) : !payload.isStarred;
+    const others = listOf(payload.flags).filter((f) => f !== flag);
+    return set
+      ? flagChangeBody([...others, flag], { add: [flag] })
+      : flagChangeBody(others, { remove: [flag] });
+  };
+
   /**
    * Execute a single mutation via fetch from the SW context.
    */
@@ -666,25 +706,13 @@
     const msgPath = `/v1/messages/${encodeURIComponent(payload.messageId)}`;
 
     switch (type) {
-      case 'toggleRead': {
-        const flags = payload.isUnread
-          ? (payload.flags || []).filter((f) => f !== '\\Seen')
-          : [...(payload.flags || []), '\\Seen'];
-        const res = await fetchWithTimeout(`${base}${msgPath}`, {
-          method: 'PUT',
-          headers,
-          body: JSON.stringify({ flags, folder: payload.folder }),
-        });
-        return res.ok;
-      }
+      // a queued "mark as read" was sent as "mark as unread" (see above)
+      case 'toggleRead':
       case 'toggleStar': {
-        const flags = payload.isStarred
-          ? (payload.flags || []).filter((f) => f !== '\\Flagged')
-          : [...(payload.flags || []), '\\Flagged'];
         const res = await fetchWithTimeout(`${base}${msgPath}`, {
           method: 'PUT',
           headers,
-          body: JSON.stringify({ flags, folder: payload.folder }),
+          body: JSON.stringify(queuedToggleBody(type, payload)),
         });
         return res.ok;
       }
@@ -708,7 +736,7 @@
         const res = await fetchWithTimeout(`${base}${msgPath}`, {
           method: 'PUT',
           headers,
-          body: JSON.stringify({ labels: payload.labels }),
+          body: JSON.stringify(labelChangeBody(payload.labels, payload.previousLabels)),
         });
         return res.ok;
       }

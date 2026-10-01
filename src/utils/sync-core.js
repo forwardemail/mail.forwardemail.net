@@ -17,6 +17,7 @@
  */
 
 import { DB_NAME } from './db-constants.ts';
+import { labelChangeBody, queuedToggleBody } from './message-changes.ts';
 
 const META_STORE = 'meta';
 const MUTATION_KEY_PREFIX = 'mutation_queue_';
@@ -139,26 +140,14 @@ export function createSyncCore({ postMessage, fetch, indexedDB }) {
     const msgPath = `/v1/messages/${encodeURIComponent(payload.messageId)}`;
 
     switch (type) {
-      case 'toggleRead': {
-        const flags = payload.isUnread
-          ? (payload.flags || []).filter((f) => f !== '\\Seen')
-          : [...(payload.flags || []), '\\Seen'];
-        const res = await fetchWithTimeout(`${base}${msgPath}`, {
-          method: 'PUT',
-          headers,
-          body: JSON.stringify({ flags, folder: payload.folder }),
-        });
-        return res.ok;
-      }
-
+      // isUnread and isStarred are the state before the toggle (see
+      // queuedToggleBody): a queued "mark as read" was sent as "mark as unread"
+      case 'toggleRead':
       case 'toggleStar': {
-        const flags = payload.isStarred
-          ? (payload.flags || []).filter((f) => f !== '\\Flagged')
-          : [...(payload.flags || []), '\\Flagged'];
         const res = await fetchWithTimeout(`${base}${msgPath}`, {
           method: 'PUT',
           headers,
-          body: JSON.stringify({ flags, folder: payload.folder }),
+          body: JSON.stringify(queuedToggleBody(type, payload)),
         });
         return res.ok;
       }
@@ -185,7 +174,7 @@ export function createSyncCore({ postMessage, fetch, indexedDB }) {
         const res = await fetchWithTimeout(`${base}${msgPath}`, {
           method: 'PUT',
           headers,
-          body: JSON.stringify({ labels: payload.labels }),
+          body: JSON.stringify(labelChangeBody(payload.labels, payload.previousLabels)),
         });
         return res.ok;
       }
