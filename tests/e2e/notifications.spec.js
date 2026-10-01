@@ -6,6 +6,11 @@ import { setupAuthenticatedMailbox } from '../fixtures/mailbox-helpers.js';
 // permission prompt for a request a click started, so Settings has to offer
 // that click and say what state the permission is in.
 
+// Chrome Headless Shell, Playwright's default Chromium, always reports
+// Notification.permission as "denied", even after grantPermissions. Chromium's
+// new headless mode reports the real permission like a desktop browser does.
+test.use({ channel: 'chromium' });
+
 // Record what reaches the browser's notification APIs.
 async function recordNotifications(page) {
   await page.addInitScript(() => {
