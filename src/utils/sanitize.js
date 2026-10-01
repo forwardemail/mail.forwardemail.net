@@ -569,8 +569,11 @@ const REMOTE_REF = /^\s*(?:https?:)?\/\//i;
 const CSS_FETCH_FN =
   /(?:url|image-set|-webkit-image-set|image|cross-fade|-webkit-cross-fade|element|src)\s*\(/i;
 
-// Elements that load a resource on their own, or embed another document.
-// The quote shows text and images; none of these belong in it.
+// Elements that load a resource on their own, or embed another document,
+// and the ones that act on their own once clicked (a form submits, and in the
+// desktop app nothing stops it from taking over the window) or draw above
+// everything (an open dialog). The quote shows text and images; none of these
+// belong in it.
 const QUOTE_FORBID_TAGS = [
   'style',
   'script',
@@ -590,7 +593,15 @@ const QUOTE_FORBID_TAGS = [
   'image',
   'use',
   'feimage',
+  'form',
+  'button',
+  'select',
+  'textarea',
+  'dialog',
 ];
+
+// A popover opens in the top layer, above the app (and any clipping).
+const QUOTE_FORBID_ATTR = ['popover', 'popovertarget', 'popovertargetaction'];
 
 /**
  * Decode CSS escapes (`\\72` → `r`, `\\(` → `(`) and drop comments, the
@@ -656,12 +667,32 @@ function declarationFetches(declaration) {
   return CSS_FETCH_FN.test(withoutData);
 }
 
+// A box positioned out of the flow is placed against the window (or the
+// nearest positioned ancestor) instead of inside the quote. This HTML renders
+// in the app's own DOM, not the sandboxed reader iframe, so a sender's
+// `position: fixed` element could cover the app's own interface (for example
+// a fake "sign in again" prompt over the compose window). Only the in-flow
+// values are kept, as written: a value like `var(--p)` can resolve to any of
+// the others.
+const POSITION_DECLARATION = /^\s*position\s*:([\s\S]*)$/i;
+const IN_FLOW_POSITION = /^\s*(?:static|relative)\s*(?:!\s*important\s*)?$/i;
+
+function declarationLeavesFlow(declaration) {
+  const match = decodeCss(declaration).match(POSITION_DECLARATION);
+  return Boolean(match) && !IN_FLOW_POSITION.test(match[1]);
+}
+
 /**
- * Remove the declarations of an inline style that fetch something remote,
- * keeping the rest (layout, colours). Returns null when nothing is left.
+ * Remove the declarations of an inline style that fetch something remote or
+ * take the element out of the flow, keeping the rest (layout, colours).
+ * Returns null when nothing is left.
  */
 function stripFetchingDeclarations(style) {
-  const kept = splitDeclarations(style).filter((d) => !declarationFetches(d));
+  // (comments go first: a quote inside one would otherwise hide the
+  // semicolons after it from the split)
+  const kept = splitDeclarations(String(style).replace(/\/\*[\s\S]*?\*\//g, '')).filter(
+    (d) => !declarationFetches(d) && !declarationLeavesFlow(d),
+  );
   const out = kept
     .map((d) => d.trim())
     .filter(Boolean)
@@ -698,8 +729,11 @@ function isHiddenOrTiny(el) {
  * embeds, frames, form images and SVG references (QUOTE_FORBID_TAGS), remote
  * srcset/background/poster attributes, and every inline style declaration
  * that fetches anything but a data: URL (after decoding CSS escapes, which is
- * how `u\\72l(` hides a `url(`). The quote keeps its text and layout; the
- * original HTML is still what is sent.
+ * how `u\\72l(` hides a `url(`). Positioning other than static and relative
+ * is removed too, with forms, dialogs and popovers, so nothing in it can be
+ * drawn over the app's own interface or act on it.
+ * The quote keeps its text and layout; the original HTML is still what is
+ * sent.
  *
  * The HTML is only ever parsed in an inert document here (DOMParser and
  * DOMPurify both use one), so nothing is requested before the caller inserts
@@ -722,6 +756,7 @@ export function sanitizeQuotedHtml(html, options = {}) {
 
   const purified = DOMPurify.sanitize(html, {
     FORBID_TAGS: QUOTE_FORBID_TAGS,
+    FORBID_ATTR: QUOTE_FORBID_ATTR,
     ADD_ATTR: ['data-original-src', 'data-tracking-pixel'],
   });
   if (!purified || typeof DOMParser === 'undefined') return '';

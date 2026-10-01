@@ -28,7 +28,7 @@
   import { describeFolderRetention } from '../utils/retention';
   import { validateLabelName } from '../utils/label-validation.ts';
   import DOMPurify from 'dompurify';
-  import { restoreBlockedImages } from '../utils/sanitize.js';
+  import { restoreBlockedImages, sanitizeQuotedHtml } from '../utils/sanitize.js';
   import {
     LABEL_PALETTE,
     pickLabelColor as pickLabelColorFromPalette,
@@ -1322,9 +1322,13 @@
     }
   });
 
+  // The queued message renders in the app's own DOM and can carry a forwarded
+  // or quoted message from someone else, so it also gets the quoted-message
+  // treatment (sanitizeQuotedHtml): no remote loads the user did not allow,
+  // and nothing positioned over the app.
   const sanitizeOutboxHtml = (html: string): string => {
     if (!html) return '';
-    return outboxPurify.sanitize(html, {
+    return outboxPurify.sanitize(sanitizeQuotedHtml(html), {
       USE_PROFILES: { html: true },
       ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto|tel|ftp):|[^a-z]|[a-z+.-]+(?:[^a-z+.-:]|$))/i,
       FORBID_TAGS: [
@@ -8143,8 +8147,9 @@
                     <small>Error: {selectedOutboxItem.lastError}</small>
                   </div>
                 {/if}
+                <!-- (contain: paint keeps what the message draws inside this box) -->
                 <div
-                  class="prose prose-sm dark:prose-invert max-w-none min-w-0 break-words wrap-anywhere [overflow-wrap:anywhere] [&_pre]:whitespace-pre-wrap [&_pre]:break-all [&_img]:max-w-full"
+                  class="prose prose-sm dark:prose-invert max-w-none min-w-0 break-words wrap-anywhere [overflow-wrap:anywhere] [&_pre]:whitespace-pre-wrap [&_pre]:break-all [&_img]:max-w-full overflow-x-auto [contain:paint]"
                   bind:this={outboxMessageBodyContainer}
                 >
                   {@html sanitizeOutboxHtml(

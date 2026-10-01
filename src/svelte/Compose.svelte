@@ -4731,8 +4731,14 @@
     color: var(--muted-foreground);
   }
 
+  /* The quote is someone else's HTML in the app's own DOM: whatever it
+   * draws stays inside its box (contain: paint also clips what is fixed,
+   * transformed or pulled out with negative margins), and wide content
+   * scrolls instead. */
   :global(.raw-quote-inner) {
     font-size: 0.875rem;
+    contain: paint;
+    overflow-x: auto;
   }
 
   /* Emoji picker styles.

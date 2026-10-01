@@ -13,6 +13,7 @@
   } from '@schedule-x/calendar';
   import '@schedule-x/theme-default/dist/index.css';
   import DOMPurify from 'dompurify';
+  import { sanitizeQuotedHtml } from '../utils/sanitize.js';
   import { i18n } from '../utils/i18n';
   import { Local } from '../utils/storage';
   import { Remote } from '../utils/remote';
@@ -719,24 +720,30 @@
 
   const containsHtml = (value: string) => /<[a-z][\s\S]*>/i.test(value || '');
 
+  // An event's description comes from whoever sent the invitation and renders
+  // in the app's own DOM, so after this pass it gets the same treatment as a
+  // quoted message (sanitizeQuotedHtml): nothing remote is loaded unless the
+  // user allows remote images, and nothing is positioned over the app.
   const sanitizeDescription = (value: string) =>
-    DOMPurify.sanitize(value || '', {
-      USE_PROFILES: { html: true },
-      FORBID_TAGS: [
-        'script',
-        'style',
-        'iframe',
-        'object',
-        'embed',
-        'form',
-        'input',
-        'textarea',
-        'select',
-        'button',
-      ],
-      FORBID_ATTR: ['onerror', 'onload', 'onclick', 'onmouseover'],
-      ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto|tel):|[^a-z]|[a-z+.-]+(?:[^a-z+.-:]|$))/i,
-    });
+    sanitizeQuotedHtml(
+      DOMPurify.sanitize(value || '', {
+        USE_PROFILES: { html: true },
+        FORBID_TAGS: [
+          'script',
+          'style',
+          'iframe',
+          'object',
+          'embed',
+          'form',
+          'input',
+          'textarea',
+          'select',
+          'button',
+        ],
+        FORBID_ATTR: ['onerror', 'onload', 'onclick', 'onmouseover'],
+        ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto|tel):|[^a-z]|[a-z+.-]+(?:[^a-z+.-:]|$))/i,
+      }),
+    );
 
   // Sanitize data for Web Worker postMessage (removes non-cloneable properties)
   const sanitizeForWorker = <T,>(data: T): T => {
