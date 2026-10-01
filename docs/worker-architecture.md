@@ -1,6 +1,6 @@
 # Worker Architecture: Detailed Reference
 
-This is the deep-dive companion to [Building Webmail: Workers](building-webmail-workers.md).
+This is the detailed companion to [Building Webmail: Workers](building-webmail-workers.md).
 It covers message contracts, data flow diagrams, IndexedDB ownership, fallback
 paths, and operational checklists.
 
@@ -18,7 +18,7 @@ flowchart TB
 
 ## Main Thread Responsibilities
 
-The main thread focuses on rendering and orchestration:
+The main thread handles rendering and orchestration:
 
 ```mermaid
 flowchart TB
@@ -222,7 +222,7 @@ that keeps the app functional.
 - `SCHEMA_VERSION` in `db-constants.ts` must match `sw-sync.js`
 - Labels are keyed by keyword/id; rename changes display name only
 - Service worker does NOT cache API responses
-- Workers use TypeScript (`.ts`) but are bundled by Vite
+- Workers use TypeScript (`.ts`), and Vite bundles them
 
 ## Update Checklist
 

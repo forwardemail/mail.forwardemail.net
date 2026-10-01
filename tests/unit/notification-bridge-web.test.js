@@ -14,9 +14,11 @@ vi.mock('../../src/utils/notification-open.ts', () => ({
 }));
 
 import {
+  canRevokePermission,
   getPermissionState,
   notify,
   requestPermission,
+  revokePermission,
 } from '../../src/utils/notification-bridge.js';
 
 const originalNotification = globalThis.Notification;
@@ -125,5 +127,21 @@ describe('notification-bridge on the web', () => {
     });
 
     expect(await requestPermission()).toBe('granted');
+  });
+  it('turns notifications off only where the app keeps the permission (the terminal client)', async () => {
+    installNotification({ permission: 'granted' });
+    // A browser keeps the choice in its own settings.
+    expect(canRevokePermission()).toBe(false);
+    expect(await revokePermission()).toBe(false);
+
+    // The terminal client's Notification can give the permission back.
+    installNotification({ permission: 'granted' });
+    globalThis.Notification.revokePermission = vi.fn(async () => {
+      globalThis.Notification.permission = 'default';
+    });
+    expect(canRevokePermission()).toBe(true);
+    expect(await revokePermission()).toBe(true);
+    expect(globalThis.Notification.revokePermission).toHaveBeenCalledOnce();
+    expect(await getPermissionState()).toBe('default');
   });
 });

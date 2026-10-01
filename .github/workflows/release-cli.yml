@@ -1,0 +1,280 @@
+name: Release CLI
+
+# Builds the `forwardemail` terminal client and attaches it to the release:
+#   - forwardemail-<os>-<arch>[.exe].gz standalone executables (Node.js SEA)
+#   - install.sh / install.ps1 one-line installers
+#   - the `forwardemail` npm package, at the same version
+# release.yml calls this for every v* tag, which `pnpm release` (np) pushes, so
+# every release publishes the CLI to npm and the version always matches the
+# app's. Run it by hand to rebuild the CLI assets of an existing release (an
+# npm version that is already published is left as it is). SHA256SUMS.txt, which the installers and the
+# self-updater verify against, is written by release.yml's checksums job
+# after this completes (a manual run should be followed by re-running it).
+on:
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version whose release gets the CLI assets (e.g. 0.14.15; tag v0.14.15 must exist)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+env:
+  NODE_VERSION: '26'
+
+jobs:
+  bundle:
+    name: Bundle
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: v${{ inputs.version }}
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          run_install: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build the CLI bundle
+        run: pnpm build:cli
+      - name: Check the bundle
+        run: |
+          test "$(node cli/dist/forwardemail.cjs --version)" = "${{ inputs.version }}"
+          node cli/dist/forwardemail.cjs --help
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cli-package
+          # The npm package directory: package.json, README, LICENSE, bundle
+          # and the desktop notifier programs.
+          path: |
+            cli/package.json
+            cli/README.md
+            cli/LICENSE.md
+            cli/dist/forwardemail.cjs
+            cli/dist/notifier
+            cli/install.sh
+            cli/install.ps1
+          if-no-files-found: error
+
+  binaries:
+    name: Binary (${{ matrix.target }})
+    needs: bundle
+    runs-on: ${{ matrix.os }}
+    # The eSigner secrets live in the release environment, as for the desktop
+    # installers, which every Windows executable is signed with.
+    environment: ${{ startsWith(matrix.os, 'windows') && 'release' || '' }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-22.04, target: linux-x64, file: forwardemail-linux-x64 }
+          - { os: ubuntu-22.04-arm, target: linux-arm64, file: forwardemail-linux-arm64 }
+          - { os: macos-15-intel, target: darwin-x64, file: forwardemail-darwin-x64 }
+          - { os: macos-15, target: darwin-arm64, file: forwardemail-darwin-arm64 }
+          - { os: windows-latest, target: win-x64, file: forwardemail-win-x64.exe }
+          - { os: windows-11-arm, target: win-arm64, file: forwardemail-win-arm64.exe }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: v${{ inputs.version }}
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          run_install: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: cli-package
+          path: cli
+      - name: Build the executable
+        run: node scripts/build-sea.mjs --output cli/dist/${{ matrix.file }}
+      # Authenticode signing through the same SSL.com eSigner setup as the
+      # desktop installers (release-desktop.yml, docs/SECRETS.md#windows-code-signing-secrets).
+      # Fails closed like the desktop build: without the secrets the release
+      # stops, unless the repository variable ALLOW_UNSIGNED_WINDOWS=true says
+      # to ship unsigned on purpose. `sign` exits non-zero unless the file
+      # ends up with a valid, timestamped signature from the publisher.
+      - name: Setup Java (CodeSignTool)
+        if: runner.os == 'Windows'
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: 21
+      - name: Configure Windows signing (SSL.com eSigner)
+        id: windows_signing
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          ESIGNER_USERNAME: ${{ secrets.ESIGNER_USERNAME }}
+          ESIGNER_PASSWORD: ${{ secrets.ESIGNER_PASSWORD }}
+          ESIGNER_CREDENTIAL_ID: ${{ secrets.ESIGNER_CREDENTIAL_ID }}
+          ESIGNER_TOTP_SECRET: ${{ secrets.ESIGNER_TOTP_SECRET }}
+          WINDOWS_PUBLISHER: ${{ vars.WINDOWS_PUBLISHER }}
+          ALLOW_UNSIGNED_WINDOWS: ${{ vars.ALLOW_UNSIGNED_WINDOWS }}
+        run: node scripts/windows-signing.cjs setup
+      - name: Sign the executable (SSL.com eSigner)
+        if: runner.os == 'Windows' && steps.windows_signing.outputs.enabled == 'true'
+        shell: bash
+        env:
+          ESIGNER_USERNAME: ${{ secrets.ESIGNER_USERNAME }}
+          ESIGNER_PASSWORD: ${{ secrets.ESIGNER_PASSWORD }}
+          ESIGNER_CREDENTIAL_ID: ${{ secrets.ESIGNER_CREDENTIAL_ID }}
+          ESIGNER_TOTP_SECRET: ${{ secrets.ESIGNER_TOTP_SECRET }}
+        run: node scripts/windows-signing.cjs sign "cli/dist/${{ matrix.file }}"
+      - name: Show Windows signing log
+        if: failure() && runner.os == 'Windows'
+        shell: bash
+        run: |
+          if [ -n "${WINDOWS_SIGN_LOG:-}" ] && [ -s "$WINDOWS_SIGN_LOG" ]; then
+            cat "$WINDOWS_SIGN_LOG"
+          else
+            echo "No signing log was written."
+          fi
+      - name: Smoke test
+        shell: bash
+        run: |
+          test "$(./cli/dist/${{ matrix.file }} --version)" = "${{ inputs.version }}"
+          ./cli/dist/${{ matrix.file }} --help > /dev/null
+          # The notifier program is written out of the executable and found.
+          FORWARDEMAIL_HOME="$RUNNER_TEMP/fe" FORWARDEMAIL_NOTIFICATIONS=1 DISPLAY=:0 \
+            ./cli/dist/${{ matrix.file }} notifications | tee "$RUNNER_TEMP/notifications.txt"
+          if [ "$RUNNER_OS" != Linux ]; then
+            program="$(sed -n 's/^  program: //p' "$RUNNER_TEMP/notifications.txt")"
+            node -e 'process.exit(require("fs").existsSync(process.argv[1]) ? 0 : 1)' "$program"
+          fi
+      - name: Compress
+        shell: bash
+        run: node scripts/build-sea.mjs --gzip-only "cli/dist/${{ matrix.file }}"
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: cli/dist/${{ matrix.file }}.gz
+      - name: Resolve release
+        id: release
+        uses: ./.github/actions/resolve-release
+        with:
+          tag: v${{ inputs.version }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Upload to the release
+        uses: ./.github/actions/upload-release-asset
+        with:
+          release-id: ${{ steps.release.outputs.release_id }}
+          path: cli/dist/${{ matrix.file }}.gz
+          content-type: application/gzip
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+  installers:
+    name: Installers
+    needs: bundle
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: v${{ inputs.version }}
+          sparse-checkout: |
+            .github/actions
+            cli
+      - name: Check the installers
+        run: |
+          sh -n cli/install.sh
+          if command -v shellcheck >/dev/null; then shellcheck cli/install.sh; fi
+      - name: Resolve release
+        id: release
+        uses: ./.github/actions/resolve-release
+        with:
+          tag: v${{ inputs.version }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Upload install.sh
+        uses: ./.github/actions/upload-release-asset
+        with:
+          release-id: ${{ steps.release.outputs.release_id }}
+          path: cli/install.sh
+          content-type: text/x-shellscript
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Upload install.ps1
+        uses: ./.github/actions/upload-release-asset
+        with:
+          release-id: ${{ steps.release.outputs.release_id }}
+          path: cli/install.ps1
+          content-type: text/plain
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+  # Publishes the bundle the binaries were built from. Authenticates with npm
+  # trusted publishing (OIDC) when the package trusts release.yml (npm checks
+  # the calling workflow), else with secrets.NPM_TOKEN. See docs/SECRETS.md.
+  npm:
+    name: Publish to npm
+    needs: [bundle, binaries]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: release
+    permissions:
+      contents: read
+      # npm trusted publishing and --provenance both use the OIDC token.
+      id-token: write
+    steps:
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          registry-url: https://registry.npmjs.org
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: cli-package
+          path: cli
+      # Artifacts do not keep file modes; the macOS notifier must stay
+      # executable in the package.
+      - name: Restore executable bits
+        run: chmod +x cli/dist/notifier/mac.noindex/terminal-notifier.app/Contents/MacOS/terminal-notifier cli/dist/notifier/ntfytoast.exe
+      - name: Publish
+        working-directory: cli
+        env:
+          VERSION: ${{ inputs.version }}
+          # Only needed without npm trusted publishing configured for the package.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          test "$(node -p 'require("./package.json").version')" = "$VERSION"
+          if npm view "forwardemail@$VERSION" version >/dev/null 2>&1; then
+            echo "forwardemail@$VERSION is already published"
+            exit 0
+          fi
+          # Like np: a prerelease (1.2.0-beta.1) goes to the "next" dist-tag,
+          # so `npm install -g forwardemail` keeps installing the latest stable.
+          case "$VERSION" in
+            *-*) tag=next ;;
+            *) tag=latest ;;
+          esac
+          # A rebuild of an older release (workflow_dispatch) must not move
+          # "latest" back: it is published under "previous" instead.
+          latest="$(npm view forwardemail dist-tags.latest 2>/dev/null || true)"
+          if [ "$tag" = latest ] && [ -n "$latest" ] && node -e '
+            const [a, b] = process.argv.slice(1).map((v) => v.split(".").map(Number));
+            for (let i = 0; i < 3; i++) if (a[i] !== b[i]) process.exit(a[i] < b[i] ? 0 : 1);
+            process.exit(1);
+          ' "$VERSION" "$latest"; then
+            tag=previous
+          fi
+          npm publish --provenance --access public --tag "$tag"
+          echo "Published forwardemail@$VERSION ($tag): https://www.npmjs.com/package/forwardemail/v/$VERSION" >> "$GITHUB_STEP_SUMMARY"

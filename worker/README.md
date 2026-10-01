@@ -22,9 +22,9 @@ pnpm tail
 
 ## What it does
 
-1. **SPA Routing** — Returns `index.html` for navigation requests (`/mailbox`, `/calendar`, etc.)
-2. **Cache Headers** — Sets correct `Cache-Control` per asset type
-3. **Security Headers** — `X-Content-Type-Options`, `X-Frame-Options`
+1. **SPA Routing**: Returns `index.html` for navigation requests (`/mailbox`, `/calendar`, etc.)
+2. **Cache Headers**: Sets correct `Cache-Control` per asset type
+3. **Security Headers**: `X-Content-Type-Options`, `X-Frame-Options`
 
 ## Files
 
@@ -37,7 +37,7 @@ worker/
 
 ## Portability
 
-The logic is standard and portable to other edge platforms:
+The logic ports to other edge platforms:
 
 | Feature       | Cloudflare | Vercel                 | Netlify      | CloudFront  |
 | ------------- | ---------- | ---------------------- | ------------ | ----------- |

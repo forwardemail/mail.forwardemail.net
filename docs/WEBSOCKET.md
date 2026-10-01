@@ -1,6 +1,6 @@
 # WebSocket Real-Time Events
 
-This document describes the real-time WebSocket integration used by the Forward Email desktop and mobile applications.
+The Forward Email desktop and mobile applications use this WebSocket integration for real-time events.
 
 ## Architecture Overview
 
@@ -68,7 +68,7 @@ There is no `data` or `payload` wrapper. The client destructures `{ event, times
 | `ping` | Server → Client | Sent every 30 seconds                                  |
 | `pong` | Client → Server | Must respond `{ event: 'pong' }` to each server `ping` |
 
-If the client does not respond with `pong`, the server will close the connection. The client also sets a 45-second timeout — if no `ping` is received within that window, the client closes and reconnects.
+If the client does not respond with `pong`, the server closes the connection. The client also sets a 45-second timeout: if no `ping` arrives within that window, the client closes and reconnects.
 
 ## IMAP Events (8)
 
@@ -192,6 +192,6 @@ ws.destroy();
 
 ## Related Documentation
 
-- [ARCHITECTURE.md](./ARCHITECTURE.md) — Full architecture document
-- [PUSH_NOTIFICATIONS.md](./PUSH_NOTIFICATIONS.md) — Push notification architecture (complements WebSocket for background delivery)
-- [SECURITY.md](./SECURITY.md) — WebSocket security hardening details
+- [ARCHITECTURE.md](./ARCHITECTURE.md): Full architecture document
+- [PUSH_NOTIFICATIONS.md](./PUSH_NOTIFICATIONS.md): Push notification architecture (complements WebSocket for background delivery)
+- [SECURITY.md](./SECURITY.md): WebSocket security hardening details

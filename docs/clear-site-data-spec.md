@@ -4,7 +4,7 @@
 
 **What it does:** Forces all clients below a version threshold to wipe IndexedDB, SW caches, and web storage, then reload with fresh assets.
 
-**When to use it:** Bad service worker deploy, broken DB schema, corrupted cache — any situation where clients can't self-recover.
+**When to use it:** Any situation where clients can't self-recover, such as a bad service worker deploy, a broken DB schema, or a corrupted cache.
 
 **How to trigger a reset:**
 
@@ -36,13 +36,13 @@ This forces every client running a version below `0.0.2` to clear everything and
 
 **Files involved:**
 
-| File                                   | Purpose                                            |
-| -------------------------------------- | -------------------------------------------------- |
-| `public/clear-manifest.json`           | The manifest — edit this to trigger/disable clears |
-| `src/main.ts` → `checkClearManifest()` | Boot check — runs before any DB/store init         |
-| `.clear-site-data.json`                | Maps file patterns to clear targets (used by CI)   |
-| `scripts/check-clear-manifest.js`      | CI script that warns on PRs                        |
-| `workbox.config.cjs`                   | Excludes manifest from SW precache                 |
+| File                                   | Purpose                                           |
+| -------------------------------------- | ------------------------------------------------- |
+| `public/clear-manifest.json`           | The manifest. Edit this to trigger/disable clears |
+| `src/main.ts` → `checkClearManifest()` | Boot check, runs before any DB/store init         |
+| `.clear-site-data.json`                | Maps file patterns to clear targets (used by CI)  |
+| `scripts/check-clear-manifest.js`      | CI script that warns on PRs                       |
+| `workbox.config.cjs`                   | Excludes manifest from SW precache                |
 
 ---
 
@@ -61,7 +61,7 @@ This forces every client running a version below `0.0.2` to clear everything and
    - Unregisters the service worker
    - Clears localStorage and sessionStorage
    - Calls `window.location.reload()`
-5. If the fetch fails or `clear_below` is `null`, continues normally — the app boots as usual
+5. If the fetch fails or `clear_below` is `null`, the app boots as usual
 
 ### Why It Doesn't Loop
 
@@ -75,11 +75,11 @@ The manifest is excluded from the service worker's control:
 - **`navigateFallbackDenylist`** includes `/clear-manifest\.json$/` so the SW won't serve `index.html` for it
 - **`cache: 'no-store'`** on the fetch request bypasses the HTTP cache
 
-This means even a broken SW won't intercept the manifest fetch. Combined with `updateViaCache: 'none'` on SW registration, the browser always checks for a fresh SW file and the manifest is always fetched from the network.
+Even a broken SW won't intercept the manifest fetch. Combined with `updateViaCache: 'none'` on SW registration, the browser always checks for a fresh SW file and the manifest is always fetched from the network.
 
 ### CDN Cache
 
-The existing CI pipeline already purges the entire Cloudflare cache on every deploy to main. This ensures the new `clear-manifest.json` is served immediately after deploy — no stale copies at the edge.
+CI purges the entire Cloudflare cache on every deploy to main, so the edge serves the new `clear-manifest.json` immediately after deploy with no stale copies.
 
 ---
 
@@ -103,8 +103,8 @@ The existing CI pipeline already purges the entire Cloudflare cache on every dep
 }
 ```
 
-- **`cache` triggers** — files that affect SW behavior or cache strategy
-- **`storage` triggers** — files that affect IndexedDB schema or database recovery
+- **`cache` triggers**: files that affect SW behavior or cache strategy
+- **`storage` triggers**: files that affect IndexedDB schema or database recovery
 
 ### PR Check
 
@@ -125,11 +125,11 @@ set `clear_below` to the current version to force client resets.
 - `src/utils/db-constants.ts`
 ```
 
-The check uses `continue-on-error: true` — it warns but never blocks the build. Existing comments are updated rather than duplicated.
+The check uses `continue-on-error: true`, so it warns but never blocks the build. Existing comments are updated rather than duplicated.
 
 ### Manual Override
 
-When automation underfires (refactors, renames, generated files that don't match patterns), manually edit `clear-manifest.json` in the same PR. The CI warning is advisory, not the only path to a reset.
+When automation underfires (refactors, renames, generated files that don't match patterns), edit `clear-manifest.json` by hand in the same PR. The CI warning is advisory; you can trigger a reset without it.
 
 ---
 
@@ -137,7 +137,7 @@ When automation underfires (refactors, renames, generated files that don't match
 
 ### Triggering a Reset
 
-1. Decide the version threshold — typically the version you're about to release
+1. Decide the version threshold, typically the version you're about to release
 2. Edit `public/clear-manifest.json`:
    ```json
    {
@@ -155,7 +155,7 @@ If a bad release is already live and you need to force resets for clients on tha
 
 1. Bump the version in `package.json`
 2. Set `clear_below` to the new version
-3. Push to main — CI builds, deploys, and purges CDN cache
+3. Push to main. CI builds, deploys, and purges CDN cache
 4. Clients on the bad version clear and reload with the fix
 
 ### Disabling
@@ -180,7 +180,7 @@ After deploying a reset, check browser dev tools console for:
 If you don't see this, check:
 
 - Is the manifest being served fresh? (`curl -I https://your-domain/clear-manifest.json`)
-- Is the SW intercepting it? (check Network tab — should show `(disk cache)` or network, not SW)
+- Is the SW intercepting it? (check Network tab: should show `(disk cache)` or network, not SW)
 - Is `VITE_PKG_VERSION` correct in the build? (check `import.meta.env.VITE_PKG_VERSION` in console)
 
 ---
@@ -189,17 +189,17 @@ If you don't see this, check:
 
 ### Threats
 
-**T1. False positive — accidental mass data wipe**
+**T1. False positive: accidental mass data wipe**
 
 Innocent refactor touches a trigger file, someone bumps `clear_below` without understanding impact. **Impact:** users lose offline data, drafts, cached settings. **Mitigations:** CI posts PR warnings when trigger files change; `clear_below` change is visible in PR diff; data re-syncs from server after clear. **Residual risk:** medium (human error), but auditable and reversible.
 
-**T2. False negative — missed clear, unrecoverable client**
+**T2. False negative: missed clear, unrecoverable client**
 
-DB schema change in an unmapped file. No CI warning, no one updates the manifest, clients brick. **Impact:** silent breakage, support tickets. **Mitigations:** directory-based globs in `.clear-site-data.json`, periodic audit of IndexedDB usage vs. impact map, manual override always available. **Residual risk:** medium — but this is the status quo today, and this system strictly improves on it.
+DB schema change in an unmapped file. No CI warning, no one updates the manifest, clients brick. **Impact:** silent breakage, support tickets. **Mitigations:** directory-based globs in `.clear-site-data.json`, periodic audit of IndexedDB usage vs. impact map, manual override always available. **Residual risk:** medium. That matches the status quo today, and this system strictly improves on it.
 
 **T3. Infinite reload loop**
 
-Client clears, reloads, clears again. **Impact:** app unusable. **Why it can't happen:** after clearing, the reload fetches fresh assets with the current `VITE_PKG_VERSION` baked in. Current version >= `clear_below`, check passes. The only scenario is if the CDN serves stale JS after the manifest — but the CI pipeline purges the entire Cloudflare cache atomically.
+Client clears, reloads, clears again. **Impact:** app unusable. **Why it can't happen:** after clearing, the reload fetches fresh assets with the current `VITE_PKG_VERSION` baked in. Current version >= `clear_below`, check passes. A loop would need the CDN to serve stale JS after the manifest, and the CI pipeline purges the entire Cloudflare cache atomically.
 
 **T4. Malicious manifest injection**
 
@@ -211,30 +211,30 @@ Old SW intercepts `/clear-manifest.json` and serves stale copy. **Impact:** reco
 
 **T6. Race during deploy**
 
-User has tab open, CDN serves new manifest before new JS assets. Boot check runs with old `VITE_PKG_VERSION`, triggers clear. **Impact:** user loses local data on next page load — but this is the intended behavior. The clear is correct; the client needs the new version. Active sessions are unaffected (check only runs on page load, not mid-session).
+User has tab open, CDN serves new manifest before new JS assets. Boot check runs with old `VITE_PKG_VERSION`, triggers clear. **Impact:** user loses local data on next page load, which is the intended behavior. The clear is correct; the client needs the new version. Active sessions are unaffected (check only runs on page load, not mid-session).
 
 ### Risk Profile
 
-| Category                          | Risk                              |
-| --------------------------------- | --------------------------------- |
-| Data loss (false positive)        | Medium — auditable and reversible |
-| Availability (reload loops)       | Very low                          |
-| Security compromise               | Low                               |
-| Operational error                 | Medium — mitigated by CI warnings |
-| Recovery failure (false negative) | Much lower than status quo        |
+| Category                          | Risk                             |
+| --------------------------------- | -------------------------------- |
+| Data loss (false positive)        | Medium: auditable and reversible |
+| Availability (reload loops)       | Very low                         |
+| Security compromise               | Low                              |
+| Operational error                 | Medium: mitigated by CI warnings |
+| Recovery failure (false negative) | Much lower than status quo       |
 
 ---
 
 ## Future Considerations
 
-These are not implemented. They're documented here for when/if the simple approach proves insufficient.
+None of these are implemented. They are recorded for when the simple approach proves insufficient.
 
-**Granular targets** — instead of clearing everything, clear only cache or only storage based on what changed. Would require a `targets` field in the manifest and conditional clearing in `checkClearManifest()`.
+**Granular targets:** instead of clearing everything, clear only cache or only storage based on what changed. Would require a `targets` field in the manifest and conditional clearing in `checkClearManifest()`.
 
-**Version ranges** — instead of a single `clear_below`, support multiple ranges for cumulative clears across releases. Would require a `ranges` array and semver comparison logic.
+**Version ranges:** instead of a single `clear_below`, support multiple ranges for cumulative clears across releases. Would require a `ranges` array and semver comparison logic.
 
-**Cloudflare Worker (Option B)** — if a broken SW ever prevents the client-side check from running, a thin Cloudflare Worker could read a version cookie and inject a `Clear-Site-Data` HTTP header at the edge, bypassing all client-side code.
+**Cloudflare Worker (Option B):** if a broken SW ever prevents the client-side check from running, a thin Cloudflare Worker could read a version cookie and inject a `Clear-Site-Data` HTTP header at the edge, bypassing all client-side code.
 
-**Manifest signing** — embed a SHA256 hash of the manifest in the build to detect tampering. The boot check would verify the hash before acting on the manifest.
+**Manifest signing:** embed a SHA256 hash of the manifest in the build to detect tampering. The boot check would verify the hash before acting on the manifest.
 
-**Automated manifest updates** — have CI automatically set `clear_below` when trigger files change, removing the manual step. Deferred because the manual step is a safety feature, not a burden, at current release velocity.
+**Automated manifest updates:** have CI set `clear_below` when trigger files change, removing the manual step. Deferred because, at current release velocity, the manual step works as a safety check.

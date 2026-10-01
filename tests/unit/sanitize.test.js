@@ -285,4 +285,19 @@ describe('htmlToPlainText', () => {
     const text = htmlToPlainText('<p>A</p>\n\n\n\n<p>B</p>');
     expect(text).not.toMatch(/\n{3,}/);
   });
+
+  it('quotes the original kept in a reply or forward', () => {
+    const original = '<p>Lunch at noon?</p><p>Café on 5th</p>';
+    const encoded = btoa(unescape(encodeURIComponent(original)));
+    const text = htmlToPlainText(
+      `<p><br></p><p class="fe-reply-attribution">On Thu, Ana wrote:</p>` +
+        `<blockquote data-raw-html="${encoded}" data-raw-variant="reply"></blockquote>`,
+    );
+    expect(text).toBe('On Thu, Ana wrote:\n> Lunch at noon?\n> Café on 5th');
+  });
+
+  it('drops a quote whose data cannot be decoded', () => {
+    const text = htmlToPlainText('<p>Hi</p><blockquote data-raw-html="%%%"></blockquote>');
+    expect(text).toBe('Hi');
+  });
 });

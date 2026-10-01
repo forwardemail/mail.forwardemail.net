@@ -64,13 +64,13 @@ CSP enforcement is not uniform across the three runtimes. Changes to `script-src
 
 `vite.config.js` strips the `<meta>` CSP for Tauri builds (the `strip-csp-meta-for-tauri` plugin) so the two policies don't collide into a more-restrictive union.
 
-**2. Tauri injects a nonce at runtime for its IPC bootstrap.** Per CSP spec, _once any nonce or hash is present in `script-src`, `'unsafe-inline'` is ignored_ for scripts that don't match. This silently breaks inline scripts that "worked" on web or in release builds. Symptom: `Refused to execute a script because its hash, its nonce, or 'unsafe-inline' does not appear in the script-src directive` even though `'unsafe-inline'` is clearly in the declared CSP.
+**2. Tauri injects a nonce at runtime for its IPC bootstrap.** Per CSP spec, _once any nonce or hash is present in `script-src`, `'unsafe-inline'` is ignored_ for scripts that don't match. This silently breaks inline scripts that "worked" on web or in release builds. Symptom: `Refused to execute a script because its hash, its nonce, or 'unsafe-inline' does not appear in the script-src directive` even though `'unsafe-inline'` is in the declared CSP.
 
-**3. Sandboxed srcdoc iframes inherit the parent's CSP.** They add their own meta CSP on top — the effective policy is the intersection (most restrictive wins). So point 2 propagates into every email iframe. An inline script that works on web will fail inside the same iframe under Tauri dev.
+**3. Sandboxed srcdoc iframes inherit the parent's CSP.** They add their own meta CSP on top, and the effective policy is the intersection (most restrictive wins). So point 2 propagates into every email iframe. An inline script that works on web will fail inside the same iframe under Tauri dev.
 
-**4. The email iframe uses an external script, not inline.** `public/email-iframe.js` is loaded via `<script src="${parent-origin}/email-iframe.js">` (see `src/utils/iframe-srcdoc.ts`). The srcdoc CSP is `script-src ${parent-origin}`. This side-steps the nonce-kills-unsafe-inline interaction because origin matches are unaffected by nonce presence. The previous hash-based approach had a race (the async SHA-256 computation wasn't always ready by first render) and would have been defeated by any future change to the script text. Do not revert to inline without also removing Tauri's nonce injection (which is not optional — it's part of the IPC bootstrap).
+**4. The email iframe uses an external script, not inline.** `public/email-iframe.js` is loaded via `<script src="${parent-origin}/email-iframe.js">` (see `src/utils/iframe-srcdoc.ts`). The srcdoc CSP is `script-src ${parent-origin}`. This side-steps the nonce-kills-unsafe-inline interaction because origin matches are unaffected by nonce presence. The previous hash-based approach had a race (the async SHA-256 computation wasn't always ready by first render) and would have been defeated by any future change to the script text. Do not revert to inline without also removing Tauri's nonce injection (which is not optional because it's part of the IPC bootstrap).
 
-**5. When a link inside the email iframe appears to silently fail,** check the _iframe's_ devtools frame, not the top-level page. Two errors typically appear together: the srcdoc script is blocked (script-src), then the iframe's `<a>` navigates to the link target, which is blocked by the parent's `frame-src` because it's an external origin. Fix the first and the second goes away — the external script registers the capture-phase click interceptor that postMessages the URL up to `handleIframeLinkClick` in `Mailbox.svelte`, which calls `openUrl()` instead of navigating.
+**5. When a link inside the email iframe appears to silently fail,** check the _iframe's_ devtools frame, not the top-level page. Two errors typically appear together: the srcdoc script is blocked (script-src), then the iframe's `<a>` navigates to the link target, which is blocked by the parent's `frame-src` because it's an external origin. Fixing the first also fixes the second: the external script registers the capture-phase click interceptor that postMessages the URL up to `handleIframeLinkClick` in `Mailbox.svelte`, which calls `openUrl()` instead of navigating.
 
 **6. When adding a new external origin (script, frame, connect),** update _both_ `index.html` and `src-tauri/tauri.conf.json`. It's easy to miss one; the web build will silently work while Tauri rejects, or vice versa.
 
@@ -92,8 +92,8 @@ The capabilities file (`src-tauri/capabilities/default.json`) grants only the mi
 | Plugin       | Permissions Granted                                                                                                                   | Permissions Denied                                                |
 | ------------ | ------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
 | Notification | `allow-is-permission-granted`, `allow-request-permission`, `allow-notify`                                                             | `allow-register-action-types`, `allow-cancel`                     |
-| Updater      | `allow-check`, `allow-download-and-install`                                                                                           | —                                                                 |
-| Deep Link    | `allow-get-current`                                                                                                                   | —                                                                 |
+| Updater      | `allow-check`, `allow-download-and-install`                                                                                           | n/a                                                               |
+| Deep Link    | `allow-get-current`                                                                                                                   | n/a                                                               |
 | Window       | `allow-close`, `allow-set-title`, `allow-show`, `allow-hide`, `allow-minimize`, `allow-maximize`, `allow-set-size`, `allow-set-focus` | `allow-create`, `allow-destroy`, `allow-set-always-on-top`        |
 | Shell        | `allow-open`                                                                                                                          | `allow-execute`, `allow-spawn`, `allow-stdin-write`, `allow-kill` |
 
@@ -127,7 +127,7 @@ The service worker (`public/sw-sync.js`) and its main-thread replacement (`src/u
 
 ## WebSocket Client
 
-The WebSocket client (`src/utils/websocket-client.js`) implements comprehensive hardening.
+The WebSocket client (`src/utils/websocket-client.js`) implements these hardening measures.
 
 **Authentication.** Credentials are sent as a base64-encoded `Authorization` header during the WebSocket handshake, not as URL parameters. This prevents credentials from appearing in server logs or browser history.
 
@@ -187,9 +187,9 @@ The application provides an optional App Lock feature that encrypts all locally 
 
 **Passkey (WebAuthn) authentication.** Users can register a passkey (biometric, security key, or platform authenticator) using the `@passwordless-id/webauthn` library. The passkey can be used to unlock the app instead of a PIN. A backup PIN is always required as a fallback. The WebAuthn ceremony is performed entirely client-side with no server round-trips.
 
-**IndexedDB encryption.** When App Lock is enabled, the database engine (`src/utils/db-crypto.ts`, wired into `src/utils/db-engine.ts`) seals every sensitive record with AES-256-GCM (WebCrypto) using a subkey derived from the DEK via keyed BLAKE2b. Sensitive tables are `messages`, `messageBodies`, `drafts`, `outbox`, `searchIndex`, and sensitive `meta` key families (mutation queue, contact cache, attachment blobs, saved searches). Non-index content fields are serialized and sealed into a single `_enc` envelope per record; only fields required by actually-queried indexes (e.g., `account`, `id`, `folder`, `date`) remain plaintext. Writes to sensitive tables fail closed while the vault is locked. Legacy plaintext records remain readable and are upgraded by a background sweep when App Lock is enabled; disabling App Lock decrypts all records before the DEK is discarded. Because the service worker has no access to the key, background content sync is skipped while App Lock is enabled (the `app_lock_enabled` meta flag gates it).
+**IndexedDB encryption.** When App Lock is enabled, the database engine (`src/utils/db-crypto.ts`, wired into `src/utils/db-engine.ts`) seals every sensitive record with AES-256-GCM (WebCrypto) using a subkey derived from the DEK via keyed BLAKE2b. Sensitive tables are `messages`, `messageBodies`, `drafts`, `outbox`, `searchIndex`, and sensitive `meta` key families (mutation queue, contact cache, attachment blobs, saved searches). Non-index content fields are serialized and sealed into a single `_enc` envelope per record; only fields required by queried indexes (e.g., `account`, `id`, `folder`, `date`) remain plaintext. Writes to sensitive tables fail closed while the vault is locked. Legacy plaintext records remain readable and are upgraded by a background sweep when App Lock is enabled; disabling App Lock decrypts all records before the DEK is discarded. Because the service worker has no access to the key, background content sync is skipped while App Lock is enabled (the `app_lock_enabled` meta flag gates it).
 
-**localStorage encryption.** Sensitive localStorage keys (credentials, the multi-account list, PGP keys and passphrases, auth tokens) are encrypted with the DEK when App Lock is enabled. The `SENSITIVE_LOCAL_KEYS` set defines which keys are encrypted, and every write through the `Local` storage utility routes through this protection (not just a one-time setup sweep); each unlock re-sweeps any values written while locked. Non-sensitive keys (UI preferences, lock configuration) remain unencrypted since they are needed before unlock. Plaintext copies of tab-scoped credentials (and the DEK itself) live in `sessionStorage` for the lifetime of an unlocked tab session so reloads do not re-prompt; they are cleared on lock and on tab close.
+**localStorage encryption.** Sensitive localStorage keys (credentials, the multi-account list, PGP keys and passphrases, auth tokens) are encrypted with the DEK when App Lock is enabled. The `SENSITIVE_LOCAL_KEYS` set defines which keys are encrypted, and every write through the `Local` storage utility routes through this protection (not only a one-time setup sweep); each unlock re-sweeps any values written while locked. Non-sensitive keys (UI preferences, lock configuration) remain unencrypted since they are needed before unlock. Plaintext copies of tab-scoped credentials (and the DEK itself) live in `sessionStorage` for the lifetime of an unlocked tab session so reloads do not re-prompt; they are cleared on lock and on tab close.
 
 **Memory safety.** The DEK is held in a module-scoped closure variable, never exposed on `window` or any global scope. On lock, `sodium.memzero()` is called to wipe the DEK from memory. The KEK is never stored; it is derived on-demand during unlock and immediately discarded after decrypting the DEK.
 
@@ -237,12 +237,12 @@ SHA-256 checksums for all release artifacts are generated and attached to each G
 
 ## Reporting Vulnerabilities
 
-If you discover a security vulnerability, please report it responsibly by emailing **security@forwardemail.net**. Do not open a public GitHub issue for security vulnerabilities. We will acknowledge receipt within 48 hours and provide a timeline for a fix.
+If you discover a security vulnerability, report it responsibly by emailing **security@forwardemail.net**. Do not open a public GitHub issue for security vulnerabilities. We will acknowledge receipt within 48 hours and provide a timeline for a fix.
 
 ## Related Documentation
 
-- [ARCHITECTURE.md](./ARCHITECTURE.md) — Full architecture document including encryption details
-- [SECRETS.md](./SECRETS.md) — Required secrets for CI/CD and code signing
-- [Desktop CI Secrets](./desktop-ci-secrets.md) — Detailed desktop signing setup
-- [RELEASES.md](./RELEASES.md) — Release process and artifact signing
-- [App Lock Architecture](./app-lock-architecture.md) — Detailed App Lock encryption design
+- [ARCHITECTURE.md](./ARCHITECTURE.md): Full architecture document including encryption details
+- [SECRETS.md](./SECRETS.md): Required secrets for CI/CD and code signing
+- [Desktop CI Secrets](./desktop-ci-secrets.md): Detailed desktop signing setup
+- [RELEASES.md](./RELEASES.md): Release process and artifact signing
+- [App Lock Architecture](./app-lock-architecture.md): Detailed App Lock encryption design

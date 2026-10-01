@@ -317,7 +317,7 @@
           </div>
 
           <div class="grid gap-3 rounded-md border p-3">
-            <p class="text-sm font-medium">Optional diagnostics — all off by default</p>
+            <p class="text-sm font-medium">Optional diagnostics (all off by default)</p>
             <p class="text-xs text-muted-foreground">
               Pick what you're comfortable sharing. Sensitive values (tokens, email addresses, home
               directory paths) are redacted before send. Use "Preview" below to see exactly what

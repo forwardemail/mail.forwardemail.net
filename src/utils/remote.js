@@ -116,7 +116,7 @@ export const Remote = {
     // Circuit breaker: when tripped, fail GETs fast instead of adding to the
     // storm. Mutations and explicit { bypassCircuit } callers go through.
     if (method === 'get' && !options.bypassCircuit && requestCircuit.isOpen()) {
-      const err = new Error('Backing off — service temporarily unavailable');
+      const err = new Error('Backing off: service temporarily unavailable');
       err.status = 503;
       err.circuitOpen = true;
       throw err;

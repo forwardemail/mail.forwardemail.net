@@ -126,6 +126,85 @@ jobs:
       - name: E2E tests
         run: pnpm test:e2e
 
+  # The terminal client (forwardemail CLI): builds the bundle, runs its tests
+  # (the end-to-end ones drive it in a pseudo-terminal) and makes sure the
+  # standalone executable still builds and starts.
+  # The terminal client on each system it ships for. The interactive tests
+  # (a real pseudo-terminal) run on Linux; the command line, the TermDOM
+  # integration, the updater, notifications and the standalone executable
+  # are tested everywhere.
+  cli:
+    if: ${{ !startsWith(github.event.head_commit.message, 'chore(release):') }}
+    name: cli (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          run_install: false
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build and test the CLI
+        run: pnpm test:cli
+
+      - name: Build the standalone executable
+        run: node scripts/build-sea.mjs --output "cli/dist/forwardemail${{ runner.os == 'Windows' && '.exe' || '' }}"
+
+      - name: Run the standalone executable
+        env:
+          FORWARDEMAIL_HOME: ${{ runner.temp }}/fe-home
+          FORWARDEMAIL_NOTIFICATIONS: '1'
+        run: |
+          exe="cli/dist/forwardemail${{ runner.os == 'Windows' && '.exe' || '' }}"
+          test "$("$exe" --version)" = "$(node -p 'require("./package.json").version')"
+          "$exe" --help > /dev/null
+          # Its notifier program is written out of the executable and found
+          # (macOS and Windows; Linux uses the system's notify-send).
+          "$exe" notifications | tee "$RUNNER_TEMP/notifications.txt"
+          if [ "$RUNNER_OS" != Linux ]; then
+            program="$(sed -n 's/^  program: //p' "$RUNNER_TEMP/notifications.txt")"
+            node -e 'process.exit(require("fs").existsSync(process.argv[1]) ? 0 : 1)' "$program"
+          fi
+
+      - name: Check the installer
+        if: runner.os != 'Windows'
+        run: sh -n cli/install.sh
+
+      # The npm package as it would be published: packed, installed globally
+      # into a scratch prefix and run from there.
+      - name: Install the npm package
+        run: |
+          cd cli
+          npm pack --pack-destination "$RUNNER_TEMP"
+          npm install --global --prefix "$RUNNER_TEMP/npm" "$RUNNER_TEMP"/forwardemail-*.tgz
+          if [ "$RUNNER_OS" = Windows ]; then bin="$RUNNER_TEMP/npm/forwardemail.cmd"; else bin="$RUNNER_TEMP/npm/bin/forwardemail"; fi
+          test "$("$bin" --version | tr -d '\r')" = "$(node -p 'require("./package.json").version')"
+          "$bin" --help > /dev/null
+          FORWARDEMAIL_NOTIFICATIONS=1 "$bin" notifications
+
   # Pre-merge secret scan. Catches accidentally-committed tokens, signing
   # keys, etc. before they hit main. Scoped to repo content only; no signing
   # secrets needed. continue-on-error: false — fail the PR if anything is

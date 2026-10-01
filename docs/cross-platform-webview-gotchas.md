@@ -19,16 +19,16 @@ That means two engines (Chromium + WebKit) but **four stability profiles**. Beha
 
 Refs: [Tauri webview versions](https://v2.tauri.app/reference/webview-versions/), [Exploring system webviews](https://dev.to/shrsv/exploring-system-webviews-in-tauri-native-rendering-for-efficient-cross-platform-apps-9hl)
 
-## 2. Service workers — biggest single issue for this app
+## 2. Service workers: biggest single issue for this app
 
-- **WKWebView blocks SWs** unless you opt into **App-Bound Domains** (`limitsNavigationsToAppBoundDomains=true`), which conflicts with `addUserScript` — i.e. with Tauri's IPC injection. Effectively: **no service workers on iOS/macOS Tauri webviews.**
+- **WKWebView blocks SWs** unless you opt into **App-Bound Domains** (`limitsNavigationsToAppBoundDomains=true`), which conflicts with `addUserScript`, i.e. with Tauri's IPC injection. In practice: **no service workers on iOS/macOS Tauri webviews.**
 - **Tauri custom protocol (`tauri://`) disallows SW registration on every platform** because WebKit/Chromium require a secure origin.
-- **No Background Sync on WebKit at all** — Chromium-only.
+- **No Background Sync on WebKit at all**: Chromium-only.
 - **Windows v2 changed default scheme** from `https://tauri.localhost` to `http://tauri.localhost`; this wipes IDB/LocalStorage/Cookies for upgraders and blocks SW-requiring features unless you set `app.windows.useHttpsScheme=true`.
 
 **Mitigation:** don't rely on the Workbox SW on mobile/macOS Tauri builds. Options:
 
-- (a) Use `tauri-plugin-localhost` so the app is served from `http://localhost:<port>` where Chromium will register SWs (still risky on iOS — WKWebView entitlement required).
+- (a) Use `tauri-plugin-localhost` so the app is served from `http://localhost:<port>` where Chromium will register SWs (still risky on iOS; WKWebView entitlement required).
 - (b) Treat the SW as a **desktop-Windows/Linux-only** enhancement and move offline/precache/sync logic into `sync.worker.ts` + Rust commands.
 
 Given the existing `sw-sync.js` + sync Web Worker + mutation queue, lean on the Web Worker + Rust commands for mobile and keep the SW as progressive enhancement.
@@ -37,9 +37,9 @@ Refs: [WebKit#206741](https://bugs.webkit.org/show_bug.cgi?id=206741), [Apple fo
 
 ## 3. IndexedDB / Dexie quirks
 
-- **WebKit 7-day ITP eviction** wipes IDB, LocalStorage, SessionStorage, and SW registrations after 7 days of use without interaction. Inside a native Tauri app the policy still applies in current WebKitGTK/WKWebView builds — an app that sits unused for a week can return to an empty cache.
-- **iOS 17+ quota**: 15% of disk for non-browser apps (WKWebView), 60% for browser apps. Plenty for a 50MB attachment cache, but `navigator.storage.estimate()` is the only reliable figure — plan for `QuotaExceededError`.
-- **Dexie on Safari**: historically compound-index/multiEntry issues, and iOS 14.5 had a hard bug storing Blobs in IDB. Dexie 4 has workarounds baked in — pin to Dexie ≥4.
+- **WebKit 7-day ITP eviction** wipes IDB, LocalStorage, SessionStorage, and SW registrations after 7 days of use without interaction. Inside a native Tauri app the policy still applies in current WebKitGTK/WKWebView builds, so an app that sits unused for a week can return to an empty cache.
+- **iOS 17+ quota**: 15% of disk for non-browser apps (WKWebView), 60% for browser apps. Plenty for a 50MB attachment cache, but `navigator.storage.estimate()` is the only reliable figure, so plan for `QuotaExceededError`.
+- **Dexie on Safari**: historically compound-index/multiEntry issues, and iOS 14.5 had a hard bug storing Blobs in IDB. Dexie 4 has workarounds baked in, so pin to Dexie ≥4.
 - **Tauri v2 migration reset**: the IDB directory path changed (`https_tauri.localhost_0.indexeddb.leveldb` → `http_…`) causing silent data loss for upgraders.
 
 **Mitigation:** wrap every write in explicit quota-error handling; persist a server-sourced watermark so the cache can rebuild when eviction happens; for upgraders from v1, detect the old path and migrate or prompt re-login. The existing `SCHEMA_VERSION` discipline between `sw-sync.js` and `db-constants.ts` is already correct.
@@ -50,7 +50,7 @@ Refs: [WebKit storage policy](https://webkit.org/blog/14403/updates-to-storage-p
 
 Classic + module Workers generally work on all four engines, but Tauri has traps:
 
-- **Tauri APIs (`invoke`, HTTP plugin, etc.) are NOT exposed in Workers** — only the main thread. Route through main or call Rust via a main-thread proxy.
+- **Tauri APIs (`invoke`, HTTP plugin, etc.) are NOT exposed in Workers**, only on the main thread. Route through main or call Rust via a main-thread proxy.
 - **macOS prod build bug**: importing worker scripts via the custom protocol returns `text/html` MIME → `SyntaxError: Unexpected token`.
 - **Dev postMessage race** requires a hot-reload on first load.
 
@@ -60,9 +60,9 @@ Refs: [tauri#3308](https://github.com/tauri-apps/tauri/issues/3308), [tauri#1227
 
 ## 5. Blob / File / attachments (direct hit on the 50MB cache)
 
-- **Android WebView cannot download `blob:` URLs** natively — DownloadManager only gets the URL, not the bytes, so `<a download>` silently fails. Intercept via `setDownloadListener` or route through Rust. Tauri has no built-in "download file" on mobile.
-- **WKWebView Blob memory pressure**: iOS aggressively kills webviews approaching ~1GB; a 50MB attachment fetched as one Blob and then decoded into DataURLs can push you there fast. Stream to disk via the Tauri `fs`/`upload` plugins instead of holding in Blob + dataURL.
-- **No HTTP range on custom protocol yet** — large attachment streaming from Rust requires range support Tauri doesn't natively emit; workaround is the localhost plugin.
+- **Android WebView cannot download `blob:` URLs** natively. DownloadManager only gets the URL, not the bytes, so `<a download>` silently fails. Intercept via `setDownloadListener` or route through Rust. Tauri has no built-in "download file" on mobile.
+- **WKWebView Blob memory pressure**: iOS kills webviews approaching ~1GB; a 50MB attachment fetched as one Blob and then decoded into DataURLs can push you there fast. Stream to disk via the Tauri `fs`/`upload` plugins instead of holding in Blob + dataURL.
+- **No HTTP range on custom protocol yet**: large attachment streaming from Rust requires range support Tauri doesn't natively emit; workaround is the localhost plugin.
 - **Asset protocol broken on Android** in some builds (500s).
 
 **Mitigation:** for mobile, use a Rust command that writes the decoded attachment to `app_data_dir` and returns a path the viewer loads via `convertFileSrc`. Cap in-memory Blob retention; avoid `FileReader.readAsDataURL` on big files.
@@ -71,7 +71,7 @@ Refs: [Android blob download guide](https://medium.com/@SrimanthChowdary/resolvi
 
 ## 6. CSP, custom protocols, cookies
 
-`tauri://localhost` (and `http://tauri.localhost` on Windows/Android) is **not a secure/valid origin** from WebKit's POV, so: no SW, no `Set-Cookie` persistence, and CORS preflights appear with `null`/opaque origins that many APIs reject. `api.forwardemail.net` needs either CORS with credentials configured for the Tauri origin or — more robustly — you proxy via Rust (`tauri-plugin-http`).
+`tauri://localhost` (and `http://tauri.localhost` on Windows/Android) is **not a secure/valid origin** from WebKit's POV, so: no SW, no `Set-Cookie` persistence, and CORS preflights appear with `null`/opaque origins that many APIs reject. `api.forwardemail.net` needs either CORS with credentials configured for the Tauri origin or, more reliably, a proxy via Rust (`tauri-plugin-http`).
 
 **Mitigation:** use `@tauri-apps/plugin-http` fetch (or `tauri-plugin-cors-fetch` which shims `window.fetch`) for anything that needs cookies, SSE, or custom headers; keep token auth (`alias_auth`/`api_key`) since cookies are fragile.
 
@@ -105,13 +105,13 @@ Refs: [Tauri commit a2d36b8](https://github.com/tauri-apps/tauri/commit/a2d36b8c
 
 ## 10. Known Tauri 2 mobile bugs worth tracking
 
-- Back button exits app instead of routing in SPA ([#14406](https://github.com/tauri-apps/tauri/issues/14406), [#8142](https://github.com/tauri-apps/tauri/issues/8142), [wry#1564](https://github.com/tauri-apps/wry/issues/1564)) — intercept via a plugin and wire to your router.
+- Back button exits app instead of routing in SPA ([#14406](https://github.com/tauri-apps/tauri/issues/14406), [#8142](https://github.com/tauri-apps/tauri/issues/8142), [wry#1564](https://github.com/tauri-apps/wry/issues/1564)). Intercept via a plugin and wire to your router.
 - Asset protocol 500s on Android ([#12364](https://github.com/tauri-apps/tauri/issues/12364)).
 - Back navigation on Android hiccups ([#14939](https://github.com/tauri-apps/tauri/issues/14939)).
 - Tauri globals occasionally not injected in emulator ([#6053](https://github.com/tauri-apps/tauri/issues/6053)).
 - Webview unresponsive reports on some Android devices ([#14741](https://github.com/tauri-apps/tauri/issues/14741)).
 
-## 11. Linux WebKitGTK — the weakest link
+## 11. Linux WebKitGTK: the weakest link
 
 The community is openly frustrated ("webkitgtk is unusable", "more unstable each release"). Common breakages: WebRTC absent unless you rebuild, MediaSource/video codecs partial, SW registration spotty, occasional IDB corruption on `webkit2gtk-4.1` < 2.44, PDF viewer missing, DRM content disabled.
 
@@ -124,7 +124,7 @@ Refs: [tauri discussion#8524](https://github.com/tauri-apps/tauri/discussions/85
 - **Windows**: signing is required but SmartScreen still warns until the publisher and file build reputation from downloads. EV certificates no longer skip this. Releases are signed through SSL.com eSigner (docs/SECRETS.md#windows-code-signing-secrets).
 - **macOS**: notarization mandatory for outside-App-Store distribution; App Store adds sandbox + entitlements review.
 - **Linux**: AppImage GPG signatures aren't auto-verified; prefer Flatpak/Snap for trust + sandboxing, or rely on the distro's `.deb/.rpm` signed repo flow.
-- **App Store (iOS)** — email apps face extra scrutiny around:
+- **App Store (iOS)**: email apps face extra scrutiny around:
   1. Account creation → **in-app account deletion** required (5.1.1(v))
   2. Privacy nutrition labels for message content
   3. If any purchase path exists, new 2025 "external purchase email" rules apply
@@ -138,10 +138,10 @@ Refs: [Tauri Windows signing](https://v2.tauri.app/distribute/sign/windows/), [T
 ## Priority cheat-sheet
 
 1. **Assume no service worker on iOS/macOS/any custom-protocol build.** Push offline/sync logic into the sync Web Worker + Rust. _(high)_
-2. **Dexie 4, Blob-in-IDB tests on iOS, quota-error handlers everywhere** — the 50MB attachment cache is guaranteed to hit eviction on WebKit. _(high)_
+2. **Dexie 4, Blob-in-IDB tests on iOS, quota-error handlers everywhere**. The 50MB attachment cache is guaranteed to hit eviction on WebKit. _(high)_
 3. **Route attachment download/streaming through Rust** (`fs`/`upload` + `convertFileSrc`), never `a[download]` with Blob URLs on Android. _(high)_
-4. **Use the HTTP plugin** (or `tauri-plugin-cors-fetch`) for authenticated API calls — custom protocol cookies/CORS will bite you. _(high)_
-5. **Swap rich `contenteditable` compose on mobile** for a robust editor (Lexical/ProseMirror latest) or textarea. _(medium-high)_
+4. **Use the HTTP plugin** (or `tauri-plugin-cors-fetch`) for authenticated API calls. Custom protocol cookies/CORS break authenticated requests. _(high)_
+5. **Swap rich `contenteditable` compose on mobile** for an IME-safe editor (Lexical/ProseMirror latest) or textarea. _(medium-high)_
 6. **Intercept Android back button** via plugin and route to your history stack. _(medium)_
 7. **Set `backgroundThrottlingPolicy` explicitly**; don't rely on workers staying alive when hidden. _(medium)_
 8. **Pin `webkit2gtk-4.1 ≥ 2.44`** and prefer Flatpak on Linux. _(medium)_

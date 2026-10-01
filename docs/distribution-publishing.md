@@ -3,8 +3,8 @@
 This guide is the operational runbook for publishing Forward Email outside the
 standard GitHub Release, Google Play, and TestFlight channels. It covers the
 strict Snap, Flathub Flatpak, the official self-hosted F-Droid-compatible
-repository, the first-party Homebrew tap, and Obtainium. It is designed so that
-a normal `v*` release is hands-off **after** each store has completed its
+repository, the first-party Homebrew tap, and Obtainium. A normal `v*` release
+is hands-off **after** each store has completed its
 one-time enrollment and the documented opt-in control has been enabled.
 
 > The `release.yml` workflow deliberately treats Snap Store, the F-Droid

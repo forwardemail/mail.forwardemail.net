@@ -1,8 +1,8 @@
-# Desktop App — Developer Setup Guide
+# Desktop App: Developer Setup Guide
 
 ## Prerequisites
 
-This guide is for **building the desktop app from source**. If you only want to install a published desktop binary, use the instructions in the repository [README](../README.md#ubuntu--debian-installation). Official Linux release artifacts are now published for **x64 and arm64**, with Linux arm64 shipping `.deb` and `.rpm` bundles.
+This guide is for **building the desktop app from source**. If you only want to install a published desktop binary, use the instructions in the repository [README](../README.md#ubuntu--debian-installation). CI publishes official Linux release artifacts for **x64 and arm64**, with Linux arm64 shipping `.deb` and `.rpm` bundles.
 
 | Tool                        | Version                                  | Notes                                                                                                                  |
 | --------------------------- | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
@@ -114,7 +114,7 @@ All JS code paths in `src/utils/updater-bridge.js` log at every decision point w
 
 These lines appear in:
 
-- The **webview devtools Console** (⌥⌘I in dev builds — enabled by the `devtools` Tauri feature in debug builds only).
+- The **webview devtools Console** (⌥⌘I in dev builds; the `devtools` Tauri feature enables it in debug builds only).
 - The **rotating log files** on disk, via `tauri-plugin-log`'s `Webview` target. Up to 5 × 1 MB files. Locations:
   - macOS: `~/Library/Logs/net.forwardemail.mail/`
   - Linux: `~/.local/share/net.forwardemail.mail/logs/`
@@ -134,7 +134,7 @@ In debug builds (`pnpm tauri:dev`), the overall log level is `Debug` so you'll s
 
 ### 3. OS-level network inspection
 
-When you need to confirm an HTTP request actually left the machine (e.g., suspecting a firewall or DNS issue):
+When you need to confirm an HTTP request left the machine (e.g., suspecting a firewall or DNS issue):
 
 ```bash
 # macOS — watch connections from the app process while triggering a check
@@ -145,7 +145,7 @@ lsof -iTCP -sTCP:ESTABLISHED -P -c 'Forward Email' -r 1
 # chain since update downloads are HTTPS.
 ```
 
-GitHub Releases assets use `objects.githubusercontent.com` / `release-assets.githubusercontent.com` for the actual `.tar.gz` download and `github.com` for the `latest.json` redirect.
+GitHub Releases assets use `objects.githubusercontent.com` / `release-assets.githubusercontent.com` for the `.tar.gz` download and `github.com` for the `latest.json` redirect.
 
 ### Common observations
 
@@ -161,24 +161,24 @@ GitHub Releases assets use `objects.githubusercontent.com` / `release-assets.git
 
 ### macOS
 
-- **"xcrun: error: invalid active developer path"** — Run `xcode-select --install` to install CLI tools.
-- **Xcode license not accepted** — Run `sudo xcodebuild -license accept`.
-- **Wrong Rust target** — Ensure you've added the correct target for your Mac (`aarch64-apple-darwin` for Apple Silicon, `x86_64-apple-darwin` for Intel).
+- **"xcrun: error: invalid active developer path"**: Run `xcode-select --install` to install CLI tools.
+- **Xcode license not accepted**: Run `sudo xcodebuild -license accept`.
+- **Wrong Rust target**: Ensure you've added the correct target for your Mac (`aarch64-apple-darwin` for Apple Silicon, `x86_64-apple-darwin` for Intel).
 
 ### Linux
 
-- **"Package libwebkit2gtk-4.1 was not found"** — Install the system dependencies listed above.
-- **WRY build failures** — Ensure all `-dev` packages are installed. On Fedora/RHEL, use `webkit2gtk4.1-devel` and equivalents.
+- **"Package libwebkit2gtk-4.1 was not found"**: Install the system dependencies listed above.
+- **WRY build failures**: Ensure all `-dev` packages are installed. On Fedora/RHEL, use `webkit2gtk4.1-devel` and equivalents.
 
 ### Windows
 
-- **"WebView2 runtime not found"** — Download and install from [Microsoft](https://developer.microsoft.com/en-us/microsoft-edge/webview2/).
-- **Build fails with MSVC errors** — Install Visual Studio Build Tools with the "Desktop development with C++" workload.
-- **Windows arm64 build fails at link time** — Ensure the Visual Studio ARM64 C++ build tools are installed before targeting `aarch64-pc-windows-msvc`.
-- **"Set as default" only opens Settings** — This is expected on modern Windows. The app can hand off to the system Default apps experience for `mailto`, but it cannot silently claim the handler itself.
-- **SmartScreen or Defender warns on install** — Release installers are signed, but SmartScreen reputation for a new certificate builds from download history, so early releases can still show the prompt. Local builds are unsigned.
+- **"WebView2 runtime not found"**: Download and install from [Microsoft](https://developer.microsoft.com/en-us/microsoft-edge/webview2/).
+- **Build fails with MSVC errors**: Install Visual Studio Build Tools with the "Desktop development with C++" workload.
+- **Windows arm64 build fails at link time**: Ensure the Visual Studio ARM64 C++ build tools are installed before targeting `aarch64-pc-windows-msvc`.
+- **"Set as default" only opens Settings**: Expected on modern Windows. The app can hand off to the system Default apps experience for `mailto`, but it cannot silently claim the handler itself.
+- **SmartScreen or Defender warns on install**: Release installers are signed, but SmartScreen reputation for a new certificate builds from download history, so early releases can still show the prompt. Local builds are unsigned.
 
 ### General
 
-- **`pnpm tauri:dev` hangs** — Check that port 5174 is not in use. Kill any stale Vite processes.
-- **Rust compilation slow on first build** — This is expected. Subsequent builds use incremental compilation and the Rust cache.
+- **`pnpm tauri:dev` hangs**: Check that port 5174 is not in use. Kill any stale Vite processes.
+- **Rust compilation slow on first build**: Expected. Subsequent builds use incremental compilation and the Rust cache.

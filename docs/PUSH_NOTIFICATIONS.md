@@ -151,7 +151,7 @@ When registration fails on a device, **Settings → Push notifications** shows t
 
 ## macOS application and signing configuration
 
-macOS uses the same App ID as iOS, `net.forwardemail.mail`, and the same backend APNs key and topic, so the server needs no macOS-specific setting. What macOS needs is signing:
+macOS uses the same App ID as iOS, `net.forwardemail.mail`, and the same backend APNs key and topic, so the server needs no macOS-specific setting. macOS needs the signing setup below:
 
 - `com.apple.developer.aps-environment` is a restricted entitlement. A Developer ID (outside the Mac App Store) app may carry it only when the bundle embeds a **Developer ID provisioning profile** that grants it. Signing with the entitlement but without the profile passes codesign and notarization, and then the kernel kills the app at launch; that is what happened in 0.10.17 to 0.10.21 ([postmortem](./desktop-postmortem-macos-entitlements-2026-05-19.md)).
 - `src-tauri/Entitlements.plist` therefore never contains the entitlement. Local, pull request and e2e builds are signed without it, and the app reports push as unavailable in **Settings → Push notifications** ("not signed for Apple Push Notifications"). Notifications still arrive over the WebSocket while the app runs.

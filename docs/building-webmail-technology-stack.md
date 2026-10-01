@@ -1,7 +1,7 @@
 # Building Webmail: Technology Stack
 
-Every tool in this stack was chosen to serve one goal: a static, client-only
-webmail app that behaves like a native client.
+Every tool in this stack serves one goal: a static, client-only webmail app
+that behaves like a native client.
 
 ## Stack Principles
 
@@ -63,8 +63,8 @@ flowchart TD
     end
 ```
 
-Every worker communicates via `MessageChannel` — no shared memory, no
-contention, no UI stalls.
+Every worker communicates via `MessageChannel`, so there is no shared memory,
+no contention, and no UI stalls.
 
 ## Composition & Content
 
@@ -106,8 +106,8 @@ flowchart LR
 ## Build-Time Environment Variables
 
 Vite statically replaces these values at build time via the `define` option in
-`vite.config.js`. Every occurrence in source code is swapped with the literal
-string during compilation — they do not exist at runtime as real environment
+`vite.config.js`. Compilation swaps every occurrence in source code with the
+literal string, so these values do not exist at runtime as real environment
 variables.
 
 | Variable                                | Source                                | Example Value                  | Purpose                                          |
@@ -148,13 +148,13 @@ const version = '0.0.1';
 
 ### Where they're used
 
-- **`VITE_PKG_VERSION`** — Boot-time version check in `src/main.ts` compares
+- **`VITE_PKG_VERSION`**: Boot-time version check in `src/main.ts` compares
   against a server-side `clear_below` threshold to trigger cache clearing
   (see [clear-site-data-spec](clear-site-data-spec.md)). Also displayed in
   Settings and sent with feedback reports.
-- **`VITE_APP_VERSION`** — Full version identifier for cache busting and
+- **`VITE_APP_VERSION`**: Full version identifier for cache busting and
   diagnostics.
-- **`VITE_BUILD_HASH`** — Unique build fingerprint for tracking deployments.
+- **`VITE_BUILD_HASH`**: Unique build fingerprint for tracking deployments.
 
 ### TypeScript support
 
@@ -201,5 +201,5 @@ pnpm format:fix       # Prettier auto-fix
 
 ---
 
-**Next:** [Worker Mesh](building-webmail-workers.md) — the three-worker
+**Next:** [Worker Mesh](building-webmail-workers.md): the three-worker
 architecture that keeps the UI at 60fps.

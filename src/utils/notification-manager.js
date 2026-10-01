@@ -20,7 +20,13 @@
 
 import { WS_EVENTS } from './websocket-client';
 import { isTauri, isTauriMacOS, isTauriMobile } from './platform.js';
-import { getPermissionState, notify, requestPermission } from './notification-bridge.js';
+import {
+  canRevokePermission,
+  getPermissionState,
+  notify,
+  requestPermission,
+  revokePermission,
+} from './notification-bridge.js';
 import { setBadgeCount as tauriBadge } from './tauri-bridge.js';
 import { isDemoMode } from './demo-mode.js';
 import { updateFaviconBadge } from './favicon-badge.js';
@@ -374,6 +380,21 @@ export async function requestNotificationPermission() {
       .catch(() => {});
   }
   return permissionGranted;
+}
+
+/**
+ * Whether Settings can turn notifications off itself. Only where the app
+ * keeps the permission (the terminal client); browsers and the operating
+ * systems keep it in their own settings.
+ */
+export function canTurnOffNotifications() {
+  return canRevokePermission();
+}
+
+export async function turnOffNotifications() {
+  const turnedOff = await revokePermission();
+  if (turnedOff) permissionGranted = false;
+  return turnedOff;
 }
 
 /** 'granted' | 'denied' | 'default' | 'unsupported', without prompting. */

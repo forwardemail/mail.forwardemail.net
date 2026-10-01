@@ -1,0 +1,26 @@
+/*
+ * Terminal display fixes that must yield to the app's responsive utilities.
+ *
+ * scripts/build-cli.mjs inserts these into Tailwind's utilities layer right
+ * after `.inline-flex`, so they override that utility while `md:hidden`,
+ * `sm:flex` and the other variants, which come later, still win. An
+ * unlayered rule in terminal.css would beat every layered utility instead
+ * and show elements the app hides at this width.
+ *
+ * Like terminal.css, this file is not converted: lengths are in cells.
+ */
+
+/*
+ * TermDOM lays out an inline-flex box like an inline-block, so its items
+ * wrap as text would when space runs short. As a flex item it makes no
+ * difference in a browser whether a child is flex or inline-flex.
+ */
+:where(.flex, .inline-flex, .grid) > .inline-flex,
+:where(button).inline-flex {
+  display: flex;
+}
+
+/* Lucide icons render as text glyphs (components/LucideIcon.svelte). */
+:where(.lucide) {
+  display: inline-block;
+}

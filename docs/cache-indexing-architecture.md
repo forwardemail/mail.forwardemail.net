@@ -1,6 +1,6 @@
 # Cache & Indexing Architecture: Detailed Reference
 
-This is the deep-dive companion to [Building Webmail: Data Layer](building-webmail-db-schema-recovery.md).
+This reference is the detailed companion to [Building Webmail: Data Layer](building-webmail-db-schema-recovery.md).
 It covers storage layers, write ownership, read patterns, eviction policies,
 reconciliation strategies, and troubleshooting.
 

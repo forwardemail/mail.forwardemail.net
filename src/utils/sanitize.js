@@ -432,6 +432,15 @@ function isSafeImageUrl(url) {
  * @param {string} html - HTML to convert
  * @returns {string} Plain-text representation
  */
+function decodeRawHtml(value) {
+  if (!value) return '';
+  try {
+    return decodeURIComponent(escape(atob(value)));
+  } catch {
+    return '';
+  }
+}
+
 export function htmlToPlainText(html) {
   if (!html) return '';
 
@@ -454,6 +463,17 @@ export function htmlToPlainText(html) {
 
     // Drop noise that has no readable text equivalent
     doc.querySelectorAll('script, style, head').forEach((el) => el.remove());
+
+    // The quoted original in a reply or forward is kept base64-encoded in
+    // data-raw-html and the blockquote itself is empty (see
+    // buildReplyQuotedBody), so it is decoded here and quoted with "> ".
+    doc.querySelectorAll('blockquote[data-raw-html]').forEach((el) => {
+      const quoted = htmlToPlainText(decodeRawHtml(el.getAttribute('data-raw-html') || ''));
+      const lines = quoted ? quoted.split('\n').map((line) => (line ? `> ${line}` : '>')) : [];
+      // A paragraph before it already ends its line.
+      const lead = el.previousSibling?.nodeType === 1 ? '' : '\n';
+      el.replaceWith(lines.length ? `${lead}${lines.join('\n')}\n` : '');
+    });
 
     // <br> becomes a newline
     doc.querySelectorAll('br').forEach((br) => br.replaceWith('\n'));

@@ -4312,7 +4312,7 @@
                   // Surface a toast and do NOT fall through to the HTML <input>
                   // below — on Tauri that can SIGABRT the WKWebView the same way.
                   toasts?.show?.(
-                    'Could not open the file picker — a known macOS issue we are working on.',
+                    'Could not open the file picker (a known macOS issue we are working on).',
                     'error',
                   );
                   console.error('[calendar] ICS picker failed', err);
@@ -5078,9 +5078,9 @@
             </div>
             <div class="mt-1">
               {#if isCustomRecurrence}
-                Custom recurrence (read-only) — saving from this view isn't supported yet.
+                Custom recurrence (read-only). Saving from this view isn't supported yet.
               {:else}
-                Saving asks whether to change just this occurrence or every event in the series.
+                Saving asks whether to change only this occurrence or every event in the series.
               {/if}
             </div>
           </div>
@@ -5663,7 +5663,7 @@
             <Tooltip.Content>
               <p>
                 {isCustomRecurrence
-                  ? 'Custom recurrence — delete from another client'
+                  ? 'Custom recurrence: delete from another client'
                   : isEditingRecurringEvent
                     ? 'Delete (choose this / all)'
                     : 'Delete'}
@@ -5737,7 +5737,7 @@
             <Button variant="outline" disabled class="w-full">This and following events</Button>
           </Tooltip.Trigger>
           <Tooltip.Content>
-            <p>Coming soon — splits the series at this occurrence.</p>
+            <p>Coming soon: splits the series at this occurrence.</p>
           </Tooltip.Content>
         </Tooltip.Root>
         <Button

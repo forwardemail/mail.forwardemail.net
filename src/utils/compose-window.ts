@@ -132,10 +132,10 @@ export async function openComposeWindow(options?: ComposeWindowOptions): Promise
     const win = new WebviewWindow(label, {
       title:
         options?.action === 'reply'
-          ? 'Reply — Forward Email'
+          ? 'Reply | Forward Email'
           : options?.action === 'forward'
-            ? 'Forward — Forward Email'
-            : 'Compose — Forward Email',
+            ? 'Forward | Forward Email'
+            : 'Compose | Forward Email',
       width: 800,
       height: 700,
       minWidth: 500,

@@ -268,7 +268,7 @@ function fetchWithTimeout(url, options = {}, timeoutMs = FETCH_TIMEOUT_MS) {
   // Fail GETs fast while the breaker is open. Mutations (draft sync POST/PUT)
   // always go through — they're low-volume and user-initiated.
   if (method === 'GET' && fetchCircuit.isOpen()) {
-    const err = new Error('Backing off — service temporarily unavailable');
+    const err = new Error('Backing off: service temporarily unavailable');
     (err as Error & { circuitOpen?: boolean }).circuitOpen = true;
     return Promise.reject(err);
   }
@@ -1234,7 +1234,7 @@ async function decryptPgp(armored) {
           armored?.substring(0, 500),
         );
         lastDecryptError =
-          'PGP/MIME message has empty encrypted payload — the API response may be incomplete.';
+          'PGP/MIME message has empty encrypted payload. The API response may be incomplete.';
       } else {
         lastDecryptError = 'No PGP armor block found in message content.';
       }

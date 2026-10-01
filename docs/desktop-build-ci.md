@@ -2,7 +2,7 @@
 
 The desktop release workflow builds the Tauri app across the supported desktop matrix when the top-level `release.yml` orchestrator calls it, when a `desktop-v*` tag is pushed, or when it is started manually from the Actions tab.
 
-The build matrix now compiles for **6 desktop targets in parallel**:
+The build matrix compiles for **6 desktop targets in parallel**:
 
 | Platform        | Binary                      |
 | --------------- | --------------------------- |
@@ -17,12 +17,12 @@ The workflow uses native GitHub-hosted runners for each architecture, including 
 
 ## Build Pipeline
 
-1. **Build** — Compiles and bundles the Tauri desktop app for each target in the matrix.
-2. **Sign** — Requires the Tauri updater signing key and produces updater signatures for normal releases. The build fails closed when the key is absent unless the emergency repository variable `ALLOW_NO_UPDATER=true` is set intentionally; platform signing also runs where its required secrets are present.
-3. **Windows trust** — Windows rows sign through SSL.com eSigner (`scripts/windows-signing.cjs`) and fail closed without the `ESIGNER_*` secrets; a later step verifies every installer and the executables inside it. Signing improves Microsoft Defender and SmartScreen trust, but reputation still depends on the certificate and download history.
-4. **Upload** — Pushes the generated artifacts into the draft GitHub Release associated with the desktop tag.
+1. **Build**: Compiles and bundles the Tauri desktop app for each target in the matrix.
+2. **Sign**: Requires the Tauri updater signing key and produces updater signatures for normal releases. The build fails closed when the key is absent unless the emergency repository variable `ALLOW_NO_UPDATER=true` is set intentionally; platform signing also runs where its required secrets are present.
+3. **Windows trust**: Windows rows sign through SSL.com eSigner (`scripts/windows-signing.cjs`) and fail closed without the `ESIGNER_*` secrets; a later step verifies every installer and the executables inside it. Signing improves Microsoft Defender and SmartScreen trust, but reputation still depends on the certificate and download history.
+4. **Upload**: Pushes the generated artifacts into the draft GitHub Release associated with the desktop tag.
 
-Dependency vulnerabilities are surfaced by GitHub's Dependabot alerts on the repository rather than as an in-workflow gate.
+GitHub's Dependabot alerts on the repository surface dependency vulnerabilities; the workflow has no in-workflow gate for them.
 
 ## Download and Test
 
@@ -37,16 +37,16 @@ After the workflow completes:
 
 To trigger the workflow manually, use the **Actions** tab, choose **Release Desktop (Tauri)**, and provide a tag such as `desktop-v0.7.0`.
 
-## ⚠️ macOS Entitlements — read before touching `src-tauri/Entitlements.plist`
+## ⚠️ macOS Entitlements: read before touching `src-tauri/Entitlements.plist`
 
 `bundle.macOS.entitlements` in `tauri.conf.json` points at `src-tauri/Entitlements.plist`, and that **same file is also used for iOS** (via `scripts/inject-ios-signing.cjs`). Entitlements baked into the macOS bundle have bitten us **twice**, and both bugs share two nasty properties: they are **invisible in `tauri:dev` / local builds** (they only manifest in a **signed + notarized** bundle), and CI reports every step green (the failure is at _exec_ time in the kernel, not at build/sign/notary time).
 
 Hard rules:
 
-1. **App Sandbox ≠ Hardened Runtime.** Notarization needs the **Hardened Runtime** (`com.apple.security.cs.allow-jit`, `com.apple.security.cs.allow-unsigned-executable-memory`, + `codesign --options runtime`). It does **not** need `com.apple.security.app-sandbox`. Do **not** add `app-sandbox` to this Developer-ID app "for hardening" — a sandboxed app brokers `NSOpenPanel` through Powerbox and (without `files.user-selected.*`) returns nil → the `rfd` file dialog SIGABRTs. See [Postmortem: macOS File Picker Crash](./desktop-postmortem-macos-sandbox-filepicker-2026-06-02.md).
+1. **App Sandbox ≠ Hardened Runtime.** Notarization needs the **Hardened Runtime** (`com.apple.security.cs.allow-jit`, `com.apple.security.cs.allow-unsigned-executable-memory`, + `codesign --options runtime`). It does **not** need `com.apple.security.app-sandbox`. Do **not** add `app-sandbox` to this Developer-ID app "for hardening": a sandboxed app brokers `NSOpenPanel` through Powerbox and (without `files.user-selected.*`) returns nil → the `rfd` file dialog SIGABRTs. See [Postmortem: macOS File Picker Crash](./desktop-postmortem-macos-sandbox-filepicker-2026-06-02.md).
 2. **Don't add entitlements the macOS Developer ID cert isn't authorized for.** `aps-environment` (APNs) is iOS-only and made every macOS build unlaunchable (`CODESIGNING Invalid Signature` at exec). It's injected for iOS at build time and must stay absent for macOS. See [Postmortem: macOS Releases Unopenable](./desktop-postmortem-macos-entitlements-2026-05-19.md).
 3. **Always validate entitlement changes on a real signed + notarized build**, not `tauri dev`. Smoke-test anything gated by the sandbox/signature: file open/save dialogs, push, keychain, protected resources.
-4. Inspect what actually shipped: `codesign -d --entitlements - "/Applications/Forward Email.app"`.
-5. **Keep `Entitlements.plist` pure ASCII with no `--` (double hyphen) inside comments.** Apple's entitlements parser (`AMFIUnserializeXML`, used by `codesign`) is stricter than `plutil` and fails with `syntax error near line N` / `failed to sign app` on non-ASCII (e.g. em-dashes) or a `--` in a comment — even though `plutil -lint` reports OK. (Bit us 2026-06-02 when a comment mentioned `codesign --options`.)
+4. Inspect what shipped: `codesign -d --entitlements - "/Applications/Forward Email.app"`.
+5. **Keep `Entitlements.plist` pure ASCII with no `--` (double hyphen) inside comments.** Apple's entitlements parser (`AMFIUnserializeXML`, used by `codesign`) is stricter than `plutil` and fails with `syntax error near line N` / `failed to sign app` on non-ASCII (e.g. em-dashes) or a `--` in a comment, even though `plutil -lint` reports OK. (Bit us 2026-06-02 when a comment mentioned `codesign --options`.)
 
 Systemic fix still open: **split macOS and iOS entitlements into separate files** so an iOS-relevant or "hardening" entitlement can't silently bake into the macOS bundle.

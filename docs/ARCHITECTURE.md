@@ -43,7 +43,7 @@ graph TD
   - **`tauri.conf.json`**: The central configuration file for all Tauri features, including window setup, plugin configuration, bundle identifiers, and security settings.
   - **`Cargo.toml`**: Manages Rust dependencies, including Tauri and its plugins.
 - **Tauri IPC**: The Inter-Process Communication bridge that allows the Svelte frontend to securely call Rust functions. All exposed Rust functions are explicitly defined with the `#[tauri::command]` attribute.
-- **Tauri Plugins**: We leverage several official Tauri plugins to provide native functionality:
+- **Tauri Plugins**: The app uses several official Tauri plugins to provide native functionality:
   - `tauri-plugin-updater`: For automatic background updates on desktop.
   - `tauri-plugin-notification`: For native desktop and mobile push notifications.
   - `tauri-plugin-deep-link`: To handle `forwardemail://` custom protocol URLs.
@@ -54,24 +54,24 @@ graph TD
 
 To keep the core application logic clean and reusable, we use several bridge modules:
 
-- **`src/utils/platform.js`**: A simple utility to detect the current runtime environment (`isTauri`, `isWeb`, `canUseServiceWorker`).
+- **`src/utils/platform.js`**: A utility to detect the current runtime environment (`isTauri`, `isWeb`, `canUseServiceWorker`).
 - **`src/utils/tauri-bridge.js`**: Initializes all Tauri-specific event listeners and frontend functionality.
 - **`src/utils/notification-bridge.js`**: A wrapper that uses either the native Tauri notification plugin or the web Notifications API, depending on the platform.
 - **`src/utils/sync-bridge.js`**: The entry point for our offline sync mechanism (see below).
 
 ## Service Worker Alternative: The Sync Shim
 
-Since Service Workers are not supported in Tauri's webview, we've implemented a custom "sync shim" to provide offline functionality across all platforms.
+Tauri's webview does not support Service Workers, so we implemented a custom "sync shim" to provide offline functionality across all platforms.
 
-1.  **`src/utils/sync-core.js`**: This is a platform-agnostic module containing the core logic for handling API synchronization and processing a mutation queue from IndexedDB. It is designed as a factory function that accepts an environment object (`fetch`, `indexedDB`, `postMessage`).
+1.  **`src/utils/sync-core.js`**: A platform-agnostic module containing the core logic for handling API synchronization and processing a mutation queue from IndexedDB. It is a factory function that accepts an environment object (`fetch`, `indexedDB`, `postMessage`).
 
 2.  **`public/sw-sync.js`**: This is the **Service Worker adapter**. It runs only in the web version. It imports `sync-core.js` and provides the Service Worker environment bindings (e.g., `self.fetch`, `self.indexedDB`, and `self.clients.matchAll().then(...)` for `postMessage`). It is triggered by the `sync` and `periodicsync` events.
 
-3.  **`src/utils/sync-shim.js`**: This is the **main-thread replacement** for the Service Worker, used in all Tauri builds. It also imports `sync-core.js` but provides main-thread environment bindings (`window.fetch`, `window.indexedDB`, and a `CustomEvent`-based `postMessage`). It is triggered by `online` events, `visibilitychange` events, and a simple `setInterval` heartbeat.
+3.  **`src/utils/sync-shim.js`**: This is the **main-thread replacement** for the Service Worker, used in all Tauri builds. It also imports `sync-core.js` but provides main-thread environment bindings (`window.fetch`, `window.indexedDB`, and a `CustomEvent`-based `postMessage`). It is triggered by `online` events, `visibilitychange` events, and a `setInterval` heartbeat.
 
 4.  **`src/utils/sync-bridge.js`**: This is a unified module that detects the platform at runtime. It initializes either the Service Worker (on the web) or the sync shim (in Tauri). The rest of the application interacts only with this bridge, making all calls to the sync layer platform-agnostic.
 
-This architecture allows us to share the exact same complex synchronization logic between the web and native apps, ensuring consistent behavior and reducing code duplication.
+With this design, the web and native apps share the same synchronization logic, which keeps behavior consistent and reduces code duplication.
 
 ## Client-Side Encryption and App Lock
 
@@ -93,39 +93,39 @@ The application provides an optional App Lock feature that encrypts all locally 
 
 ### Data Flow
 
-1. On first setup, a random DEK is generated and encrypted with the KEK derived from the user's PIN.
-2. On app start, if App Lock is enabled, the lock screen is shown before any content renders.
-3. On successful unlock, the KEK is derived, the DEK is decrypted, and held in a module-scoped closure.
+1. On first setup, the app generates a random DEK and encrypts it with the KEK derived from the user's PIN.
+2. On app start, if App Lock is enabled, the app shows the lock screen before any content renders.
+3. On successful unlock, the app derives the KEK, decrypts the DEK, and holds it in a module-scoped closure.
 4. All IndexedDB writes pass through `encryptRecord()` which encrypts non-indexed fields with the DEK.
 5. All IndexedDB reads pass through `decryptRecord()` which decrypts the fields transparently.
 6. On lock (manual or inactivity), `sodium.memzero()` wipes the DEK from memory.
 
 ## Build Process
 
-1.  The web application is built using Vite (`pnpm build`).
-2.  `pnpm tauri build` is executed.
+1.  Vite builds the web application (`pnpm build`).
+2.  `pnpm tauri build` runs.
 3.  The `tauri-action` GitHub Action orchestrates the entire build, signing, and packaging process for all target platforms (macOS, Windows, Linux, Android, iOS).
 
 ## Release Flow
 
 1.  `pnpm release` bumps the version across `package.json`, `tauri.conf.json`, and `Cargo.toml`, creates a `v*` tag, and pushes the commit and tag.
-2.  The [`release.yml`](../.github/workflows/release.yml) orchestrator is triggered by the tag and runs the WebView E2E gate.
+2.  The [`release.yml`](../.github/workflows/release.yml) orchestrator runs on the tag and starts with the WebView E2E gate.
 3.  It creates a draft GitHub Release, then calls `release-desktop.yml` and `release-mobile.yml` through `workflow_call`.
 4.  The reusable workflows build, sign, package, notarize where applicable, and upload desktop and mobile artifacts; configured store-upload steps run in the mobile workflow.
 5.  After the platform builds pass, `release.yml` builds and deploys the web application to Cloudflare R2 and Workers inline, then purges the cache.
 6.  Inline deployment is required because a release created with the automatic `GITHUB_TOKEN` does not trigger a separate release-event workflow.
 7.  The orchestrator publishes the GitHub Release, generates `SHA256SUMS.txt`, and optionally sends a Matrix notification.
-8.  [`deploy.yml`](../.github/workflows/deploy.yml) remains a manual `workflow_dispatch` recovery path; it is not triggered by release publication.
+8.  [`deploy.yml`](../.github/workflows/deploy.yml) remains a manual `workflow_dispatch` recovery path; release publication does not trigger it.
 9.  The `newRelease` WebSocket event is broadcast to all connected clients, and the Tauri desktop app's auto-updater detects and downloads the new version.
 
 For the full release process, see [RELEASES.md](./RELEASES.md).
 
 ## Related Documentation
 
-- [DEVELOPMENT.md](./DEVELOPMENT.md) — Development guide for desktop and mobile
-- [RELEASES.md](./RELEASES.md) — Full release process documentation
-- [SECURITY.md](./SECURITY.md) — Security hardening and code signing details
-- [SECRETS.md](./SECRETS.md) — Required secrets for CI/CD
-- [WEBSOCKET.md](./WEBSOCKET.md) — WebSocket protocol and event routing
-- [PUSH_NOTIFICATIONS.md](./PUSH_NOTIFICATIONS.md) — Push notification architecture
-- [TAURI_TESTING.md](./TAURI_TESTING.md) — Testing strategy for Tauri apps
+- [DEVELOPMENT.md](./DEVELOPMENT.md): Development guide for desktop and mobile
+- [RELEASES.md](./RELEASES.md): Full release process documentation
+- [SECURITY.md](./SECURITY.md): Security hardening and code signing details
+- [SECRETS.md](./SECRETS.md): Required secrets for CI/CD
+- [WEBSOCKET.md](./WEBSOCKET.md): WebSocket protocol and event routing
+- [PUSH_NOTIFICATIONS.md](./PUSH_NOTIFICATIONS.md): Push notification architecture
+- [TAURI_TESTING.md](./TAURI_TESTING.md): Testing strategy for Tauri apps

@@ -1,7 +1,7 @@
 # Building Webmail: Service Worker & Offline Patterns
 
-A service worker is essential for a PWA, but it is not a data store. Our rule:
-**cache the shell, not the mail.** The real offline magic happens in IndexedDB
+A PWA needs a service worker, but the service worker does not store mail. Our
+rule: **cache the shell, not the mail.** Offline support lives in IndexedDB
 with optimistic updates, mutation queues, and background sync.
 
 ## The Separation
@@ -89,8 +89,8 @@ into a durable queue and retries when the network returns.
 
 ### Pattern 2: Mutation Queue
 
-Failed API calls are persisted in the `meta` table under the `mutation-queue`
-key. The queue is durable across page reloads and processed in order.
+The app persists failed API calls in the `meta` table under the `mutation-queue`
+key. The queue survives page reloads and runs in order.
 
 ```mermaid
 flowchart TD
@@ -115,8 +115,8 @@ flowchart TD
 
 ### Pattern 3: Outbox (Offline Send)
 
-Composed emails are queued in the `outbox` table when offline and sent when the
-network returns.
+When offline, the app queues composed emails in the `outbox` table and sends
+them when the network returns.
 
 ```mermaid
 flowchart TD
@@ -129,8 +129,8 @@ flowchart TD
 
 ### Pattern 4: Draft Autosave
 
-Drafts are saved to IndexedDB automatically as the user composes, protecting
-against browser crashes and network loss.
+The app saves drafts to IndexedDB automatically as the user composes, which
+protects against browser crashes and network loss.
 
 ```mermaid
 flowchart TD
@@ -145,7 +145,7 @@ flowchart TD
 ### Pattern 5: Background Sync (Service Worker)
 
 The service worker (`sw-sync.js`) can replay queued actions when the browser
-regains connectivity — even if the tab is closed.
+regains connectivity, even if the tab is closed.
 
 ```mermaid
 flowchart TD
@@ -181,7 +181,7 @@ flowchart TD
 ### Pattern 7: Atomic Account Switch
 
 When switching accounts, we preload the new account's cache from IndexedDB
-before resetting stores — avoiding a blank flash.
+before resetting stores, which avoids a blank flash.
 
 ```mermaid
 flowchart TD
@@ -205,4 +205,4 @@ flowchart TD
 
 ---
 
-**Next:** [Deployment](deployment-checklist.md) — ship to Cloudflare R2 + Workers.
+**Next:** [Deployment](deployment-checklist.md): ship to Cloudflare R2 + Workers.

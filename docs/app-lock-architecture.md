@@ -6,14 +6,14 @@ credentials, and PGP keys are encrypted at rest in the browser.
 
 ## Design Goals
 
-1. **Device-level protection** — A single lock protects all accounts in the
+1. **Device-level protection**: A single lock protects all accounts in the
    browser, similar to a phone lock screen.
-2. **Zero server knowledge** — Encryption keys never leave the client. The
+2. **Zero server knowledge**: Encryption keys never leave the client. The
    server cannot decrypt locally cached data.
-3. **Envelope encryption** — A random Data Encryption Key (DEK) encrypts
+3. **Envelope encryption**: A random Data Encryption Key (DEK) encrypts
    data; the DEK itself is wrapped by a Key Encryption Key (KEK) derived
    from the user's PIN or passkey.
-4. **Passkey-first optional** — Users can register a WebAuthn passkey
+4. **Passkey-first optional**: Users can register a WebAuthn passkey
    (Touch ID, Face ID, YubiKey, etc.) as an alternative to their PIN.
 
 ## Cryptographic Design
@@ -58,8 +58,8 @@ flowchart TB
 
 ### Encrypted Value Format
 
-Encrypted values are prefixed with a magic header to distinguish them from
-plaintext, allowing safe handling during migrations:
+The app prefixes encrypted values with a magic header to distinguish them from
+plaintext, which allows safe handling during migrations:
 
 ```
 \x00ENC\x01 || nonce (24 bytes) || ciphertext
@@ -68,7 +68,7 @@ plaintext, allowing safe handling during migrations:
 ## Storage Layout
 
 All app lock state is stored in `localStorage` with fixed (non-account-scoped)
-keys. This is intentional — the lock protects the **device**, not individual
+keys. This is intentional: the lock protects the **device**, not individual
 accounts.
 
 | Key                               | Content                                                               | Encrypted?                   |
@@ -138,11 +138,11 @@ and locks the app after a configurable period:
 - **Activity events**: mousedown, mousemove, keydown, keypress, touchstart,
   touchmove, scroll, wheel, pointerdown
 - **Throttled**: Activity detection is throttled to 1 check per second
-- **Lock on minimize**: Optional — locks when `document.hidden` becomes true
+- **Lock on minimize**: Optional. Locks when `document.hidden` becomes true
   or Tauri window loses focus
 - **Timer reset**: Any activity event resets the countdown
 
-When the timer fires, `crypto-store.lock()` is called which:
+When the timer fires, it calls `crypto-store.lock()`, which:
 
 1. Zeros out the in-memory DEK
 2. Triggers the lock screen UI
@@ -179,7 +179,7 @@ authentication ceremony. This provides:
 
 **Registration (two-step):**
 
-1. A 32-byte random salt is generated and stored in `webmail_passkey_prf_salt`
+1. The app generates a 32-byte random salt and stores it in `webmail_passkey_prf_salt`
 2. The credential is created via WebAuthn `create()` with the PRF extension
    enabled (so the authenticator knows to support PRF for this credential)
 3. Immediately after registration, the app calls WebAuthn `get()` (authenticate)
@@ -205,7 +205,7 @@ The PRF extension requires:
 - Firefox: not yet supported
 
 The UI checks `isPrfSupported()` before showing the passkey option and falls
-back to PIN-only mode gracefully.
+back to PIN-only mode.
 
 ## Source Files
 
@@ -219,15 +219,15 @@ back to PIN-only mode gracefully.
 
 ## Security Considerations
 
-- **DEK never persisted in plaintext** — Only the encrypted DEK is stored.
+- **DEK never persisted in plaintext**: Only the encrypted DEK is stored.
   The plaintext DEK exists only in JavaScript memory while the app is unlocked.
-- **Argon2id parameters** — 64 MB memory, 3 iterations. High enough to resist
+- **Argon2id parameters**: 64 MB memory, 3 iterations. High enough to resist
   brute-force on a stolen `localStorage` dump while remaining fast on modern
   devices (~200 ms).
-- **No server round-trip** — Lock/unlock is entirely client-side. A compromised
+- **No server round-trip**: Lock/unlock is entirely client-side. A compromised
   server cannot bypass the app lock.
-- **CSP requirement** — `'wasm-unsafe-eval'` is required in `script-src` for
+- **CSP requirement**: `'wasm-unsafe-eval'` is required in `script-src` for
   the libsodium and hash-wasm WebAssembly modules used by the crypto operations.
-- **Global scope** — The lock is device-level, not per-account. All accounts
+- **Global scope**: The lock is device-level, not per-account. All accounts
   in the browser share the same PIN/passkey. This mirrors the mental model of
   a device lock screen and avoids the complexity of per-account key management.

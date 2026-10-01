@@ -13,8 +13,8 @@ release run on **2026-09-13**.
 
 Every `v*` tag already ships signed macOS, Linux, Android, and iOS binaries to
 GitHub Releases, uploads the IPA to TestFlight, uploads the AAB to the Google
-Play internal track, and deploys the web app. What is left for v1 is accounts,
-store listings, the Windows eSigner secrets, and paperwork.
+Play internal track, and deploys the web app. v1 still needs accounts, store
+listings, the Windows eSigner secrets, and paperwork.
 
 | Channel                        | Built by CI            | Signed                                 | Published today                     | State                                 |
 | ------------------------------ | ---------------------- | -------------------------------------- | ----------------------------------- | ------------------------------------- |
@@ -59,7 +59,7 @@ Notes:
 | Cloudflare R2 + Workers            | Five secrets + `R2_BUCKET`                                              | Working.                                                                                   |
 | GitHub Pages                       | Enabled, source = GitHub Actions                                        | Ready for the F-Droid lane.                                                                |
 
-All of the above are stored as **repository** secrets, not in the `release`
+All of the above live in **repository** secrets, not in the `release`
 environment the docs describe. See the note in
 [SECRETS.md](./SECRETS.md#where-each-value-belongs) for the migration.
 

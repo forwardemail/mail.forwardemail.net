@@ -353,7 +353,7 @@
     </Card.Title>
     <Card.Description>
       Move this account, its PGP keys and its app settings to your phone by scanning a code. Nothing
-      is sent over the internet — the code itself carries everything.
+      is sent over the internet. The code itself carries everything.
     </Card.Description>
   </Card.Header>
 
@@ -378,8 +378,8 @@
         {#if expiredUnprotected}
           <p class="text-sm">
             That code carried the password for <strong>{codeAccount || account}</strong> with no pairing
-            code. If anyone could see your screen, change the password for that account — rotating it
-            is the only thing that actually revokes what was shown.
+            code. If anyone could see your screen, change the password for that account. Rotating it is
+            the only way to revoke what was shown.
           </p>
         {/if}
       {/if}
@@ -503,7 +503,7 @@
 
         {#if pairingCode}
           <div class="border border-border p-3">
-            <p class="text-xs text-muted-foreground">Pairing code — type this on your phone</p>
+            <p class="text-xs text-muted-foreground">Pairing code: type this on your phone</p>
             <p class="font-mono text-2xl tracking-widest">{pairingCode}</p>
             <p class="mt-1 text-xs text-muted-foreground">
               Keep it separate from the code itself. A photo of the QR is useless without it.

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
- * Sync version from package.json to tauri.conf.json and Cargo.toml.
+ * Sync version from package.json to tauri.conf.json, Cargo.toml and the
+ * terminal client's npm package (cli/package.json).
  * Called automatically by npm's `version` lifecycle hook so that
  * `np` (or `npm version`) keeps all version files in sync.
  */
@@ -29,6 +30,19 @@ if (JSON.parse(tauriConf).version !== version) {
   process.exit(1);
 }
 fs.writeFileSync(tauriConfPath, tauriConf);
+
+// Update the terminal client's npm package, which is published at the same
+// version. Same targeted replace as tauri.conf.json above.
+const cliPackagePath = path.join(root, 'cli', 'package.json');
+if (fs.existsSync(cliPackagePath)) {
+  let cliPackage = fs.readFileSync(cliPackagePath, 'utf8');
+  cliPackage = cliPackage.replace(/^(\s*"version":\s*)"[^"]*"/m, `$1"${version}"`);
+  if (JSON.parse(cliPackage).version !== version) {
+    console.error('Failed to set version in cli/package.json');
+    process.exit(1);
+  }
+  fs.writeFileSync(cliPackagePath, cliPackage);
+}
 
 // Update Cargo.toml (first version = line under [package])
 const cargoPath = path.join(root, 'src-tauri', 'Cargo.toml');

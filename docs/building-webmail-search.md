@@ -1,8 +1,8 @@
 # Building Webmail: The Search Engine
 
-Search is the fastest way users navigate a mailbox. It has to be instant,
-offline-capable, and reliable — even as the mailbox grows to thousands of
-messages. That makes search a core system, not a feature.
+Search is the fastest way to move through a mailbox. It has to be instant,
+offline-capable, and reliable, even when the mailbox holds thousands of
+messages. We treat search as a core system.
 
 ## The Problem
 
@@ -85,8 +85,8 @@ flowchart TD
 
 ## Index Health & Rebuilds
 
-Indexes drift. Messages get synced, evicted, or updated. We track this
-explicitly and heal automatically:
+Indexes drift as messages get synced, evicted, or updated. We track drift
+explicitly and heal it automatically:
 
 ```mermaid
 flowchart TD
@@ -108,5 +108,5 @@ flowchart TD
 
 ---
 
-**Next:** [Service Worker & Offline Patterns](building-webmail-service-worker.md)
-— cache the shell, queue the mutations.
+**Next:** [Service Worker & Offline Patterns](building-webmail-service-worker.md):
+cache the shell, queue the mutations.

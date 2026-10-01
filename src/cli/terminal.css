@@ -1,0 +1,365 @@
+/*
+ * Terminal theme for the webmail.
+ *
+ * Loaded after the app's own stylesheet, whose lengths the build has already
+ * converted to cells. This file is not converted: here 1px is one cell, `ch`
+ * is one column, and rows are counted in px.
+ *
+ * Selectors are keyed by a class where possible: TermDOM tests a rule whose
+ * last compound has no class or id against every element.
+ */
+
+/* ---------------------------------------------------------------- base */
+
+/* TermDOM brackets every <button>; the app's buttons have their own look. */
+button::before,
+button::after {
+  content: none;
+}
+
+html,
+body {
+  overflow: hidden;
+}
+
+img,
+video,
+canvas,
+iframe {
+  display: none !important;
+}
+
+/* A message body is laid out inside its frame (see frames.ts). */
+.fe-email-iframe {
+  display: block !important;
+  height: auto !important;
+  border-style: none !important;
+}
+
+/* A control is one row tall. Heights set for touch targets become auto. */
+button,
+a,
+input,
+select,
+[role='button'],
+[role='menuitem'],
+[role='option'],
+[role='tab'] {
+  height: auto !important;
+  min-height: 0 !important;
+}
+
+/* Avatars, dots and badges shrink to their text. */
+.rounded-full {
+  width: auto !important;
+  height: auto !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  border-style: none !important;
+  border-radius: 0 !important;
+}
+/* Their content no longer has a box to fill (an avatar's initials). */
+.rounded-full > .w-full,
+.rounded-full > .h-full {
+  width: auto !important;
+  height: auto !important;
+}
+
+/* Icon-only buttons are as wide as their glyph plus a column each side. */
+.h-6.w-6,
+.h-7.w-7,
+.h-8.w-8,
+.h-9.w-9,
+.h-10.w-10,
+.h-11.w-11,
+.size-6,
+.size-7,
+.size-8,
+.size-9,
+.size-10,
+.size-11 {
+  width: auto !important;
+  min-width: 0 !important;
+  padding-inline: 1ch !important;
+}
+
+/* Focus shows as reverse video on the focused control. */
+:focus-visible {
+  outline: none;
+}
+button:focus-visible,
+a:focus-visible,
+li:focus-visible,
+[role='button']:focus-visible,
+[role='menuitem']:focus-visible,
+[role='option']:focus-visible,
+[role='tab']:focus-visible {
+  background-color: var(--action-primary-bg, #20c1ed) !important;
+  color: var(--action-primary-fg, #000000) !important;
+}
+
+/* ---------------------------------------------------------------- icons */
+
+/*
+ * Lucide icons render as text glyphs in the terminal build
+ * (components/LucideIcon.svelte). Any other SVG has nothing to draw.
+ */
+svg {
+  display: none !important;
+}
+.lucide {
+  width: auto !important;
+  height: auto !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  flex-shrink: 0;
+}
+/* Icons drawn over a field (the search box's magnifier) keep their place. */
+.lucide.absolute {
+  top: 0 !important;
+  bottom: auto !important;
+}
+.lucide-bold {
+  font-weight: bold;
+}
+.lucide-italic {
+  font-style: italic;
+}
+.lucide-underline {
+  text-decoration: underline;
+}
+
+/* ---------------------------------------------------------------- layout */
+
+/* The inline-flex fix is in terminal-utilities.css. */
+
+/*
+ * Text fields are one row: a tinted field rather than a drawn box. A field
+ * made display:flex would shrink its text to one column, since the value and
+ * placeholder become flex items.
+ */
+input:not([type='checkbox'], [type='radio'], [type='range'], [type='file'], [type='hidden']) {
+  display: inline-block !important;
+  border-style: none !important;
+  background-color: var(--muted, #1e293b) !important;
+  padding-block: 0 !important;
+}
+select,
+[data-slot='select-trigger'] {
+  border-style: none !important;
+  background-color: var(--muted, #1e293b) !important;
+  padding-block: 0 !important;
+}
+
+/* The sign-in form keeps its boxed fields. */
+.fe-login-shell input:not([type='checkbox']) {
+  border-style: solid !important;
+  background-color: transparent !important;
+}
+
+/* Outlined buttons are bracketed on one row instead of boxed on three. */
+button.border,
+a.border {
+  border-style: none !important;
+}
+button.border::before,
+a.border::before {
+  content: '[';
+  margin-inline-end: 1ch;
+}
+button.border::after,
+a.border::after {
+  content: ']';
+  margin-inline-start: 1ch;
+}
+
+/* Message list rows: no minimum height, no vertical padding. */
+[data-conversation-row] {
+  min-height: 0 !important;
+  padding-block: 0 !important;
+}
+
+/*
+ * Invisible inputs laid over a control (the composer's color pickers are
+ * opacity-0 overlays) would be visible and catch every click here, since a
+ * terminal draws nothing transparent. A color has no meaning on a grid
+ * anyway.
+ */
+input[type='color'],
+input[type='file'],
+input.opacity-0 {
+  display: none !important;
+}
+
+/* The message editor takes clicks anywhere in its box, as in a browser. */
+.ProseMirror {
+  min-height: 10px;
+}
+
+/* The floating composer (560×600 px on a desktop) fits the terminal's rows. */
+[data-testid='compose-modal'] {
+  top: 0 !important;
+  height: auto !important;
+}
+
+/*
+ * A flex item that clips its text may shrink below its content, as the
+ * spec's automatic minimum size gives it in a browser; TermDOM keeps the
+ * content width, so a long account address would push the account button
+ * past the sidebar.
+ */
+.truncate,
+.text-ellipsis {
+  min-width: 0;
+}
+
+/*
+ * Text for screen readers only. It is kept out of sight with clip, which a
+ * character grid cannot do, so it would be drawn over its neighbors.
+ */
+.sr-only {
+  display: none !important;
+}
+
+/*
+ * Dialogs (shadcn's dialog content) are a grid, width: 100% with a
+ * max-width. TermDOM clamps the box to the max-width but lays a grid's
+ * content out at the full width, so text ran past the right edge (the
+ * discard prompt) and rows lost their second column (the keys in the
+ * shortcut list). As a block, the content wraps inside the box; the grid's
+ * gap becomes a row between the parts.
+ */
+[data-slot='dialog-content'] {
+  display: block !important;
+}
+[data-slot='dialog-content'] > * + * {
+  margin-top: 1px;
+}
+
+/*
+ * Hover tooltips repeat a control's label. In a terminal they cover the
+ * cells around the control and sit in the way of the next click.
+ */
+[data-slot='tooltip-content'] {
+  display: none !important;
+}
+
+/*
+ * The calendar's date field labels itself on its top border, which a
+ * one-row field does not have; the label would be drawn over the date.
+ */
+.sx__date-input-label {
+  display: none !important;
+}
+
+/*
+ * A toast is sized to its content, and TermDOM spreads its justify-between
+ * row over the whole screen width instead, which put the close button far
+ * off to the right. Packed to the start, it sits after the message.
+ */
+[data-testid='toast'] {
+  justify-content: flex-start !important;
+}
+
+/*
+ * The mailbox's own dropdowns (sort, labels, filters, move) are sized to
+ * their content and then placed from that width. Their full-width rows made
+ * TermDOM report the whole screen width instead, so a menu stretched across
+ * the screen; the rows take their content's width here.
+ */
+.fe-dropdown-fixed .w-full {
+  width: auto !important;
+}
+
+/*
+ * The sign-in screen's ground is radial gradients over the brand ink. A
+ * terminal cannot draw radial gradients, so the declaration was dropped as a
+ * whole and the terminal's own background showed around the card; the ink
+ * alone is used instead. (Phone widths already use a plain surface.)
+ */
+@media (min-width: 81px) {
+  body:not(.mailbox-mode)#rl-app {
+    background: var(--fe-ink);
+  }
+}
+
+/*
+ * Phone-width tab bar: the icon row spans its tab so the glyph centers over
+ * the label (TermDOM placed it from the tab's middle), and the unread badge
+ * follows the glyph instead of hanging off the icon's corner.
+ */
+.fe-mobile-tab-icon {
+  width: 100%;
+}
+.fe-mobile-tab-badge {
+  position: static !important;
+  margin-left: 1ch;
+}
+
+/*
+ * The hint bar (hints.ts) takes the bottom row; the page gives it up, and
+ * the phone-width tab bar sits on top of it.
+ */
+.fe-has-hints body#rl-app {
+  height: calc(100vh - 1px) !important;
+}
+.fe-has-hints .fe-mobile-tabbar {
+  bottom: 1px !important;
+}
+#fe-terminal-hints {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 1px;
+  display: flex;
+  overflow: hidden;
+  white-space: nowrap;
+  padding-inline: 1ch;
+  background-color: var(--muted, #1e293b);
+  color: var(--muted-foreground, #94a3b8);
+  z-index: 2147483647;
+}
+.fe-hint {
+  margin-inline-end: 3ch;
+}
+.fe-hint-key {
+  color: var(--primary, #3b82f6);
+  font-weight: bold;
+}
+
+/*
+ * Two-column rows with a label and an auto-sized control column (the
+ * keyboard shortcut table). TermDOM under-measures the auto column when it
+ * shares out the row, so the Edit buttons were drawn past the table's edge
+ * where clicks could not reach them; the column gets a fixed width, room
+ * for "Press a key… (Esc to cancel)" and its Cancel button while rebinding.
+ */
+.grid.grid-cols-\[1fr_auto\] {
+  grid-template-columns: minmax(0, 1fr) 46ch !important;
+}
+.grid.grid-cols-\[1fr_auto\] > :last-child {
+  justify-content: flex-end;
+  text-align: right;
+}
+
+/*
+ * The settings page is sized inline to the screen less its header
+ * (calc(100dvh - 3.5rem - var(--sai-top))), which TermDOM cannot compute,
+ * so it took its content's height and everything below the first screen
+ * was out of reach. The page fills the body as a column instead, and its
+ * content scrolls. (The app shows and hides the page with an inline display.)
+ */
+#settings-root[style*='display: block'] {
+  display: flex !important;
+  flex-direction: column;
+  height: 100%;
+}
+#settings-root > .flex.min-h-0 {
+  flex: 1 1 0;
+  height: auto !important;
+}
+/* In the one-column layout the content is a flex item that must shrink. */
+#settings-root .fe-mobile-page-scroll {
+  min-height: 0;
+}

@@ -145,6 +145,27 @@ export async function getPermissionState() {
 }
 
 /**
+ * Whether notifications can be turned off from the app. Browsers and the
+ * operating systems keep that choice in their own settings; the terminal
+ * client keeps its own permission (src/cli/notifications.ts) and gives it
+ * back through Notification.revokePermission().
+ */
+export function canRevokePermission() {
+  return (
+    !isTauri &&
+    typeof Notification !== 'undefined' &&
+    typeof Notification.revokePermission === 'function'
+  );
+}
+
+/** Turns notifications off where canRevokePermission() says it can. */
+export async function revokePermission() {
+  if (!canRevokePermission()) return false;
+  await Notification.revokePermission();
+  return true;
+}
+
+/**
  * Show a notification.
  *
  * @param {Object} options

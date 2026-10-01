@@ -951,7 +951,7 @@ export const openServerDraft = async (msg) => {
       }
     } catch (err) {
       warn('[openServerDraft] Failed to load the draft from the server:', err);
-      toastsRef?.show?.("Couldn't load the whole draft — opening what is cached", 'warning');
+      toastsRef?.show?.("Couldn't load the whole draft. Opening what is cached", 'warning');
     } finally {
       clearNotice();
     }
@@ -2879,7 +2879,7 @@ export const viewOriginal = async (msg) => {
   // with no indication why. Warn instead of failing silently.
   if (attemptedRawFetch && (!headersText || !payload || looksLikeHtml(payload))) {
     toastsRef?.show?.(
-      "Couldn't load the full original message from the server — showing what's cached",
+      "Couldn't load the full original message from the server. Showing what's cached",
       'warning',
     );
   }

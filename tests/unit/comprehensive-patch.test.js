@@ -1277,7 +1277,7 @@ describe('PGP desktop and settings regressions', () => {
       /if \(attemptedRawFetch && \(!headersText \|\| !payload \|\| looksLikeHtml\(payload\)\)\)/,
     );
     expect(viewOriginalBody).toContain(
-      "Couldn't load the full original message from the server — showing what's cached",
+      "Couldn't load the full original message from the server. Showing what's cached",
     );
 
     const downloadOriginalBody = mailboxActionsSrc.slice(

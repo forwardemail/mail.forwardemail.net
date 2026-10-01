@@ -7,6 +7,7 @@ This is the official, open-source, and end-to-end encrypted webmail client for [
 <!-- readme-toc:start -->
 
 - [Downloads & Releases](#downloads--releases)
+  - [Terminal](#terminal)
   - [Linux package managers](#linux-package-managers)
   - [Android without Google Play](#android-without-google-play)
   - [Ubuntu / Debian installation](#ubuntu--debian-installation)
@@ -54,17 +55,35 @@ Store listings are in progress. The current status of every channel, and what is
 
 | Platform    | Architecture          | Download                                                                                                                       | Store                                                   |
 | :---------- | :-------------------- | :----------------------------------------------------------------------------------------------------------------------------- | :------------------------------------------------------ |
-| **Web**     | —                     | [mail.forwardemail.net](https://mail.forwardemail.net)                                                                         | —                                                       |
-| **Windows** | x64                   | `.msi` / `.exe` on [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases)                           | —                                                       |
-| **Windows** | arm64                 | `-setup.exe` on [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases)                              | —                                                       |
+| **Web**     | n/a                   | [mail.forwardemail.net](https://mail.forwardemail.net)                                                                         | n/a                                                     |
+| **Windows** | x64                   | `.msi` / `.exe` on [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases)                           | n/a                                                     |
+| **Windows** | arm64                 | `-setup.exe` on [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases)                              | n/a                                                     |
 | **macOS**   | Apple Silicon & Intel | `.dmg` on [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases)                                    | App Store (Coming Soon)                                 |
-| **Linux**   | x64                   | `.deb` / `.AppImage` / `.rpm` on [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases)             | —                                                       |
-| **Linux**   | arm64                 | `.deb` / `.rpm` on [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases)                           | —                                                       |
+| **Linux**   | x64                   | `.deb` / `.AppImage` / `.rpm` on [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases)             | n/a                                                     |
+| **Linux**   | arm64                 | `.deb` / `.rpm` on [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases)                           | n/a                                                     |
 | **Linux**   | x64 / arm64           | `forwardemail-mail_<version>_<arch>.snap` on [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases) | Snap Store (pending name registration)                  |
 | **Linux**   | x64 / arm64           | Flatpak manifest in the repository                                                                                             | Flathub (planned after v1)                              |
 | **Android** | Universal             | Dual-provider `.apk` / `.aab` on [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases)             | Google Play (internal testing)                          |
 | **Android** | Google-free           | `forwardemail-mail_<version>_fdroid.apk` on [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases)  | Obtainium today; self-hosted F-Droid repository pending |
+| **CLI**     | Any                   | `npm i -g forwardemail` or standalone on [GitHub Releases](https://github.com/forwardemail/mail.forwardemail.net/releases)     | npm                                                     |
 | **iOS**     | arm64                 | TestFlight                                                                                                                     | App Store (Coming Soon)                                 |
+
+### Terminal
+
+The webmail also runs in a terminal. Same app, same account, drawn as text:
+
+```sh
+# macOS and Linux
+curl -fsSL https://github.com/forwardemail/mail.forwardemail.net/releases/latest/download/install.sh | sh
+
+# Windows (PowerShell)
+irm https://github.com/forwardemail/mail.forwardemail.net/releases/latest/download/install.ps1 | iex
+
+# Anywhere with Node.js 22+
+npm install -g forwardemail
+```
+
+Then run `forwardemail`, or `forwardemail --demo` to look around without an account. New mail shows as a desktop notification on macOS, Linux and Windows while the terminal is in the background. The standalone executables keep themselves up to date. See the [terminal client guide](./docs/CLI.md) for keys, notifications, where data is stored, updates and verification.
 
 ### Linux package managers
 
@@ -153,7 +172,7 @@ If you are building your own custom Linux binary instead of installing a publish
 These screenshots are captured automatically from the production Demo Account after each successful release. Expand a theme and device group to browse its views.
 
 <details>
-<summary><strong>Dark mode — Desktop</strong></summary>
+<summary><strong>Dark mode, Desktop</strong></summary>
 
 | View                             |                                            Screenshot                                             |
 | :------------------------------- | :-----------------------------------------------------------------------------------------------: |
@@ -177,7 +196,7 @@ These screenshots are captured automatically from the production Demo Account af
 </details>
 
 <details>
-<summary><strong>Dark mode — Mobile</strong></summary>
+<summary><strong>Dark mode, Mobile</strong></summary>
 
 | View                             |                                               Screenshot                                                |
 | :------------------------------- | :-----------------------------------------------------------------------------------------------------: |
@@ -201,7 +220,7 @@ These screenshots are captured automatically from the production Demo Account af
 </details>
 
 <details>
-<summary><strong>Light mode — Desktop</strong></summary>
+<summary><strong>Light mode, Desktop</strong></summary>
 
 | View                             |                                             Screenshot                                              |
 | :------------------------------- | :-------------------------------------------------------------------------------------------------: |
@@ -225,7 +244,7 @@ These screenshots are captured automatically from the production Demo Account af
 </details>
 
 <details>
-<summary><strong>Light mode — Mobile</strong></summary>
+<summary><strong>Light mode, Mobile</strong></summary>
 
 | View                             |                                                Screenshot                                                 |
 | :------------------------------- | :-------------------------------------------------------------------------------------------------------: |
@@ -252,21 +271,21 @@ These screenshots are captured automatically from the production Demo Account af
 
 ## Security & Privacy
 
-Security is the foundational principle of this application. We are committed to transparency and providing users with control over their data. For a detailed overview of our security practices, please see:
+Security is the foundation of this application. We are committed to transparency and to giving you control over your data. For details on our security practices, see:
 
 - [Security Policy](https://forwardemail.net/security)
 - [security.txt](https://forwardemail.net/.well-known/security.txt)
 
 ### Client-Side Encryption & App Lock
 
-The application offers a robust **App Lock** feature that enables cryptographic encryption for your entire client-side database and settings — in the browser, on desktop, or on mobile. When enabled from the **Settings > Privacy & Security** menu, all sensitive data stored locally (including message bodies, contacts, and API tokens) is encrypted at rest using the `XSalsa20-Poly1305` stream cipher from the audited `libsodium` library.
+**App Lock** encrypts your entire client-side database and settings in the browser, on desktop, or on mobile. When you enable it from the **Settings > Privacy & Security** menu, all sensitive data stored locally (including message bodies, contacts, and API tokens) is encrypted at rest using the `XSalsa20-Poly1305` stream cipher from the audited `libsodium` library.
 
-This feature can be secured using two methods:
+You can secure App Lock with two methods:
 
 1.  **Passkey (WebAuthn)**: For the highest level of security, you can lock and unlock the application using a FIDO2/WebAuthn-compliant authenticator. This allows you to use hardware security keys or your device's built-in biometrics. The encryption key is derived directly from the authenticator using the PRF extension, meaning the key is never stored on the device itself.
-2.  **PIN Code**: For convenience, you can set a simple PIN code. This provides an iOS-like lock screen experience, ideal for quick access on mobile devices.
+2.  **PIN Code**: For convenience, you can set a PIN code. This provides an iOS-like lock screen experience, ideal for quick access on mobile devices.
 
-Our implementation supports a wide range of authenticators for Passkey-based App Lock:
+Passkey-based App Lock supports these authenticators:
 
 | Type                        | Examples                                                                                                        |
 | :-------------------------- | :-------------------------------------------------------------------------------------------------------------- |
@@ -281,18 +300,18 @@ All builds are handled by public [GitHub Actions](https://github.com/features/ac
 ## Features
 
 - **Blazing Fast**: Built with Rust and Svelte 5 for a lightweight and responsive experience.
-- **End-to-End Encrypted**: Cryptographic encryption for your entire client-side app — browser, desktop, or mobile.
+- **End-to-End Encrypted**: Cryptographic encryption for your entire client-side app in the browser, on desktop, or on mobile.
 - **Open-Source**: All code for the web, desktop, and mobile apps is available on GitHub.
 - **No Advertising or Tracking Intermediaries**: Mailbox data and real-time WebSocket updates stay between the app and Forward Email. Platform push providers and release hosting are used only to deliver native notifications and signed application updates.
 - **Real-time Updates**: Mailbox updates are pushed instantly via WebSockets.
 - **Cross-Platform Notifications**: Native desktop and mobile push notifications.
-- **Multi-account** — Login with multiple Forward Email accounts, alias auth, and optional API key override.
-- **Mailbox** — Folders, message threading, bulk actions, keyboard shortcuts, attachment handling, PGP decryption.
-- **Compose** — Rich text editor (TipTap), CC/BCC, emoji picker, attachments, draft autosave, offline outbox queue.
-- **Search** — Full-text search with FlexSearch, optional body indexing, saved searches, background indexing.
+- **Multi-account**: Login with multiple Forward Email accounts, alias auth, and optional API key override.
+- **Mailbox**: Folders, message threading, bulk actions, keyboard shortcuts, attachment handling, PGP decryption.
+- **Compose**: Rich text editor (TipTap), CC/BCC, emoji picker, attachments, draft autosave, offline outbox queue.
+- **Search**: Full-text search with FlexSearch, optional body indexing, saved searches, background indexing.
 - **Offline Support**: A custom main-thread sync engine provides offline access and queues outgoing actions, replacing the need for a Service Worker and ensuring functionality on all platforms including Ionic/Capacitor mobile.
-- **Calendar** — Month/week/day views, quick add/edit/delete, iCal export.
-- **Contacts** — CRUD operations, vCard import/export, deep links to compose/search.
+- **Calendar**: Month/week/day views, quick add/edit/delete, iCal export.
+- **Contacts**: CRUD operations, vCard import/export, deep links to compose/search.
 - **Demo Mode**: Evaluate the app's features offline without an account.
 - **`mailto:` Handler**: Registers as the default email client on desktop platforms.
 - **Auto-Updates**: Desktop apps automatically check for and install new versions securely.
@@ -321,7 +340,7 @@ graph TD
     F --- M
 ```
 
-For more detail, please see the full [Architecture Document](./docs/ARCHITECTURE.md).
+For more detail, see the full [Architecture Document](./docs/ARCHITECTURE.md).
 
 ## Tech Stack
 
@@ -343,44 +362,45 @@ For more detail, please see the full [Architecture Document](./docs/ARCHITECTURE
 
 ### Key Components
 
-- **Main Thread** — Svelte components, stores, routing, UI rendering
-- **db.worker** — Owns IndexedDB via Dexie, handles all database operations
-- **sync.worker** — API fetching, message parsing (PostalMime), data normalization
-- **search.worker** — FlexSearch indexing and query execution
+- **Main Thread**: Svelte components, stores, routing, UI rendering
+- **db.worker**: Owns IndexedDB via Dexie, handles all database operations
+- **sync.worker**: API fetching, message parsing (PostalMime), data normalization
+- **search.worker**: FlexSearch indexing and query execution
 
 ### Documentation
 
-Detailed architecture documentation is available in the `docs/` directory:
+The `docs/` directory holds the architecture documentation:
 
-- [Architecture](./docs/ARCHITECTURE.md) — Full architecture document
-- [Vision & Architecture](docs/building-webmail-vision-architecture.md) — Design principles and architectural patterns
-- [Worker Architecture](docs/worker-architecture.md) — Worker responsibilities and message passing
-- [Cache & Indexing](docs/cache-indexing-architecture.md) — Storage layers and data flow
-- [Search](docs/building-webmail-search.md) — FlexSearch setup and query parsing
-- [Service Worker](docs/building-webmail-service-worker.md) — Asset caching strategy
-- [DB Schema & Recovery](docs/building-webmail-db-schema-recovery.md) — Database management
-- [Desktop Build CI](docs/desktop-build-ci.md) — How the desktop build is triggered and tested
-- [Desktop CI Secrets](docs/desktop-ci-secrets.md) — CI secrets setup for desktop signing
-- [Desktop Contributing](docs/desktop-contributing.md) — Desktop architecture and IPC patterns
-- [Desktop Setup](docs/desktop-setup.md) — Developer environment setup for desktop
-- [Desktop & Mobile Development](./docs/DEVELOPMENT.md) — Platform-specific development guide
-- [iOS Setup](./docs/ios-setup.md) — Local signing, CI, and TestFlight workflow
-- [Release Process](./docs/RELEASES.md) — How releases are managed
-- [Distribution Publishing](./docs/distribution-publishing.md) — Snap, Flathub, F-Droid, Homebrew, and Obtainium setup
-- [Release Readiness](./docs/release-readiness.md) — Channel status, accounts still needed, and the v1 release checklist
-- [Security Hardening](./docs/SECURITY.md) — Security practices and hardening
-- [App Lock Architecture](docs/app-lock-architecture.md) — Client-side encryption and App Lock design
-- [Push Notifications](./docs/PUSH_NOTIFICATIONS.md) — Push notification setup
-- [WebSocket](./docs/WEBSOCKET.md) — Real-time WebSocket protocol
-- [Tauri Testing](./docs/TAURI_TESTING.md) — Testing Tauri desktop/mobile apps
-- [Secrets](./docs/SECRETS.md) — Secrets management for CI/CD
-- [Workers](docs/building-webmail-workers.md) — Worker mesh architecture
-- [Technology Stack](docs/building-webmail-technology-stack.md) — Technology choices and rationale
-- [Mailbox Loading Flow](docs/mailbox-loading-flow.md) — Full request lifecycle for loading messages
-- [Clear-Site-Data](docs/clear-site-data-spec.md) — Client reset kill switch specification
-- [Deployment Checklist](docs/deployment-checklist.md) — Step-by-step deployment guide
-- [Building Webmail Series](docs/building-webmail-series.md) — Technical deep-dive blog series overview
-- [Vision Gap Analysis](docs/webmail-vision-gap-analysis.md) — Gap analysis between vision spec and implementation
+- [Architecture](./docs/ARCHITECTURE.md): Full architecture document
+- [Vision & Architecture](docs/building-webmail-vision-architecture.md): Design principles and architectural patterns
+- [Worker Architecture](docs/worker-architecture.md): Worker responsibilities and message passing
+- [Cache & Indexing](docs/cache-indexing-architecture.md): Storage layers and data flow
+- [Search](docs/building-webmail-search.md): FlexSearch setup and query parsing
+- [Service Worker](docs/building-webmail-service-worker.md): Asset caching strategy
+- [DB Schema & Recovery](docs/building-webmail-db-schema-recovery.md): Database management
+- [Desktop Build CI](docs/desktop-build-ci.md): How the desktop build is triggered and tested
+- [Desktop CI Secrets](docs/desktop-ci-secrets.md): CI secrets setup for desktop signing
+- [Desktop Contributing](docs/desktop-contributing.md): Desktop architecture and IPC patterns
+- [Desktop Setup](docs/desktop-setup.md): Developer environment setup for desktop
+- [Desktop & Mobile Development](./docs/DEVELOPMENT.md): Platform-specific development guide
+- [iOS Setup](./docs/ios-setup.md): Local signing, CI, and TestFlight workflow
+- [Terminal Client](./docs/CLI.md): Installing, using, and building the `forwardemail` CLI
+- [Release Process](./docs/RELEASES.md): How releases are managed
+- [Distribution Publishing](./docs/distribution-publishing.md): Snap, Flathub, F-Droid, Homebrew, and Obtainium setup
+- [Release Readiness](./docs/release-readiness.md): Channel status, accounts still needed, and the v1 release checklist
+- [Security Hardening](./docs/SECURITY.md): Security practices and hardening
+- [App Lock Architecture](docs/app-lock-architecture.md): Client-side encryption and App Lock design
+- [Push Notifications](./docs/PUSH_NOTIFICATIONS.md): Push notification setup
+- [WebSocket](./docs/WEBSOCKET.md): Real-time WebSocket protocol
+- [Tauri Testing](./docs/TAURI_TESTING.md): Testing Tauri desktop/mobile apps
+- [Secrets](./docs/SECRETS.md): Secrets management for CI/CD
+- [Workers](docs/building-webmail-workers.md): Worker mesh architecture
+- [Technology Stack](docs/building-webmail-technology-stack.md): Technology choices and rationale
+- [Mailbox Loading Flow](docs/mailbox-loading-flow.md): Full request lifecycle for loading messages
+- [Clear-Site-Data](docs/clear-site-data-spec.md): Client reset kill switch specification
+- [Deployment Checklist](docs/deployment-checklist.md): Step-by-step deployment guide
+- [Building Webmail Series](docs/building-webmail-series.md): Technical blog series overview
+- [Vision Gap Analysis](docs/webmail-vision-gap-analysis.md): Gap analysis between vision spec and implementation
 
 ## Project Structure
 
@@ -503,7 +523,7 @@ BREAKING CHANGE: settings store schema changed, requires cache clear
 
 ### Releasing
 
-Releases are managed locally using [np](https://github.com/sindresorhus/np). Version bumps still flow through `pnpm release`, and desktop artifact publishing is handled by the Tauri desktop release workflow plus the `pnpm release:desktop` helper for desktop-only hotfixes.
+You run releases locally with [np](https://github.com/sindresorhus/np). Version bumps still flow through `pnpm release`. The Tauri desktop release workflow publishes desktop artifacts, with the `pnpm release:desktop` helper for desktop-only hotfixes.
 
 ```bash
 pnpm release            # interactive version prompt, runs checks, pushes, publishes GitHub Release
@@ -572,12 +592,12 @@ The separate `deploy.yml` workflow is a manual `workflow_dispatch` recovery path
 
 Local validation for release work should still cover the standard web checks before tagging a release:
 
-1. **Install** — `pnpm install --frozen-lockfile`
-2. **Lint** — `pnpm lint`
-3. **Format** — `pnpm format`
-4. **Unit tests** — `pnpm test -- --run`
-5. **Build** — `pnpm build`
-6. **Desktop build smoke test** — `pnpm tauri:build` for the target platform you are validating
+1. **Install**: `pnpm install --frozen-lockfile`
+2. **Lint**: `pnpm lint`
+3. **Format**: `pnpm format`
+4. **Unit tests**: `pnpm test -- --run`
+5. **Build**: `pnpm build`
+6. **Desktop build smoke test**: `pnpm tauri:build` for the target platform you are validating
 
 For exact secret generation, GitHub environment setup, and platform-specific signing steps, use [docs/SECRETS.md](./docs/SECRETS.md) as the canonical guide, with [docs/desktop-ci-secrets.md](./docs/desktop-ci-secrets.md) and [docs/ios-setup.md](./docs/ios-setup.md) as platform-specific companions.
 
@@ -671,9 +691,9 @@ Create a token at **My Profile → API Tokens → Create Token → Create Custom
 
 The CDN worker (`worker/`) handles:
 
-1. **SPA Routing** — Returns `index.html` for navigation requests to `/mailbox`, `/calendar`, `/contacts`, `/login`
-2. **Cache Headers** — Sets correct `Cache-Control` per asset type
-3. **Security Headers** — `X-Content-Type-Options`, `X-Frame-Options`
+1. **SPA Routing**: Returns `index.html` for navigation requests to `/mailbox`, `/calendar`, `/contacts`, `/login`
+2. **Cache Headers**: Sets correct `Cache-Control` per asset type
+3. **Security Headers**: `X-Content-Type-Options`, `X-Frame-Options`
 
 After first deployment, configure the custom domain:
 

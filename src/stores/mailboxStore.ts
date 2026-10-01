@@ -2275,7 +2275,7 @@ const createMailboxStore = () => {
         }
 
         toasts?.show?.(
-          `Couldn't ${type === 'delete' ? 'delete' : 'move'} ${subjectLabel} — restored`,
+          `Couldn't ${type === 'delete' ? 'delete' : 'move'} ${subjectLabel} (restored)`,
           'error',
         );
         return;
@@ -2310,7 +2310,7 @@ const createMailboxStore = () => {
           selectedMessage.set({ ...selected, ...restoreFields });
         }
 
-        toasts?.show?.(`Couldn't sync a change to ${subjectLabel} — reverted`, 'error');
+        toasts?.show?.(`Couldn't sync a change to ${subjectLabel} (reverted)`, 'error');
       }
     } catch (err) {
       warn('revertFailedMutation failed', err);

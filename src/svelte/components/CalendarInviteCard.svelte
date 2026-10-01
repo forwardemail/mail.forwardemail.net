@@ -362,7 +362,7 @@
   const sendRsvp = async (partstat: RsvpStatus) => {
     if (rsvpSending || rsvpSent) return;
     if (!userEmail || !invite.organizer?.email) {
-      error = 'Cannot send RSVP — missing organizer or account email.';
+      error = 'Cannot send RSVP: missing organizer or account email.';
       return;
     }
     rsvpSending = partstat;

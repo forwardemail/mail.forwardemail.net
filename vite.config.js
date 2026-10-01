@@ -89,7 +89,7 @@ const LIBSODIUM_CORE_ESM = findLibsodiumCorePath();
  * directory.  This plugin intercepts that broken relative import and
  * redirects it to the actual file on disk.
  */
-function libsodiumResolverPlugin() {
+export function libsodiumResolverPlugin() {
   return {
     name: 'libsodium-resolver',
     enforce: 'pre',
@@ -111,7 +111,7 @@ function libsodiumResolverPlugin() {
 // modules in web builds. This is the primary defense against the blank-page
 // crash — even if a developer accidentally adds a static import, the browser
 // will never see a bare specifier it cannot resolve.
-function stubTauriModulesPlugin() {
+export function stubTauriModulesPlugin() {
   const STUB_PREFIX = '\0tauri-stub:';
   return {
     name: 'stub-tauri-modules-for-web',

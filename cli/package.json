@@ -1,0 +1,42 @@
+{
+  "name": "forwardemail",
+  "version": "0.14.14",
+  "description": "Forward Email in your terminal: the webmail, calendar and contacts",
+  "keywords": [
+    "email",
+    "webmail",
+    "terminal",
+    "tui",
+    "cli",
+    "calendar",
+    "contacts",
+    "privacy",
+    "forward email"
+  ],
+  "homepage": "https://github.com/forwardemail/mail.forwardemail.net/blob/main/docs/CLI.md",
+  "bugs": {
+    "url": "https://github.com/forwardemail/mail.forwardemail.net/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/forwardemail/mail.forwardemail.net.git",
+    "directory": "cli"
+  },
+  "license": "BUSL-1.1",
+  "author": "Forward Email LLC <support@forwardemail.net> (https://forwardemail.net)",
+  "bin": {
+    "forwardemail": "dist/forwardemail.cjs"
+  },
+  "files": [
+    "dist/forwardemail.cjs",
+    "dist/notifier",
+    "LICENSE.md"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}

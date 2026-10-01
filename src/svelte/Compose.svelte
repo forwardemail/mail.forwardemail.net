@@ -2017,7 +2017,7 @@
       // clean message instead of an unhandled rejection (the "Fatal (compose)"
       // overlay), and don't fall through to the HTML <input> — it can SIGABRT
       // the WKWebView the same way.
-      attachmentError = 'Could not open the file picker — a known macOS issue we are working on.';
+      attachmentError = 'Could not open the file picker (a known macOS issue we are working on).';
       console.error('[compose] file picker failed', err);
       return;
     }
@@ -2037,7 +2037,7 @@
     try {
       files = await pickFiles({ accept: 'image/*' });
     } catch (err) {
-      attachmentError = 'Could not open the image picker — a known macOS issue we are working on.';
+      attachmentError = 'Could not open the image picker (a known macOS issue we are working on).';
       console.error('[compose] image picker failed', err);
       return;
     }
@@ -3008,6 +3008,10 @@
     }
     if (isPlainText && resolvedPrefill.text) {
       body = resolvedPrefill.text as string;
+    } else if (isPlainText && resolvedPrefill.html && !resolvedPrefill.body) {
+      // A forward brings only HTML; the quoted original is kept as text,
+      // below blank lines left for writing.
+      body = `\n\n${htmlToPlainText(resolvedPrefill.html as string)}`;
     } else if (resolvedPrefill.body) {
       body = resolvedPrefill.body as string;
     }
@@ -3021,7 +3025,7 @@
     const sig = skipSig ? { enabled: false, text: '', html: '' } : LocalSettings.getSignature();
     if (sig.enabled && !isSignatureEmpty(sig)) {
       if (isPlainText) {
-        body = applySignaturePlain(sig, body);
+        body = applySignaturePlain(sig, body.replace(/^\n+/, ''));
       } else {
         const baseHtml = (resolvedPrefill.html as string) || body || '';
         const withSig = applySignatureHtml(sig, baseHtml);
@@ -3084,8 +3088,22 @@
     // reply counterpart to the open() insertion (which handles new/forward);
     // the reply quote only arrives here, after the body loads.
     const sig = LocalSettings.getSignature();
-    const content =
-      sig.enabled && !isSignatureEmpty(sig) ? applySignatureHtml(sig, newBody) : newBody;
+    const withSig = sig.enabled && !isSignatureEmpty(sig);
+    if (isPlainText && !editorView) {
+      // The quote arrives as HTML; the textarea would show it as markup.
+      // Blank lines above it leave room to write, as in the rich editor.
+      const quoted = htmlToPlainText(newBody);
+      body = withSig ? applySignaturePlain(sig, quoted) : `\n\n${quoted}`;
+      autosaveTimer?.markBaseline?.();
+      if (options?.focusTop) {
+        tick().then(() => {
+          plainTextInputEl?.focus();
+          plainTextInputEl?.setSelectionRange?.(0, 0);
+        });
+      }
+      return;
+    }
+    const content = withSig ? applySignatureHtml(sig, newBody) : newBody;
     // Set the HTML content in the editor. emitUpdate=false so tiptap doesn't
     // fire onUpdate → markDraftDirty for programmatic prefill — otherwise an
     // untouched reply would autosave a draft 3s after opening.

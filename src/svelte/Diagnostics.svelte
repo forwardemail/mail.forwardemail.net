@@ -146,8 +146,8 @@
     {/if}
     {#each report?.results ?? [] as r (r.id)}
       <StatusLine status={lineStatus(r.status)} meta={`${r.durationMs}ms`}>
-        <span class="text-foreground font-semibold">{r.label}</span>
-        <span class="text-fg-muted"> — {r.message}</span>
+        <span class="text-foreground font-semibold">{r.label}:</span>
+        <span class="text-fg-muted">{r.message}</span>
       </StatusLine>
     {/each}
   </StatusLog>

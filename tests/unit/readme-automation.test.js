@@ -29,10 +29,10 @@ describe('README screenshot automation', () => {
 
     expect(gallery.match(/<details>/g)).toHaveLength(4);
     expect(gallery.match(/<\/details>/g)).toHaveLength(4);
-    expect(gallery).toContain('<strong>Dark mode — Desktop</strong>');
-    expect(gallery).toContain('<strong>Dark mode — Mobile</strong>');
-    expect(gallery).toContain('<strong>Light mode — Desktop</strong>');
-    expect(gallery).toContain('<strong>Light mode — Mobile</strong>');
+    expect(gallery).toContain('<strong>Dark mode, Desktop</strong>');
+    expect(gallery).toContain('<strong>Dark mode, Mobile</strong>');
+    expect(gallery).toContain('<strong>Light mode, Desktop</strong>');
+    expect(gallery).toContain('<strong>Light mode, Mobile</strong>');
     expect(gallery).toContain('docs/screenshots/desktop/login-dark.jpg');
     expect(gallery).toContain('docs/screenshots/mobile/login-light.jpg');
     expect(gallery).toContain('**Screenshots as of July 14, 2026.**');

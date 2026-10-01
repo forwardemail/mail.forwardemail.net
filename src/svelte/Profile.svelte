@@ -233,7 +233,7 @@
                 // The native macOS picker can return nil (see file-picker.ts);
                 // surface a clean message instead of an unhandled rejection.
                 photoError =
-                  'Could not open the image picker — a known macOS issue we are working on.';
+                  'Could not open the image picker (a known macOS issue we are working on).';
                 console.error('[profile] photo picker failed', err);
                 return null;
               });

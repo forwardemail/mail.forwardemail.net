@@ -179,7 +179,7 @@ export const checkCSPEnforcement = (): Promise<DiagnosticResult> =>
       await fetch(blocked, { method: 'HEAD', cache: 'no-store' });
       return {
         status: 'fail',
-        message: 'Probe to an unallowlisted host succeeded — CSP not enforced',
+        message: 'Probe to an unallowlisted host succeeded: CSP not enforced',
       };
     } catch {
       return { status: 'pass', message: 'Cross-origin probe blocked as expected' };
@@ -551,7 +551,7 @@ export const runDiagnostics = async (): Promise<DiagnosticsReport> => {
  */
 export const formatReportText = (report: DiagnosticsReport): string => {
   const lines: string[] = [
-    'Forward Email — Diagnostics',
+    'Forward Email Diagnostics',
     `Generated: ${report.generatedAt}`,
     `Runtime:   ${report.platform.runtime}`,
     `Online:    ${report.platform.online}`,

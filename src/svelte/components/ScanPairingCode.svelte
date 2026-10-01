@@ -388,7 +388,7 @@
       </Button>
       {#if phase === 'unlocking'}
         <p class="text-center text-xs text-muted-foreground">
-          Deliberately slow — the same work that makes guessing the code impractical.
+          Deliberately slow: the same work makes guessing the code impractical.
         </p>
       {/if}
     </div>

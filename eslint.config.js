@@ -15,6 +15,7 @@ export default [
     // process can leave one behind and it should never be linted.
     ignores: [
       'dist/**',
+      'cli/dist/**',
       'node_modules/**',
       'src-tauri/**',
       'public/sw-message-normalize.js',
@@ -73,6 +74,15 @@ export default [
         ...globals.worker,
         IDBTransactionMode: 'readonly',
       },
+    },
+  },
+  {
+    // The terminal client (docs/CLI.md) runs the browser app on Node: its
+    // code names Node types (NodeJS.*), fetch types and the bundle globals
+    // declared in src/cli/globals.d.ts, which TypeScript checks.
+    files: ['src/cli/**/*.ts'],
+    rules: {
+      'no-undef': 'off',
     },
   },
   {

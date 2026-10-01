@@ -1,8 +1,8 @@
 # Mailbox Loading Flow
 
-This document traces the full request lifecycle when loading messages for a
-mailbox folder — from user click through every cache layer, worker, and
-network path, all the way back to the rendered list.
+This document traces the request lifecycle for loading messages in a mailbox
+folder: from the user's click through every cache layer, worker, and network
+path, back to the rendered list.
 
 ## High-level overview
 
@@ -27,7 +27,7 @@ IndexedDB caches are empty (e.g. first visit to a folder on a new device).
 
 ## Detailed request flow
 
-### Phase 1 — Folder selection (synchronous)
+### Phase 1: Folder selection (synchronous)
 
 **Entry point**: `mailboxStore.ts:selectFolder()`
 
@@ -46,9 +46,9 @@ cache hit into a single render frame.
 
 ---
 
-### Phase 2 — In-memory cache check (synchronous, ~0ms)
+### Phase 2: In-memory cache check (synchronous, ~0ms)
 
-**Location**: `mailboxStore.ts:loadMessages()` — in-memory LRU section
+**Location**: `mailboxStore.ts:loadMessages()` (in-memory LRU section)
 
 ```
 folderMessageCache : Map<string, { messages[], hasNextPage }>
@@ -76,9 +76,9 @@ the list renders instantly with no flicker.
 
 ---
 
-### Phase 3 — IndexedDB cache read (async, ~5ms)
+### Phase 3: IndexedDB cache read (async, ~5ms)
 
-**Location**: `mailboxStore.ts:loadMessages()` — IDB cache section
+**Location**: `mailboxStore.ts:loadMessages()` (IDB cache section)
 
 ```mermaid
 flowchart TD
@@ -100,14 +100,14 @@ flowchart TD
     D --> E["Count total for hasNextPage<br/>(if basic query)"]
 ```
 
-**The IDB read populates the list within ~5ms** — well under the 150ms
+**The IDB read populates the list within ~5ms**, well under the 150ms
 skeleton delay threshold. Users see cached data almost instantly.
 
 ---
 
-### Phase 4 — Skeleton decision
+### Phase 4: Skeleton decision
 
-**Location**: `mailboxStore.ts:loadMessages()` — skeleton gate
+**Location**: `mailboxStore.ts:loadMessages()` (skeleton gate)
 
 ```mermaid
 flowchart TD
@@ -116,7 +116,7 @@ flowchart TD
 ```
 
 On the Svelte side (`Mailbox.svelte`), the skeleton has a **150ms delay**
-before it actually renders:
+before it renders:
 
 ```mermaid
 flowchart TD
@@ -127,14 +127,14 @@ flowchart TD
     B -->|No| E["showListSkeleton = false<br/>cancel immediately"]
 ```
 
-This means: if the IDB read or a preview fetch resolves within 150ms, the
-skeleton never appears at all.
+If the IDB read or a preview fetch resolves within 150ms, the skeleton never
+appears.
 
 ---
 
-### Phase 5 — Preview fetch (empty-cache optimization)
+### Phase 5: Preview fetch (empty-cache optimization)
 
-**Location**: `mailboxStore.ts:loadMessages()` — preview section
+**Location**: `mailboxStore.ts:loadMessages()` (preview section)
 
 When cache is completely empty AND the page limit is large (>20), a **parallel
 small fetch** fires to get initial results on screen faster:
@@ -153,7 +153,7 @@ clears the skeleton while the full page loads.
 
 ---
 
-### Phase 6 — Network fetch via `fetchWithFallback()`
+### Phase 6: Network fetch via `fetchWithFallback()`
 
 **Location**: `mailboxStore.ts:fetchWithFallback()`
 
@@ -189,9 +189,9 @@ flowchart LR
 
 ---
 
-### Phase 7 — Response processing (main thread)
+### Phase 7: Response processing (main thread)
 
-**Location**: `mailboxStore.ts:loadMessages()` — response handler
+**Location**: `mailboxStore.ts:loadMessages()` (response handler)
 
 ```mermaid
 flowchart TD
@@ -294,7 +294,7 @@ The sync worker is the **preferred network path**. It:
 
 **Why raw fetch?** The sync worker runs in a Web Worker context. Service
 Workers intercept main-thread fetches but worker-originated fetches go
-directly to the network. This is intentional — API responses are cached in
+directly to the network. This is intentional: the app caches API responses in
 IndexedDB, not in CacheStorage.
 
 ### Service Worker (`public/sw-sync.js`)
@@ -412,6 +412,6 @@ flowchart LR
 
 ## Related documents
 
-- [Worker Architecture](worker-architecture.md) — worker responsibilities and communication
-- [Cache and Indexing Architecture](cache-indexing-architecture.md) — storage layers and search indexing
-- [Service Worker](building-webmail-service-worker.md) — SW setup and background sync
+- [Worker Architecture](worker-architecture.md): worker responsibilities and communication
+- [Cache and Indexing Architecture](cache-indexing-architecture.md): storage layers and search indexing
+- [Service Worker](building-webmail-service-worker.md): SW setup and background sync

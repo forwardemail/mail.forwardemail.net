@@ -1,7 +1,7 @@
 name: Release
 
 # Triggered when `np` (or manual `git tag`) pushes a semver tag.
-# Orchestrates: GitHub Release creation -> Desktop builds -> Mobile builds -> Checksums.
+# Orchestrates: GitHub Release creation -> Desktop, mobile and CLI builds -> Checksums.
 on:
   push:
     tags:
@@ -230,12 +230,30 @@ jobs:
       release_id: ${{ needs.create-release.outputs.release_id }}
     secrets: inherit
 
+  # ── 2c. Build the terminal client (forwardemail CLI) ──────────────────
+  # Standalone executables and the one-line installers go onto the release,
+  # and the same version is published to npm as `forwardemail`. The CLI
+  # bundles the same frontend, so it waits for the same gates.
+  build-cli:
+    needs: [create-release, e2e-webview, ci-gate]
+    if: ${{ !cancelled()
+      && needs.create-release.result == 'success'
+      && needs.e2e-webview.result == 'success'
+      && needs.ci-gate.result == 'success' }}
+    uses: ./.github/workflows/release-cli.yml
+    with:
+      version: ${{ needs.create-release.outputs.version }}
+    secrets: inherit
+
   # ── 3. Generate checksums (best-effort) ────────────────────────────────
   # Resolves the target release fresh here — build-desktop/build-mobile
   # resolve at upload time with the same "prefer published over draft" logic,
   # so assets land on whichever release won the race with np.
   checksums:
-    needs: [create-release, build-desktop, build-mobile]
+    # build-cli is listed so its assets exist before hashing (the CLI's
+    # installers and self-updater verify against SHA256SUMS.txt); like mobile
+    # it does not gate the checksums themselves.
+    needs: [create-release, build-desktop, build-mobile, build-cli]
     if: always() && needs.build-desktop.result == 'success'
     runs-on: ubuntu-latest
     steps:
@@ -633,6 +651,7 @@ jobs:
       - ci-gate
       - build-desktop
       - build-mobile
+      - build-cli
       - checksums
       - publish
       - publish-fdroid-repository
@@ -649,6 +668,7 @@ jobs:
           GATE: ${{ needs.ci-gate.result }}
           DESK: ${{ needs.build-desktop.result }}
           MOBILE: ${{ needs.build-mobile.result }}
+          CLI: ${{ needs.build-cli.result }}
           SUMS: ${{ needs.checksums.result }}
           PUB: ${{ needs.publish.result }}
           FDROID: ${{ needs.publish-fdroid-repository.result }}
@@ -667,6 +687,7 @@ jobs:
             echo "| ci-gate        | \`$GATE\` |"
             echo "| build-desktop  | \`$DESK\` |"
             echo "| build-mobile   | \`$MOBILE\` |"
+            echo "| build-cli      | \`$CLI\` |"
             echo "| checksums      | \`$SUMS\` |"
             echo "| publish        | \`$PUB\` |"
             echo "| F-Droid repository | \`$FDROID\` |"
@@ -699,6 +720,16 @@ jobs:
           # to tolerate (release ships without mobile if e2e blocked it).
           if [ "$MOBILE" != "success" ] && [ "$MOBILE" != "skipped" ]; then
             echo "::error::build-mobile result=$MOBILE (expected success or skipped)"
+            fail=1
+          fi
+
+          # build-cli (the terminal client's executables and installers):
+          # 'success' or 'skipped' (an upstream gate blocked it). A failure
+          # leaves the release without the files install.sh, install.ps1 and
+          # the self-updater download, so it fails the summary; rebuild them
+          # with the "Release CLI" workflow.
+          if [ "$CLI" != "success" ] && [ "$CLI" != "skipped" ]; then
+            echo "::error::build-cli result=$CLI (expected success or skipped); rerun 'Release CLI' for this version"
             fail=1
           fi
 

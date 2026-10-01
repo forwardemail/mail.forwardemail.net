@@ -21,6 +21,8 @@ export interface NotificationEventSource {
 export function setNotificationToasts(toasts: NotificationToastHost | null | undefined): void;
 export function requestNotificationPermission(): Promise<boolean>;
 export function getNotificationPermissionState(): Promise<NotificationPermissionState>;
+export function canTurnOffNotifications(): boolean;
+export function turnOffNotifications(): Promise<boolean>;
 export function initNotificationPermission(): Promise<boolean>;
 export function showTestNotification(): Promise<boolean>;
 export function setBadgeCount(count: number): Promise<void>;

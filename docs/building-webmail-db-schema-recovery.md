@@ -1,12 +1,11 @@
 # Building Webmail: The Data Layer
 
-IndexedDB is not a cache here — it IS the product. The schema, upgrade
-strategy, and recovery paths define whether offline-first feels solid or
-fragile.
+Here IndexedDB is the product. The schema, upgrade strategy, and recovery paths
+decide whether offline-first feels solid or fragile.
 
 ## Why IndexedDB Is Product Memory
 
-The UI reads from local storage first. The API only supplies deltas. That means
+The UI reads from local storage first. The API only supplies deltas, so
 IndexedDB holds everything the user expects to see immediately:
 
 ```mermaid
@@ -44,7 +43,7 @@ Schema version: `1` (defined in `src/utils/db-constants.ts`)
 
 ### Key Indexes on `messages`
 
-The schema is designed to make these reads fast:
+These indexes keep common reads fast:
 
 | Index                            | Used For                   |
 | -------------------------------- | -------------------------- |
@@ -108,7 +107,7 @@ flowchart LR
 
 ## Version Management
 
-All version numbers are centralized:
+`SCHEMA_VERSION` is defined once and shared:
 
 | File                        | Variable                 | Purpose                                              |
 | --------------------------- | ------------------------ | ---------------------------------------------------- |
@@ -122,7 +121,7 @@ All version numbers are centralized:
 Schema changes happen inside `db.worker` and are versioned. Every update must:
 
 1. Add new tables/indexes without breaking existing reads
-2. Keep migrations minimal — data ops, not runtime patches
+2. Keep migrations minimal: data ops, not runtime patches
 3. Increment `SCHEMA_VERSION` in `db-constants.ts`
 4. Ensure `sw-sync.js` stays in sync
 
@@ -167,9 +166,9 @@ flowchart TD
 | Search returns nothing   | Check `searchIndex` rows, run health check       |
 | Stale data after sync    | Check `syncManifests` for cursor progress        |
 | Blank settings on login  | Verify `settings` table has rows for account     |
-| "Database blocked" error | Schema version mismatch — clear and re-init      |
+| "Database blocked" error | Schema version mismatch; clear and re-init       |
 
 ---
 
-**Next:** [Search Engine](building-webmail-search.md) — local-first full-text
+**Next:** [Search Engine](building-webmail-search.md): local-first full-text
 search with FlexSearch.

@@ -149,7 +149,7 @@ export function buildScreenshotGallery(date, manifest = views) {
     for (const profile of profiles) {
       lines.push(
         '<details>',
-        `<summary><strong>${theme.label} — ${profile.label}</strong></summary>`,
+        `<summary><strong>${theme.label}, ${profile.label}</strong></summary>`,
         '',
         '| View | Screenshot |',
         '| :--- | :---: |',

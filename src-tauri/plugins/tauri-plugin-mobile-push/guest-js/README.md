@@ -5,20 +5,20 @@ Push notifications for Tauri v2 apps on iOS (APNs) and Android (FCM).
 [![Crates.io](https://img.shields.io/crates/v/tauri-plugin-mobile-push.svg)](https://crates.io/crates/tauri-plugin-mobile-push)
 [![npm](https://img.shields.io/npm/v/tauri-plugin-mobile-push-api.svg)](https://www.npmjs.com/package/tauri-plugin-mobile-push-api)
 
-A Tauri v2 plugin that provides native remote push notification support using Apple Push Notification service (APNs) on iOS and Firebase Cloud Messaging (FCM) on Android. Unlike `tauri-plugin-notification` which only handles local notifications, this plugin handles **server-sent remote push notifications** -- the kind you need for chat apps, alerts, and any real-time engagement.
+A Tauri v2 plugin that provides native remote push notification support using Apple Push Notification service (APNs) on iOS and Firebase Cloud Messaging (FCM) on Android. Unlike `tauri-plugin-notification` which only handles local notifications, this plugin handles **server-sent remote push notifications**, as used by chat apps, alerts, and other real-time features.
 
-The plugin uses **explicit AppDelegate delegation** instead of method swizzling, making it reliable, transparent, and compatible with iOS 26+ where swizzling-based approaches break.
+The plugin uses **explicit AppDelegate delegation** instead of method swizzling, so it stays compatible with iOS 26+, where swizzling-based approaches break.
 
 ## Features
 
-- **APNs on iOS** -- native device token registration and push delivery
-- **FCM on Android** -- Firebase Cloud Messaging integration with automatic token management
-- **Foreground notifications** -- receive and display pushes while the app is open
-- **Notification tap handling** -- deep-link into your app when users tap a notification
-- **Token refresh events** -- stay in sync when the OS rotates device tokens
-- **No method swizzling** -- explicit delegation pattern that is debuggable and future-proof
-- **Desktop no-op** -- compiles on macOS/Windows/Linux without error; commands return `Err` at runtime so you can gate push logic behind platform checks
-- **TypeScript API** -- fully typed async functions and event listeners
+- **APNs on iOS**: native device token registration and push delivery
+- **FCM on Android**: Firebase Cloud Messaging integration with automatic token management
+- **Foreground notifications**: receive and display pushes while the app is open
+- **Notification tap handling**: deep-link into your app when users tap a notification
+- **Token refresh events**: stay in sync when the OS rotates device tokens
+- **No method swizzling**: explicit delegation pattern you can debug
+- **Desktop no-op**: compiles on macOS/Windows/Linux without error; commands return `Err` at runtime so you can gate push logic behind platform checks
+- **TypeScript API**: typed async functions and event listeners
 
 ## Platform Support
 
@@ -32,14 +32,14 @@ The plugin uses **explicit AppDelegate delegation** instead of method swizzling,
 
 **The official `tauri-plugin-notification` only supports local notifications.** It cannot receive server-sent pushes. If you need to send notifications from your backend to your users' devices, you need this plugin.
 
-**Third-party alternatives use method swizzling**, which intercepts Objective-C method calls at runtime. This technique is fragile -- it breaks when multiple plugins swizzle the same methods, produces difficult-to-debug failures, and Apple has been deprecating the APIs that enable it. On iOS 26+, swizzling-based push plugins can silently fail.
+**Third-party alternatives use method swizzling**, which intercepts Objective-C method calls at runtime. Swizzling breaks when multiple plugins swizzle the same methods, produces failures that are hard to debug, and Apple has been deprecating the APIs that enable it. On iOS 26+, swizzling-based push plugins can silently fail.
 
-**This plugin uses explicit AppDelegate delegation.** You create a small `AppDelegate.swift` file that forwards APNs callbacks to the plugin via `NotificationCenter`. This approach is:
+**This plugin uses explicit AppDelegate delegation.** You create a small `AppDelegate.swift` file that forwards APNs callbacks to the plugin via `NotificationCenter`. With this approach:
 
-- **Reliable** -- no hidden runtime magic that can silently break
-- **Debuggable** -- you can set breakpoints in the delegate methods and see exactly what happens
-- **Future-proof** -- uses standard Apple APIs that will not be deprecated
-- **Composable** -- works alongside any other plugins or libraries without conflicts
+- **Reliable**: no hidden runtime interception that can silently break
+- **Debuggable**: you can set breakpoints in the delegate methods and step through each callback
+- **Future-proof**: uses standard Apple APIs that will not be deprecated
+- **Composable**: works alongside other plugins or libraries without conflicts
 
 ## Installation
 
@@ -102,7 +102,7 @@ In Xcode, select your target, go to **Signing & Capabilities**, and add the **Pu
 
 #### 2. Create AppDelegate.swift
 
-Create the file at `src-tauri/gen/apple/Sources/AppDelegate.swift`. This file forwards APNs callbacks to the plugin -- it is required because the plugin does **not** use method swizzling.
+Create the file at `src-tauri/gen/apple/Sources/AppDelegate.swift`. This file forwards APNs callbacks to the plugin. The plugin requires it because it does **not** use method swizzling.
 
 ```swift
 import SwiftUI
@@ -434,16 +434,16 @@ Once you have the device token, send pushes from your backend via:
 - **iOS (APNs):** Use the [APNs HTTP/2 API](https://developer.apple.com/documentation/usernotifications/sending-notification-requests-to-apns) with a `.p8` signing key or `.p12` certificate.
 - **Android (FCM):** Use the [FCM HTTP v1 API](https://firebase.google.com/docs/cloud-messaging/send-message) with a service account.
 
-The notification payload should include `title`, `body`, and any custom `data` fields your app needs. These will be delivered to your `onNotificationReceived` and `onNotificationTapped` handlers.
+The notification payload should include `title`, `body`, and any custom `data` fields your app needs. The plugin delivers them to your `onNotificationReceived` and `onNotificationTapped` handlers.
 
 ## Architecture
 
-The plugin is structured as a standard Tauri v2 plugin with platform-specific native implementations:
+The plugin follows the standard Tauri v2 layout with platform-specific native implementations:
 
-- **Rust core** (`src/`) -- plugin registration, command definitions, and a desktop no-op fallback
-- **Swift** (`ios/`) -- `MobilePushPlugin` receives APNs callbacks via `NotificationCenter` posts from your AppDelegate
-- **Kotlin** (`android/`) -- `MobilePushPlugin` wraps Firebase Messaging; `FCMService` extends `FirebaseMessagingService` to forward messages and token refreshes
-- **TypeScript** (`guest-js/`) -- thin async wrappers over `invoke()` and `addPluginListener()` from `@tauri-apps/api`
+- **Rust core** (`src/`): plugin registration, command definitions, and a desktop no-op fallback
+- **Swift** (`ios/`): `MobilePushPlugin` receives APNs callbacks via `NotificationCenter` posts from your AppDelegate
+- **Kotlin** (`android/`): `MobilePushPlugin` wraps Firebase Messaging; `FCMService` extends `FirebaseMessagingService` to forward messages and token refreshes
+- **TypeScript** (`guest-js/`): thin async wrappers over `invoke()` and `addPluginListener()` from `@tauri-apps/api`
 
 ## License
 

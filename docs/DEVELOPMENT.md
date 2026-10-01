@@ -1,6 +1,6 @@
 # Development Guide (Tauri)
 
-This guide covers development for both desktop and mobile applications, which are now unified under the Tauri v2 framework.
+This guide covers development for the desktop and mobile applications, which both run on Tauri v2.
 
 ## Prerequisites
 
@@ -18,7 +18,7 @@ This guide covers development for both desktop and mobile applications, which ar
 
 2.  **Run the development server**:
 
-    This will start the Vite dev server for the Svelte frontend and launch the Tauri application shell.
+    This starts the Vite dev server for the Svelte frontend and launch the Tauri application shell.
     - **Desktop**:
 
       ```bash
@@ -58,25 +58,25 @@ This guide covers development for both desktop and mobile applications, which ar
 
 ### Frontend-Backend Communication (IPC)
 
-Tauri uses an Inter-Process Communication (IPC) bridge to allow the Svelte frontend to call Rust functions. All IPC commands are defined in `src-tauri/src/lib.rs` within the `#[tauri::command]` attribute.
+Tauri uses an Inter-Process Communication (IPC) bridge so the Svelte frontend can call Rust functions. `src-tauri/src/lib.rs` defines all IPC commands with the `#[tauri::command]` attribute.
 
 The frontend interacts with these commands via the `@tauri-apps/api` JavaScript library. See `src/utils/tauri-bridge.js` for examples.
 
 ### Service Worker Alternative (Sync Shim)
 
-Service Workers are not supported in Tauri's webview. To provide offline functionality, we use a "sync shim" architecture:
+Tauri's webview does not support Service Workers. For offline functionality, we use a "sync shim" architecture:
 
 1.  **`src/utils/sync-core.js`**: A platform-agnostic module containing the core logic for handling API synchronization and mutation queues. It's a factory function that accepts an environment object (`fetch`, `indexedDB`, `postMessage`).
 
-2.  **`public/sw-sync.js`**: The Service Worker adapter. It imports `sync-core.js` and provides the SW environment bindings. This is used for the web version.
+2.  **`public/sw-sync.js`**: The Service Worker adapter. It imports `sync-core.js` and provides the SW environment bindings. The web version uses it.
 
-3.  **`src/utils/sync-shim.js`**: The main-thread replacement for the Service Worker. It also imports `sync-core.js` but provides main-thread environment bindings (`window.fetch`, `window.indexedDB`, and a `CustomEvent`-based `postMessage`). This is used in Tauri builds.
+3.  **`src/utils/sync-shim.js`**: The main-thread replacement for the Service Worker. It also imports `sync-core.js` but provides main-thread environment bindings (`window.fetch`, `window.indexedDB`, and a `CustomEvent`-based `postMessage`). Tauri builds use it.
 
 4.  **`src/utils/sync-bridge.js`**: A unified module that automatically detects the platform and initializes either the Service Worker or the sync shim. The rest of the application imports from this bridge, making the code platform-agnostic.
 
 ### Native Plugins
 
-Tauri's functionality is extended through plugins. We use several official plugins, configured in `src-tauri/Cargo.toml` and `src-tauri/src/lib.rs`:
+Plugins extend Tauri. We use several official plugins, configured in `src-tauri/Cargo.toml` and `src-tauri/src/lib.rs`:
 
 - `tauri-plugin-updater`: For automatic background updates on desktop.
 - `tauri-plugin-notification`: For native desktop and mobile push notifications.
@@ -99,13 +99,13 @@ pnpm tauri:android:build
 pnpm tauri:ios:build
 ```
 
-This will generate optimized, signed (if configured) binaries in `src-tauri/target/release/`.
+This generates optimized, signed (if configured) binaries in `src-tauri/target/release/`.
 
 ## E2E Testing
 
-We use Playwright for end-to-end testing. The tests are located in `tests/e2e/`.
+We use Playwright for end-to-end testing. The tests live in `tests/e2e/`.
 
-- `tests/e2e/tauri/`: Tests specifically for the Tauri application.
+- `tests/e2e/tauri/`: Tests for the Tauri application.
 - `tests/e2e/websocket/`: Tests for the WebSocket client.
 
 To run the tests:
@@ -120,16 +120,16 @@ npx playwright test tests/e2e/tauri/
 
 The GitHub workflow in [`.github/workflows/e2e-apps.yml`](../.github/workflows/e2e-apps.yml) runs these tests automatically on every push.
 
-For a comprehensive testing guide, see [TAURI_TESTING.md](./TAURI_TESTING.md).
+For the full testing guide, see [TAURI_TESTING.md](./TAURI_TESTING.md).
 
 ## Related Documentation
 
-- [ARCHITECTURE.md](./ARCHITECTURE.md) — Full architecture document
-- [RELEASES.md](./RELEASES.md) — Release process and artifact details
-- [SECRETS.md](./SECRETS.md) — Required secrets for CI/CD
-- [SECURITY.md](./SECURITY.md) — Security hardening and code signing
-- [TAURI_TESTING.md](./TAURI_TESTING.md) — Comprehensive Tauri testing guide
-- [Desktop Contributing](./desktop-contributing.md) — Desktop architecture and IPC patterns
-- [Desktop Setup](./desktop-setup.md) — Desktop environment setup
-- [iOS Setup](./ios-setup.md) — iOS simulator, signing, CI, and TestFlight setup
-- [Desktop CI Secrets](./desktop-ci-secrets.md) — Desktop signing-specific secret setup
+- [ARCHITECTURE.md](./ARCHITECTURE.md): Full architecture document
+- [RELEASES.md](./RELEASES.md): Release process and artifact details
+- [SECRETS.md](./SECRETS.md): Required secrets for CI/CD
+- [SECURITY.md](./SECURITY.md): Security hardening and code signing
+- [TAURI_TESTING.md](./TAURI_TESTING.md): Comprehensive Tauri testing guide
+- [Desktop Contributing](./desktop-contributing.md): Desktop architecture and IPC patterns
+- [Desktop Setup](./desktop-setup.md): Desktop environment setup
+- [iOS Setup](./ios-setup.md): iOS simulator, signing, CI, and TestFlight setup
+- [Desktop CI Secrets](./desktop-ci-secrets.md): Desktop signing-specific secret setup

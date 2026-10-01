@@ -36,21 +36,21 @@ Tests the new event modal and form interactions:
 
 ### ICS Files (`tests/fixtures/ics/`)
 
-- `simple-event.ics` - Single timed event
-- `all-day-event.ics` - All-day event
-- `multi-event.ics` - Three events in one file
-- `event-with-details.ics` - Event with location, URL, attendees, etc.
-- `invalid-event.ics` - Malformed ICS for error handling
+- `simple-event.ics`: Single timed event
+- `all-day-event.ics`: All-day event
+- `multi-event.ics`: Three events in one file
+- `event-with-details.ics`: Event with location, URL, attendees, etc.
+- `invalid-event.ics`: Malformed ICS for error handling
 
 ### Helper Functions (`tests/fixtures/calendar-helpers.js`)
 
 Reusable utilities for calendar tests:
 
-- `setupAuthenticatedSession()` - Sets up auth tokens
-- `navigateToCalendar()` - Navigates to calendar page
-- `openNewEventModal()` - Opens new event modal
-- `uploadICSFile()` - Uploads an ICS file
-- Plus additional helpers for common operations
+- `setupAuthenticatedSession()`: Sets up auth tokens
+- `navigateToCalendar()`: Navigates to calendar page
+- `openNewEventModal()`: Opens new event modal
+- `uploadICSFile()`: Uploads an ICS file
+- More helpers for common operations
 
 ## Running the Tests
 
@@ -83,10 +83,10 @@ pnpm test:e2e tests/e2e/calendar.spec.js --debug
 
 ### What's NOT Tested ⏭️
 
-- **Event rendering on calendar** - Skipped due to Schedule-X rendering timing complexities
-- **Clicking existing events** - Requires events to render first
-- **Actual save operations** - Better tested with integration tests
-- **Edit/delete operations** - Depends on clicking rendered events
+- **Event rendering on calendar**: Skipped due to Schedule-X rendering timing complexities
+- **Clicking existing events**: Requires events to render first
+- **Saving events**: Better tested with integration tests
+- **Edit/delete operations**: Depends on clicking rendered events
 
 These limitations are intentional to keep tests fast and reliable. The tests focus on what users can interact with directly in the UI.
 
@@ -95,4 +95,4 @@ These limitations are intentional to keep tests fast and reliable. The tests foc
 - Tests use mocked API responses via `tests/e2e/mockApi.js`
 - Authentication uses localStorage with `webmail_` prefix
 - Schedule-X calendar has complex async rendering, so we avoid tests that depend on seeing rendered events
-- Tests verify UI interactions work, not business logic
+- Tests verify UI interactions; business logic is out of scope

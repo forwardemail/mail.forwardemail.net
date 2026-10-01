@@ -2,11 +2,14 @@
   import { onMount } from 'svelte';
   import { Button } from '$lib/components/ui/button';
   import Bell from '@lucide/svelte/icons/bell';
+  import BellOff from '@lucide/svelte/icons/bell-off';
   import BellRing from '@lucide/svelte/icons/bell-ring';
   import {
+    canTurnOffNotifications,
     getNotificationPermissionState,
     requestNotificationPermission,
     showTestNotification,
+    turnOffNotifications,
   } from '../../utils/notification-manager.js';
 
   import type {
@@ -70,6 +73,20 @@
     }
   };
 
+  // Only where the app keeps the permission itself (the terminal client).
+  const canTurnOff = canTurnOffNotifications();
+
+  const turnOff = async () => {
+    busy = true;
+    try {
+      await turnOffNotifications();
+      await refresh();
+      toasts?.show?.('Notifications are off.', 'info');
+    } finally {
+      busy = false;
+    }
+  };
+
   const description = $derived.by(() => {
     switch (permission) {
       case 'granted':
@@ -79,7 +96,7 @@
           ? 'Blocked. Allow Forward Email in your system notification settings.'
           : 'Blocked for this site. Allow notifications in your browser’s site settings, then reload.';
       case 'unsupported':
-        return 'This browser cannot show notifications. New mail still appears in the app.';
+        return 'Notifications are not available here. New mail still appears in the app.';
       case 'loading':
         return '';
       default:
@@ -108,6 +125,12 @@
         <BellRing class="mr-2 h-4 w-4" />
         Send a test notification
       </Button>
+      {#if canTurnOff}
+        <Button variant="outline" onclick={turnOff} disabled={busy}>
+          <BellOff class="mr-2 h-4 w-4" />
+          Turn off notifications
+        </Button>
+      {/if}
     {/if}
   </div>
 </div>

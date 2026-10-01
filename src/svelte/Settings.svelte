@@ -444,9 +444,15 @@
   let otherPlatformsOpen = $state(false);
 
   $effect(() => {
-    if (section !== 'help') return;
+    // A failed lookup is tried again the next time this section opens, not
+    // straight away: clearing desktopLoading re-runs this effect, which
+    // would otherwise refetch in a loop while the request keeps failing.
+    if (section !== 'help') {
+      desktopError = '';
+      return;
+    }
     if (isTauriDesktop) return;
-    if (desktopRelease || desktopLoading) return;
+    if (desktopRelease || desktopLoading || desktopError) return;
 
     desktopLoading = true;
     desktopError = '';
@@ -505,7 +511,7 @@
             // has to be triggered explicitly here, otherwise the flow dead-ends
             // at "Update available" and nothing installs. On success the app
             // relaunches, so the lines after the await never run.
-            updateCheckResult = `Update available: v${result.version} — downloading…`;
+            updateCheckResult = `Update available: v${result.version}. Downloading…`;
             try {
               await downloadAndInstall(result, ({ downloaded, contentLength }) => {
                 if (contentLength) {
@@ -513,7 +519,7 @@
                   updateCheckResult = `Downloading v${result.version}… ${pct}%`;
                 }
               });
-              updateCheckResult = `Update v${result.version} installed — restarting…`;
+              updateCheckResult = `Update v${result.version} installed. Restarting…`;
             } catch (err) {
               // updater-bridge throws friendly messages (e.g. the "move to
               // Applications" guidance for a bad install location).

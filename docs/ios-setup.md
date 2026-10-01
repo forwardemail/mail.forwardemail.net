@@ -1,4 +1,4 @@
-# iOS App — Developer Setup Guide
+# iOS App: Developer Setup Guide
 
 Target for iOS is Tauri v2 mobile. This guide covers simulator-first development with a free Apple ID; paid Developer Program work (TestFlight, ad-hoc sideload) is at the end.
 
@@ -7,11 +7,11 @@ Target for iOS is Tauri v2 mobile. This guide covers simulator-first development
 | Tool          | Version | Notes                                                                                                                        |
 | ------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------- |
 | **macOS**     | 13+     | iOS development is Mac-only                                                                                                  |
-| **Xcode**     | 15+     | Install from App Store or [developer.apple.com](https://developer.apple.com/xcode/) — **not** just Command Line Tools        |
+| **Xcode**     | 15+     | Install from App Store or [developer.apple.com](https://developer.apple.com/xcode/), **not** only Command Line Tools         |
 | **Rust**      | stable  | `rustup target add aarch64-apple-ios-sim x86_64-apple-ios` (device target `aarch64-apple-ios` only needed for signed builds) |
 | **Node.js**   | 20+     |                                                                                                                              |
 | **pnpm**      | 9+      | `corepack enable && corepack prepare pnpm@latest --activate`                                                                 |
-| **CocoaPods** | 1.15+   | `brew install cocoapods` — required by `tauri ios init` to run `pod install`                                                 |
+| **CocoaPods** | 1.15+   | `brew install cocoapods` (required by `tauri ios init` to run `pod install`)                                                 |
 | **Apple ID**  | any     | Free account is sufficient for simulator + 7-day personal-device sideload                                                    |
 
 ## First-Time Setup
@@ -41,7 +41,7 @@ Add `aarch64-apple-ios` as well only when you intend to produce signed device bu
 
 ### 3. Install CocoaPods
 
-Tauri's `ios init` command runs `pod install` internally to set up the Xcode workspace. If `pod` is not on your `PATH`, the command will fail with a `No such file or directory` error.
+Tauri's `ios init` command runs `pod install` internally to set up the Xcode workspace. If `pod` is not on your `PATH`, the command fails with a `No such file or directory` error.
 
 ```bash
 brew install cocoapods
@@ -50,7 +50,7 @@ pod --version   # verify installation
 
 ### 4. Initialize the Tauri iOS project
 
-`src-tauri/gen/` is git-ignored, so the iOS Xcode project is generated on demand:
+`src-tauri/gen/` is git-ignored, so you generate the iOS Xcode project on demand:
 
 ```bash
 pnpm tauri ios init
@@ -76,7 +76,7 @@ The wrapper script (`scripts/ios-dev.sh`) verifies Xcode is selected, boots an i
 pnpm tauri:ios:build
 ```
 
-Defaults to your host arch's simulator target (`aarch64-sim` on Apple Silicon, `x86_64-sim` on Intel). The resulting `.app` bundle lives under `src-tauri/gen/apple/build/<target>/` — drag it onto a running simulator window to install.
+Defaults to your host arch's simulator target (`aarch64-sim` on Apple Silicon, `x86_64-sim` on Intel). The resulting `.app` bundle lives under `src-tauri/gen/apple/build/<target>/`. Drag it onto a running simulator window to install.
 
 Pass through extra flags when you need a different target:
 
@@ -90,7 +90,7 @@ pnpm tauri:ios:build -- --target x86_64-sim
 2. Select the top-level project → **Signing & Capabilities** → sign in with your Apple ID and pick your **Personal Team**.
 3. Plug in the device, select it as the run target, press ⌘R.
 
-Apps signed with a free team expire after **7 days** and allow at most 3 apps per device. For longer-lived builds you need a paid Developer Program account — see the signed-build section below.
+Apps signed with a free team expire after **7 days** and allow at most 3 apps per device. For longer-lived builds you need a paid Developer Program account (see the signed-build section below).
 
 ## Safe Areas / Notch / Dynamic Island
 
@@ -98,7 +98,7 @@ iOS WKWebView supports `env(safe-area-inset-*)` natively; `src/styles/base.css:1
 
 ## Share Extension (deferred)
 
-The Android build receives `ACTION_SEND` intents in `MainActivity.kt:79-115` and dispatches `app:share-received` to the webview. The iOS equivalent is a **Share Extension** — a separate embedded target in the Xcode project that Tauri does not scaffold. Track this as follow-up work; the app functions without it.
+The Android build receives `ACTION_SEND` intents in `MainActivity.kt:79-115` and dispatches `app:share-received` to the webview. The iOS equivalent is a **Share Extension**: a separate embedded target in the Xcode project that Tauri does not scaffold. Track this as follow-up work; the app functions without it.
 
 ## Signed Device / Sideload / TestFlight Builds
 
@@ -125,22 +125,22 @@ Requires a paid [Apple Developer Program](https://developer.apple.com/programs/)
 
 ### CI signed builds → TestFlight (GitHub Actions)
 
-The iOS job in [`release-mobile.yml`](../.github/workflows/release-mobile.yml) produces a signed IPA, uploads it to App Store Connect for TestFlight distribution, and also attaches the IPA to the GitHub Release for archival. It runs on every `v*` tag as part of the [unified release](./RELEASES.md#unified-release-v-tag). The workflow now runs on `macos-26` and explicitly selects the latest stable Xcode toolchain before building so the active iPhoneOS SDK satisfies Apple’s current submission requirement. When required secrets are missing the job logs a warning and exits 0 — it never blocks the desktop/Android release.
+The iOS job in [`release-mobile.yml`](../.github/workflows/release-mobile.yml) produces a signed IPA, uploads it to App Store Connect for TestFlight distribution, and also attaches the IPA to the GitHub Release for archival. It runs on every `v*` tag as part of the [unified release](./RELEASES.md#unified-release-v-tag). The workflow runs on `macos-26` and explicitly selects the latest stable Xcode toolchain before building so the active iPhoneOS SDK satisfies Apple’s current submission requirement. When required secrets are missing, the job logs a warning and exits 0, so it never blocks the desktop/Android release.
 
 #### One-time setup
 
 On [developer.apple.com](https://developer.apple.com):
 
-1. **Certificates → +** → **Apple Distribution** (the unified modern cert — works for both iOS App Store and macOS App Store). Upload a CSR you generate in Keychain Access (**Certificate Assistant → Request a Certificate from a Certificate Authority → Saved to disk**). Download `.cer`, double-click to install, then export from Keychain as a password-protected `.p12`.
+1. **Certificates → +** → **Apple Distribution** (the unified modern cert, which works for both iOS App Store and macOS App Store). Upload a CSR you generate in Keychain Access (**Certificate Assistant → Request a Certificate from a Certificate Authority → Saved to disk**). Download `.cer`, double-click to install, then export from Keychain as a password-protected `.p12`.
 2. **Identifiers** → verify App ID `net.forwardemail.mail` exists.
 3. **Profiles → + → Distribution → App Store** → pick the App ID and the Apple Distribution cert → download the `.mobileprovision`.
 
 On [appstoreconnect.apple.com](https://appstoreconnect.apple.com):
 
-4. **My Apps → + → New App** → iOS, bundle ID `net.forwardemail.mail`, pick a SKU like `forwardemail-mail-ios`. Minimum metadata is fine to start — full screenshots/description only required before public App Store submission.
+4. **My Apps → + → New App** → iOS, bundle ID `net.forwardemail.mail`, pick a SKU like `forwardemail-mail-ios`. Minimum metadata is fine to start. Full screenshots/description are only required before public App Store submission.
 5. **Users and Access → Integrations → App Store Connect API → Generate API Key** with **App Manager** role. Download the `.p8` (downloadable only once). Note the **Key ID** (10 chars) and **Issuer ID** (UUID at the top of the page).
 
-Store the six iOS and App Store Connect secrets in the `release` environment — see [SECRETS.md](./SECRETS.md) for the full list, Windows/macOS/Android values, and exact encoding commands.
+Store the six iOS and App Store Connect secrets in the `release` environment. See [SECRETS.md](./SECRETS.md) for the full list, Windows/macOS/Android values, and exact encoding commands.
 
 #### What happens on a tagged release
 
@@ -165,17 +165,17 @@ Find the build at [appstoreconnect.apple.com](https://appstoreconnect.apple.com)
 | Stage               | Location                                   | Typical duration     | What to do                                                                                       |
 | ------------------- | ------------------------------------------ | -------------------- | ------------------------------------------------------------------------------------------------ |
 | Upload received     | Activity → iOS Builds → "Processing"       | 5–15 min             | Wait. You'll get an email when processing finishes (or fails).                                   |
-| Processing complete | TestFlight → iOS tab, listed under version | —                    | Build is ready for internal testers immediately.                                                 |
+| Processing complete | TestFlight → iOS tab, listed under version | n/a                  | Build is ready for internal testers immediately.                                                 |
 | Missing Compliance  | Yellow banner on the build row             | one-time per version | Click the build → answer the encryption question (see below).                                    |
 | Internal testing    | TestFlight → Internal Testing → Groups     | instant after adding | Add up to 25 testers (must be users on your team). They get an email + TF push.                  |
 | External testing    | TestFlight → External Testing → Groups     | <24h beta review     | Add testers by email (no Apple Developer seat needed). First build per version is beta-reviewed. |
-| Build expiry        | —                                          | 90 days from upload  | Upload a new build before expiry to keep testing continuous.                                     |
+| Build expiry        | n/a                                        | 90 days from upload  | Upload a new build before expiry to keep testing continuous.                                     |
 
 **Testers install the [TestFlight app](https://apps.apple.com/app/testflight/id899247664) from the App Store once**, tap the invite link or redeem the code you send them, then install. Updates are automatic.
 
 #### Export compliance (one-time, per app)
 
-Forward Email uses TLS for network transport and user-held PGP keys for email content — both typically qualify as **exempt** encryption under US EAR (§740.17(b)(1) / 5D992.c).
+Forward Email uses TLS for network transport and user-held PGP keys for email content. Both typically qualify as **exempt** encryption under US EAR (§740.17(b)(1) / 5D992.c).
 
 [`scripts/inject-ios-signing.cjs`](../scripts/inject-ios-signing.cjs) sets
 `ITSAppUsesNonExemptEncryption=false` in the generated iOS `Info.plist` during every signed CI
@@ -189,10 +189,10 @@ Consult a lawyer if the app later ships non-standard crypto (custom ciphers, ECC
 
 From **TestFlight → Internal Testing → +** or **External Testing → +**:
 
-- **Internal Testing** — up to 25 team members who have an App Store Connect role. Builds appear instantly after processing, no beta review. Best for developers + QA.
-- **External Testing** — up to 10,000 testers by email (no Apple Developer Program seat needed on their end). First build per version number goes through a same-day beta review. Subsequent builds with the same major version auto-skip review.
+- **Internal Testing**: up to 25 team members who have an App Store Connect role. Builds appear instantly after processing, no beta review. Best for developers + QA.
+- **External Testing**: up to 10,000 testers by email (no Apple Developer Program seat needed on their end). First build per version number goes through a same-day beta review. Subsequent builds with the same major version auto-skip review.
 
-Each tester receives an email invite with a public TestFlight link. They can also be added to a Public Link that you share anywhere — useful for "apply to beta" pages.
+Each tester receives an email invite with a public TestFlight link. They can also be added to a Public Link that you share anywhere, which is useful for "apply to beta" pages.
 
 #### Manual signed build (local)
 
@@ -226,7 +226,7 @@ For rare cases where you want to produce a signed IPA outside CI (e.g., debuggin
 
 ## Related Docs
 
-- `docs/DEVELOPMENT.md` — overall dev workflow
-- `docs/desktop-setup.md` — macOS desktop (Tauri) setup, some steps overlap
-- `docs/desktop-ci-secrets.md` — CI secret-management pattern to mirror for iOS signing
-- `docs/RELEASES.md` — release pipeline overview
+- `docs/DEVELOPMENT.md`: overall dev workflow
+- `docs/desktop-setup.md`: macOS desktop (Tauri) setup, some steps overlap
+- `docs/desktop-ci-secrets.md`: CI secret-management pattern to mirror for iOS signing
+- `docs/RELEASES.md`: release pipeline overview

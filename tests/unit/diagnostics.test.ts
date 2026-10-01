@@ -77,7 +77,7 @@ describe('formatReportText', () => {
   it('produces a header + one line per check', () => {
     const text = formatReportText(fixtureReport());
     const lines = text.split('\n');
-    expect(lines[0]).toBe('Forward Email — Diagnostics');
+    expect(lines[0]).toBe('Forward Email Diagnostics');
     expect(text).toContain('Generated: 2026-04-26T12:00:00.000Z');
     expect(text).toContain('Runtime:   web');
     expect(text).toMatch(/\[PASS\] A \(10ms\): ok/);

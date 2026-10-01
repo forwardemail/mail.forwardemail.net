@@ -5,10 +5,10 @@ desktop and mobile applications.
 
 ## Overview
 
-The E2E test suite is designed to be **platform-agnostic**: the same Playwright
+The E2E test suite is **platform-agnostic**: the same Playwright
 test files run against both the web app (via dev server) and the Tauri desktop
 app (via WebDriver or CDP). Tests that require Tauri-specific APIs check for
-`window.__TAURI_INTERNALS__` and skip gracefully when running in web mode.
+`window.__TAURI_INTERNALS__` and skip when running in web mode.
 
 ## Test Configurations
 
@@ -20,7 +20,7 @@ npx playwright test --config playwright.config.js
 ```
 
 This starts the Vite dev server and runs tests in Chromium. All tests that
-don't require Tauri-specific APIs will pass.
+don't require Tauri-specific APIs pass.
 
 ### Tauri Mode (Desktop)
 
@@ -164,6 +164,6 @@ matches `TAURI_CDP_URL`.
 
 ## Related Documentation
 
-- [DEVELOPMENT.md](./DEVELOPMENT.md) — Development guide including E2E test commands
-- [ARCHITECTURE.md](./ARCHITECTURE.md) — Full architecture document
-- [SECURITY.md](./SECURITY.md) — Security hardening details
+- [DEVELOPMENT.md](./DEVELOPMENT.md): Development guide including E2E test commands
+- [ARCHITECTURE.md](./ARCHITECTURE.md): Full architecture document
+- [SECURITY.md](./SECURITY.md): Security hardening details

@@ -1,6 +1,6 @@
 # Building Webmail
 
-A technical deep-dive into how we built a privacy-first, offline-capable webmail
+A technical walkthrough of how we built a privacy-first, offline-capable webmail
 PWA that runs entirely in the browser.
 
 ```mermaid

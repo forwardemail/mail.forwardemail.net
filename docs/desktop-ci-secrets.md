@@ -1,4 +1,4 @@
-# Desktop App — CI & Secrets Setup Guide
+# Desktop App: CI & Secrets Setup Guide
 
 ## GitHub Environment Setup
 
@@ -31,7 +31,7 @@ Copy the public key string and paste it into `src-tauri/tauri.conf.json`:
 }
 ```
 
-Commit this change — the public key is safe to store in the repository.
+Commit this change. The public key is safe to store in the repository.
 
 ### Step 3: Add private key secrets to GitHub
 
@@ -40,8 +40,8 @@ Commit this change — the public key is safe to store in the repository.
    cat ~/.tauri/forwardemail.key
    ```
 2. In the `release` environment, add:
-   - **`TAURI_SIGNING_PRIVATE_KEY`** — the full contents of the private key file
-   - **`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`** — the password you set during generation
+   - **`TAURI_SIGNING_PRIVATE_KEY`**: the full contents of the private key file
+   - **`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`**: the password you set during generation
 
 ## Running a Release
 
@@ -56,14 +56,14 @@ Commit this change — the public key is safe to store in the repository.
 
 1. Go to **Actions → Release**.
 2. Click **Run workflow**.
-3. Enter the version (e.g. `0.3.2`) — no `v` prefix needed.
+3. Enter the version (e.g. `0.3.2`) with no `v` prefix.
 4. Click **Run workflow**.
 
 This orchestrates the WebView E2E gate, draft GitHub Release creation, desktop and mobile builds, web deployment, release publication, checksums, and the optional Matrix notification.
 
 ## Complete Secrets Reference
 
-All secrets should be added to the **`release`** GitHub environment.
+Add all secrets to the **`release`** GitHub environment.
 
 | Secret                               | Required | Description                                                    | How to Obtain                                                           |
 | ------------------------------------ | -------- | -------------------------------------------------------------- | ----------------------------------------------------------------------- |
@@ -82,7 +82,7 @@ All secrets should be added to the **`release`** GitHub environment.
 
 The desktop workflow also reads the repository variables `ALLOW_UNSIGNED_WINDOWS`, `WINDOWS_PUBLISHER` and `WINDOWS_SIGN_NSIS_PLUGINS` (see [SECRETS.md](./SECRETS.md#windows-code-signing-secrets)) and `ALLOW_NO_UPDATER`. Leave it unset during normal releases: the workflow fails closed when `TAURI_SIGNING_PRIVATE_KEY` is missing. Setting `ALLOW_NO_UPDATER=true` is an emergency override that deliberately produces release artifacts without updater signatures.
 
-**Note:** `GITHUB_TOKEN` is provided automatically by GitHub Actions — do not add it manually.
+GitHub Actions provides `GITHUB_TOKEN` automatically. Do not add it manually.
 
 ## macOS Code Signing and Notarization
 

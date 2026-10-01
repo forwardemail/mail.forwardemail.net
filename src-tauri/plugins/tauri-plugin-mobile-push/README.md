@@ -2,23 +2,23 @@
 
 [![npm](https://img.shields.io/npm/v/tauri-plugin-mobile-push-api.svg)](https://www.npmjs.com/package/tauri-plugin-mobile-push-api)
 
-Push notifications for Tauri v2 mobile apps -- iOS (APNs) and Android (FCM).
+Push notifications for Tauri v2 mobile apps on iOS (APNs) and Android (FCM).
 
-A Tauri v2 plugin that provides native remote push notification support using Apple Push Notification service (APNs) on iOS and Firebase Cloud Messaging (FCM) on Android. Unlike `tauri-plugin-notification` which only handles local notifications, this plugin handles **server-sent remote push notifications** -- the kind you need for chat apps, alerts, and real-time engagement.
+A Tauri v2 plugin that provides native remote push notification support using Apple Push Notification service (APNs) on iOS and Firebase Cloud Messaging (FCM) on Android. `tauri-plugin-notification` only handles local notifications. This plugin handles **server-sent remote push notifications**, which chat apps, alerts, and real-time engagement need.
 
-**Zero-config on iOS.** No AppDelegate file, no method swizzling, no manual setup. The plugin automatically injects APNs handlers into the Tao AppDelegate at runtime using ObjC runtime APIs. Just enable the Push Notifications capability in Xcode and you are ready to go.
+**Zero-config on iOS.** No AppDelegate file, no method swizzling, no manual setup. The plugin automatically injects APNs handlers into the Tao AppDelegate at runtime using ObjC runtime APIs. Enable the Push Notifications capability in Xcode and the setup is done.
 
 ## Features
 
-- **APNs on iOS** -- native device token registration and push delivery
-- **FCM on Android** -- Firebase Cloud Messaging integration with automatic token management
-- **Zero iOS configuration** -- no AppDelegate.swift file needed; APNs methods are injected automatically at runtime
-- **No method swizzling** -- uses direct `@_cdecl` FFI and `class_addMethod` injection, which is transparent and future-proof
-- **Foreground notifications** -- receive and display pushes while the app is open
-- **Notification tap handling** -- deep-link into your app when users tap a notification
-- **Token refresh events** -- stay in sync when the OS rotates device tokens
-- **Desktop no-op** -- compiles on macOS/Windows/Linux without error; commands return stub values so you can gate push logic behind platform checks
-- **TypeScript API** -- fully typed async functions and event listeners
+- **APNs on iOS**: native device token registration and push delivery
+- **FCM on Android**: Firebase Cloud Messaging integration with automatic token management
+- **Zero iOS configuration**: no AppDelegate.swift file needed; APNs methods are injected automatically at runtime
+- **No method swizzling**: uses direct `@_cdecl` FFI and `class_addMethod` injection, which is transparent and future-proof
+- **Foreground notifications**: receive and display pushes while the app is open
+- **Notification tap handling**: deep-link into your app when users tap a notification
+- **Token refresh events**: stay in sync when the OS rotates device tokens
+- **Desktop no-op**: compiles on macOS/Windows/Linux without error; commands return stub values so you can gate push logic behind platform checks
+- **TypeScript API**: fully typed async functions and event listeners
 
 ## Platform Support
 
@@ -30,16 +30,16 @@ A Tauri v2 plugin that provides native remote push notification support using Ap
 
 ## Why This Plugin?
 
-**The official `tauri-plugin-notification` only supports local notifications.** It cannot receive server-sent pushes. If you need to send notifications from your backend to your users' devices -- the standard push notification flow for any chat app, messaging service, or alert system -- you need a remote push plugin.
+**The official `tauri-plugin-notification` only supports local notifications.** It cannot receive server-sent pushes. To send notifications from your backend to your users' devices (the standard push flow for any chat app, messaging service, or alert system), you need a remote push plugin.
 
 **Third-party alternatives use method swizzling**, which intercepts Objective-C method calls at runtime. This technique is fragile: it breaks when multiple plugins swizzle the same methods, produces difficult-to-debug failures, and Apple has been deprecating the APIs that enable it.
 
-**This plugin takes a different approach.** On iOS, it uses direct `@_cdecl` FFI between Rust and Swift, bypassing Tauri's standard `run_mobile_plugin` dispatch entirely. APNs delegate methods are injected into the Tao-generated AppDelegate at runtime using `imp_implementationWithBlock` and `class_addMethod`. This means:
+**This plugin avoids swizzling.** On iOS, it uses direct `@_cdecl` FFI between Rust and Swift, bypassing Tauri's standard `run_mobile_plugin` dispatch entirely. APNs delegate methods are injected into the Tao-generated AppDelegate at runtime using `imp_implementationWithBlock` and `class_addMethod`. This means:
 
-- **Zero configuration** -- no AppDelegate.swift file to create or maintain
-- **Reliable** -- uses the same FFI mechanism (`@_cdecl`) that Tauri uses internally for `init_plugin_<name>()`
-- **Debuggable** -- all operations are logged via `NSLog` with the `[mobile-push]` prefix
-- **Composable** -- does not conflict with other Tauri plugins or native code
+- **Zero configuration**: no AppDelegate.swift file to create or maintain
+- **Reliable**: uses the same FFI mechanism (`@_cdecl`) that Tauri uses internally for `init_plugin_<name>()`
+- **Debuggable**: all operations are logged via `NSLog` with the `[mobile-push]` prefix
+- **Composable**: does not conflict with other Tauri plugins or native code
 
 ## Installation
 
@@ -109,7 +109,7 @@ Ensure your `.entitlements` file includes:
 
 Change to `production` for App Store / TestFlight builds. If you added the Push Notifications capability via Xcode, this is handled automatically.
 
-That is the complete iOS setup. No AppDelegate.swift file is needed -- the plugin handles all APNs delegate methods automatically via runtime injection.
+That completes the iOS setup. No AppDelegate.swift file is needed: the plugin handles all APNs delegate methods automatically via runtime injection.
 
 ### Android
 
@@ -314,7 +314,7 @@ Once you have the device token, send pushes from your backend:
 - **iOS (APNs):** Use the [APNs HTTP/2 API](https://developer.apple.com/documentation/usernotifications/sending-notification-requests-to-apns) with a `.p8` signing key or `.p12` certificate. The token from `getToken()` is a hex-encoded APNs device token.
 - **Android (FCM):** Use the [FCM HTTP v1 API](https://firebase.google.com/docs/cloud-messaging/send-message) with a service account. The token from `getToken()` is an FCM registration token.
 
-The notification payload should include `title`, `body`, and any custom `data` fields your app needs. These will be delivered to your `onNotificationReceived` and `onNotificationTapped` handlers.
+The notification payload should include `title`, `body`, and any custom `data` fields your app needs. The plugin delivers them to your `onNotificationReceived` and `onNotificationTapped` handlers.
 
 ## Architecture
 
@@ -322,9 +322,9 @@ The plugin uses different strategies per platform to work around limitations in 
 
 ### iOS: Direct `@_cdecl` FFI
 
-Tauri v2's `swift-rs` compilation model creates duplicate `PluginManager` singletons when multiple plugins include Swift code. This causes `run_mobile_plugin` calls to hang indefinitely -- `register_plugin()` stores the plugin in one singleton, but `run_plugin_command()` dispatches through a different one.
+Tauri v2's `swift-rs` compilation model creates duplicate `PluginManager` singletons when multiple plugins include Swift code. This causes `run_mobile_plugin` calls to hang indefinitely: `register_plugin()` stores the plugin in one singleton, but `run_plugin_command()` dispatches through a different one.
 
-This plugin bypasses that system entirely using `@_cdecl` FFI functions, which is the same mechanism Tauri uses for `init_plugin_<name>()` and is proven to work reliably:
+This plugin bypasses that system entirely using `@_cdecl` FFI functions, the same mechanism Tauri uses for `init_plugin_<name>()`:
 
 - **`request_permission`**: Rust spawns a thread that calls `extern "C" mobile_push_request_permission()` in Swift. The Swift function calls `UNUserNotificationCenter.requestAuthorization()` and blocks with a `DispatchSemaphore` until the user responds. Returns 1 (granted) or 0 (denied) to Rust.
 - **`get_token`**: Rust spawns a thread that calls `extern "C" mobile_push_get_device_token()` in Swift. On first call, the Swift function lazily injects APNs delegate methods (`didRegisterForRemoteNotificationsWithDeviceToken`, `didFailToRegisterForRemoteNotificationsWithError`) into Tao's dynamically-created AppDelegate using `imp_implementationWithBlock` + `class_addMethod`. It then calls `registerForRemoteNotifications()` and blocks until the APNs callback fires, writing the hex token to a C buffer.

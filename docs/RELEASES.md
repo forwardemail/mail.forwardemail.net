@@ -1,6 +1,6 @@
 # Release Process
 
-This document outlines the process for creating releases for the web, desktop, and mobile applications.
+This document covers how to create releases for the web, desktop, and mobile applications.
 
 ## Release Flows
 
@@ -31,6 +31,18 @@ The workflow uses native GitHub-hosted runners for `macos-15`, `macos-15-intel`,
 pnpm release:desktop patch
 ```
 
+### Terminal client: part of every `v*` release
+
+[`release.yml`](../.github/workflows/release.yml) calls [`release-cli.yml`](../.github/workflows/release-cli.yml) after the release is created. It attaches these assets to the same GitHub Release:
+
+| Asset                                        | What it is                                                                      |
+| -------------------------------------------- | ------------------------------------------------------------------------------- |
+| `forwardemail-{linux,darwin}-{x64,arm64}.gz` | Standalone executables (Node.js single executable applications)                 |
+| `forwardemail-win-{x64,arm64}.exe.gz`        | Standalone Windows executables, Authenticode-signed like the desktop installers |
+| `install.sh`, `install.ps1`                  | The one-line installers                                                         |
+
+The executables are listed in `SHA256SUMS.txt`, which the installers and the self-updater verify against, and they carry build provenance attestations. The same version is published to npm as `forwardemail` on every release, from the bundle CI built and tested; np itself does not publish. The installers and the updater only see a release once it is published, not while it is a draft. The [terminal client guide](./CLI.md#releasing) has the details.
+
 ## CI Pipeline
 
 Every push to `main` and every PR triggers [`ci.yml`](../.github/workflows/ci.yml):
@@ -38,7 +50,7 @@ Every push to `main` and every PR triggers [`ci.yml`](../.github/workflows/ci.ym
 - Lint + format checks
 - Unit tests (Vitest)
 - Build
-- E2E tests (Playwright — desktop Chromium, mobile Android, mobile iOS viewports)
+- E2E tests (Playwright: desktop Chromium, mobile Android, mobile iOS viewports)
 
 ## Versioning
 
@@ -104,9 +116,9 @@ The full one-time setup, secret generation, installation commands, and failure h
 
 ### iOS
 
-| File                                  | Description                                                      |
-| ------------------------------------- | ---------------------------------------------------------------- |
-| `forwardemail-mail_<version>_ios.ipa` | Signed IPA (archival — primary distribution is TestFlight below) |
+| File                                  | Description                                                     |
+| ------------------------------------- | --------------------------------------------------------------- |
+| `forwardemail-mail_<version>_ios.ipa` | Signed IPA (archival; primary distribution is TestFlight below) |
 
 The same IPA is uploaded to **App Store Connect → TestFlight** via `xcrun altool` using the App Store Connect API key. Testers install through the TestFlight app rather than downloading from the GitHub Release. See [ios-setup.md](./ios-setup.md#testflight-lifecycle-post-release) for the post-release flow (processing wait, inviting testers, beta review).
 
@@ -124,7 +136,7 @@ requirements below before creating a release tag.
 | Windows      | SSL.com certificate via eSigner   | Signed in CI through eSigner cloud signing; the Windows rows fail closed without the `ESIGNER_*` secrets. SmartScreen reputation still builds over time after signing |
 | Linux        | None needed                       | `.deb` and `.rpm` work unsigned; trust is handled by the host package flow                                                                                            |
 | Android      | Self-managed keystore (`.jks`)    | Required for Play Store; optional for APK                                                                                                                             |
-| iOS          | Apple Distribution + ASC API key  | Required for TestFlight — job skips gracefully when secrets aren't set                                                                                                |
+| iOS          | Apple Distribution + ASC API key  | Required for TestFlight; job skips gracefully when secrets aren't set                                                                                                 |
 | Auto-updater | Ed25519 key                       | Required for `.sig` files                                                                                                                                             |
 
 See [SECRETS.md](./SECRETS.md) for the full list of required secrets, [desktop-ci-secrets.md](./desktop-ci-secrets.md) for desktop signing setup, and [ios-setup.md](./ios-setup.md) for the iOS signing and TestFlight flow.
@@ -135,7 +147,7 @@ Tauri v2 has a handful of platform-specific bugs that are easy to ship past in
 `tauri dev` and only show up in signed/notarized production builds. Run through
 this list before promoting a draft GitHub release.
 
-### macOS — entitlements + updater smoke test
+### macOS: entitlements + updater smoke test
 
 The Developer ID macOS bundle is **not** sandboxed. `src-tauri/Entitlements.plist`
 carries only `com.apple.security.network.client` and the two Hardened Runtime
@@ -153,7 +165,7 @@ Smoke test, on a notarized signed build (not `tauri dev`):
 2. Open Console.app → filter for "Forward Email".
 3. Launch the app. Confirm:
    - The updater check fires and either reports "up to date" or surfaces a new
-     version prompt — not a network error.
+     version prompt, not a network error.
    - The login flow reaches `api.forwardemail.net` (sign in with a test
      account).
 4. If outbound traffic is silently failing, re-check `Entitlements.plist`
@@ -161,14 +173,14 @@ Smoke test, on a notarized signed build (not `tauri dev`):
 5. Open Compose and add an attachment. The native file picker must open;
    a crash here means the sandbox entitlement crept back in.
 
-### Windows — `mailto:` handler smoke test
+### Windows: `mailto:` handler smoke test
 
 Windows ships both NSIS (`-setup.exe`) and MSI installers. The deep-link
 plugin's compile-time scheme registration only works with MSI on Windows
-(tauri-apps/plugins-workspace#10095) — so we register `mailto:` at runtime via
+(tauri-apps/plugins-workspace#10095), so we register `mailto:` at runtime via
 direct registry mutation in `set_default_mailto_handler` (`src-tauri/src/lib.rs`).
 
-Smoke test, on a fresh Windows 11 VM (don't reuse a dev machine — stale
+Smoke test, on a fresh Windows 11 VM (don't reuse a dev machine: stale
 registry entries from prior installs hide the bug):
 
 1. Install via `-setup.exe` (NSIS).
@@ -183,7 +195,7 @@ registry entries from prior installs hide the bug):
    `start mailto:` command again. Confirm a new compose window opens in the
    existing instance, not a second app process.
 
-If step 4 silently does nothing, the runtime registry write isn't taking — fall
+If step 4 silently does nothing, the runtime registry write isn't taking. Fall
 back to MSI (`.msi`) and reproduce there before shipping.
 
 ### Updater endpoint resilience
@@ -208,7 +220,7 @@ Worker or static R2/S3 object) and add it as a second entry in `endpoints`:
 ```
 
 Tauri tries each endpoint in order and falls through on network or non-200
-errors — so the self-hosted mirror becomes primary, the GitHub URL is the
+errors, so the self-hosted mirror becomes primary and the GitHub URL is the
 backstop.
 
 The mirror needs to publish the same manifest JSON the desktop release
@@ -221,7 +233,7 @@ Authenticode signing alone doesn't suppress every Windows Defender / third-party
 AV false-positive against WebView2 binaries (tauri-apps/wry#2486). On each
 release, proactively submit the new `-setup.exe` and `.msi` to:
 
-- Microsoft Defender — https://www.microsoft.com/wdsi/filesubmission (mark as
+- Microsoft Defender: https://www.microsoft.com/wdsi/filesubmission (mark as
   "incorrectly detected as malware").
 - Major third-party AV vendors that have one-shot false-positive forms
   (Avast/AVG, Bitdefender, Kaspersky, ESET).
@@ -229,10 +241,10 @@ release, proactively submit the new `-setup.exe` and `.msi` to:
 Reputation builds over weeks, so submitting on each release is more useful
 than batching after user reports.
 
-### Linux — webkit2gtk version
+### Linux: webkit2gtk version
 
 `tauri.conf.json` declares `libwebkit2gtk-4.1-0` as the deb dependency. Don't
-drop back to `4.0` — it's no longer in Ubuntu 24 / Debian 13 repos
+drop back to `4.0`; it's no longer in Ubuntu 24 / Debian 13 repos
 (tauri-apps/wry#9662). When testing the AppImage, use a fresh Ubuntu 24 VM
 (not Ubuntu 22) so we catch any 4.1 incompatibilities before users do.
 
@@ -243,12 +255,12 @@ drop back to `4.0` — it's no longer in Ubuntu 24 / Debian 13 repos
   upstream fix yet.
 - **Notification plugin on Android** (tauri-apps/plugins-workspace#2341): the
   `cancelAll`, `pending`, `active`, and `channels` APIs are broken. Don't add
-  call sites for any of them — `notification-bridge.js` already avoids them
+  call sites for any of them. `notification-bridge.js` already avoids them
   and logs explicitly when channel creation fails on Android.
 - **macOS WKWebView pinned to OS version**: users on old macOS get old WebKit.
   We currently set `bundle.macOS.minimumSystemVersion = "10.15"`. Bumping to
   `11.0` would drop Catalina users in exchange for fewer JS-feature edge
-  cases — defer until telemetry shows Catalina usage is negligible.
+  cases. Defer until telemetry shows Catalina usage is negligible.
 
 ### Latest release promotion
 
@@ -277,15 +289,15 @@ already succeeded. Two defenses are in place:
 
 If a row still fails, use **Re-run failed jobs** on the run. GitHub re-runs the
 failed rows and every job that was skipped downstream (checksums, publish,
-deploy), and a re-uploaded asset replaces the earlier one by name. Note that a
+deploy), and a re-uploaded asset replaces the earlier one by name. A
 re-run executes the workflow files from the tagged commit, so it will not pick
 up workflow fixes merged since the tag.
 
 ## Related Documentation
 
-- [SECRETS.md](./SECRETS.md) — Required secrets for CI/CD and release signing
-- [SECURITY.md](./SECURITY.md) — Code signing verification and supply chain protections
-- [DEVELOPMENT.md](./DEVELOPMENT.md) — Building for production locally
-- [Desktop CI Secrets](./desktop-ci-secrets.md) — Detailed desktop signing setup
-- [iOS Setup](./ios-setup.md) — Local iOS setup, CI signing, and TestFlight workflow
-- [Distribution Publishing Guide](./distribution-publishing.md) — Snap, Flathub, F-Droid, Homebrew, and Obtainium setup and operations
+- [SECRETS.md](./SECRETS.md): Required secrets for CI/CD and release signing
+- [SECURITY.md](./SECURITY.md): Code signing verification and supply chain protections
+- [DEVELOPMENT.md](./DEVELOPMENT.md): Building for production locally
+- [Desktop CI Secrets](./desktop-ci-secrets.md): Detailed desktop signing setup
+- [iOS Setup](./ios-setup.md): Local iOS setup, CI signing, and TestFlight workflow
+- [Distribution Publishing Guide](./distribution-publishing.md): Snap, Flathub, F-Droid, Homebrew, and Obtainium setup and operations

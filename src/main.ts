@@ -2900,7 +2900,7 @@ async function bootstrap() {
         // automatic) and, crucially, surface errors via a toast.
         initAutoUpdater({
           onUpdateAvailable: (info: { version?: string }) => {
-            toasts.show(`Installing update v${info?.version ?? ''} — the app will restart`, 'info');
+            toasts.show(`Installing update v${info?.version ?? ''}. The app will restart`, 'info');
             return true;
           },
           onError: (err: { message?: string }) => {

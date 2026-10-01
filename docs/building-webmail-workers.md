@@ -1,8 +1,8 @@
 # Building Webmail: The Worker Mesh
 
 Offline-first webmail is a concurrency problem. Message parsing, API sync, and
-full-text indexing are too heavy for the main thread. The solution: a worker
-mesh with clear ownership boundaries and zero shared state.
+full-text indexing are too heavy for the main thread, so the app runs them in a
+worker mesh with clear ownership boundaries and zero shared state.
 
 ## The Golden Rule
 
@@ -271,5 +271,5 @@ a fallback path to direct API calls.
 
 ---
 
-**Next:** [Data Layer](building-webmail-db-schema-recovery.md) — how IndexedDB
+**Next:** [Data Layer](building-webmail-db-schema-recovery.md): how IndexedDB
 becomes product memory.

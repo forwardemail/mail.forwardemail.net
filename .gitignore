@@ -52,3 +52,8 @@ google-services.json
 firebase-service-account*.json
 
 dev-screenshots/
+
+# Terminal client build output (pnpm build:cli / build:sea)
+cli/dist/
+cli/LICENSE.md
+cli/README.md

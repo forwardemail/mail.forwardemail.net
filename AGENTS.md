@@ -159,9 +159,9 @@ VITE_WEBMAIL_API_BASE=https://api.forwardemail.net
 
 ## Key Files to Understand
 
-1. `src/main.ts` — App bootstrap and routing
-2. `src/stores/mailboxStore.ts` — Core message list orchestration
-3. `src/svelte/Mailbox.svelte` — Main UI (largest component)
-4. `src/workers/db.worker.ts` — Database schema and operations
-5. `src/workers/sync.worker.ts` — API sync logic
-6. `docs/worker-architecture.md` — Worker design documentation
+1. `src/main.ts`: App bootstrap and routing
+2. `src/stores/mailboxStore.ts`: Core message list orchestration
+3. `src/svelte/Mailbox.svelte`: Main UI (largest component)
+4. `src/workers/db.worker.ts`: Database schema and operations
+5. `src/workers/sync.worker.ts`: API sync logic
+6. `docs/worker-architecture.md`: Worker design documentation

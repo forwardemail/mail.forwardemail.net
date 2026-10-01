@@ -1,6 +1,6 @@
 # GitHub Secrets Configuration
 
-This document is the canonical reference for every secret and variable used by the CI/CD workflows that build, sign, upload, and deploy the Forward Email desktop and mobile applications. All signing material should be stored in the **`release`** GitHub Actions environment unless noted otherwise.
+This document lists every secret and variable that the CI/CD workflows use to build, sign, upload, and deploy the Forward Email desktop and mobile applications. Store all signing material in the **`release`** GitHub Actions environment unless noted otherwise.
 
 ## Where each value belongs
 
@@ -14,7 +14,7 @@ Open **Settings → Secrets and variables → Actions** in the GitHub repository
 | **Repository variables**                | Break-glass `ALLOW_NO_UPDATER` override                                                   | `release-desktop.yml`                                                      |
 | **Automatic GitHub secret**             | `GITHUB_TOKEN` only                                                                       | Release creation, reusable workflows, deployment, and release asset upload |
 
-`GITHUB_TOKEN` is provided automatically by GitHub Actions. Do not create it manually.
+GitHub Actions provides `GITHUB_TOKEN` automatically. Do not create it manually.
 
 > **Current state (verified 2026-09-13):** every signing and deployment secret is stored as a **repository** secret; the `release` environment holds only a duplicate `IOS_PROVISIONING_PROFILE_BASE64`. Jobs that declare `environment: release` still resolve repository secrets, so releases work, but environment protection rules (required reviewers, branch restrictions) protect nothing until the values are moved. Migrate by re-adding each value with `gh secret set NAME --env release` and then deleting the repository copy; secret values cannot be copied through the API, so this needs the original material.
 
@@ -94,6 +94,7 @@ to the GitHub Release and skips only the Play upload.
 | `HOMEBREW_TAP_TOKEN`          | `release` secret                 | Required only when Homebrew tap automation is enabled       | Fine-grained token or GitHub App token with write and pull-request access only to the first-party tap |
 | `HOMEBREW_TAP_REPOSITORY`     | Repository or `release` variable | Optional                                                    | Target tap; defaults to `forwardemail/homebrew-forwardemail`                                          |
 | `PUBLISH_HOMEBREW_TAP`        | Repository or `release` variable | No; set to `true` to enable                                 | Opens or refreshes the versioned cask pull request in the target tap                                  |
+| `NPM_TOKEN`                   | `release` secret                 | Only without trusted publishing, and for manual CLI runs    | npm granular token for `forwardemail`; see [npm publishing](#npm-publishing-for-the-terminal-client)  |
 
 The `PUBLISH_*` controls must stay unset until each channel's account, review process, and credentials are ready. When a control is `true`, the release summary treats a failed corresponding lane as a release failure. Flathub does not use a source-repository secret: after the initial submission is accepted, its External Data Checker operates in the separate `flathub/net.forwardemail.mail` repository.
 
@@ -155,7 +156,7 @@ Use the matching **Developer ID Application** entry as `APPLE_SIGNING_IDENTITY`.
 
 ### Windows code-signing secrets
 
-Windows installers are Authenticode-signed with an SSL.com code-signing certificate through **eSigner**, SSL.com's cloud signing service. The private key of a publicly trusted code-signing certificate must stay in a hardware security module, so there is no `.pfx` to export: eSigner keeps the key, and CI signs through it without any manual step.
+Windows installers, and the terminal client's Windows executables, are Authenticode-signed with an SSL.com code-signing certificate through **eSigner**, SSL.com's cloud signing service. The private key of a publicly trusted code-signing certificate must stay in a hardware security module, so there is no `.pfx` to export: eSigner keeps the key, and CI signs through it without any manual step.
 
 | Name                        | Type                | Purpose                                                                                  |
 | --------------------------- | ------------------- | ---------------------------------------------------------------------------------------- |
@@ -176,16 +177,20 @@ Windows installers are Authenticode-signed with an SSL.com code-signing certific
 
 The WiX extension DLLs that Tauri also passes to the signing command run only on the build machine, so they are skipped.
 
+The terminal client (`release-cli.yml`) runs the same `setup` on its two Windows rows and then `scripts/windows-signing.cjs sign` on `forwardemail-win-x64.exe` and `forwardemail-win-arm64.exe` before they are compressed and uploaded, with the same checks and the same `ALLOW_UNSIGNED_WINDOWS` break-glass.
+
 #### Signing volume
 
-eSigner plans include a fixed number of signings per month, and unused signings carry over. A normal release uses about 18:
+eSigner plans include a fixed number of signings per month, and unused signings carry over. A normal release uses about 20:
 
 | Row           | Signed files                                                                    | Signings |
 | ------------- | ------------------------------------------------------------------------------- | -------- |
 | Windows-x64   | app binary ×2 (MSI and NSIS), 5 NSIS plugins, uninstaller, `.msi`, `-setup.exe` | 10       |
 | Windows-arm64 | app binary, 5 NSIS plugins, uninstaller, `-setup.exe`                           | 8        |
+| CLI win-x64   | `forwardemail-win-x64.exe`                                                      | 1        |
+| CLI win-arm64 | `forwardemail-win-arm64.exe`                                                    | 1        |
 
-`WINDOWS_SIGN_NSIS_PLUGINS=false` brings a release down to 8 signings. Re-running a failed Windows row signs everything again. The `Verify Windows signatures` step prints the number of signings each row used.
+`WINDOWS_SIGN_NSIS_PLUGINS=false` brings a release down to 10 signings. Re-running a failed Windows row signs everything again. The `Verify Windows signatures` step prints the number of signings each row used.
 
 #### One-time setup
 
@@ -194,7 +199,7 @@ eSigner plans include a fixed number of signings per month, and unused signings 
 3. **Copy the credential ID.** The **SIGNING CREDENTIALS** section of the order lists the **eSigner credential ID**, a UUID such as `8b072e22-7685-4771-b5c6-48e46614915f`. It becomes `ESIGNER_CREDENTIAL_ID`. With CodeSignTool installed locally, `CodeSignTool get_credential_ids -username=... -password=...` prints it as well.
 4. **Add the secrets.** In GitHub, open **Settings → Environments → release** and add `ESIGNER_USERNAME`, `ESIGNER_PASSWORD`, `ESIGNER_CREDENTIAL_ID` and `ESIGNER_TOTP_SECRET`. Use the username and password you sign in to SSL.com with.
 5. **Check the publisher name.** The workflow requires the certificate's CN or O to equal `bundle.publisher` in `src-tauri/tauri.conf.json` (`Forward Email LLC`). If the certificate shows a different legal name, for example `Forward Email, LLC`, set the repository variable `WINDOWS_PUBLISHER` to that exact name.
-6. **Pick a plan with enough signings.** At about 18 signings per release, pick the eSigner tier for the number of releases you expect each month. Change tiers in the SSL.com account.
+6. **Pick a plan with enough signings.** At about 20 signings per release, pick the eSigner tier for the number of releases you expect each month. Change tiers in the SSL.com account.
 7. **Release.** The next release signs automatically. On Windows, confirm the result:
 
    ```powershell
@@ -288,7 +293,7 @@ This is not the backend `firebase-service-account.json` and not the client
 
 ### iOS TestFlight signing secrets
 
-The iOS release job builds a signed IPA and uploads it to TestFlight. It now runs on `macos-26` and explicitly selects the latest stable Xcode toolchain so the active iPhoneOS SDK satisfies Apple’s current submission requirement.
+The iOS release job builds a signed IPA and uploads it to TestFlight. It runs on `macos-26` and explicitly selects the latest stable Xcode toolchain so the active iPhoneOS SDK satisfies Apple’s current submission requirement.
 
 Start in the Apple Developer portal and App Store Connect:
 
@@ -358,6 +363,27 @@ Create `forwardemail/homebrew-forwardemail` with `Casks/forward-email.rb` from t
 
 The token must be able to create a pull request, not merely push commits. This is why `GITHUB_TOKEN` is not used: it cannot independently authorize cross-repository writes to the tap. The updater downloads the release's two macOS DMGs and calculates their SHA-256 hashes itself before it opens the PR.
 
+### npm publishing for the terminal client
+
+The `npm` job of `release-cli.yml` publishes the `forwardemail` package. It needs one of two ways to sign in to npm. Trusted publishing is preferred: there is no token to leak, rotate or renew.
+
+**Trusted publishing (recommended).** The `forwardemail` package already exists on npm, so this can be set up before the first release:
+
+1. Sign in to [npmjs.com](https://www.npmjs.com) with an account that maintains `forwardemail`, and open the package's **Settings** tab.
+2. Under **Trusted Publisher**, choose **GitHub Actions** and enter organization `forwardemail`, repository `mail.forwardemail.net`, workflow filename `release.yml` and environment `release`. npm checks the workflow that started the run, and `release.yml` calls `release-cli.yml`, so the filename is `release.yml`.
+3. Save. Under **Publishing access**, you can then choose to require two-factor authentication and disallow tokens.
+
+A manual **Release CLI** run (from the Actions tab) starts from `release-cli.yml` instead, so npm does not trust it. It needs `NPM_TOKEN`, or publish that version by hand (`pnpm build:cli && cd cli && npm publish --access public`).
+
+**A token.** Use one for manual runs, or instead of trusted publishing:
+
+1. On npmjs.com, open your avatar › **Access Tokens** › **Generate New Token** › **Granular Access Token**.
+2. Name it `mail.forwardemail.net release-cli`. Under **Packages and scopes**, choose **Read and write** for the `forwardemail` package only. Check **Bypass two-factor authentication**, since CI cannot answer a 2FA prompt. Set an expiration: npm allows at most 90 days for write tokens.
+3. Copy the token (it is shown once). In GitHub, open **Settings › Environments › release › Environment secrets › Add environment secret**, name it `NPM_TOKEN` and paste the value. With the GitHub CLI: `gh secret set NPM_TOKEN --env release --repo forwardemail/mail.forwardemail.net`.
+4. Put a reminder in your calendar before the expiration date. An expired token fails the `npm` job, and the rest of the release is unaffected. Re-run **Release CLI** for that version after replacing it.
+
+The job reads the token as `NODE_AUTH_TOKEN` and passes `--provenance` either way. A version already on npm is skipped, so re-running is safe.
+
 ### Cloudflare and R2 deployment secrets
 
 The web deployment pipeline uses Cloudflare R2 for static assets and Cloudflare Workers for serving and cache management.
@@ -370,7 +396,7 @@ The web deployment pipeline uses Cloudflare R2 for static assets and Cloudflare 
 | `CLOUDFLARE_ZONE_ID`                        | Cloudflare Dashboard → domain overview                                                              |
 | `CLOUDFLARE_API_TOKEN`                      | My Profile → API Tokens → Create Token → Custom token with Workers, R2, and cache-purge permissions |
 
-A full step-by-step walkthrough for the Cloudflare values is in [deployment-checklist.md](./deployment-checklist.md).
+[deployment-checklist.md](./deployment-checklist.md) has a step-by-step walkthrough for the Cloudflare values.
 
 ## Verification checklist
 
@@ -392,10 +418,10 @@ After populating the values above, verify the setup in the following order.
 
 ## Related documentation
 
-- [PUSH_NOTIFICATIONS.md](./PUSH_NOTIFICATIONS.md) — Push provider setup, profile behavior, and cross-repository values
-- [RELEASES.md](./RELEASES.md) — End-to-end release orchestration and artifact outputs
-- [ios-setup.md](./ios-setup.md) — Local and CI iOS signing workflow details
-- [desktop-ci-secrets.md](./desktop-ci-secrets.md) — Desktop-focused signing notes
-- [deployment-checklist.md](./deployment-checklist.md) — Full Cloudflare and R2 deployment setup
-- [SECURITY.md](./SECURITY.md) — Code-signing trust and supply-chain notes
-- [distribution-publishing.md](./distribution-publishing.md) — Step-by-step Snap, Flathub, F-Droid, Homebrew, and Obtainium setup
+- [PUSH_NOTIFICATIONS.md](./PUSH_NOTIFICATIONS.md): Push provider setup, profile behavior, and cross-repository values
+- [RELEASES.md](./RELEASES.md): End-to-end release orchestration and artifact outputs
+- [ios-setup.md](./ios-setup.md): Local and CI iOS signing workflow details
+- [desktop-ci-secrets.md](./desktop-ci-secrets.md): Desktop-focused signing notes
+- [deployment-checklist.md](./deployment-checklist.md): Full Cloudflare and R2 deployment setup
+- [SECURITY.md](./SECURITY.md): Code-signing trust and supply-chain notes
+- [distribution-publishing.md](./distribution-publishing.md): Step-by-step Snap, Flathub, F-Droid, Homebrew, and Obtainium setup

@@ -161,7 +161,7 @@ flowchart LR
 | ---- | ------ | ----------- | ------- |
 | `A`  | `mail` | `192.0.2.1` | Proxied |
 
-Traffic routes through the Worker — the A record is a placeholder.
+Traffic routes through the Worker. The A record is a placeholder.
 
 ---
 
@@ -174,8 +174,8 @@ Traffic routes through the Worker — the A record is a placeholder.
 VITE_WEBMAIL_API_BASE=https://api.forwardemail.net
 ```
 
-The following variables are injected automatically by `vite.config.js` at build
-time via the `define` option (no manual configuration needed):
+`vite.config.js` injects these variables automatically at build time via the
+`define` option (no manual configuration needed):
 
 | Variable           | Source            | Purpose                                 |
 | ------------------ | ----------------- | --------------------------------------- |
@@ -183,11 +183,11 @@ time via the `define` option (no manual configuration needed):
 | `VITE_APP_VERSION` | `version + hash`  | Full version for cache busting          |
 | `VITE_BUILD_HASH`  | MD5 of version+ts | Unique per-build fingerprint            |
 
-See [Technology Stack — Build-Time Environment Variables](building-webmail-technology-stack.md#build-time-environment-variables) for details.
+See [Technology Stack: Build-Time Environment Variables](building-webmail-technology-stack.md#build-time-environment-variables) for details.
 
 ### Runtime
 
-None needed — the app is entirely client-side after build.
+None. The app runs entirely client-side after build.
 
 ---
 
@@ -223,7 +223,7 @@ flowchart TD
 
 ### Releasing
 
-Releases are managed locally using [np](https://github.com/sindresorhus/np):
+You manage releases locally with [np](https://github.com/sindresorhus/np):
 
 ```bash
 pnpm release
@@ -280,12 +280,12 @@ flowchart TD
 
 | Problem                     | Fix                                                                                                     |
 | --------------------------- | ------------------------------------------------------------------------------------------------------- |
-| Worker not serving files    | `cd worker && pnpm tail` — Check wrangler.toml routes                                                   |
+| Worker not serving files    | Run `cd worker && pnpm tail`, then check wrangler.toml routes                                           |
 | R2 bucket empty             | `aws --endpoint-url "$ENDPOINT" s3 ls "s3://${R2_BUCKET}/"`                                             |
 | Cache not clearing          | Manual purge: `curl -X POST ".../purge_cache" --data '{"purge_everything":true}'`                       |
 | Deploy 403 error            | Verify API token has: Workers Scripts: Edit, Workers R2: Edit, Cache Purge: Purge, Workers Routes: Edit |
 | Release not triggering      | Ensure `pnpm release` pushed a `v*` tag and inspect the **Release** workflow in the Actions tab         |
-| Manual redeploy unavailable | Run `.github/workflows/deploy.yml` with `workflow_dispatch`; it is not triggered by release publication |
+| Manual redeploy unavailable | Run `.github/workflows/deploy.yml` with `workflow_dispatch`; release publication does not trigger it    |
 
 ---
 

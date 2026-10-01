@@ -18,16 +18,16 @@ P6 mail components, P7 density, P8 accessibility.
 P4 removed the bulk of this. A liveness audit of every `fe-*` class in the
 standalone stylesheets found that most of them were never applied to an element.
 
-One trap worth recording, because the first pass got it wrong: a hyphen is a
+The first pass fell into a trap: a hyphen is a
 non-word character, so a `\bfe-message\b` regex matches the _prefix_ of
 `fe-message-list-wrapper` and reports a dead class as live. Liveness checks on
-hyphenated class names need `(?![-\w])`, not `\b`. That error only ever kept
+hyphenated class names need `(?![-\w])`, not `\b`. That error only kept
 extra rules, so nothing was deleted wrongly, but it hid 8 dead classes on the
 first pass.
 
-Equally important: the check must look at markup and scripts only. A class
+The check must also look at markup and scripts only. A class
 referenced solely by another stylesheet is still never applied. Four
-`.fe-message-*` rules in `base.css` looked live purely because `mailbox.css`
+`.fe-message-*` rules in `base.css` looked live only because `mailbox.css`
 also styled them.
 
 ### Resolved in P4
@@ -66,7 +66,7 @@ test that asserts the exact string, so removing them means updating
 
 ## Contrast and accessibility
 
-### `text-primary` as text on dark — resolved in P8
+### `text-primary` as text on dark: resolved in P8
 
 34 occurrences, not the ~50 first counted: the earlier figure came from a
 `\btext-primary\b` regex, which matches the prefix of `text-primary-foreground`
@@ -74,24 +74,24 @@ because a hyphen is a non-word character. The same trap as the class liveness
 audit. All 34 genuine foreground uses now resolve through `text-fg-link`, which
 is identical to before in light mode and 7.10:1 instead of 3.49:1 on dark.
 
-### Label chips force white text over user-chosen colours — resolved in P8
+### Label chips force white text over user-chosen colours: resolved in P8
 
-`src/utils/contrast.ts` now picks the foreground by measurement. Worth knowing
-why it is not a simple luminance threshold: a threshold test still fails for
+`src/utils/contrast.ts` now picks the foreground by measurement. A simple
+luminance threshold is not enough: it still fails for
 mid-luminance backgrounds, because the in-palette neutrals give only 4.19:1 on
 Primary blue and 3.74:1 on the pink `#d6336c`. The helper measures both palette
 candidates and escalates to pure black or white when neither clears AA, which
 buys about one extra point of ratio. A test sweeps the label and calendar
 palettes and asserts every choice clears 4.5:1.
 
-### `--fg-muted` is not a body-text colour — intentional, documented
+### `--fg-muted` is not a body-text colour: intentional, documented
 
 Measures 4.48:1 on the light canvas and 3.79:1 on the dark canvas, so it fails
 AA for body text in both themes. This is why the shadcn bridge maps
 `--muted-foreground` to `--fg-secondary` instead. `--fg-muted` is for
 timestamps, counts and disabled text. Noted in `fe-tokens.css`.
 
-### `--fe-danger-deep` misses AA on the sunken surface — open, low priority
+### `--fe-danger-deep` misses AA on the sunken surface: open, low priority
 
 The specification presents `#dc2626` as the light-safe danger colour. It
 measures 4.54:1 on the canvas and 4.83:1 on raised surfaces, but 4.22:1 on
@@ -99,7 +99,7 @@ measures 4.54:1 on the canvas and 4.83:1 on raised surfaces, but 4.22:1 on
 value would ripple through `--destructive` and its 60-plus uses, so it is left
 as specified.
 
-### Diagnostics ground — fixed in P3
+### Diagnostics ground: fixed in P3
 
 `/mailbox/diagnostics` is not part of `mailbox-mode`, so it inherited the login
 screen's Ink ground. With light-theme tokens on that dark ground, state text
@@ -111,7 +111,7 @@ the page being clipped by the login shell's vertical centering.
 
 ## Specification gaps found
 
-### Caution had no light-safe variant — resolved
+### Caution had no light-safe variant: resolved
 
 The specification defines `-deep` variants for Signal and Mint but not for
 Caution, and `--fe-caution` (`#f59e0b`) measures 2.02:1 on the light canvas, so
@@ -119,21 +119,21 @@ it cannot be text there. Added `--fe-caution-deep`. It is amber-800
 (`#92400e`), not amber-700, because amber-700 measures 4.39:1 against
 `--surface-sunken` and misses AA on that one surface.
 
-### No token for a starred message — resolved
+### No token for a starred message: resolved
 
 Added `--state-starred`, aliased to Caution's hue rather than introducing a new
 accent, since the specification caps accent count and gold is the conventional
 star colour.
 
-### Categorical colour is out of scope for the token layer — intentional
+### Categorical colour is out of scope for the token layer: intentional
 
 Three palettes are deliberately literal because their job is to distinguish
 items, not to carry brand meaning. This is the same role `--chart-*` plays.
 Each is commented at its definition.
 
-- `Contacts.svelte` — 12 avatar colours
-- `Calendar.svelte` — 6 calendar identity colours
-- `Compose.svelte` — editor text and highlight colours. These are serialised
+- `Contacts.svelte`: 12 avatar colours
+- `Calendar.svelte`: 6 calendar identity colours
+- `Compose.svelte`: editor text and highlight colours. These are serialised
   into outgoing email HTML, which the recipient's client renders with no access
   to this app's tokens, so they must be literal.
 
@@ -145,7 +145,7 @@ separation from it.
 
 ## Deferred to later phases
 
-### `mailbox.css` — resolved in P4, and it was not what it looked like
+### `mailbox.css`: resolved in P4, and it was not what it looked like
 
 This was logged as the largest remaining visual clash, on the reading that
 `.fe-nav-toggle` and `.fe-reader-backbtn` were painting grey buttons against the
@@ -154,17 +154,17 @@ rendered; the visible hamburger and back buttons are built from Tailwind
 utilities in `Mailbox.svelte` and were already correct. The same applied to the
 `body.light-mode` block: almost all of it targeted dead classes.
 
-The lesson is to check that a selector is live before reading a hardcoded value
-inside it as a rendering bug.
+Check that a selector is live before reading a hardcoded value inside it as a
+rendering bug.
 
-### Encryption uses the wrong state colour — resolved in P6
+### Encryption uses the wrong state colour: resolved in P6
 
 Both PGP banners and their passphrase actions now use `--state-encrypted`, with
 a lock icon carrying `aria-label` and the block marked `role="status"`. There
 were two banner blocks, not one; the second differed only in indentation and was
 easy to miss.
 
-### Unread rows do not use `--state-unread` — resolved in P6
+### Unread rows do not use `--state-unread`: resolved in P6
 
 The state gutter is a `::before` on `[data-conversation-row]`, painted when
 `data-unread="true"`. The flat message row was not exposing `data-unread` at
@@ -173,20 +173,20 @@ guard now asserts that the count of row containers and the count of
 `data-unread` attributes match, so a new row variant cannot silently ship
 without the third cue.
 
-### Two different warnings now look identical — accepted
+### Two different warnings now look identical: accepted
 
 `MessageTab.svelte` had a yellow banner for blocked images and an orange one for
 a security warning; both are `--state-caution` now. The specification has one
 caution hue, and each banner keeps a distinct icon and message, which satisfies
 the rule that state must be legible without colour.
 
-### Calendar today-circle hue changed — done, worth knowing
+### Calendar today-circle hue changed: done, worth knowing
 
 The date-picker today circle was violet in both themes. Violet is
 `--state-encrypted` in this system and would misread as an encryption cue, so
 today now takes the primary accent.
 
-### schedule-x light theme is only partly themed — P4 or later
+### schedule-x light theme is only partly themed: P4 or later
 
 The `--sx-color-*` surface overrides are still scoped to `.sx-wrapper.is-dark`,
 matching previous behaviour, so light-mode schedule-x still uses its own default
@@ -196,7 +196,7 @@ surfaces. The values are tokens now, but light mode is not driven by them.
 
 ## Unrelated pre-existing issues
 
-### `tailwind.config.js` is inert — open
+### `tailwind.config.js` is inert: open
 
 Tailwind v4 with no `@config` directive anywhere, so the file is never loaded.
 Its custom breakpoints never applied, meaning the roughly 59 `md:` utilities
@@ -204,7 +204,7 @@ have always resolved at Tailwind's default 768px rather than the intended 820px.
 Wiring it up would shift layout between 768px and 820px, so it needs its own
 change. Deleting the file is the safer option.
 
-### `svelte-check` baseline — open
+### `svelte-check` baseline: open
 
 Around 2058 pre-existing errors, so it cannot gate this work. Verification is
 vitest, eslint, prettier, a production build, and screenshot comparison.

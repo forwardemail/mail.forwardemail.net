@@ -36,7 +36,7 @@ flowchart LR
 
 ## Architectural North Stars
 
-These are the constraints we refuse to break:
+We refuse to break these four constraints:
 
 ```mermaid
 flowchart TD
@@ -182,9 +182,9 @@ flowchart LR
 
 If we get the architecture right, everything else scales: faster UX, better
 privacy, richer features, and a codebase that ships as a PWA today and wraps
-as a native app tomorrow. The constraint is the advantage.
+as a native app tomorrow.
 
 ---
 
-**Next:** [Technology Stack](building-webmail-technology-stack.md) — the tools
-that make this constraint real.
+**Next:** [Technology Stack](building-webmail-technology-stack.md): the tools
+that make these constraints real.

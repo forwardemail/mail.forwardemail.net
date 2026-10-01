@@ -20,4 +20,4 @@ We prefer to receive reports in English.
 
 Please disclose a vulnerability or security relevant issue here: [https://github.com/tauri-apps/plugins-workspace/security/advisories/new](https://github.com/tauri-apps/plugins-workspace/security/advisories/new).
 
-Alternatively, you can also contact us by email via [security@tauri.app](mailto:security@tauri.app).
+You can also contact us by email via [security@tauri.app](mailto:security@tauri.app).

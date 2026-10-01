@@ -4,6 +4,16 @@ export const SETTING_SCOPES = {
   HYBRID: 'hybrid',
 } as const;
 
+/**
+ * The terminal client (src/cli) sets this before the app loads. A terminal
+ * draws text, so messages are shown and composed as plain text there by
+ * default; both stay switchable in Settings. Other platforms keep their
+ * defaults.
+ */
+const isTerminalClient =
+  typeof globalThis !== 'undefined' &&
+  (globalThis as { __FORWARDEMAIL_TERMINAL__?: boolean }).__FORWARDEMAIL_TERMINAL__ === true;
+
 export type SettingScope = (typeof SETTING_SCOPES)[keyof typeof SETTING_SCOPES];
 export type ValueType = 'string' | 'boolean' | 'number' | 'json';
 
@@ -178,8 +188,8 @@ export const SETTINGS_REGISTRY: Record<string, SettingDefinition> = {
     scope: SETTING_SCOPES.DEVICE,
     localKey: 'compose_plain_default',
     valueType: 'boolean',
-    defaultValue: false,
-    localParse: (raw) => parseBoolean(raw, false),
+    defaultValue: isTerminalClient,
+    localParse: (raw) => parseBoolean(raw, isTerminalClient),
     localSerialize: (value) => serializeBoolean(Boolean(value)),
   },
   attachment_reminder: {
@@ -367,8 +377,8 @@ export const SETTINGS_REGISTRY: Record<string, SettingDefinition> = {
     scope: SETTING_SCOPES.DEVICE,
     localKey: 'view_plain_text',
     valueType: 'boolean',
-    defaultValue: false,
-    localParse: (raw) => parseBoolean(raw, false),
+    defaultValue: isTerminalClient,
+    localParse: (raw) => parseBoolean(raw, isTerminalClient),
     localSerialize: (value) => serializeBoolean(Boolean(value)),
   },
   prefetch_enabled: {
