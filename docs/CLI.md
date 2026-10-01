@@ -152,6 +152,10 @@ What you type right after a new-message, reply or forward shortcut (Ctrl+N, `r`,
 | `?`                 | Show every keyboard shortcut.                                                    |
 | `Ctrl+C`            | Quit and give the terminal back.                                                 |
 
+`forwardemail` uses the terminal's alternate screen, as `vim` and `less` do. The wheel scrolls the app, not your shell's history, and quitting puts your shell's screen back as it was.
+
+A scroll bar on the right edge of the message list, a message, the compose window and other long panes shows when there is more to see. Click the bar above or below its thumb to scroll a page, or drag the thumb. In the compose window the message grows as you type, the window scrolls to keep the cursor in view, and the arrow keys scroll it back.
+
 Clicking and scrolling with the wheel work with the mouse in any terminal that reports mouse events. That includes most modern terminals: iTerm2, Terminal.app, GNOME Terminal, Konsole, kitty, WezTerm, Alacritty, foot and Windows Terminal. A terminal of 120 columns or more shows the full desktop layout. At 80 columns or fewer (the webmail's 640 px phone breakpoint), the folder list moves behind the `≡` menu, as on a phone.
 
 Drag over text, in a message or anywhere else, to select it. Releasing the button copies it to your clipboard, and the bottom row says **Copied**. The copy goes through the terminal's clipboard sequence (OSC 52), so it also works over SSH. In tmux, add `set -g set-clipboard on`. iTerm2 asks first: allow it under **Settings › General › Selection › Applications in terminal may access clipboard**. To use your terminal's own selection instead, hold its modifier while you drag: Option in iTerm2, Fn in Terminal.app, Shift in most others.

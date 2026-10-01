@@ -120,6 +120,23 @@ function switchTextMode(session) {
   session.clickAt(at + 1, save.row);
 }
 
+// Scroll bars (src/cli/scrollbars.ts): a track of │ with a thumb of █.
+const cellsOf = (line) => [...line];
+// The column of the first scroll bar thumb right of a column, or -1.
+function barColumn(screen, from = 0) {
+  let found = -1;
+  for (const line of screen.split('\n')) {
+    const col = cellsOf(line).indexOf('█', from);
+    if (col !== -1 && (found === -1 || col < found)) found = col;
+  }
+  return found;
+}
+// The screen rows the thumb fills in a column.
+function thumbRows(screen, col) {
+  return screen.split('\n').flatMap((line, row) => (cellsOf(line)[col] === '█' ? [row] : []));
+}
+const PASTE = (text) => `\u001b[200~${text}\u001b[201~`;
+
 describe.runIf(canRunInteractive)('in a terminal', () => {
   let session;
   afterEach(async () => {
@@ -331,7 +348,11 @@ describe.runIf(canRunInteractive)('in a terminal', () => {
       (text) => text.includes('SORT BY') && text.includes('Newest first'),
       { label: 'the sort menu' },
     );
-    const row = menu.split('\n').find((line) => line.includes('Newest first'));
+    const row = menu
+      .split('\n')
+      .find((line) => line.includes('Newest first'))
+      // The message list's scroll bar on the right edge is not the menu.
+      .replace(/\s{2,}[│█]\s*$/, '');
     expect(row.indexOf('Newest first')).toBeGreaterThan(20);
     expect(row.trimEnd().length - row.indexOf('Newest first')).toBeLessThan(40);
     session.type(KEYS.escape);
@@ -587,6 +608,97 @@ describe.runIf(canRunInteractive)('in a terminal', () => {
     const screen = await session.waitFor('Forward Email Team');
     // No folder sidebar beside the list at this width.
     expect(screen).not.toContain('Outbox');
+  });
+
+  it('runs on the alternate screen, so the wheel cannot reach the shell above it', async () => {
+    session = startTerminal({ home: tempHome(), shellLines: ['$ ls', 'notes.txt'] });
+    await session.waitFor('Try Demo');
+    // The shell's lines and scrollback stay on the normal screen, out of
+    // reach of the wheel, as with vim or less.
+    expect(session.bufferType()).toBe('alternate');
+    expect(session.screen()).not.toContain('notes.txt');
+    session.type(KEYS.ctrlC);
+    const { code } = await session.exit;
+    expect(code).toBe(0);
+    // Quitting puts the shell's screen back as it was, with no trace of
+    // the app over it.
+    expect(session.bufferType()).toBe('normal');
+    const screen = session.screen();
+    expect(screen).toContain('$ ls');
+    expect(screen).toContain('notes.txt');
+    expect(screen).not.toContain('Try Demo');
+    expect(screen).not.toContain('Ctrl+C');
+  });
+
+  it('shows a scroll bar beside the message list that follows the wheel, the track and the thumb', async () => {
+    session = startTerminal({ home: tempHome(), args: ['--demo'], cols: 120, rows: 30 });
+    await session.waitFor((text) => text.includes('Forward Email Team') && text.includes('█'), {
+      label: 'the message list and its scroll bar',
+    });
+    const top = session.locate('Forward Email Team');
+    const col = barColumn(session.screen(), top.col);
+    const start = thumbRows(session.screen(), col);
+    // The list starts at the top, with more below: the thumb is at the top
+    // of the track and the track runs on under it.
+    expect(start[0]).toBe(top.row - 1);
+    expect(cellsOf(session.screen().split('\n')[start.at(-1) + 1])[col]).toBe('│');
+
+    // The wheel scrolls the list and the thumb follows.
+    session.wheel(top.col, top.row, 'down', 6);
+    await session.waitFor((text) => thumbRows(text, col)[0] > start[0], {
+      label: 'the thumb to move down',
+    });
+    expect(session.screen()).not.toContain('Forward Email Team');
+
+    // A click on the track below the thumb scrolls a page.
+    const moved = thumbRows(session.screen(), col);
+    session.clickAt(col + 1, moved.at(-1) + 2);
+    await session.waitFor((text) => thumbRows(text, col)[0] > moved[0], {
+      label: 'the thumb to page down',
+    });
+
+    // Dragging the thumb to the top scrolls back to the first message.
+    const now = thumbRows(session.screen(), col);
+    await session.drag({ col: col + 1, row: now[0] + 1 }, { col: col + 1, row: start[0] + 1 });
+    await session.waitFor(
+      (text) => text.includes('Forward Email Team') && thumbRows(text, col)[0] === start[0],
+      { label: 'the list and its thumb back at the top' },
+    );
+  });
+
+  it('scrolls a long draft inside the compose window and keeps the caret in view', async () => {
+    session = startTerminal({ home: tempHome(), args: ['--demo'], cols: 120, rows: 30 });
+    await session.waitFor('Welcome to Forward Email!');
+    session.type(KEYS.ctrlN);
+    await session.waitFor('Message');
+    session.click('Message');
+    const lines = Array.from({ length: 40 }, (_, i) => `Line ${i + 1} of a long draft`);
+    session.type(PASTE(lines.join('\r')));
+
+    // The body grows past the window; the window scrolls to the last line,
+    // where the caret is, and its title stays on screen.
+    let screen = await session.waitFor('Line 40 of a long draft');
+    expect(screen).toContain('New message');
+    expect(screen).not.toContain('Line 1 of a long draft');
+    expect(screen.split('\n')[0]).toContain('Search mail');
+    // No text is drawn over the toolbar below the body.
+    const send = screen.split('\n').findIndex((line) => line.includes('Send'));
+    expect(screen.split('\n').slice(send).join('\n')).not.toContain('of a long draft');
+    // A scroll bar beside the text shows there is more above: its thumb is
+    // below the top of its track.
+    const text = session.locate('Line 40 of a long draft');
+    const thumbBelowTop = (now) => {
+      const col = barColumn(now, text.col);
+      const first = col === -1 ? -1 : thumbRows(now, col)[0];
+      return first > 0 && cellsOf(now.split('\n')[first - 1])[col] === '│';
+    };
+    await session.waitFor(thumbBelowTop, { label: 'a scroll bar with its thumb off the top' });
+
+    // Moving the caret up to the first line scrolls back to it.
+    session.type(KEYS.up.repeat(40));
+    screen = await session.waitFor('Line 1 of a long draft', { label: 'the first line' });
+    expect(screen).toContain('New message');
+    expect(screen).not.toContain('Line 40 of a long draft');
   });
 
   it('quits on Ctrl+C and hands the terminal back', async () => {

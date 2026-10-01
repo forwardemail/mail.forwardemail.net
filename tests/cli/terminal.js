@@ -29,12 +29,21 @@ const quote = (value) => `'${String(value).replace(/'/g, `'\\''`)}'`;
  * Starts `forwardemail <args>` at the given size. Returns helpers to type,
  * read the screen and wait for text, and a stop() that must be awaited.
  */
-export function startTerminal({ args = [], home, cols = 120, rows = 36, env = {} } = {}) {
+export function startTerminal({
+  args = [],
+  home,
+  cols = 120,
+  rows = 36,
+  env = {},
+  shellLines = [],
+} = {}) {
   const term = new xterm.Terminal({ cols, rows, allowProposedApi: true });
   const command = [process.execPath, CLI, ...args].map(quote).join(' ');
+  // Lines a shell printed before the client started.
+  const printed = shellLines.map((line) => `echo ${quote(line)}; `).join('');
   const child = spawn(
     'script',
-    ['-qfec', `stty cols ${cols} rows ${rows}; exec ${command}`, '/dev/null'],
+    ['-qfec', `stty cols ${cols} rows ${rows}; ${printed}exec ${command}`, '/dev/null'],
     {
       env: {
         ...process.env,
@@ -164,6 +173,11 @@ export function startTerminal({ args = [], home, cols = 120, rows = 36, env = {}
     pointerShapes,
     // The terminal modes the client turned on (focus reports, mouse, …).
     modes: () => term.modes,
+    // 'normal' or 'alternate': which screen buffer the client draws on.
+    bufferType: () => term.buffer.active.type,
+    // Turns the mouse wheel over a cell, by its 1-based column and row.
+    wheel: (col, row, direction, times = 1) =>
+      child.stdin.write(`\u001b[<${direction === 'down' ? 65 : 64};${col};${row}M`.repeat(times)),
     type: (keys) => child.stdin.write(keys),
     async stop() {
       if (!exited) {

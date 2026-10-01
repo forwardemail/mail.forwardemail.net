@@ -25,7 +25,9 @@ import {
   convertMediaQuery,
   convertStylesheet,
 } from '../../src/cli/px-to-cells.js';
+import { thumbPlacement } from '../../src/cli/scrollbars';
 import { createStorage } from '../../src/cli/storage';
+import { wrappedRows } from '../../src/cli/textareas';
 import { createAppWindow, installGeometry } from '../../src/cli/viewport';
 
 const quietTransport = (cols = 80, rows = 24) => ({
@@ -352,5 +354,74 @@ describe('hint bar keys', () => {
     expect(bytesFor('shift + tab')).toBe('\x1b[Z');
     // Ctrl+M is Enter to a terminal, so it is not pressed as Ctrl+M.
     expect(bytesFor('ctrl + m')).toBeNull();
+  });
+});
+
+describe('scroll bar thumb', () => {
+  it('is as long as the share of the content on screen', () => {
+    // 10 rows of 40 on screen: a quarter of the track.
+    expect(thumbPlacement(20, 10, 40, 0)).toEqual({ thumbTop: 0, thumbRows: 5 });
+    // At least one row, however long the content.
+    expect(thumbPlacement(20, 10, 10_000, 0).thumbRows).toBe(1);
+  });
+
+  it('sits at the ends only when the box is scrolled to them', () => {
+    expect(thumbPlacement(20, 10, 40, 30)).toEqual({ thumbTop: 15, thumbRows: 5 });
+    // One row scrolled in a long list leaves the top; one row short of the
+    // end does not reach the bottom.
+    expect(thumbPlacement(20, 10, 1000, 1).thumbTop).toBe(1);
+    expect(thumbPlacement(20, 10, 1000, 989).thumbTop).toBe(18);
+    expect(thumbPlacement(20, 10, 1000, 990).thumbTop).toBe(19);
+  });
+});
+
+describe('text area rows', () => {
+  it('counts lines, including an empty last line', () => {
+    expect(wrappedRows('', 20)).toBe(1);
+    expect(wrappedRows('one\ntwo', 20)).toBe(2);
+    expect(wrappedRows('one\n', 20)).toBe(2);
+  });
+
+  it('wraps at spaces, lets spaces hang, and breaks words longer than the line', () => {
+    expect(wrappedRows('aaaa bbbb cccc', 9)).toBe(2);
+    expect(wrappedRows('aaaa     ', 4)).toBe(1);
+    expect(wrappedRows('abcdefghij', 4)).toBe(3);
+    expect(wrappedRows('ab abcdefghij', 4)).toBe(4);
+  });
+
+  it('counts wide characters as two columns, each a place to break', () => {
+    expect(wrappedRows('日本語のテキスト', 8)).toBe(2);
+    expect(wrappedRows('ab 日本語のテキストです', 12)).toBe(2);
+  });
+
+  it('moves a tab to the next stop of eight, wrapping when it does not fit', () => {
+    expect(wrappedRows('a\tb', 12)).toBe(1);
+    expect(wrappedRows('a\tb\tc\td\te', 12)).toBe(4);
+    expect(wrappedRows('\t\t\tword', 12)).toBe(3);
+  });
+
+  it('wraps text the way TermDOM wraps a text area', async () => {
+    const dom = new TermDOM({ transport: quietTransport(40, 30) });
+    // A box styled as the engine styles a text area's text. A one-row box
+    // gives the row height, whatever units an earlier test left rects in.
+    dom.document.body.innerHTML =
+      '<div id="row" style="height: 1px"></div>' +
+      '<div id="copy" style="width: 12ch; white-space: pre-wrap; overflow-wrap: break-word"></div>';
+    const copy = dom.document.getElementById('copy');
+    const row = dom.document.getElementById('row').getBoundingClientRect().height;
+    for (const text of [
+      'The quick brown fox jumps over the lazy dog. Pack my box with five dozen liquor jugs.',
+      'one\n\nSupercalifragilisticexpialidocious!',
+      'a\tb\tc\td\te',
+      '\t\t\tword',
+      'ab 日本語のテキストです',
+    ]) {
+      copy.textContent = text;
+      expect({ text, rows: copy.getBoundingClientRect().height / row }).toEqual({
+        text,
+        rows: wrappedRows(text, 12),
+      });
+    }
+    dom.dispose?.();
   });
 });

@@ -11,6 +11,8 @@ import { installClipboard } from './clipboard';
 import { installLinks } from './links';
 import { canConnect, installNetwork } from './network';
 import { installPointer } from './pointer';
+import { installScrollbars } from './scrollbars';
+import { installTextareaSizing } from './textareas';
 import { installNotifications, type Notifier } from './notifications';
 import { openInBrowser } from './open-url';
 import { createAppWindow, installGeometry } from './viewport';
@@ -225,6 +227,8 @@ export function installEnvironment(options: EnvironmentOptions) {
   installAnimations(win);
   installGeometry(win);
   installFrames(win);
+  installTextareaSizing(win);
+  installScrollbars(win);
   installNotifications(win, { dataDir: options.dataDir, notifier: options.notifier ?? null });
   const appWindow = createAppWindow(win);
 

@@ -20,6 +20,46 @@ export interface StartOptions {
   notifications?: boolean;
 }
 
+// Switching to the alternate screen saves the cursor; switching back
+// restores the shell's screen and puts the cursor back.
+const ALTERNATE_SCREEN = '\x1b[?1049h';
+const MAIN_SCREEN = '\x1b[?1049l';
+const CLEAR_SCREEN = '\x1b[H\x1b[2J';
+// The switch back that TermDOM writes when it lets the terminal go.
+const MAIN_SCREEN_KEEP_CURSOR = '\x1b[?1047l';
+
+/**
+ * Runs the app on the alternate screen, as vim and less do: the wheel
+ * scrolls the app rather than the shell's scrollback, and quitting brings
+ * the shell's screen back as it was.
+ *
+ * TermDOM lets the terminal go with ?1047l, which leaves the alternate
+ * screen, and then draws its last frame, which would land over the shell's
+ * lines. While the app runs, that switch is dropped from what TermDOM
+ * writes, and the app leaves the alternate screen itself at exit, before
+ * anything else is printed there (the update notice). An instance started
+ * by restart() takes over the screen its parent left it on.
+ */
+function useAlternateScreen(restarted: boolean) {
+  const stdout = process.stdout;
+  const write = stdout.write.bind(stdout) as (...args: unknown[]) => boolean;
+  stdout.write = ((chunk: unknown, ...rest: unknown[]) =>
+    write(
+      typeof chunk === 'string' && chunk.includes(MAIN_SCREEN_KEEP_CURSOR)
+        ? chunk.replaceAll(MAIN_SCREEN_KEEP_CURSOR, '')
+        : chunk,
+      ...rest,
+    )) as typeof stdout.write;
+  write(`${restarted ? '' : ALTERNATE_SCREEN}${CLEAR_SCREEN}`);
+  process.prependListener('exit', () => {
+    try {
+      fs.writeSync(1, MAIN_SCREEN);
+    } catch {
+      // The terminal is gone.
+    }
+  });
+}
+
 // Handed from an instance to the one that replaces it (see restart()).
 const RESUME_VARIABLE = 'FORWARDEMAIL_RESUME';
 const ORIGIN = 'https://mail.forwardemail.net';
@@ -84,6 +124,8 @@ export async function startApp({
   notifications = true,
 }: StartOptions) {
   const logFile = redirectConsole(dataDir, Boolean(process.env.FORWARDEMAIL_DEBUG));
+  // Set for an instance started by restart(), which takes over its screen.
+  const restarted = Boolean(process.env[RESUME_VARIABLE]);
   const resume = readResume(dataDir);
 
   let restarting = false;
@@ -137,6 +179,7 @@ export async function startApp({
     });
   }
   process.on('SIGHUP', () => process.exit(0));
+  useAlternateScreen(restarted);
   await env.term.attach();
   // Plain text by default for reading and writing (stores/settingsRegistry.ts).
   (globalThis as Record<string, unknown>).__FORWARDEMAIL_TERMINAL__ = true;

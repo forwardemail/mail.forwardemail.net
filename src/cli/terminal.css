@@ -201,6 +201,19 @@ input.opacity-0 {
   top: 0 !important;
   height: auto !important;
 }
+/*
+ * The message body (the text area and the box around it) is as tall as its
+ * text, and the box around the fields scrolls: the compose window keeps to
+ * the screen and scrolls to the lines below. TermDOM counts only a
+ * scroller's children toward its scroll height, and gave the scroller its
+ * content's height as a minimum, so the text ran past the window.
+ */
+[data-testid='compose-modal'] .flex-1.min-h-\[200px\] {
+  flex: 1 0 auto;
+}
+[data-testid='compose-modal'] .flex-1.overflow-y-auto {
+  min-height: 0;
+}
 
 /*
  * A flex item that clips its text may shrink below its content, as the
@@ -362,4 +375,29 @@ input.opacity-0 {
 /* In the one-column layout the content is a flex item that must shrink. */
 #settings-root .fe-mobile-page-scroll {
   min-height: 0;
+}
+
+/*
+ * Scroll bars (scrollbars.ts): one column over the right edge of each box
+ * that scrolls. The script sets where each bar and its thumb sit.
+ */
+#fe-terminal-scrollbars {
+  display: contents;
+}
+.fe-scrollbar {
+  position: fixed;
+  width: 1px;
+  overflow: hidden;
+  white-space: pre;
+  user-select: none;
+  cursor: default;
+  z-index: 2147483646;
+  color: var(--border, #334155);
+}
+.fe-scrollbar-thumb {
+  position: absolute;
+  left: 0;
+  width: 1px;
+  white-space: pre;
+  color: var(--muted-foreground, #94a3b8);
 }
