@@ -811,14 +811,32 @@ jobs:
           # by filename convention AuthKey_<KEY_ID>.p8
           KEY_DIR="$HOME/.appstoreconnect/private_keys"
           mkdir -p "$KEY_DIR"
+          trap 'rm -f "$KEY_DIR/AuthKey_${ASC_KEY_ID}.p8"' EXIT
           echo "$ASC_KEY" > "$KEY_DIR/AuthKey_${ASC_KEY_ID}.p8"
           chmod 600 "$KEY_DIR/AuthKey_${ASC_KEY_ID}.p8"
-          xcrun altool --upload-app \
-            --type ios \
-            --file "$IPA_PATH" \
-            --apiKey "$ASC_KEY_ID" \
-            --apiIssuer "$ASC_ISSUER"
-          rm -f "$KEY_DIR/AuthKey_${ASC_KEY_ID}.p8"
+          # Before uploading, altool looks up the app by bundle ID in App
+          # Store Connect. That lookup sometimes fails for a few minutes with
+          # "Cannot determine the Apple ID from Bundle ID" (it did for
+          # v0.14.15, after v0.14.14 uploaded fine), so only that error is
+          # retried. It also persists while a new Apple agreement waits to be
+          # accepted. Anything else, such as a rejected build, fails at once.
+          log="$RUNNER_TEMP/altool.log"
+          for attempt in 1 2 3 4; do
+            if xcrun altool --upload-app \
+              --type ios \
+              --file "$IPA_PATH" \
+              --apiKey "$ASC_KEY_ID" \
+              --apiIssuer "$ASC_ISSUER" 2>&1 | tee "$log"; then
+              exit 0
+            fi
+            grep -q 'Cannot determine the Apple ID from Bundle ID' "$log" || exit 1
+            if [ "$attempt" -lt 4 ]; then
+              echo "App Store Connect could not look up the app (attempt $attempt); retrying in $((attempt * 60)) seconds"
+              sleep $((attempt * 60))
+            fi
+          done
+          echo "::error::App Store Connect still cannot find the app for this bundle ID. Accept any pending agreements in App Store Connect (Business > Agreements), check that the app exists there and that the API key (APP_STORE_CONNECT_KEY_ID) has access to it, then re-run this job."
+          exit 1
 
       - name: Resolve release ID (prefer published over draft)
         if: steps.check.outputs.enabled == 'true'

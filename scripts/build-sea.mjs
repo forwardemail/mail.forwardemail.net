@@ -20,6 +20,7 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { gzipSync } from 'node:zlib';
 import { inject } from 'postject';
+import { hasSignature, removeSignature } from './pe-signature.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
@@ -99,13 +100,24 @@ try {
   fs.copyFileSync(process.execPath, output);
   fs.chmodSync(output, 0o755);
 
+  // The copy still carries the Node.js project's signature, which would no
+  // longer match once the app is injected. Remove it first, so the release
+  // can sign the executable as Forward Email.
   const macos = process.platform === 'darwin';
+  const windows = process.platform === 'win32';
   if (macos) execFileSync('codesign', ['--remove-signature', output], { stdio: 'inherit' });
+  if (windows) removeSignature(output);
 
   await inject(output, 'NODE_SEA_BLOB', fs.readFileSync(blob), {
     sentinelFuse: 'NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2',
     machoSegmentName: macos ? 'NODE_SEA' : undefined,
   });
+
+  // Checked here, where CI builds it on Windows, rather than first failing
+  // when the release signs it.
+  if (windows && hasSignature(output)) {
+    throw new Error(`${path.basename(output)} still has a signature table; it could not be signed`);
+  }
 
   // Apple Silicon refuses to run unsigned code; an ad-hoc signature is enough
   // for a binary that was not downloaded through a quarantining browser.

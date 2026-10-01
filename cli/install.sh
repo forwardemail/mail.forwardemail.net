@@ -96,6 +96,8 @@ case ":${PATH}:" in
     ;;
   *)
     printf '\n%s is not on your PATH. Add it, for example:\n' "$INSTALL_DIR"
+    # $PATH stays literal: this prints a command for the user to run.
+    # shellcheck disable=SC2016
     printf '  echo '\''export PATH="%s:$PATH"'\'' >> ~/.profile\n' "$INSTALL_DIR"
     printf 'then open a new terminal and run: forwardemail\n'
     ;;

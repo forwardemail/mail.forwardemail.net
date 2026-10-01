@@ -189,9 +189,13 @@ jobs:
             node -e 'process.exit(require("fs").existsSync(process.argv[1]) ? 0 : 1)' "$program"
           fi
 
+      # The same check release-cli.yml runs before attaching the installer to
+      # a release, so a failure shows up here instead of in the release.
       - name: Check the installer
         if: runner.os != 'Windows'
-        run: sh -n cli/install.sh
+        run: |
+          sh -n cli/install.sh
+          if command -v shellcheck >/dev/null; then shellcheck cli/install.sh; fi
 
       # The npm package as it would be published: packed, installed globally
       # into a scratch prefix and run from there.
