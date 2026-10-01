@@ -2668,11 +2668,13 @@ const fetchEmlOriginal = async (msg) => {
 
 export const downloadOriginal = async (msg) => {
   const target = msg || get(mailboxStore.state.selectedMessage);
-  const content = await getMessageContent(target);
-  if (!content) {
+  if (!target) {
     toastsRef?.show?.('Original message not available to download', 'error');
     return;
   }
+  // A body that was never cached (one still encrypted, or not opened on
+  // this device) is no reason to give up: the server has the original.
+  const content = await getMessageContent(target);
   const meta = content?.meta || {};
   let emlPayload =
     meta.eml ||
@@ -2732,8 +2734,13 @@ export const downloadOriginal = async (msg) => {
     }
   }
 
+  if (!emlPayload) {
+    toastsRef?.show?.('Original message not available to download', 'error');
+    return;
+  }
+
   const success = downloadFile(
-    emlPayload || '',
+    emlPayload,
     getSafeFilename(target?.subject, 'eml'),
     'message/rfc822',
   );
@@ -2804,11 +2811,12 @@ export const reportSpamMessage = async (msg) => {
 
 export const viewOriginal = async (msg) => {
   const target = msg || get(mailboxStore.state.selectedMessage);
-  const content = await getMessageContent(target);
-  if (!content) {
+  if (!target) {
     toastsRef?.show?.('Original message not available', 'error');
     return;
   }
+  // As for downloadOriginal: without a cached body, the server's copy.
+  const content = await getMessageContent(target);
   const meta = content?.meta || {};
   let payload =
     meta.raw ||
@@ -2877,11 +2885,33 @@ export const viewOriginal = async (msg) => {
   // timeout, 404 because the server no longer holds a raw copy, etc. — the
   // viewer would otherwise silently open showing "No headers available"
   // with no indication why. Warn instead of failing silently.
+  // Nothing at all to show: one error, not the warning as well.
+  if (!payload && !decryptedText) {
+    toastsRef?.show?.('Original message not available', 'error');
+    return;
+  }
+
   if (attemptedRawFetch && (!headersText || !payload || looksLikeHtml(payload))) {
     toastsRef?.show?.(
       "Couldn't load the full original message from the server. Showing what's cached",
       'warning',
     );
+  }
+
+  // The terminal client has no browser tab to open the viewer page in; it
+  // shows the original itself (src/cli/original.ts).
+  if ((globalThis as { __FORWARDEMAIL_TERMINAL__?: boolean }).__FORWARDEMAIL_TERMINAL__) {
+    window.dispatchEvent(
+      new CustomEvent('fe:view-original', {
+        detail: {
+          raw: payload || '',
+          headers: headersText || '',
+          decrypted: decryptedText || '',
+          subject: target?.subject || '',
+        },
+      }),
+    );
+    return;
   }
 
   const viewerPage = buildOriginalViewerPage({

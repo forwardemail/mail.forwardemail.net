@@ -20,44 +20,61 @@ export interface StartOptions {
   notifications?: boolean;
 }
 
-// Switching to the alternate screen saves the cursor; switching back
-// restores the shell's screen and puts the cursor back.
-const ALTERNATE_SCREEN = '\x1b[?1049h';
+// Leaving the alternate screen this way also puts back the cursor that
+// entering it saved, so the shell's prompt returns where it was.
 const MAIN_SCREEN = '\x1b[?1049l';
-const CLEAR_SCREEN = '\x1b[H\x1b[2J';
-// The switch back that TermDOM writes when it lets the terminal go.
-const MAIN_SCREEN_KEEP_CURSOR = '\x1b[?1047l';
 
 /**
  * Runs the app on the alternate screen, as vim and less do: the wheel
  * scrolls the app rather than the shell's scrollback, and quitting brings
  * the shell's screen back as it was.
  *
- * TermDOM lets the terminal go with ?1047l, which leaves the alternate
- * screen, and then draws its last frame, which would land over the shell's
- * lines. While the app runs, that switch is dropped from what TermDOM
- * writes, and the app leaves the alternate screen itself at exit, before
- * anything else is printed there (the update notice). An instance started
- * by restart() takes over the screen its parent left it on.
+ * The page's body is made the fullscreen element, which TermDOM draws on
+ * the alternate screen by moving the cursor to each cell. Its inline mode
+ * draws by writing new lines instead, and a terminal that keeps lines
+ * scrolled off the alternate screen (iTerm2 does by default) filled its
+ * scrollback with old frames on every resize. The body, not the root
+ * element, because TermDOM left the sign-in page blank with the root
+ * fullscreen. The hint bar and the scroll bars sit outside the body and
+ * are still drawn.
+ *
+ * TermDOM leaves the alternate screen at exit without putting the cursor
+ * back; the app does that before anything else is printed (the update
+ * notice).
  */
-function useAlternateScreen(restarted: boolean) {
-  const stdout = process.stdout;
-  const write = stdout.write.bind(stdout) as (...args: unknown[]) => boolean;
-  stdout.write = ((chunk: unknown, ...rest: unknown[]) =>
-    write(
-      typeof chunk === 'string' && chunk.includes(MAIN_SCREEN_KEEP_CURSOR)
-        ? chunk.replaceAll(MAIN_SCREEN_KEEP_CURSOR, '')
-        : chunk,
-      ...rest,
-    )) as typeof stdout.write;
-  write(`${restarted ? '' : ALTERNATE_SCREEN}${CLEAR_SCREEN}`);
+async function useAlternateScreen(win: Window, attach: () => Promise<void>) {
+  // Only once the alternate screen is up: leaving it before then (Ctrl+C
+  // during start-up) would put the cursor back to where none was saved.
+  let entered = false;
   process.prependListener('exit', () => {
+    if (!entered) return;
     try {
       fs.writeSync(1, MAIN_SCREEN);
     } catch {
       // The terminal is gone.
     }
   });
+  // TermDOM draws its first frame before anything can be made fullscreen,
+  // and draws it under the shell's prompt, scrolling the shell's lines up to
+  // make room. The page has no height for that frame, so the frame is
+  // empty.
+  const root = win.document.documentElement;
+  root.style.setProperty('height', '0', 'important');
+  await attach();
+  const fullscreen = win.document.body.requestFullscreen();
+  root.style.removeProperty('height');
+  await fullscreen;
+  entered = true;
+  // The page fills the screen and never scrolls as a whole: its boxes
+  // scroll inside it. On the alternate screen TermDOM still moves the whole
+  // screen to bring a caret below it into view (a paste into a long draft),
+  // leaving rows of nothing at the bottom. That is undone after the frame.
+  const pin = () =>
+    setTimeout(() => {
+      if (win.scrollY !== 0) win.scrollTo(0, 0);
+    }, 0);
+  for (const type of ['keydown', 'input', 'focusin', 'paste'])
+    win.addEventListener(type, pin, true);
 }
 
 // Handed from an instance to the one that replaces it (see restart()).
@@ -124,8 +141,6 @@ export async function startApp({
   notifications = true,
 }: StartOptions) {
   const logFile = redirectConsole(dataDir, Boolean(process.env.FORWARDEMAIL_DEBUG));
-  // Set for an instance started by restart(), which takes over its screen.
-  const restarted = Boolean(process.env[RESUME_VARIABLE]);
   const resume = readResume(dataDir);
 
   let restarting = false;
@@ -179,8 +194,7 @@ export async function startApp({
     });
   }
   process.on('SIGHUP', () => process.exit(0));
-  useAlternateScreen(restarted);
-  await env.term.attach();
+  await useAlternateScreen(env.window as unknown as Window, () => env.term.attach());
   // Plain text by default for reading and writing (stores/settingsRegistry.ts).
   (globalThis as Record<string, unknown>).__FORWARDEMAIL_TERMINAL__ = true;
   installFocus(env.window);

@@ -18,6 +18,7 @@
  * session. FORWARDEMAIL_NOTIFICATIONS=0 or --no-notifications turns them off
  * everywhere; FORWARDEMAIL_NOTIFICATIONS=1 turns them on over SSH as well.
  */
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import NotificationCenter from 'toasted-notifier/notifiers/notificationcenter';
@@ -172,6 +173,8 @@ export function createSystemNotifier(options: {
   version: string;
   env?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
+  /** Where the notifier programs are; found by the client otherwise. */
+  programs?: string;
 }): Notifier | null {
   const env = options.env ?? process.env;
   const platform = options.platform ?? process.platform;
@@ -180,7 +183,7 @@ export function createSystemNotifier(options: {
   // Found, and for a standalone executable written out, on first use.
   let dir: string | null | undefined;
   const file = (name: string, executable = false) => {
-    if (dir === undefined) dir = notifierDir(options.dataDir, options.version);
+    if (dir === undefined) dir = options.programs ?? notifierDir(options.dataDir, options.version);
     const full = dir ? path.join(dir, name) : null;
     if (!full || !fs.existsSync(full)) return null;
     if (executable && platform !== 'win32') {
@@ -226,11 +229,37 @@ export function createSystemNotifier(options: {
         name: 'Notification Center (terminal-notifier)',
         program: file(NOTIFIER_FILES.darwin, true),
       }),
-      async show({ title, body, tag }) {
+      async show({ title, body, tag, onClick }) {
         const customPath = file(NOTIFIER_FILES.darwin, true);
         if (!customPath) return false;
-        // Clicking brings the terminal the client runs in to the front.
+        // Clicking brings the terminal the client runs in to the front, and
+        // the app opens what the notification is about. terminal-notifier
+        // waits for the click only when given a timeout, and reports it as
+        // JSON. The program is started here rather than through
+        // toasted-notifier so that it can be ended when the client quits.
         const bundle = env.__CFBundleIdentifier;
+        if (onClick) {
+          return showWithAction(env, {
+            command: customPath,
+            args: [
+              '-title',
+              oneLine(title) || 'Forward Email',
+              '-message',
+              oneLine(body) || ' ',
+              ...(tag ? ['-group', tag] : []),
+              ...(bundle && /^[\w.-]+$/.test(bundle) ? ['-activate', bundle] : []),
+              '-sound',
+              'default',
+              '-json',
+              '-timeout',
+              String(CLICK_WAIT_SECONDS),
+            ],
+            group: tag,
+            clicked: (output) =>
+              /"activationType"\s*:\s*"(?:contentsClicked|actionClicked)"/.test(output),
+            onClick,
+          });
+        }
         return run(new NotificationCenter({ customPath, withFallback: false }), {
           title: oneLine(title) || 'Forward Email',
           message: oneLine(body) || ' ',
@@ -272,8 +301,25 @@ export function createSystemNotifier(options: {
       name: 'the desktop notification service (notify-send)',
       program: 'notify-send',
     }),
-    async show({ title, body }) {
+    async show({ title, body, onClick }) {
       const icon = file(NOTIFIER_FILES.icon);
+      if (onClick && notifySendHasActions(env)) {
+        return showWithAction(env, {
+          command: 'notify-send',
+          args: [
+            '--app-name=Forward Email',
+            '--action=default=Open',
+            '--wait',
+            ...(icon ? [`--icon=${icon}`] : []),
+            '--',
+            oneLine(title) || 'Forward Email',
+            oneLine(body) || ' ',
+          ],
+          // notify-send prints the name of the action taken.
+          clicked: (output) => output.split('\n').some((line) => line.trim() === 'default'),
+          onClick,
+        });
+      }
       return run(new NotifySend(), {
         title: oneLine(title) || 'Forward Email',
         message: oneLine(body) || ' ',
@@ -282,6 +328,86 @@ export function createSystemNotifier(options: {
       });
     },
   };
+}
+
+// ── Clicks on Linux ─────────────────────────────────────────────────────────
+
+// notify-send learned --action and --wait in libnotify 0.7.10; older ones
+// would show the option names as text.
+const actionsSupported = new Map<string, boolean>();
+function notifySendHasActions(env: NodeJS.ProcessEnv): boolean {
+  const key = env.PATH ?? '';
+  if (!actionsSupported.has(key)) {
+    const help = spawnSync('notify-send', ['--help'], { env, encoding: 'utf8', timeout: 2000 });
+    const text = `${help.stdout ?? ''}`;
+    actionsSupported.set(key, /--action\b/.test(text) && /--wait\b/.test(text));
+  }
+  return actionsSupported.get(key)!;
+}
+
+// How long terminal-notifier waits for a click on macOS; the notification
+// is taken down after that.
+const CLICK_WAIT_SECONDS = 4 * 60 * 60;
+
+// Programs waiting for a click, ended when the client quits, and the one
+// showing each group (a later notification for a message replaces it).
+const waiting = new Set<ChildProcess>();
+const byGroup = new Map<string, ChildProcess>();
+let cleanupInstalled = false;
+
+/**
+ * A notification whose click opens what it is about: the program shows it,
+ * keeps running until it is clicked or closed, and prints what happened.
+ */
+function showWithAction(
+  env: NodeJS.ProcessEnv,
+  options: {
+    command: string;
+    args: string[];
+    group?: string;
+    clicked: (output: string) => boolean;
+    onClick: () => void;
+  },
+): Promise<boolean> {
+  if (!cleanupInstalled) {
+    cleanupInstalled = true;
+    process.on('exit', () => {
+      for (const child of waiting) child.kill();
+    });
+  }
+  if (options.group) byGroup.get(options.group)?.kill();
+  return new Promise((resolve) => {
+    let child: ChildProcess;
+    try {
+      child = spawn(options.command, options.args, { env, stdio: ['ignore', 'pipe', 'ignore'] });
+    } catch {
+      resolve(false);
+      return;
+    }
+    waiting.add(child);
+    if (options.group) byGroup.set(options.group, child);
+    const forget = () => {
+      waiting.delete(child);
+      if (options.group && byGroup.get(options.group) === child) byGroup.delete(options.group);
+    };
+    let output = '';
+    child.stdout?.setEncoding('utf8');
+    child.stdout?.on('data', (chunk: string) => {
+      output += chunk;
+      if (options.clicked(output)) {
+        output = '';
+        options.onClick();
+      }
+    });
+    child.on('error', () => {
+      forget();
+      resolve(false);
+    });
+    child.on('exit', forget);
+    // Shown once the program is running; it keeps running until the
+    // notification is clicked or closed.
+    child.on('spawn', () => resolve(true));
+  });
 }
 
 // ── The Notification API ────────────────────────────────────────────────────

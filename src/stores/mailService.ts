@@ -5,7 +5,7 @@ import { Local } from '../utils/storage.js';
 import { sanitizeHtml } from '../utils/sanitize.js';
 import { formatFriendlyDate } from '../utils/date.ts';
 import { createPerfTracer } from '../utils/perf-logger.ts';
-import { DARK_SURFACE, LIGHT_SURFACE } from '../utils/dark-surface.ts';
+import { createPgpModal } from '../utils/pgp-key-prompt.ts';
 import { abortIfNeeded, getMessageApiId } from '../utils/sync-helpers.ts';
 import {
   sendSyncRequest,
@@ -1735,88 +1735,6 @@ async function cacheMessageContent(
   } catch (err) {
     debugWarn('Cache message content failed', err);
   }
-}
-
-function createPgpModal({
-  onConfirm,
-  onClose,
-}: {
-  onConfirm?: () => void;
-  onClose?: () => void;
-}): () => void {
-  if (typeof document === 'undefined') return () => {};
-
-  const isLightMode = document.body.classList.contains('light-mode');
-
-  const overlay = document.createElement('div');
-  overlay.className = 'fe-modal-backdrop';
-  overlay.style.position = 'fixed';
-  overlay.style.top = '0';
-  overlay.style.left = '0';
-  overlay.style.right = '0';
-  overlay.style.bottom = '0';
-  overlay.style.background = 'rgba(0, 0, 0, 0.6)';
-  overlay.style.display = 'flex';
-  overlay.style.alignItems = 'center';
-  overlay.style.justifyContent = 'center';
-  overlay.style.zIndex = '9999';
-  overlay.style.padding = '16px';
-
-  const dialog = document.createElement('div');
-  dialog.className = 'fe-modal';
-
-  // This dialog is built with inline styles, so it cannot read the app's CSS
-  // custom properties. Both palettes come from dark-surface.ts.
-  const palette = isLightMode ? LIGHT_SURFACE : DARK_SURFACE;
-  dialog.style.background = palette.overlay;
-  dialog.style.border = `1px solid ${palette.border}`;
-  dialog.style.color = palette.text;
-
-  dialog.style.borderRadius = '12px';
-  dialog.style.padding = '18px';
-  dialog.style.maxWidth = '500px';
-  dialog.style.width = '96%';
-  dialog.style.boxShadow = '0 30px 80px rgba(0, 0, 0, 0.4)';
-
-  const headingColor = palette.text;
-  const textColor = palette.textSubtle;
-
-  dialog.innerHTML = `
-    <h3 style="margin-top:0; color: ${headingColor}; font-size: 18px; font-weight: 600;">PGP encrypted message detected</h3>
-    <p style="margin: 8px 0 12px; color: ${textColor}; line-height: 1.5;">You need to add a PGP private key to decrypt this message.</p>
-    <p style="margin: 0 0 16px; color: ${textColor}; line-height: 1.5;">Go to Settings &gt; Accounts &amp; Security to add a key now?</p>
-    <div style="display:flex; gap:10px; justify-content:flex-end;">
-      <button type="button" data-role="cancel" class="fe-button ghost" style="padding:8px 16px; cursor:pointer;">Not now</button>
-      <button type="button" data-role="confirm" class="fe-button" style="padding:8px 16px; cursor:pointer;">Go to settings</button>
-    </div>
-  `;
-
-  const cleanup = (): void => {
-    if (overlay && overlay.parentNode) {
-      overlay.remove();
-    }
-  };
-
-  overlay.addEventListener('click', (e) => {
-    if (e.target === overlay) {
-      cleanup();
-      onClose?.();
-    }
-  });
-
-  dialog.querySelector('[data-role="cancel"]')?.addEventListener('click', () => {
-    cleanup();
-    onClose?.();
-  });
-  dialog.querySelector('[data-role="confirm"]')?.addEventListener('click', () => {
-    cleanup();
-    onConfirm?.();
-  });
-
-  overlay.appendChild(dialog);
-  document.body.appendChild(overlay);
-
-  return cleanup;
 }
 
 async function getStoredKeys(): Promise<PgpKey[]> {

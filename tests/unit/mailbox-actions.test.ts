@@ -354,7 +354,10 @@ import {
   availableLabels,
   currentAccount,
   accountMenuOpen,
+  downloadOriginal,
+  viewOriginal,
 } from '../../src/stores/mailboxActions.ts';
+import { downloadFile } from '../../src/utils/download';
 import { mailboxStore } from '../../src/stores/mailboxStore';
 import { db } from '../../src/utils/db';
 
@@ -1443,5 +1446,70 @@ describe('openServerDraft', () => {
 
     expect(composeRef.open).not.toHaveBeenCalled();
     expect(hoisted.remoteRequest).not.toHaveBeenCalled();
+  });
+});
+
+describe('the original message when its body was never cached', () => {
+  // An encrypted message with no key on this device, or one not opened
+  // here yet, has no cached body; the server still has its source.
+  const RAW = 'From: a@example.com\r\nSubject: Hi\r\n\r\n-----BEGIN PGP MESSAGE-----\r\n';
+  const message = { id: 'm1', folder: 'INBOX', subject: 'Hi' };
+  let toasts: { show: ReturnType<typeof vi.fn> };
+
+  beforeEach(() => {
+    toasts = { show: vi.fn() };
+    setToasts(toasts);
+    hoisted.remoteRequest.mockResolvedValue(RAW);
+  });
+  afterEach(() => {
+    delete (globalThis as { __FORWARDEMAIL_TERMINAL__?: boolean }).__FORWARDEMAIL_TERMINAL__;
+  });
+
+  it('downloads the server copy', async () => {
+    await downloadOriginal(message);
+    expect(hoisted.remoteRequest).toHaveBeenCalledWith(
+      'Message',
+      {},
+      expect.objectContaining({ pathOverride: expect.stringContaining('/v1/messages/m1?') }),
+    );
+    expect(downloadFile).toHaveBeenCalledWith(
+      RAW,
+      expect.stringMatching(/\.eml$/),
+      'message/rfc822',
+    );
+    expect(toasts.show).not.toHaveBeenCalledWith(expect.stringContaining('not available'), 'error');
+  });
+
+  it('says so when the server has no copy either', async () => {
+    hoisted.remoteRequest.mockRejectedValue(new Error('offline'));
+    await downloadOriginal(message);
+    expect(downloadFile).not.toHaveBeenCalled();
+    expect(toasts.show).toHaveBeenCalledWith('Original message not available to download', 'error');
+  });
+
+  it('hands the server copy to the terminal viewer', async () => {
+    (globalThis as { __FORWARDEMAIL_TERMINAL__?: boolean }).__FORWARDEMAIL_TERMINAL__ = true;
+    const shown: CustomEvent[] = [];
+    const listener = (event: Event) => shown.push(event as CustomEvent);
+    window.addEventListener('fe:view-original', listener);
+    try {
+      await viewOriginal(message);
+    } finally {
+      window.removeEventListener('fe:view-original', listener);
+    }
+    expect(shown).toHaveLength(1);
+    expect(shown[0].detail).toMatchObject({ raw: RAW, subject: 'Hi' });
+    expect(shown[0].detail.headers).toContain('Subject: Hi');
+  });
+
+  it("says so in the viewer's place when nothing can be shown", async () => {
+    hoisted.remoteRequest.mockRejectedValue(new Error('offline'));
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    await viewOriginal(message);
+    expect(open).not.toHaveBeenCalled();
+    expect(toasts.show).toHaveBeenCalledWith('Original message not available', 'error');
+    // One message, not a warning about the cache as well.
+    expect(toasts.show).toHaveBeenCalledTimes(1);
+    open.mockRestore();
   });
 });

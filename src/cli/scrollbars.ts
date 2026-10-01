@@ -179,21 +179,43 @@ export function installScrollbars(win: AnyRecord) {
     return { bar, thumb, key: '' };
   };
 
-  // Boxes whose overflow lets them scroll, found as elements are added or
-  // restyled; whether one has more than it shows is checked on each update.
+  // Boxes whose overflow lets them scroll. Reading the computed style of
+  // every element the app adds cost seconds on a long message list, so the
+  // look is narrowed first to the elements that can scroll: those with an
+  // overflow utility class or inline overflow, text areas, and the app's
+  // own scroll boxes, which its stylesheets name. The list is refreshed
+  // before an update after the page has changed.
+  const SCROLL_BOXES = [
+    // Not overflow-hidden, which every message row has.
+    '[class*="overflow-auto"]',
+    '[class*="overflow-y-auto"]',
+    '[class*="overflow-scroll"]',
+    '[class*="overflow-y-scroll"]',
+    '[style*="overflow"]',
+    'textarea',
+    '.fe-reader',
+    '.fe-folders',
+    '.fe-message-list-wrapper',
+    '#calendar-root',
+    '#diagnostics-root',
+    '.fe-bottom-sheet-content',
+    '.fe-search-overlay-body',
+    '.sx__view-container',
+    '.sx__all-day-wrapper',
+    '.fe-original-body',
+  ].join(', ');
   const candidates = new Set<AnyRecord>();
-  const consider = (el: AnyRecord) => {
-    if (layer.contains(el)) return;
-    if (scrolls(style(el).overflowY)) candidates.add(el);
-    else candidates.delete(el);
-  };
-  const discover = (root: AnyRecord) => {
-    if (root.nodeType !== 1) return;
-    consider(root);
-    for (const el of root.querySelectorAll('*')) consider(el);
+  let pageChanged = true;
+  const discover = () => {
+    pageChanged = false;
+    candidates.clear();
+    for (const el of document.querySelectorAll(SCROLL_BOXES)) {
+      if (!layer.contains(el) && scrolls(style(el).overflowY)) candidates.add(el);
+    }
   };
 
   const update = () => {
+    if (pageChanged) discover();
     const found = new Map<AnyRecord, Placement>();
     for (const el of candidates) {
       if (!el.isConnected) {
@@ -278,22 +300,17 @@ export function installScrollbars(win: AnyRecord) {
   win.addEventListener(
     'resize',
     () => {
-      discover(document.documentElement);
+      pageChanged = true;
       soon();
     },
     true,
   );
   for (const type of ['input', 'keyup', 'focusin']) win.addEventListener(type, settled, true);
   new win.MutationObserver((records: AnyRecord[]) => {
-    let changed = false;
-    for (const record of records) {
-      if (layer.contains(record.target)) continue;
-      changed = true;
-      // A class on an ancestor can make the boxes inside it scroll.
-      if (record.type === 'attributes') discover(record.target);
-      else for (const node of record.addedNodes) discover(node);
-    }
-    if (changed) settled();
+    if (records.every((record) => layer.contains(record.target))) return;
+    // New text can make a box taller without making another box scroll.
+    if (records.some((record) => record.type !== 'characterData')) pageChanged = true;
+    settled();
   }).observe(document.documentElement, {
     childList: true,
     subtree: true,
@@ -302,7 +319,6 @@ export function installScrollbars(win: AnyRecord) {
     attributeFilter: ['class', 'style'],
   });
   document.documentElement.append(layer);
-  discover(document.documentElement);
   soon();
   return { update };
 }

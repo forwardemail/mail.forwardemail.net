@@ -67,19 +67,32 @@ function readLink(href: string): (() => Promise<Uint8Array>) | null {
   return null;
 }
 
-export function installLinks(win: AnyRecord, downloadsDir: () => string = getDownloadsDir) {
+/**
+ * Saves a file to the Downloads folder and says where in a toast, as a
+ * browser's download does. Resolves to the path, or null if it failed.
+ */
+export async function saveToDownloads(
+  win: AnyRecord,
+  read: () => Promise<Uint8Array>,
+  name: string,
+  downloadsDir: () => string = getDownloadsDir,
+): Promise<string | null> {
   const toast = (message: string, type: string) =>
     win.dispatchEvent(new win.CustomEvent('fe:mail-service-toast', { detail: { message, type } }));
+  try {
+    const file = writeUnique(downloadsDir(), safeFileName(name), await read());
+    toast(`Saved to ${file}`, 'success');
+    return file;
+  } catch (error) {
+    console.warn('[download] failed:', error);
+    toast(`Could not save ${safeFileName(name)}: ${(error as Error).message}`, 'error');
+    return null;
+  }
+}
 
-  const save = async (read: () => Promise<Uint8Array>, name: string) => {
-    try {
-      const file = writeUnique(downloadsDir(), safeFileName(name), await read());
-      toast(`Saved to ${file}`, 'success');
-    } catch (error) {
-      console.warn('[download] failed:', error);
-      toast(`Could not save ${safeFileName(name)}: ${(error as Error).message}`, 'error');
-    }
-  };
+export function installLinks(win: AnyRecord, downloadsDir: () => string = getDownloadsDir) {
+  const save = (read: () => Promise<Uint8Array>, name: string) =>
+    saveToDownloads(win, read, name, downloadsDir);
 
   win.addEventListener('click', (event: AnyRecord) => {
     const anchor = event.target?.closest?.('a[href]');

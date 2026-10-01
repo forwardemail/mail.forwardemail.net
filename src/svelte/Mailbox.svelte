@@ -6861,14 +6861,14 @@
                          options carry aria-selected. The li is presentational so
                          the option role sits on the element that actually holds
                          focus and the click handler. -->
-                    <ul
+                    <div
                       class="divide-y divide-border"
                       role="listbox"
                       aria-label="Conversations"
                       aria-multiselectable="true"
                     >
                       {#each convList as conv (conv.id)}
-                        <li
+                        <div
                           role="presentation"
                           class={`fe-msg-row relative cursor-pointer hover:bg-accent/50 transition-colors ${swipeItemId === conv.id ? 'overflow-hidden' : ''} ${activeConvId === conv.id || ($selectedConversationIds || []).includes(conv.id) ? 'msg-active' : ''}`}
                           oncontextmenu={(e) => openContextMenu(e, conv)}
@@ -7362,9 +7362,9 @@
                               {/if}
                             {/if}
                           </div>
-                        </li>
+                        </div>
                       {/each}
-                    </ul>
+                    </div>
                   {:else}
                     {@const msgList = $filteredMessages}
                     <!-- Keyed so Svelte moves rows instead of rewriting them in

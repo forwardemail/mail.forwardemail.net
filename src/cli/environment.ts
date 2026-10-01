@@ -9,7 +9,9 @@ import { installFrames } from './frames';
 import { installHistory } from './history';
 import { installKeys } from './keys';
 import { installClipboard } from './clipboard';
+import { installNativeDialogs } from './dialogs';
 import { installLinks } from './links';
+import { installOriginalViewer } from './original';
 import { canConnect, installNetwork } from './network';
 import { installPointer } from './pointer';
 import { installScrollbars } from './scrollbars';
@@ -209,6 +211,7 @@ export function installEnvironment(options: EnvironmentOptions) {
   };
   delete windowExtras.default;
   for (const [name, value] of Object.entries(windowExtras)) define(win, name, value);
+  if (!options.transport) installNativeDialogs(win);
 
   const canvasProto = (win.HTMLCanvasElement as { prototype: Record<string, unknown> }).prototype;
   const contexts = new WeakMap<object, unknown>();
@@ -221,6 +224,7 @@ export function installEnvironment(options: EnvironmentOptions) {
 
   installHistory(win, { reload: options.reload });
   installLinks(win);
+  installOriginalViewer(win);
   installClipboard(win);
   installPointer(win);
   installKeys(win);

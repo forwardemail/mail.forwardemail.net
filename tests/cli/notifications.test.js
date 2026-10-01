@@ -9,9 +9,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { TermDOM } from '@b9g/termdom';
-import { afterEach, beforeEach, describe, expect, it, onTestFinished } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { IDLE_MS, installFocus } from '../../src/cli/focus';
 import {
+  NOTIFIER_FILES,
   createSystemNotifier,
   installNotifications,
   unavailableReason,
@@ -126,6 +127,134 @@ describe('system notifier', () => {
       expect(call[call.indexOf('--app-name') + 1]).toBe('Forward Email');
     },
   );
+});
+
+// A notify-send from libnotify 0.7.10 or later: it offers --action and
+// --wait, records its arguments, and reports a click on the default action
+// as notify-send does, by printing the action's name.
+function fakeClickableNotifySend() {
+  const bin = path.join(dir, 'bin-actions');
+  fs.mkdirSync(bin);
+  const log = path.join(dir, 'notify-send-actions.log');
+  fs.writeFileSync(
+    path.join(bin, 'notify-send'),
+    [
+      '#!/bin/sh',
+      'if [ "$1" = "--help" ]; then echo "  -A, --action=[NAME=]Text"; echo "  -w, --wait"; exit 0; fi',
+      `for a in "$@"; do printf '%s\\n' "$a"; done >> '${log}'`,
+      'echo default',
+    ].join('\n'),
+    { mode: 0o755 },
+  );
+  return {
+    env: { PATH: `${bin}${path.delimiter}${process.env.PATH}`, DISPLAY: ':0' },
+    args: () => (fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trimEnd().split('\n') : []),
+  };
+}
+
+describe('clicking a system notification', () => {
+  it.skipIf(process.platform !== 'linux')(
+    'opens what it is about where notify-send reports clicks',
+    async () => {
+      const fake = fakeClickableNotifySend();
+      const notifier = createSystemNotifier({
+        dataDir: dir,
+        version: '1.0.0',
+        env: fake.env,
+        platform: 'linux',
+      });
+      let clicked = 0;
+      const shown = await notifier.show({
+        title: 'New email from Alice',
+        body: 'Quarterly plan',
+        onClick: () => clicked++,
+      });
+      expect(shown).toBe(true);
+      await vi.waitFor(() => expect(clicked).toBe(1));
+      const args = fake.args();
+      expect(args).toContain('--action=default=Open');
+      expect(args).toContain('--wait');
+      expect(args.slice(-2)).toEqual(['New email from Alice', 'Quarterly plan']);
+    },
+  );
+
+  it.skipIf(process.platform === 'win32')(
+    'opens what it is about where terminal-notifier reports clicks, and ends the ones it replaced',
+    async () => {
+      const programs = path.join(dir, 'programs');
+      const program = path.join(programs, NOTIFIER_FILES.darwin);
+      const log = path.join(dir, 'terminal-notifier.log');
+      fs.mkdirSync(path.dirname(program), { recursive: true });
+      // Shown and left waiting for a click in group "waits"; clicked at once
+      // otherwise.
+      fs.writeFileSync(
+        program,
+        [
+          '#!/bin/sh',
+          `for a in "$@"; do printf '%s\\n' "$a"; done >> '${log}'`,
+          'case " $* " in *" waits "*) exec sleep 30 ;; esac',
+          'echo \'{"activationType" : "contentsClicked", "activationValue" : ""}\'',
+        ].join('\n'),
+        { mode: 0o755 },
+      );
+      const notifier = createSystemNotifier({
+        dataDir: dir,
+        version: '1.0.0',
+        env: { __CFBundleIdentifier: 'com.googlecode.iterm2' },
+        platform: 'darwin',
+        programs,
+      });
+      let clicked = 0;
+      expect(
+        await notifier.show({ title: 'Alice', body: 'Plan', tag: 'm1', onClick: () => clicked++ }),
+      ).toBe(true);
+      await vi.waitFor(() => expect(clicked).toBe(1));
+      const args = fs.readFileSync(log, 'utf8').trimEnd().split('\n');
+      expect(args).toEqual(expect.arrayContaining(['-json', '-timeout', '-activate']));
+      expect(args[args.indexOf('-group') + 1]).toBe('m1');
+
+      // A program still waiting is ended when a notification replaces it.
+      const running = () =>
+        fs.readdirSync('/proc').filter((pid) => {
+          try {
+            return fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').startsWith('sleep\u000030');
+          } catch {
+            return false;
+          }
+        }).length;
+      const before = process.platform === 'linux' ? running() : 0;
+      await notifier.show({ title: 'Bob', body: 'One', tag: 'waits', onClick: () => {} });
+      if (process.platform === 'linux') await vi.waitFor(() => expect(running()).toBe(before + 1));
+      await notifier.show({ title: 'Bob', body: 'Two', tag: 'waits', onClick: () => {} });
+      if (process.platform === 'linux') {
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        expect(running()).toBe(before + 1);
+      }
+    },
+  );
+
+  it('fires click on the Notification the app made, where the app opens the message', async () => {
+    let click;
+    const notifier = {
+      show: async ({ onClick }) => {
+        click = onClick;
+        return true;
+      },
+    };
+    const term = new TermDOM({ html: '<body></body>' });
+    const win = term.window;
+    fs.writeFileSync(
+      path.join(dir, 'notifications.json'),
+      JSON.stringify({ permission: 'granted' }),
+    );
+    const Notification = installNotifications(win, { dataDir: dir, notifier });
+    const notification = new Notification('New email', { body: 'Hi', data: { messageId: 'm1' } });
+    const opened = [];
+    notification.onclick = () => opened.push(notification.data.messageId);
+    await vi.waitFor(() => expect(click).toBeTypeOf('function'));
+    click();
+    expect(opened).toEqual(['m1']);
+  });
 });
 
 describe('Notification', () => {

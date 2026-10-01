@@ -701,6 +701,123 @@ describe.runIf(canRunInteractive)('in a terminal', () => {
     expect(screen).not.toContain('Line 40 of a long draft');
   });
 
+  it('draws without scrolling the screen, so no frame lands in the scrollback', async () => {
+    session = startTerminal({
+      home: tempHome(),
+      args: ['--demo'],
+      cols: 120,
+      rows: 30,
+      keepScrollback: true,
+    });
+    await session.waitFor('Welcome to Forward Email!');
+    const steps = [
+      ['open a message', KEYS.down, 'To: Demo User'],
+      ['go back', KEYS.escape, (text) => !text.includes('To: Demo User')],
+      ['open the shortcut list', '?', 'Keyboard shortcuts'],
+      ['close it', KEYS.escape, (text) => !text.includes('Keyboard shortcuts')],
+    ];
+    for (const [label, keys, until] of steps) {
+      session.type(keys);
+      await session.waitFor(until, { label });
+      expect({ label, scrolledOff: session.scrolledOff() }).toEqual({ label, scrolledOff: 0 });
+    }
+    // A new theme draws every cell again.
+    session.click('☀');
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    expect(session.scrolledOff()).toBe(0);
+    session.click('Settings');
+    await session.waitFor('Appearance');
+    expect(session.scrolledOff()).toBe(0);
+  });
+
+  it('shows the original message in the terminal, saves it and closes with Esc', async () => {
+    const downloads = tempHome();
+    session = startTerminal({
+      home: tempHome(),
+      args: ['--demo'],
+      env: { FORWARDEMAIL_DOWNLOADS: downloads },
+    });
+    await session.waitFor('Welcome to Forward Email!');
+    session.type(KEYS.down);
+    await session.waitFor('To: Demo User');
+    session.click('⋯');
+    await session.waitFor('View original');
+    session.click('View original');
+    const screen = await session.waitFor('RAW SOURCE', { label: 'the original message' });
+    expect(screen).toContain('HEADERS');
+    expect(screen).toContain('Thanks for trying out Forward Email webmail.');
+    // The bottom row has the viewer's keys, not the message's.
+    await session.waitFor((text) => text.split('\n').at(-1).includes('Esc Close'), {
+      label: 'the viewer keys',
+    });
+    // A key meant for the message behind it does nothing.
+    session.type('r');
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    expect(session.screen()).not.toContain('New message');
+
+    session.click('Save .eml');
+    await session.waitFor(() => fs.readdirSync(downloads).length === 1, {
+      label: 'the saved file',
+    });
+    expect(fs.readdirSync(downloads)[0]).toMatch(/\.eml$/);
+
+    session.type(KEYS.escape);
+    await session.waitFor(
+      (text) => !text.includes('RAW SOURCE') && text.includes('To: Demo User'),
+      {
+        label: 'the message again',
+      },
+    );
+  });
+
+  it('asks a confirm() question on the bottom row and keeps the answer', async () => {
+    session = startTerminal({ home: tempHome(), args: ['--demo'], cols: 120, rows: 30 });
+    await session.waitFor('Welcome to Forward Email!');
+    session.click('Settings');
+    await session.waitFor('Appearance');
+    session.click('Advanced');
+    await session.waitFor('Database Information');
+    for (let i = 0; i < 20 && !session.screen().includes('Complete Reset'); i++) {
+      const at = session.locate('Appearance');
+      session.wheel(at.col + 40, at.row + 5, 'down', 5);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+    session.click('Complete Reset');
+    await session.waitFor(
+      (text) => text.split('\n').at(-1).includes('cannot be undone.  y Yes   n No'),
+      { label: 'the question' },
+    );
+    // No: nothing is reset, and the page is drawn again over the question.
+    session.type('n');
+    await session.waitFor((text) => text.split('\n').at(-1).includes('Esc Back'), {
+      label: 'the hint bar back',
+    });
+    expect(session.screen()).toContain('Danger Zone');
+  });
+
+  it('opens the message a notification points at', async () => {
+    const home = tempHome();
+    session = startTerminal({ home, args: ['--demo'] });
+    await session.waitFor('Welcome to Forward Email!');
+    await session.stop();
+    // The demo account stays signed in; a notification's target opens once
+    // the app is ready, the way a click on one or its toast's View does.
+    const target = encodeURIComponent(JSON.stringify({ folder: 'INBOX', messageId: 'demo-2' }));
+    session = startTerminal({
+      home,
+      env: {
+        FORWARDEMAIL_RESUME: JSON.stringify({
+          url: `https://mail.forwardemail.net/mailbox?fe_notify=${target}`,
+          session: null,
+        }),
+      },
+    });
+    const screen = await session.waitFor('Privacy Monitor <privacy@forwardemail.net>', {
+      label: 'the message',
+    });
+    expect(screen).toContain('Your weekly privacy report');
+  });
+
   it('quits on Ctrl+C and hands the terminal back', async () => {
     session = startTerminal({ home: tempHome() });
     await session.waitFor('Try Demo');

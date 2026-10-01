@@ -9,6 +9,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { StringDecoder } from 'node:string_decoder';
 import { fileURLToPath } from 'node:url';
 import xterm from '@xterm/headless';
 
@@ -36,8 +37,14 @@ export function startTerminal({
   rows = 36,
   env = {},
   shellLines = [],
+  keepScrollback = false,
 } = {}) {
-  const term = new xterm.Terminal({ cols, rows, allowProposedApi: true });
+  const term = new xterm.Terminal({
+    cols,
+    rows,
+    allowProposedApi: true,
+    ...(keepScrollback ? { scrollback: 1000 } : {}),
+  });
   const command = [process.execPath, CLI, ...args].map(quote).join(' ');
   // Lines a shell printed before the client started.
   const printed = shellLines.map((line) => `echo ${quote(line)}; `).join('');
@@ -63,7 +70,22 @@ export function startTerminal({
       resolve(exited);
     });
   });
-  child.stdout.on('data', (data) => term.write(data));
+  // keepScrollback: the client's switch to the alternate screen is dropped,
+  // so it draws on a screen that keeps what scrolls off its top, as iTerm2
+  // keeps the alternate screen's. scrolledOff() counts those lines.
+  // A character or an escape can be split between two chunks, so the text
+  // is decoded as one stream and an unfinished escape waits for the next.
+  const decoder = new StringDecoder('utf8');
+  let held = '';
+  child.stdout.on('data', (data) => {
+    if (!keepScrollback) return term.write(data);
+    let text = held + decoder.write(data);
+    const tail = text.lastIndexOf('\u001b');
+    held = tail !== -1 && !/[@-~]/.test(text.slice(tail + 2)) ? text.slice(tail) : '';
+    if (held) text = text.slice(0, tail);
+    // eslint-disable-next-line no-control-regex -- the escapes that switch screens
+    term.write(text.replace(/\u001b\[\?(?:1049|1047|47)[hl]/g, ''));
+  });
   // What the client put on the clipboard (OSC 52) and the pointer shapes it
   // asked for (OSC 22), as a terminal would receive them.
   const clipboard = [];
@@ -175,6 +197,8 @@ export function startTerminal({
     modes: () => term.modes,
     // 'normal' or 'alternate': which screen buffer the client draws on.
     bufferType: () => term.buffer.active.type,
+    // Lines the client's drawing pushed off the top of the screen.
+    scrolledOff: () => term.buffer.active.baseY,
     // Turns the mouse wheel over a cell, by its 1-based column and row.
     wheel: (col, row, direction, times = 1) =>
       child.stdin.write(`\u001b[<${direction === 'down' ? 65 : 64};${col};${row}M`.repeat(times)),

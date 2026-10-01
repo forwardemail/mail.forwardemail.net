@@ -15,6 +15,7 @@ import { installFrames } from '../../src/cli/frames';
 import { createImageConstructor } from '../../src/cli/images';
 import { bytesFor, displayCombo } from '../../src/cli/hints';
 import { installLinks, safeFileName, writeUnique } from '../../src/cli/links';
+import { MAX_SHOWN, installOriginalViewer } from '../../src/cli/original';
 import {
   insertAfterRule,
   opaqueColors,
@@ -28,6 +29,7 @@ import {
 } from '../../src/cli/px-to-cells.js';
 import { thumbPlacement } from '../../src/cli/scrollbars';
 import { createStorage } from '../../src/cli/storage';
+import { createPgpModal } from '../../src/utils/pgp-key-prompt';
 import { wrappedRows } from '../../src/cli/textareas';
 import { createAppWindow, installGeometry } from '../../src/cli/viewport';
 
@@ -343,11 +345,18 @@ describe('downloads', () => {
   });
 });
 
+// installGeometry patches the engine's shared prototypes, so it runs once.
+let geometryInstalled = false;
+function geometry(win) {
+  if (!geometryInstalled) installGeometry(win);
+  geometryInstalled = true;
+}
+
 describe('viewport', () => {
   it('reports the terminal in virtual pixels and converts media queries and inline styles', () => {
     const term = new TermDOM({ transport: quietTransport(120, 40) });
     const win = term.window;
-    installGeometry(win);
+    geometry(win);
     const app = createAppWindow(win);
 
     // innerWidth is 0 until attached; the proxy scales whatever the engine reports.
@@ -463,5 +472,121 @@ describe('text area rows', () => {
       });
     }
     dom.dispose?.();
+  });
+});
+
+describe('the missing PGP key prompt in a terminal', () => {
+  it('fits an 80 by 24 terminal with both buttons on screen', () => {
+    const term = new TermDOM({ transport: quietTransport(80, 24) });
+    geometry(term.window);
+    const saved = globalThis.document;
+    globalThis.document = term.document;
+    try {
+      createPgpModal({});
+    } finally {
+      globalThis.document = saved;
+    }
+    // Rects reach scripts in virtual pixels: 8 per column, 16 per row.
+    const rows = (el) => {
+      const rect = el.getBoundingClientRect();
+      return { top: rect.top / 16, bottom: rect.bottom / 16 };
+    };
+    const dialog = term.document.querySelector('.fe-modal');
+    expect(rows(dialog).bottom).toBeLessThanOrEqual(24);
+    for (const button of dialog.querySelectorAll('button')) {
+      expect(rows(button).top).toBeGreaterThanOrEqual(0);
+      expect(rows(button).bottom).toBeLessThanOrEqual(24);
+      // A button is one row of text, not 16 rows of padding.
+      expect(rows(button).bottom - rows(button).top).toBeLessThanOrEqual(3);
+    }
+  });
+});
+
+describe('the original message viewer', () => {
+  // Keys typed into the terminal, so Tab, Enter and typing take the paths a
+  // user's keys take.
+  function typedTerminal() {
+    let type;
+    const readable = new ReadableStream({
+      start(controller) {
+        type = (text) => controller.enqueue(text);
+      },
+    });
+    const term = new TermDOM({
+      html: '<body><button id="delete">Delete</button><input id="field"></body>',
+      transport: {
+        ...quietTransport(80, 24),
+        interactive: true,
+        readable,
+      },
+    });
+    return { term, type: (text) => type(text) };
+  }
+  const tick = (ms = 50) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  it('keeps keys away from the page behind it until it is closed', async () => {
+    const { term, type } = typedTerminal();
+    const win = term.window;
+    const viewer = installOriginalViewer(win);
+    let deleted = 0;
+    term.document.querySelector('#delete').addEventListener('click', () => deleted++);
+    await term.attach();
+    try {
+      term.document.querySelector('#field').focus();
+      win.dispatchEvent(
+        new win.CustomEvent('fe:view-original', {
+          detail: { raw: 'Subject: Hi\r\n\r\nBody', subject: 'Hi' },
+        }),
+      );
+      expect(viewer.isOpen()).toBe(true);
+      const overlay = term.document.querySelector('#fe-terminal-original');
+      const labels = () => term.document.activeElement?.textContent;
+      expect(labels()).toBe('Close');
+
+      // Tab goes round the viewer's buttons, both ways.
+      for (const expected of ['Save .eml', 'Copy raw', 'Close', 'Save .eml']) {
+        type('\t');
+        await tick();
+        expect(labels()).toBe(expected);
+      }
+      type('\x1b[Z');
+      await tick();
+      expect(labels()).toBe('Close');
+
+      // Focus moved behind the viewer some other way: keys still do nothing there.
+      term.document.querySelector('#delete').focus();
+      type('\r');
+      await tick();
+      term.document.querySelector('#delete').focus();
+      type(' ');
+      await tick();
+      term.document.querySelector('#field').focus();
+      type('x');
+      await tick();
+      expect(deleted).toBe(0);
+      expect(term.document.querySelector('#field').value).toBe('');
+      expect(viewer.isOpen()).toBe(true);
+      expect(overlay.contains(term.document.activeElement)).toBe(true);
+
+      // Esc closes it and gives focus back.
+      type('\x1b');
+      await tick(150);
+      expect(viewer.isOpen()).toBe(false);
+      expect(term.document.querySelector('#fe-terminal-original')).toBeNull();
+    } finally {
+      await term.dispose();
+    }
+  });
+
+  it('shows the start of a very large message and says where the rest is', () => {
+    const term = new TermDOM({ transport: quietTransport() });
+    installOriginalViewer(term.window);
+    const raw = `Subject: Big\r\n\r\n${'A'.repeat(MAX_SHOWN * 4)}`;
+    term.window.dispatchEvent(
+      new term.window.CustomEvent('fe:view-original', { detail: { raw, subject: 'Big' } }),
+    );
+    const shown = term.document.querySelectorAll('#fe-terminal-original pre')[1].textContent;
+    expect(shown.length).toBeLessThan(MAX_SHOWN + 200);
+    expect(shown).toContain('Save .eml for the full message');
   });
 });
