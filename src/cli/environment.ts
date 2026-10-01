@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { TermDOM, type TerminalTransport } from '@b9g/termdom';
 import * as fakeIndexedDB from 'fake-indexeddb';
+import { createImageConstructor } from './images';
 import { createStorage } from './storage';
 import { installCentering } from './center';
 import { installAnimations, installDomFixes, installEditingFixes } from './dom-fixes';
@@ -196,6 +197,8 @@ export function installEnvironment(options: EnvironmentOptions) {
     sessionStorage,
     caches: undefined,
     Worker: ThreadWorker,
+    // Pictures cannot be drawn, so preloads report a failed load (images.ts).
+    Image: createImageConstructor(win),
     // Links leave the terminal for the system browser; there is no window
     // object to hand back.
     open: (url?: string | URL) => {

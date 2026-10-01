@@ -12,6 +12,7 @@ import createDOMPurify from 'dompurify';
 import { describe, expect, it } from 'vitest';
 import { installAnimations, installDomFixes } from '../../src/cli/dom-fixes';
 import { installFrames } from '../../src/cli/frames';
+import { createImageConstructor } from '../../src/cli/images';
 import { bytesFor, displayCombo } from '../../src/cli/hints';
 import { installLinks, safeFileName, writeUnique } from '../../src/cli/links';
 import {
@@ -46,6 +47,45 @@ const quietTransport = (cols = 80, rows = 24) => ({
 
 // eslint-disable-next-line no-control-regex -- ANSI escapes start with ESC
 const plain = (ansi) => ansi.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '');
+
+describe('new Image()', () => {
+  // The way bits-ui's Avatar preloads a contact photo: src first, handlers after.
+  const preload = (Image, src) =>
+    new Promise((resolve) => {
+      const img = new Image();
+      img.src = src;
+      img.onload = () => resolve({ img, result: 'load' });
+      img.onerror = () => resolve({ img, result: 'error' });
+    });
+
+  it('creates an <img> that reports it could not load, after the handlers are set', async () => {
+    const win = new TermDOM({ transport: quietTransport() }).window;
+    const Image = createImageConstructor(win);
+    const { img, result } = await preload(Image, 'data:image/png;base64,iVBORw0KGgo=');
+    expect(result).toBe('error');
+    expect(img).toBeInstanceOf(win.HTMLImageElement);
+    expect(img.tagName).toBe('IMG');
+    expect(img.src).toBe('data:image/png;base64,iVBORw0KGgo=');
+    expect(img.complete).toBe(true);
+    expect(img.naturalWidth).toBe(0);
+  });
+
+  it('takes a size, and sends nothing for an empty src or a replaced one', async () => {
+    const win = new TermDOM({ transport: quietTransport() }).window;
+    const Image = createImageConstructor(win);
+    const sized = new Image(64, 32);
+    expect([sized.width, sized.height]).toEqual([64, 32]);
+
+    const img = new Image();
+    let errors = 0;
+    img.addEventListener('error', () => errors++);
+    img.src = '';
+    img.src = 'https://example.com/a.png';
+    img.src = 'https://example.com/b.png';
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(errors).toBe(1);
+  });
+});
 
 describe('localStorage', () => {
   it('persists to a private file and reads back in a new session', async () => {

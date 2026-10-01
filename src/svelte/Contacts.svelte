@@ -1435,14 +1435,15 @@
                 >
                   {#if contact.photo}
                     <Avatar.Image src={contact.photo} alt={contact.name || 'Contact'} />
-                  {:else}
-                    <Avatar.Fallback
-                      class="text-white text-xs font-semibold"
-                      style="background-color: {getAvatarColor(contact)}"
-                    >
-                      {getInitials(contact)}
-                    </Avatar.Fallback>
                   {/if}
+                  <!-- Shown until a photo loads, and in its place when it cannot (a broken
+                       photo, or the terminal client, which draws no images). -->
+                  <Avatar.Fallback
+                    class="text-white text-xs font-semibold"
+                    style="background-color: {getAvatarColor(contact)}"
+                  >
+                    {getInitials(contact)}
+                  </Avatar.Fallback>
                 </Avatar.Root>
                 <div class="min-w-0 flex-1">
                   <div class="truncate font-medium">
