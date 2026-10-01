@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   assetName,
   backgroundUpdate,
+  cleanupPreviousBinary,
   compareVersions,
   installBinary,
   parseChecksums,
@@ -111,7 +112,14 @@ describe('installBinary', () => {
     await installBinary(release, { target });
 
     expect(fs.readFileSync(target, 'utf8')).toBe('new build');
-    if (process.platform !== 'win32') expect(fs.statSync(target).mode & 0o111).not.toBe(0);
+    if (process.platform === 'win32') {
+      // Windows cannot delete a running .exe, so the old build is renamed
+      // and removed on the next start.
+      expect(fs.readFileSync(`${target}.old`, 'utf8')).toBe('old build');
+      cleanupPreviousBinary(target);
+    } else {
+      expect(fs.statSync(target).mode & 0o111).not.toBe(0);
+    }
     expect(fs.readdirSync(dir)).toEqual(['forwardemail']);
   });
 
