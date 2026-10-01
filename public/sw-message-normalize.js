@@ -408,6 +408,9 @@ var __swNormalize = function(exports) {
     }
     return toDisplayAddress(fieldVal) || "";
   }
+  function hasDeletedFlag(flags) {
+    return Array.isArray(flags) && flags.some((flag) => String(flag).toLowerCase() === "\\deleted");
+  }
   function normalizeMessageForCache(raw = {}, folder, account = accountKey()) {
     const flags = Array.isArray(raw.flags) ? raw.flags : [];
     const nodemailerHeaders = raw.nodemailer?.headers || raw.nodemailer?.Headers || {};
@@ -470,7 +473,7 @@ var __swNormalize = function(exports) {
       })(),
       flags,
       is_unread: isUnread,
-      is_unread_index: isUnread ? 1 : 0,
+      is_unread_index: isUnread && !hasDeletedFlag(flags) ? 1 : 0,
       is_starred: Boolean(raw.is_flagged) || Boolean(raw.is_starred) || flags.includes("\\Flagged"),
       is_flagged: Boolean(raw.is_flagged) || Boolean(raw.is_starred) || flags.includes("\\Flagged"),
       // Derived like is_starred so the reply indicator and the optimistic flag

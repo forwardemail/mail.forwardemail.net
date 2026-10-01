@@ -9,7 +9,7 @@
 // extraction, not a retype. eslint forbids explicit `any`, so the dynamic
 // response/record params below are left untyped (implicit any) like the rest.
 
-import { normalizeMessageForCache } from '../utils/sync-helpers';
+import { hasDeletedFlag, normalizeMessageForCache } from '../utils/sync-helpers';
 import { lightweightListSupported } from '../utils/api-capabilities';
 
 // Validate a value the way Dexie validates a primary key, used as a fallback
@@ -69,7 +69,9 @@ export const getMessageKey = (msg) => {
 
 // Merge two message-list pages, preserving order (existing first, then
 // incoming) and dropping duplicates by getMessageKey. Messages with no
-// derivable key are always kept (can't dedup what we can't identify).
+// derivable key are always kept (can't dedup what we can't identify). When a
+// key is in both, the incoming copy replaces the existing one in place: it is
+// the newer server state (flags, labels) of the same message.
 //
 // `max` (optional, >0): bound the merged result to its last `max` entries by
 // dropping from the HEAD. Infinite scroll appends older pages at the tail, so
@@ -78,27 +80,160 @@ export const getMessageKey = (msg) => {
 // for the entire life of a folder session. The dropped head is restored by any
 // page-1 replace-load (folder reselect, refresh, filter change). `max <= 0`
 // (the default) means no cap.
-export const mergeMessagePages = (existing = [], incoming = [], max = 0) => {
-  const merged = [];
-  const seen = new Set();
-  const append = (list) => {
+export const mergeMessagePages = <T>(existing: T[] = [], incoming: T[] = [], max = 0): T[] => {
+  const merged: T[] = [];
+  const positions = new Map();
+  const append = (list: T[], replace: boolean) => {
     (list || []).forEach((msg) => {
       const key = getMessageKey(msg);
       if (key == null) {
         merged.push(msg);
         return;
       }
-      if (seen.has(key)) return;
-      seen.add(key);
+      if (positions.has(key)) {
+        if (replace) merged[positions.get(key)] = msg;
+        return;
+      }
+      positions.set(key, merged.length);
       merged.push(msg);
     });
   };
-  append(existing);
-  append(incoming);
+  append(existing, false);
+  append(incoming, true);
   if (max > 0 && merged.length > max) {
     return merged.slice(-max);
   }
   return merged;
+};
+
+/**
+ * Merge a fresh first page into a list that holds several pages.
+ *
+ * Rows of the old list up to the last row of the fresh page are the same
+ * window of the folder, so a row there that the fresh page lacks was deleted
+ * or moved elsewhere and is dropped (`removed`). Rows past the window are
+ * kept. When the fresh page holds the whole folder (`complete`), or its last
+ * row is not in the old list (many new messages arrived), the fresh page
+ * replaces the list (`replaced`) and the caller resets paging; in the second
+ * case nothing counts as removed.
+ */
+export const mergeHeadPage = <T extends object>(
+  existing: T[] = [],
+  incoming: T[] = [],
+  { complete = false } = {},
+): { messages: T[]; removed: T[]; replaced: boolean } => {
+  const lastKey = incoming.length ? getMessageKey(incoming[incoming.length - 1]) : null;
+  const boundary =
+    complete || lastKey == null ? -1 : existing.findIndex((m) => getMessageKey(m) === lastKey);
+  const incomingKeys = new Set(incoming.map(getMessageKey).filter((key) => key != null));
+  const notIncoming = (msg: T) => {
+    const key = getMessageKey(msg);
+    return key != null && !incomingKeys.has(key);
+  };
+  if (complete) {
+    return { messages: incoming, removed: existing.filter(notIncoming), replaced: true };
+  }
+  // Without the boundary the old rows cannot be placed: they may be deleted
+  // or only pushed past the first page, so none counts as removed.
+  if (boundary === -1) return { messages: incoming, removed: [], replaced: true };
+
+  const tail = existing.slice(boundary + 1).filter((msg) => {
+    const key = getMessageKey(msg);
+    return key == null || !incomingKeys.has(key);
+  });
+  return {
+    messages: [...incoming, ...tail],
+    removed: existing.slice(0, boundary + 1).filter(notIncoming),
+    replaced: false,
+  };
+};
+
+// IMAP mailbox names are case-sensitive except INBOX.
+export const sameFolderPath = (a: unknown, b: unknown) => {
+  const left = String(a ?? '');
+  const right = String(b ?? '');
+  return left === right || (left.toUpperCase() === 'INBOX' && right.toUpperCase() === 'INBOX');
+};
+
+// Locate the messages a realtime event names: by server id anywhere, or by
+// IMAP UID within the event's folder. UIDs are per folder, so without a folder
+// only ids can match.
+export const matchesRemoteMessage = (
+  msg: { folder?: unknown; id?: unknown; uid?: unknown; Uid?: unknown } | null | undefined,
+  { folder = '', uids, ids }: { folder?: string; uids?: Set<number>; ids?: Set<string> },
+) => {
+  if (!msg) return false;
+  const inFolder = !folder || sameFolderPath(msg.folder, folder);
+  if (!inFolder) return false;
+  if (ids?.size && msg.id != null && ids.has(String(msg.id))) return true;
+  if (!folder || !uids?.size) return false;
+  const uid = Number(msg.uid ?? msg.Uid);
+  return Number.isSafeInteger(uid) && uids.has(uid);
+};
+
+// Apply an IMAP flag change (add/remove/set) to a cached message, keeping the
+// derived booleans the list and counts read in step with the flag list.
+type FlagFields = {
+  flags?: unknown;
+  is_unread?: unknown;
+  is_unread_index?: unknown;
+  is_starred?: unknown;
+  is_answered?: unknown;
+};
+
+export const applyRemoteFlagChange = <T extends object>(
+  input: T,
+  action: string,
+  flags: string[],
+): T => {
+  const msg = input as T & FlagFields;
+  const current = Array.isArray(msg?.flags) ? (msg.flags as unknown[]).map(String) : [];
+  const lower = new Set(flags.map((flag) => flag.toLowerCase()));
+  let next: string[];
+  if (action === 'set') next = [...flags];
+  else if (action === 'add') {
+    const have = new Set(current.map((flag) => flag.toLowerCase()));
+    next = [...current, ...flags.filter((flag) => !have.has(flag.toLowerCase()))];
+  } else if (action === 'remove') next = current.filter((flag) => !lower.has(flag.toLowerCase()));
+  else return msg;
+
+  const has = (name: string) => next.some((flag) => flag.toLowerCase() === name);
+  const isUnread = !has('\\seen');
+  const isStarred = has('\\flagged');
+  const updated = {
+    ...msg,
+    flags: next,
+    is_unread: isUnread,
+    is_unread_index: isUnread && !hasDeletedFlag(next) ? 1 : 0,
+    is_starred: isStarred,
+    is_flagged: isStarred,
+    is_answered: has('\\answered'),
+  };
+  const same =
+    current.length === next.length &&
+    current.every((flag, idx) => flag === next[idx]) &&
+    msg.is_unread === updated.is_unread &&
+    msg.is_unread_index === updated.is_unread_index &&
+    msg.is_starred === updated.is_starred &&
+    msg.is_answered === updated.is_answered;
+  return same ? msg : (updated as T);
+};
+
+// Apply a label change (add/remove/set) the same way.
+export const applyRemoteLabelChange = <T extends object>(
+  input: T,
+  action: string,
+  labels: string[],
+): T => {
+  const msg = input as T & { labels?: unknown };
+  const current = coerceLabelList(msg?.labels);
+  let next: string[];
+  if (action === 'set') next = [...labels];
+  else if (action === 'add') next = [...current, ...labels.filter((l) => !current.includes(l))];
+  else if (action === 'remove') next = current.filter((l) => !labels.includes(l));
+  else return msg;
+  const same = current.length === next.length && current.every((l, idx) => l === next[idx]);
+  return same ? msg : { ...msg, labels: next };
 };
 
 // Decide whether infinite scroll should keep paging after a message-list page

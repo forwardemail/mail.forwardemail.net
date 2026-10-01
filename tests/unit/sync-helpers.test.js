@@ -290,3 +290,28 @@ describe('normalizeMessageForCache date handling', () => {
     expect(normalized.dateMs).toBe(0);
   });
 });
+
+describe('cached rows after changes made elsewhere', () => {
+  it('follows a message moved by another client to its new folder and UID', () => {
+    const existing = { id: 'm1', folder: 'INBOX', uid: 5, flags: ['\\Seen'], is_unread: false };
+    const { record, changed } = mergeFlagsAndMetadata(existing, {
+      ...existing,
+      folder: 'Archive',
+      folder_id: 'archive-id',
+      uid: 40,
+    });
+    expect(changed).toBe(true);
+    expect(record).toMatchObject({ folder: 'Archive', folder_id: 'archive-id', uid: 40 });
+  });
+
+  it('leaves an unread message flagged \\Deleted out of the unread index', () => {
+    const existing = { id: 'm1', flags: [], is_unread: true, is_unread_index: 1 };
+    const { record, changed } = mergeFlagsAndMetadata(existing, {
+      ...existing,
+      flags: ['\\Deleted'],
+    });
+    expect(changed).toBe(true);
+    expect(record.is_unread_index).toBe(0);
+    expect(normalizeMessageForCache({ id: 'm2', flags: ['\\Deleted'] }).is_unread_index).toBe(0);
+  });
+});

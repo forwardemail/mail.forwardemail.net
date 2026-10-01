@@ -19,7 +19,6 @@ import {
   extractTextContent,
 } from '../utils/mime-utils.js';
 import {
-  toUid,
   toKey,
   accountKey,
   coerceLabelList,
@@ -394,8 +393,11 @@ async function runMetadataTask(task, postProgress) {
   const maxMessages = task.maxMessages || Infinity;
 
   let manifest = await getManifest(account, folder);
-  let lastUID = manifest?.lastUID || 0;
+  let lastUID = Number.isFinite(manifest?.lastUID) ? manifest.lastUID : 0;
   let lastModSeq = manifest?.lastModSeq || null;
+  // Every page of this pass asks for the same window; lastModSeq moves as
+  // pages arrive and is only saved for the next pass.
+  const sinceModSeq = lastModSeq;
   let page = 1;
   let totalFetched = 0;
   let totalInserted = 0;
@@ -404,12 +406,13 @@ async function runMetadataTask(task, postProgress) {
   while (true) {
     if (totalFetched >= maxMessages) break;
 
+    // No after_uid: this pass also has to see flag changes on messages that
+    // are already cached, not only messages newer than the last UID.
     const params = {
       folder,
       page,
       limit,
-      after_uid: lastUID || undefined,
-      since_modseq: lastModSeq || undefined,
+      since_modseq: sinceModSeq || undefined,
       include_body: 0,
       raw: false,
       attachments: false,
@@ -437,7 +440,9 @@ async function runMetadataTask(task, postProgress) {
     totalUpdated += writeResult.updated;
 
     normalized.forEach((item) => {
-      lastUID = Math.max(toUid(item.id), toUid(lastUID));
+      // The id is a server ObjectId, not a UID: Math.max on it gave NaN.
+      const uid = Number(item.uid);
+      if (Number.isSafeInteger(uid) && uid > lastUID) lastUID = uid;
       if (item.modseq) {
         const modSeqNum = Number(item.modseq);
         if (Number.isFinite(modSeqNum)) {

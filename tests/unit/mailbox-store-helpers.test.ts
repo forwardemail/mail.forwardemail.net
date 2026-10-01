@@ -19,6 +19,10 @@ import {
   shouldKeepCacheOnEmpty,
   computePrunedIds,
   isStaleListRequest,
+  mergeHeadPage,
+  matchesRemoteMessage,
+  applyRemoteFlagChange,
+  applyRemoteLabelChange,
 } from '../../src/stores/mailbox-store-helpers';
 
 // Mock bulkGet: returns the cached record for each [account, key] tuple in the
@@ -136,10 +140,22 @@ describe('mergeMessagePages', () => {
     expect(mergeMessagePages(existing, incoming)).toEqual([{ id: 'a' }, { id: 'b' }, { id: 'c' }]);
   });
 
-  it('keeps the existing copy when a key collides (first write wins)', () => {
-    const existing = [{ id: 'a', from: 'old' }];
-    const incoming = [{ id: 'a', from: 'new' }];
-    expect(mergeMessagePages(existing, incoming)).toEqual([{ id: 'a', from: 'old' }]);
+  it('replaces the existing copy in place when a key collides (newer server state wins)', () => {
+    // Reloading a later page after a flag change elsewhere must show the new
+    // flags, not the copy loaded before the change.
+    const existing = [
+      { id: 'a', is_unread: true },
+      { id: 'b', is_unread: true },
+    ];
+    const incoming = [
+      { id: 'a', is_unread: false },
+      { id: 'c', is_unread: true },
+    ];
+    expect(mergeMessagePages(existing, incoming)).toEqual([
+      { id: 'a', is_unread: false },
+      { id: 'b', is_unread: true },
+      { id: 'c', is_unread: true },
+    ]);
   });
 
   it('always keeps messages with no derivable key', () => {
@@ -865,5 +881,114 @@ describe('collectFolderMessages', () => {
     });
 
     expect(out.messages.map((m) => m.id)).toEqual(['a']);
+  });
+});
+
+describe('mergeHeadPage', () => {
+  const m = (id: string, extra = {}) => ({ id, ...extra });
+
+  it('drops rows of the first-page window the fresh page lacks and keeps later pages', () => {
+    const existing = [m('6'), m('5'), m('4'), m('3'), m('2'), m('1')];
+    const incoming = [m('6', { fresh: true }), m('4'), m('3')];
+    const result = mergeHeadPage(existing, incoming);
+    expect(result.messages.map((x) => x.id)).toEqual(['6', '4', '3', '2', '1']);
+    expect(result.messages[0]).toEqual({ id: '6', fresh: true });
+    expect(result.removed.map((x) => x.id)).toEqual(['5']);
+    expect(result.replaced).toBe(false);
+  });
+
+  it('adds new messages at the top', () => {
+    const result = mergeHeadPage([m('2'), m('1'), m('0')], [m('3'), m('2')]);
+    expect(result.messages.map((x) => x.id)).toEqual(['3', '2', '1', '0']);
+    expect(result.removed).toEqual([]);
+  });
+
+  it('replaces the list when the fresh page is the whole folder', () => {
+    const result = mergeHeadPage([m('3'), m('2'), m('1')], [m('3')], { complete: true });
+    expect(result.messages.map((x) => x.id)).toEqual(['3']);
+    expect(result.removed.map((x) => x.id)).toEqual(['2', '1']);
+    expect(result.replaced).toBe(true);
+  });
+
+  it('replaces the list but removes nothing when the window cannot be placed', () => {
+    const result = mergeHeadPage([m('2'), m('1')], [m('9'), m('8')]);
+    expect(result.messages.map((x) => x.id)).toEqual(['9', '8']);
+    expect(result.removed).toEqual([]);
+    expect(result.replaced).toBe(true);
+  });
+});
+
+describe('matchesRemoteMessage', () => {
+  const row = { id: 'm1', uid: 5, folder: 'INBOX' };
+
+  it('compares paths case-sensitively except INBOX', () => {
+    const work = { id: 'w1', uid: 5, folder: 'Work' };
+    expect(matchesRemoteMessage(work, { folder: 'work', uids: new Set([5]) })).toBe(false);
+    expect(matchesRemoteMessage(work, { folder: 'Work', uids: new Set([5]) })).toBe(true);
+  });
+
+  it('matches by UID only within the event folder', () => {
+    expect(matchesRemoteMessage(row, { folder: 'inbox', uids: new Set([5]) })).toBe(true);
+    expect(matchesRemoteMessage(row, { folder: 'Sent', uids: new Set([5]) })).toBe(false);
+    expect(matchesRemoteMessage(row, { uids: new Set([5]) })).toBe(false);
+  });
+
+  it('matches by id anywhere, or within the folder when one is given', () => {
+    expect(matchesRemoteMessage(row, { ids: new Set(['m1']) })).toBe(true);
+    expect(matchesRemoteMessage(row, { folder: 'INBOX', ids: new Set(['m1']) })).toBe(true);
+    expect(matchesRemoteMessage(row, { folder: 'Trash', ids: new Set(['m1']) })).toBe(false);
+  });
+});
+
+describe('applyRemoteFlagChange', () => {
+  const unread = { id: 'm1', flags: [], is_unread: true, is_unread_index: 1, is_starred: false };
+
+  it('adds, removes and sets flags and keeps the derived fields in step', () => {
+    const read = applyRemoteFlagChange(unread, 'add', ['\\Seen', '\\Flagged']);
+    expect(read).toMatchObject({
+      flags: ['\\Seen', '\\Flagged'],
+      is_unread: false,
+      is_unread_index: 0,
+      is_starred: true,
+    });
+    expect(applyRemoteFlagChange(read, 'remove', ['\\seen'])).toMatchObject({
+      flags: ['\\Flagged'],
+      is_unread: true,
+    });
+    expect(applyRemoteFlagChange(read, 'set', ['\\Answered'])).toMatchObject({
+      flags: ['\\Answered'],
+      is_unread: true,
+      is_answered: true,
+      is_starred: false,
+    });
+  });
+
+  it('does not count an unread message flagged \\Deleted', () => {
+    expect(applyRemoteFlagChange(unread, 'add', ['\\Deleted'])).toMatchObject({
+      is_unread: true,
+      is_unread_index: 0,
+    });
+  });
+
+  it('returns the same object when nothing changes or the action is unknown', () => {
+    const read = {
+      ...unread,
+      flags: ['\\Seen'],
+      is_unread: false,
+      is_unread_index: 0,
+      is_answered: false,
+    };
+    expect(applyRemoteFlagChange(read, 'add', ['\\Seen'])).toBe(read);
+    expect(applyRemoteFlagChange(read, 'toggle', ['\\Seen'])).toBe(read);
+  });
+});
+
+describe('applyRemoteLabelChange', () => {
+  it('adds, removes and sets labels', () => {
+    const msg = { id: 'm1', labels: ['a'] };
+    expect(applyRemoteLabelChange(msg, 'add', ['b']).labels).toEqual(['a', 'b']);
+    expect(applyRemoteLabelChange(msg, 'remove', ['a']).labels).toEqual([]);
+    expect(applyRemoteLabelChange(msg, 'set', ['c']).labels).toEqual(['c']);
+    expect(applyRemoteLabelChange(msg, 'add', ['a'])).toBe(msg);
   });
 });

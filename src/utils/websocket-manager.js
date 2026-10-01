@@ -148,6 +148,9 @@ function createWebSocketManager() {
     client.on('_maxReconnectsReached', (data) => {
       dispatch('_maxReconnectsReached', email, data || {});
     });
+    client.on('_messageDropped', (data) => {
+      dispatch('_messageDropped', email, data || {});
+    });
 
     client.connect();
     clients.set(email, client);

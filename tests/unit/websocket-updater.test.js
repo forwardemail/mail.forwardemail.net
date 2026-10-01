@@ -15,9 +15,9 @@ vi.mock('../../src/utils/storage', () => ({
 }));
 
 // Mock sync-controller
-const mockStartInitialSync = vi.fn();
+const mockSyncFolderForEvent = vi.fn();
 vi.mock('../../src/utils/sync-controller', () => ({
-  startInitialSync: (...args) => mockStartInitialSync(...args),
+  syncFolderForEvent: (...args) => mockSyncFolderForEvent(...args),
 }));
 
 // Mock notification-manager
@@ -48,6 +48,11 @@ const mockLoadMessages = vi.fn();
 const mockLoadFolders = vi.fn();
 const mockInvalidateFolderInMemCache = vi.fn();
 const mockUpdateFolderUnreadCounts = vi.fn();
+const mockResolveRealtimeFolder = vi.fn();
+const mockRemoveRemoteMessages = vi.fn();
+const mockApplyRemoteFlags = vi.fn();
+const mockApplyRemoteLabels = vi.fn();
+const mockApplyRemoteMailboxChange = vi.fn();
 
 // Create writable stores for the mock mailbox state
 const selectedFolderStore = writable('INBOX');
@@ -73,6 +78,11 @@ vi.mock('../../src/stores/mailboxStore', () => ({
       loadFolders: (...args) => mockLoadFolders(...args),
       invalidateFolderInMemCache: (...args) => mockInvalidateFolderInMemCache(...args),
       updateFolderUnreadCounts: (...args) => mockUpdateFolderUnreadCounts(...args),
+      resolveRealtimeFolder: (...args) => mockResolveRealtimeFolder(...args),
+      removeRemoteMessages: (...args) => mockRemoveRemoteMessages(...args),
+      applyRemoteFlags: (...args) => mockApplyRemoteFlags(...args),
+      applyRemoteLabels: (...args) => mockApplyRemoteLabels(...args),
+      applyRemoteMailboxChange: (...args) => mockApplyRemoteMailboxChange(...args),
     },
   },
 }));
@@ -88,6 +98,7 @@ const mockMgrOn = vi.fn((event, handler) => {
   return vi.fn(); // unsub
 });
 
+const mockGetClient = vi.fn(() => ({ connected: true }));
 const mockManager = {
   reconcile: mockMgrReconcile,
   reconnectAll: mockMgrReconnectAll,
@@ -96,7 +107,7 @@ const mockManager = {
   off: vi.fn(),
   removeAccount: vi.fn(),
   getClients: vi.fn(() => new Map()),
-  getClient: vi.fn(() => null),
+  getClient: (...args) => mockGetClient(...args),
   get anyConnected() {
     return true;
   },
@@ -135,6 +146,7 @@ vi.mock('../../src/utils/websocket-client', () => ({
     CALENDAR_EVENT_UPDATED: 'calendarEventUpdated',
     CALENDAR_EVENT_DELETED: 'calendarEventDeleted',
     ADDRESS_BOOK_CREATED: 'addressBookCreated',
+    ADDRESS_BOOK_UPDATED: 'addressBookUpdated',
     ADDRESS_BOOK_DELETED: 'addressBookDeleted',
     CONTACT_CREATED: 'contactCreated',
     CONTACT_UPDATED: 'contactUpdated',
@@ -155,7 +167,7 @@ vi.mock('../../src/utils/websocket-client', () => ({
 }));
 
 // Now import the module under test
-import { Local } from '../../src/utils/storage';
+import { Accounts, Local } from '../../src/utils/storage';
 import { createInboxUpdater } from '../../src/utils/websocket-updater.js';
 import { PUSH_COALESCE_MS } from '../../src/utils/realtime-event-coalescer.js';
 
@@ -187,7 +199,7 @@ describe('createInboxUpdater', () => {
     mgrEventHandlers.clear();
     mockLoadMessages.mockReset();
     mockLoadFolders.mockReset();
-    mockStartInitialSync.mockReset();
+    mockSyncFolderForEvent.mockReset();
     mockInvalidateFolderInMemCache.mockReset();
     mockUpdateFolderUnreadCounts.mockReset();
     mockMgrOn.mockClear();
@@ -300,13 +312,14 @@ describe('createInboxUpdater', () => {
     updater.destroy();
   });
 
-  it('subscribes to all 5 CardDAV events via manager.on()', () => {
+  it('subscribes to all 6 CardDAV events via manager.on()', () => {
     setupCredentials();
     const updater = createInboxUpdater();
     updater.start();
 
     const subscribedEvents = mockMgrOn.mock.calls.map((call) => call[0]);
     expect(subscribedEvents).toContain('addressBookCreated');
+    expect(subscribedEvents).toContain('addressBookUpdated');
     expect(subscribedEvents).toContain('addressBookDeleted');
     expect(subscribedEvents).toContain('contactCreated');
     expect(subscribedEvents).toContain('contactUpdated');
@@ -333,7 +346,7 @@ describe('refreshFolder (core sync bug fix)', () => {
     mgrEventHandlers.clear();
     mockLoadMessages.mockReset();
     mockLoadFolders.mockReset();
-    mockStartInitialSync.mockReset();
+    mockSyncFolderForEvent.mockReset();
     mockInvalidateFolderInMemCache.mockReset();
     mockUpdateFolderUnreadCounts.mockReset();
     mockMgrOn.mockClear();
@@ -374,9 +387,9 @@ describe('refreshFolder (core sync bug fix)', () => {
     expect(mockLoadMessages).toHaveBeenCalled();
   });
 
-  it('calls startInitialSync() when newMessage arrives', () => {
+  it('calls syncFolderForEvent() when newMessage arrives', () => {
     simulateWsEvent('newMessage', { mailbox: 'INBOX' });
-    expect(mockStartInitialSync).toHaveBeenCalled();
+    expect(mockSyncFolderForEvent).toHaveBeenCalled();
   });
 
   it('calls invalidateFolderInMemCache() before loadMessages()', () => {
@@ -394,7 +407,7 @@ describe('refreshFolder (core sync bug fix)', () => {
     simulateWsEvent('newMessage', { mailbox: 'Sent' });
     expect(mockLoadMessages).not.toHaveBeenCalled();
     // But sync should still run
-    expect(mockStartInitialSync).toHaveBeenCalled();
+    expect(mockSyncFolderForEvent).toHaveBeenCalled();
   });
 
   it('calls loadMessages() for flagsUpdated on current folder', () => {
@@ -415,8 +428,8 @@ describe('refreshFolder (core sync bug fix)', () => {
     });
     // loadMessages called for INBOX (current folder)
     expect(mockLoadMessages).toHaveBeenCalled();
-    // startInitialSync called for both folders
-    expect(mockStartInitialSync).toHaveBeenCalledTimes(2);
+    // syncFolderForEvent called for both folders
+    expect(mockSyncFolderForEvent).toHaveBeenCalledTimes(2);
   });
 
   it('refreshes destination for messagesCopied', () => {
@@ -475,7 +488,7 @@ describe('refreshFolder (core sync bug fix)', () => {
     });
     await vi.advanceTimersByTimeAsync(PUSH_COALESCE_MS);
     // Should only have triggered once (WS wins)
-    expect(mockStartInitialSync).toHaveBeenCalledTimes(1);
+    expect(mockSyncFolderForEvent).toHaveBeenCalledTimes(1);
     expect(mockLoadMessages).toHaveBeenCalledTimes(1);
   });
 
@@ -492,13 +505,15 @@ describe('refreshFolder (core sync bug fix)', () => {
       }),
     );
     await vi.advanceTimersByTimeAsync(PUSH_COALESCE_MS - 1);
-    expect(mockStartInitialSync).not.toHaveBeenCalled();
+    expect(mockSyncFolderForEvent).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
-    expect(mockStartInitialSync).toHaveBeenCalledTimes(1);
+    expect(mockSyncFolderForEvent).toHaveBeenCalledTimes(1);
     expect(mockLoadMessages).toHaveBeenCalledTimes(1);
   });
 
-  it('leaves system-displayed background push reconciliation to the visibility handler', async () => {
+  it('still refreshes data for a push the system displayed', async () => {
+    // The system drew the alert (app in the background on iOS or Android);
+    // the change it carries must still reach the cache.
     vi.useFakeTimers();
     window.dispatchEvent(
       new CustomEvent('fe:push-notification', {
@@ -512,8 +527,8 @@ describe('refreshFolder (core sync bug fix)', () => {
       }),
     );
     await vi.advanceTimersByTimeAsync(PUSH_COALESCE_MS);
-    expect(mockStartInitialSync).not.toHaveBeenCalled();
-    expect(mockLoadMessages).not.toHaveBeenCalled();
+    expect(mockSyncFolderForEvent).toHaveBeenCalledTimes(1);
+    expect(mockLoadMessages).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -541,6 +556,28 @@ describe('CalDAV/CardDAV event dispatch', () => {
     window.removeEventListener('fe:contact-changed', eventsSpy);
   });
 
+  it("ignores another account's calendar and contact changes", () => {
+    // The views show the active account and match by iCal or vCard UID,
+    // which another account can share.
+    for (const name of [
+      'fe:calendar-changed',
+      'fe:calendar-event-changed',
+      'fe:contacts-changed',
+      'fe:contact-changed',
+    ]) {
+      window.addEventListener(name, eventsSpy);
+    }
+    const other = { _account: 'other@example.com', uid: 'shared-uid' };
+    simulateWsEvent('calendarUpdated', { ...other, id: 'cal-1' });
+    simulateWsEvent('calendarEventDeleted', { ...other, eventId: 'e1' });
+    simulateWsEvent('addressBookUpdated', { ...other, id: 'ab-1' });
+    simulateWsEvent('contactDeleted', { ...other, contactId: 'c1' });
+    expect(eventsSpy).not.toHaveBeenCalled();
+
+    simulateWsEvent('calendarEventDeleted', { _account: 'user@example.com', eventId: 'e2' });
+    expect(eventsSpy).toHaveBeenCalledTimes(1);
+  });
+
   it('dispatches fe:calendar-changed for calendarCreated', () => {
     window.addEventListener('fe:calendar-changed', eventsSpy);
     simulateWsEvent('calendarCreated', { id: 'cal-1' });
@@ -556,6 +593,15 @@ describe('CalDAV/CardDAV event dispatch', () => {
   it('dispatches fe:contacts-changed for addressBookCreated', () => {
     window.addEventListener('fe:contacts-changed', eventsSpy);
     simulateWsEvent('addressBookCreated', { id: 'ab-1' });
+    expect(eventsSpy).toHaveBeenCalled();
+  });
+
+  // an address book renamed or recolored in another client (CardDAV PROPPATCH)
+  it('dispatches fe:contacts-changed for addressBookUpdated', () => {
+    window.addEventListener('fe:contacts-changed', eventsSpy);
+    simulateWsEvent('addressBookUpdated', {
+      addressBook: { id: 'ab-1', name: 'Renamed', object: 'address_book' },
+    });
     expect(eventsSpy).toHaveBeenCalled();
   });
 
@@ -619,5 +665,347 @@ describe('stop and destroy lifecycle', () => {
     updater.start();
     // reconcile should not have been called again after destroy
     expect(mockMgrReconcile.mock.calls.length).toBe(callsAfterFirstStart);
+  });
+});
+
+// ── Applying what an event says changed ───────────────────────────────────
+
+describe('event payloads applied to the store', () => {
+  let updater;
+
+  beforeEach(() => {
+    mgrEventHandlers.clear();
+    for (const fn of [
+      mockLoadMessages,
+      mockLoadFolders,
+      mockSyncFolderForEvent,
+      mockInvalidateFolderInMemCache,
+      mockUpdateFolderUnreadCounts,
+      mockRemoveRemoteMessages,
+      mockApplyRemoteFlags,
+      mockApplyRemoteLabels,
+      mockApplyRemoteMailboxChange,
+    ]) {
+      fn.mockReset();
+    }
+    // Mailbox ids resolve to paths the way the store does.
+    mockResolveRealtimeFolder.mockReset();
+    mockResolveRealtimeFolder.mockImplementation(async (_account, mailbox, path) => {
+      if (path) return path;
+      return { 'inbox-id': 'INBOX', 'trash-id': 'Trash' }[mailbox] || '';
+    });
+    mockRemoveRemoteMessages.mockResolvedValue([]);
+    mockApplyRemoteFlags.mockResolvedValue([]);
+    mockGetClient.mockReset();
+    mockGetClient.mockReturnValue({ connected: true });
+    mockIsDemoMode.mockReturnValue(false);
+    selectedFolderStore.set('INBOX');
+    foldersStore.set([
+      { id: 'inbox-id', path: 'INBOX', name: 'Inbox' },
+      { id: 'trash-id', path: 'Trash', name: 'Trash' },
+    ]);
+    Object.defineProperty(document, 'visibilityState', {
+      value: 'visible',
+      writable: true,
+      configurable: true,
+    });
+    setupCredentials();
+    updater = createInboxUpdater();
+    updater.start();
+  });
+
+  afterEach(() => {
+    updater.destroy();
+    vi.useRealTimers();
+  });
+
+  it('removes expunged messages, then reloads the folder from the server', async () => {
+    simulateWsEvent('messagesExpunged', {
+      _account: 'user@example.com',
+      mailbox: 'inbox-id',
+      uids: [3, 4],
+    });
+
+    await vi.waitFor(() => expect(mockLoadMessages).toHaveBeenCalledWith({ refresh: true }));
+    expect(mockRemoveRemoteMessages).toHaveBeenCalledWith({
+      account: 'user@example.com',
+      folder: 'INBOX',
+      uids: [3, 4],
+      ids: [],
+    });
+    expect(mockRemoveRemoteMessages.mock.invocationCallOrder[0]).toBeLessThan(
+      mockLoadMessages.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('keeps only valid UIDs from an untrusted payload', async () => {
+    simulateWsEvent('messagesExpunged', {
+      mailbox: 'inbox-id',
+      uids: [1, 'x', -2, 1.5, '3', { uid: 4 }, 1],
+      ids: ['m1', 42, { id: 'x' }],
+    });
+
+    await vi.waitFor(() => expect(mockRemoveRemoteMessages).toHaveBeenCalled());
+    expect(mockRemoveRemoteMessages).toHaveBeenCalledWith(
+      expect.objectContaining({ uids: [1, 3], ids: ['m1', '42'] }),
+    );
+  });
+
+  it('reads the UIDs of a push copy, where lists arrive as strings', async () => {
+    vi.useFakeTimers();
+    window.dispatchEvent(
+      new CustomEvent('fe:push-notification', {
+        detail: {
+          event: 'messagesExpunged',
+          notification_id: '123e4567-e89b-12d3-a456-426614174200',
+          mailbox: 'inbox-id',
+          uids: '[7,8]',
+        },
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(PUSH_COALESCE_MS);
+    vi.useRealTimers();
+
+    await vi.waitFor(() =>
+      expect(mockRemoveRemoteMessages).toHaveBeenCalledWith(
+        expect.objectContaining({ folder: 'INBOX', uids: [7, 8] }),
+      ),
+    );
+  });
+
+  it('removes moved messages from the source and refreshes both folders', async () => {
+    simulateWsEvent('messagesMoved', {
+      sourceMailbox: 'inbox-id',
+      destinationMailbox: 'trash-id',
+      destinationPath: 'Trash',
+      sourceUid: [5],
+      destinationUid: [105],
+    });
+
+    await vi.waitFor(() => expect(mockSyncFolderForEvent).toHaveBeenCalledTimes(2));
+    expect(mockRemoveRemoteMessages).toHaveBeenCalledWith(
+      expect.objectContaining({
+        folder: 'INBOX',
+        uids: [5],
+        destinationFolder: 'Trash',
+        destinationUids: [105],
+      }),
+    );
+    expect(mockSyncFolderForEvent.mock.calls.map(([, folder]) => folder.path)).toEqual([
+      'INBOX',
+      'Trash',
+    ]);
+    expect(mockLoadMessages).toHaveBeenCalledTimes(1);
+  });
+
+  it('applies a flag change and still refreshes', async () => {
+    simulateWsEvent('flagsUpdated', {
+      mailbox: 'inbox-id',
+      action: 'add',
+      flags: ['\\Deleted'],
+      uids: [9],
+    });
+
+    await vi.waitFor(() => expect(mockLoadMessages).toHaveBeenCalled());
+    expect(mockApplyRemoteFlags).toHaveBeenCalledWith({
+      account: 'user@example.com',
+      folder: 'INBOX',
+      uids: [9],
+      ids: [],
+      action: 'add',
+      flags: ['\\Deleted'],
+    });
+  });
+
+  it('does not apply an unknown flag action but still refreshes', () => {
+    simulateWsEvent('flagsUpdated', {
+      mailbox: 'inbox-id',
+      action: 'toggle',
+      flags: ['\\Seen'],
+      uids: [9],
+    });
+
+    expect(mockApplyRemoteFlags).not.toHaveBeenCalled();
+    expect(mockLoadMessages).toHaveBeenCalledWith({ refresh: true });
+  });
+
+  it('applies the first of two server copies of one flag change only', async () => {
+    const change = {
+      mailbox: 'inbox-id',
+      action: 'add',
+      flags: ['\\Seen'],
+      uids: [9],
+      timestamp: 1000,
+    };
+    simulateWsEvent('flagsUpdated', { ...change, notificationId: 'copy-1' });
+    simulateWsEvent('flagsUpdated', { ...change, notificationId: 'copy-2' });
+
+    await vi.waitFor(() => expect(mockLoadMessages).toHaveBeenCalled());
+    expect(mockApplyRemoteFlags).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not clear labels or flags for a set that does not name them', async () => {
+    // Older servers send STORE FLAGS replacements as action 'set' without
+    // the list; that says nothing about the new labels.
+    simulateWsEvent('labelsUpdated', { mailbox: 'inbox-id', action: 'set', uids: [2] });
+    simulateWsEvent('flagsUpdated', { mailbox: 'inbox-id', action: 'set', uids: [3] });
+
+    expect(mockLoadMessages).toHaveBeenCalled();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(mockApplyRemoteLabels).not.toHaveBeenCalled();
+    expect(mockApplyRemoteFlags).not.toHaveBeenCalled();
+  });
+
+  it('applies a set to an empty list when the list is there', async () => {
+    simulateWsEvent('labelsUpdated', { mailbox: 'inbox-id', action: 'set', uids: [2], labels: [] });
+    simulateWsEvent('flagsUpdated', { mailbox: 'inbox-id', action: 'set', uids: [3], flags: '[]' });
+
+    await vi.waitFor(() => expect(mockApplyRemoteFlags).toHaveBeenCalled());
+    expect(mockApplyRemoteLabels).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'set', labels: [], uids: [2] }),
+    );
+    expect(mockApplyRemoteFlags).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'set', flags: [], uids: [3] }),
+    );
+  });
+
+  it('marks a move as a move for the store', async () => {
+    simulateWsEvent('messagesMoved', {
+      sourceMailbox: 'inbox-id',
+      destinationMailbox: 'trash-id',
+      sourceUid: [5],
+      destinationUid: [105],
+    });
+
+    await vi.waitFor(() => expect(mockRemoveRemoteMessages).toHaveBeenCalled());
+    expect(mockRemoveRemoteMessages).toHaveBeenCalledWith(expect.objectContaining({ moved: true }));
+  });
+
+  it('passes a created folder to the store', () => {
+    simulateWsEvent('mailboxCreated', { path: 'Trash', mailbox: 't' });
+    expect(mockApplyRemoteMailboxChange).toHaveBeenCalledWith({
+      account: 'user@example.com',
+      type: 'created',
+      path: 'Trash',
+    });
+  });
+
+  it('applies labels with their action', async () => {
+    simulateWsEvent('labelsUpdated', {
+      mailbox: 'inbox-id',
+      action: 'remove',
+      labels: ['work'],
+      uids: [2],
+    });
+
+    await vi.waitFor(() => expect(mockApplyRemoteLabels).toHaveBeenCalled());
+    expect(mockApplyRemoteLabels).toHaveBeenCalledWith(
+      expect.objectContaining({ folder: 'INBOX', action: 'remove', labels: ['work'], uids: [2] }),
+    );
+  });
+
+  it('only refreshes for an untagged push while several accounts are signed in', async () => {
+    // The alias map is incomplete, so the push may be about another account
+    // whose INBOX shares the path.
+    vi.mocked(Accounts.getAll).mockReturnValue([
+      { email: 'user@example.com' },
+      { email: 'other@example.com' },
+    ]);
+    simulateWsEvent('messagesExpunged', { mailbox: 'inbox-id', path: 'INBOX', uids: [1] });
+    simulateWsEvent('flagsUpdated', {
+      mailbox: 'inbox-id',
+      action: 'add',
+      flags: ['\\Seen'],
+      uids: [1],
+    });
+
+    expect(mockLoadMessages).toHaveBeenCalled();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(mockRemoveRemoteMessages).not.toHaveBeenCalled();
+    expect(mockApplyRemoteFlags).not.toHaveBeenCalled();
+    vi.mocked(Accounts.getAll).mockReturnValue([]);
+  });
+
+  it('applies an untagged push when one account is signed in', async () => {
+    vi.mocked(Accounts.getAll).mockReturnValue([{ email: 'user@example.com' }]);
+    simulateWsEvent('messagesExpunged', { mailbox: 'inbox-id', uids: [1] });
+
+    await vi.waitFor(() =>
+      expect(mockRemoveRemoteMessages).toHaveBeenCalledWith(
+        expect.objectContaining({ account: 'user@example.com', uids: [1] }),
+      ),
+    );
+    vi.mocked(Accounts.getAll).mockReturnValue([]);
+  });
+
+  it("keeps another account's cache current without touching the view", async () => {
+    simulateWsEvent('messagesExpunged', {
+      _account: 'other@example.com',
+      mailbox: 'inbox-id',
+      uids: [1],
+    });
+
+    await vi.waitFor(() => expect(mockRemoveRemoteMessages).toHaveBeenCalled());
+    expect(mockRemoveRemoteMessages).toHaveBeenCalledWith(
+      expect.objectContaining({ account: 'other@example.com', uids: [1] }),
+    );
+    expect(mockLoadMessages).not.toHaveBeenCalled();
+    expect(mockSyncFolderForEvent).not.toHaveBeenCalled();
+  });
+
+  it('applies folder renames and deletes and forces a folder reload', () => {
+    simulateWsEvent('mailboxRenamed', { oldPath: 'Work', newPath: 'Projects', mailbox: 'w' });
+    simulateWsEvent('mailboxDeleted', { path: 'Old', mailbox: 'o' });
+    simulateWsEvent('mailboxCreated', { path: 'New', mailbox: 'n' });
+
+    expect(mockApplyRemoteMailboxChange).toHaveBeenCalledWith({
+      account: 'user@example.com',
+      type: 'renamed',
+      oldPath: 'Work',
+      newPath: 'Projects',
+    });
+    expect(mockApplyRemoteMailboxChange).toHaveBeenCalledWith({
+      account: 'user@example.com',
+      type: 'deleted',
+      path: 'Old',
+    });
+    expect(mockLoadFolders).toHaveBeenCalledTimes(3);
+    for (const call of mockLoadFolders.mock.calls) expect(call[0]).toEqual({ force: true });
+  });
+
+  it('catches up after a reconnect, but not on the first connection', async () => {
+    vi.useFakeTimers();
+    simulateWsEvent('_authenticated', { _account: 'user@example.com' });
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(mockLoadMessages).not.toHaveBeenCalled();
+
+    simulateWsEvent('_disconnected', { _account: 'user@example.com' });
+    simulateWsEvent('_authenticated', { _account: 'user@example.com' });
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(mockLoadFolders).toHaveBeenCalledWith({ force: true });
+    expect(mockLoadMessages).toHaveBeenCalledWith({ refresh: true });
+  });
+
+  it('catches up when the socket dropped a message', async () => {
+    vi.useFakeTimers();
+    simulateWsEvent('_messageDropped', { _account: 'user@example.com', reason: 'rate-limit' });
+    simulateWsEvent('_messageDropped', { _account: 'user@example.com', reason: 'size' });
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(mockLoadMessages).toHaveBeenCalledTimes(1);
+    expect(mockLoadFolders).toHaveBeenCalledWith({ force: true });
+  });
+
+  it("polls while the active account's socket is down, even if another is up", async () => {
+    vi.useFakeTimers();
+    updater.destroy();
+    updater = createInboxUpdater();
+    updater.start();
+    mockGetClient.mockReturnValue({ connected: false });
+
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(mockLoadMessages).toHaveBeenCalledWith({ refresh: true });
   });
 });

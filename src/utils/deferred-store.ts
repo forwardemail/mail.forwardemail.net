@@ -51,6 +51,9 @@ export interface DeferredWritable<T> extends Writable<T> {
 export function deferredWritable<T>(initial: T): DeferredWritable<T> {
   const inner: Writable<T> = writable(initial);
   let pendingFrame: number | null = null;
+  // The value a pending frame will set; update() builds on it, so an update
+  // made within the frame does not bring back what the removal took out.
+  let pendingValue: T = initial;
 
   /**
    * Returns true when `next` is a shorter array than the current value,
@@ -79,6 +82,7 @@ export function deferredWritable<T>(initial: T): DeferredWritable<T> {
     if (isRemoval(value)) {
       // Defer removals to next animation frame
       if (typeof requestAnimationFrame === 'function') {
+        pendingValue = value;
         pendingFrame = requestAnimationFrame(() => {
           pendingFrame = null;
           inner.set(value);
@@ -94,8 +98,10 @@ export function deferredWritable<T>(initial: T): DeferredWritable<T> {
   };
 
   const deferredUpdate = (updater: Updater<T>): void => {
-    const current = get(inner);
+    const current = pendingFrame !== null ? pendingValue : get(inner);
     const next = updater(current);
+    // Unchanged: keep any pending frame as it is
+    if (next === current) return;
     deferredSet(next);
   };
 

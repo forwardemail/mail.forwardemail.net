@@ -97,6 +97,11 @@ import {
   shouldKeepCacheOnEmpty,
   computePrunedIds,
   isStaleListRequest,
+  mergeHeadPage,
+  matchesRemoteMessage,
+  applyRemoteFlagChange,
+  applyRemoteLabelChange,
+  sameFolderPath,
 } from './mailbox-store-helpers';
 import {
   createPendingDeleteTracker,
@@ -120,6 +125,11 @@ const folderLoadState = new Map();
 // page-1 replace-loads (folder reselect, refresh, filter change) restore the
 // full newest head.
 const MAX_LIVE_MESSAGES = 1000;
+
+// Realtime changes (see removeRemoteMessages): how long a removal stays
+// noted against stale writes, and the shape of a server mailbox id.
+const REMOTE_REMOVAL_TTL_MS = 3 * 60_000;
+const OBJECT_ID_PATTERN = /^[a-f\d]{24}$/i;
 
 // Optimistic-update trackers (pending deletes + flag mutations) live in
 // optimistic-trackers.ts so their reconciliation logic can be unit-tested.
@@ -167,8 +177,21 @@ const bulkGetMessages = (keys: unknown[]) => db.messages.bulkGet(keys as never);
 
 const createMailboxStore = () => {
   // Track in-flight message list requests to prevent duplicates
-  let inFlightMessageListRequest = null;
+  let inFlightMessageListRequest: {
+    key: string;
+    promise: Promise<unknown>;
+    trailing?: boolean;
+  } | null = null;
   let syncRefreshTimer = null;
+  let searchRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+  // Messages removed by other clients, noted for a few minutes (see noteRemoteRemoval)
+  let remoteRemovals: Array<{
+    account: string;
+    folder: string;
+    uids: Set<number>;
+    ids: Set<string>;
+    expiresAt: number;
+  }> = [];
   let lastSyncRefresh = { account: null, folder: null, at: 0 };
   const error = writable('');
   const toastsRef = writable(null);
@@ -220,6 +243,28 @@ const createMailboxStore = () => {
 
   const selectMessage = (msg) => {
     selectedMessage.set(msg);
+  };
+
+  // Close the reader and drop selections for messages that no longer exist
+  // (deleted or moved by another client).
+  const clearRemovedSelection = (removedIds: Set<string>) => {
+    if (!removedIds.size) return;
+    const isRemoved = (id: unknown) => id != null && removedIds.has(String(id));
+    if (isRemoved(get(selectedMessage)?.id)) selectedMessage.set(null);
+    const conversation = get(selectedConversation) as {
+      id?: unknown;
+      messages?: Array<{ id?: unknown }>;
+    } | null;
+    const conversationMessages = Array.isArray(conversation?.messages) ? conversation.messages : [];
+    if (
+      conversation &&
+      (isRemoved(conversation.id) ||
+        (conversationMessages.length > 0 && conversationMessages.every((m) => isRemoved(m?.id))))
+    ) {
+      selectedConversation.set(null);
+    }
+    const ids = get(selectedConversationIds);
+    if (ids.some(isRemoved)) selectedConversationIds.set(ids.filter((id) => !isRemoved(id)));
   };
 
   const buildSearchQuery = (rawTerm = '') => {
@@ -490,6 +535,9 @@ const createMailboxStore = () => {
     const { force = false } = options;
     const state = folderLoadState.get(account) || { promise: null, lastFetchAt: 0 };
     if (state.promise) {
+      // A forced load (a folder created, renamed or deleted elsewhere) must
+      // not settle for a list fetched before the change: fetch once more after.
+      if (force) state.trailing = true;
       return state.promise;
     }
 
@@ -618,6 +666,12 @@ const createMailboxStore = () => {
     } finally {
       state.promise = null;
       folderLoadState.set(account, state);
+      if (state.trailing) {
+        state.trailing = false;
+        if ((Local.get('email') || 'default') === account) {
+          loadFolders({ force: true }).catch(() => {});
+        }
+      }
     }
   };
 
@@ -712,10 +766,23 @@ const createMailboxStore = () => {
     return mapped;
   };
 
-  const loadMessages = async () => {
+  // `refresh: true` is a reload after a change made elsewhere (realtime event,
+  // sync). It never piggybacks on a request already in flight, which may have
+  // been answered before the change: it runs again once that one settles. With
+  // several pages on screen it reloads the first page and merges it in place
+  // instead of reloading only the last page.
+  const loadMessages = async (options: { refresh?: boolean } = {}) => {
+    const refresh = options?.refresh === true;
+    if (refresh && inFlightMessageListRequest) {
+      inFlightMessageListRequest.trailing = true;
+      return inFlightMessageListRequest.promise;
+    }
+
     const account = Local.get('email') || 'default';
     const folder = get(selectedFolder);
-    const currentPage = get(page);
+    const viewPage = get(page);
+    const headRefresh = refresh && viewPage > 1;
+    const currentPage = headRefresh ? 1 : viewPage;
     const limit = getLimit();
     const startIdx = (currentPage - 1) * limit;
     const currentSort = get(sortOrder);
@@ -754,7 +821,9 @@ const createMailboxStore = () => {
     // Synchronous in-memory cache check — runs in same microtask as selectedFolder.set()
     // so Svelte batches both updates into one render (no skeleton flash)
     const memKey = `${account}:${folder}:${currentPage}`;
-    const memCached = folderMessageCache.get(memKey);
+    // A head refresh keeps the pages on screen, so it skips the cached first
+    // page, which would replace them.
+    const memCached = headRefresh ? null : folderMessageCache.get(memKey);
     if (memCached?.messages?.length) {
       cachedPage = memCached.messages;
       let nextMessages = shouldAppend
@@ -776,7 +845,7 @@ const createMailboxStore = () => {
     // Linux/WebKitGTK — folders rendered but the message list stayed stuck on
     // its skeleton because loadMessages hung here, before its demo/Remote
     // fallback. Mirrors loadFolders' demo fast-path.
-    if (!isDemoMode())
+    if (!isDemoMode() && !headRefresh)
       try {
         tracer.stage('cache_read_start');
         let pageSlice = [];
@@ -888,6 +957,12 @@ const createMailboxStore = () => {
       hasAttachmentsOnly: get(hasAttachmentsOnly),
     });
 
+    // A refresh that found a load started while it read the cache runs after it.
+    if (refresh && inFlightMessageListRequest) {
+      inFlightMessageListRequest.trailing = true;
+      return inFlightMessageListRequest.promise;
+    }
+
     // If same request is already in flight, wait for it instead of making duplicate
     if (inFlightMessageListRequest?.key === requestKey) {
       try {
@@ -908,7 +983,8 @@ const createMailboxStore = () => {
       resolveInflight = res;
       _rejectInflight = rej;
     });
-    inFlightMessageListRequest = { key: requestKey, promise: inflightDeferred };
+    const inflightEntry = { key: requestKey, promise: inflightDeferred, trailing: false };
+    inFlightMessageListRequest = inflightEntry;
 
     // Prevent scheduleSyncRefresh from immediately scheduling a redundant call
     // while this load is still in progress (covers initial load gap)
@@ -979,12 +1055,13 @@ const createMailboxStore = () => {
 
     // Only show skeleton when cache is completely empty — if we have cached data
     // already displayed, keep it visible while the network refreshes in the background
-    if (!cachedPage.length) {
+    const hasVisibleList = cachedPage.length > 0 || headRefresh;
+    if (!hasVisibleList) {
       loading.set(true);
     }
 
     const previewLimit = Math.min(20, limit);
-    if (!cachedPage.length && limit > previewLimit) {
+    if (!hasVisibleList && limit > previewLimit) {
       fetchAddressSafePage({ ...requestParams, limit: previewLimit }, 'preview_start')
         .then(({ source, res }) => {
           if (inFlightMessageListRequest?.key !== requestKey) return;
@@ -1034,8 +1111,17 @@ const createMailboxStore = () => {
       if (isStaleRequest) {
         tracer.stage('stale_request_continue_cache', { source });
       }
+      const isBasicPage1 =
+        !shouldAppend &&
+        currentPage === 1 &&
+        !queryParam &&
+        !get(unreadOnly) &&
+        !get(hasAttachmentsOnly);
       const isNoContent = isNoContentResponse(source, res);
-      if (isNoContent) {
+      // A refresh may come back empty because the last message was deleted
+      // elsewhere. That is decided below, so it does not stop here.
+      const checkEmpty = refresh && isBasicPage1 && !isStaleRequest;
+      if (isNoContent && !checkEmpty) {
         if (!isStaleRequest) {
           loading.set(false);
           error.set('');
@@ -1043,7 +1129,10 @@ const createMailboxStore = () => {
         tracer.end({ status: 'no_content', source });
         return;
       }
-      const list = extractMessageList(source, res);
+      const list = isNoContent ? [] : extractMessageList(source, res);
+      // The folder total below decides whether an empty first page is real.
+      // The folder list is from before the change, so read it again.
+      if (checkEmpty && !list.length) await loadFolders({ force: true }).catch(() => {});
       // Keep infinite scroll alive while the server still has more than we've
       // paged, not just while the last fetched page looked full — otherwise a
       // short first server page strands the rest of a large folder (the
@@ -1060,7 +1149,8 @@ const createMailboxStore = () => {
         page: currentPage,
         serverTotal,
       });
-      if (!isStaleRequest) {
+      // A head refresh keeps the later pages, and with them the paging state.
+      if (!isStaleRequest && !headRefresh) {
         hasNextPage.set(Boolean(hasMore));
       }
       // shouldPrune is calculated after `merged` is declared below
@@ -1092,6 +1182,8 @@ const createMailboxStore = () => {
         merged = await mergeMissingLabels(bulkGetMessages, account, mapped, labelPresence);
         merged = await mergeMissingAddressFields(bulkGetMessages, account, merged);
       }
+      // A page fetched before a change elsewhere can still list removed rows.
+      merged = merged.filter((m) => !isRemotelyRemoved(account, m));
 
       // Server-confirmed-empty: when the folder's own metadata reports zero
       // messages AND this basic page-1 fetch returned none, the folder is
@@ -1100,12 +1192,6 @@ const createMailboxStore = () => {
       // client (Thunderbird/phone) never cleared on refresh; only a full reset
       // did. serverTotal is null when the count is unknown, so we fall through to
       // the transient guard below and keep the cache in that case.
-      const isBasicPage1 =
-        !shouldAppend &&
-        currentPage === 1 &&
-        !queryParam &&
-        !get(unreadOnly) &&
-        !get(hasAttachmentsOnly);
       if (isBasicPage1 && merged.length === 0 && serverTotal === 0) {
         if (!isStaleRequest) {
           if (!isDemoMode()) {
@@ -1115,10 +1201,14 @@ const createMailboxStore = () => {
             } catch (clearErr) {
               console.warn('[mailbox] Failed to clear empty folder cache:', clearErr);
             }
-            const staleIds = cachedPage
+            const staleIds = [...cachedPage, ...(get(messages) || [])]
               .map((m: { id?: string }) => m.id)
               .filter(Boolean) as string[];
             if (staleIds.length) searchStore.actions.removeFromIndex(staleIds).catch(() => {});
+          }
+          const selected = get(selectedMessage);
+          if (selected?.folder?.toUpperCase?.() === folder?.toUpperCase?.()) {
+            clearRemovedSelection(new Set([String(selected.id)]));
           }
           messages.set([]);
           hasNextPage.set(false);
@@ -1161,17 +1251,53 @@ const createMailboxStore = () => {
         return;
       }
 
+      // On a refresh, rows on screen within the fresh first page's window that
+      // it no longer lists were removed (deleted or moved elsewhere). A head
+      // refresh also keeps the later pages instead of replacing them.
+      const headMerge =
+        refresh && !isStaleRequest
+          ? mergeHeadPage(
+              (get(messages) || []).filter((m) => sameFolderPath(m?.folder, folder)),
+              merged,
+              { complete: !hasMore },
+            )
+          : null;
+      // A filtered list (unread only, starred, attachments) also drops rows
+      // that only stopped matching the filter, such as the message just read,
+      // so only an unfiltered one tells what was removed. Rows with a local
+      // change still pending are not removed either.
+      const pendingLocalIds = new Set([
+        ...getPendingDeleteIds(),
+        ...pendingInsertTracker.getIds(),
+        ...pendingFlagTracker.getIds(),
+      ]);
+      const removedRows =
+        headMerge && isBasicQuery
+          ? headMerge.removed.filter((m) => !pendingLocalIds.has(m.id))
+          : [];
+
       // Prune stale cache entries on any non-append replace-load so messages
       // deleted or moved via the API (or another client) don't linger after a
       // refresh. Restricted to non-empty server responses — the transient-empty
       // branch above already short-circuits that case to guard against a flaky
-      // API returning [] for a non-empty folder.
-      const shouldPrune = !shouldAppend && cachedPage.length && merged.length;
+      // API returning [] for a non-empty folder. A filtered query returns a
+      // subset of the folder, so its absence proves nothing: prune only when
+      // the query is unfiltered.
+      const pruneCandidates = headRefresh && headMerge ? removedRows : cachedPage;
+      const shouldPrune =
+        !shouldAppend && isBasicQuery && pruneCandidates.length > 0 && merged.length > 0;
 
       if (!isStaleRequest) {
-        let nextMessages = shouldAppend
-          ? mergeMessagePages(get(messages), merged, MAX_LIVE_MESSAGES)
-          : merged;
+        let nextMessages =
+          headRefresh && headMerge
+            ? headMerge.messages
+            : shouldAppend
+              ? mergeMessagePages(get(messages), merged, MAX_LIVE_MESSAGES)
+              : merged;
+        if (headRefresh && headMerge?.replaced) {
+          page.set(1);
+          hasNextPage.set(Boolean(hasMore));
+        }
         // Keep a just-sent message visible in Sent until the indexer reports it.
         if (folder === getSentFolderPath()) nextMessages = pendingInsertTracker.apply(nextMessages);
         messages.set(applyPendingFlagMutations(filterPendingDeletes(nextMessages)));
@@ -1190,6 +1316,9 @@ const createMailboxStore = () => {
           // When search is active, selectedMessage is managed by searchMessages(),
           // not loadMessages() — clearing it here would drop the active search result.
           selectedMessage.set(null);
+        }
+        if (removedRows.length) {
+          clearRemovedSelection(new Set(removedRows.map((m) => String(m.id))));
         }
       }
 
@@ -1250,7 +1379,11 @@ const createMailboxStore = () => {
                 ...getPendingDeleteIds(),
                 ...pendingInsertTracker.getIds(),
               ]);
-              prunedIds = computePrunedIds(cachedPage, { serverIds, pendingIds, queuedIds });
+              prunedIds = computePrunedIds(pruneCandidates, {
+                serverIds,
+                pendingIds,
+                queuedIds,
+              });
               if (prunedIds.length) {
                 const pairs = prunedIds.map((id) => [account, id]);
                 await db.messages.bulkDelete(pairs);
@@ -1379,6 +1512,12 @@ const createMailboxStore = () => {
           else loading.set(false);
         }
       }
+      // A refresh asked for while this load was in flight runs now, or after
+      // the load that replaced this one.
+      if (inflightEntry.trailing) {
+        if (inFlightMessageListRequest) inFlightMessageListRequest.trailing = true;
+        else void loadMessages({ refresh: true }).catch(() => {});
+      }
     }
   };
 
@@ -1396,6 +1535,9 @@ const createMailboxStore = () => {
     // account's list; the store's search generation is otherwise only bumped
     // by a newer search.
     searchMessagesGeneration += 1;
+    if (searchRefreshTimer) clearTimeout(searchRefreshTimer);
+    searchRefreshTimer = null;
+    remoteRemovals = [];
     // Clear folder TTL cache so the next loadFolders() does a fresh fetch
     // instead of returning stale/empty data from a previous session.
     folderLoadState.clear();
@@ -1420,8 +1562,37 @@ const createMailboxStore = () => {
       // if the API response differs from the search results.
       if (get(searchActive)) return;
       lastSyncRefresh = { account, folder, at: Date.now() };
-      loadMessages();
+      loadMessages({ refresh: true });
     }, 150);
+  };
+
+  // Re-run the active search without moving the selection, so results pick up
+  // messages a sync just indexed.
+  const refreshSearch = async () => {
+    if (!get(searchActive)) return;
+    const searchQuery = buildSearchQuery((get(query) || '').trim());
+    if (!searchQuery) return;
+    const generation = ++searchMessagesGeneration;
+    try {
+      const results =
+        (await searchStore.actions.search(searchQuery, {
+          folder: get(selectedFolder),
+          crossFolder: false,
+          limit: 200,
+          candidates: [],
+        })) || [];
+      if (generation !== searchMessagesGeneration || !get(searchActive)) return;
+      searchResults.set(results as never);
+    } catch (err) {
+      warn('[mailboxStore] search refresh failed', err);
+    }
+  };
+  const scheduleSearchRefresh = () => {
+    if (searchRefreshTimer) clearTimeout(searchRefreshTimer);
+    searchRefreshTimer = setTimeout(() => {
+      searchRefreshTimer = null;
+      refreshSearch().catch(() => {});
+    }, 300);
   };
 
   onSyncTaskComplete((data) => {
@@ -1435,10 +1606,463 @@ const createMailboxStore = () => {
     updateFolderUnreadCounts();
 
     if (get(selectedFolder)?.toUpperCase() !== data.folder?.toUpperCase()) return;
+    if (get(searchActive)) scheduleSearchRefresh();
     // Refresh the message list to catch deletions/moves
     // that may have happened on server or in another session
     scheduleSyncRefresh(data.folder, account);
   });
+
+  // ── Changes made by other clients (realtime events) ─────────────────────
+  //
+  // Events name mailboxes by id and messages by folder + UID (or id). These
+  // apply them straight to the list on screen, the search results, the open
+  // reader and IndexedDB, so a change shows without waiting for a reload and
+  // also reaches rows beyond the first page and folders not on screen. They
+  // work for any signed-in account: the cache of an account not on screen is
+  // kept current too, and only the active account touches the visible stores.
+
+  const isActiveAccountName = (account: string) => (Local.get('email') || 'default') === account;
+  type RealtimeRow = { id?: unknown; folder?: unknown; uid?: unknown };
+
+  // Resolve an event's mailbox (id or path) to a folder path, or '' if unknown.
+  // Current servers name the mailbox by id. When the folder records carry ids,
+  // an id that matches none of them is not looked up by path: the event may be
+  // about another account's mailbox of the same name.
+  const resolveRealtimeFolder = async (account: string, mailbox: unknown, path: unknown) => {
+    const id = typeof mailbox === 'string' ? mailbox : '';
+    const named = typeof path === 'string' && path ? path : id;
+    let sawIds = false;
+    const find = (list: Array<{ id?: unknown; _id?: unknown; path?: string }>) => {
+      const hasIds = list.some((f) => f?.id != null || f?._id != null);
+      sawIds = sawIds || hasIds;
+      const byId = id ? list.find((f) => String(f?.id ?? f?._id ?? '') === id) : null;
+      if (byId || (id && hasIds && OBJECT_ID_PATTERN.test(id))) return byId || null;
+      return (named && list.find((f) => sameFolderPath(f?.path, named))) || null;
+    };
+    if (isActiveAccountName(account)) {
+      const match = find(get(folders) || []);
+      if (match?.path) return match.path as string;
+    }
+    if (!isDemoMode()) {
+      try {
+        const match = find((await db.folders.where('account').equals(account).toArray()) || []);
+        if (match?.path) return match.path as string;
+      } catch (err) {
+        warn('[mailboxStore] realtime folder lookup failed', err);
+      }
+    }
+    if (sawIds && OBJECT_ID_PATTERN.test(id)) return '';
+    return typeof path === 'string' ? path : '';
+  };
+
+  // Events that arrive together for one folder (Thunderbird stores
+  // \Deleted, then expunges; a large change arrives in slices) share one read
+  // of its rows while that read is in flight.
+  const folderRowReads = new Map<string, Promise<RealtimeRow[]>>();
+  const readFolderRows = (account: string, folder: string) => {
+    const key = `${account}\u0000${folder}`;
+    const inFlight = folderRowReads.get(key);
+    if (inFlight) return inFlight;
+    const rows = Promise.resolve(
+      db.messages.where('[account+folder]').equals([account, folder]).toArray(),
+    )
+      .then((list) => (list || []) as RealtimeRow[])
+      .finally(() => folderRowReads.delete(key));
+    folderRowReads.set(key, rows);
+    return rows;
+  };
+
+  // Ids of messages with a local move or delete still on its way to the
+  // server. Their cached rows reflect that change, not the server's folder.
+  const getLocallyMovingIds = async (account: string) => {
+    const ids = new Set(getPendingDeleteIds().map(String));
+    try {
+      for (const id of await getQueuedMessageIds(account)) ids.add(String(id));
+    } catch {
+      // the queue is unreadable: rely on the pending tracker alone
+    }
+    return ids;
+  };
+
+  type RealtimeLocator = { folder: string; uids: Set<number>; ids: Set<string> };
+
+  // Current cached rows an event names. Ids are read directly; UIDs are
+  // resolved from the list on screen when possible, else from one read of
+  // the folder. Rows are always read fresh by id, so a shared folder read
+  // never writes back stale data.
+  const readRealtimeRows = async (
+    account: string,
+    locator: RealtimeLocator,
+  ): Promise<RealtimeRow[]> => {
+    if (isDemoMode()) return [];
+    const ids = new Set(locator.ids);
+    if (locator.folder && locator.uids.size) {
+      const unresolved = new Set(locator.uids);
+      if (isActiveAccountName(account)) {
+        for (const m of [...(get(messages) || []), ...(get(searchResults) || [])]) {
+          if (m?.id == null || !matchesRemoteMessage(m, { ...locator, ids: undefined })) continue;
+          ids.add(String(m.id));
+          unresolved.delete(Number(m.uid));
+        }
+      }
+      if (unresolved.size) {
+        const scope = { folder: locator.folder, uids: unresolved };
+        for (const row of await readFolderRows(account, locator.folder)) {
+          if (row?.id != null && matchesRemoteMessage(row, scope)) ids.add(String(row.id));
+        }
+      }
+    }
+    if (!ids.size) return [];
+    const moving = await getLocallyMovingIds(account);
+    const rows = await db.messages.bulkGet([...ids].map((id) => [account, id]) as never);
+    return ((rows || []) as RealtimeRow[]).filter(
+      (row) => row && !moving.has(String(row.id)) && matchesRemoteMessage(row, locator),
+    );
+  };
+
+  // Removals stay noted for a few minutes: a sync or list load that fetched
+  // its page before the change would otherwise write the rows back.
+  const noteRemoteRemoval = (account: string, locator: RealtimeLocator) => {
+    const now = Date.now();
+    remoteRemovals = remoteRemovals.filter((entry) => entry.expiresAt > now);
+    remoteRemovals.push({ ...locator, account, expiresAt: now + REMOTE_REMOVAL_TTL_MS });
+  };
+  const isRemotelyRemoved = (account: string, msg: RealtimeRow) => {
+    if (!remoteRemovals.length) return false;
+    const now = Date.now();
+    return remoteRemovals.some(
+      (entry) =>
+        entry.account === account && entry.expiresAt > now && matchesRemoteMessage(msg, entry),
+    );
+  };
+
+  // Drop rows again that a sync of the folder wrote back from a page it
+  // fetched before they were removed.
+  onSyncTaskComplete((data: { taskType?: string; account?: string; folder?: string }) => {
+    if (data?.taskType !== 'metadata' && data?.taskType !== 'backfill') return;
+    const account = data.account || Local.get('email') || 'default';
+    const now = Date.now();
+    const entries = remoteRemovals.filter(
+      (entry) =>
+        entry.account === account &&
+        entry.expiresAt > now &&
+        (!entry.folder || sameFolderPath(entry.folder, data.folder)),
+    );
+    if (!entries.length || isDemoMode()) return;
+    (async () => {
+      for (const entry of entries) {
+        const keys = (await readRealtimeRows(account, entry)).map((row) => [account, row.id]);
+        if (!keys.length) continue;
+        await db.messages.bulkDelete(keys as never);
+        await db.messageBodies.bulkDelete(keys as never);
+        if (isActiveAccountName(account)) {
+          searchStore.actions.removeFromIndex(keys.map(([, id]) => String(id))).catch(() => {});
+        }
+      }
+    })().catch((err) => warn('[mailboxStore] realtime removal re-apply failed', err));
+  });
+
+  // Messages expunged from `folder`, or moved out of it. For a move into a
+  // known folder the cached rows are moved with the destination UID (by
+  // position in the lockstep lists) instead of being deleted.
+  const removeRemoteMessages = async ({
+    account,
+    folder = '',
+    uids = [],
+    ids = [],
+    destinationFolder = '',
+    destinationUids = [],
+    moved = false,
+  }: {
+    account: string;
+    folder?: string;
+    uids?: number[];
+    ids?: string[];
+    destinationFolder?: string;
+    destinationUids?: number[];
+    moved?: boolean;
+  }) => {
+    const locator = { folder, uids: new Set(uids), ids: new Set(ids.map(String)) };
+    if (!locator.ids.size && !(folder && locator.uids.size)) return [];
+    // A moved message keeps its id and may come back (delete, then undo), so
+    // only its source UID is noted; UIDs are never reused in a mailbox.
+    const noteRemoval = () => {
+      if (!moved) noteRemoteRemoval(account, locator);
+      else if (folder && locator.uids.size) {
+        noteRemoteRemoval(account, { folder, uids: locator.uids, ids: new Set() });
+      }
+    };
+    const removed = new Set<string>();
+    const active = isActiveAccountName(account);
+    if (active) {
+      const keep = (m: RealtimeRow) => {
+        if (!matchesRemoteMessage(m, locator)) return true;
+        if (m?.id != null) removed.add(String(m.id));
+        return false;
+      };
+      // update() builds on a removal still waiting for its frame
+      messages.update((list) => {
+        const nextList = (list || []).filter(keep);
+        return nextList.length === (list || []).length ? list : nextList;
+      });
+      const results = get(searchResults) || [];
+      const nextResults = results.filter(keep);
+      if (nextResults.length !== results.length) searchResults.set(nextResults);
+      const selected = get(selectedMessage);
+      if (selected) keep(selected);
+      clearRemovedSelection(removed);
+      if (folder) invalidateFolderInMemCache(account, folder);
+      else folderMessageCache.clear();
+      if (destinationFolder) invalidateFolderInMemCache(account, destinationFolder);
+    }
+
+    const movedRows: Array<RealtimeRow & Record<string, unknown>> = [];
+    try {
+      const rows = await readRealtimeRows(account, locator);
+      const deleteKeys = [];
+      for (const row of rows) {
+        const id = String(row.id);
+        removed.add(id);
+        locator.ids.add(id);
+        const byId = ids.length === destinationUids.length ? ids.indexOf(id) : -1;
+        const index = byId >= 0 ? byId : uids.indexOf(Number(row.uid));
+        const destinationUid = index >= 0 ? destinationUids[index] : undefined;
+        if (destinationFolder && destinationUid) {
+          movedRows.push({
+            ...(row as object),
+            account,
+            folder: destinationFolder,
+            uid: destinationUid,
+            updatedAt: Date.now(),
+          });
+        } else {
+          deleteKeys.push([account, row.id]);
+        }
+      }
+      noteRemoval();
+      if (deleteKeys.length) {
+        await db.messages.bulkDelete(deleteKeys as never);
+        await db.messageBodies.bulkDelete(deleteKeys as never);
+      }
+      if (movedRows.length) {
+        await db.messages.bulkPut(movedRows as never);
+        const bodies = await db.messageBodies.bulkGet(
+          movedRows.map((row) => [account, row.id]) as never,
+        );
+        const movedBodies = ((bodies || []) as Array<Record<string, unknown> | undefined>)
+          .filter(Boolean)
+          .map((body) => ({ ...body, folder: destinationFolder, updatedAt: Date.now() }));
+        if (movedBodies.length) await db.messageBodies.bulkPut(movedBodies as never);
+      }
+    } catch (err) {
+      noteRemoval();
+      warn('[mailboxStore] realtime cache removal failed', err);
+    }
+
+    if (active && removed.size) {
+      const movedIds = new Set(movedRows.map((row) => String(row.id)));
+      const gone = [...removed].filter((id) => !movedIds.has(id));
+      if (gone.length) searchStore.actions.removeFromIndex(gone).catch(() => {});
+      if (movedRows.length) searchStore.actions.indexMessages(movedRows as never).catch(() => {});
+    }
+    return [...removed];
+  };
+
+  // Shared by flag and label changes: patch matching rows on screen and in
+  // IndexedDB with `change`, and drop any pending local change for them, since
+  // the server now reports a newer state.
+  const patchRemoteMessages = async (
+    account: string,
+    locator: RealtimeLocator,
+    change: <T extends object>(msg: T) => T,
+  ) => {
+    if (!locator.ids.size && !(locator.folder && locator.uids.size)) return [];
+    const patched = new Set<string>();
+    const patch = <T extends RealtimeRow>(m: T): T => {
+      if (!matchesRemoteMessage(m, locator)) return m;
+      if (m?.id != null) {
+        patched.add(String(m.id));
+        cancelPendingFlag(String(m.id));
+      }
+      return change(m);
+    };
+    if (isActiveAccountName(account)) {
+      messages.update((list) => {
+        const nextList = (list || []).map(patch);
+        return nextList.some((m, idx) => m !== list[idx]) ? nextList : list;
+      });
+      const results = get(searchResults) || [];
+      const nextResults = results.map(patch);
+      if (nextResults.some((m, idx) => m !== results[idx])) searchResults.set(nextResults);
+      const selected = get(selectedMessage);
+      const nextSelected = selected ? patch(selected) : selected;
+      if (nextSelected !== selected) selectedMessage.set(nextSelected);
+      if (locator.folder) invalidateFolderInMemCache(account, locator.folder);
+      else folderMessageCache.clear();
+    }
+
+    try {
+      const rows = await readRealtimeRows(account, locator);
+      const changed = [];
+      for (const row of rows) {
+        patched.add(String(row.id));
+        const next = change(row);
+        if (next !== row) changed.push({ ...(next as object), account, updatedAt: Date.now() });
+      }
+      if (changed.length) await db.messages.bulkPut(changed as never);
+    } catch (err) {
+      warn('[mailboxStore] realtime cache update failed', err);
+    }
+    return [...patched];
+  };
+
+  const applyRemoteFlags = ({
+    account,
+    folder = '',
+    uids = [],
+    ids = [],
+    action,
+    flags = [],
+  }: {
+    account: string;
+    folder?: string;
+    uids?: number[];
+    ids?: string[];
+    action: string;
+    flags?: string[];
+  }) =>
+    patchRemoteMessages(
+      account,
+      { folder, uids: new Set(uids), ids: new Set(ids.map(String)) },
+      (msg) => applyRemoteFlagChange(msg, action, flags),
+    );
+
+  const applyRemoteLabels = ({
+    account,
+    folder = '',
+    uids = [],
+    ids = [],
+    action,
+    labels = [],
+  }: {
+    account: string;
+    folder?: string;
+    uids?: number[];
+    ids?: string[];
+    action: string;
+    labels?: string[];
+  }) =>
+    patchRemoteMessages(
+      account,
+      { folder, uids: new Set(uids), ids: new Set(ids.map(String)) },
+      (msg) => applyRemoteLabelChange(msg, action, labels),
+    );
+
+  // A folder renamed or deleted elsewhere: move or drop its cached messages,
+  // and keep the view on a folder that exists.
+  const applyRemoteMailboxChange = async ({
+    account,
+    type,
+    path = '',
+    oldPath = '',
+    newPath = '',
+  }: {
+    account: string;
+    type: 'renamed' | 'deleted' | 'created';
+    path?: string;
+    oldPath?: string;
+    newPath?: string;
+  }) => {
+    const active = isActiveAccountName(account);
+    const sameFolder = sameFolderPath;
+    // A folder deleted and created again starts its UIDs over: removal notes
+    // for the old folder would hide new messages there.
+    const paths = [path, oldPath, newPath].filter(Boolean);
+    remoteRemovals = remoteRemovals.filter(
+      (entry) => entry.account !== account || !paths.some((p) => sameFolderPath(entry.folder, p)),
+    );
+    if (type === 'created') return;
+    if (type === 'renamed') {
+      if (
+        !oldPath ||
+        !newPath ||
+        oldPath === newPath ||
+        ALWAYS_PROTECTED.has(oldPath.toUpperCase())
+      )
+        return;
+      if (active) {
+        messages.update((list) =>
+          (list || []).map((m) => (sameFolder(m?.folder, oldPath) ? { ...m, folder: newPath } : m)),
+        );
+        invalidateFolderInMemCache(account, oldPath);
+        const expanded = get(expandedFolders);
+        if (expanded.has(oldPath)) {
+          const next = new Set(expanded);
+          next.delete(oldPath);
+          next.add(newPath);
+          expandedFolders.set(next);
+          saveExpandedState(next);
+        }
+        if (sameFolder(get(selectedFolder), oldPath)) selectedFolder.set(newPath);
+      }
+      if (isDemoMode()) return;
+      try {
+        await db.messages
+          .where('[account+folder]')
+          .equals([account, oldPath])
+          .modify({ folder: newPath });
+        await db.messageBodies
+          .where('[account+folder]')
+          .equals([account, oldPath])
+          .modify({ folder: newPath });
+        await db.folders
+          .where('[account+path]')
+          .equals([account, oldPath])
+          .modify({ path: newPath });
+      } catch (err) {
+        warn('[mailboxStore] realtime folder rename failed', err);
+      }
+      return;
+    }
+
+    if (type !== 'deleted' || !path || ALWAYS_PROTECTED.has(path.toUpperCase())) return;
+    if (active) {
+      const removedIds = new Set(
+        (get(messages) || []).filter((m) => sameFolder(m?.folder, path)).map((m) => String(m.id)),
+      );
+      const selected = get(selectedMessage);
+      if (selected && sameFolder(selected.folder, path)) removedIds.add(String(selected.id));
+      clearRemovedSelection(removedIds);
+      invalidateFolderInMemCache(account, path);
+      const expanded = get(expandedFolders);
+      if (expanded.has(path)) {
+        const next = new Set(expanded);
+        next.delete(path);
+        expandedFolders.set(next);
+        saveExpandedState(next);
+      }
+      folders.set((get(folders) || []).filter((f) => !sameFolder(f?.path, path)));
+      if (sameFolder(get(selectedFolder), path)) {
+        const inbox = (get(folders) || []).find((f) => f.path?.toUpperCase?.() === 'INBOX');
+        selectFolder(inbox?.path || 'INBOX');
+      }
+    }
+    if (isDemoMode()) return;
+    try {
+      if (active) {
+        const rows = await db.messages.where('[account+folder]').equals([account, path]).toArray();
+        const ids = ((rows || []) as RealtimeRow[])
+          .filter((m) => m?.id != null)
+          .map((m) => String(m.id));
+        if (ids.length) searchStore.actions.removeFromIndex(ids).catch(() => {});
+      }
+      await db.messages.where('[account+folder]').equals([account, path]).delete();
+      await db.messageBodies.where('[account+folder]').equals([account, path]).delete();
+      await db.folders.where('[account+path]').equals([account, path]).delete();
+    } catch (err) {
+      warn('[mailboxStore] realtime folder delete failed', err);
+    }
+  };
 
   const getArchiveFolderPath = () => {
     // Check if user has set an account-specific custom archive folder
@@ -1986,6 +2610,10 @@ const createMailboxStore = () => {
           id: recordId,
           account,
           folder: target,
+          // The UID belongs to the source folder; the target assigns a new
+          // one, which the next sync fills in. Kept, it would match a
+          // different message in the target folder named by a later event.
+          uid: null,
           labels: existing?.labels ?? msg.labels ?? [],
           updatedAt: Date.now(),
         };
@@ -2188,6 +2816,8 @@ const createMailboxStore = () => {
           id: msg.id,
           account,
           folder: target,
+          // The source UID means another message in the target (see moveMessage).
+          uid: null,
           labels: existingMessages[idx]?.labels ?? msg.labels ?? [],
           updatedAt: Date.now(),
         }));
@@ -3009,6 +3639,13 @@ const createMailboxStore = () => {
       emptySpam,
       clearFolderMessageCache: () => folderMessageCache.clear(),
       invalidateFolderInMemCache,
+      // Changes made by other clients
+      resolveRealtimeFolder,
+      removeRemoteMessages,
+      applyRemoteFlags,
+      applyRemoteLabels,
+      applyRemoteMailboxChange,
+      refreshSearch,
       addPendingFlagMutation,
       addPendingDeletes,
       revertFailedMutation,

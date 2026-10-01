@@ -3,6 +3,7 @@ import type { Writable, Readable } from 'svelte/store';
 import { deferredWritable } from '../utils/deferred-store';
 import { shallowArrayEqual } from '../utils/store-utils.ts';
 import { sortMessages } from '../utils/message-sort.ts';
+import { hasDeletedFlag } from '../utils/sync-helpers';
 import { selectedFolder } from './folderStore';
 import {
   query,
@@ -110,7 +111,9 @@ export const filteredMessages: Readable<Message[]> = derived(
           (m) => !$selectedFolder || m.folder?.toUpperCase() === selectedUpper,
         )
       : ($messages || []).filter((m) => m.folder?.toUpperCase() === selectedUpper);
-    let list = base;
+    // A message flagged \Deleted is waiting for EXPUNGE; hide it as Apple Mail
+    // does, so a delete made by flagging (Thunderbird) shows at once.
+    let list = base.filter((m) => !hasDeletedFlag(m.flags));
     if ($unreadOnly) list = list.filter((m) => m.is_unread);
     if ($hasAttachmentsOnly) list = list.filter((m) => m.has_attachment);
     if ($filterByLabel && $filterByLabel.length > 0) {

@@ -134,6 +134,10 @@ export function createPendingFlagTracker({
         }
       }
     },
+    getIds(): string[] {
+      prune();
+      return [...pending.keys()];
+    },
     // Stop suppressing a single id without waiting out its TTL — used when a
     // queued mutation for it has been confirmed permanently failed and the
     // caller is about to restore the pre-mutation flag values instead.

@@ -9,12 +9,22 @@
  * of idempotent work (for example, UI notifications and data refreshes).
  */
 
+import { normalizeStringList, normalizeUidList } from './realtime-payload.js';
+
 export const PUSH_COALESCE_MS = 1500;
 // How long a socket event waits for its push copy where the system may draw
 // the push itself (macOS; see shouldHoldSocketEvent below).
 export const SOCKET_HOLD_FOR_PUSH_MS = 3000;
 export const TRANSPORT_DEDUP_TTL_MS = 5 * 60 * 1000;
 export const MAX_TRANSPORT_DEDUP_ENTRIES = 500;
+// The server can publish one change twice, each copy with its own
+// notification_id. A content identity collapses the copies; for events that
+// carry a notification_id it only has to outlive the copies, so it expires
+// sooner and cannot swallow a later event that reuses a UID.
+export const ONE_TIME_CONTENT_TTL_MS = 60 * 1000;
+// Window in which a repeatable change identical to the previous change of the
+// same target is treated as a second copy of it.
+export const REPEATABLE_CONTENT_TTL_MS = 2000;
 
 const MAX_KEY_PART_LENGTH = 256;
 
@@ -27,8 +37,24 @@ function firstNonEmpty(...values) {
   return '';
 }
 
+// Push data can carry lists as strings ("[1,2]" or "1,2"); normalize them so
+// both copies of an event produce one identity.
+function joinUids(value) {
+  return normalizeUidList(value).join(',');
+}
+
 function joinValues(value) {
-  return Array.isArray(value) ? value.map(String).join(',') : '';
+  return normalizeStringList(value).join(',');
+}
+
+function getUidValidity(data) {
+  return firstNonEmpty(
+    data.uidValidity,
+    data.uid_validity,
+    data.uidvalidity,
+    data.message?.uidValidity,
+    data.message?.uid_validity,
+  );
 }
 
 function getCalendarIdentity(data) {
@@ -118,76 +144,164 @@ const ONE_TIME_EVENTS = new Set([
  * lacks it (or vice versa) on mixed-version deployments.
  */
 export function getRealtimeEventKeys(eventName, data) {
+  return getRealtimeEventKeyEntries(eventName, data).map((entry) => entry.key);
+}
+
+// Each key with how long it stays remembered.
+function getRealtimeEventKeyEntries(eventName, data) {
   if (typeof eventName !== 'string' || !data || typeof data !== 'object') return [];
 
-  const keys = [];
+  const entries = [];
 
   // notification_id is minted per delivery by the server, so it is already
   // globally unique and needs no account scoping.
   const notificationId = firstNonEmpty(data.notification_id, data.notificationId);
-  if (notificationId) keys.push(`id:${notificationId.slice(0, MAX_KEY_PART_LENGTH)}`);
+  if (notificationId) {
+    entries.push({
+      key: `id:${notificationId.slice(0, MAX_KEY_PART_LENGTH)}`,
+      ttl: TRANSPORT_DEDUP_TTL_MS,
+    });
+  }
 
   const legacyKey = getLegacyEventKey(eventName, data);
-  if (legacyKey && (!notificationId || ONE_TIME_EVENTS.has(eventName))) keys.push(legacyKey);
+  if (legacyKey && ONE_TIME_EVENTS.has(eventName)) {
+    entries.push({
+      key: legacyKey,
+      ttl: notificationId ? ONE_TIME_CONTENT_TTL_MS : TRANSPORT_DEDUP_TTL_MS,
+    });
+  } else if (legacyKey && !notificationId) {
+    entries.push({ key: legacyKey, ttl: TRANSPORT_DEDUP_TTL_MS });
+  }
 
-  return keys;
+  return entries;
+}
+
+/**
+ * For a repeatable event, the thing it changes (`target`) and what it changed
+ * it to (`change`). Two server copies of one change share both, and the
+ * server `timestamp` too. A real repeat, such as read then unread then read
+ * again, has its own timestamp, so without equal timestamps nothing is a copy.
+ */
+function getRepeatableChange(eventName, data) {
+  if (!data || typeof data !== 'object') return null;
+  const timestamp = firstNonEmpty(data.timestamp);
+  if (!timestamp) return null;
+  let target = '';
+  let change = '';
+  switch (eventName) {
+    case 'flagsUpdated':
+    case 'labelsUpdated': {
+      const uids = firstNonEmpty(joinUids(data.uids), data.uid, data.id);
+      if (!uids) return null;
+      // Without the flags or labels two different changes look the same
+      const values = joinValues(eventName === 'flagsUpdated' ? data.flags : data.labels);
+      if (!values) return null;
+      target = [firstNonEmpty(data.mailbox, data.path), uids, values].join('>');
+      change = firstNonEmpty(data.action) || 'update';
+      break;
+    }
+    case 'mailboxCreated':
+    case 'mailboxDeleted':
+      target = firstNonEmpty(data.path, data.mailbox?.path, data.mailbox);
+      change = eventName;
+      break;
+    case 'mailboxRenamed': {
+      const oldPath = firstNonEmpty(data.oldPath, data.old_path);
+      const newPath = firstNonEmpty(data.newPath, data.new_path);
+      if (!oldPath || !newPath) return null;
+      target = [oldPath, newPath].sort().join('>');
+      change = `${oldPath}>${newPath}`;
+      break;
+    }
+    default:
+      return null;
+  }
+
+  if (!target) return null;
+  return {
+    target: `${accountPrefix(data)}${eventName.startsWith('mailbox') ? 'mailbox' : eventName}:${target.slice(0, MAX_KEY_PART_LENGTH * 4)}`,
+    change: `${change}@${timestamp.slice(0, MAX_KEY_PART_LENGTH)}`,
+  };
 }
 
 function getLegacyEventKey(eventName, data) {
   const message = data.message && typeof data.message === 'object' ? data.message : data;
   let identity = '';
   switch (eventName) {
-    case 'newMessage':
-      identity = firstNonEmpty(
+    // A UID is only unique within one mailbox and one UIDVALIDITY, so both
+    // are part of the identity when the payload names them.
+    case 'newMessage': {
+      const uid = firstNonEmpty(
         message.uid,
         message.id,
         message.message_id,
         message.MessageId,
         message.messageId,
       );
+      if (!uid) return '';
+      identity = [
+        // the socket names the mailbox by path, push by id: prefer the path
+        firstNonEmpty(message.folder_path, data.path, data.mailbox),
+        getUidValidity(data),
+        uid,
+      ]
+        .filter(Boolean)
+        .join('>');
       break;
+    }
     // The server names the moved and copied messages in sourceUid and
     // destinationUid. Without the UIDs every move between the same two
     // folders had one identity, and each one after the first was dropped.
     case 'messagesMoved': {
       const uids = firstNonEmpty(
-        joinValues(data.uids),
-        joinValues(data.sourceUid),
-        joinValues(data.source_uid),
+        joinUids(data.uids),
+        joinUids(data.sourceUid),
+        joinUids(data.source_uid),
         data.uid,
       );
       if (!uids) return '';
       identity = [
         firstNonEmpty(data.sourceMailbox, data.source_mailbox),
         firstNonEmpty(data.destinationMailbox, data.destination_mailbox),
+        getUidValidity(data),
         uids,
-      ].join('>');
+      ]
+        .filter(Boolean)
+        .join('>');
       break;
     }
     case 'messagesCopied': {
       const uids = firstNonEmpty(
-        joinValues(data.uids),
-        joinValues(data.destinationUid),
-        joinValues(data.destination_uid),
+        joinUids(data.uids),
+        joinUids(data.destinationUid),
+        joinUids(data.destination_uid),
         data.uid,
       );
       if (!uids) return '';
-      identity = [firstNonEmpty(data.destinationMailbox, data.destination_mailbox), uids].join('>');
+      identity = [
+        firstNonEmpty(data.destinationMailbox, data.destination_mailbox),
+        getUidValidity(data),
+        uids,
+      ]
+        .filter(Boolean)
+        .join('>');
       break;
     }
     case 'flagsUpdated':
     case 'labelsUpdated':
       identity = [
         firstNonEmpty(data.mailbox, data.path),
-        firstNonEmpty(joinValues(data.uids), data.uid, data.id),
+        firstNonEmpty(joinUids(data.uids), data.uid, data.id),
         firstNonEmpty(joinValues(data.flags), joinValues(data.labels), data.action),
       ].join('>');
       break;
     case 'messagesExpunged': {
       // without UIDs this would name every expunge in the mailbox
-      const uids = firstNonEmpty(joinValues(data.uids), data.uid, data.id);
+      const uids = firstNonEmpty(joinUids(data.uids), data.uid, data.id);
       if (!uids) return '';
-      identity = [firstNonEmpty(data.mailbox, data.path), uids].join('>');
+      identity = [firstNonEmpty(data.mailbox, data.path), getUidValidity(data), uids]
+        .filter(Boolean)
+        .join('>');
       break;
     }
     case 'mailboxCreated':
@@ -211,8 +325,12 @@ function getLegacyEventKey(eventName, data) {
       identity = getCalendarIdentity(data);
       break;
     case 'addressBookCreated':
+    case 'addressBookUpdated':
     case 'addressBookDeleted':
+      // the server sends the address book as data.addressBook
       identity = firstNonEmpty(
+        data.addressBook?.id,
+        data.addressBook?.addressBookId,
         data.addressBookId,
         data.address_book_id,
         data.href,
@@ -268,46 +386,68 @@ export function createRealtimeEventCoalescer({
 }) {
   if (typeof onEvent !== 'function') throw new TypeError('onEvent must be a function');
 
+  // key -> expiry time
   const seenEvents = new Map();
+  // repeatable target -> { change, expiresAt } of the last delivered change
+  const recentChanges = new Map();
   const pendingPushEvents = new Map();
   const heldSocketEvents = new Map();
   let destroyed = false;
 
-  const pruneSeenEvents = (now) => {
-    for (const [key, timestamp] of seenEvents) {
-      if (now - timestamp >= TRANSPORT_DEDUP_TTL_MS) seenEvents.delete(key);
+  const pruneMap = (map, now) => {
+    for (const [key, value] of map) {
+      const expiresAt = typeof value === 'number' ? value : value.expiresAt;
+      if (now >= expiresAt) map.delete(key);
     }
-    while (seenEvents.size > MAX_TRANSPORT_DEDUP_ENTRIES) {
-      const oldestKey = seenEvents.keys().next().value;
+    while (map.size > MAX_TRANSPORT_DEDUP_ENTRIES) {
+      const oldestKey = map.keys().next().value;
       if (oldestKey === undefined) break;
-      seenEvents.delete(oldestKey);
+      map.delete(oldestKey);
     }
   };
 
   const hasSeen = (keys, now = Date.now()) => {
     for (const key of keys) {
-      const timestamp = seenEvents.get(key);
-      if (timestamp !== undefined && now - timestamp < TRANSPORT_DEDUP_TTL_MS) return true;
+      const expiresAt = seenEvents.get(key);
+      if (expiresAt !== undefined && now < expiresAt) return true;
     }
 
     return false;
   };
 
-  const remember = (keys, now = Date.now()) => {
-    if (!keys.length) return;
-    for (const key of keys) {
+  const remember = (entries, now = Date.now()) => {
+    if (!entries.length) return;
+    for (const { key, ttl } of entries) {
       seenEvents.delete(key);
-      seenEvents.set(key, now);
+      seenEvents.set(key, now + ttl);
     }
 
-    pruneSeenEvents(now);
+    pruneMap(seenEvents, now);
+  };
+
+  // True when this change repeats the last delivered change of its target
+  // within the copy window. Otherwise records it as the last change.
+  const isRepeatedChange = (eventName, data, now = Date.now()) => {
+    const repeatable = getRepeatableChange(eventName, data);
+    if (!repeatable) return false;
+    const last = recentChanges.get(repeatable.target);
+    if (last && now < last.expiresAt && last.change === repeatable.change) return true;
+    recentChanges.delete(repeatable.target);
+    recentChanges.set(repeatable.target, {
+      change: repeatable.change,
+      expiresAt: now + REPEATABLE_CONTENT_TTL_MS,
+    });
+    pruneMap(recentChanges, now);
+    return false;
   };
 
   const consume = (source, eventName, data, suppressVisual = false) => {
     if (destroyed) return false;
-    const keys = getRealtimeEventKeys(eventName, data);
-    if (hasSeen(keys)) return false;
-    remember(keys);
+    const entries = getRealtimeEventKeyEntries(eventName, data);
+    if (hasSeen(entries.map((entry) => entry.key))) return false;
+    // Remembered either way, so the push copy of a dropped copy is dropped too.
+    remember(entries);
+    if (isRepeatedChange(eventName, data)) return false;
     onEvent(eventName, data, { source, suppressVisual });
     return true;
   };
@@ -422,6 +562,7 @@ export function createRealtimeEventCoalescer({
     for (const { timer } of heldSocketEvents.values()) clearTimeout(timer);
     heldSocketEvents.clear();
     seenEvents.clear();
+    recentChanges.clear();
   };
 
   return { handleWebSocket, handlePush, destroy };

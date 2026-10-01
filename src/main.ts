@@ -682,9 +682,11 @@ function mountContacts() {
   }
 }
 
-// Wire WebSocket CustomEvents to Calendar and Contacts APIs.
-// The websocket-updater dispatches these events when CalDAV/CardDAV changes arrive.
-// We listen here because calendarApi/contactsApi are only available in main.ts scope.
+// Wire WebSocket CustomEvents to the Calendar API.
+// The websocket-updater dispatches these events when CalDAV changes arrive.
+// We listen here because calendarApi is only available in main.ts scope.
+// Contacts.svelte listens for its own fe:contacts-changed and
+// fe:contact-changed events; a second listener here reloaded it twice.
 // Store references for cleanup on sign-out.
 const _feCalendarChanged = () => {
   calendarApi.reload?.();
@@ -705,14 +707,6 @@ const _feCalendarEventChanged = (event: Event) => {
   calendarApi.reload?.();
 };
 
-const _feContactsChanged = () => {
-  contactsApi.reload?.();
-};
-
-const _feContactChanged = () => {
-  contactsApi.reload?.();
-};
-
 const _feMailServiceToast = (event: Event) => {
   const detail = (event as CustomEvent<{ message?: string; type?: string }>).detail;
   const message = typeof detail?.message === 'string' ? detail.message : '';
@@ -731,15 +725,11 @@ let _handleNewReleaseWeb: ((e: Event) => void) | undefined = null;
 
 globalThis.addEventListener('fe:calendar-changed', _feCalendarChanged);
 globalThis.addEventListener('fe:calendar-event-changed', _feCalendarEventChanged);
-globalThis.addEventListener('fe:contacts-changed', _feContactsChanged);
-globalThis.addEventListener('fe:contact-changed', _feContactChanged);
 globalThis.addEventListener('fe:mail-service-toast', _feMailServiceToast);
 
 export function cleanupCustomEventListeners() {
   globalThis.removeEventListener('fe:calendar-changed', _feCalendarChanged);
   globalThis.removeEventListener('fe:calendar-event-changed', _feCalendarEventChanged);
-  globalThis.removeEventListener('fe:contacts-changed', _feContactsChanged);
-  globalThis.removeEventListener('fe:contact-changed', _feContactChanged);
   globalThis.removeEventListener('fe:mail-service-toast', _feMailServiceToast);
   if (_handleNewReleaseTauri) {
     globalThis.removeEventListener('fe:new-release', _handleNewReleaseTauri);

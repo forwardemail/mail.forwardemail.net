@@ -2,6 +2,8 @@ import {
   createRealtimeEventCoalescer,
   getRealtimeEventKey,
   PUSH_COALESCE_MS,
+  REPEATABLE_CONTENT_TTL_MS,
+  ONE_TIME_CONTENT_TTL_MS,
   SOCKET_HOLD_FOR_PUSH_MS,
   TRANSPORT_DEDUP_TTL_MS,
 } from '../../src/utils/realtime-event-coalescer.js';
@@ -486,6 +488,209 @@ describe('realtime event transport coalescer', () => {
       coalescer.destroy();
       vi.advanceTimersByTime(SOCKET_HOLD_FOR_PUSH_MS);
       expect(onEvent).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('two server copies of one change', () => {
+    // Older servers publish some events twice: each copy has its own
+    // notification_id, the same content and the same server timestamp.
+    const flags = (id, action, extra = {}) => ({
+      notificationId: id,
+      timestamp: 1000,
+      _account: 'alice@example.com',
+      mailbox: 'inbox-id',
+      uids: [5],
+      flags: ['\\Seen'],
+      action,
+      ...extra,
+    });
+
+    it('delivers a flag change once', () => {
+      const onEvent = vi.fn();
+      const coalescer = createRealtimeEventCoalescer({ onEvent });
+
+      expect(coalescer.handleWebSocket('flagsUpdated', flags('a', 'add'))).toBe(true);
+      expect(coalescer.handleWebSocket('flagsUpdated', flags('b', 'add'))).toBe(false);
+      expect(onEvent).toHaveBeenCalledTimes(1);
+    });
+
+    it('drops the push copy of the dropped copy as well', () => {
+      const onEvent = vi.fn();
+      const coalescer = createRealtimeEventCoalescer({ onEvent });
+
+      coalescer.handleWebSocket('flagsUpdated', flags('a', 'add'));
+      coalescer.handleWebSocket('flagsUpdated', flags('b', 'add'));
+      vi.advanceTimersByTime(REPEATABLE_CONTENT_TTL_MS + 1);
+      coalescer.handlePush({ event: 'flagsUpdated', ...flags('b', 'add') });
+      vi.advanceTimersByTime(PUSH_COALESCE_MS);
+
+      expect(onEvent).toHaveBeenCalledTimes(1);
+    });
+
+    it('delivers the same change again when it has its own timestamp', () => {
+      // read, then unread here (no event back), then read again elsewhere
+      const onEvent = vi.fn();
+      const coalescer = createRealtimeEventCoalescer({ onEvent });
+
+      coalescer.handleWebSocket('flagsUpdated', flags('a', 'add'));
+      expect(
+        coalescer.handleWebSocket('flagsUpdated', flags('b', 'add', { timestamp: 1500 })),
+      ).toBe(true);
+      expect(onEvent).toHaveBeenCalledTimes(2);
+    });
+
+    it('treats nothing as a copy without a timestamp', () => {
+      const onEvent = vi.fn();
+      const coalescer = createRealtimeEventCoalescer({ onEvent });
+
+      coalescer.handleWebSocket('flagsUpdated', flags('a', 'add', { timestamp: undefined }));
+      coalescer.handleWebSocket('flagsUpdated', flags('b', 'add', { timestamp: undefined }));
+      expect(onEvent).toHaveBeenCalledTimes(2);
+    });
+
+    it('delivers the same change again once the copy window has passed', () => {
+      const onEvent = vi.fn();
+      const coalescer = createRealtimeEventCoalescer({ onEvent });
+
+      coalescer.handleWebSocket('flagsUpdated', flags('a', 'add'));
+      vi.advanceTimersByTime(REPEATABLE_CONTENT_TTL_MS);
+      expect(coalescer.handleWebSocket('flagsUpdated', flags('b', 'add'))).toBe(true);
+      expect(onEvent).toHaveBeenCalledTimes(2);
+    });
+
+    it('treats push lists sent as strings like the socket arrays', () => {
+      const onEvent = vi.fn();
+      const coalescer = createRealtimeEventCoalescer({ onEvent });
+
+      coalescer.handleWebSocket('flagsUpdated', flags('a', 'add'));
+      coalescer.handlePush({
+        event: 'flagsUpdated',
+        ...flags('b', 'add', { uids: '[5]', flags: '["\\\\Seen"]' }),
+      });
+      vi.advanceTimersByTime(PUSH_COALESCE_MS);
+
+      expect(onEvent).toHaveBeenCalledTimes(1);
+    });
+
+    it('delivers two label changes that do not name their labels', () => {
+      // Older servers omit `labels`; two different changes then look alike.
+      const onEvent = vi.fn();
+      const coalescer = createRealtimeEventCoalescer({ onEvent });
+      const change = (id) => ({
+        notificationId: id,
+        mailbox: 'inbox-id',
+        uids: [5],
+        action: 'add',
+      });
+
+      coalescer.handleWebSocket('labelsUpdated', change('l1'));
+      coalescer.handleWebSocket('labelsUpdated', change('l2'));
+      expect(onEvent).toHaveBeenCalledTimes(2);
+    });
+
+    it('delivers a folder created, deleted and created again', () => {
+      const onEvent = vi.fn();
+      const coalescer = createRealtimeEventCoalescer({ onEvent });
+      const folder = (id, timestamp) => ({ notificationId: id, path: 'Receipts', timestamp });
+
+      expect(coalescer.handleWebSocket('mailboxCreated', folder('c1', 1))).toBe(true);
+      expect(coalescer.handleWebSocket('mailboxCreated', folder('c2', 1))).toBe(false);
+      expect(coalescer.handleWebSocket('mailboxDeleted', folder('d1', 2))).toBe(true);
+      expect(coalescer.handleWebSocket('mailboxCreated', folder('c3', 3))).toBe(true);
+      expect(onEvent).toHaveBeenCalledTimes(3);
+    });
+
+    it('delivers a rename back and forth but not a copy of one rename', () => {
+      const onEvent = vi.fn();
+      const coalescer = createRealtimeEventCoalescer({ onEvent });
+      const rename = (id, oldPath, newPath, timestamp) => ({
+        notificationId: id,
+        oldPath,
+        newPath,
+        timestamp,
+      });
+
+      expect(coalescer.handleWebSocket('mailboxRenamed', rename('r1', 'A', 'B', 1))).toBe(true);
+      expect(coalescer.handleWebSocket('mailboxRenamed', rename('r2', 'A', 'B', 1))).toBe(false);
+      expect(coalescer.handleWebSocket('mailboxRenamed', rename('r3', 'B', 'A', 2))).toBe(true);
+      expect(coalescer.handleWebSocket('mailboxRenamed', rename('r4', 'A', 'B', 3))).toBe(true);
+    });
+
+    it('collapses an expunge with string UIDs and its array copy', () => {
+      const onEvent = vi.fn();
+      const coalescer = createRealtimeEventCoalescer({ onEvent });
+
+      coalescer.handleWebSocket('messagesExpunged', { mailbox: 'inbox-id', uids: [1, 2] });
+      coalescer.handlePush({ event: 'messagesExpunged', mailbox: 'inbox-id', uids: '1,2' });
+      vi.advanceTimersByTime(PUSH_COALESCE_MS);
+
+      expect(onEvent).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('UIDs are only unique within a mailbox', () => {
+    it('gives the socket and push copies of a new message one identity', () => {
+      // The socket names the mailbox by path, push by id; both carry the
+      // message's folder path.
+      const onEvent = vi.fn();
+      const coalescer = createRealtimeEventCoalescer({ onEvent });
+
+      coalescer.handleWebSocket('newMessage', {
+        mailbox: 'INBOX',
+        message: { uid: 7, folder_path: 'INBOX' },
+      });
+      coalescer.handlePush({
+        event: 'newMessage',
+        mailbox: '64b7f0c2e4b0a1a2b3c4d5e6',
+        message: { uid: 7, folder_path: 'INBOX' },
+      });
+      vi.advanceTimersByTime(PUSH_COALESCE_MS);
+
+      expect(onEvent).toHaveBeenCalledTimes(1);
+    });
+
+    it('delivers new messages with the same UID in two mailboxes', () => {
+      const onEvent = vi.fn();
+      const coalescer = createRealtimeEventCoalescer({ onEvent });
+
+      coalescer.handleWebSocket('newMessage', {
+        notificationId: 'n1',
+        mailbox: 'INBOX',
+        message: { uid: 7 },
+      });
+      coalescer.handleWebSocket('newMessage', {
+        notificationId: 'n2',
+        mailbox: 'Sent',
+        message: { uid: 7 },
+      });
+
+      expect(onEvent).toHaveBeenCalledTimes(2);
+    });
+
+    it('delivers a reused UID after UIDVALIDITY changed', () => {
+      const onEvent = vi.fn();
+      const coalescer = createRealtimeEventCoalescer({ onEvent });
+      const expunge = (id, uidValidity) => ({
+        notificationId: id,
+        mailbox: 'folder-id',
+        uidValidity,
+        uids: [1],
+      });
+
+      coalescer.handleWebSocket('messagesExpunged', expunge('e1', 100));
+      expect(coalescer.handleWebSocket('messagesExpunged', expunge('e2', 101))).toBe(true);
+      expect(onEvent).toHaveBeenCalledTimes(2);
+    });
+
+    it('keeps a one-time content key only briefly when the event has a notification id', () => {
+      const onEvent = vi.fn();
+      const coalescer = createRealtimeEventCoalescer({ onEvent });
+      const expunge = (id) => ({ notificationId: id, mailbox: 'folder-id', uids: [1] });
+
+      coalescer.handleWebSocket('messagesExpunged', expunge('e1'));
+      expect(coalescer.handleWebSocket('messagesExpunged', expunge('e2'))).toBe(false);
+      vi.advanceTimersByTime(ONE_TIME_CONTENT_TTL_MS);
+      expect(coalescer.handleWebSocket('messagesExpunged', expunge('e3'))).toBe(true);
     });
   });
 });

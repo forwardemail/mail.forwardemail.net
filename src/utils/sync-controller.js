@@ -422,6 +422,44 @@ export function syncFolderOnDemand(folder, account, opts = {}) {
   pump();
 }
 
+/**
+ * Metadata sync for a folder another client just changed. It goes to the
+ * front of the queue, ahead of queued backfill (moving a copy already queued
+ * further back), and ignores the sync scope: the scope limits background
+ * sync, not a change the user is waiting to see.
+ */
+export function syncFolderForEvent(account, folder) {
+  const folderPath = typeof folder === 'string' ? folder : folder?.path || folder?.name;
+  if (!folderPath || typeof folderPath !== 'string') return;
+  const settings = getSyncSettings();
+  const normalizedAccount = accountKey(account || currentAccount);
+  if (currentAccount && currentAccount !== normalizedAccount) {
+    queue = [];
+    queuedKeys.clear();
+    progressMap.set(new Map());
+    resetSyncWorkerReady();
+  }
+  currentAccount = normalizedAccount;
+
+  const key = buildQueueKey({ type: 'metadata', folder: folderPath });
+  const queued = queue.find((t) => buildQueueKey(t) === key);
+  if (queued) {
+    queue = queue.filter((t) => t !== queued);
+    queuedKeys.delete(key);
+  }
+  unshiftTask(
+    queued || {
+      type: 'metadata',
+      folder: folderPath,
+      pageSize: settings.pageSize || 50,
+      maxMessages: settings.maxHeaders,
+      wantBodies: false,
+    },
+  );
+  setStatus({ account: currentAccount, queue: [...queue] });
+  pump();
+}
+
 export function pauseSync() {
   setStatus({ paused: true, running: false });
 }

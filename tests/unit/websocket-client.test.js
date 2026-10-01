@@ -29,11 +29,12 @@ const API_EVENTS = {
   calendarEventCreated: 'calendarEventCreated',
   calendarEventUpdated: 'calendarEventUpdated',
   calendarEventDeleted: 'calendarEventDeleted',
-  // CardDAV (5)
+  // CardDAV (6)
   contactCreated: 'contactCreated',
   contactUpdated: 'contactUpdated',
   contactDeleted: 'contactDeleted',
   addressBookCreated: 'addressBookCreated',
+  addressBookUpdated: 'addressBookUpdated',
   addressBookDeleted: 'addressBookDeleted',
   // Broadcast (1)
   newRelease: 'newRelease',
@@ -44,8 +45,8 @@ describe('WS_EVENTS', () => {
     expect(Object.isFrozen(WS_EVENTS)).toBe(true);
   });
 
-  it('contains exactly 21 event types', () => {
-    expect(Object.keys(WS_EVENTS)).toHaveLength(21);
+  it('contains exactly 22 event types', () => {
+    expect(Object.keys(WS_EVENTS)).toHaveLength(22);
   });
 
   it('includes all 9 IMAP events', () => {
@@ -69,8 +70,9 @@ describe('WS_EVENTS', () => {
     expect(WS_EVENTS.CALENDAR_EVENT_DELETED).toBe('calendarEventDeleted');
   });
 
-  it('includes all 5 CardDAV events', () => {
+  it('includes all 6 CardDAV events', () => {
     expect(WS_EVENTS.ADDRESS_BOOK_CREATED).toBe('addressBookCreated');
+    expect(WS_EVENTS.ADDRESS_BOOK_UPDATED).toBe('addressBookUpdated');
     expect(WS_EVENTS.ADDRESS_BOOK_DELETED).toBe('addressBookDeleted');
     expect(WS_EVENTS.CONTACT_CREATED).toBe('contactCreated');
     expect(WS_EVENTS.CONTACT_UPDATED).toBe('contactUpdated');

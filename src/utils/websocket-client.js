@@ -91,8 +91,9 @@ export const WS_EVENTS = Object.freeze({
   CALENDAR_EVENT_CREATED: 'calendarEventCreated',
   CALENDAR_EVENT_UPDATED: 'calendarEventUpdated',
   CALENDAR_EVENT_DELETED: 'calendarEventDeleted',
-  // CardDAV (5)
+  // CardDAV (6)
   ADDRESS_BOOK_CREATED: 'addressBookCreated',
+  ADDRESS_BOOK_UPDATED: 'addressBookUpdated',
   ADDRESS_BOOK_DELETED: 'addressBookDeleted',
   CONTACT_CREATED: 'contactCreated',
   CONTACT_UPDATED: 'contactUpdated',
@@ -143,6 +144,7 @@ export function createWebSocketClient(opts = {}) {
   // Rate limiting state
   let messageCount = 0;
   let rateLimitWindowStart = Date.now();
+  let dropReported = false;
 
   // Reset reconnect counter when the browser comes back online
   // A handshake is under way
@@ -188,9 +190,18 @@ export function createWebSocketClient(opts = {}) {
     if (now - rateLimitWindowStart > RATE_LIMIT_WINDOW_MS) {
       messageCount = 0;
       rateLimitWindowStart = now;
+      dropReported = false;
     }
     messageCount++;
     return messageCount > MAX_MESSAGES_PER_MINUTE;
+  }
+
+  // A dropped message may have been an event, so the view can be out of date.
+  // Report it once per rate limit window; listeners schedule a full refresh.
+  function reportDropped(reason) {
+    if (dropReported) return;
+    dropReported = true;
+    dispatch('_messageDropped', { reason });
   }
 
   // Parse incoming message with size validation
@@ -199,6 +210,7 @@ export function createWebSocketClient(opts = {}) {
       // Size check for string messages
       if (typeof data === 'string' && data.length > MAX_MESSAGE_SIZE) {
         console.warn('[ws] Rejected oversized message:', data.length, 'bytes');
+        reportDropped('size');
         return null;
       }
 
@@ -206,6 +218,7 @@ export function createWebSocketClient(opts = {}) {
       if (wantsMsgpackr && msgpackrAvailable && unpack && data instanceof ArrayBuffer) {
         if (data.byteLength > MAX_MESSAGE_SIZE) {
           console.warn('[ws] Rejected oversized binary message:', data.byteLength, 'bytes');
+          reportDropped('size');
           return null;
         }
         return unpack(data);
@@ -220,6 +233,7 @@ export function createWebSocketClient(opts = {}) {
       if (data instanceof Blob) {
         if (data.size > MAX_MESSAGE_SIZE) {
           console.warn('[ws] Rejected oversized blob message:', data.size, 'bytes');
+          reportDropped('size');
           return null;
         }
         return data
@@ -410,6 +424,7 @@ export function createWebSocketClient(opts = {}) {
       // away must not be retried without backoff)
       messageCount = 0;
       rateLimitWindowStart = Date.now();
+      dropReported = false;
       // Don't start ping timeout here — wait for auth response or first ping.
       // The server sends pings after authentication, not immediately on open.
       dispatch('_connected', {});
@@ -419,6 +434,7 @@ export function createWebSocketClient(opts = {}) {
       if (socket !== ws) return;
       // Rate limit check
       if (isRateLimited()) {
+        reportDropped('rate-limit');
         return;
       }
 
@@ -474,9 +490,10 @@ export function createWebSocketClient(opts = {}) {
           break;
       }
 
-      // Destructure: remove protocol fields, keep domain data
+      // Destructure: remove protocol fields, keep domain data. The timestamp
+      // stays: it tells two server copies of one change from a real repeat.
       // eslint-disable-next-line no-unused-vars
-      const { event: _e, type: _t, timestamp: _ts, ...payload } = parsed;
+      const { event: _e, type: _t, ...payload } = parsed;
 
       // Dispatch to registered listeners
       dispatch(eventName, payload);

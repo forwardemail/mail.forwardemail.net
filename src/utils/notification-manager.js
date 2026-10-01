@@ -37,6 +37,12 @@ import { extractEmail } from './address.ts';
 import { Local } from './storage.js';
 import { isActiveAccount, sameAccount } from './account-scope.ts';
 import { createRealtimeEventCoalescer } from './realtime-event-coalescer.js';
+import {
+  normalizeFlagAction,
+  normalizeIdentifier,
+  normalizeStringList,
+  normalizeUidList,
+} from './realtime-payload.js';
 import { openNotificationTarget } from './notification-open.ts';
 
 // ── In-app toast reference ─────────────────────────────────────────────────
@@ -1123,22 +1129,42 @@ async function _handleNewMessageInner(data, { suppressVisual = false, source = '
   }
 }
 
-function handleFlagsUpdated(data) {
-  if (!data || typeof data !== 'object') return;
-
-  if (data.action === 'add' && Array.isArray(data.flags) && data.flags.includes('\\Seen')) {
-    incrementBadge(-1);
-  }
-
-  if (data.action === 'remove' && Array.isArray(data.flags) && data.flags.includes('\\Seen')) {
-    incrementBadge(1);
+// The badge counts unread mail in INBOX, so only an INBOX change moves it.
+// `mailbox` is the mailbox id on current servers; resolve it to a path.
+async function isInboxMailbox(mailbox) {
+  try {
+    const { get } = await import('svelte/store');
+    const { mailboxStore } = await import('../stores/mailboxStore');
+    const folders = get(mailboxStore.state.folders) || [];
+    const folder = folders.find((f) => String(f?.id) === mailbox || f?.path === mailbox);
+    return folder?.path?.toUpperCase?.() === 'INBOX';
+  } catch {
+    return false;
   }
 }
 
-function handleMessagesExpunged(data) {
+// An immediate estimate only: the data refresh that follows the same event
+// recounts unread mail and sets the badge to the real value.
+function handleFlagsUpdated(data) {
   if (!data || typeof data !== 'object') return;
-  const count = Array.isArray(data.uids) ? data.uids.length : 1;
-  incrementBadge(-count);
+  const action = normalizeFlagAction(data.action);
+  if (action !== 'add' && action !== 'remove') return;
+  if (!normalizeStringList(data.flags).includes('\\Seen')) return;
+
+  const count = normalizeUidList(data.uids).length || 1;
+  const delta = action === 'add' ? -count : count;
+  const path = normalizeIdentifier(data.path);
+  const mailbox = normalizeIdentifier(data.mailbox);
+  const target = path || mailbox;
+  if (!target || target.toUpperCase() === 'INBOX') {
+    incrementBadge(delta);
+    return;
+  }
+
+  if (path) return;
+  isInboxMailbox(mailbox)
+    .then((isInbox) => (isInbox ? incrementBadge(delta) : undefined))
+    .catch(() => {});
 }
 
 function handleMailboxCreated(data, { suppressVisual = false } = {}) {
@@ -1324,7 +1350,8 @@ function routeNotificationEvent(eventName, data, options) {
         handleFlagsUpdated(data);
         return true;
       case WS_EVENTS.MESSAGES_EXPUNGED:
-        handleMessagesExpunged(data);
+        // Expunged messages may have been read or unread; the payload cannot
+        // tell. The data refresh for the same event recounts and sets the badge.
         return true;
       case WS_EVENTS.MAILBOX_CREATED:
         handleMailboxCreated(data, options);

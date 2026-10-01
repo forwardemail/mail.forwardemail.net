@@ -214,6 +214,16 @@ interface LabelLike {
   label?: string;
 }
 
+/**
+ * True when the flags mark a message \Deleted (IMAP STORE +FLAGS \Deleted
+ * before EXPUNGE). Such a message is hidden and not counted as unread, as
+ * Apple Mail does, so a client that deletes by flagging first (Thunderbird)
+ * shows the delete at once.
+ */
+export function hasDeletedFlag(flags: unknown): boolean {
+  return Array.isArray(flags) && flags.some((flag) => String(flag).toLowerCase() === '\\deleted');
+}
+
 export function normalizeMessageForCache(
   raw: RawMessage = {},
   folder?: string,
@@ -373,7 +383,7 @@ export function normalizeMessageForCache(
     })(),
     flags,
     is_unread: isUnread,
-    is_unread_index: isUnread ? 1 : 0,
+    is_unread_index: isUnread && !hasDeletedFlag(flags) ? 1 : 0,
     is_starred: Boolean(raw.is_flagged) || Boolean(raw.is_starred) || flags.includes('\\Flagged'),
     is_flagged: Boolean(raw.is_flagged) || Boolean(raw.is_starred) || flags.includes('\\Flagged'),
     // Derived like is_starred so the reply indicator and the optimistic flag
@@ -436,15 +446,36 @@ export function mergeFlagsAndMetadata(
 
   const nextUnread = incoming.is_unread ?? existing.is_unread;
   const normalizedUnread = typeof nextUnread === 'boolean' ? nextUnread : Boolean(nextUnread);
-  if (normalizedUnread !== existing.is_unread) {
+  const nextUnreadIndex = normalizedUnread && !hasDeletedFlag(nextFlags) ? 1 : 0;
+  const existingUnreadIndex = existing.is_unread_index ?? (existing.is_unread ? 1 : 0);
+  if (normalizedUnread !== existing.is_unread || nextUnreadIndex !== existingUnreadIndex) {
     next.is_unread = normalizedUnread;
-    next.is_unread_index = normalizedUnread ? 1 : 0;
+    next.is_unread_index = nextUnreadIndex;
     changed = true;
   }
 
   const nextStarred = incoming.is_starred ?? existing.is_starred;
   if (nextStarred !== existing.is_starred) {
     next.is_starred = nextStarred;
+    changed = true;
+  }
+
+  // A message moved by another client keeps its id but gets a new folder and
+  // UID; without these the cached row stayed filed under the old folder.
+  if (
+    typeof incoming.folder === 'string' &&
+    incoming.folder &&
+    incoming.folder !== existing.folder
+  ) {
+    next.folder = incoming.folder;
+    changed = true;
+  }
+  if (incoming.folder_id && incoming.folder_id !== existing.folder_id) {
+    next.folder_id = incoming.folder_id;
+    changed = true;
+  }
+  if (incoming.uid && incoming.uid !== existing.uid) {
+    next.uid = incoming.uid;
     changed = true;
   }
 
