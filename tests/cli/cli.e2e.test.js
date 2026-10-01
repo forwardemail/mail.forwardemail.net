@@ -256,6 +256,29 @@ describe.runIf(canRunInteractive)('in a terminal', () => {
     expect(screen).toContain('Today');
   });
 
+  it('shows the demo contacts by name and the demo events on the calendar, which open', async () => {
+    session = startTerminal({ home: tempHome(), args: ['--demo'] });
+    await session.waitFor('Welcome to Forward Email!');
+
+    session.click('Contacts');
+    await session.waitFor('New Contact');
+    // Names, not only addresses, in the list, and the phone number of the open contact
+    await session.waitFor(
+      (text) => ['Alice Johnson', 'Bob Smith', '+1-555-0101'].every((part) => text.includes(part)),
+      { label: 'the contacts by name' },
+    );
+
+    session.click('‹');
+    await session.waitFor('Welcome to Forward Email!');
+    session.click('Calendar');
+    const screen = await session.waitFor('Team Meeting', { label: 'the event in the month grid' });
+    expect(screen).toContain('Lunch with Dave');
+
+    // Opening an event shows it, and the client keeps running
+    session.click('Team Meeting');
+    await session.waitFor('Discuss Q4 roadmap', { label: 'the open event' });
+  });
+
   it('saves a download to the downloads folder', async () => {
     const downloads = tempHome();
     session = startTerminal({

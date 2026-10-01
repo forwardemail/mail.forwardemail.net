@@ -501,6 +501,22 @@ export function generateMessages(folder = 'INBOX', page = 1) {
 
 // ── Fake Contacts ─────────────────────────────────────────────────────────
 
+// The API's contact fields (full_name, emails, phone_numbers) and the vCard
+// itself, which the contacts page reads the name, phone and company from.
+function withContactCard(contact) {
+  const vcard = ['BEGIN:VCARD', 'VERSION:3.0', `FN:${contact.fn}`, `EMAIL:${contact.email}`];
+  if (contact.tel) vcard.push(`TEL:${contact.tel}`);
+  if (contact.org) vcard.push(`ORG:${contact.org}`);
+  vcard.push('END:VCARD');
+  return {
+    ...contact,
+    full_name: contact.fn,
+    emails: [{ value: contact.email }],
+    phone_numbers: contact.tel ? [{ value: contact.tel }] : [],
+    content: vcard.join('\r\n'),
+  };
+}
+
 export function generateContacts() {
   return [
     {
@@ -551,7 +567,7 @@ export function generateContacts() {
       org: 'Forward Email',
       updated: daysAgo(30),
     },
-  ];
+  ].map(withContactCard);
 }
 
 // ── Fake Calendar Events ──────────────────────────────────────────────────
@@ -568,21 +584,23 @@ export function generateCalendarEvents() {
   return [
     {
       id: nextId(),
+      calendar_id: 'demo-calendar',
       summary: 'Team Meeting',
       description: 'Discuss Q4 roadmap and feature priorities',
       start: tomorrow.toISOString(),
       end: new Date(tomorrow.getTime() + 3600000).toISOString(),
       location: 'Conference Room A',
-      attendees: ['alice@example.com', DEMO_EMAIL],
+      attendees: `alice@example.com, ${DEMO_EMAIL}`,
     },
     {
       id: nextId(),
+      calendar_id: 'demo-calendar',
       summary: 'Lunch with Dave',
       description: 'Thai restaurant downtown',
       start: nextWeek.toISOString(),
       end: new Date(nextWeek.getTime() + 3600000).toISOString(),
       location: 'Thai Palace, 123 Main St',
-      attendees: ['dave@example.com', DEMO_EMAIL],
+      attendees: `dave@example.com, ${DEMO_EMAIL}`,
     },
   ];
 }
