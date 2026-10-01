@@ -70,6 +70,14 @@ if (composeRoot) {
     props: {
       nativeWindow: true,
       toasts,
+      onAddAccount: async () => {
+        try {
+          const { emit } = await import('@tauri-apps/api/event');
+          await emit('compose:add-account', {});
+        } catch {
+          // Not in Tauri context — ignore
+        }
+      },
       registerApi: (api: Record<string, unknown>) => {
         composeApi = api;
         initFromTauriEvent();

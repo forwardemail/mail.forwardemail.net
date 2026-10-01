@@ -44,6 +44,7 @@ export async function saveDraft(draftData, options = {}) {
     id,
     account,
     folder: getDraftsFolder(),
+    from: draftData.from || '',
     to: draftData.to || [],
     cc: draftData.cc || [],
     bcc: draftData.bcc || [],

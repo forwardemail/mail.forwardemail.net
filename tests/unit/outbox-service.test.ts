@@ -16,6 +16,8 @@ const h = vi.hoisted(() => ({
   remoteRequest: vi.fn().mockResolvedValue({}),
   saveSentCopy: vi.fn().mockResolvedValue(undefined),
   blockedToast: vi.fn(),
+  // Credentials held for other signed-in accounts, keyed by email.
+  authHeaders: new Map<string, string>(),
 }));
 
 vi.mock('../../src/utils/storage', () => ({
@@ -23,6 +25,9 @@ vi.mock('../../src/utils/storage', () => ({
 }));
 vi.mock('../../src/utils/remote', () => ({
   Remote: { request: (...a: unknown[]) => h.remoteRequest(...a) },
+}));
+vi.mock('../../src/utils/auth', () => ({
+  getAuthHeaderForAccount: (email: string) => h.authHeaders.get(email) || '',
 }));
 vi.mock('../../src/utils/sent-copy.js', () => ({
   saveSentCopy: (...a: unknown[]) => h.saveSentCopy(...a),
@@ -75,6 +80,7 @@ beforeEach(() => {
   h.remoteRequest.mockReset().mockResolvedValue({});
   h.saveSentCopy.mockClear();
   h.blockedToast.mockClear();
+  h.authHeaders.clear();
 });
 afterEach(() => vi.useRealTimers());
 
@@ -326,7 +332,89 @@ describe('processOutbox account binding', () => {
     await vi.runAllTimersAsync();
     await p;
 
-    expect(h.saveSentCopy).toHaveBeenCalledWith(email, 'me@test.com', null);
+    expect(h.saveSentCopy).toHaveBeenCalledWith(email, 'me@test.com', null, null, {});
+  });
+});
+
+// The compose From menu can pick another account signed in on this device. The
+// item stays in the outbox it was composed in, but the API only accepts a From
+// address with that alias's own credentials, so every request about it must
+// carry them, and the Sent copy belongs to that account.
+describe('processOutbox send-as', () => {
+  const sendAsItem = {
+    account: 'me@test.com',
+    id: 'a',
+    status: 'pending',
+    retryCount: 0,
+    nextRetryAt: 0,
+    sendAs: 'alias@test.com',
+    emailData: { ...email, from: 'alias@test.com' },
+  };
+
+  it('sends with the send-as account credentials and files Sent under it', async () => {
+    vi.useFakeTimers();
+    h.authHeaders.set('alias@test.com', 'Basic alias-creds');
+    h.outbox.set('a', { ...sendAsItem });
+
+    const p = processOutbox();
+    await vi.runAllTimersAsync();
+    await p;
+
+    expect(h.remoteRequest).toHaveBeenCalledWith(
+      'Emails',
+      expect.objectContaining({ from: 'alias@test.com' }),
+      expect.objectContaining({ method: 'POST', authHeader: 'Basic alias-creds' }),
+    );
+    expect(h.saveSentCopy).toHaveBeenCalledWith(
+      sendAsItem.emailData,
+      'alias@test.com',
+      null,
+      null,
+      { authHeader: 'Basic alias-creds' },
+    );
+  });
+
+  it('waits instead of sending as the active account when those credentials are gone', async () => {
+    vi.useFakeTimers();
+    h.outbox.set('a', { ...sendAsItem });
+
+    const p = processOutbox();
+    await vi.runAllTimersAsync();
+    const result = await p;
+
+    // Never falls back to the active session: that would be rejected (or worse,
+    // sent from the wrong address).
+    expect(h.remoteRequest).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ sent: 0, failed: 0 });
+    expect(await getOutboxItem('a')).toMatchObject({
+      status: 'pending',
+      retryCount: 0,
+      lastError: expect.stringContaining('alias@test.com'),
+    });
+  });
+
+  it('records the send-as account on queue, but not when it is the outbox owner', async () => {
+    const other = await queueEmail(email, { skipProcess: true, sendAs: 'alias@test.com' });
+    const self = await queueEmail(email, { skipProcess: true, sendAs: 'me@test.com' });
+    expect(other.sendAs).toBe('alias@test.com');
+    expect(self.sendAs).toBeNull();
+  });
+
+  it('schedules on the server with the send-as account credentials', async () => {
+    h.authHeaders.set('alias@test.com', 'Basic alias-creds');
+    h.remoteRequest.mockResolvedValueOnce({ id: 'srv-1' });
+
+    const { record, serverScheduled } = await scheduleEmail(email, Date.now() + 60_000, {
+      sendAs: 'alias@test.com',
+    });
+
+    expect(serverScheduled).toBe(true);
+    expect(record.sendAs).toBe('alias@test.com');
+    expect(h.remoteRequest).toHaveBeenCalledWith(
+      'Emails',
+      expect.anything(),
+      expect.objectContaining({ authHeader: 'Basic alias-creds' }),
+    );
   });
 });
 

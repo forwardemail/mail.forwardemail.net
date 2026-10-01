@@ -935,6 +935,7 @@ if (composeRoot) {
       props: {
         toasts,
         mailboxView: composeMailboxView,
+        onAddAccount: () => mailboxActions.addAccount(),
         onSent(rawResult?: unknown) {
           const result = (rawResult || {}) as {
             archive?: boolean;
@@ -1360,6 +1361,17 @@ if (isTauriDesktop) {
   // The compose webview can't reliably access IDB / db worker, so it
   // relays draft + source IDs back here for the main window to clean up.
   import('@tauri-apps/api/event').then(({ listen }) => {
+    // "Add another account…" in a compose window's From menu: sign in here.
+    listen('compose:add-account', async () => {
+      try {
+        const { getCurrentWindow } = await import('@tauri-apps/api/window');
+        await getCurrentWindow().setFocus();
+      } catch {
+        // Focus is a nicety; the sign-in page still opens.
+      }
+      mailboxActions.addAccount();
+    });
+
     listen('compose:sent', async (event) => {
       const result = event.payload as
         | {

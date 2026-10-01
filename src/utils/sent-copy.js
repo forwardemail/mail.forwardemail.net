@@ -46,15 +46,19 @@ export const saveSentCopy = async (
   account = null,
   folderList = null,
   sentFolderOverride = null,
+  requestOptions = {},
 ) => {
   // Two-tier folder resolution: store first, then IDB fallback.
   // Skipped entirely when the caller passes an explicit sent folder — the
   // native compose window has no IDB folder store, so the main window
   // resolves the folder and hands it over at open time.
+  // The folder store only ever holds the active account's folders, so a copy
+  // filed for another signed-in account (sent as that account) skips it.
+  const forActive = !account || account === (Local.get('email') || 'default');
   let folders = folderList;
   if (!sentFolderOverride && !folders) {
     // Primary: read from in-memory folder store (already loaded after login)
-    const storeFolders = get(foldersStore);
+    const storeFolders = forActive ? get(foldersStore) : null;
     if (storeFolders?.length) {
       folders = storeFolders;
       warn('[saveSentCopy] Using folder store (%d folders)', storeFolders.length);
@@ -75,11 +79,27 @@ export const saveSentCopy = async (
   warn('[saveSentCopy] Resolved folder: %s', payload.folder);
 
   const response = await Remote.request('MessageCreate', payload, {
+    ...requestOptions,
     method: 'POST',
     pathOverride: '/v1/messages',
   });
 
   return response;
+};
+
+/**
+ * The Sent folder for any signed-in account, read from its cached folder list
+ * (the folder store only holds the active account's). Falls back to 'Sent'
+ * where there is no cache, as in the desktop compose window.
+ */
+export const resolveSentFolderForAccount = async (account) => {
+  let folders = null;
+  try {
+    folders = await db.folders.where('account').equals(account).toArray();
+  } catch {
+    folders = null;
+  }
+  return resolveSentFolder(account, folders);
 };
 
 // Merge the MessageCreate response (server id + dates) with the compose payload

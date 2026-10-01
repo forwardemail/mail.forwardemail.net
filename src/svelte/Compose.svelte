@@ -78,13 +78,24 @@
   import { Remote } from '../utils/remote';
   import { isDemoBlockedError, isDemoMode, showDemoBlockedToast } from '../utils/demo-mode';
   import { getContacts, mergeRecentAddresses } from '../utils/contact-cache';
-  import { Local } from '../utils/storage';
+  import { Accounts, Local } from '../utils/storage';
   import { db } from '../utils/db';
   import { getMessageApiId } from '../utils/sync-helpers';
   import { flagChangeBody } from '../utils/message-changes';
-  import { extractDisplayName, isValidEmail } from '../utils/address.ts';
+  import { extractDisplayName, isValidEmail, normalizeEmail } from '../utils/address.ts';
+  import {
+    formatFromHeader,
+    isFromHeaderRejection,
+    listSendableAccounts,
+    type SendableAccount,
+  } from '../utils/send-as';
+  import { getAuthHeaderForAccount } from '../utils/auth';
   import { MAX_SCHEDULE_LEAD_MS, queueEmail, scheduleEmail } from '../utils/outbox-service';
-  import { saveSentCopy, buildOptimisticSentSource } from '../utils/sent-copy.js';
+  import {
+    saveSentCopy,
+    buildOptimisticSentSource,
+    resolveSentFolderForAccount,
+  } from '../utils/sent-copy.js';
   import { parseMailto, mailtoToPrefill } from '../utils/mailto';
   import {
     saveDraft,
@@ -100,6 +111,7 @@
     attachmentReminder,
     getEffectiveSettingValue,
     profileName,
+    getProfileNameFor,
     LocalSettings,
   } from '../stores/settingsStore';
   import { applySignatureHtml, applySignaturePlain, isSignatureEmpty } from '../utils/signature';
@@ -142,6 +154,7 @@
   import AlignRight from '@lucide/svelte/icons/align-right';
   import AlertTriangle from '@lucide/svelte/icons/alert-triangle';
   import ChevronDown from '@lucide/svelte/icons/chevron-down';
+  import Plus from '@lucide/svelte/icons/plus';
   import Archive from '@lucide/svelte/icons/archive';
   import RemoveFormatting from '@lucide/svelte/icons/remove-formatting';
   import FileText from '@lucide/svelte/icons/file-text';
@@ -171,6 +184,8 @@
     toasts?: ToastApi | null;
     registerApi?: (api: ComposeApi) => void;
     onSent?: (result?: unknown) => void;
+    /** Starts signing in another account, so it can be picked as From. */
+    onAddAccount?: () => void;
     nativeWindow?: boolean;
   }
 
@@ -178,6 +193,7 @@
     toasts = null,
     registerApi = () => {},
     onSent = () => {},
+    onAddAccount,
     nativeWindow = false,
   }: Props = $props();
 
@@ -201,6 +217,10 @@
   let scheduleMeridiem = $state<'AM' | 'PM'>('AM');
   let showScheduleTimePicker = $state(false);
   let fromAddress = $state('');
+  // From menu: the active account plus the other accounts signed in on this
+  // device. The API only accepts a From address with that alias's own
+  // credentials, so these are exactly the addresses that can send.
+  let sendableAccounts = $state<SendableAccount[]>([]);
   let toInput = $state('');
   let ccInput = $state('');
   let bccInput = $state('');
@@ -213,6 +233,54 @@
   let success = $state('');
   let attachments = $state<unknown[]>([]);
   let attachmentError = $state('');
+  const activeAccount = () => Local.get('email') || '';
+  const sameEmail = (a: string, b: string) => normalizeEmail(a) === normalizeEmail(b);
+
+  const refreshSendableAccounts = () => {
+    let accounts: Array<{ email?: string }> = [];
+    try {
+      accounts = Accounts.getAll() || [];
+    } catch {
+      accounts = [];
+    }
+    sendableAccounts = listSendableAccounts(
+      accounts.map((acct) => ({ email: acct?.email, name: getProfileNameFor(acct?.email || '') })),
+      activeAccount(),
+      (email) => Boolean(getAuthHeaderForAccount(email)),
+    );
+  };
+
+  const sendingAddress = $derived(fromAddress || activeAccount());
+  // The account to send as when it isn't the active one; null means active.
+  const sendAsAccount = $derived(
+    fromAddress && !sameEmail(fromAddress, activeAccount()) ? fromAddress : null,
+  );
+  const fromDisplayName = $derived(
+    sendAsAccount ? getProfileNameFor(sendAsAccount) : $profileName || '',
+  );
+
+  // Prefill, drafts and replies name an address; keep it only when it is an
+  // account we can send as, otherwise fall back to the active account.
+  const selectFrom = (address: string) => {
+    refreshSendableAccounts();
+    const match = sendableAccounts.find((acct) => sameEmail(acct.email, address || ''));
+    fromAddress = match && !sameEmail(match.email, activeAccount()) ? match.email : '';
+  };
+
+  /** Request options that authenticate as the From account. Null when its credentials are gone. */
+  const sendAsRequestOptions = (): { authHeader?: string } | null => {
+    if (!sendAsAccount) return {};
+    const authHeader = getAuthHeaderForAccount(sendAsAccount);
+    return authHeader ? { authHeader } : null;
+  };
+
+  const missingSenderError = () =>
+    `Can't send as ${sendAsAccount}: sign in to that account on this device again.`;
+
+  const describeSendError = (message: string) =>
+    isFromHeaderRejection(message)
+      ? `Forward Email won't send from ${sendingAddress} with this account. ${message}`
+      : message;
   let attachmentLoading = $state(0);
   let attachInputEl: HTMLInputElement | undefined;
   let imageInputEl: HTMLInputElement | undefined;
@@ -1240,6 +1308,7 @@
     id: currentDraftId || undefined,
     serverId: currentDraftServerId || undefined,
     createdAt: currentDraftSyncedAt || undefined,
+    from: sendingAddress,
     to: [...toList],
     cc: [...ccList],
     bcc: [...bccList],
@@ -1373,6 +1442,7 @@
   };
 
   const reset = () => {
+    fromAddress = '';
     toList = [];
     ccList = [];
     bccList = [];
@@ -1476,6 +1546,7 @@
     minimizedDrafts = minimizedDrafts.filter((md) => (md as { key: string }).key !== d.key);
     reset();
     activeDraftKey = d.key;
+    selectFrom((d.data.from as string) || '');
     toList = (d.data.to as string[]) || [];
     ccList = (d.data.cc as string[]) || [];
     bccList = (d.data.bcc as string[]) || [];
@@ -1604,6 +1675,14 @@
     setVisible(false);
     reset();
     if (nativeWindow) closeNativeWindow();
+  };
+
+  // The main window leaves for the sign-in page, so close (saving any edits)
+  // first. The desktop compose window stays open; the main window signs in and
+  // the new account shows up next time this menu opens.
+  const addAccountForSending = async () => {
+    if (!nativeWindow) await closeComposer();
+    onAddAccount?.();
   };
 
   const promptDiscardDraft = () => {
@@ -2350,9 +2429,16 @@
       return null;
     }
 
-    const email = fromAddress || Local.get('email') || '';
-    const name = $profileName;
-    const from = name ? `"${name}" <${email}>` : email;
+    if (!sendAsRequestOptions()) {
+      error = missingSenderError();
+      return null;
+    }
+    const email = sendingAddress;
+    if (!isValidEmail(email)) {
+      error = `Invalid From address: ${email}`;
+      return null;
+    }
+    const from = formatFromHeader(email, fromDisplayName);
     const payload: Record<string, unknown> = {
       from,
       to: toRecipients,
@@ -2459,7 +2545,9 @@
     sending = true;
     error = '';
     try {
-      const { serverScheduled } = await scheduleEmail(payload, sendAt);
+      const { serverScheduled } = await scheduleEmail(payload, sendAt, {
+        sendAs: sendAsAccount,
+      });
       const msgIdToDelete = sourceMessageId;
       const serverDraftIdToDelete = currentDraftServerId;
       if (currentDraftId) {
@@ -2588,7 +2676,7 @@
     if (isOnline && undoWindowMs > 0) {
       try {
         const sendAt = Date.now() + undoWindowMs;
-        const queued = await queueEmail(payload, { sendAt });
+        const queued = await queueEmail(payload, { sendAt, sendAs: sendAsAccount });
         const msgIdToDelete = sourceMessageId;
         const serverDraftIdToDelete = currentDraftServerId;
         if (currentDraftId) {
@@ -2627,7 +2715,7 @@
 
     if (!isOnline) {
       try {
-        await queueEmail(payload);
+        await queueEmail(payload, { sendAs: sendAsAccount });
         const msgIdToDelete = sourceMessageId;
         const serverDraftIdToDelete = currentDraftServerId;
         if (currentDraftId) {
@@ -2672,12 +2760,30 @@
       delete apiPayload._replyToMessageId;
       delete apiPayload._replyToMessageFolder;
 
-      await Remote.request('Emails', apiPayload, { method: 'POST' });
+      // Checked when the payload was built; read again so a sign-out since
+      // then can't send the message with the active account's credentials.
+      const senderOptions = sendAsRequestOptions();
+      if (!senderOptions) throw new Error(missingSenderError());
+      await Remote.request('Emails', apiPayload, { ...senderOptions, method: 'POST' });
       // Captured from whichever Sent-copy save runs below, then handed to the
       // main window so it can show the message in Sent instantly (optimistic
       // insert) instead of waiting for the backend indexer.
       let sentCopyResponse: unknown = null;
-      if (!nativeWindow) {
+      // Sent as another signed-in account: the copy goes to that account's
+      // Sent folder, filed with its credentials.
+      const sentAs = sendAsAccount;
+      const sentAsFolder = sentAs ? await resolveSentFolderForAccount(sentAs) : null;
+      if (sentAs) {
+        try {
+          sentCopyResponse = await saveSentCopy(payload, sentAs, null, sentAsFolder, senderOptions);
+        } catch (sentErr) {
+          console.error('[Compose] Failed to save sent copy for', sentAs, sentErr);
+          if (!nativeWindow) {
+            toasts?.show?.('Message sent, but failed to save copy to Sent folder', 'warning');
+          }
+        }
+        if (!nativeWindow) markOriginalAsAnswered();
+      } else if (!nativeWindow) {
         sentCopyResponse = await saveSentCopyWrapper(payload);
         // Mark original message as \Answered after successful reply
         markOriginalAsAnswered();
@@ -2761,8 +2867,8 @@
         sentCopy: optimisticSent,
         // The account this window sent as. The main window may be showing a
         // different account by the time it applies the optimistic Sent copy.
-        account: Local.get('email') || null,
-        sentFolder: nativeWindow ? nativeSentFolder || null : null,
+        account: sentAs || Local.get('email') || null,
+        sentFolder: sentAs ? sentAsFolder : nativeWindow ? nativeSentFolder || null : null,
         toast: nativeWindow ? { message: 'Message sent', type: 'success' } : undefined,
       });
       if (nativeWindow) closeNativeWindow();
@@ -2771,7 +2877,7 @@
       const e = err as { message?: string; status?: number };
       if (e.message?.includes('network') || e.message?.includes('fetch') || e.status === 0) {
         try {
-          await queueEmail(payload);
+          await queueEmail(payload, { sendAs: sendAsAccount });
           const msgIdToDelete = sourceMessageId;
           const serverDraftIdToDelete = currentDraftServerId;
           if (currentDraftId) {
@@ -2807,7 +2913,7 @@
           }
         }
       } else {
-        error = e?.message || 'Send failed';
+        error = describeSendError(e?.message || 'Send failed');
         toasts?.show?.(error, 'error');
       }
     } finally {
@@ -2933,6 +3039,7 @@
           currentDraftId = draft.id;
           currentDraftServerId = draft.serverId || null;
           currentDraftSyncedAt = draft.lastSyncedAt || null;
+          selectFrom(draft.from || '');
           toList = draft.to || [];
           ccList = draft.cc || [];
           bccList = draft.bcc || [];
@@ -2999,7 +3106,7 @@
       replyToMessageFolder = resolvedPrefill.replyToMessageFolder as string;
     }
     if (resolvedPrefill.subject) subject = resolvedPrefill.subject as string;
-    if (resolvedPrefill.from) fromAddress = resolvedPrefill.from as string;
+    if (resolvedPrefill.from) selectFrom(resolvedPrefill.from as string);
     // Forwards arrive with the original's files already decoded (see
     // getForwardAttachments). Appended rather than assigned so a draft reopened
     // with attachments keeps them.
@@ -3456,6 +3563,56 @@
 
       <div class="flex-1 overflow-y-auto p-0 md:p-4 flex flex-col gap-3">
         <div class="space-y-2 shrink-0">
+          <div
+            class="flex items-center gap-2 min-h-[44px] md:min-h-[38px] px-3 py-1 border border-input bg-background shadow-xs text-base md:text-sm"
+            data-testid="compose-from"
+          >
+            <span class="shrink-0 text-muted-foreground">From</span>
+            <DropdownMenu.Root
+              onOpenChange={(open) => {
+                if (open) refreshSendableAccounts();
+              }}
+            >
+              <DropdownMenu.Trigger>
+                {#snippet child({ props })}
+                  <button
+                    type="button"
+                    class="flex min-w-0 flex-1 items-center gap-1 text-left"
+                    aria-label="Choose the account to send from"
+                    {...props}
+                  >
+                    <span class="truncate">
+                      {fromDisplayName ? `${fromDisplayName} <${sendingAddress}>` : sendingAddress}
+                    </span>
+                    <ChevronDown class="h-4 w-4 shrink-0 text-muted-foreground" />
+                  </button>
+                {/snippet}
+              </DropdownMenu.Trigger>
+              <!-- #compose-root sits at z-index 9999, so the menu must clear it. -->
+              <DropdownMenu.Content
+                align="start"
+                class="z-[10000] min-w-[260px] max-h-[320px] overflow-y-auto"
+              >
+                {#each sendableAccounts as account (account.email)}
+                  <DropdownMenu.Item onclick={() => selectFrom(account.email)}>
+                    <div class="min-w-0">
+                      <div class="truncate">{account.email}</div>
+                      {#if account.name}
+                        <div class="truncate text-xs text-muted-foreground">{account.name}</div>
+                      {/if}
+                    </div>
+                  </DropdownMenu.Item>
+                {/each}
+                {#if onAddAccount}
+                  <DropdownMenu.Separator />
+                  <DropdownMenu.Item onclick={addAccountForSending}>
+                    <Plus class="mr-2 h-4 w-4" />
+                    Add another account…
+                  </DropdownMenu.Item>
+                {/if}
+              </DropdownMenu.Content>
+            </DropdownMenu.Root>
+          </div>
           <div class="relative">
             <div
               class="flex flex-wrap items-center gap-1.5 min-h-[44px] md:min-h-[38px] px-3 py-2 md:py-1.5 border border-input bg-background shadow-xs transition-[color,box-shadow] outline-none focus-within:border-ring focus-within:ring-ring/50 focus-within:ring-[3px]"

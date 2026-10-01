@@ -461,6 +461,10 @@ export const LocalSettings = {
   },
 };
 
+/** The display name saved for one account, whichever account is active. */
+export const getProfileNameFor = (account: string): string =>
+  Local.get(profileNameKey(account)) || '';
+
 export const loadProfileName = (account?: string): void => {
   profileName.set(Local.get(profileNameKey(account)) || '');
 };

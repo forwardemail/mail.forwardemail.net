@@ -42,6 +42,13 @@ export async function mockApi(page, overrides = {}) {
     jsonResponse(route, { message: `e2e mock: ${route.request().url()} is not mocked` }, 404),
   );
 
+  // The web updater polls GitHub for the latest release. A local build is
+  // usually behind it, so the real answer triggers an app reload a second or so
+  // after boot and closes whatever the test had open. A 404 reads as no update.
+  await page.route('https://api.github.com/**', (route) =>
+    route.fulfill({ status: 404, contentType: 'application/json', body: '{}' }),
+  );
+
   // Boot-time calls the app always makes; shapes mirror the demo interceptor.
   await page.route('**/v1/account**', (route) => {
     if (route.request().method() === 'GET') {

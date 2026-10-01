@@ -2,6 +2,7 @@ import { db } from './db';
 import { Local } from './storage';
 import { isActiveAccount } from './account-scope.ts';
 import { Remote } from './remote';
+import { getAuthHeaderForAccount } from './auth';
 import { flagChangeBody } from './message-changes.ts';
 import { writable } from 'svelte/store';
 import { saveSentCopy } from './sent-copy.js';
@@ -84,6 +85,24 @@ function getAccount() {
 }
 
 /**
+ * Request options for the account an item is sent as.
+ *
+ * An item lives in the outbox of the account it was composed in, but may go
+ * out as another account signed in on this device (picked in the compose From
+ * menu). The API only accepts a From address with that alias's own
+ * credentials, so every request about the item uses them. Returns null when
+ * those credentials are unavailable: signed out, or locked behind App Lock.
+ */
+function requestOptionsFor(sendAs) {
+  if (!sendAs) return {};
+  const authHeader = getAuthHeaderForAccount(sendAs);
+  return authHeader ? { authHeader } : null;
+}
+
+const missingSenderMessage = (sendAs) =>
+  `Can't send as ${sendAs}: sign in to that account on this device again.`;
+
+/**
  * Calculate exponential backoff delay (shared formula — see ./backoff.js)
  */
 function calculateBackoff(retryCount) {
@@ -115,6 +134,7 @@ export async function queueEmail(emailData, options = {}) {
     sendAt = null,
     serverId = null,
     serverScheduled = false,
+    sendAs = null,
   } = options || {};
   const id = `${OUTBOX_PREFIX}${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const now = Date.now();
@@ -134,6 +154,8 @@ export async function queueEmail(emailData, options = {}) {
     // must never be re-sent, so it is tracked separately from serverId, which
     // we might not get back.
     serverScheduled: Boolean(serverScheduled),
+    // Another signed-in account to send as; null sends as the outbox owner.
+    sendAs: sendAs && sendAs !== account ? sendAs : null,
     lastError: null,
     emailData,
     createdAt: now,
@@ -170,7 +192,7 @@ export async function queueEmail(emailData, options = {}) {
  * @param {number} sendAt - Delivery time in ms since epoch
  * @returns {Promise<{record: Object, serverScheduled: boolean, error?: string}>}
  */
-export async function scheduleEmail(emailData, sendAt) {
+export async function scheduleEmail(emailData, sendAt, { sendAs = null } = {}) {
   if (isDemoMode()) {
     showDemoBlockedToast('schedule email');
     const err = new Error('Demo mode: sending is disabled');
@@ -182,12 +204,18 @@ export async function scheduleEmail(emailData, sendAt) {
   if (!scheduledDate) throw new Error('Invalid schedule time');
 
   if (!isOnline()) {
-    return { record: await queueEmail(emailData, { sendAt }), serverScheduled: false };
+    return { record: await queueEmail(emailData, { sendAt, sendAs }), serverScheduled: false };
   }
+
+  const requestOptions = requestOptionsFor(sendAs);
+  if (!requestOptions) throw new Error(missingSenderMessage(sendAs));
 
   try {
     const payload = buildSendPayload(emailData, sendAt);
-    const response = await Remote.request('Emails', payload, { method: 'POST' });
+    const response = await Remote.request('Emails', payload, {
+      ...requestOptions,
+      method: 'POST',
+    });
     // The email is on the server now. Even if the response was not what we
     // expected, record that it is out of our hands — sending it again would
     // deliver a duplicate, which is worse than an entry we cannot cancel.
@@ -196,6 +224,7 @@ export async function scheduleEmail(emailData, sendAt) {
       serverId: response?.id || null,
       serverScheduled: true,
       skipProcess: true,
+      sendAs,
     });
     if (!response?.id) {
       warn('[Outbox] Scheduled email accepted without an id; it cannot be cancelled from here');
@@ -204,7 +233,7 @@ export async function scheduleEmail(emailData, sendAt) {
   } catch (err) {
     warn('[Outbox] Could not schedule on the server, falling back to local scheduling', err);
     return {
-      record: await queueEmail(emailData, { sendAt }),
+      record: await queueEmail(emailData, { sendAt, sendAs }),
       serverScheduled: false,
       error: err?.message || 'Scheduling failed',
     };
@@ -288,8 +317,8 @@ async function updateOutboxCount() {
  * Save a copy of sent message to Sent folder (client-side workaround)
  * Similar to saveSentCopy in Compose.svelte
  */
-async function saveSentCopyToFolder(emailPayload, account) {
-  return saveSentCopy(emailPayload, account || getAccount(), null);
+async function saveSentCopyToFolder(emailPayload, account, requestOptions = {}) {
+  return saveSentCopy(emailPayload, account || getAccount(), null, null, requestOptions);
 }
 
 /**
@@ -307,9 +336,12 @@ function isServerScheduled(item) {
 async function recordSentSideEffects(item, account) {
   // Save copy to Sent folder (client-side workaround). Skipped when the
   // payload opts out, e.g. spam reports that would put spam back in Sent.
+  // The copy belongs in the Sent folder of the account it went out as.
   if (item.emailData?.save_sent !== false) {
     try {
-      await saveSentCopyToFolder(item.emailData, account);
+      const requestOptions = requestOptionsFor(item.sendAs);
+      if (!requestOptions) throw new Error(missingSenderMessage(item.sendAs));
+      await saveSentCopyToFolder(item.emailData, item.sendAs || account, requestOptions);
     } catch (sentErr) {
       console.error('[Outbox] Failed to save sent copy:', sentErr);
       // Don't fail the overall send if saving to Sent fails
@@ -393,10 +425,16 @@ async function settleServerScheduledItem(item, account) {
 
   let status = null;
   try {
+    const requestOptions = requestOptionsFor(item.sendAs);
+    if (!requestOptions) throw new Error(missingSenderMessage(item.sendAs));
     const email = await Remote.request(
       'EmailStatus',
       {},
-      { method: 'GET', pathOverride: `/v1/emails/${encodeURIComponent(item.serverId)}` },
+      {
+        ...requestOptions,
+        method: 'GET',
+        pathOverride: `/v1/emails/${encodeURIComponent(item.serverId)}`,
+      },
     );
     status = email?.status || null;
   } catch (err) {
@@ -460,6 +498,18 @@ async function sendOutboxItem(item) {
     return { success: false, deferred: true, error: 'Account not active' };
   }
 
+  // Sending as another signed-in account needs its credentials. Without them
+  // (App Lock, or signed out) wait rather than fail: unlocking brings them back.
+  const requestOptions = requestOptionsFor(item.sendAs);
+  if (!requestOptions) {
+    await db.outbox.update([account, item.id], {
+      lastError: missingSenderMessage(item.sendAs),
+      nextRetryAt: now + MAX_BACKOFF_MS,
+      updatedAt: now,
+    });
+    return { success: false, deferred: true, error: missingSenderMessage(item.sendAs) };
+  }
+
   // The server already holds this one and sends it on its own schedule, so all
   // that is left is to find out what it did with it.
   if (isServerScheduled(item) && item.sendAt && item.sendAt <= now) {
@@ -475,7 +525,7 @@ async function sendOutboxItem(item) {
   try {
     const payload = buildSendPayload(item.emailData, item.sendAt);
 
-    await Remote.request('Emails', payload, { method: 'POST' });
+    await Remote.request('Emails', payload, { ...requestOptions, method: 'POST' });
 
     await recordSentSideEffects(item, account);
     await markOutboxSent(item, account);
@@ -723,10 +773,13 @@ export async function cancelScheduledEmail(id) {
   // If the email has a server ID, it was submitted to the server and we must cancel there first
   if (item.serverId) {
     try {
+      const requestOptions = requestOptionsFor(item.sendAs);
+      if (!requestOptions) throw new Error(missingSenderMessage(item.sendAs));
       await Remote.request(
         'EmailCancel',
         {},
         {
+          ...requestOptions,
           method: 'DELETE',
           pathOverride: `/v1/emails/${item.serverId}`,
         },

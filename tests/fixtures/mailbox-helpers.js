@@ -24,6 +24,13 @@ export async function setupAuthenticatedMailbox(page) {
     }
   });
 
+  // The web updater polls GitHub for the latest release. A local build is
+  // usually behind it, so the real answer triggers an app reload a second or so
+  // after boot and closes whatever the test had open. A 404 reads as no update.
+  await page.route('https://api.github.com/**', (route) =>
+    route.fulfill({ status: 404, contentType: 'application/json', body: '{}' }),
+  );
+
   // Mock API endpoints — the app calls https://api.forwardemail.net/v1/...
   await page.route('**/v1/**', async (route) => {
     const url = new URL(route.request().url());
