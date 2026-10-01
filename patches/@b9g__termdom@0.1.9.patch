@@ -1,0 +1,22 @@
+diff --git a/index.js b/index.js
+index 2ef5073..062fb3c 100644
+--- a/index.js
++++ b/index.js
+@@ -23819,11 +23819,17 @@ var HANDLER_ATTRIBUTES = /* @__PURE__ */ new Set([
+   ...FORWARDED_BODY_EVENT_HANDLERS
+ ]);
+ var FORWARDED_HANDLER_ATTRIBUTES = new Set(FORWARDED_BODY_EVENT_HANDLERS);
++function __feScriptingEnabled(document) {
++  return document !== null && document[kDefaultView] !== null;
++}
+ function compileEventHandler(target, type, record) {
+   const value = record.value;
+   if (!(value instanceof UncompiledHandler)) {
+     return value;
+   }
++  if (!__feScriptingEnabled(value.element[kDocument2])) {
++    return null;
++  }
+   try {
+     record.value = new Function("event", value.source);
+   } catch (error) {

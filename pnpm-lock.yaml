@@ -11,6 +11,11 @@ overrides:
   svelte: '>=5.55.7'
   devalue: '>=5.8.1'
 
+patchedDependencies:
+  '@b9g/termdom@0.1.9':
+    hash: mzii4rtytsl2bxxawrovcndsoa
+    path: patches/@b9g__termdom@0.1.9.patch
+
 importers:
 
   .:
@@ -198,7 +203,7 @@ importers:
     devDependencies:
       '@b9g/termdom':
         specifier: 0.1.9
-        version: 0.1.9
+        version: 0.1.9(patch_hash=mzii4rtytsl2bxxawrovcndsoa)
       '@commitlint/cli':
         specifier: ^20.5.3
         version: 20.5.3(@types/node@26.4.0)(conventional-commits-parser@6.4.0)(typescript@5.9.3)
@@ -6469,7 +6474,7 @@ snapshots:
       '@csstools/css-tokenizer': 3.0.4
       lru-cache: 10.4.3
 
-  '@b9g/termdom@0.1.9':
+  '@b9g/termdom@0.1.9(patch_hash=mzii4rtytsl2bxxawrovcndsoa)':
     dependencies:
       arabic-persian-reshaper: 1.0.1
       bidi-js: 1.1.0

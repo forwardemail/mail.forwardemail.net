@@ -204,6 +204,9 @@
       "linkify-it": ">=5.0.2",
       "svelte": ">=5.55.7",
       "devalue": ">=5.8.1"
+    },
+    "patchedDependencies": {
+      "@b9g/termdom@0.1.9": "patches/@b9g__termdom@0.1.9.patch"
     }
   }
 }

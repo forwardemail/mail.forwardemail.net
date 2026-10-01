@@ -257,6 +257,45 @@ describe('message frames', () => {
       payload: { url: 'https://forwardemail.net/', isMailto: false },
     });
   });
+
+  it('strips inline handlers and javascript: URLs from the copied-in message nodes', async () => {
+    const term = new TermDOM({ transport: quietTransport() });
+    const win = term.window;
+    installFrames(win);
+
+    const flags = globalThis;
+    flags.__feFrameHandlerRan = false;
+
+    const frame = term.document.createElement('iframe');
+    frame.className = 'fe-email-iframe';
+    term.document.body.append(frame);
+    frame.srcdoc =
+      '<!DOCTYPE html><html><body>' +
+      '<details open ontoggle="globalThis.__feFrameHandlerRan = true"><summary>s</summary>x</details>' +
+      '<p onclick="globalThis.__feFrameHandlerRan = true">body</p>' +
+      '<img src="x" onerror="globalThis.__feFrameHandlerRan = true">' +
+      '<a href="  JaVaScript:globalThis.__feFrameHandlerRan = true">evil</a>' +
+      '</body></html>';
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const view = frame.querySelector('.fe-frame-view');
+    const root = view.shadowRoot.querySelector('.fe-frame-root');
+
+    // No event-handler attribute survives on any node that reached the app's
+    // own document (the scheme check is case- and whitespace-insensitive).
+    for (const el of root.querySelectorAll('*')) {
+      for (const name of el.getAttributeNames()) {
+        expect(name.toLowerCase().startsWith('on')).toBe(false);
+      }
+    }
+    expect(root.querySelector('a').getAttribute('href')).toBeNull();
+
+    // And clicking the de-fanged link runs nothing of its own.
+    flags.__feFrameHandlerRan = false;
+    root.querySelector('a').click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(flags.__feFrameHandlerRan).toBe(false);
+  });
 });
 
 describe('DOM fixes', () => {

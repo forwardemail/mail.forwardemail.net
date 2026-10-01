@@ -8,13 +8,30 @@
  * element, where its stylesheet stays scoped to the message, and the
  * messages the iframe's runtime script would post back (content height,
  * link clicks) are posted from here instead. Nothing runs from the message
- * itself: scripts are dropped with the rest of the head.
+ * itself: scripts are dropped with the rest of the head, and the inline event
+ * handlers and javascript: URLs that could run once the nodes join the app's
+ * scripted document are stripped as they are copied in.
  */
 import { convertDeclarations, convertStylesheet } from './px-to-cells.js';
 import type { AnyRecord } from './types';
 
 const VIEW_CLASS = 'fe-frame-view';
 const kPending = Symbol('forwardemail.frame.pending');
+
+// Attributes whose value is a URL the document would act on.
+const URL_ATTRIBUTES = [
+  'href',
+  'xlink:href',
+  'src',
+  'action',
+  'formaction',
+  'background',
+  'poster',
+  'ping',
+];
+
+// Schemes that run code rather than naming a resource.
+const ACTIVE_URL_SCHEME = /^\s*(?:javascript|vbscript):/i;
 
 // The message stylesheet targets html and body, which a shadow tree has not
 // got; they become the wrapper that stands in for both.
@@ -67,6 +84,24 @@ function render(win: AnyRecord, iframe: AnyRecord) {
     root.append(document.importNode(node, true));
   }
   for (const el of root.querySelectorAll('script, iframe, object, embed, link, meta')) el.remove();
+  // Defense in depth. The body is sanitized before it becomes the iframe's
+  // srcdoc, but this is where its nodes cross into the app's own, scripted
+  // document, so strip anything that could execute here no matter what the
+  // sanitizer upstream did: inline event handler attributes, and
+  // javascript:/vbscript: URLs on the attributes that follow one.
+  for (const el of root.querySelectorAll('*')) {
+    for (const name of el.getAttributeNames?.() ?? []) {
+      if (/^on/i.test(name)) el.removeAttribute(name);
+    }
+    for (const name of URL_ATTRIBUTES) {
+      const value = el.getAttribute(name);
+      // Tab, newline and carriage return are stripped from a URL before its
+      // scheme is read, so a "java\tscript:" href is one too.
+      if (value && ACTIVE_URL_SCHEME.test(value.replace(/[\t\n\r]/g, ''))) {
+        el.removeAttribute(name);
+      }
+    }
+  }
   for (const el of root.querySelectorAll('[style]')) {
     el.setAttribute('style', convertDeclarations(el.getAttribute('style') ?? ''));
   }
