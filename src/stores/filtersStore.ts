@@ -6,9 +6,17 @@
  * MANAGED_SCRIPT_NAME) and never rewrites any other, because a script written
  * in the main site's editor or over ManageSieve holds rules this builder
  * cannot reproduce.
+ *
+ * The server is the source of truth. Every load reads the script back, saves
+ * first check that nobody changed it since it was loaded (another device, the
+ * main site), and a successful save is read back rather than trusting what was
+ * sent. Each request is bound to the account it started for, so a slow
+ * response can never land under an account the user has since switched to.
  */
 import { get, writable, type Writable } from 'svelte/store';
 import { Remote } from '../utils/remote';
+import { Local } from '../utils/storage';
+import { getAuthHeaderForAccount } from '../utils/auth';
 import {
   MANAGED_SCRIPT_NAME,
   rulesToSieve,
@@ -43,6 +51,12 @@ export const filtersBlocked: Writable<FiltersBlockedReason> = writable('');
 export const filtersWarnings: Writable<string[]> = writable([]);
 
 let managedScriptId: string | null = null;
+/** The managed script's content as last read from the server ('' = no script). */
+let loadedContent: string | null = null;
+/** Bumped by every load and reset, so only the newest load may write the stores. */
+let loadGeneration = 0;
+/** The account the store's contents (or the load in flight) belong to. */
+let stateAccount = '';
 /**
  * Set when the managed script's content could not be parsed back into rules.
  * Saving is refused in that state rather than overwriting rules we cannot show.
@@ -71,17 +85,76 @@ function asArray<T>(res: unknown): T[] {
   return Array.isArray(list) ? list : [];
 }
 
+/** Auth for one account, so a request keeps its account across a switch. */
+function requestOptionsFor(account: string): { authHeader?: string } {
+  const authHeader = getAuthHeaderForAccount(account);
+  return authHeader ? { authHeader } : {};
+}
+
+interface ServerState {
+  scripts: SieveScriptSummary[];
+  managed: SieveScriptSummary | null;
+  /** The managed script's content, '' when there is no managed script. */
+  content: string;
+}
+
+/**
+ * Read the script list and the managed script's content from the server.
+ * Returns null when `isCurrent` says the result is no longer wanted.
+ */
+async function fetchServerState(
+  account: string,
+  isCurrent: () => boolean = () => true,
+): Promise<ServerState | null> {
+  const auth = requestOptionsFor(account);
+  const res = await Remote.request('SieveScripts', {}, { ...auth, method: 'GET' });
+  if (!isCurrent()) return null;
+  const scripts = asArray<SieveScriptSummary>(res);
+  const managed = scripts.find((s) => s.name === MANAGED_SCRIPT_NAME) || null;
+  if (!managed) return { scripts, managed, content: '' };
+
+  // The list response omits content, so fetch the script itself for rules.
+  const detail = (await Remote.request(
+    'SieveScript',
+    {},
+    {
+      ...auth,
+      method: 'GET',
+      pathOverride: `/v1/sieve-scripts/${encodeURIComponent(managed.id)}`,
+    },
+  )) as { content?: string };
+  return { scripts, managed, content: detail?.content || '' };
+}
+
+const CHANGED_ELSEWHERE =
+  'Filters were changed on another device or on the website, so they have been reloaded. Make your changes again and save.';
+
 export async function loadFilters(): Promise<void> {
+  const account = Local.get('email') || '';
+  const generation = ++loadGeneration;
+  if (stateAccount !== account) {
+    // Never show one account's rules while another account's are loading.
+    managedScriptId = null;
+    loadedContent = null;
+    filterRules.set([]);
+    foreignScripts.set([]);
+    filtersActive.set(false);
+    managedScriptUnreadable.set(false);
+  }
+  stateAccount = account;
   filtersLoading.set(true);
   filtersError.set('');
   filtersBlocked.set('');
   try {
-    const res = await Remote.request('SieveScripts', {}, { method: 'GET' });
-    const scripts = asArray<SieveScriptSummary>(res);
+    const isCurrent = () => generation === loadGeneration;
+    const state = await fetchServerState(account, isCurrent);
+    // A newer load (or an account switch) started meanwhile: let it win.
+    if (!state || !isCurrent()) return;
+    const { scripts, managed, content } = state;
 
-    const managed = scripts.find((s) => s.name === MANAGED_SCRIPT_NAME) || null;
     foreignScripts.set(scripts.filter((s) => s.name !== MANAGED_SCRIPT_NAME));
     managedScriptId = managed?.id || null;
+    loadedContent = content;
     filtersActive.set(Boolean(managed?.is_active));
 
     if (!managed) {
@@ -90,14 +163,7 @@ export async function loadFilters(): Promise<void> {
       return;
     }
 
-    // The list response omits content, so fetch the script itself for rules.
-    const detail = (await Remote.request(
-      'SieveScript',
-      {},
-      { method: 'GET', pathOverride: `/v1/sieve-scripts/${encodeURIComponent(managed.id)}` },
-    )) as { content?: string };
-
-    const rules = sieveToRules(detail?.content || '');
+    const rules = sieveToRules(content);
     if (rules === null) {
       // Our own script name, but content we did not write (hand-edited, or
       // written by an older format). Show nothing and refuse to save over it.
@@ -108,14 +174,29 @@ export async function loadFilters(): Promise<void> {
     managedScriptUnreadable.set(false);
     filterRules.set(rules);
   } catch (err) {
+    if (generation !== loadGeneration) return;
     const reason = blockedReason(err);
     filtersBlocked.set(reason);
     if (!reason) filtersError.set(errorMessage(err));
+    loadedContent = null;
     filterRules.set([]);
     foreignScripts.set([]);
   } finally {
-    filtersLoading.set(false);
+    if (generation === loadGeneration) filtersLoading.set(false);
   }
+}
+
+/**
+ * True when the server's managed script is no longer the one we loaded: edited,
+ * deleted or created somewhere else. Writing over it would throw those changes
+ * away, so callers reload instead.
+ */
+async function changedSinceLoad(account: string): Promise<boolean> {
+  if (loadedContent === null) return true;
+  const state = await fetchServerState(account);
+  if (!state) return true;
+  if ((state.managed?.id || null) !== managedScriptId) return true;
+  return state.content !== loadedContent;
 }
 
 /**
@@ -132,18 +213,27 @@ export async function saveFilters(rules: FilterRule[]): Promise<boolean> {
     return false;
   }
 
+  const account = Local.get('email') || '';
   filtersSaving.set(true);
   filtersError.set('');
   filtersWarnings.set([]);
   const content = rulesToSieve(rules);
 
   try {
+    if (await changedSinceLoad(account)) {
+      await loadFilters();
+      filtersError.set(CHANGED_ELSEWHERE);
+      return false;
+    }
+
+    const auth = requestOptionsFor(account);
     let saved: SieveScriptSummary;
     if (managedScriptId) {
       saved = (await Remote.request(
         'SieveScriptUpdate',
         { content, activate: true },
         {
+          ...auth,
           method: 'PUT',
           pathOverride: `/v1/sieve-scripts/${encodeURIComponent(managedScriptId)}`,
         },
@@ -157,18 +247,17 @@ export async function saveFilters(rules: FilterRule[]): Promise<boolean> {
           content,
           activate: true,
         },
-        { method: 'POST' },
+        { ...auth, method: 'POST' },
       )) as SieveScriptSummary;
       managedScriptId = saved?.id || null;
     }
 
-    filterRules.set(rules);
-    filtersActive.set(true);
-    filtersWarnings.set(
-      (saved?.security_warnings || [])
-        .map((w) => w?.message || '')
-        .filter((m): m is string => Boolean(m)),
-    );
+    const warnings = (saved?.security_warnings || [])
+      .map((w) => w?.message || '')
+      .filter((m): m is string => Boolean(m));
+    // Show what the server stored, not what we sent.
+    await loadFilters();
+    filtersWarnings.set(warnings);
     return true;
   } catch (err) {
     const reason = blockedReason(err);
@@ -186,18 +275,26 @@ export async function deleteAllFilters(): Promise<boolean> {
     filterRules.set([]);
     return true;
   }
+  const account = Local.get('email') || '';
   filtersSaving.set(true);
   filtersError.set('');
   try {
+    if (await changedSinceLoad(account)) {
+      await loadFilters();
+      filtersError.set(CHANGED_ELSEWHERE);
+      return false;
+    }
     await Remote.request(
       'SieveScriptDelete',
       {},
       {
+        ...requestOptionsFor(account),
         method: 'DELETE',
         pathOverride: `/v1/sieve-scripts/${encodeURIComponent(managedScriptId)}`,
       },
     );
     managedScriptId = null;
+    loadedContent = '';
     filterRules.set([]);
     filtersActive.set(false);
     managedScriptUnreadable.set(false);
@@ -212,7 +309,17 @@ export async function deleteAllFilters(): Promise<boolean> {
 
 /** Reset store state when the active account changes. */
 export function resetFilters(): void {
+  // The view may already have started loading the new account (it reacts to
+  // the account change before the switch gets here). That state is correct,
+  // so only clear what belongs to another account.
+  const active = Local.get('email') || '';
+  if (stateAccount && stateAccount === active) return;
+  stateAccount = '';
+  // Drops any load still in flight for the previous account.
+  loadGeneration += 1;
   managedScriptId = null;
+  loadedContent = null;
+  filtersLoading.set(false);
   filterRules.set([]);
   foreignScripts.set([]);
   filtersActive.set(false);

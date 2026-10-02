@@ -134,6 +134,8 @@
 
   interface Props {
     navigate?: (path: string) => void;
+    /** True while the settings page is on screen (it stays mounted when hidden). */
+    active?: Readable<boolean>;
     storageUsed?: Readable<number> | number;
     storageTotal?: Readable<number> | number;
     localUsage?: Readable<number> | number;
@@ -152,6 +154,7 @@
 
   let {
     navigate = () => {},
+    active = readable(true),
     storageUsed,
     storageTotal,
     localUsage,
@@ -574,6 +577,7 @@
     'appearance',
     'privacy',
     'folders',
+    'filters',
     'search',
     'advanced',
     'shortcuts',
@@ -2578,6 +2582,8 @@
 
       {#if section === 'filters'}
         <FiltersSettings
+          visible={$active}
+          account={activeEmail || Local.get('email') || ''}
           folders={availableFolders.map((path) => ({ path, label: path }))}
           labels={labelsList.map((l: LabelItem) => ({
             keyword: getLabelKey(l) as string,

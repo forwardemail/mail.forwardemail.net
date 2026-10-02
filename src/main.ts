@@ -534,12 +534,16 @@ if (loginRoot) {
 
 const settingsRoot = document.querySelector('#settings-root');
 const profileRoot = document.querySelector('#profile-root');
+// Settings is mounted once and only hidden between visits, so views inside it
+// that mirror server state (Filters) watch this to reload when shown again.
+const settingsActive = writable(currentRoute() === 'settings');
 
 if (settingsRoot) {
   mount(Settings, {
     target: settingsRoot,
     props: {
       navigate: (path: string) => viewModel.navigate?.(path),
+      active: settingsActive,
       storageUsed: viewModel.mailboxView.storageUsed,
       storageTotal: viewModel.mailboxView.storageTotal,
       localUsage: viewModel.mailboxView.localUsage,
@@ -1600,6 +1604,7 @@ routeStore.subscribe((route) => {
   mailboxActive.set(route === 'mailbox');
   calendarActive.set(route === 'calendar');
   profileActive.set(route === 'profile');
+  settingsActive.set(route === 'settings');
   if (mailboxMode && _bootstrapComplete) {
     // Lazily mount Calendar and Contacts on first authenticated route.
     // They are deferred to avoid Svelte 5 runtime crashes on the login page.

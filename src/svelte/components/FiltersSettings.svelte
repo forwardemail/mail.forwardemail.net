@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
   import { Label } from '$lib/components/ui/label';
@@ -40,6 +40,10 @@
   } from '../../utils/sieve-rules';
 
   interface Props {
+    /** False while the settings page is hidden (it stays mounted between visits). */
+    visible?: boolean;
+    /** The signed-in account the rules belong to. */
+    account?: string;
     /** Folder paths offered in the "move to" picker. */
     folders?: { path: string; label: string }[];
     /** Label keywords offered in the "apply label" picker. */
@@ -47,7 +51,7 @@
     onToast?: (message: string, type?: string) => void;
   }
 
-  const { folders = [], labels = [], onToast }: Props = $props();
+  const { visible = true, account = '', folders = [], labels = [], onToast }: Props = $props();
 
   let editing = $state<FilterRule | null>(null);
   let editingIndex = $state(-1);
@@ -56,8 +60,41 @@
 
   const rules = $derived($filterRules);
 
+  // The rules live on the server and can change from another device or the
+  // website, so reload whenever this view is shown again: first mount, the
+  // settings page coming back, an account switch, or the window regaining
+  // focus. Unsaved edits are left alone; saving checks the server first.
+  let lastAccount = '';
+  $effect(() => {
+    const shown = visible;
+    const acct = account;
+    untrack(() => {
+      if (acct !== lastAccount) {
+        // Edits belong to the account they were made under.
+        lastAccount = acct;
+        dirty = false;
+        editing = null;
+        editingIndex = -1;
+      }
+      if (shown && !dirty) loadFilters();
+    });
+  });
+
   onMount(() => {
-    loadFilters();
+    // Returning to the window fires both focus and visibilitychange.
+    let lastRefresh = 0;
+    const refreshIfShown = () => {
+      if (document.visibilityState !== 'visible' || !visible || dirty || editing) return;
+      if (Date.now() - lastRefresh < 2000) return;
+      lastRefresh = Date.now();
+      loadFilters();
+    };
+    window.addEventListener('focus', refreshIfShown);
+    document.addEventListener('visibilitychange', refreshIfShown);
+    return () => {
+      window.removeEventListener('focus', refreshIfShown);
+      document.removeEventListener('visibilitychange', refreshIfShown);
+    };
   });
 
   const fieldOptions = Object.entries(CONDITION_FIELD_LABELS) as [ConditionField, string][];
@@ -204,7 +241,8 @@
         </Alert.Root>
       {/each}
 
-      {#if $filtersLoading}
+      <!-- Reloads happen on every visit and focus; keep the list up meanwhile. -->
+      {#if $filtersLoading && !rules.length}
         <p class="text-sm text-muted-foreground">Loading filters…</p>
       {:else if !rules.length}
         <p class="text-sm text-muted-foreground">

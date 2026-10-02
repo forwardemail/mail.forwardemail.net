@@ -36,6 +36,7 @@ const managedRule = createRule({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  hoisted.remoteRequest.mockReset();
   resetFilters();
 });
 
@@ -113,36 +114,132 @@ describe('loadFilters', () => {
   });
 });
 
+/**
+ * A minimal /v1/sieve-scripts server: one list, scripts by id. The store reads
+ * back after every write, so a fixed sequence of mocked responses would encode
+ * the call order rather than the behaviour.
+ */
+function fakeServer(initial: { id: string; name: string; content: string }[] = []) {
+  const scripts = new Map(initial.map((x) => [x.id, { ...x, is_active: true }]));
+  let nextId = 1;
+  const calls: { action: string; auth?: string }[] = [];
+  hoisted.remoteRequest.mockImplementation(
+    async (action: string, payload: Record<string, unknown>, opts: Record<string, unknown>) => {
+      calls.push({ action, auth: opts?.authHeader as string | undefined });
+      const id = decodeURIComponent(
+        String(opts?.pathOverride || '')
+          .split('/')
+          .pop() || '',
+      );
+      switch (action) {
+        case 'SieveScripts':
+          return [...scripts.values()].map(({ content: _c, ...rest }) => rest);
+        case 'SieveScript':
+          return scripts.get(id);
+        case 'SieveScriptCreate': {
+          const created = {
+            id: `new${nextId++}`,
+            name: String(payload.name),
+            content: String(payload.content),
+            is_active: true,
+          };
+          scripts.set(created.id, created);
+          return created;
+        }
+        case 'SieveScriptUpdate': {
+          const cur = scripts.get(id);
+          if (!cur) throw Object.assign(new Error('Not found'), { status: 404 });
+          cur.content = String(payload.content);
+          return cur;
+        }
+        case 'SieveScriptDelete':
+          scripts.delete(id);
+          return {};
+        default:
+          throw new Error(`unexpected ${action}`);
+      }
+    },
+  );
+  return { scripts, calls };
+}
+
 describe('saveFilters', () => {
   it('creates the script on first save and activates it in the same call', async () => {
-    hoisted.remoteRequest.mockResolvedValueOnce([]);
+    const server = fakeServer();
     await loadFilters();
-    hoisted.remoteRequest.mockResolvedValueOnce({ id: 'new1', name: MANAGED_SCRIPT_NAME });
 
     const ok = await saveFilters([managedRule]);
 
     expect(ok).toBe(true);
-    const [action, payload, opts] = hoisted.remoteRequest.mock.calls.at(-1)!;
-    expect(action).toBe('SieveScriptCreate');
-    expect(opts).toMatchObject({ method: 'POST' });
+    const create = hoisted.remoteRequest.mock.calls.find(([a]) => a === 'SieveScriptCreate')!;
     // An inactive script looks saved but filters nothing.
-    expect(payload).toMatchObject({ name: MANAGED_SCRIPT_NAME, activate: true });
-    expect((payload as { content: string }).content).toContain('fileinto :create "Newsletters";');
+    expect(create[1]).toMatchObject({ name: MANAGED_SCRIPT_NAME, activate: true });
+    expect((create[1] as { content: string }).content).toContain('fileinto :create "Newsletters";');
+    expect(create[2]).toMatchObject({ method: 'POST' });
+    expect([...server.scripts.values()]).toHaveLength(1);
     expect(get(filtersActive)).toBe(true);
+    expect(get(filterRules)).toEqual([managedRule]);
   });
 
   it('updates in place once the script exists, keeping one script per account', async () => {
-    hoisted.remoteRequest
-      .mockResolvedValueOnce([{ id: 's1', name: MANAGED_SCRIPT_NAME, is_active: true }])
-      .mockResolvedValueOnce({ content: rulesToSieve([managedRule]) });
+    const server = fakeServer([
+      { id: 's1', name: MANAGED_SCRIPT_NAME, content: rulesToSieve([managedRule]) },
+    ]);
     await loadFilters();
-    hoisted.remoteRequest.mockResolvedValueOnce({ id: 's1' });
 
-    await saveFilters([]);
+    expect(await saveFilters([])).toBe(true);
 
-    const [action, , opts] = hoisted.remoteRequest.mock.calls.at(-1)!;
-    expect(action).toBe('SieveScriptUpdate');
-    expect(opts).toMatchObject({ method: 'PUT', pathOverride: '/v1/sieve-scripts/s1' });
+    const update = hoisted.remoteRequest.mock.calls.find(([a]) => a === 'SieveScriptUpdate')!;
+    expect(update[2]).toMatchObject({ method: 'PUT', pathOverride: '/v1/sieve-scripts/s1' });
+    expect([...server.scripts.keys()]).toEqual(['s1']);
+  });
+
+  it('shows what the server stored after saving, not what was sent', async () => {
+    const server = fakeServer([
+      { id: 's1', name: MANAGED_SCRIPT_NAME, content: rulesToSieve([managedRule]) },
+    ]);
+    await loadFilters();
+    const renamed = { ...managedRule, name: 'Renamed' };
+
+    await saveFilters([renamed]);
+
+    // The last calls are the read-back of the script just written.
+    expect(server.calls.slice(-2).map((c) => c.action)).toEqual(['SieveScripts', 'SieveScript']);
+    expect(get(filterRules)).toEqual([renamed]);
+  });
+
+  it('refuses to overwrite filters changed elsewhere since they were loaded', async () => {
+    const server = fakeServer([
+      { id: 's1', name: MANAGED_SCRIPT_NAME, content: rulesToSieve([managedRule]) },
+    ]);
+    await loadFilters();
+    // Another device saves a different rule set meanwhile.
+    const theirs = createRule({
+      name: 'From another device',
+      conditions: [{ field: 'subject', op: 'contains', value: 'invoice' }],
+      actions: { label: 'billing' },
+    });
+    server.scripts.get('s1')!.content = rulesToSieve([theirs]);
+
+    const ok = await saveFilters([]);
+
+    expect(ok).toBe(false);
+    expect(hoisted.remoteRequest.mock.calls.some(([a]) => a === 'SieveScriptUpdate')).toBe(false);
+    // Reloaded, so the screen now mirrors the server.
+    expect(get(filterRules)).toEqual([theirs]);
+    expect(get(filtersError)).toMatch(/changed on another device/i);
+  });
+
+  it('does not recreate a script that was deleted elsewhere', async () => {
+    const server = fakeServer([
+      { id: 's1', name: MANAGED_SCRIPT_NAME, content: rulesToSieve([managedRule]) },
+    ]);
+    await loadFilters();
+    server.scripts.delete('s1');
+
+    expect(await saveFilters([managedRule])).toBe(false);
+    expect(server.scripts.size).toBe(0);
+    expect(get(filterRules)).toEqual([]);
   });
 
   it('keeps the previous rules in the store when the save fails', async () => {
@@ -150,7 +247,11 @@ describe('saveFilters', () => {
       .mockResolvedValueOnce([{ id: 's1', name: MANAGED_SCRIPT_NAME, is_active: true }])
       .mockResolvedValueOnce({ content: rulesToSieve([managedRule]) });
     await loadFilters();
-    hoisted.remoteRequest.mockRejectedValueOnce(new Error('nope'));
+    hoisted.remoteRequest
+      // the pre-save check finds the script unchanged
+      .mockResolvedValueOnce([{ id: 's1', name: MANAGED_SCRIPT_NAME, is_active: true }])
+      .mockResolvedValueOnce({ content: rulesToSieve([managedRule]) })
+      .mockRejectedValueOnce(new Error('nope'));
 
     const ok = await saveFilters([]);
 
@@ -160,22 +261,64 @@ describe('saveFilters', () => {
   });
 });
 
+describe('account binding', () => {
+  it('drops a load that finished after the account was reset', async () => {
+    let release: (v: unknown) => void = () => {};
+    hoisted.remoteRequest.mockImplementationOnce(
+      () => new Promise((resolve) => (release = resolve)),
+    );
+    const pending = loadFilters();
+    // Account switch: storage now names another account, and the switch resets.
+    localStorage.setItem('webmail_email', 'other@example.com');
+    resetFilters();
+    release([{ id: 's1', name: MANAGED_SCRIPT_NAME, is_active: true }]);
+    await pending;
+
+    expect(get(filterRules)).toEqual([]);
+    expect(hoisted.remoteRequest).toHaveBeenCalledTimes(1);
+    localStorage.removeItem('webmail_email');
+  });
+
+  it("keeps the new account's filters when the switch resets after they loaded", async () => {
+    localStorage.setItem('webmail_email', 'new@example.com');
+    fakeServer([{ id: 's1', name: MANAGED_SCRIPT_NAME, content: rulesToSieve([managedRule]) }]);
+    await loadFilters();
+
+    // switchAccount calls resetFilters after an await, by which time the view
+    // has already loaded the new account.
+    resetFilters();
+
+    expect(get(filterRules)).toEqual([managedRule]);
+    localStorage.removeItem('webmail_email');
+  });
+});
+
 describe('deleteAllFilters', () => {
   it('deletes the script and clears state', async () => {
-    hoisted.remoteRequest
-      .mockResolvedValueOnce([{ id: 's1', name: MANAGED_SCRIPT_NAME, is_active: true }])
-      .mockResolvedValueOnce({ content: rulesToSieve([managedRule]) });
+    const server = fakeServer([
+      { id: 's1', name: MANAGED_SCRIPT_NAME, content: rulesToSieve([managedRule]) },
+    ]);
     await loadFilters();
-    hoisted.remoteRequest.mockResolvedValueOnce({});
 
     const ok = await deleteAllFilters();
 
     expect(ok).toBe(true);
+    expect(server.scripts.size).toBe(0);
     expect(get(filterRules)).toEqual([]);
     expect(get(filtersActive)).toBe(false);
-    const [action, , opts] = hoisted.remoteRequest.mock.calls.at(-1)!;
-    expect(action).toBe('SieveScriptDelete');
-    expect(opts).toMatchObject({ method: 'DELETE' });
+    const del = hoisted.remoteRequest.mock.calls.find(([a]) => a === 'SieveScriptDelete')!;
+    expect(del[2]).toMatchObject({ method: 'DELETE' });
+  });
+
+  it('does not delete filters changed elsewhere since they were loaded', async () => {
+    const server = fakeServer([
+      { id: 's1', name: MANAGED_SCRIPT_NAME, content: rulesToSieve([managedRule]) },
+    ]);
+    await loadFilters();
+    server.scripts.get('s1')!.content = rulesToSieve([{ ...managedRule, name: 'Edited' }]);
+
+    expect(await deleteAllFilters()).toBe(false);
+    expect(server.scripts.size).toBe(1);
   });
 
   it('is a no-op when no script was ever created', async () => {
