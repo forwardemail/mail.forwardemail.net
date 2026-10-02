@@ -7,6 +7,7 @@
  *
  * No real API calls are made — everything is served from memory.
  */
+import { shouldHidePurchaseLinks } from './store-policy.js';
 
 // ── Demo Account Constants ────────────────────────────────────────────────
 export const DEMO_EMAIL = 'demo@forwardemail.net';
@@ -108,8 +109,22 @@ export function generateFolders() {
 
 // ── Fake Messages ─────────────────────────────────────────────────────────
 
+// App Store and Google Play builds may not point people to sign-up outside
+// the store (see store-policy.js), so the welcome message tells them to sign in.
+const welcomeNextStep = () =>
+  shouldHidePurchaseLinks()
+    ? {
+        text: 'To use your own account, sign out of the demo and sign in with your Forward Email address.',
+        html: '<p>To use your own account, sign out of the demo and sign in with your Forward Email address.</p>',
+      }
+    : {
+        text: 'To get started with your own account, visit https://forwardemail.net',
+        html: '<p>To get started with your own account, visit <a href="https://forwardemail.net">forwardemail.net</a></p>',
+      };
+
 export function generateMessages(folder = 'INBOX', page = 1) {
   resetIds();
+  const nextStep = welcomeNextStep();
   const allMessages = {
     INBOX: [
       {
@@ -122,8 +137,8 @@ export function generateMessages(folder = 'INBOX', page = 1) {
         date: minutesAgo(5),
         intro:
           'Thanks for trying out Forward Email webmail. This is a demo account with sample data...',
-        text: 'Thanks for trying out Forward Email webmail.\n\nThis is a demo account with sample data to help you explore the interface. Feel free to click around and explore all the features!\n\nNote: Sending emails and other write operations are disabled in demo mode.\n\nTo get started with your own account, visit https://forwardemail.net\n\nBest regards,\nThe Forward Email Team',
-        html: '<p>Thanks for trying out Forward Email webmail.</p><p>This is a demo account with sample data to help you explore the interface. Feel free to click around and explore all the features!</p><p><strong>Note:</strong> Sending emails and other write operations are disabled in demo mode.</p><p>To get started with your own account, visit <a href="https://forwardemail.net">forwardemail.net</a></p><p>Best regards,<br>The Forward Email Team</p>',
+        text: `Thanks for trying out Forward Email webmail.\n\nThis is a demo account with sample data to help you explore the interface. Feel free to click around and explore all the features!\n\nNote: Sending emails and other write operations are disabled in demo mode.\n\n${nextStep.text}\n\nBest regards,\nThe Forward Email Team`,
+        html: `<p>Thanks for trying out Forward Email webmail.</p><p>This is a demo account with sample data to help you explore the interface. Feel free to click around and explore all the features!</p><p><strong>Note:</strong> Sending emails and other write operations are disabled in demo mode.</p>${nextStep.html}<p>Best regards,<br>The Forward Email Team</p>`,
         flags: [],
         size: 2048,
         attachments: [],
@@ -132,13 +147,14 @@ export function generateMessages(folder = 'INBOX', page = 1) {
         id: nextId(),
         uid: 1002,
         mailbox: 'INBOX',
-        subject: 'Your weekly privacy report',
-        from: { name: 'Privacy Monitor', address: 'privacy@forwardemail.net' },
+        subject: 'Privacy settings to try',
+        from: { name: 'Privacy Tips', address: 'privacy@forwardemail.net' },
         to: [{ name: 'Demo User', address: DEMO_EMAIL }],
         date: hoursAgo(2),
-        intro: 'Your email privacy score this week is 98/100. No tracking pixels were detected...',
-        text: 'Your email privacy score this week is 98/100.\n\nNo tracking pixels were detected in your incoming emails this week. Forward Email automatically strips tracking pixels and protects your privacy.\n\nPrivacy Summary:\n- Emails received: 47\n- Tracking pixels blocked: 12\n- External images proxied: 23\n- Encrypted emails: 8\n\nKeep up the great work protecting your privacy!',
-        html: '<h2>Your Weekly Privacy Report</h2><p>Your email privacy score this week is <strong>98/100</strong>.</p><p>No tracking pixels were detected in your incoming emails this week. Forward Email automatically strips tracking pixels and protects your privacy.</p><h3>Privacy Summary</h3><ul><li>Emails received: 47</li><li>Tracking pixels blocked: 12</li><li>External images proxied: 23</li><li>Encrypted emails: 8</li></ul><p>Keep up the great work protecting your privacy!</p>',
+        intro:
+          'Tracking pixels are blocked by default. A few more settings are under Settings, Privacy & Security...',
+        text: 'Tracking pixels are blocked by default. The app hides the tiny invisible images that tell senders when an email was opened.\n\nA few more settings are under Settings, Privacy & Security:\n\n- Block all external images by default. Load them for one email at a time when you want them.\n- App Lock. Lock the app with a PIN or a passkey.\n- PGP encryption. Add your private key to read OpenPGP-encrypted email.\n- View emails as plain text. Strip HTML and remote content from every email.\n\nThe Forward Email Team',
+        html: '<p>Tracking pixels are blocked by default. The app hides the tiny invisible images that tell senders when an email was opened.</p><p>A few more settings are under <strong>Settings, Privacy &amp; Security</strong>:</p><ul><li><strong>Block all external images by default.</strong> Load them for one email at a time when you want them.</li><li><strong>App Lock.</strong> Lock the app with a PIN or a passkey.</li><li><strong>PGP encryption.</strong> Add your private key to read OpenPGP-encrypted email.</li><li><strong>View emails as plain text.</strong> Strip HTML and remote content from every email.</li></ul><p>The Forward Email Team</p>',
         flags: [],
         size: 3200,
         attachments: [],

@@ -107,8 +107,10 @@ if [ ! -d src-tauri/gen/apple ]; then
   echo "   🏗️  Initializing generated iOS project..."
   npx tauri ios init --ci
 fi
-# Camera permission + scene delegate, in the order xcodegen requires.
-bash scripts/configure-ios-project.sh
+# Camera permission + scene delegate, in the order xcodegen requires. Dev runs
+# on a device reach the Vite server over the LAN, so they also declare the
+# Local Network permission; release builds leave it out.
+IOS_DEV_LOCAL_NETWORK=1 bash scripts/configure-ios-project.sh
 node scripts/configure-mobile-display-name.cjs
 
 # ── Launch ─────────────────────────────────────────────────────────────────

@@ -81,7 +81,7 @@ Defaults to your host arch's simulator target (`aarch64-sim` on Apple Silicon, `
 Pass through extra flags when you need a different target:
 
 ```bash
-pnpm tauri:ios:build -- --target x86_64-sim
+pnpm tauri:ios:build --target x86_64-sim
 ```
 
 ### Run on a physical device with a free Apple ID
@@ -117,9 +117,12 @@ Requires a paid [Apple Developer Program](https://developer.apple.com/programs/)
    - Generate an **iOS Distribution certificate** and download the `.cer`; double-click to add to Keychain.
    - Create an **Ad Hoc provisioning profile** (for sideload) or **App Store profile** (for TestFlight) referencing that App ID and cert.
 2. Set `developmentTeam` in `src-tauri/tauri.conf.json` to your 10-char team ID.
-3. Build:
+3. Build through the wrapper, which writes signing, push and export-compliance settings into the
+   generated project first (use `--export-method release-testing` for Ad Hoc and
+   `app-store-connect` for TestFlight):
    ```bash
-   pnpm tauri ios build --target aarch64
+   APPLE_TEAM_ID=<your team ID> IOS_PROFILE_NAME="<profile name>" \
+     pnpm tauri:ios:build --target aarch64 --export-method release-testing
    ```
 4. The resulting `.ipa` is at `src-tauri/gen/apple/build/arm64/<scheme>.ipa`.
 
@@ -166,7 +169,7 @@ Find the build at [appstoreconnect.apple.com](https://appstoreconnect.apple.com)
 | ------------------- | ------------------------------------------ | -------------------- | ------------------------------------------------------------------------------------------------ |
 | Upload received     | Activity → iOS Builds → "Processing"       | 5–15 min             | Wait. You'll get an email when processing finishes (or fails).                                   |
 | Processing complete | TestFlight → iOS tab, listed under version | n/a                  | Build is ready for internal testers immediately.                                                 |
-| Missing Compliance  | Yellow banner on the build row             | one-time per version | Click the build → answer the encryption question (see below).                                    |
+| Missing Compliance  | Yellow banner on the build row             | should not appear    | Builds carry the export-compliance key (see below); if the banner shows, answer as described.    |
 | Internal testing    | TestFlight → Internal Testing → Groups     | instant after adding | Add up to 25 testers (must be users on your team). They get an email + TF push.                  |
 | External testing    | TestFlight → External Testing → Groups     | <24h beta review     | Add testers by email (no Apple Developer seat needed). First build per version is beta-reviewed. |
 | Build expiry        | n/a                                        | 90 days from upload  | Upload a new build before expiry to keep testing continuous.                                     |
@@ -175,13 +178,21 @@ Find the build at [appstoreconnect.apple.com](https://appstoreconnect.apple.com)
 
 #### Export compliance (one-time, per app)
 
-Forward Email uses TLS for network transport and user-held PGP keys for email content. Both typically qualify as **exempt** encryption under US EAR (§740.17(b)(1) / 5D992.c).
+Forward Email uses the system's TLS and ships standard encryption of its own: OpenPGP.js for
+mail, libsodium (XSalsa20-Poly1305, BLAKE2b) for App Lock, and Argon2id for App Lock PINs and
+device pairing codes. Under App Encryption Documentation, answer **Standard encryption algorithms
+instead of, or in addition to, using or accessing the encryption within Apple's operating
+system**. That answer needs documentation only for France, and the app is not offered there.
 
 [`scripts/inject-ios-signing.cjs`](../scripts/inject-ios-signing.cjs) sets
-`ITSAppUsesNonExemptEncryption=false` in the generated iOS `Info.plist` during every signed CI
-build. This normally prevents the build from entering the App Store Connect "Missing Compliance"
-state. If App Store Connect still asks the question, answer that the app uses encryption and
-qualifies for the exemptions, then confirm that the uploaded archive contains the generated key.
+`ITSAppUsesNonExemptEncryption=false` in the generated iOS `Info.plist` during every signed
+build, so builds skip the App Store Connect "Missing Compliance" state. If App Store Connect still
+asks, give the answer above and confirm that the uploaded archive contains the generated key.
+
+To add France, file a French encryption declaration, upload it under App Encryption
+Documentation, and set the `IOS_ENCRYPTION_COMPLIANCE_CODE` repository variable to the code Apple
+issues. Signed builds then set the flag to true and add `ITSEncryptionExportComplianceCode`
+([`scripts/ios-export-compliance.cjs`](../scripts/ios-export-compliance.cjs)).
 
 Consult a lawyer if the app later ships non-standard crypto (custom ciphers, ECC on-device key gen without TLS context, etc).
 
@@ -200,13 +211,13 @@ For rare cases where you want to produce a signed IPA outside CI (e.g., debuggin
 
 1. Follow the one-time setup above so the Apple Distribution cert is in your login Keychain and the `.mobileprovision` is installed in `~/Library/MobileDevice/Provisioning Profiles/`.
 2. Set `developmentTeam` in `src-tauri/tauri.conf.json` to your 10-char team ID (already set).
-3. Build:
+3. Build with `pnpm tauri:ios:build`, which configures the generated project the way a release
+   needs (no development-only Local Network string, export-compliance keys, no web inspector)
+   before it signs:
    ```bash
    APPLE_TEAM_ID=FH83QMJS7P \
-   IOS_EXPORT_METHOD=app-store-connect \
    IOS_PROFILE_NAME="Forward Email Mail App Store" \
-     node scripts/inject-ios-signing.cjs
-   pnpm tauri ios build --target aarch64 --export-method app-store-connect
+     pnpm tauri:ios:build --target aarch64 --export-method app-store-connect
    ```
 4. Find the IPA at `src-tauri/gen/apple/build/arm64/*.ipa`.
 5. Upload to TestFlight via Transporter.app (Mac App Store) or `xcrun altool --upload-app`.

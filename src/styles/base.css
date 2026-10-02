@@ -226,6 +226,13 @@ body:not(.mailbox-mode) {
     padding-bottom: calc(1rem + var(--sai-bottom)) !important;
     scroll-padding-bottom: calc(1rem + var(--sai-bottom));
   }
+
+  /* Calendar and Contacts end with a footer that clears the home indicator
+     itself, so the content above it needs no inset of its own. */
+  .fe-mobile-page-scroll.fe-above-footer {
+    padding-bottom: 1rem !important;
+    scroll-padding-bottom: 1rem;
+  }
 }
 
 /* ============================================

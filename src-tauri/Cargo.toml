@@ -20,17 +20,21 @@ fcm = ["dep:tauri-plugin-remote-push"]
 # in release builds — the server binds 127.0.0.1:4445 and grants full
 # automation control of the app.
 webdriver = ["dep:tauri-plugin-webdriver"]
+# Compiles the web inspector into release builds (Safari Web Inspector on iOS
+# and macOS, Chrome remote debugging on Android, DevTools on Windows and
+# Linux). Debug builds always include it. Off by default: on iOS it also sets
+# the private WKPreferences key developerExtrasEnabled, which App Review
+# rejects, and an inspectable web view lets anyone holding the unlocked
+# device read what the app stores. Build scripts turn it on when
+# WEB_INSPECTOR=true; see scripts/web-inspector-args.cjs.
+devtools = ["tauri/devtools"]
 
 [build-dependencies]
 tauri-build = { version = "2.5.6", features = [] }
 time = "0.3"
 
 [dependencies]
-tauri = { version = "2.10.3", features = [
-  "tray-icon",
-  "image-png",
-  "devtools",
-] }
+tauri = { version = "2.10.3", features = ["tray-icon", "image-png"] }
 tauri-plugin-notification = "2.3.3"
 tauri-plugin-deep-link = "2.4.8"
 tauri-plugin-process = "2.3.1"

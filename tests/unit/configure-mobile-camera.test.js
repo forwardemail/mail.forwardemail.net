@@ -77,13 +77,14 @@ function createFixture({ android = true, ios = true } = {}) {
 
   return {
     root,
-    run() {
+    run(env = {}) {
       const result = spawnSync(
         process.execPath,
         [join(root, 'scripts', 'configure-mobile-camera.cjs')],
         {
           cwd: root,
           encoding: 'utf8',
+          env: { ...process.env, IOS_DEV_LOCAL_NETWORK: '', ...env },
         },
       );
       if (result.status !== 0) {
@@ -186,12 +187,38 @@ describe('configure-mobile-camera', () => {
     expect(yml).toContain('CFBundleDisplayName: Mail');
   });
 
-  it('declares the local-network usage description for dev-on-device', () => {
+  it('declares the local-network usage description for dev runs on a device', () => {
     const fixture = createFixture();
-    fixture.run();
+    fixture.run({ IOS_DEV_LOCAL_NETWORK: '1' });
 
     expect(fixture.projectYml()).toContain('NSLocalNetworkUsageDescription:');
     expect(fixture.plist()).toContain('<key>NSLocalNetworkUsageDescription</key>');
+  });
+
+  it('leaves the local-network usage description out of release builds', () => {
+    // Its text talks about a development server, which App Review would see.
+    const fixture = createFixture();
+    fixture.run();
+
+    expect(fixture.projectYml()).not.toContain('NSLocalNetworkUsageDescription');
+    expect(fixture.plist()).not.toContain('NSLocalNetworkUsageDescription');
+    expect(fixture.plist()).toContain('<key>NSCameraUsageDescription</key>');
+  });
+
+  it('removes the dev-only local-network description before a release build', () => {
+    // A generated project can survive from `pnpm tauri:ios:dev` to a release
+    // build on the same machine.
+    const fixture = createFixture();
+    fixture.run({ IOS_DEV_LOCAL_NETWORK: '1' });
+    fixture.run();
+
+    const yml = fixture.projectYml();
+    const plist = fixture.plist();
+    expect(yml).not.toContain('NSLocalNetworkUsageDescription');
+    expect(plist).not.toContain('NSLocalNetworkUsageDescription');
+    expect(yml).toMatch(/\n {8}NSCameraUsageDescription: "[^"]+"\n/);
+    expect(plist).toContain('<key>NSCameraUsageDescription</key>');
+    expect(plist).toMatch(/<\/dict>\s*<\/plist>\s*$/);
   });
 
   it('adds a newly introduced key to a project that already has the older ones', () => {
@@ -199,7 +226,7 @@ describe('configure-mobile-camera', () => {
     // whole block when any one key was present, so projects configured before
     // a key was introduced never received it.
     const fixture = createFixture();
-    fixture.run();
+    fixture.run({ IOS_DEV_LOCAL_NETWORK: '1' });
 
     const ymlWithoutLocalNetwork = fixture
       .projectYml()
@@ -211,7 +238,7 @@ describe('configure-mobile-camera', () => {
       ymlWithoutLocalNetwork,
     );
 
-    fixture.run();
+    fixture.run({ IOS_DEV_LOCAL_NETWORK: '1' });
 
     expect(fixture.projectYml()).toContain('NSLocalNetworkUsageDescription:');
     // And the key that was already there is not duplicated.

@@ -8,6 +8,7 @@
   let mailboxSubscriptions: Unsubscriber[] = [];
   import { mailService, getPgpKeysVersion, pgpKeysVersion } from '../stores/mailService';
   import { isTauri } from '../utils/platform.js';
+  import { shouldHidePurchaseLinks } from '../utils/store-policy.js';
   import { searchStore } from '../stores/searchStore';
   import { Remote } from '../utils/remote';
   import { isDemoBlockedError, isDemoMode } from '../utils/demo-mode';
@@ -233,6 +234,9 @@
   } from '../stores/tabStore';
   import { isTauriDesktop } from '../utils/platform.js';
   import { onlineStatus, checkConnectivity } from '../utils/network-status';
+
+  // App Store and Google Play builds hide billing and sign-up links (store-policy.js).
+  const hidePurchaseLinks = shouldHidePurchaseLinks();
 
   const isBodyPrefetchEnabled = () => getEffectiveSettingValue('cache_prefetch_enabled') !== false;
 
@@ -5742,8 +5746,12 @@
       class:mobile-reader-closing={readerClosing}
     >
       {#if isOffline}
+        <!-- The banner sits above the header, so it takes the status-bar inset
+             from the header (installed web app on iPhone and iPad; 0 in the
+             native apps, which inset the web view). -->
         <div
           class="flex items-center justify-center gap-2 px-4 py-1.5 bg-state-caution/15 border-b border-state-caution/25 text-state-caution text-sm"
+          style="padding-top: calc(0.375rem + var(--sai-top, env(safe-area-inset-top, 0px)))"
           role="status"
         >
           <WifiOff class="h-3.5 w-3.5 shrink-0" />
@@ -5767,7 +5775,9 @@
       {/if}
       <div
         class="flex items-center gap-3 px-4 py-2 bg-muted/50 dark:bg-background"
-        style="padding-top: max(0.5rem, env(safe-area-inset-top, 0px))"
+        style={isOffline
+          ? 'padding-top: 0.5rem'
+          : 'padding-top: max(0.5rem, env(safe-area-inset-top, 0px))'}
       >
         <Tooltip.Root>
           <Tooltip.Trigger>
@@ -6273,12 +6283,15 @@
             </div>
 
             {#if $storageTotal > 0}
-              <a
-                href="https://forwardemail.net/my-account/billing"
-                target="_blank"
-                rel="noopener noreferrer"
-                class="block px-3 pb-3 hover:bg-accent/50 transition-colors mx-2 mb-2"
-                title="Manage billing and storage"
+              <!-- App Store and Google Play builds show the meter without the billing link. -->
+              <svelte:element
+                this={hidePurchaseLinks ? 'div' : 'a'}
+                href={hidePurchaseLinks ? undefined : 'https://forwardemail.net/my-account/billing'}
+                target={hidePurchaseLinks ? undefined : '_blank'}
+                rel={hidePurchaseLinks ? undefined : 'noopener noreferrer'}
+                class={`block px-3 pb-3 mx-2 mb-2 ${hidePurchaseLinks ? '' : 'hover:bg-accent/50 transition-colors'}`}
+                title={hidePurchaseLinks ? undefined : 'Manage billing and storage'}
+                data-testid="sidebar-storage"
               >
                 <div class="flex items-center justify-between text-xs text-muted-foreground mb-1">
                   <small>Storage</small>
@@ -6293,7 +6306,7 @@
                 <small class="text-xs text-muted-foreground mt-1">
                   {formatStorage($storageUsed)} of {formatStorage($storageTotal)}
                 </small>
-              </a>
+              </svelte:element>
             {/if}
             <!-- Sidebar resize handle (inside aside to avoid grid layout issues) -->
             <button
@@ -9405,7 +9418,7 @@
                     />
                     {#if filterDownloadableAttachments($attachments).length}
                       <div
-                        class="sticky bottom-0 z-10 mt-4 flex shrink-0 flex-nowrap items-start gap-2 overflow-x-auto overflow-y-hidden border-t border-border bg-[var(--color-panel)]/95 pt-4 pb-3 backdrop-blur supports-[backdrop-filter]:bg-[var(--color-panel)]/85"
+                        class="sticky bottom-0 z-10 mt-4 flex shrink-0 flex-nowrap items-start gap-2 overflow-x-auto overflow-y-hidden border-t border-border bg-[var(--color-panel)]/95 px-4 pt-4 pb-3 backdrop-blur supports-[backdrop-filter]:bg-[var(--color-panel)]/85"
                       >
                         {#each filterDownloadableAttachments($attachments) as att}
                           <div class="flex h-24 w-[104px] shrink-0 flex-col gap-1">

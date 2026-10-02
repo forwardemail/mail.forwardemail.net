@@ -308,6 +308,15 @@ jobs:
           ALLOW_UNSIGNED_WINDOWS: ${{ vars.ALLOW_UNSIGNED_WINDOWS }}
         run: node scripts/windows-signing.cjs setup
 
+      # Release builds leave out the web inspector unless the WEB_INSPECTOR
+      # repository variable is true (scripts/web-inspector-args.cjs).
+      - name: Web inspector flag
+        id: web_inspector
+        shell: bash
+        env:
+          WEB_INSPECTOR: ${{ vars.WEB_INSPECTOR }}
+        run: echo "args=$(node scripts/web-inspector-args.cjs)" >> "$GITHUB_OUTPUT"
+
       - name: Build and release Tauri app
         # v0.6.2: adds `retryAttempts`, which re-tries a failed build and each
         # failed asset upload inside the same job. GitHub's upload endpoint
@@ -349,7 +358,7 @@ jobs:
           releaseDraft: true
           prerelease: false
           retryAttempts: 3
-          args: ${{ matrix.args }}
+          args: ${{ matrix.args }} ${{ steps.web_inspector.outputs.args }}
 
       # Build strict-confinement Snaps from the same tagged source on both
       # native Linux architectures. Snapcraft's LXD build supplies the isolated

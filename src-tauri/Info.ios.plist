@@ -14,14 +14,13 @@
   -->
 
   <!--
-    Export-compliance declaration. The app uses only standard, exempt encryption
-    (HTTPS/TLS) and no proprietary/non-exempt cryptography. Declaring this as
-    false tells App Store Connect no export-compliance documentation is needed
-    and SUPPRESSES the per-build "Provide Export Compliance Information" prompt
-    that otherwise stalls every TestFlight build and blocks external Beta Review.
+    Export compliance (ITSAppUsesNonExemptEncryption, plus
+    ITSEncryptionExportComplianceCode once the app is offered in France) is
+    written into the generated Info.plist by scripts/inject-ios-signing.cjs on
+    every signed build; scripts/ios-export-compliance.cjs explains the answer.
+    Do not set it here: tauri ios build merges this file over the generated
+    Info.plist, so a value here would replace the one the build wrote.
   -->
-  <key>ITSAppUsesNonExemptEncryption</key>
-  <false/>
 
   <!--
     Photo library usage string. The compose attach flow and profile/contact

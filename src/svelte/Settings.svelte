@@ -49,6 +49,7 @@
   import ChevronDown from '@lucide/svelte/icons/chevron-down';
   import ExternalLink from '@lucide/svelte/icons/external-link';
   import { isTauri, isTauriDesktop, isTauriMacOS, isTauriMobile } from '../utils/platform.js';
+  import { shouldHidePurchaseLinks } from '../utils/store-policy.js';
   import { openExternalUrl, supportsExternalBrowserOverride } from '../utils/external-links.js';
 
   const openExternal = async (url: string) => {
@@ -127,6 +128,9 @@
   import PushNotificationSettings from './components/PushNotificationSettings.svelte';
   import { hasWebPushKey } from '../utils/web-push.js';
   import NewMailNotificationSettings from './components/NewMailNotificationSettings.svelte';
+
+  // App Store and Google Play builds hide billing and sign-up links (store-policy.js).
+  const hidePurchaseLinks = shouldHidePurchaseLinks();
 
   interface ToastApi {
     show?: (message: string, type?: string) => void;
@@ -2110,13 +2114,16 @@
                   {formatStorageValue(storageUsedValue)} of {formatStorageValue(storageTotalValue)}
                 </div>
               </div>
-              <Button
-                variant="outline"
-                class="mt-4"
-                onclick={() => openExternal('https://forwardemail.net/my-account/billing')}
-              >
-                Increase storage
-              </Button>
+              <!-- App Store and Google Play builds may not link to outside purchases. -->
+              {#if !hidePurchaseLinks}
+                <Button
+                  variant="outline"
+                  class="mt-4"
+                  onclick={() => openExternal('https://forwardemail.net/my-account/billing')}
+                >
+                  Increase storage
+                </Button>
+              {/if}
             </Card.Content>
           </Card.Root>
         {/if}
@@ -3097,8 +3104,11 @@
               {#if storagePercentValue() > 90}
                 <Alert.Root variant="destructive">
                   <AlertTriangle class="h-4 w-4" />
+                  <!-- App Store and Google Play builds may not suggest buying more. -->
                   <Alert.Description
-                    >Mailbox storage almost full! Consider upgrading your plan.</Alert.Description
+                    >{hidePurchaseLinks
+                      ? 'Mailbox storage almost full. Delete emails or empty Trash to free up space.'
+                      : 'Mailbox storage almost full! Consider upgrading your plan.'}</Alert.Description
                   >
                 </Alert.Root>
               {/if}

@@ -46,19 +46,20 @@ The updater signing key is required for normal production desktop releases. The 
 
 ### Mobile signing secrets
 
-| Name                              | Type     | Required                                                         | Purpose                                                                 |
-| --------------------------------- | -------- | ---------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| `ANDROID_KEYSTORE_BASE64`         | Secret   | Yes for signed Android builds                                    | Base64-encoded Android signing keystore (`.jks`)                        |
-| `ANDROID_KEYSTORE_PASSWORD`       | Secret   | Yes for signed Android builds                                    | Keystore password                                                       |
-| `ANDROID_KEY_ALIAS`               | Secret   | Yes for signed Android builds                                    | Key alias inside the keystore                                           |
-| `ANDROID_KEY_PASSWORD`            | Secret   | Yes for signed Android builds                                    | Password for the selected key alias                                     |
-| `IOS_CERTIFICATE_BASE64`          | Secret   | Optional if `APPLE_CERTIFICATE` also contains Apple Distribution | Base64-encoded iOS **Apple Distribution** `.p12`                        |
-| `IOS_CERTIFICATE_PASSWORD`        | Secret   | Optional if `APPLE_CERTIFICATE_PASSWORD` is reused               | Password used when exporting the iOS `.p12`                             |
-| `IOS_PROVISIONING_PROFILE_BASE64` | Secret   | Yes for TestFlight                                               | Base64-encoded App Store provisioning profile (`.mobileprovision`)      |
-| `APP_STORE_CONNECT_API_KEY`       | Secret   | Yes for TestFlight                                               | Full contents of the downloaded `AuthKey_XXXXXXXXXX.p8` file            |
-| `APP_STORE_CONNECT_KEY_ID`        | Secret   | Yes for TestFlight                                               | Key ID shown by App Store Connect for the API key                       |
-| `APP_STORE_CONNECT_ISSUER_ID`     | Secret   | Yes for TestFlight                                               | Issuer UUID shown in App Store Connect                                  |
-| `IOS_SIGNING_IDENTITY`            | Variable | Optional                                                         | Override for the iOS signing identity; defaults to `Apple Distribution` |
+| Name                              | Type     | Required                                                         | Purpose                                                                           |
+| --------------------------------- | -------- | ---------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `ANDROID_KEYSTORE_BASE64`         | Secret   | Yes for signed Android builds                                    | Base64-encoded Android signing keystore (`.jks`)                                  |
+| `ANDROID_KEYSTORE_PASSWORD`       | Secret   | Yes for signed Android builds                                    | Keystore password                                                                 |
+| `ANDROID_KEY_ALIAS`               | Secret   | Yes for signed Android builds                                    | Key alias inside the keystore                                                     |
+| `ANDROID_KEY_PASSWORD`            | Secret   | Yes for signed Android builds                                    | Password for the selected key alias                                               |
+| `IOS_CERTIFICATE_BASE64`          | Secret   | Optional if `APPLE_CERTIFICATE` also contains Apple Distribution | Base64-encoded iOS **Apple Distribution** `.p12`                                  |
+| `IOS_CERTIFICATE_PASSWORD`        | Secret   | Optional if `APPLE_CERTIFICATE_PASSWORD` is reused               | Password used when exporting the iOS `.p12`                                       |
+| `IOS_PROVISIONING_PROFILE_BASE64` | Secret   | Yes for TestFlight                                               | Base64-encoded App Store provisioning profile (`.mobileprovision`)                |
+| `APP_STORE_CONNECT_API_KEY`       | Secret   | Yes for TestFlight                                               | Full contents of the downloaded `AuthKey_XXXXXXXXXX.p8` file                      |
+| `APP_STORE_CONNECT_KEY_ID`        | Secret   | Yes for TestFlight                                               | Key ID shown by App Store Connect for the API key                                 |
+| `APP_STORE_CONNECT_ISSUER_ID`     | Secret   | Yes for TestFlight                                               | Issuer UUID shown in App Store Connect                                            |
+| `IOS_SIGNING_IDENTITY`            | Variable | Optional                                                         | Override for the iOS signing identity; defaults to `Apple Distribution`           |
+| `IOS_ENCRYPTION_COMPLIANCE_CODE`  | Variable | Only once the app is offered in France                           | Code Apple issues for the French encryption declaration (see `docs/ios-setup.md`) |
 
 ### Mobile push build inputs
 
@@ -118,8 +119,9 @@ The `PUBLISH_*` controls must stay unset until each channel's account, review pr
 | `PUBLISH_SNAP_STORE`        | Repository or `release` variable | No       | Enables automated Snap Store stable-channel publication                                        |
 | `PUBLISH_FDROID_REPOSITORY` | Repository or `release` variable | No       | Enables signed F-Droid repository publication to GitHub Pages                                  |
 | `PUBLISH_HOMEBREW_TAP`      | Repository or `release` variable | No       | Enables first-party Homebrew tap pull-request automation                                       |
+| `WEB_INSPECTOR`             | Repository variable              | No       | `true` compiles the web inspector into release builds; leave unset for store releases          |
 
-Leave `ALLOW_NO_UPDATER` unset during normal operation. It exists only to unblock an intentional non-updatable desktop release when updater signing is unavailable. Because the Matrix jobs do not attach the `release` environment, `MATRIX_TOKEN` must be a repository Actions secret rather than an environment-only secret. When it is absent, release artifacts and deployment are unaffected; only Matrix delivery is skipped.
+Leave `ALLOW_NO_UPDATER` and `WEB_INSPECTOR` unset during normal operation; on iOS the web inspector uses a private WebKit key that App Review rejects. `ALLOW_NO_UPDATER` exists only to unblock an intentional non-updatable desktop release when updater signing is unavailable. Because the Matrix jobs do not attach the `release` environment, `MATRIX_TOKEN` must be a repository Actions secret rather than an environment-only secret. When it is absent, release artifacts and deployment are unaffected; only Matrix delivery is skipped.
 
 ## Generating and storing each value
 

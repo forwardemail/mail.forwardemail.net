@@ -172,7 +172,7 @@ describe.runIf(canRunInteractive)('in a terminal', () => {
 
     // The mailbox: folders, the message list with senders and subjects.
     let screen = await session.waitFor('Welcome to Forward Email!');
-    for (const text of ['Inbox', 'Sent', 'Forward Email Team', 'Privacy Monitor', 'Compose']) {
+    for (const text of ['Inbox', 'Sent', 'Forward Email Team', 'Privacy Tips', 'Compose']) {
       expect(screen).toContain(text);
     }
 
@@ -185,7 +185,7 @@ describe.runIf(canRunInteractive)('in a terminal', () => {
 
     // Next message.
     session.type(KEYS.down);
-    await session.waitFor('Privacy Monitor <privacy@forwardemail.net>');
+    await session.waitFor('Privacy Tips <privacy@forwardemail.net>');
 
     // The session was stored where FORWARDEMAIL_HOME points.
     expect(fs.existsSync(path.join(home, 'local-storage.json'))).toBe(true);
@@ -383,7 +383,7 @@ describe.runIf(canRunInteractive)('in a terminal', () => {
 
   it('keeps the message list drawn while the pointer moves over it', async () => {
     session = startTerminal({ home: tempHome(), args: ['--demo'] });
-    await session.waitFor('Privacy Monitor');
+    await session.waitFor('Privacy Tips');
     const top = session.locate('Forward Email Team');
     // Over the second row and on down the list, then off it.
     for (const step of [4, 7, 10, 13, 25]) {
@@ -395,8 +395,8 @@ describe.runIf(canRunInteractive)('in a terminal', () => {
     for (const text of [
       'Forward Email Team',
       'Welcome to Forward Email!',
-      'Privacy Monitor',
-      'Your weekly privacy report',
+      'Privacy Tips',
+      'Privacy settings to try',
       'Alice Johnson',
     ]) {
       expect(screen).toContain(text);
@@ -812,10 +812,10 @@ describe.runIf(canRunInteractive)('in a terminal', () => {
         }),
       },
     });
-    const screen = await session.waitFor('Privacy Monitor <privacy@forwardemail.net>', {
+    const screen = await session.waitFor('Privacy Tips <privacy@forwardemail.net>', {
       label: 'the message',
     });
-    expect(screen).toContain('Your weekly privacy report');
+    expect(screen).toContain('Privacy settings to try');
   });
 
   it('quits on Ctrl+C and hands the terminal back', async () => {

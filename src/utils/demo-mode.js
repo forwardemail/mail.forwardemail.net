@@ -4,7 +4,9 @@
  * Provides a complete sandboxed demo experience. When demo mode is active:
  *   1. All API requests are intercepted and served from fake data
  *   2. Write operations (send, move, delete, etc.) show a toast notification
- *      linking to https://forwardemail.net for sign-up
+ *      linking to https://forwardemail.net for sign-up. App Store and Google
+ *      Play builds may not link to sign-up, so their toast offers Sign In,
+ *      which leaves the demo for the sign-in screen (see store-policy.js).
  *   3. The user can exit demo mode at any time
  *
  * Demo mode is activated via the "Try Demo" button on the Login page and
@@ -22,6 +24,7 @@ import {
   generateLabels,
 } from './demo-data';
 import { Local, Accounts } from './storage';
+import { shouldHidePurchaseLinks } from './store-policy.js';
 
 // ── State ─────────────────────────────────────────────────────────────────
 
@@ -33,7 +36,14 @@ let _toasts = null;
 const _readMessageIds = new Set();
 
 const SIGN_UP_URL = 'https://forwardemail.net';
-const BLOCKED_MSG = 'This action isn’t available in the demo. Create an account to make changes.';
+
+// What to do instead of a blocked action. App Store and Google Play builds may
+// not point to sign-up outside the store, so they ask people to sign in.
+function nextStep() {
+  return shouldHidePurchaseLinks()
+    ? 'Sign in with your Forward Email account to make changes.'
+    : 'Create an account to make changes.';
+}
 
 // Actions that are read-only and should return fake data
 const READ_ACTIONS = new Set([
@@ -137,6 +147,7 @@ export function isDemoBlockedError(error) {
 /**
  * Show the "not available in demo" toast with a sign-up action button.
  * If the user clicks the action, we log them out and open the sign-up page.
+ * App Store and Google Play builds offer Sign In instead and open no page.
  */
 export function showDemoBlockedToast(actionLabel) {
   if (!_toasts) {
@@ -144,14 +155,13 @@ export function showDemoBlockedToast(actionLabel) {
     return;
   }
 
-  const label = actionLabel
-    ? `${actionLabel} isn’t available in the demo. Create an account to make changes.`
-    : BLOCKED_MSG;
+  const hideSignUp = shouldHidePurchaseLinks();
+  const label = `${actionLabel || 'This action'} isn’t available in the demo. ${nextStep()}`;
 
   _toasts.show(label, 'warning', {
     duration: 12000,
     action: {
-      label: 'Create Account',
+      label: hideSignUp ? 'Sign In' : 'Create Account',
       callback: () => {
         exitDemoAndRedirect();
       },
@@ -208,9 +218,13 @@ export async function cleanupDemoAccount({ preserveCredentials = false } = {}) {
 }
 
 /**
- * Exit demo mode, clear credentials, and redirect to sign-up page.
+ * Exit demo mode, clear credentials, and return to the sign-in screen.
+ * Opens the sign-up page as well, except in App Store and Google Play builds.
+ *
+ * @param {object} [options]
+ * @param {boolean} [options.openSignUp] - defaults to true outside the stores
  */
-export function exitDemoAndRedirect() {
+export function exitDemoAndRedirect({ openSignUp = !shouldHidePurchaseLinks() } = {}) {
   deactivateDemoMode();
 
   // Clear demo credentials from storage
@@ -231,7 +245,7 @@ export function exitDemoAndRedirect() {
   }
 
   // Open sign-up page
-  window.open(SIGN_UP_URL, '_blank', 'noopener,noreferrer');
+  if (openSignUp) window.open(SIGN_UP_URL, '_blank', 'noopener,noreferrer');
 
   // Hard navigation to login with replace to clear the current history entry
   window.location.replace('/');

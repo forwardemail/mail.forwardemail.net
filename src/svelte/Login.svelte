@@ -10,10 +10,14 @@
   import QrCodeIcon from '@lucide/svelte/icons/qr-code';
   import ScanPairingCode from './components/ScanPairingCode.svelte';
   import { isTauriMobile } from '../utils/platform.js';
+  import { shouldHidePurchaseLinks } from '../utils/store-policy.js';
   import { signInWithAliasPassword } from '../utils/alias-sign-in';
   import { Local, Accounts } from '../utils/storage';
   import { activateDemoMode, isDemoMode } from '../utils/demo-mode';
   import { DEMO_EMAIL, DEMO_ALIAS_AUTH } from '../utils/demo-data';
+
+  // App Store and Google Play builds hide billing and sign-up links (store-policy.js).
+  const hidePurchaseLinks = shouldHidePurchaseLinks();
 
   interface Props {
     onSuccess?: (path: string) => void;
@@ -372,19 +376,22 @@
       {/if}
     </Card.Content>
 
-    <Card.Footer class="flex-col gap-1 text-center text-sm text-muted-foreground">
-      <span>
-        Don't have an account?
-        <a
-          class="text-fg-link underline-offset-4 hover:underline"
-          href="https://forwardemail.net"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          Sign up
-        </a>
-      </span>
-    </Card.Footer>
+    <!-- App Store and Google Play builds may not link to sign-up outside the store. -->
+    {#if !hidePurchaseLinks}
+      <Card.Footer class="flex-col gap-1 text-center text-sm text-muted-foreground">
+        <span>
+          Don't have an account?
+          <a
+            class="text-fg-link underline-offset-4 hover:underline"
+            href="https://forwardemail.net"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Sign up
+          </a>
+        </span>
+      </Card.Footer>
+    {/if}
   </Card.Root>
 </div>
 

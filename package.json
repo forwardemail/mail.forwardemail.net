@@ -49,7 +49,7 @@
     "tauri:check-cache": "bash scripts/check-cargo-cache.sh",
     "tauri:sync-version": "node scripts/sync-version.cjs",
     "tauri:dev": "pnpm tauri:check-cache && pnpm tauri:sync-version && tauri dev",
-    "tauri:build": "pnpm tauri:check-cache && pnpm tauri:sync-version && tauri build",
+    "tauri:build": "pnpm tauri:check-cache && pnpm tauri:sync-version && node scripts/web-inspector-args.cjs --exec tauri build",
     "tauri:build:debug": "pnpm tauri:check-cache && pnpm tauri:sync-version && tauri build --debug",
     "tauri:android:dev": "bash scripts/android-dev.sh",
     "tauri:android:dev:fdroid": "ANDROID_PUSH_PROVIDER=unified-push bash scripts/android-dev.sh",

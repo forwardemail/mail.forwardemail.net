@@ -50,6 +50,85 @@ function makeSandbox() {
   return { dir, appleDir, targetDir };
 }
 
+// Apple's vocabulary for NSPrivacyCollectedDataType and its purposes. Xcode's
+// privacy report silently drops any value outside these lists.
+const APPLE_DATA_TYPES = [
+  'Name',
+  'EmailAddress',
+  'PhoneNumber',
+  'PhysicalAddress',
+  'OtherUserContactInfo',
+  'Health',
+  'Fitness',
+  'PaymentInfo',
+  'CreditInfo',
+  'OtherFinancialInfo',
+  'PreciseLocation',
+  'CoarseLocation',
+  'SensitiveInfo',
+  'Contacts',
+  'EmailsOrTextMessages',
+  'PhotosorVideos',
+  'AudioData',
+  'GameplayContent',
+  'CustomerSupport',
+  'OtherUserContent',
+  'BrowsingHistory',
+  'SearchHistory',
+  'UserID',
+  'DeviceID',
+  'PurchaseHistory',
+  'ProductInteraction',
+  'AdvertisingData',
+  'OtherUsageData',
+  'CrashData',
+  'PerformanceData',
+  'OtherDiagnosticData',
+  'EnvironmentScanning',
+  'Hands',
+  'Head',
+  'OtherDataTypes',
+].map((type) => `NSPrivacyCollectedDataType${type}`);
+const APPLE_PURPOSES = [
+  'ThirdPartyAdvertising',
+  'DeveloperAdvertising',
+  'Analytics',
+  'ProductPersonalization',
+  'AppFunctionality',
+  'Other',
+].map((purpose) => `NSPrivacyCollectedDataTypePurpose${purpose}`);
+
+type PlistValue = string | boolean | PlistValue[] | { [key: string]: PlistValue };
+
+function plistValue(el: Element): PlistValue {
+  switch (el.tagName) {
+    case 'true':
+      return true;
+    case 'false':
+      return false;
+    case 'array':
+      return [...el.children].map(plistValue);
+    case 'dict': {
+      const out: { [key: string]: PlistValue } = {};
+      const children = [...el.children];
+      for (let i = 0; i < children.length; i += 2) {
+        out[children[i].textContent ?? ''] = plistValue(children[i + 1]);
+      }
+      return out;
+    }
+    default:
+      return el.textContent ?? '';
+  }
+}
+
+function readPlist(file: string) {
+  const doc = new DOMParser().parseFromString(fs.readFileSync(file, 'utf8'), 'application/xml');
+  expect(doc.querySelector('parsererror')).toBeNull();
+  return plistValue(doc.documentElement.firstElementChild as Element) as {
+    [key: string]: PlistValue;
+  };
+}
+
 function run(dir: string) {
   return execSync(`node ${path.join(dir, 'scripts', 'configure-ios-store-metadata.cjs')}`, {
     encoding: 'utf8',
@@ -84,6 +163,38 @@ describe('configure-ios-store-metadata', () => {
       'NSPrivacyAccessedAPICategorySystemBootTime',
     ]) {
       expect(manifest).toContain(category);
+    }
+  });
+
+  it('declares each collected data type in Apple vocabulary, linked and never for tracking', () => {
+    run(sandbox.dir);
+    const manifest = readPlist(path.join(sandbox.targetDir, 'PrivacyInfo.xcprivacy'));
+    const entries = manifest.NSPrivacyCollectedDataTypes as { [key: string]: PlistValue }[];
+
+    // The same types as the App Privacy answers in docs/store-submission.md.
+    expect(entries.map((entry) => entry.NSPrivacyCollectedDataType)).toEqual(
+      [
+        'EmailAddress',
+        'Contacts',
+        'EmailsOrTextMessages',
+        'PhotosorVideos',
+        'OtherUserContent',
+        'CustomerSupport',
+        'SearchHistory',
+        'UserID',
+        'DeviceID',
+        'ProductInteraction',
+        'CrashData',
+        'OtherDiagnosticData',
+      ].map((type) => `NSPrivacyCollectedDataType${type}`),
+    );
+    for (const entry of entries) {
+      expect(APPLE_DATA_TYPES).toContain(entry.NSPrivacyCollectedDataType);
+      expect(entry.NSPrivacyCollectedDataTypeLinked).toBe(true);
+      expect(entry.NSPrivacyCollectedDataTypeTracking).toBe(false);
+      const purposes = entry.NSPrivacyCollectedDataTypePurposes as string[];
+      expect(purposes.length).toBeGreaterThan(0);
+      for (const purpose of purposes) expect(APPLE_PURPOSES).toContain(purpose);
     }
   });
 

@@ -4378,7 +4378,9 @@
       </button>
     </div>
 
-    <div class="calendar-content fe-mobile-page-scroll flex-1 flex flex-col p-4 min-h-0">
+    <div
+      class="calendar-content fe-mobile-page-scroll fe-above-footer flex-1 flex flex-col p-4 min-h-0"
+    >
       {#if loading}
         <div class="flex items-center justify-center h-64 text-muted-foreground">
           Loading calendar...
@@ -4409,7 +4411,10 @@
             New Task
           </Button>
         </div>
-        <div class="fe-mobile-page-scroll flex-1 overflow-y-auto" data-testid="tasks-list">
+        <div
+          class="fe-mobile-page-scroll fe-above-footer flex-1 overflow-y-auto"
+          data-testid="tasks-list"
+        >
           <TasksList
             tasks={tasksList as Record[]}
             onSelect={(task) => openEditEvent(task)}
@@ -4453,8 +4458,11 @@
         </div>
       {/if}
     </div>
+    <!-- Keeps the line above the home indicator in the installed web app on
+         iPhone and iPad; the native apps inset the web view, so this adds 0 there. -->
     <div
       class="flex items-center gap-2 border-t border-border bg-muted/50 px-4 py-2 text-xs text-muted-foreground shrink-0"
+      style="padding-bottom: calc(0.5rem + var(--sai-bottom, env(safe-area-inset-bottom, 0px)))"
     >
       <Info class="h-3.5 w-3.5 shrink-0" />
       <span>Privacy: Your calendar data is stored privately and never shared.</span>

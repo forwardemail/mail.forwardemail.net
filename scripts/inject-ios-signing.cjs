@@ -10,6 +10,7 @@
 const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
+const { applyExportCompliance } = require('./ios-export-compliance.cjs');
 
 const root = path.resolve(__dirname, '..');
 const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
@@ -252,7 +253,18 @@ console.log(
 );
 
 // ── 3. Sync Info.plist version + monotonic build number ──────────────────
-const infoPlistPath = path.join(appleDir, 'forwardemail-desktop_iOS', 'Info.plist');
+// The generated iOS target is named after the Cargo package; fall back to any
+// *_iOS target so a rename cannot silently skip the keys written below.
+function findInfoPlist() {
+  const expected = path.join(appleDir, 'forwardemail-desktop_iOS', 'Info.plist');
+  if (fs.existsSync(expected)) return expected;
+  for (const entry of fs.readdirSync(appleDir)) {
+    const candidate = path.join(appleDir, entry, 'Info.plist');
+    if (entry.endsWith('_iOS') && fs.existsSync(candidate)) return candidate;
+  }
+  return expected;
+}
+const infoPlistPath = findInfoPlist();
 if (fs.existsSync(infoPlistPath)) {
   const [major, minor, patch] = pkg.version.split('.').map(Number);
   // App Store Connect requires CFBundleVersion to be a monotonically
@@ -282,34 +294,36 @@ if (fs.existsSync(infoPlistPath)) {
 }
 
 // ── 3b. Inject App Store compliance keys into Info.plist ─────────────────────
-// ITSAppUsesNonExemptEncryption=false: the app uses only standard/exempt crypto
-// (TLS + user-held PGP keys via libsodium/openpgp), qualifying for the
-// mass-market exemption (US EAR §740.17(b)(1)). Declaring it avoids the
-// per-build "Missing Compliance" stall in App Store Connect.
+// Export compliance: the app ships standard encryption beyond the system's own
+// and is not offered in France, so ITSAppUsesNonExemptEncryption is false and
+// App Store Connect skips the per-build "Missing Compliance" prompt. Setting
+// IOS_ENCRYPTION_COMPLIANCE_CODE (after Apple approves a French encryption
+// declaration) makes it true and adds ITSEncryptionExportComplianceCode. See
+// scripts/ios-export-compliance.cjs; src-tauri/Info.ios.plist must not set them.
 // NSPhotoLibraryUsageDescription is required because the app presents an image
 // picker for attachments / avatars (<input type="file" accept="image/*">).
 if (fs.existsSync(infoPlistPath)) {
+  const compliance = applyExportCompliance(infoPlistPath);
+  console.log(
+    compliance.code
+      ? `Set ITSAppUsesNonExemptEncryption=true with ITSEncryptionExportComplianceCode=${compliance.code}`
+      : 'Set ITSAppUsesNonExemptEncryption=false',
+  );
+
   // Same wording as src-tauri/Info.ios.plist. Two different strings used to
   // ship depending on whether this script ran, so simulator and device builds
   // showed different prompts.
   const photoUsage =
     'Forward Email uses your photo library so you can attach photos to emails and set profile pictures.';
   try {
-    execSync(`plutil -replace ITSAppUsesNonExemptEncryption -bool false "${infoPlistPath}"`);
     execSync(
       `plutil -replace NSPhotoLibraryUsageDescription -string "${photoUsage}" "${infoPlistPath}"`,
     );
-    console.log('Injected ITSAppUsesNonExemptEncryption=false + NSPhotoLibraryUsageDescription');
+    console.log('Injected NSPhotoLibraryUsageDescription');
   } catch {
-    // Regex fallback (no plutil): insert each key before the final </dict>
+    // Regex fallback (no plutil): insert the key before the final </dict>
     // only if it isn't already present.
     let plist = fs.readFileSync(infoPlistPath, 'utf8');
-    if (!/<key>ITSAppUsesNonExemptEncryption<\/key>/.test(plist)) {
-      plist = plist.replace(
-        /<\/dict>(\s*<\/plist>\s*)$/m,
-        `  <key>ITSAppUsesNonExemptEncryption</key>\n  <false/>\n</dict>$1`,
-      );
-    }
     if (!/<key>NSPhotoLibraryUsageDescription<\/key>/.test(plist)) {
       plist = plist.replace(
         /<\/dict>(\s*<\/plist>\s*)$/m,
@@ -317,8 +331,12 @@ if (fs.existsSync(infoPlistPath)) {
       );
     }
     fs.writeFileSync(infoPlistPath, plist);
-    console.log('Injected compliance keys via regex fallback');
+    console.log('Injected NSPhotoLibraryUsageDescription via regex fallback');
   }
+} else if (method === 'app-store-connect') {
+  // Without the generated Info.plist the upload has no export-compliance keys.
+  console.error(`No generated Info.plist under ${appleDir}; run tauri ios init first`);
+  process.exit(1);
 }
 
 // APNs authorization is now isolated to ForwardEmail-iOS.entitlements in the

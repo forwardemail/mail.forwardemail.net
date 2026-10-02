@@ -30,23 +30,31 @@ const CAMERA_USAGE_DESCRIPTION =
   'Forward Email uses the camera to scan account setup and device sync QR codes.';
 
 /**
- * Every iOS privacy usage description the app declares, injected per-key so a
- * project that already carries one of them still gains the others.
- *
  * NSLocalNetworkUsageDescription exists for `tauri ios dev` on a physical
  * device, where the app connects to the dev server over the LAN and iOS 14+
- * gates that behind the Local Network permission. A production build never
- * opens a local-network connection, so the key sits unused there and the
- * prompt never appears; declaring it unconditionally is harmless and keeps
- * one pipeline instead of a dev-only fork.
+ * gates that behind the Local Network permission. scripts/ios-dev.sh sets
+ * IOS_DEV_LOCAL_NETWORK=1. Release builds leave the key out, and remove it from
+ * a generated project reused after a dev run: its text mentions a development
+ * server, which means nothing to App Review or to people using the app.
+ */
+const LOCAL_NETWORK_USAGE = {
+  key: 'NSLocalNetworkUsageDescription',
+  text: 'Forward Email connects to your development server over the local network during development.',
+};
+
+const includeLocalNetwork = process.env.IOS_DEV_LOCAL_NETWORK === '1';
+
+/**
+ * Every iOS privacy usage description this build declares, injected per-key so
+ * a project that already carries one of them still gains the others.
  */
 const IOS_USAGE_DESCRIPTIONS = [
   { key: 'NSCameraUsageDescription', text: CAMERA_USAGE_DESCRIPTION },
-  {
-    key: 'NSLocalNetworkUsageDescription',
-    text: 'Forward Email connects to your development server over the local network during development.',
-  },
+  ...(includeLocalNetwork ? [LOCAL_NETWORK_USAGE] : []),
 ];
+
+/** Keys a previous dev run may have added that this build must not ship. */
+const IOS_REMOVED_KEYS = includeLocalNetwork ? [] : [LOCAL_NETWORK_USAGE.key];
 
 const ANDROID_PERMISSIONS = ['android.permission.CAMERA'];
 const ANDROID_FEATURES = [{ name: 'android.hardware.camera', required: false }];
@@ -117,11 +125,24 @@ function configureIosProjectYml(appleDir) {
   if (!fs.existsSync(projectYmlPath)) return false;
 
   let yml = fs.readFileSync(projectYmlPath, 'utf8');
+  let removed = false;
+  for (const key of IOS_REMOVED_KEYS) {
+    const without = yml.replace(new RegExp(`^[ \\t]*${key}:.*\\n`, 'm'), '');
+    if (without !== yml) {
+      yml = without;
+      removed = true;
+      console.log(`Removed ${key} from project.yml`);
+    }
+  }
+
   // Checked PER KEY, not with one early return: a project regenerated after a
   // previous run already carries the earlier keys, and skipping the whole
   // block would silently drop any newly added description forever.
   const missing = IOS_USAGE_DESCRIPTIONS.filter(({ key }) => !yml.includes(key));
-  if (missing.length === 0) return false;
+  if (missing.length === 0) {
+    if (removed) fs.writeFileSync(projectYmlPath, yml);
+    return removed;
+  }
 
   const infoPropsRegex = /(info:\s*\n\s+path:[^\n]+\n\s+properties:\n)/;
   const match = yml.match(infoPropsRegex);
@@ -129,7 +150,8 @@ function configureIosProjectYml(appleDir) {
     console.warn(
       'Could not find info.properties in project.yml; relying on the direct Info.plist patch',
     );
-    return false;
+    if (removed) fs.writeFileSync(projectYmlPath, yml);
+    return removed;
   }
 
   // Match the indentation of whatever property already sits in the block.
@@ -149,12 +171,29 @@ function configureIosPlist(targetDir) {
   if (!fs.existsSync(plistPath)) return false;
 
   let plist = fs.readFileSync(plistPath, 'utf8');
+  let removed = false;
+  for (const key of IOS_REMOVED_KEYS) {
+    const without = plist.replace(
+      new RegExp(`[ \\t]*<key>${key}</key>\\s*<string>[^<]*</string>\\n?`),
+      '',
+    );
+    if (without !== plist) {
+      plist = without;
+      removed = true;
+      console.log(`Removed ${key} from Info.plist`);
+    }
+  }
+
   const missing = IOS_USAGE_DESCRIPTIONS.filter(({ key }) => !plist.includes(key));
-  if (missing.length === 0) return false;
+  if (missing.length === 0) {
+    if (removed) fs.writeFileSync(plistPath, plist);
+    return removed;
+  }
 
   if (!/<\/dict>\s*<\/plist>\s*$/.test(plist)) {
     console.warn('Info.plist has an unexpected shape; skipping the direct patch');
-    return false;
+    if (removed) fs.writeFileSync(plistPath, plist);
+    return removed;
   }
 
   const entries = missing

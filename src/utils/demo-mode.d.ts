@@ -35,7 +35,7 @@ export function setDemoToasts(toasts: DemoToastHost | null): void;
 export function isDemoBlockedError(error: unknown): error is DemoBlockedError;
 export function showDemoBlockedToast(actionLabel?: string): void;
 export function cleanupDemoAccount(options?: { preserveCredentials?: boolean }): Promise<void>;
-export function exitDemoAndRedirect(): void;
+export function exitDemoAndRedirect(options?: { openSignUp?: boolean }): void;
 export function interceptDemoRequest(
   action: string,
   params?: Record<string, unknown>,

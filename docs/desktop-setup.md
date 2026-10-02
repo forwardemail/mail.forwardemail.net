@@ -70,6 +70,8 @@ This starts the Vite dev server on `http://localhost:5174` and opens the Tauri w
 
 **DevTools:** Press `Cmd+Option+I` (macOS) or `Ctrl+Shift+I` (Windows/Linux) to open the WebView inspector.
 
+Release builds leave the inspector out unless `WEB_INSPECTOR` is `true` when you run `pnpm tauri:build`, `pnpm tauri:android:build` or `pnpm tauri:ios:build` (for example `WEB_INSPECTOR=true pnpm tauri:build` in a POSIX shell). The variable turns on the `devtools` Cargo feature through `scripts/web-inspector-args.cjs`. The desktop and mobile release workflows read it from the `WEB_INSPECTOR` repository variable; Snap and Flatpak builds always leave the inspector out. Keep it off for App Store and Google Play builds: on iOS the inspector sets a private WebKit preference that App Review rejects, and an inspectable web view exposes the app's stored data to anyone holding the unlocked device.
+
 ## Building Unsigned Binaries
 
 ```bash
@@ -114,7 +116,7 @@ All JS code paths in `src/utils/updater-bridge.js` log at every decision point w
 
 These lines appear in:
 
-- The **webview devtools Console** (⌥⌘I in dev builds; the `devtools` Tauri feature enables it in debug builds only).
+- The **webview devtools Console** (⌥⌘I in dev builds, or in a release build made with `WEB_INSPECTOR=true`).
 - The **rotating log files** on disk, via `tauri-plugin-log`'s `Webview` target. Up to 5 × 1 MB files. Locations:
   - macOS: `~/Library/Logs/net.forwardemail.mail/`
   - Linux: `~/.local/share/net.forwardemail.mail/logs/`

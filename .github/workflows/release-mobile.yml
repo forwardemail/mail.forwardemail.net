@@ -38,6 +38,10 @@ env:
   RUST_BACKTRACE: short
   NODE_VERSION: '26'
   PNPM_VERSION: '9'
+  # Release builds leave out the web inspector unless the WEB_INSPECTOR
+  # repository variable is true (scripts/web-inspector-args.cjs). The Android
+  # build script reads it directly; the iOS step passes the flag below.
+  WEB_INSPECTOR: ${{ vars.WEB_INSPECTOR }}
 
 jobs:
   android:
@@ -633,6 +637,10 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           IOS_EXPORT_METHOD: app-store-connect
           IOS_SIGNING_IDENTITY: ${{ vars.IOS_SIGNING_IDENTITY || 'Apple Distribution' }}
+          # Empty while the app is not offered in France. Set the repository
+          # variable to the code Apple issues for the French encryption
+          # declaration (scripts/ios-export-compliance.cjs).
+          IOS_ENCRYPTION_COMPLIANCE_CODE: ${{ vars.IOS_ENCRYPTION_COMPLIANCE_CODE }}
         run: |
           node scripts/sync-version.cjs
           node scripts/inject-ios-signing.cjs
@@ -677,7 +685,7 @@ jobs:
           # iOS 26.4 SDK no longer ships the library. Must be ≥ 15.4;
           # 16.0 gives a clean margin.
           IPHONEOS_DEPLOYMENT_TARGET: '16.0'
-        run: pnpm tauri ios build --ci --verbose --target aarch64 --export-method app-store-connect
+        run: pnpm tauri ios build --ci --verbose --target aarch64 --export-method app-store-connect $(node scripts/web-inspector-args.cjs)
 
       - name: Rename IPA with version
         if: steps.check.outputs.enabled == 'true'
@@ -721,6 +729,7 @@ jobs:
           # component-by-component (1234.2 > 1234.1 > 1234).
           IOS_BUILD_NUMBER: ${{ github.run_number }}.${{ github.run_attempt }}
           IOS_SIGNING_IDENTITY: ${{ vars.IOS_SIGNING_IDENTITY || 'Apple Distribution' }}
+          IOS_ENCRYPTION_COMPLIANCE_CODE: ${{ vars.IOS_ENCRYPTION_COMPLIANCE_CODE }}
         run: |
           set -euo pipefail
           if [ -z "${IPA_PATH:-}" ] || [ ! -f "$IPA_PATH" ]; then
@@ -749,6 +758,16 @@ jobs:
           echo "── After override ──"
           /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$PLIST"
           /usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$PLIST"
+
+          # Export compliance comes only from inject-ios-signing.cjs; without it
+          # every upload stalls on "Missing Compliance" in App Store Connect.
+          EXPECTED_ENCRYPTION=false
+          if [ -n "${IOS_ENCRYPTION_COMPLIANCE_CODE:-}" ]; then EXPECTED_ENCRYPTION=true; fi
+          ENCRYPTION=$(/usr/libexec/PlistBuddy -c "Print :ITSAppUsesNonExemptEncryption" "$PLIST" 2>/dev/null || echo missing)
+          if [ "$ENCRYPTION" != "$EXPECTED_ENCRYPTION" ]; then
+            echo "::error::ITSAppUsesNonExemptEncryption is $ENCRYPTION in the IPA, expected $EXPECTED_ENCRYPTION"
+            exit 1
+          fi
 
           # Preserve the original entitlements so re-signing keeps capabilities
           # (push, app groups, associated domains, etc.) — losing these breaks

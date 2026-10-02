@@ -1405,7 +1405,7 @@
         </div>
       </div>
       <ul
-        class="fe-mobile-page-scroll flex-1 overflow-y-auto"
+        class="fe-mobile-page-scroll fe-above-footer flex-1 overflow-y-auto"
         data-testid="contact-list"
         data-loading={loading ? 'true' : 'false'}
         data-count={filtered.length}
@@ -1467,7 +1467,7 @@
 
     <!-- Contact Detail -->
     <div
-      class="fe-mobile-page-scroll overflow-y-auto min-h-0 p-4 md:p-6 {selectedContact
+      class="fe-mobile-page-scroll fe-above-footer overflow-y-auto min-h-0 p-4 md:p-6 {selectedContact
         ? 'block'
         : 'hidden md:block'}"
     >
@@ -1689,9 +1689,12 @@
       {/if}
     </div>
   </div>
-  <!-- Privacy Message (always visible at bottom, matching Calendar page) -->
+  <!-- Privacy Message (always visible at bottom, matching Calendar page). The
+       padding keeps it above the home indicator in the installed web app on
+       iPhone and iPad; the native apps inset the web view, so it adds 0 there. -->
   <div
     class="flex items-center gap-2 border-t border-border bg-muted/50 px-4 py-2 text-xs text-muted-foreground shrink-0"
+    style="padding-bottom: calc(0.5rem + var(--sai-bottom, env(safe-area-inset-bottom, 0px)))"
   >
     <Info class="h-3.5 w-3.5 shrink-0" />
     <span>Privacy: Your contact data is stored privately and never shared.</span>

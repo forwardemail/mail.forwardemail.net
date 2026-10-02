@@ -30,15 +30,15 @@ ANDROID_PUSH_PROVIDER="${ANDROID_PUSH_PROVIDER:-unified-push}"
 case "$ANDROID_PUSH_PROVIDER" in
   unified-push)
     export VITE_ANDROID_PUSH_PROVIDER="unified-push"
-    FEATURE_ARGS=()
+    CARGO_FEATURES=""
     ;;
   fcm)
     export VITE_ANDROID_PUSH_PROVIDER="fcm"
-    FEATURE_ARGS=(--features fcm)
+    CARGO_FEATURES="fcm"
     ;;
   both)
     export VITE_ANDROID_PUSH_PROVIDER="auto"
-    FEATURE_ARGS=(--features fcm)
+    CARGO_FEATURES="fcm"
     ;;
   *)
     echo "Invalid ANDROID_PUSH_PROVIDER: $ANDROID_PUSH_PROVIDER (expected unified-push, fcm, or both)" >&2
@@ -47,6 +47,18 @@ case "$ANDROID_PUSH_PROVIDER" in
 esac
 export ANDROID_PUSH_PROVIDER
 
+# Release builds leave out WebView debugging unless WEB_INSPECTOR=true
+# (scripts/web-inspector-args.cjs). Debug builds always include it.
+INSPECTOR_FEATURE="$(node scripts/web-inspector-args.cjs --names)"
+if [ -n "$INSPECTOR_FEATURE" ]; then
+  CARGO_FEATURES="${CARGO_FEATURES:+$CARGO_FEATURES,}$INSPECTOR_FEATURE"
+fi
+
+FEATURE_ARGS=()
+if [ -n "$CARGO_FEATURES" ]; then
+  FEATURE_ARGS=(--features "$CARGO_FEATURES")
+fi
+
 FCM_CAPABILITY="src-tauri/capabilities/android-fcm.generated.json"
 trap 'rm -f "$FCM_CAPABILITY"' EXIT
 
@@ -54,6 +66,11 @@ echo "📦 Android Build"
 echo "   SDK:   $ANDROID_HOME"
 echo "   NDK:   $ANDROID_NDK_HOME"
 echo "   Push:  $ANDROID_PUSH_PROVIDER"
+if [ -n "$INSPECTOR_FEATURE" ]; then
+  echo "   Web inspector: on"
+else
+  echo "   Web inspector: debug builds only (set WEB_INSPECTOR=true for release builds)"
+fi
 echo ""
 
 # ── Configure generated-project integrations ──────────────────────────────
