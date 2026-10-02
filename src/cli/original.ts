@@ -99,7 +99,9 @@ export function installOriginalViewer(win: AnyRecord) {
         () => win.dispatchEvent(new win.CustomEvent('fe-terminal-notice', { detail: 'Copied' })),
         () =>
           win.dispatchEvent(
-            new win.CustomEvent('fe-terminal-notice', { detail: 'Could not copy' }),
+            new win.CustomEvent('fe-terminal-notice', {
+              detail: { text: 'Could not copy', failed: true },
+            }),
           ),
       );
     });

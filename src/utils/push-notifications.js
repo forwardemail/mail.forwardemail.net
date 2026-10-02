@@ -671,12 +671,15 @@ async function registerForAccount(email, aliasAuth, token, platform) {
   // stored record predates alias-ID capture. POST /v1/push-tokens upserts on
   // (alias, platform, token), so re-registering is idempotent and is the only
   // way an install upgraded from an older build learns its alias mapping.
+  // A record marked by a sign-in is registered again too (see
+  // refreshAccountPushOnNextSync).
   if (
     existing &&
     existing.regId &&
     existing.token === token &&
     existing.platform === platform &&
-    existing.aliasId
+    existing.aliasId &&
+    !existing.reregister
   ) {
     return true;
   }
@@ -712,13 +715,15 @@ async function registerForActiveAccount(token, platform) {
 
   // Same token AND a known alias ID means nothing to do. A record without the
   // alias ID is re-registered so the account becomes attributable — see
-  // registerForAccount for why that POST is safe to repeat.
+  // registerForAccount for why that POST is safe to repeat — and so is a
+  // record marked by a sign-in (refreshAccountPushOnNextSync).
   if (
     existing &&
     existing.regId &&
     existing.token === token &&
     existing.platform === platform &&
-    existing.aliasId
+    existing.aliasId &&
+    !existing.reregister
   ) {
     return true;
   }
@@ -1393,10 +1398,32 @@ export async function syncPushNotifications() {
     // A browser only registers once the user has allowed notifications from
     // Settings; at boot it just keeps an existing registration current.
     if (getWebPushPermission() !== 'granted') return false;
-    return initPushNotifications();
+  } else if (!isNativePushPlatform) {
+    return false;
   }
-  if (!isNativePushPlatform) return false;
-  return initPushNotifications();
+
+  if (!(await initPushNotifications())) return false;
+  return registerPendingAccounts();
+}
+
+function hasPendingRegistrations() {
+  return Object.values(getAccountRegistrations() || {}).some((record) => record?.reregister);
+}
+
+/**
+ * Register the accounts a sign-in marked (refreshAccountPushOnNextSync) with
+ * the device token push was set up with, when the setup itself did not get to
+ * them: push was already set up, or their registration failed. Nothing is set
+ * up again, so no listener is removed and no permission is asked for.
+ *
+ * @returns {Promise<boolean>} false while an account is still waiting
+ */
+async function registerPendingAccounts() {
+  if (!hasPendingRegistrations()) return true;
+  const token = Local.get(TOKEN_STORAGE_KEY);
+  const platform = Local.get(TOKEN_PLATFORM_KEY);
+  if (token && platform) await reconcileAllAccounts(token, platform);
+  return !hasPendingRegistrations();
 }
 
 /**
@@ -1843,7 +1870,9 @@ export function getActivePushProvider() {
   const email = Local.get('email') || '';
   if (!email) return null;
   const record = getAccountRegistrations()[email];
-  if (!record || !record.regId) return null;
+  // (a registration waiting to be made again may be gone from the server, so
+  // the app draws its own alerts until it is)
+  if (!record || !record.regId || record.reregister) return null;
   return normalizePushProvider(record.platform);
 }
 
@@ -1869,6 +1898,28 @@ export function isSystemPushAlertExpected(eventName, data) {
 
 export function isPushInitialized() {
   return initialized;
+}
+
+/**
+ * Make the next sync register this device again for an account that just
+ * signed in, instead of trusting the registration stored from before.
+ *
+ * The server can have deleted that registration: changing the alias password
+ * deletes the alias's push tokens, and so do expiry, repeated delivery
+ * failures and the alias moving to another owner. The device would otherwise
+ * believe it is registered and get no notifications. POST /v1/push-tokens
+ * upserts on (alias, platform, token), so registering again is harmless when
+ * the server still has it. Every sync retries until it succeeds (see
+ * registerPendingAccounts), and an account added this way that has no
+ * registration yet gets one the same way.
+ *
+ * @param {string} email - The account that signed in
+ */
+export function refreshAccountPushOnNextSync(email) {
+  if (!email || isDemoMode()) return;
+  const registrations = getAccountRegistrations();
+  registrations[email] = { ...registrations[email], reregister: true };
+  setAccountRegistrations(registrations);
 }
 
 /**

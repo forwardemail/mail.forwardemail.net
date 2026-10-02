@@ -137,6 +137,17 @@ function thumbRows(screen, col) {
 }
 const PASTE = (text) => `\u001b[200~${text}\u001b[201~`;
 
+// Ctrl+C with nothing selected asks first, on the bottom row.
+const QUIT_QUESTION = (text) =>
+  text.split('\n').at(-1).includes('Quit Forward Email?  y Yes   n No');
+
+// Ctrl+C, then Yes.
+async function quit(session) {
+  session.type(KEYS.ctrlC);
+  await session.waitFor(QUIT_QUESTION, { label: 'the quit question' });
+  session.type('y');
+}
+
 describe.runIf(canRunInteractive)('in a terminal', () => {
   let session;
   afterEach(async () => {
@@ -403,18 +414,43 @@ describe.runIf(canRunInteractive)('in a terminal', () => {
     }
   });
 
-  it('copies text selected with the mouse to the clipboard', async () => {
-    session = startTerminal({ home: tempHome(), args: ['--demo'] });
+  it('copies text selected with the mouse on Ctrl+C, and stays open', async () => {
+    // (wide enough for the whole hint bar of an open message)
+    session = startTerminal({ home: tempHome(), args: ['--demo'], cols: 160 });
     await session.waitFor('Welcome to Forward Email!');
     session.type(KEYS.down);
-    await session.waitFor('This is a demo account');
     // Across the message body, which is drawn from the message's own HTML.
-    const start = session.locate('This is a demo account');
+    // The list shows the same words in its preview, so the test looks for
+    // them below the header of the open message.
+    const bodyRow = (text) => {
+      const lines = text.split('\n');
+      const header = lines.findIndex((line) => line.includes('To: Demo User'));
+      if (header === -1) return -1;
+      return lines.findIndex(
+        (line, row) => row > header && line.includes('This is a demo account'),
+      );
+    };
+    const screen = await session.waitFor((text) => bodyRow(text) !== -1, {
+      label: 'the message body',
+    });
+    const start = session.locate('This is a demo account', bodyRow(screen));
     await session.drag(start, { col: start.col + 14, row: start.row });
+    // A drag only selects, and the bottom row says what Ctrl+C does now.
+    await session.waitFor((text) => text.split('\n').at(-1).includes('Ctrl+C Copy'), {
+      label: 'the copy hint',
+    });
+    expect(session.clipboard).toEqual([]);
+
+    session.type(KEYS.ctrlC);
     await session.waitFor((text) => text.split('\n').at(-1).includes('Copied'), {
       label: 'the copy notice',
     });
-    expect(session.clipboard.at(-1)).toBe('This is a demo');
+    expect(session.clipboard).toEqual(['This is a demo']);
+    // The copy clears the selection, so Ctrl+C quits again, and the app is
+    // still open.
+    await session.waitFor((text) => text.split('\n').at(-1).includes('Ctrl+C Quit'), {
+      label: 'the quit hint',
+    });
   });
 
   it('places the caret where the rich-text editor is clicked', async () => {
@@ -617,7 +653,7 @@ describe.runIf(canRunInteractive)('in a terminal', () => {
     // reach of the wheel, as with vim or less.
     expect(session.bufferType()).toBe('alternate');
     expect(session.screen()).not.toContain('notes.txt');
-    session.type(KEYS.ctrlC);
+    await quit(session);
     const { code } = await session.exit;
     expect(code).toBe(0);
     // Quitting puts the shell's screen back as it was, with no trace of
@@ -818,10 +854,19 @@ describe.runIf(canRunInteractive)('in a terminal', () => {
     expect(screen).toContain('Privacy settings to try');
   });
 
-  it('quits on Ctrl+C and hands the terminal back', async () => {
+  it('asks before quitting on Ctrl+C, and hands the terminal back', async () => {
     session = startTerminal({ home: tempHome() });
     await session.waitFor('Try Demo');
+    // No keeps the session.
     session.type(KEYS.ctrlC);
+    await session.waitFor(QUIT_QUESTION, { label: 'the question' });
+    session.type('n');
+    await session.waitFor((text) => text.split('\n').at(-1).includes('Ctrl+C Quit'), {
+      label: 'the hint bar back',
+    });
+    expect(session.screen()).toContain('Try Demo');
+    // Yes quits.
+    await quit(session);
     const { code } = await session.exit;
     expect(code).toBe(0);
   });

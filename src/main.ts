@@ -512,6 +512,23 @@ const syncPushForActiveAccount = () => {
     });
 };
 
+// The same after a sign-in, except that this device registers for the account
+// again instead of trusting the registration stored before: the server deletes
+// an alias's push registrations when its password changes.
+const syncPushAfterSignIn = () => {
+  if (isTauri && !isTauriMobile && !isTauriMacOS) return;
+
+  const email = Local.get('email') || '';
+  import('./utils/push-notifications.js')
+    .then(({ refreshAccountPushOnNextSync, syncPushNotifications }) => {
+      refreshAccountPushOnNextSync(email);
+      return syncPushNotifications();
+    })
+    .catch((error) => {
+      console.warn('[main] Push notification sync failed:', error);
+    });
+};
+
 const loginRoot = document.querySelector('#login-root');
 const loginWrapper = document.querySelector('.fe-login-shell');
 if (loginRoot) {
@@ -520,7 +537,7 @@ if (loginRoot) {
     props: {
       onSuccess(path = '/mailbox') {
         mailboxActions.resetSessionState?.();
-        syncPushForActiveAccount();
+        syncPushAfterSignIn();
         if (viewModel.navigate) {
           // Replace the login history entry so users cannot swipe back to it
           viewModel.navigate(path, { replace: true });

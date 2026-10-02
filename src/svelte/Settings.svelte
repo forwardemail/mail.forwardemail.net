@@ -3536,7 +3536,18 @@
       // screen. Normal sign-in and account switching never reload either;
       // pairing uses the same in-app paths.
       if (result.account) {
-        void switchAccount(result.account);
+        const account = result.account;
+        // Signed in with the credentials in the code: register this device
+        // for the account again rather than trust the registration stored
+        // before (the switch syncs push, unless the account is already
+        // active)
+        void import('../utils/push-notifications.js')
+          .then(({ refreshAccountPushOnNextSync, syncPushNotifications }) => {
+            refreshAccountPushOnNextSync(account);
+            return syncPushNotifications();
+          })
+          .catch(() => {});
+        void switchAccount(account);
         globalThis.history.pushState({}, '', '/mailbox');
         globalThis.dispatchEvent(new PopStateEvent('popstate'));
       } else {

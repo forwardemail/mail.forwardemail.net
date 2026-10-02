@@ -252,11 +252,16 @@ export function installHints(win: AnyRecord, options: { columns: () => number })
   let shown: Hint[] = [];
   let html = '';
 
-  // A short notice in place of the hints ("Copied"), from other modules.
-  let notice: string | null = null;
+  // A short notice in place of the hints ("Copied"), from other modules: its
+  // text, or { text, failed } for one that reports a failure.
+  let notice: Hint | null = null;
   let noticeTimer: ReturnType<typeof setTimeout> | null = null;
   win.addEventListener('fe-terminal-notice', (event: AnyRecord) => {
-    notice = String(event.detail ?? '');
+    const detail = event.detail;
+    notice =
+      detail && typeof detail === 'object'
+        ? { keys: detail.failed ? '✗' : '✓', label: String(detail.text ?? '') }
+        : { keys: '✓', label: String(detail ?? '') };
     if (noticeTimer) clearTimeout(noticeTimer);
     noticeTimer = setTimeout(() => {
       notice = null;
@@ -310,7 +315,7 @@ export function installHints(win: AnyRecord, options: { columns: () => number })
     const width = options.columns();
     const tooltip = hovered ? labelOf(hovered) : null;
     const hints: Hint[] = notice
-      ? [{ keys: '✓', label: notice }]
+      ? [notice]
       : tooltip
         ? [{ keys: '', label: tooltip }]
         : hintsForScreen();

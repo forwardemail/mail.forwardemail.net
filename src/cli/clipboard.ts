@@ -1,25 +1,31 @@
 /**
- * Copying the selection with the keyboard.
+ * The clipboard: the app's copy buttons, and copying the selection with the
+ * keyboard.
+ *
+ * navigator.clipboard.writeText and write, which the app's "Click to copy"
+ * addresses, Diagnostics and "Copy raw" use, go through system-clipboard.ts:
+ * the terminal's clipboard sequence (OSC 52) plus the system's clipboard
+ * program, and they reject when the text reached no clipboard, so the app
+ * shows "Failed to copy" instead of a false "Copied". As in a browser, they
+ * need a click or a key press in the last few seconds.
  *
  * The client takes the mouse for clicks and scrolling, so the terminal's own
  * selection needs a modifier (Option in iTerm2, Fn in Terminal.app, Shift in
  * most others). Dragging over text selects it in the app instead. A drag no
  * longer copies on its own: while anything is selected the hint bar shows
- * "Ctrl+C Copy", and Ctrl+C copies the selection to the system clipboard
- * through the terminal's clipboard sequence (OSC 52), which reaches it even
- * over SSH, the way tmux does. With nothing selected, Ctrl+C quits, but asks
- * first ("Quit Forward Email?"), so a mistaken press does not drop the
- * session.
+ * "Ctrl+C Copy", and Ctrl+C copies the selection the same way. With nothing
+ * selected, Ctrl+C quits, but asks first ("Quit Forward Email?"), so a
+ * mistaken press does not drop the session.
  *
  * Ctrl+C arrives as data in raw mode, where the engine asks the window to
  * close. That close is cancelable through `beforeunload`, so a selection turns
  * the key press into a copy, and a quit is held until it is confirmed; both
  * keep the app open. Everything else (an external SIGINT, the pipe ending)
- * bypasses the window and still exits. The
- * OSC 52 is written straight to the output, as the pointer shape is in
- * pointer.ts, because the close is not dispatched as a key press and so
- * navigator.clipboard's user-gesture gate would reject it.
+ * bypasses the window and still exits. The close is not a dispatched key
+ * press, so the copy calls the writer itself rather than navigator.clipboard,
+ * whose user-gesture check would turn it down.
  */
+import { createClipboardWriter, type ClipboardOptions } from './system-clipboard';
 import type { AnyRecord } from './types';
 
 const TEXT_NODE = 3;
@@ -71,9 +77,46 @@ export function selectedText(win: AnyRecord): string {
   return text;
 }
 
-/** The OSC 52 sequence that puts `text` on the system clipboard. */
-export function clipboardSequence(text: string): string {
-  return `\x1b]52;c;${Buffer.from(text, 'utf8').toString('base64')}\x07`;
+/**
+ * navigator.clipboard.writeText and write, through `copy`. A browser lets a
+ * page write the clipboard within a few seconds of a click or a key press
+ * (transient activation), which TermDOM tracks as navigator.userActivation.
+ */
+export function installClipboardApi(win: AnyRecord, copy: (text: string) => Promise<unknown>) {
+  const clipboard = win.navigator?.clipboard;
+  if (!clipboard) return;
+  const denied = (message: string) =>
+    win.DOMException
+      ? new win.DOMException(message, 'NotAllowedError')
+      : Object.assign(new Error(message), { name: 'NotAllowedError' });
+  const allowed = () => {
+    const activation = win.navigator.userActivation;
+    return activation ? Boolean(activation.isActive) : true;
+  };
+  const write = (text: string) =>
+    copy(text).then(
+      () => undefined,
+      (error: unknown) => {
+        throw denied(`Could not copy: ${(error as Error)?.message ?? error}`);
+      },
+    );
+  const define = (name: string, value: unknown) =>
+    Object.defineProperty(clipboard, name, { value, configurable: true, writable: true });
+
+  define('writeText', (text: unknown) =>
+    allowed()
+      ? write(String(text))
+      : Promise.reject(denied('Copying needs a click or a key press first')),
+  );
+  define('write', async (items: Iterable<AnyRecord>) => {
+    if (!allowed()) throw denied('Copying needs a click or a key press first');
+    for (const item of items ?? []) {
+      if (!Array.from((item?.types ?? []) as string[]).includes('text/plain')) continue;
+      const data = await item.getType('text/plain');
+      return write(typeof data === 'string' ? data : String(await data.text()));
+    }
+    throw denied('A clipboard write needs a text/plain entry');
+  });
 }
 
 export function installClipboard(
@@ -84,12 +127,19 @@ export function installClipboard(
     // open. Left out where there is nothing to ask with (a passed transport),
     // so Ctrl+C quits at once there, as it always has.
     confirmQuit?: () => boolean;
+    // The platform, environment and process runner the copy uses (tests).
+    clipboard?: Omit<ClipboardOptions, 'output'>;
   } = {},
 ) {
   const document = win.document as AnyRecord;
-  const output = options.output ?? process.stdout;
-  const notice = (detail: string) =>
-    win.dispatchEvent(new win.CustomEvent('fe-terminal-notice', { detail }));
+  const copyText = createClipboardWriter({ ...options.clipboard, output: options.output });
+  installClipboardApi(win, copyText);
+  // A notice in place of the hints for a moment (hints.ts), marked as a
+  // failure when it reports one.
+  const notice = (text: string, failed = false) =>
+    win.dispatchEvent(
+      new win.CustomEvent('fe-terminal-notice', { detail: failed ? { text, failed } : text }),
+    );
 
   // The hint bar flips "Ctrl+C Quit" to "Ctrl+C Copy" from this.
   let active = false;
@@ -100,27 +150,35 @@ export function installClipboard(
   };
   const refresh = () => setActive(Boolean(selectedText(win).trim()));
 
-  // Writing the clipboard sequence straight to the terminal, not through
-  // navigator.clipboard: this runs outside a dispatched key press, which that
-  // API requires. Returns whether the terminal took it.
+  // A copy under way; a Ctrl+C meanwhile starts no second one.
+  let copying = false;
+  // Copies the selection; returns false with nothing selected. Clearing the
+  // selection once the copy succeeds both confirms it and returns Ctrl+C to
+  // quitting, so a second press leaves. A failed copy keeps the selection for
+  // another try.
   const copy = (): boolean => {
     const text = selectedText(win);
     if (!text.trim()) return false;
-    try {
-      output.write(clipboardSequence(text));
-    } catch {
-      notice('Could not copy: the terminal is not reachable');
-      return false;
-    }
-    // Clearing the selection both confirms the copy and returns Ctrl+C to
-    // quitting, so a second press leaves.
-    try {
-      win.getSelection?.()?.removeAllRanges?.();
-    } catch {
-      // no selection to clear
-    }
-    setActive(false);
-    notice('Copied');
+    if (copying) return true;
+    copying = true;
+    copyText(text)
+      .finally(() => {
+        copying = false;
+      })
+      .then(
+        () => {
+          if (selectedText(win) === text) {
+            try {
+              win.getSelection?.()?.removeAllRanges?.();
+            } catch {
+              // no selection to clear
+            }
+            setActive(false);
+          }
+          notice('Copied');
+        },
+        (error: unknown) => notice(`Could not copy: ${(error as Error)?.message ?? error}`, true),
+      );
     return true;
   };
 

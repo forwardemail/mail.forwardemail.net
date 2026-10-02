@@ -649,7 +649,11 @@ describe('copying the selection', () => {
       transport: { ...quietTransport(80, 24), interactive: true, readable },
     });
     const written = [];
-    installClipboard(term.window, { output: { write: (text) => written.push(String(text)) } });
+    installClipboard(term.window, {
+      output: { write: (text) => written.push(String(text)) },
+      // No clipboard program here, on any system: OSC 52 alone.
+      clipboard: { platform: 'linux', env: {}, wsl: false },
+    });
     // The text the clipboard sequence carries, decoded, or null if none.
     const copied = () => {
       // eslint-disable-next-line no-control-regex -- OSC 52 is ESC ] 52 … BEL

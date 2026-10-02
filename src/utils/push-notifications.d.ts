@@ -109,6 +109,7 @@ export function getActivePushProvider(): PushProvider | null;
 export function isSystemPushAlertExpected(eventName: string, data: unknown): boolean;
 export function __resetPushTapHandlingForTests(): void;
 export function isPushInitialized(): boolean;
+export function refreshAccountPushOnNextSync(email: string): void;
 export function getAndroidPushProviderPreference(): 'fcm' | 'unified-push';
 export function selectFcmPushProvider(): Promise<boolean>;
 export function selectUnifiedPushDistributor(): Promise<boolean>;

@@ -24,11 +24,13 @@ export function tempHome() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'forwardemail-test-'));
 }
 
-const quote = (value) => `'${String(value).replace(/'/g, `'\\''`)}'`;
+export const quote = (value) => `'${String(value).replace(/'/g, `'\\''`)}'`;
 
 /**
  * Starts `forwardemail <args>` at the given size. Returns helpers to type,
  * read the screen and wait for text, and a stop() that must be awaited.
+ * `wrap` takes the client's command line and returns the one to run instead
+ * (the client inside tmux).
  */
 export function startTerminal({
   args = [],
@@ -38,6 +40,7 @@ export function startTerminal({
   env = {},
   shellLines = [],
   keepScrollback = false,
+  wrap = (command) => command,
 } = {}) {
   const term = new xterm.Terminal({
     cols,
@@ -50,7 +53,7 @@ export function startTerminal({
   const printed = shellLines.map((line) => `echo ${quote(line)}; `).join('');
   const child = spawn(
     'script',
-    ['-qfec', `stty cols ${cols} rows ${rows}; ${printed}exec ${command}`, '/dev/null'],
+    ['-qfec', `stty cols ${cols} rows ${rows}; ${printed}exec ${wrap(command)}`, '/dev/null'],
     {
       env: {
         ...process.env,
@@ -64,10 +67,16 @@ export function startTerminal({
     },
   );
   let exited = null;
+  child.on('exit', (code, signal) => {
+    exited = { code, signal };
+  });
+  // Resolves once the screen shows all of the client's output: 'close' comes
+  // after the last of it, where 'exit' can come before, and xterm parses what
+  // it gets on a timer.
   const exit = new Promise((resolve) => {
-    child.on('exit', (code, signal) => {
-      exited = { code, signal };
-      resolve(exited);
+    child.on('close', (code, signal) => {
+      exited ??= { code, signal };
+      term.write('', () => resolve(exited));
     });
   });
   // keepScrollback: the client's switch to the alternate screen is dropped,
@@ -77,6 +86,9 @@ export function startTerminal({
   // is decoded as one stream and an unfinished escape waits for the next.
   const decoder = new StringDecoder('utf8');
   let held = '';
+  // Everything the client wrote, as the terminal received it.
+  const received = [];
+  child.stdout.on('data', (data) => received.push(data));
   child.stdout.on('data', (data) => {
     if (!keepScrollback) return term.write(data);
     let text = held + decoder.write(data);
@@ -193,6 +205,8 @@ export function startTerminal({
     drag,
     clipboard,
     pointerShapes,
+    // The client's output so far, escape sequences and all.
+    output: () => Buffer.concat(received).toString('utf8'),
     // The terminal modes the client turned on (focus reports, mouse, …).
     modes: () => term.modes,
     // 'normal' or 'alternate': which screen buffer the client draws on.
@@ -204,10 +218,8 @@ export function startTerminal({
       child.stdin.write(`\u001b[<${direction === 'down' ? 65 : 64};${col};${row}M`.repeat(times)),
     type: (keys) => child.stdin.write(keys),
     async stop() {
-      if (!exited) {
-        child.kill('SIGKILL');
-        await exit;
-      }
+      if (!exited) child.kill('SIGKILL');
+      await exit;
       term.dispose();
     },
   };

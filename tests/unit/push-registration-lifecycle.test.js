@@ -17,7 +17,7 @@ describe('mobile push registration lifecycle wiring', () => {
 
   it('synchronizes after successful login credentials are stored', () => {
     expect(mainSource).toMatch(
-      /onSuccess\(path = '\/mailbox'\) \{[\s\S]*?resetSessionState\?\.\(\);[\s\S]*?syncPushForActiveAccount\(\);[\s\S]*?viewModel\.navigate/,
+      /onSuccess\(path = '\/mailbox'\) \{[\s\S]*?resetSessionState\?\.\(\);[\s\S]*?syncPushAfterSignIn\(\);[\s\S]*?viewModel\.navigate/,
     );
   });
 

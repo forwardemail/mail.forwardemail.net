@@ -58,7 +58,7 @@ const NON_TEXT_INPUTS = new Set([
   'hidden',
 ]);
 
-function isTextField(el: AnyRecord | null): boolean {
+export function isTextField(el: AnyRecord | null): boolean {
   if (!el) return false;
   const tag = String(el.localName ?? '');
   if (tag === 'input') return !NON_TEXT_INPUTS.has(String(el.type ?? 'text').toLowerCase());

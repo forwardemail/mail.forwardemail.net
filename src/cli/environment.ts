@@ -5,6 +5,7 @@ import { createImageConstructor } from './images';
 import { createStorage } from './storage';
 import { installCentering } from './center';
 import { installAnimations, installDomFixes, installEditingFixes } from './dom-fixes';
+import { installFocusNavigation } from './focus-navigation';
 import { installFrames } from './frames';
 import { installHistory } from './history';
 import { installKeys } from './keys';
@@ -234,6 +235,7 @@ export function installEnvironment(options: EnvironmentOptions) {
   });
   installPointer(win);
   installKeys(win);
+  installFocusNavigation(win);
   installCentering(win);
   installDomFixes(win);
   installEditingFixes(win);

@@ -2057,6 +2057,14 @@
     if (!list.length) return;
     const currentId = $threadingEnabled ? $selectedConversation?.id : $selectedMessage?.id;
     let idx = list.findIndex((item) => item.id === currentId);
+    // With no message open (back in the list), go on from the row that has
+    // the keyboard focus.
+    if (idx === -1) {
+      const focusedId = document.activeElement
+        ?.closest?.('[data-conversation-row]')
+        ?.getAttribute('data-message-id');
+      if (focusedId) idx = list.findIndex((item: { id: unknown }) => String(item.id) === focusedId);
+    }
     if (idx === -1) idx = offset > 0 ? -1 : list.length;
     const nextIndex = Math.min(Math.max(idx + offset, 0), list.length - 1);
     const target = list[nextIndex];

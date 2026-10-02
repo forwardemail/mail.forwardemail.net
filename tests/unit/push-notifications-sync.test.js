@@ -194,6 +194,97 @@ describe('authenticated mobile push synchronization', () => {
     expect(registerServerMock).toHaveBeenCalledTimes(2);
   });
 
+  it('registers again after a sign-in, though the device has a stored registration', async () => {
+    localStore.set('alias_auth', ALIAS_AUTH);
+    localStore.set('email', 'user@example.com');
+    const { getActivePushProvider, refreshAccountPushOnNextSync, syncPushNotifications } =
+      await import('../../src/utils/push-notifications.js');
+
+    await expect(syncPushNotifications()).resolves.toBe(true);
+    expect(registerServerMock).toHaveBeenCalledOnce();
+
+    // resuming the app trusts the stored registration
+    await expect(syncPushNotifications()).resolves.toBe(true);
+    expect(registerServerMock).toHaveBeenCalledOnce();
+
+    // the alias password changed, which deleted the registration on the
+    // server, and the user signed in again with the new one
+    localStore.set('alias_auth', 'user@example.com:new-app-password');
+    refreshAccountPushOnNextSync('user@example.com');
+    // (until it is registered again, the app draws its own alerts)
+    expect(getActivePushProvider()).toBeNull();
+    await expect(syncPushNotifications()).resolves.toBe(true);
+    expect(registerServerMock).toHaveBeenCalledTimes(2);
+    expect(registerServerMock).toHaveBeenLastCalledWith(FCM_TOKEN, 'android');
+    expect(getActivePushProvider()).toBe('fcm');
+    // push was not set up again: no new permission request, token or
+    // listeners, and nothing to unregister with the same device token
+    expect(fcmPermissionMock).toHaveBeenCalledOnce();
+    expect(fcmGetTokenMock).toHaveBeenCalledOnce();
+    expect(unregisterServerMock).not.toHaveBeenCalled();
+
+    // and trusts the new registration from then on, after a restart too
+    await expect(syncPushNotifications()).resolves.toBe(true);
+    vi.resetModules();
+    const restarted = await import('../../src/utils/push-notifications.js');
+    await expect(restarted.syncPushNotifications()).resolves.toBe(true);
+    expect(registerServerMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps trying on later syncs when registering again after a sign-in fails', async () => {
+    localStore.set('alias_auth', ALIAS_AUTH);
+    localStore.set('email', 'user@example.com');
+    const { refreshAccountPushOnNextSync, syncPushNotifications } =
+      await import('../../src/utils/push-notifications.js');
+    await expect(syncPushNotifications()).resolves.toBe(true);
+
+    refreshAccountPushOnNextSync('user@example.com');
+    registerServerMock.mockResolvedValueOnce(null);
+    await expect(syncPushNotifications()).resolves.toBe(false);
+
+    // the next resume tries again
+    await expect(syncPushNotifications()).resolves.toBe(true);
+    expect(registerServerMock).toHaveBeenCalledTimes(3);
+
+    await expect(syncPushNotifications()).resolves.toBe(true);
+    expect(registerServerMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('registers an account signed in next to the active one', async () => {
+    localStore.set('alias_auth', ALIAS_AUTH);
+    localStore.set('email', 'user@example.com');
+    const { refreshAccountPushOnNextSync, syncPushNotifications } =
+      await import('../../src/utils/push-notifications.js');
+    // (the storage mock outlives this test, so it is put back afterwards)
+    const { Accounts } = await import('../../src/utils/storage');
+    try {
+      Accounts.getAll.mockReturnValue([{ email: 'user@example.com', aliasAuth: ALIAS_AUTH }]);
+      await expect(syncPushNotifications()).resolves.toBe(true);
+      expect(registerServerMock).toHaveBeenCalledOnce();
+
+      // a second account is added and signed in while push is already set up
+      Accounts.getAll.mockReturnValue([
+        { email: 'user@example.com', aliasAuth: ALIAS_AUTH },
+        { email: 'other@example.com', aliasAuth: 'other@example.com:app-password' },
+      ]);
+      registerServerForAccountMock.mockResolvedValue({ id: 'registration-2', aliasId: 'alias-2' });
+      refreshAccountPushOnNextSync('other@example.com');
+      await expect(syncPushNotifications()).resolves.toBe(true);
+
+      expect(registerServerForAccountMock).toHaveBeenCalledOnce();
+      expect(registerServerForAccountMock).toHaveBeenCalledWith(
+        FCM_TOKEN,
+        'android',
+        'other@example.com:app-password',
+      );
+      // the active account's registration was trusted, not repeated
+      expect(registerServerMock).toHaveBeenCalledOnce();
+    } finally {
+      Accounts.getAll.mockReturnValue([]);
+      registerServerForAccountMock.mockReset();
+    }
+  });
+
   it('waits for in-flight registration before logout cleanup', async () => {
     localStore.set('alias_auth', ALIAS_AUTH);
     let resolveToken;
