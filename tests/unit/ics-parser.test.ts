@@ -517,3 +517,53 @@ describe('fetchAttachmentText', () => {
     expect(await fetchAttachmentText('')).toBeNull();
   });
 });
+
+describe('emailed invites cannot schedule on the user’s behalf', () => {
+  const forged = sampleIcs.replace(
+    'ORGANIZER;CN=Alice:mailto:alice@example.com',
+    'ORGANIZER;CN=Victim:mailto:Victim@Example.com',
+  );
+
+  it('marks an invite naming the user as organizer as client-scheduled', () => {
+    const out = unfold(normalizeIcsForCalendar(forged, { noSchedulingFor: 'victim@example.com' }));
+    expect(out).toMatch(
+      /^ORGANIZER;[^\r\n]*SCHEDULE-AGENT=CLIENT[^\r\n]*:mailto:Victim@Example\.com$/m,
+    );
+  });
+
+  it('leaves invites from other organizers as they are', () => {
+    const out = unfold(
+      normalizeIcsForCalendar(sampleIcs, { noSchedulingFor: 'victim@example.com' }),
+    );
+    expect(out).not.toMatch(/SCHEDULE-AGENT/);
+    expect(unfold(normalizeIcsForCalendar(forged))).not.toMatch(/SCHEDULE-AGENT/);
+  });
+
+  it('only takes the answer of the attendee who sent the reply', () => {
+    const reply = [
+      'BEGIN:VCALENDAR',
+      'VERSION:2.0',
+      'METHOD:REPLY',
+      'BEGIN:VEVENT',
+      'UID:abc123@example.com',
+      'DTSTAMP:20260102T000000Z',
+      'ORGANIZER;CN=Alice:mailto:alice@example.com',
+      'ATTENDEE;PARTSTAT=ACCEPTED:mailto:bob@example.com',
+      'ATTENDEE;PARTSTAT=DECLINED:mailto:carol@example.com',
+      'ATTENDEE;PARTSTAT=ACCEPTED:mailto:stranger@example.net',
+      'END:VEVENT',
+      'END:VCALENDAR',
+    ].join('\r\n');
+    const merged = mergeReplyIntoIcs(sampleIcs, reply, 'Bob@Example.com');
+    const attendees = unfold(merged).match(/^ATTENDEE.*$/gm) || [];
+    expect(attendees).toHaveLength(2);
+    expect(attendees.find((a) => a.includes('bob@example.com'))).toMatch(/PARTSTAT=ACCEPTED/);
+    expect(attendees.find((a) => a.includes('carol@example.com'))).toMatch(/PARTSTAT=ACCEPTED/);
+    expect(merged).not.toMatch(/stranger@example\.net/);
+
+    // (a reply without a known sender changes nothing)
+    const unknown = unfold(mergeReplyIntoIcs(sampleIcs, reply, ''));
+    expect(unknown).not.toMatch(/stranger@example\.net/);
+    expect(unknown).toMatch(/PARTSTAT=NEEDS-ACTION[^\r\n]*:mailto:bob@example\.com/);
+  });
+});

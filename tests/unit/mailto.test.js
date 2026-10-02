@@ -68,6 +68,14 @@ describe('parseMailto', () => {
     expect(result.other['x-custom']).toEqual(['value']);
   });
 
+  it('keeps parameters named like Object properties as ordinary ones', () => {
+    const result = parseMailto('mailto:a@x.com?__proto__=polluted&constructor=c&subject=Hi');
+    expect(result.subject).toBe('Hi');
+    expect(result.other.__proto__).toEqual(['polluted']);
+    expect(result.other.constructor).toEqual(['c']);
+    expect({}.polluted).toBeUndefined();
+  });
+
   it('preserves raw input', () => {
     const input = 'mailto:test@example.com';
     expect(parseMailto(input).raw).toBe(input);

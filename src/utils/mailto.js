@@ -60,7 +60,9 @@ export const parseMailto = (input = '') => {
     replyTo: '',
     inReplyTo: '',
     raw: input || '',
-    other: {},
+    // (keys come from the link: "__proto__" or "constructor" must not reach
+    // Object.prototype)
+    other: Object.create(null),
   };
 
   if (!input) return result;

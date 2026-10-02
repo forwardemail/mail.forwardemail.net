@@ -325,6 +325,42 @@ export const extractEmail = (address: AddressInput): string => {
   return normalizeEmail(address);
 };
 
+//
+// Header values come from whoever sent the message, so they are parsed with
+// linear scans: the regular expressions these replace (/<([^>]+)>/ and
+// /^["']?([^"'<]+)["']?\s*<(.+)>$/) backtrack quadratically on long runs of
+// "<" or spaces, which froze the app while it rendered such a message.
+//
+
+// The text inside the first "<...>" with something in it, as /<([^>]+)>/.
+const angleAddr = (raw: string): string | null => {
+  let start = raw.indexOf('<');
+  while (start !== -1) {
+    const end = raw.indexOf('>', start + 1);
+    if (end === -1) return null;
+    if (end > start + 1) return raw.slice(start + 1, end);
+    start = raw.indexOf('<', end);
+  }
+  return null;
+};
+
+const LINE_TERMINATOR = /[\n\r\u2028\u2029]/;
+const NAME_UNSAFE = /["'<]/;
+
+// [name, address] of '"Name" <address>' or 'Name <address>', as
+// /^["']?([^"'<]+)["']?\s*<(.+)>$/ matched it.
+const nameAddr = (raw: string): [string, string] | null => {
+  const start = raw.indexOf('<');
+  if (start === -1 || !raw.endsWith('>')) return null;
+  const address = raw.slice(start + 1, -1);
+  if (!address || LINE_TERMINATOR.test(address)) return null;
+  let name = raw.slice(0, start).trimEnd();
+  if (name.startsWith('"') || name.startsWith("'")) name = name.slice(1);
+  if (name.endsWith('"') || name.endsWith("'")) name = name.slice(0, -1);
+  if (!name || NAME_UNSAFE.test(name)) return null;
+  return [name, address];
+};
+
 export const normalizeEmail = (value: AddressInput = ''): string => {
   if (!value) return '';
   let raw: string = '';
@@ -344,8 +380,8 @@ export const normalizeEmail = (value: AddressInput = ''): string => {
     raw = value;
   }
   if (typeof raw !== 'string') return '';
-  const match = raw.match(/<([^>]+)>/);
-  const email = (match ? match[1] : raw).trim().toLowerCase();
+  const inside = angleAddr(raw);
+  const email = (inside === null ? raw : inside).trim().toLowerCase();
   return email;
 };
 
@@ -415,11 +451,11 @@ export const extractDisplayName = (from: AddressInput): string => {
   }
 
   // Match pattern: "Name" <email> or Name <email>
-  const match = raw.match(/^["']?([^"'<]+)["']?\s*<(.+)>$/);
+  const match = nameAddr(raw);
 
   if (match) {
-    const name = match[1].trim();
-    const email = match[2].trim();
+    const name = match[0].trim();
+    const email = match[1].trim();
 
     // If name exists and is not empty, use it
     if (name && name.length > 0) {

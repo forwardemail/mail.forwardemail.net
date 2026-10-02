@@ -24,6 +24,7 @@
     displayAddresses,
     getReplyToList,
     extractDisplayName,
+    normalizeEmail,
   } from '../utils/address.ts';
   import { truncatePreview } from '../utils/preview';
   import { describeFolderRetention } from '../utils/retention';
@@ -9405,7 +9406,12 @@
                     {/if}
                     {#if parsedInvite}
                       <div class="mb-4">
-                        <CalendarInviteCard invite={parsedInvite} />
+                        <CalendarInviteCard
+                          invite={parsedInvite}
+                          sender={normalizeEmail(
+                            extractAddressList($selectedMessage, 'from')[0] || '',
+                          )}
+                        />
                       </div>
                     {/if}
                     <EmailIframe

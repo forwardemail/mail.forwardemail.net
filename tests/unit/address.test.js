@@ -360,3 +360,50 @@ describe('isValidEmail', () => {
     expect(isValidEmail('')).toBe(false);
   });
 });
+
+describe('address parsing of hostile headers', () => {
+  // the previous implementations, for comparison
+  const previousDisplayName = (value) => {
+    const raw = value.trim();
+    if (!raw) return '';
+    const match = raw.match(/^["']?([^"'<]+)["']?\s*<(.+)>$/);
+    if (match) return match[1].trim() || match[2].trim();
+    return raw.trim();
+  };
+  const previousNormalize = (raw) => {
+    if (!raw) return '';
+    const match = raw.match(/<([^>]+)>/);
+    return (match ? match[1] : raw).trim().toLowerCase();
+  };
+
+  it('parses as before', () => {
+    const alphabet = ['"', "'", '<', '>', ' ', 'a', 'B', '@', '\n', '\t'];
+    let seed = 1;
+    const random = () => {
+      seed = (seed * 1103515245 + 12345) % 2147483648;
+      return seed / 2147483648;
+    };
+    for (let i = 0; i < 20000; i++) {
+      let value = '';
+      const length = Math.floor(random() * 14);
+      for (let j = 0; j < length; j++) value += alphabet[Math.floor(random() * alphabet.length)];
+      expect(extractDisplayName(value)).toBe(previousDisplayName(value));
+      expect(normalizeEmail(value)).toBe(previousNormalize(value));
+    }
+  });
+
+  it('handles long runs of spaces and angle brackets quickly', () => {
+    const values = [
+      `a${' '.repeat(40000)}x`,
+      '<'.repeat(40000),
+      `"${' '.repeat(40000)}`,
+      `a ${'<'.repeat(40000)}>`,
+    ];
+    const start = performance.now();
+    for (const value of values) {
+      extractDisplayName(value);
+      normalizeEmail(value);
+    }
+    expect(performance.now() - start).toBeLessThan(200);
+  });
+});

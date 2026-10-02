@@ -175,7 +175,16 @@ const isVideoConferenceUrl = (value: unknown): boolean => {
   }
 };
 
-export const normalizeIcsForCalendar = (ics: string): string => {
+//
+// `noSchedulingFor`: the user's address.  An invite that arrived by email and
+// names the user as its ORGANIZER is a copy, and possibly a forged one, so
+// adding it to the calendar must not make the server send invitations from
+// the user to its attendees (RFC 6638 Section 7.1, SCHEDULE-AGENT=CLIENT).
+//
+export const normalizeIcsForCalendar = (
+  ics: string,
+  { noSchedulingFor = '' }: { noSchedulingFor?: string } = {},
+): string => {
   let cal: ICAL.Component;
   try {
     cal = new ICAL.Component(ICAL.parse(ics));
@@ -189,7 +198,12 @@ export const normalizeIcsForCalendar = (ics: string): string => {
   const methodProp = cal.getFirstProperty('method');
   if (methodProp) cal.removeProperty(methodProp);
 
+  const user = noSchedulingFor.trim().toLowerCase();
   cal.getAllSubcomponents('vevent').forEach((vevent) => {
+    const organizerProp = vevent.getFirstProperty('organizer');
+    if (user && organizerProp && stripMailto(organizerProp.getFirstValue()).toLowerCase() === user)
+      organizerProp.setParameter('schedule-agent', 'CLIENT');
+
     const locationProp = vevent.getFirstProperty('location');
     const urlProp = vevent.getFirstProperty('url');
     if (locationProp && !urlProp) {
@@ -248,7 +262,12 @@ export const buildReplyIcs = (
   return cal.toString();
 };
 
-export const mergeReplyIntoIcs = (existingIcs: string, replyIcs: string): string => {
+//
+// `from`: the address the reply was sent from.  Only that attendee's answer
+// is taken from it: a reply naming other attendees (or new ones, which the
+// organizer's server would then invite) could otherwise be sent by anyone.
+//
+export const mergeReplyIntoIcs = (existingIcs: string, replyIcs: string, from?: string): string => {
   let existingCal: ICAL.Component;
   let replyCal: ICAL.Component;
   try {
@@ -281,6 +300,7 @@ export const mergeReplyIntoIcs = (existingIcs: string, replyIcs: string): string
       const partstat = replyAttendeeProp.getParameter('partstat') as string | undefined;
       if (!email || !partstat) return;
       const target = email.toLowerCase();
+      if (from !== undefined && target !== from.trim().toLowerCase()) return;
 
       const match = targetVevent
         .getAllProperties('attendee')

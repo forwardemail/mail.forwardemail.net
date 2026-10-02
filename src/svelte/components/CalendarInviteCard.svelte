@@ -26,10 +26,12 @@
 
   interface Props {
     invite: ParsedInvite;
+    // address of the message the invite came with
+    sender?: string;
     onAdded?: () => void;
   }
 
-  let { invite, onAdded }: Props = $props();
+  let { invite, sender = '', onAdded }: Props = $props();
 
   let saving = $state(false);
   let added = $state(false);
@@ -264,18 +266,28 @@
         (ev?.ical as string) ||
         ((ev?.raw as Record<string, unknown> | undefined)?.ical as string) ||
         '';
-      let ical: string;
+      //
+      // An emailed copy that names the user as organizer never schedules:
+      // the user's own event is already on the calendar (and is left as it
+      // is), and anyone can send one naming the user to have invitations
+      // sent from the user's address.  A reply only updates the answer of
+      // the attendee who sent it.
+      //
+      const noScheduling = { noSchedulingFor: userEmail };
+      let ical = '';
       if (invite.method === 'REPLY' && wasUpdate) {
         const existingIcal = getFullIcal(remoteMatch) || getFullIcal(cachedEventMatch);
         ical = existingIcal
-          ? normalizeIcsForCalendar(mergeReplyIntoIcs(existingIcal, invite.raw))
-          : normalizeIcsForCalendar(invite.raw);
-      } else {
-        ical = normalizeIcsForCalendar(invite.raw);
+          ? normalizeIcsForCalendar(mergeReplyIntoIcs(existingIcal, invite.raw, sender))
+          : normalizeIcsForCalendar(invite.raw, noScheduling);
+      } else if (!(userIsOrganizer && wasUpdate)) {
+        ical = normalizeIcsForCalendar(invite.raw, noScheduling);
       }
 
       let response: Record<string, unknown> = {};
-      if (wasUpdate) {
+      if (!ical) {
+        response = remoteMatch || cachedEventMatch || {};
+      } else if (wasUpdate) {
         response =
           ((await Remote.request(
             'CalendarEventUpdate',
