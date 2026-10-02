@@ -29,6 +29,7 @@
  */
 
 import { notify, requestPermission } from './notification-bridge.js';
+import { isTauri } from './platform.js';
 
 type TaskLike = Record<string, unknown>;
 
@@ -265,9 +266,13 @@ function fire(item: TaskLike, anchor: Date): void {
 export function refreshTaskReminders(events: TaskLike[] | undefined): void {
   if (!Array.isArray(events)) return;
 
-  // Best-effort permission ask on first call. Doesn't block scheduling —
-  // notify() itself silently no-ops when permission is denied.
-  if (!permissionRequested) {
+  // Best-effort permission ask on first call, in the desktop and mobile apps.
+  // Doesn't block scheduling: notify() no-ops without permission. Browsers
+  // get no ask from here. This runs when the calendar loads, not from a
+  // click, and browsers ignore a prompt that no user action started (some
+  // count it against the site). The web app asks from the Turn on toast and
+  // from Settings instead.
+  if (isTauri && !permissionRequested) {
     permissionRequested = true;
     requestPermission()
       .then((p: unknown) => debug('permission', p))

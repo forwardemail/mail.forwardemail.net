@@ -14,7 +14,9 @@
   import Smartphone from '@lucide/svelte/icons/smartphone';
   import Trash2 from '@lucide/svelte/icons/trash-2';
   import Wrench from '@lucide/svelte/icons/wrench';
+  import { i18n } from '../../utils/i18n';
   import {
+    allowBrowserNotifications,
     deregisterCurrentDevicePush,
     getPushNotificationStatus,
     openNotificationSettings,
@@ -60,6 +62,14 @@
   let confirmationOpen = $state(false);
   let confirmation = $state<Confirmation | null>(null);
   let refreshSequence = 0;
+  // Bumped when the translations load or change, so text read through tr()
+  // renders again.
+  let localeVersion = $state(0);
+
+  const tr = (key: string): string => {
+    void localeVersion;
+    return String(i18n.t(`browserNotifications.${key}`));
+  };
 
   const healthMeta: Record<PushHealth, { label: string; description: string; badgeClass: string }> =
     {
@@ -126,6 +136,47 @@
 
   const isMacOS = () => status?.platform === 'macos';
   const isWeb = () => status?.platform === 'web';
+
+  // The browser build shows new mail itself while it is open when Web Push
+  // cannot deliver it. Say which way this browser works, and what the user
+  // can do when nothing can show a notification.
+  const browserNotice = $derived.by(() => {
+    const state = status?.browserNotifications;
+    if (!status || !state || !status.authenticated || status.demo) return null;
+    switch (state.mode) {
+      case 'fallback':
+        return {
+          icon: 'on',
+          text: status.supported
+            ? `${tr('pushNotReceiving')} ${tr('fallbackActive')}`
+            : tr('fallbackActive'),
+          hint:
+            state.pushFailure === 'push-service-unavailable' && !error ? tr('pushServiceHint') : '',
+          allow: false,
+        };
+      case 'needs-permission':
+        // A browser with Web Push asks from "Allow & register this device".
+        return status.supported
+          ? null
+          : { icon: 'off', text: tr('needsPermission'), hint: '', allow: true };
+      case 'blocked':
+        return { icon: 'off', text: tr('blocked'), hint: '', allow: false };
+      case 'unavailable':
+        return { icon: 'off', text: tr('unavailable'), hint: '', allow: false };
+      default:
+        return null;
+    }
+  });
+
+  // Without Web Push the browser permission still decides whether the open
+  // app can show a notification, so show that one.
+  const shownPermission = (): PushNotificationStatus['permission'] => {
+    const state = status?.browserNotifications;
+    if (!status || status.supported || !isWeb() || !state) return status?.permission ?? 'unknown';
+    if (state.permission === 'granted') return 'granted';
+    if (state.permission === 'unsupported') return 'unsupported';
+    return 'not-granted';
+  };
 
   const actionError = (code: PushManagementCode) => {
     switch (code) {
@@ -229,6 +280,17 @@
     }
   };
 
+  // Runs from the button click: the browser shows its prompt only then.
+  const allowNotifications = () =>
+    runAction('allow-browser', async () => {
+      const permission = await allowBrowserNotifications();
+      toasts?.show?.(
+        permission === 'granted' ? tr('allowed') : tr('notAllowed'),
+        permission === 'granted' ? 'success' : 'info',
+      );
+      await refreshStatus(false);
+    });
+
   const registerDevice = () =>
     runAction('register', async () => {
       applyResult(
@@ -330,9 +392,16 @@
 
   onMount(() => {
     void refreshStatus();
-    return subscribePushStatus(() => {
+    const stopLocale = i18n.onChange(() => {
+      localeVersion += 1;
+    });
+    const stopStatus = subscribePushStatus(() => {
       if (!activeAction) void refreshStatus(false);
     });
+    return () => {
+      stopLocale();
+      stopStatus();
+    };
   });
 </script>
 
@@ -401,8 +470,7 @@
               notifications still arrive while the app is running.
             {:else if status.platform === 'web'}
               This browser cannot receive push notifications. On iPhone and iPad, add Forward Email
-              to the Home Screen from Safari first. New mail notifications still appear while the
-              app is open.
+              to the Home Screen from Safari first.
             {:else}
               Push notification controls are available only in the native Android, iOS, and macOS
               apps.
@@ -424,7 +492,7 @@
             server.
           </Alert.Description>
         </Alert.Root>
-      {:else if status.permission === 'not-granted'}
+      {:else if status.permission === 'not-granted' && status.browserNotifications?.mode !== 'blocked'}
         <Alert.Root>
           <BellOff class="h-4 w-4" />
           <Alert.Description>
@@ -437,6 +505,33 @@
             {:else}
               Registration will request notification permission. If it remains denied, enable it in
               system settings and try again.
+            {/if}
+          </Alert.Description>
+        </Alert.Root>
+      {/if}
+
+      {#if browserNotice}
+        <Alert.Root data-testid="browser-notifications-notice">
+          {#if browserNotice.icon === 'on'}
+            <Bell class="h-4 w-4" />
+          {:else}
+            <BellOff class="h-4 w-4" />
+          {/if}
+          <Alert.Description>
+            <p>{browserNotice.text}</p>
+            {#if browserNotice.hint}
+              <p class="mt-1">{browserNotice.hint}</p>
+            {/if}
+            {#if browserNotice.allow}
+              <Button
+                class="mt-3"
+                size="sm"
+                onclick={allowNotifications}
+                disabled={Boolean(activeAction)}
+              >
+                <Bell class="mr-2 h-4 w-4" />
+                {tr('allow')}
+              </Button>
             {/if}
           </Alert.Description>
         </Alert.Root>
@@ -474,7 +569,7 @@
           <dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">
             Notification permission
           </dt>
-          <dd class="mt-1 font-medium">{permissionLabel(status.permission)}</dd>
+          <dd class="mt-1 font-medium">{permissionLabel(shownPermission())}</dd>
         </div>
         <div class="rounded-md border p-3">
           <dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">

@@ -123,6 +123,9 @@ class I18n {
         const fallbackTranslations = await this.loadTranslations(this.fallbackLocale);
         this.translations = fallbackTranslations;
         this.currentLocale = this.fallbackLocale;
+        // Text rendered before the translations loaded shows key paths until
+        // its listeners hear about the fallback.
+        this.notifyChange();
       }
 
       return false;

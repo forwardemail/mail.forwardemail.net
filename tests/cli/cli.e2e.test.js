@@ -4,6 +4,7 @@
  * pseudo-terminal with the demo account.
  */
 import fs from 'node:fs';
+import http from 'node:http';
 import path from 'node:path';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { CLI, KEYS, canRunInteractive, runCli, startTerminal, tempHome } from './terminal.js';
@@ -852,6 +853,228 @@ describe.runIf(canRunInteractive)('in a terminal', () => {
       label: 'the message',
     });
     expect(screen).toContain('Privacy settings to try');
+  });
+
+  it('attaches files from the Attach button and from a drop on the message', async () => {
+    const files = tempHome();
+    fs.writeFileSync(path.join(files, 'quarterly-report.csv'), 'a,b\n1,2\n');
+    fs.writeFileSync(path.join(files, 'My Notes.txt'), 'notes');
+    fs.mkdirSync(path.join(files, 'Photos'));
+    session = startTerminal({
+      home: tempHome(),
+      args: ['--demo'],
+      // The typed path prompt, whatever this machine's display.
+      env: { FORWARDEMAIL_FILE_PICKER: 'terminal' },
+    });
+    await session.waitFor('Welcome to Forward Email!');
+    session.type(KEYS.ctrlN);
+    await session.waitFor((text) => text.includes('Subject') && text.includes('Ctrl+O Attach'), {
+      label: 'the compose window and its Attach hint',
+    });
+
+    // The paperclip button asks for a path; Tab completes it.
+    session.click('⌇');
+    await session.waitFor((text) => text.split('\n').at(-2).includes('File to attach:'), {
+      label: 'the path prompt',
+    });
+    expect(session.screen().split('\n').at(-1)).toContain(
+      'Tab Complete   Enter Attach   Esc Cancel',
+    );
+    session.type(`${files}/quar`);
+    session.type(KEYS.tab);
+    await session.waitFor(`${files}/quarterly-report.csv`, { label: 'the completed path' });
+    session.type(KEYS.enter);
+    await session.waitFor((text) => text.includes('quarterly-report.csv') && text.includes('8 B'), {
+      label: 'the attachment in the compose window',
+    });
+
+    // Files dropped on the message arrive as a paste of their paths
+    // (macOS Terminal escapes the space); they are attached, not typed.
+    session.click('Message');
+    session.type(PASTE(`${files}/My\\ Notes.txt ${files}/Photos `));
+    const screen = await session.waitFor(
+      (text) => text.includes('My Notes.txt') && text.includes('5 B'),
+      { label: 'the dropped file in the compose window' },
+    );
+    expect(screen.split('\n').at(-1)).toContain(
+      'Attached My Notes.txt. Not attached: Photos is a folder',
+    );
+    expect(screen).not.toContain(`${files}/Photos`);
+  });
+
+  it('keeps the whole message under the size limit, and Quit on an 80-column hint bar', async () => {
+    // Two files of 20 MB, made sparse so nothing is written: each fits the
+    // 37.5 MB limit, both together do not.
+    const files = tempHome();
+    for (const name of ['first.bin', 'second.bin']) {
+      fs.closeSync(fs.openSync(path.join(files, name), 'w'));
+      fs.truncateSync(path.join(files, name), 20 * 1024 * 1024);
+    }
+    session = startTerminal({ home: tempHome(), args: ['--demo'], cols: 80, rows: 36 });
+    await session.waitFor('Forward Email Team');
+    session.type(KEYS.ctrlN);
+    await session.waitFor('Subject');
+    const bar = () => session.screen().split('\n').at(-1);
+    await session.waitFor(() => bar().includes('Save draft'), { label: 'the compose hints' });
+    expect(bar()).toContain('Ctrl+C Quit');
+    expect(bar()).not.toContain('Ctrl+O');
+
+    session.click('Message');
+    session.type(PASTE(`${files}/first.bin`));
+    await session.waitFor((text) => text.includes('first.bin') && text.includes('20.0 MB'), {
+      label: 'the first file',
+      timeout: 120_000,
+    });
+    session.type(PASTE(`${files}/second.bin`));
+    await session.waitFor(
+      () => bar().includes('Not attached: second.bin would make the message larger than 37.5 MB'),
+      { label: 'the second file refused' },
+    );
+    // Only the notice on the bottom row names it.
+    expect(session.screen().split('\n').slice(0, -1).join('\n')).not.toContain('second.bin');
+
+    // ✕ on the first file's card makes room for the second.
+    const lines = session.screen().split('\n');
+    const row = lines.findIndex((line) => line.includes('20.0 MB'));
+    session.clickAt(lines[row].indexOf('✕', lines[row].indexOf('20.0 MB')) + 1, row + 1);
+    await session.waitFor((text) => !text.includes('first.bin'), { label: 'the first file gone' });
+    session.click('Message');
+    session.type(PASTE(`${files}/second.bin`));
+    await session.waitFor((text) => text.includes('second.bin') && text.includes('20.0 MB'), {
+      label: 'the second file',
+      timeout: 120_000,
+    });
+  });
+
+  it('opens the system file dialog where there is a display', async () => {
+    // A zenity of our own on the PATH: it records how it was started and
+    // answers with a file, as the real dialog does when a file is chosen.
+    const bin = tempHome();
+    const files = tempHome();
+    fs.writeFileSync(path.join(files, 'photo one.jpg'), 'JPEG');
+    const record = path.join(bin, 'args.txt');
+    fs.writeFileSync(
+      path.join(bin, 'zenity'),
+      `#!/bin/sh\nprintf '%s\\n' "$@" > '${record}'\nprintf '%s\\n' '${files}/photo one.jpg'\n`,
+      { mode: 0o755 },
+    );
+    session = startTerminal({
+      home: tempHome(),
+      args: ['--demo'],
+      env: {
+        DISPLAY: ':99',
+        WAYLAND_DISPLAY: '',
+        XDG_CURRENT_DESKTOP: 'GNOME',
+        SSH_CONNECTION: '',
+        SSH_CLIENT: '',
+        SSH_TTY: '',
+        PATH: `${bin}:${process.env.PATH}`,
+      },
+    });
+    await session.waitFor('Welcome to Forward Email!');
+    session.type(KEYS.ctrlN);
+    await session.waitFor('Subject');
+    session.click('⌇');
+    await session.waitFor((text) => text.includes('photo one.jpg') && text.includes('4 B'), {
+      label: 'the chosen file in the compose window',
+    });
+    // One argument per line; the separator argument is a new line itself.
+    expect(fs.readFileSync(record, 'utf8')).toBe(
+      '--file-selection\n--title=Attach files\n--multiple\n--separator=\n\n',
+    );
+    expect(session.screen()).not.toContain('File to attach:');
+  });
+
+  it('sends the attachments to the server with the message', async () => {
+    // A stand-in for the API: enough to sign in, and a record of what is sent.
+    const folders = ['INBOX', 'Drafts', 'Sent', 'Trash'].map((name) => ({
+      id: `folder-${name}`,
+      path: name,
+      name,
+      delimiter: '/',
+      specialUse: `\\${name === 'INBOX' ? 'Inbox' : name}`,
+      messages: 0,
+      unseen: 0,
+    }));
+    const sent = [];
+    const server = http.createServer((req, res) => {
+      let body = '';
+      req.on('data', (chunk) => (body += chunk));
+      req.on('end', () => {
+        const { pathname } = new URL(req.url, 'http://localhost');
+        res.setHeader('Content-Type', 'application/json');
+        if (req.method === 'POST' && pathname === '/v1/emails') {
+          sent.push(JSON.parse(body));
+          return res.end(JSON.stringify({ id: 'email-1', status: 'queued' }));
+        }
+        if (pathname === '/v1/folders') return res.end(JSON.stringify(folders));
+        if (pathname === '/v1/account') return res.end(JSON.stringify({ email: 'me@example.com' }));
+        res.end(req.method === 'GET' ? '[]' : JSON.stringify({ id: 'saved-1' }));
+      });
+    });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    try {
+      const files = tempHome();
+      const pdf = Buffer.from('%PDF-1.4\n%\xe2\xe3\xcf\xd3\nreport', 'latin1');
+      fs.writeFileSync(path.join(files, 'report.pdf'), pdf);
+      session = startTerminal({
+        home: tempHome(),
+        args: ['--api', `http://127.0.0.1:${server.address().port}`],
+        env: { FORWARDEMAIL_FILE_PICKER: 'terminal' },
+      });
+      await session.waitFor('Sign In');
+      session.click('you@example.com');
+      session.type('me@example.com');
+      session.click('Password');
+      session.type('secret');
+      session.type(KEYS.enter);
+      await session.waitFor('Ctrl+N New', { label: 'the mailbox' });
+      // The mailbox may still be settling in: press again if no window came.
+      for (let tries = 0; ; tries++) {
+        session.type(KEYS.ctrlN);
+        try {
+          await session.waitFor('Subject', { timeout: 5000 });
+          break;
+        } catch (error) {
+          if (tries === 3) throw error;
+        }
+      }
+      session.type('bob@example.org,');
+      await session.waitFor('bob@example.org  ✕');
+      session.click('Subject');
+      session.type('Report');
+      session.type(KEYS.tab);
+      session.type('Attached.');
+      // Ctrl+O, then the path.
+      session.type('\u000f');
+      await session.waitFor('File to attach:');
+      session.type(path.join(files, 'report.pdf'));
+      session.type(KEYS.enter);
+      await session.waitFor((text) => text.includes('report.pdf') && text.includes('PDF'), {
+        label: 'the attachment',
+      });
+      session.click('Send');
+      for (let i = 0; i < 200 && sent.length === 0; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      expect(sent).toHaveLength(1);
+      expect(sent[0]).toMatchObject({
+        to: ['bob@example.org'],
+        subject: 'Report',
+        text: 'Attached.',
+        has_attachment: true,
+        attachments: [
+          {
+            filename: 'report.pdf',
+            contentType: 'application/pdf',
+            encoding: 'base64',
+            content: pdf.toString('base64'),
+          },
+        ],
+      });
+    } finally {
+      server.close();
+    }
   });
 
   it('asks before quitting on Ctrl+C, and hands the terminal back', async () => {

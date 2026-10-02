@@ -54,6 +54,27 @@ export interface PushNotificationStatus {
   otherRegistrations: PushRegistrationStatus[];
   unifiedPush: UnifiedPushProviderState | null;
   health: PushHealth;
+  /** How the browser build shows new mail; null in the native apps and demo mode. */
+  browserNotifications?: BrowserNotificationState | null;
+}
+
+/**
+ * push: Web Push delivers alerts. fallback: it does not, and the open app
+ * shows new mail with the Notifications API. needs-permission, blocked,
+ * unavailable: nothing can show a notification yet.
+ */
+export type BrowserNotificationMode =
+  | 'push'
+  | 'fallback'
+  | 'needs-permission'
+  | 'blocked'
+  | 'unavailable';
+
+export interface BrowserNotificationState {
+  mode: BrowserNotificationMode;
+  permission: 'granted' | 'denied' | 'default' | 'unsupported';
+  /** PushManagementCode of the last failed Web Push registration in this tab. */
+  pushFailure: string | null;
 }
 
 export type PushManagementCode =
@@ -99,6 +120,10 @@ export function getLastPushRegistrationFailure(): { code: string; detail: string
 export function canReceiveWebPush(): Promise<boolean>;
 export function openNotificationSettings(): Promise<boolean>;
 export function subscribePushStatus(listener: () => void): () => void;
+export function refreshPushStatus(): void;
+export function allowBrowserNotifications(): Promise<
+  'granted' | 'denied' | 'default' | 'unsupported'
+>;
 export function registerCurrentDevicePush(): Promise<PushManagementResult>;
 export function deregisterCurrentDevicePush(): Promise<PushManagementResult>;
 export function reregisterCurrentDevicePush(): Promise<PushManagementResult>;

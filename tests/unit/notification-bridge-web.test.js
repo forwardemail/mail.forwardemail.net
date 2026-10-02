@@ -128,6 +128,65 @@ describe('notification-bridge on the web', () => {
 
     expect(await requestPermission()).toBe('granted');
   });
+  it('uses the service worker registration on a page it does not control yet', async () => {
+    // Chrome on Android: new Notification() throws, and a first visit or a
+    // hard reload leaves the page without a controller.
+    const created = installNotification({ throws: true });
+    const showNotification = vi.fn(async () => {});
+    Object.defineProperty(navigator, 'serviceWorker', {
+      configurable: true,
+      value: {
+        controller: null,
+        ready: new Promise(() => {}),
+        getRegistration: vi.fn(async () => ({ showNotification })),
+      },
+    });
+
+    await expect(notify({ title: 'Alice', body: 'Hello', tag: 'new-message-2' })).resolves.toBe(
+      true,
+    );
+    expect(showNotification).toHaveBeenCalledWith(
+      'Alice',
+      expect.objectContaining({ body: 'Hello' }),
+    );
+    expect(created).toHaveLength(0);
+  });
+
+  it('uses new Notification() when no service worker is registered, without waiting', async () => {
+    const created = installNotification();
+    Object.defineProperty(navigator, 'serviceWorker', {
+      configurable: true,
+      value: {
+        controller: null,
+        // never settles without a registered worker
+        ready: new Promise(() => {}),
+        getRegistration: vi.fn(async () => undefined),
+      },
+    });
+
+    await expect(notify({ title: 'Alice', body: 'Hello' })).resolves.toBe(true);
+    expect(created).toHaveLength(1);
+  });
+
+  it('does not prompt a site the user blocked', async () => {
+    installNotification({ permission: 'denied' });
+
+    expect(await requestPermission()).toBe('denied');
+    expect(Notification.requestPermission).not.toHaveBeenCalled();
+  });
+
+  it('treats a page served without HTTPS as unable to notify, and never prompts there', async () => {
+    installNotification({ permission: 'default' });
+    Object.defineProperty(window, 'isSecureContext', { value: false, configurable: true });
+    try {
+      expect(await getPermissionState()).toBe('unsupported');
+      expect(await requestPermission()).toBe('denied');
+      expect(Notification.requestPermission).not.toHaveBeenCalled();
+    } finally {
+      delete window.isSecureContext;
+    }
+  });
+
   it('turns notifications off only where the app keeps the permission (the terminal client)', async () => {
     installNotification({ permission: 'granted' });
     // A browser keeps the choice in its own settings.

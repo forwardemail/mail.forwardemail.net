@@ -185,6 +185,12 @@ A second registration started while one is waiting shares its answer rather than
 
 The server encrypts new-mail alerts with RFC 8291 and signs them with VAPID, like UnifiedPush. Silent events are never sent to browsers (Safari revokes subscriptions that receive pushes without a notification). The service worker shows the alert unless a window of the app is focused in a Chromium or Firefox browser (WebKit, which includes every browser on iOS, always gets one) and opens the message in its account when clicked; the page tells the worker which account each alias ID belongs to. While Web Push is registered, a hidden tab does not also draw the WebSocket copy of the alert.
 
+### When Web Push cannot deliver
+
+The browser falls back to the Notifications API while the app is open when it has no Push API (iOS Safari outside the Home Screen, older Safari), the build has no VAPID key, the browser cannot reach its push service (Brave with Google push messaging off, a blocked network), or registration failed or was removed. The app then draws each WebSocket new-mail event as a system notification itself, under the same rules as below, through the service worker's `showNotification` when a registration exists (the only kind Chrome on Android allows, including on a page the worker does not control yet) and `new Notification()` otherwise. A click opens the message in its account through `notification-open.ts`. The test for "Web Push delivers" is the active account's registration being `web-push` and the browser holding a subscription it can reach (`canReceiveWebPush`), so a message never gets both alerts.
+
+**Settings → Push notifications** reads that state from `getPushNotificationStatus().browserNotifications`: `push`, `fallback` (the open app shows new mail), `needs-permission` (an **Allow notifications** button, for a browser without Web Push), `blocked` (how to allow the site again, with no prompt) or `unavailable` (no Notifications API on the page, or a page served without HTTPS). The strings are in `src/locales` under `browserNotifications`.
+
 ## Notifications from the WebSocket
 
 On every platform the app also hears about new mail over its WebSocket connection while it runs. On Windows and Linux that is the only source, and in a browser without Web Push. `src/utils/notification-manager.js` decides what to show:
@@ -193,7 +199,7 @@ On every platform the app also hears about new mail over its WebSocket connectio
 - **The app is open but not in use** (hidden, minimized, or a visible window or tab behind another app): a system notification, through the Tauri notification plugin in the desktop and mobile apps and the service worker (or `new Notification()`) in the browser.
 - **No system notification is possible** (permission not granted, no notification support, or the OS refused it): the message is remembered, and a toast summarising what arrived is shown as soon as the user comes back to the app.
 
-Browsers ignore or auto-deny a permission request that no click started, so the web app never asks on its own. It offers the permission once per device in a toast with a **Turn on** button, and **Settings → General → Notifications → New mail notifications** shows the current state with **Allow notifications** and **Send a test notification** buttons. The desktop and mobile apps ask directly, as before.
+Browsers ignore or auto-deny a permission request that no click started, so the web app never asks on its own: task reminders ask only in the desktop and mobile apps, and a site the user blocked gets no prompt at all. It offers the permission once per device in a toast with a **Turn on** button, and **Settings → General → Notifications → New mail notifications** shows the current state with **Allow notifications** and **Send a test notification** buttons. The desktop and mobile apps ask directly, as before.
 
 ## Opening a notification
 

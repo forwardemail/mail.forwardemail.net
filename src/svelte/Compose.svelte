@@ -393,6 +393,23 @@
     })),
   );
 
+  // The bytes of the files on this draft, as they will be sent. The
+  // terminal client (src/cli/attachments.ts) reads it from the compose
+  // window to keep a message under the server's size limit.
+  const attachmentBytes = $derived(
+    attachments.reduce((total: number, att: unknown) => {
+      const { content, size } = att as { content?: unknown; size?: number };
+      if (typeof content === 'string') {
+        const base64 = content.replace(/\s/g, '');
+        const padding = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0;
+        return total + Math.max(0, Math.floor((base64.length * 3) / 4) - padding);
+      }
+      const data = (content as { data?: unknown } | null)?.data;
+      if (Array.isArray(data)) return total + data.length;
+      return total + (Number(size) || 0);
+    }, 0),
+  );
+
   let focusedField = $state('to');
   let contactOptions = $state<unknown[]>([]);
   let editorView = $state<Editor | null>(null);
@@ -3308,6 +3325,7 @@
       role="dialog"
       aria-modal={!compact && !nativeWindow}
       data-testid="compose-modal"
+      data-attachment-bytes={attachmentBytes}
       ondragenter={onComposeDragEnter}
       ondragover={onComposeDragOver}
       ondragleave={onComposeDragLeave}

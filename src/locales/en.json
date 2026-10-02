@@ -172,5 +172,33 @@
     "important": "Important",
     "personal": "Personal",
     "work": "Work"
+  },
+  "browserNotifications": {
+    "pushNotReceiving": "This browser is not receiving push notifications.",
+    "fallbackActive": "Forward Email shows new mail as a browser notification while it is open.",
+    "pushServiceHint": "In Brave, turn on \"Use Google services for push messaging\" in Settings > Privacy and security. A VPN, firewall or content blocker can block push.",
+    "needsPermission": "Allow browser notifications to see new mail while Forward Email is open.",
+    "allow": "Allow notifications",
+    "blocked": "Your browser blocks notifications for this site. Allow them in the site settings (the icon next to the address bar) and reload the page. Private windows can block them.",
+    "unavailable": "This browser cannot show notifications on this page. New mail appears inside Forward Email.",
+    "allowed": "Notifications are on.",
+    "notAllowed": "Notifications are off. Allow them for this site in your browser settings."
+  },
+  "terminal": {
+    "attach": {
+      "attached": "Attached {names}",
+      "notFound": "Not found: {name}",
+      "folder": "Not attached: {name} is a folder",
+      "notFile": "Not attached: {name} is not a regular file",
+      "unreadable": "Could not read {name}",
+      "tooLarge": "Too large to attach: {name} ({size}). The limit is {limit}.",
+      "wouldExceed": "Not attached: {name} would make the message larger than {limit}",
+      "dialogTitle": "Attach files",
+      "promptLabel": "File to attach:",
+      "waiting": "Choose files in the file dialog",
+      "hintAttach": "Attach",
+      "hintComplete": "Complete",
+      "hintCancel": "Cancel"
+    }
   }
 }

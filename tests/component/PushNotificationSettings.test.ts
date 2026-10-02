@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import type {
   PushNotificationStatus,
@@ -6,6 +6,7 @@ import type {
 } from '../../src/utils/push-notifications.js';
 
 const push = vi.hoisted(() => ({
+  allowBrowser: vi.fn(),
   deregister: vi.fn(),
   getStatus: vi.fn(),
   listener: null as (() => void) | null,
@@ -20,6 +21,7 @@ const push = vi.hoisted(() => ({
 }));
 
 vi.mock('../../src/utils/push-notifications.js', () => ({
+  allowBrowserNotifications: (...args: unknown[]) => push.allowBrowser(...args),
   deregisterCurrentDevicePush: (...args: unknown[]) => push.deregister(...args),
   getPushNotificationStatus: (...args: unknown[]) => push.getStatus(...args),
   openNotificationSettings: (...args: unknown[]) => push.openSettings(...args),
@@ -32,6 +34,8 @@ vi.mock('../../src/utils/push-notifications.js', () => ({
 }));
 
 import PushNotificationSettings from '../../src/svelte/components/PushNotificationSettings.svelte';
+import { i18n } from '../../src/utils/i18n';
+import type { BrowserNotificationState } from '../../src/utils/push-notifications.js';
 
 const currentRegistration = (
   overrides: Partial<PushRegistrationStatus> = {},
@@ -78,6 +82,10 @@ const successfulResult = (
   ok: true as const,
   code,
   status,
+});
+
+beforeAll(async () => {
+  await i18n.setLocale('en');
 });
 
 beforeEach(() => {
@@ -583,5 +591,138 @@ describe('<PushNotificationSettings />', () => {
     });
     expect(await screen.findByText(/registration is disabled in demo mode/i)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /register this device/i })).toBeNull();
+  });
+
+  describe('in a browser', () => {
+    const browserStatus = (
+      browserNotifications: BrowserNotificationState,
+      overrides: Partial<PushNotificationStatus> = {},
+    ) =>
+      makeStatus({
+        platform: 'web',
+        provider: 'web-push',
+        providerLabel: 'Web Push (this browser)',
+        initialized: false,
+        localTokenPresent: false,
+        localTokenFingerprint: null,
+        currentRegistration: null,
+        health: 'not-registered',
+        browserNotifications,
+        ...overrides,
+      });
+
+    const noPushApi = {
+      supported: false,
+      provider: null,
+      providerLabel: 'Not selected',
+      permission: 'unsupported' as const,
+      health: 'unsupported' as const,
+    };
+
+    it('says the open app shows new mail when push is not reaching this browser', async () => {
+      push.getStatus.mockResolvedValue(
+        browserStatus({
+          mode: 'fallback',
+          permission: 'granted',
+          pushFailure: 'push-service-unavailable',
+        }),
+      );
+
+      render(PushNotificationSettings, { props: { openExternal: vi.fn() } });
+
+      const notice = await screen.findByTestId('browser-notifications-notice');
+      expect(notice).toHaveTextContent(
+        'This browser is not receiving push notifications. Forward Email shows new mail as a browser notification while it is open.',
+      );
+      expect(notice).toHaveTextContent('Use Google services for push messaging');
+      expect(screen.queryByRole('button', { name: 'Allow notifications' })).toBeNull();
+    });
+
+    it('shows no notice while Web Push delivers', async () => {
+      push.getStatus.mockResolvedValue(
+        browserStatus(
+          { mode: 'push', permission: 'granted', pushFailure: null },
+          { currentRegistration: currentRegistration({ platform: 'web-push' }), health: 'active' },
+        ),
+      );
+
+      render(PushNotificationSettings, { props: { openExternal: vi.fn() } });
+
+      expect(await screen.findByText('Active')).toBeInTheDocument();
+      expect(screen.queryByTestId('browser-notifications-notice')).toBeNull();
+    });
+
+    it('asks for permission from the Allow button in a browser without push', async () => {
+      const toasts = { show: vi.fn() };
+      push.getStatus
+        .mockResolvedValueOnce(
+          browserStatus(
+            { mode: 'needs-permission', permission: 'default', pushFailure: null },
+            noPushApi,
+          ),
+        )
+        .mockResolvedValue(
+          browserStatus({ mode: 'fallback', permission: 'granted', pushFailure: null }, noPushApi),
+        );
+      let answer: (value: string) => void = () => {};
+      push.allowBrowser.mockReturnValue(new Promise((resolve) => (answer = resolve)));
+
+      render(PushNotificationSettings, { props: { toasts, openExternal: vi.fn() } });
+
+      expect(
+        await screen.findByText(
+          'Allow browser notifications to see new mail while Forward Email is open.',
+        ),
+      ).toBeInTheDocument();
+      expect(push.allowBrowser).not.toHaveBeenCalled();
+      expect(screen.getByText('Not allowed')).toBeInTheDocument();
+
+      await fireEvent.click(screen.getByRole('button', { name: 'Allow notifications' }));
+      // asked during the click itself
+      expect(push.allowBrowser).toHaveBeenCalledTimes(1);
+      answer('granted');
+
+      await waitFor(() =>
+        expect(screen.getByTestId('browser-notifications-notice')).toHaveTextContent(
+          'Forward Email shows new mail as a browser notification while it is open.',
+        ),
+      );
+      expect(toasts.show).toHaveBeenCalledWith('Notifications are on.', 'success');
+      expect(screen.getByText('Allowed')).toBeInTheDocument();
+    });
+
+    it('explains how to unblock notifications without offering a prompt', async () => {
+      push.getStatus.mockResolvedValue(
+        browserStatus(
+          { mode: 'blocked', permission: 'denied', pushFailure: null },
+          { permission: 'not-granted', health: 'permission-not-granted' },
+        ),
+      );
+
+      render(PushNotificationSettings, { props: { openExternal: vi.fn() } });
+
+      expect(await screen.findByTestId('browser-notifications-notice')).toHaveTextContent(
+        'Your browser blocks notifications for this site. Allow them in the site settings',
+      );
+      expect(screen.queryByRole('button', { name: 'Allow notifications' })).toBeNull();
+      expect(screen.queryByText(/Registering asks this browser for permission/)).toBeNull();
+      expect(push.allowBrowser).not.toHaveBeenCalled();
+    });
+
+    it('says when this page cannot show notifications at all', async () => {
+      push.getStatus.mockResolvedValue(
+        browserStatus(
+          { mode: 'unavailable', permission: 'unsupported', pushFailure: null },
+          noPushApi,
+        ),
+      );
+
+      render(PushNotificationSettings, { props: { openExternal: vi.fn() } });
+
+      expect(await screen.findByTestId('browser-notifications-notice')).toHaveTextContent(
+        'This browser cannot show notifications on this page.',
+      );
+      expect(screen.getByText(/add Forward Email to the Home Screen/)).toBeInTheDocument();
+    });
   });
 });

@@ -108,9 +108,11 @@ export async function requestPermission() {
     return _requestTauriPermission();
   }
 
-  // Web
-  if (typeof Notification === 'undefined') return 'denied';
+  // Web. An insecure page cannot get the permission, and a site the user
+  // blocked gets no prompt: browsers only change that in their site settings.
+  if (typeof Notification === 'undefined' || isInsecureContext()) return 'denied';
   if (Notification.permission === 'granted') return 'granted';
+  if (Notification.permission === 'denied') return 'denied';
   try {
     // Safari before 15 only supports the callback form.
     const result = await new Promise((resolve, reject) => {
@@ -139,9 +141,15 @@ export async function getPermissionState() {
       return 'default';
     }
   }
-  if (typeof Notification === 'undefined') return 'unsupported';
+  if (typeof Notification === 'undefined' || isInsecureContext()) return 'unsupported';
   const state = Notification.permission;
   return state === 'granted' || state === 'denied' ? state : 'default';
+}
+
+// Browsers only grant notifications to secure pages (HTTPS or localhost).
+// Only an explicit false counts: environments without the flag are trusted.
+function isInsecureContext() {
+  return typeof window !== 'undefined' && window.isSecureContext === false;
 }
 
 /**
@@ -357,6 +365,33 @@ async function _notifyTauri({ title, body, channelId, data, number, tag }) {
 const WEB_NOTIFICATION_ICON = '/icons/icon-192.png';
 const SERVICE_WORKER_READY_TIMEOUT_MS = 3000;
 
+/**
+ * The service worker registration that can show a notification, or null when
+ * there is none (no service worker support, a private window that disables
+ * it, a development build). getRegistration() answers at once, unlike
+ * `ready`, which never settles without a worker.
+ */
+async function getNotificationRegistration() {
+  const serviceWorker = typeof navigator !== 'undefined' ? navigator.serviceWorker : null;
+  if (!serviceWorker) return null;
+
+  if (typeof serviceWorker.getRegistration === 'function') {
+    try {
+      const registration = await serviceWorker.getRegistration();
+      if (typeof registration?.showNotification === 'function') return registration;
+    } catch {
+      // Fall through to the controller check below.
+    }
+  }
+
+  if (!serviceWorker.controller) return null;
+  const registration = await Promise.race([
+    serviceWorker.ready,
+    new Promise((resolve) => setTimeout(() => resolve(null), SERVICE_WORKER_READY_TIMEOUT_MS)),
+  ]);
+  return typeof registration?.showNotification === 'function' ? registration : null;
+}
+
 async function _notifyWeb({ title, body, icon, tag, data }) {
   if (typeof Notification === 'undefined' || Notification.permission !== 'granted') {
     return false;
@@ -369,20 +404,18 @@ async function _notifyWeb({ title, body, icon, tag, data }) {
   const options = { body, icon: icon || WEB_NOTIFICATION_ICON, tag, data: payload };
 
   // Prefer SW-based notification for persistence (survives tab close). It is
-  // also the only kind Chrome on Android allows.
-  if (typeof navigator !== 'undefined' && navigator.serviceWorker?.controller) {
-    try {
-      const registration = await Promise.race([
-        navigator.serviceWorker.ready,
-        new Promise((resolve) => setTimeout(() => resolve(null), SERVICE_WORKER_READY_TIMEOUT_MS)),
-      ]);
-      if (registration?.showNotification) {
-        await registration.showNotification(title, options);
-        return true;
-      }
-    } catch (err) {
-      console.warn('[notification-bridge] Service worker notification failed:', err);
+  // also the only kind Chrome on Android allows: there new Notification()
+  // throws. A page the worker does not control yet (the first visit, or a
+  // hard reload) still has the registration, so look it up instead of
+  // requiring a controller.
+  try {
+    const registration = await getNotificationRegistration();
+    if (registration) {
+      await registration.showNotification(title, options);
+      return true;
     }
+  } catch (err) {
+    console.warn('[notification-bridge] Service worker notification failed:', err);
   }
 
   // Fallback to basic Notification API, which has no service worker to

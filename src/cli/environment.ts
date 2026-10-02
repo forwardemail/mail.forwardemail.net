@@ -1,6 +1,8 @@
 import path from 'node:path';
 import { TermDOM, type TerminalTransport } from '@b9g/termdom';
 import * as fakeIndexedDB from 'fake-indexeddb';
+import { installAttachments } from './attachments';
+import { FileReader } from './file-reader';
 import { createImageConstructor } from './images';
 import { createStorage } from './storage';
 import { installCentering } from './center';
@@ -202,6 +204,8 @@ export function installEnvironment(options: EnvironmentOptions) {
     Worker: ThreadWorker,
     // Pictures cannot be drawn, so preloads report a failed load (images.ts).
     Image: createImageConstructor(win),
+    // Reads picked files: attachments, imports (file-reader.ts).
+    FileReader,
     // Links leave the terminal for the system browser; there is no window
     // object to hand back.
     open: (url?: string | URL) => {
@@ -234,6 +238,8 @@ export function installEnvironment(options: EnvironmentOptions) {
       : () => Boolean((win.confirm as (message?: string) => boolean)('Quit Forward Email?')),
   });
   installPointer(win);
+  // Before installKeys: Esc closes an open file dialog first.
+  installAttachments(win);
   installKeys(win);
   installFocusNavigation(win);
   installCentering(win);

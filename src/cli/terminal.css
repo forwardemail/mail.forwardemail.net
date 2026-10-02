@@ -451,3 +451,46 @@ input.opacity-0 {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+/*
+ * The path prompt for attaching a file (attachments.ts), on the bottom row
+ * above the hints, with the Tab completions above it.
+ */
+#fe-terminal-attach {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 2147483000;
+  display: flex;
+  flex-direction: column;
+  background-color: var(--background, #0f172a);
+  color: var(--foreground, #e2e8f0);
+}
+.fe-has-hints #fe-terminal-attach {
+  bottom: 1px;
+}
+.fe-attach-matches {
+  padding: 0 1ch;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--muted-foreground, #94a3b8);
+}
+.fe-attach-matches[hidden] {
+  display: none;
+}
+.fe-attach-row {
+  display: flex;
+  gap: 1ch;
+  padding: 0 1ch;
+}
+.fe-attach-label {
+  flex: none;
+  font-weight: bold;
+}
+#fe-terminal-attach .fe-attach-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--foreground, #e2e8f0);
+}

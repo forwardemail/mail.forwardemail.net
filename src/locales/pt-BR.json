@@ -172,5 +172,33 @@
     "important": "Importante",
     "personal": "Pessoal",
     "work": "Trabalho"
+  },
+  "browserNotifications": {
+    "pushNotReceiving": "Este navegador não está recebendo notificações push.",
+    "fallbackActive": "O Forward Email mostra novos e-mails como notificação do navegador enquanto estiver aberto.",
+    "pushServiceHint": "No Brave, ative \"Usar os serviços do Google para mensagens push\" em Configurações > Privacidade e segurança. Uma VPN, um firewall ou um bloqueador de conteúdo pode bloquear o push.",
+    "needsPermission": "Permita as notificações do navegador para ver novos e-mails enquanto o Forward Email estiver aberto.",
+    "allow": "Permitir notificações",
+    "blocked": "Seu navegador bloqueia as notificações deste site. Permita-as nas configurações do site (o ícone ao lado da barra de endereços) e recarregue a página. Janelas privadas podem bloqueá-las.",
+    "unavailable": "Este navegador não pode mostrar notificações nesta página. Novos e-mails aparecem dentro do Forward Email.",
+    "allowed": "As notificações estão ativadas.",
+    "notAllowed": "As notificações estão desativadas. Permita-as para este site nas configurações do navegador."
+  },
+  "terminal": {
+    "attach": {
+      "attached": "Anexado: {names}",
+      "notFound": "Não encontrado: {name}",
+      "folder": "Não anexado: {name} é uma pasta",
+      "notFile": "Não anexado: {name} não é um arquivo comum",
+      "unreadable": "Não foi possível ler {name}",
+      "tooLarge": "Grande demais para anexar: {name} ({size}). O limite é {limit}.",
+      "wouldExceed": "Não anexado: {name} deixaria a mensagem maior que {limit}",
+      "dialogTitle": "Anexar arquivos",
+      "promptLabel": "Arquivo para anexar:",
+      "waiting": "Escolha os arquivos na janela de seleção",
+      "hintAttach": "Anexar",
+      "hintComplete": "Completar",
+      "hintCancel": "Cancelar"
+    }
   }
 }

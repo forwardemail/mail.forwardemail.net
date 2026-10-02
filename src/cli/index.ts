@@ -41,6 +41,8 @@ Environment
   FORWARDEMAIL_NOTIFICATIONS   0 is the same as --no-notifications; 1 shows them
                                over SSH too (off there by default)
   FORWARDEMAIL_DOWNLOADS       Where saved files go (default: ~/Downloads)
+  FORWARDEMAIL_FILE_PICKER     terminal asks for a file's path on the bottom row
+                               instead of opening a file dialog
   FORWARDEMAIL_DEBUG           Write a debug log to forwardemail.log in FORWARDEMAIL_HOME
 
 Notifications
@@ -53,7 +55,8 @@ Keys
   f forwards, e archives, s stars, Del deletes, Ctrl+N writes a new message,
   Esc closes a menu or goes back, ? lists every shortcut. Change shortcuts in
   Settings > Keyboard Shortcuts. Tab moves between controls; the mouse clicks
-  and scrolls. Ctrl+C quits.
+  and scrolls. Ctrl+O attaches a file to the message you are writing, and so
+  does dropping the file on the terminal window. Ctrl+C quits.
 
 Docs: https://github.com/forwardemail/mail.forwardemail.net/blob/main/docs/CLI.md`;
 

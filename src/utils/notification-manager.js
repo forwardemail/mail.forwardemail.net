@@ -379,10 +379,15 @@ export async function requestNotificationPermission() {
   const result = await requestPermission();
   permissionGranted = result === 'granted';
   // In a browser, allowing notifications is also what Web Push waits for;
-  // subscribe now rather than on the next start.
-  if (permissionGranted && !isTauri) {
+  // subscribe now rather than on the next start. If push cannot register,
+  // this permission still lets the open app show new mail. Either way the
+  // push card in Settings reads its status again.
+  if (!isTauri) {
     import('./push-notifications.js')
-      .then(({ syncPushNotifications }) => syncPushNotifications())
+      .then(async ({ syncPushNotifications, refreshPushStatus }) => {
+        if (permissionGranted) await syncPushNotifications().catch(() => {});
+        refreshPushStatus();
+      })
       .catch(() => {});
   }
   return permissionGranted;

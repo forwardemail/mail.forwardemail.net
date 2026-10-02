@@ -40,7 +40,10 @@ import {
   unregisterPushToken,
   unregisterPushTokenForAccount,
 } from './background-service.js';
-import { requestPermission as requestNotificationPermission } from './notification-bridge.js';
+import {
+  getPermissionState as getBrowserPermissionState,
+  requestPermission as requestNotificationPermission,
+} from './notification-bridge.js';
 import { openNotificationTarget, pushDataToTarget } from './notification-open.ts';
 import {
   drainUnifiedPushMessages,
@@ -373,6 +376,15 @@ export function subscribePushStatus(listener) {
   if (typeof listener !== 'function') return () => {};
   pushStatusListeners.add(listener);
   return () => pushStatusListeners.delete(listener);
+}
+
+/**
+ * Tell Settings to read the status again after a change made outside this
+ * module: the browser notification permission, granted from the New mail
+ * notifications row or the Turn on toast.
+ */
+export function refreshPushStatus() {
+  notifyPushStatusChanged();
 }
 
 function normalizePushTokenForComparison(provider, token) {
@@ -1297,8 +1309,11 @@ async function initializePushNotifications() {
       return true;
     } catch (error) {
       console.warn('[push] Web Push initialization failed:', error);
+      // From here on the open app shows new mail itself (notification-manager
+      // draws the WebSocket copy when Web Push cannot deliver); Settings says so.
       if (error instanceof PushTimeoutError) {
         recordRegistrationFailure('registration-timeout', describeError(error));
+        notifyPushStatusChanged();
         throw error;
       }
       if (error instanceof PushRegistrationError) {
@@ -1306,6 +1321,7 @@ async function initializePushNotifications() {
       } else {
         recordRegistrationFailure('registration-failed', describeError(error));
       }
+      notifyPushStatusChanged();
       return false;
     }
   }
@@ -1563,7 +1579,53 @@ function createBasePushStatus() {
     registeredAccounts: [],
     unifiedPush: null,
     health: 'unsupported',
+    browserNotifications: null,
   };
+}
+
+/**
+ * Whether Web Push delivers new-mail alerts for the active account in this
+ * browser. The same test notification-manager.js makes before it leaves a
+ * WebSocket alert to the service worker.
+ */
+async function isWebPushDelivering() {
+  if (!isWebPushPlatform() || getActivePushProvider() !== 'web-push') return false;
+  return canReceiveWebPush();
+}
+
+/**
+ * How the browser build tells the user about new mail. Web Push reaches the
+ * service worker even with the app closed. When it cannot (no Push API, the
+ * push service is unreachable, the registration failed or was removed), the
+ * open app shows each new message with the Notifications API itself
+ * (notification-manager.js), which needs the same permission.
+ *
+ *   push              Web Push delivers the alerts.
+ *   fallback          push does not; the open app shows them.
+ *   needs-permission  nothing can show them until the user allows it.
+ *   blocked           the user blocked notifications for this site.
+ *   unavailable       no Notifications API here (iOS Safari outside the Home
+ *                     Screen, a page served without HTTPS).
+ *
+ * null in the desktop and mobile apps, which have native notifications, and
+ * in demo mode, which shows none.
+ */
+async function getBrowserNotificationState() {
+  if (isTauri || isDemoMode()) return null;
+
+  let permission = 'unsupported';
+  try {
+    permission = await getBrowserPermissionState();
+  } catch {
+    // Treated as unavailable.
+  }
+
+  let mode = 'needs-permission';
+  if (permission === 'unsupported') mode = 'unavailable';
+  else if (permission === 'denied') mode = 'blocked';
+  else if (permission === 'granted') mode = (await isWebPushDelivering()) ? 'push' : 'fallback';
+
+  return { mode, permission, pushFailure: lastRegistrationFailure?.code || null };
 }
 
 /**
@@ -1572,6 +1634,7 @@ function createBasePushStatus() {
  */
 export async function getPushNotificationStatus() {
   const status = createBasePushStatus();
+  status.browserNotifications = await getBrowserNotificationState();
   if (!status.supported) return status;
 
   // A macOS build that is not signed for APNs has nothing to manage. Keep the
@@ -1722,6 +1785,32 @@ async function removeCurrentPushRegistration(initialStatus) {
   notifyPushStatusChanged();
 
   return removed;
+}
+
+/**
+ * Ask this browser for notification permission. Call it from a click:
+ * browsers ignore a prompt that no user action started. A site the user
+ * blocked gets no prompt (only the browser's site settings can change that).
+ * Once allowed, try Web Push; if it cannot register, the open app shows new
+ * mail with the Notifications API.
+ *
+ * @returns {Promise<'granted' | 'denied' | 'default' | 'unsupported'>}
+ */
+export function allowBrowserNotifications() {
+  if (isTauri || isDemoMode()) return Promise.resolve('unsupported');
+  // Asked before anything is awaited, while the click still counts.
+  const request = requestNotificationPermission();
+  return request.then(async (permission) => {
+    if (permission === 'granted') {
+      try {
+        await syncPushNotifications();
+      } catch (error) {
+        console.warn('[push] Web Push registration after allowing notifications failed:', error);
+      }
+    }
+    notifyPushStatusChanged();
+    return permission;
+  });
 }
 
 export function registerCurrentDevicePush() {

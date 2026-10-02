@@ -9,11 +9,16 @@
  * Clicking a hint presses its key. The ? list ends with a way to the
  * settings page where shortcuts are changed.
  */
+import { PICKING_ATTRIBUTE, attachKeyTaken } from './attachments';
+import { tr } from './i18n';
 import type { AnyRecord } from './types';
 
 interface Hint {
   keys: string;
   label: string;
+  // Left out when the row is too narrow for every hint, highest first,
+  // before the hints at the end are cut.
+  drop?: number;
   // Pressed when the hint is clicked: terminal input, or an action.
   press?: string | null;
   run?: () => void;
@@ -183,6 +188,21 @@ export function installHints(win: AnyRecord, options: { columns: () => number })
       (el: AnyRecord) => isShown(el) && !el.closest('[data-testid="compose-modal"]'),
     );
 
+    // Attaching a file (attachments.ts): the typed path prompt, or a system
+    // file dialog that is open.
+    if (document.getElementById('fe-terminal-attach')) {
+      return [
+        key('Tab', tr('terminal.attach.hintComplete')),
+        key('Enter', tr('terminal.attach.hintAttach')),
+        key('Esc', tr('terminal.attach.hintCancel')),
+      ];
+    }
+    if (document.documentElement.hasAttribute(PICKING_ATTRIBUTE)) {
+      return [
+        { keys: '', label: tr('terminal.attach.waiting') },
+        key('Esc', tr('terminal.attach.hintCancel')),
+      ];
+    }
     if (manager()?.captureInProgress) {
       return [{ keys: '', label: 'Press the new key for this shortcut' }, key('Esc', 'Cancel')];
     }
@@ -211,8 +231,11 @@ export function installHints(win: AnyRecord, options: { columns: () => number })
     if (isShown(document.querySelector('[data-testid="compose-modal"]'))) {
       return [
         key('Tab', 'Next field'),
-        key('Shift+Tab', 'Previous', 'shift + tab'),
+        // On a narrow row these go first, so Quit stays: Ctrl+O at 80
+        // columns, Shift+Tab too at 70. --help and docs/CLI.md list both.
+        { ...key('Shift+Tab', 'Previous', 'shift + tab'), drop: 1 },
         action('save-draft'),
+        attachKeyTaken() ? null : { ...key('Ctrl+O', tr('terminal.attach.hintAttach')), drop: 2 },
         quit,
       ].filter(Boolean) as Hint[];
     }
@@ -253,23 +276,31 @@ export function installHints(win: AnyRecord, options: { columns: () => number })
   let html = '';
 
   // A short notice in place of the hints ("Copied"), from other modules: its
-  // text, or { text, failed } for one that reports a failure.
+  // text, or { text, failed } for one that reports a failure, which is
+  // marked ✗ instead of ✓ and stays longer.
   let notice: Hint | null = null;
   let noticeTimer: ReturnType<typeof setTimeout> | null = null;
   win.addEventListener('fe-terminal-notice', (event: AnyRecord) => {
     const detail = event.detail;
+    const failed = Boolean(detail && typeof detail === 'object' && detail.failed);
     notice =
       detail && typeof detail === 'object'
-        ? { keys: detail.failed ? '✗' : '✓', label: String(detail.text ?? '') }
+        ? { keys: failed ? '✗' : '✓', label: String(detail.text ?? '') }
         : { keys: '✓', label: String(detail ?? '') };
     if (noticeTimer) clearTimeout(noticeTimer);
-    noticeTimer = setTimeout(() => {
-      notice = null;
-      render();
-    }, 2000);
+    noticeTimer = setTimeout(
+      () => {
+        notice = null;
+        render();
+      },
+      failed ? 5000 : 2000,
+    );
     noticeTimer.unref?.();
     render();
   });
+
+  // Other modules changed what the bar should show (attachments.ts).
+  win.addEventListener('fe-terminal-hints', () => render());
 
   // The selection state that flips the Ctrl+C hint to "Copy" (clipboard.ts).
   win.addEventListener('fe-terminal-selection', (event: AnyRecord) => {
@@ -320,10 +351,20 @@ export function installHints(win: AnyRecord, options: { columns: () => number })
         ? [{ keys: '', label: tooltip }]
         : hintsForScreen();
     // As many as fit, keeping the shortcut list's hint when anything is cut.
+    // Hints marked to drop go first, highest first, until the rest fit.
+    const sizeOf = (hint: Hint) => (hint.keys ? hint.keys.length + 1 : 0) + hint.label.length + 3;
+    let candidates = hints;
+    const droppable = hints
+      .filter((hint) => hint.drop)
+      .sort((a, b) => (b.drop ?? 0) - (a.drop ?? 0));
+    for (const hint of droppable) {
+      if (candidates.reduce((sum, each) => sum + sizeOf(each), 1) <= width) break;
+      candidates = candidates.filter((each) => each !== hint);
+    }
     const fitted: Hint[] = [];
     let used = 1;
-    for (const hint of hints) {
-      const size = (hint.keys ? hint.keys.length + 1 : 0) + hint.label.length + 3;
+    for (const hint of candidates) {
+      const size = sizeOf(hint);
       if (used + size > width) break;
       fitted.push(hint);
       used += size;

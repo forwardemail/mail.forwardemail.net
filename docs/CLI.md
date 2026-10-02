@@ -17,6 +17,7 @@ forwardemail
   - [Commands and options](#commands-and-options)
   - [Keys and mouse](#keys-and-mouse)
   - [Plain text](#plain-text)
+  - [Attachments](#attachments)
   - [Notifications](#notifications)
   - [Environment variables](#environment-variables)
   - [Where data is stored](#where-data-is-stored)
@@ -147,6 +148,7 @@ What you type right after a new-message, reply or forward shortcut (Ctrl+N, `r`,
 | `↑` / `↓`           | Open the next or previous message, counting from the focused row in the list.    |
 | `Esc`               | Close a dialog or menu; otherwise go back (from a message, a contact, settings). |
 | `Ctrl+N`            | Compose a new message.                                                           |
+| `Ctrl+O`            | Attach a file to the message you are writing (see [Attachments](#attachments)).  |
 | `r` / `a` / `f`     | Reply, reply all, forward.                                                       |
 | `e` / `s` / `Del`   | Archive, star, delete.                                                           |
 | `?`                 | Show every keyboard shortcut.                                                    |
@@ -170,6 +172,30 @@ Links in messages, and links to other sites, open in your default browser. Files
 
 Messages are shown, and new messages written, as plain text by default in the terminal. A reply quotes the original with `>` in front of each line. The **T** button next to **Save draft** in the compose window switches that message to rich text, with the formatting toolbar, and back. To change the default, use **Settings › Appearance › Use plain text by default** and **Settings › Privacy & Security › View emails as plain text**. The browser, desktop and mobile apps keep rich text as their default.
 
+### Attachments
+
+To attach files, choose **⌇** (Attach file) in the compose window or press `Ctrl+O`. The bottom row lists `Ctrl+O` where there is room; at 80 columns it leaves it out to keep `Ctrl+C Quit`. A file dialog opens:
+
+| System        | Dialog                                                                                                                                         |
+| :------------ | :--------------------------------------------------------------------------------------------------------------------------------------------- |
+| macOS         | The system's Open dialog, through `osascript`.                                                                                                 |
+| Linux and BSD | `zenity` or `kdialog`, when there is a display. KDE desktops try `kdialog` first. Install either one (packages `zenity`, `kdialog`) to use it. |
+| Windows       | The system's Open dialog, through PowerShell.                                                                                                  |
+| WSL           | The Windows Open dialog, through PowerShell; the files come back as `/mnt/c/…` paths. With WSLg, `zenity` or `kdialog` is the fallback.        |
+
+Over SSH, and on Linux without a display, the bottom row asks for the file's path instead:
+
+```text
+ File to attach: ~/Documents/rep
+ Tab Complete   Enter Attach   Esc Cancel
+```
+
+Tab completes a name as a shell does and lists the names when several match. A relative path starts in the directory you ran `forwardemail` from. Enter attaches the file. Esc, or a click elsewhere, cancels. Over SSH with X forwarding (`ssh -X`), Linux uses the dialog on your display. `FORWARDEMAIL_FILE_PICKER=terminal` always asks on the bottom row. While a dialog is open, Esc in the terminal closes it.
+
+You can also drag files from your file manager and drop them on the terminal window while the compose window is open. A terminal turns a drop into the files' paths, pasted as text. The client reads those paths and attaches the files in place of the text. It understands the ways terminals write them: backslash escapes (macOS Terminal, iTerm2, Ghostty), quotes (GNOME Terminal, WezTerm, Windows Terminal), `file://` links with `%20` for spaces, a path per line, and Windows paths under WSL. A paste in the To, Cc, Bcc or Subject field stays text, and so does a pasted path to a file that does not exist. To put the path of an existing file into the message, type it. The terminal has to mark the drop as a paste (bracketed paste), as current terminals do; a terminal that types the path out instead puts it into the message as text.
+
+The client skips folders, and files that would take the message's attachments past 37.5 MB, counting the ones already on it: the server takes messages up to 50 MB, and encoding makes attachments a third larger. Removing an attachment makes room again. The bottom row says what the client attached and what it skipped. Each attachment shows below the message with its size, and its **✕** removes it.
+
 ### Notifications
 
 New mail that arrives while the terminal is in the background shows as a desktop notification, as it does in a browser tab you are not looking at. While you are using the terminal, it shows inside the app instead. Calendar reminders work the same way.
@@ -188,16 +214,17 @@ Notifications are off over SSH, since they would appear on the remote computer, 
 
 ### Environment variables
 
-| Variable                       | Effect                                                                               |
-| :----------------------------- | :----------------------------------------------------------------------------------- |
-| `FORWARDEMAIL_HOME`            | Same as `--data-dir`: the directory for settings and the session (see below).        |
-| `FORWARDEMAIL_API_URL`         | Same as `--api`.                                                                     |
-| `FORWARDEMAIL_NO_UPDATE_CHECK` | Same as `--no-update-check`.                                                         |
-| `FORWARDEMAIL_NO_HINTS`        | Same as `--no-hints`.                                                                |
-| `FORWARDEMAIL_NOTIFICATIONS`   | `0` is the same as `--no-notifications`. `1` shows them over SSH too.                |
-| `FORWARDEMAIL_POINTER`         | `1` asks any terminal to change the pointer shape, `0` none (see above).             |
-| `FORWARDEMAIL_DOWNLOADS`       | Where saved files go, instead of `~/Downloads` (or your home directory without one). |
-| `FORWARDEMAIL_DEBUG`           | Writes the app's console output to `forwardemail.log` in the data directory.         |
+| Variable                       | Effect                                                                                |
+| :----------------------------- | :------------------------------------------------------------------------------------ |
+| `FORWARDEMAIL_HOME`            | Same as `--data-dir`: the directory for settings and the session (see below).         |
+| `FORWARDEMAIL_API_URL`         | Same as `--api`.                                                                      |
+| `FORWARDEMAIL_NO_UPDATE_CHECK` | Same as `--no-update-check`.                                                          |
+| `FORWARDEMAIL_NO_HINTS`        | Same as `--no-hints`.                                                                 |
+| `FORWARDEMAIL_NOTIFICATIONS`   | `0` is the same as `--no-notifications`. `1` shows them over SSH too.                 |
+| `FORWARDEMAIL_POINTER`         | `1` asks any terminal to change the pointer shape, `0` none (see above).              |
+| `FORWARDEMAIL_DOWNLOADS`       | Where saved files go, instead of `~/Downloads` (or your home directory without one).  |
+| `FORWARDEMAIL_FILE_PICKER`     | `terminal` asks for a file's path on the bottom row instead of opening a file dialog. |
+| `FORWARDEMAIL_DEBUG`           | Writes the app's console output to `forwardemail.log` in the data directory.          |
 
 ### Where data is stored
 
@@ -292,6 +319,7 @@ The terminal client runs the webmail's own code, so features behave the same way
 - **Fonts and font sizes** are the terminal's. Headings stand out by weight and color, not size.
 - **Passkeys** (WebAuthn) need a browser or the desktop app. To use App Lock in the terminal, unlock it with its PIN.
 - **Push notifications and the service worker** are unavailable. New mail arrives over the WebSocket connection while the app is open, and shows as a [desktop notification](#notifications) when the terminal is in the background.
+- **Drag and drop** reaches the terminal as pasted file paths, which the compose window turns into attachments (see [Attachments](#attachments)).
 - **Hover tooltips** appear in the bottom row rather than over the page, where they would cover the controls around them.
 - **Transparency and animation** are flattened: translucent colors are blended with the page background, and transitions jump to their end.
 - **Esc followed by a key** in quick succession counts as two presses, not as Alt plus the key (some terminals send Alt that way). The exceptions are Alt+Backspace and Alt+B/F/D, which keep their word-editing meaning in text fields. The webmail has no other Alt shortcuts.
@@ -328,9 +356,10 @@ The webmail is built a second time for Node.js, and the result is a single Commo
    - `history` and `location` ([`src/cli/history.ts`](../src/cli/history.ts))
    - sandboxed message frames ([`src/cli/frames.ts`](../src/cli/frames.ts))
    - downloads and outside links ([`src/cli/links.ts`](../src/cli/links.ts))
+   - file inputs, file dialogs and dropped files ([`src/cli/attachments.ts`](../src/cli/attachments.ts)), and `FileReader` ([`src/cli/file-reader.ts`](../src/cli/file-reader.ts))
    - geometry scaled to the virtual pixel grid ([`src/cli/viewport.ts`](../src/cli/viewport.ts))
 
-The application code under `src/` is untouched. Everything specific to the terminal lives in `src/cli/`, and the browser and desktop builds do not include it.
+The application code under `src/` runs as it is; the one addition for the terminal is the compose window's `data-attachment-bytes` attribute, which the attachment size limit reads. Everything specific to the terminal lives in `src/cli/`, and the browser and desktop builds do not include it.
 
 The standalone executables are [Node.js single executable applications](https://nodejs.org/api/single-executable-applications.html): the bundle is injected into a copy of the `node` binary by [`scripts/build-sea.mjs`](../scripts/build-sea.mjs).
 
