@@ -40,7 +40,14 @@ export function bufferToDataUrl(attachment) {
   const base64 = attachmentToBase64(attachment);
   if (!base64) return '';
   const { contentType, mimeType, type } = attachment || {};
-  const mime = contentType || mimeType || type || 'application/octet-stream';
+  // (the type comes from the message, which may carry a malformed one such
+  // as "image/png name=a.png"; only a plain type/subtype is kept, and an
+  // image is still shown as browsers sniff image bytes)
+  const declared = String(contentType || mimeType || type || '')
+    .split(/[;,\s]/)[0]
+    .trim()
+    .toLowerCase();
+  const mime = /^[\w.+-]+\/[\w.+-]+$/.test(declared) ? declared : 'application/octet-stream';
   return `data:${mime};base64,${base64}`;
 }
 
@@ -54,6 +61,17 @@ const normalizeCid = (value = '') => {
   return cid.trim();
 };
 
+// An attachment URL is written into the message HTML as attribute text, and
+// this can run after the HTML was sanitized. The MIME type in a data URL comes
+// from the message's own Content-Type header, so only a data URL made of MIME
+// token characters and base64 (or a blob or http(s) URL without such
+// characters) is used: it then holds no quote, whitespace, "<", ">", "(" or
+// ")" that could end the attribute or url() it is written in.
+const SAFE_INLINE_URL =
+  /^(?:data:[\w.+-]+\/[\w.+-]+(?:;[\w.+-]+=[\w.+-]+)*;base64,[A-Za-z0-9+/]+={0,2}|(?:blob:|https?:\/\/)[^\s"'`<>()\\]+)$/i;
+
+const safeInlineUrl = (url) => (typeof url === 'string' && SAFE_INLINE_URL.test(url) ? url : '');
+
 export function applyInlineAttachments(html, attachments) {
   if (!html || !attachments || attachments.length === 0) return html;
   let updated = html;
@@ -65,7 +83,7 @@ export function applyInlineAttachments(html, attachments) {
     byCid.set(cid, href);
   };
   attachments.forEach((att) => {
-    const href = att?.href;
+    const href = safeInlineUrl(att?.href);
     const rawCid = att?.contentId;
     const normalizedCid = normalizeCid(rawCid);
     addCid(rawCid, href);
@@ -73,8 +91,8 @@ export function applyInlineAttachments(html, attachments) {
     if (normalizedCid && normalizedCid.includes('@')) {
       addCid(normalizedCid.split('@')[0], href);
     }
-    if (att.name) byName.set(att.name, att.href);
-    if (att.filename) byName.set(att.filename, att.href);
+    if (href && att.name) byName.set(att.name, href);
+    if (href && att.filename) byName.set(att.filename, href);
   });
 
   const resolveCid = (cid) => {
@@ -84,27 +102,34 @@ export function applyInlineAttachments(html, attachments) {
   };
 
   updated = updated.replace(
-    /\b(src|background|href|poster|xlink:href)\s*=\s*(["']?)\s*cid:([^"'\s>]+)\s*\2/gi,
-    (match, attr, _quote, cid) => {
+    /\b(src|background|href|poster|xlink:href)\s*=\s*(["']?)\s*cid:([^"'\s>]+)(\s*)\2/gi,
+    (match, attr, quote, cid, space) => {
       const url = resolveCid(cid);
-      return url ? `${attr}="${url}"` : match;
+      if (!url) return match;
+      // (keeps the original quoting, so a match inside another attribute's
+      // value, e.g. title="src=cid:x", cannot end that value; an unquoted
+      // value keeps the whitespace that separates it from the next attribute)
+      return quote ? `${attr}=${quote}${url}${quote}` : `${attr}=${url}${space}`;
     },
   );
 
   updated = updated.replace(/url\(\s*cid:([^\s)]+)\s*\)/gi, (match, cid) => {
     const url = resolveCid(cid);
-    return url ? `url("${url}")` : match;
+    // (unquoted, as this is often inside a style="..." attribute)
+    return url ? `url(${url})` : match;
   });
 
   updated = updated.replace(/<img([^>]*?)>/gi, (match, attrs) => {
     const hasSrc = /src\s*=/.test(attrs);
     if (hasSrc) return match;
-    const altMatch = attrs.match(/alt=["']([^"']+)["']/i);
+    const altMatch = attrs.match(/(?:^|\s)alt=["']([^"']+)["']/i);
     if (!altMatch) return match;
     const alt = altMatch[1];
     const url = byName.get(alt);
     if (!url) return match;
-    return `<img${attrs} src="${url}">`;
+    // (unquoted: `>` is not escaped in attribute values, so this tag may end
+    // inside one, where an added quote would end that value)
+    return `<img${attrs} src=${url}>`;
   });
 
   return updated;

@@ -32,10 +32,7 @@
 
     {
       "identifier": "opener:allow-open-url",
-      "allow": [
-        { "url": "https://*", "app": true },
-        { "url": "http://*", "app": true }
-      ]
+      "allow": [{ "url": "https://*" }, { "url": "http://*" }]
     },
 
     "log:allow-log",
@@ -46,7 +43,11 @@
     "fs:allow-read-file",
     {
       "identifier": "fs:allow-write-file",
-      "allow": [{ "path": "$TEMP/forwardemail-original-*" }]
+      "allow": [
+        { "path": "$TEMP/forwardemail-original-*.html" },
+        { "path": "$TEMP/forwardemail-original-*.txt" },
+        { "path": "$TEMP/forwardemail-original-*.eml" }
+      ]
     },
     "fs:allow-remove",
     {

@@ -1,0 +1,16 @@
+{
+  "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/tauri-v2.0.0/crates/tauri-cli/capabilities-schema.json",
+  "identifier": "windows-browser-override",
+  "description": "Windows only: lets a link open in the browser chosen in Settings (External Browser Override). Opening a URL with a chosen program is not granted on other platforms, where that program is run directly with the URL as its argument.",
+  "windows": ["main", "compose-*"],
+  "permissions": [
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        { "url": "https://*", "app": true },
+        { "url": "http://*", "app": true }
+      ]
+    }
+  ],
+  "platforms": ["windows"]
+}

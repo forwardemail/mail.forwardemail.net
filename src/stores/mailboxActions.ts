@@ -2575,11 +2575,21 @@ async function openInNewTabTauri(content, mime) {
   // Use `join` rather than string concatenation — on Windows, `tempDir()`
   // does not always return a trailing separator, which previously yielded
   // a malformed path like `C:\Users\...\Tempforwardemail-original-…`.
-  const filePath = await join(tmp, `forwardemail-original-${Date.now()}.${ext}`);
+  // The file holds the raw (and any decrypted) message and the temp directory
+  // may be shared with other users (e.g. /tmp on Linux), so the name is not
+  // guessable and only the owner can read it.
+  // (crypto.randomUUID is missing from older WebKit versions)
+  const id =
+    typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) =>
+          byte.toString(16).padStart(2, '0'),
+        ).join('');
+  const filePath = await join(tmp, `forwardemail-original-${id}.${ext}`);
 
   const data =
     typeof content === 'string' ? new TextEncoder().encode(content) : new Uint8Array(content);
-  await writeFile(filePath, data);
+  await writeFile(filePath, data, { createNew: true, mode: 0o600 });
   await openPath(filePath);
 }
 

@@ -22,20 +22,31 @@ describe('external link override configuration', () => {
     expect(serializeLocalValue(def, '  firefox  ')).toBe('firefox');
   });
 
-  it('allows app-specific openUrl calls for http and https URLs in Tauri capabilities', () => {
-    const capability = JSON.parse(
-      fs.readFileSync(path.join(repoRoot, 'src-tauri/capabilities/default.json'), 'utf8'),
-    );
-    const openerPermission = capability.permissions.find(
-      (entry) => entry && typeof entry === 'object' && entry.identifier === 'opener:allow-open-url',
+  const readCapability = (name) =>
+    JSON.parse(fs.readFileSync(path.join(repoRoot, `src-tauri/capabilities/${name}.json`), 'utf8'));
+  const findPermission = (capability, identifier) =>
+    capability.permissions.find(
+      (entry) => entry && typeof entry === 'object' && entry.identifier === identifier,
     );
 
-    expect(openerPermission).toBeTruthy();
-    expect(openerPermission.allow).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ url: 'https://*', app: true }),
-        expect.objectContaining({ url: 'http://*', app: true }),
-      ]),
-    );
+  it('allows openUrl with a chosen program only on Windows, where the override is offered', () => {
+    // every platform: http and https URLs, opened with the system default
+    const opener = findPermission(readCapability('default'), 'opener:allow-open-url');
+    expect(opener.allow).toEqual([{ url: 'https://*' }, { url: 'http://*' }]);
+
+    // Windows only: the External Browser Override setting
+    const windows = readCapability('windows-browser-override');
+    expect(windows.platforms).toEqual(['windows']);
+    expect(findPermission(windows, 'opener:allow-open-url').allow).toEqual([
+      { url: 'https://*', app: true },
+      { url: 'http://*', app: true },
+    ]);
+  });
+
+  it('only allows writing the temp files that Open Original can open', () => {
+    const capability = readCapability('default');
+    const write = findPermission(capability, 'fs:allow-write-file');
+    const open = findPermission(capability, 'opener:allow-open-path');
+    expect(write.allow).toEqual(open.allow);
   });
 });
