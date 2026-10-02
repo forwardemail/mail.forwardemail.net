@@ -225,7 +225,13 @@ export function installEnvironment(options: EnvironmentOptions) {
   installHistory(win, { reload: options.reload });
   installLinks(win);
   installOriginalViewer(win);
-  installClipboard(win);
+  installClipboard(win, {
+    // Only the real terminal has the dialogs to ask with; a passed transport
+    // quits at once, as before.
+    confirmQuit: options.transport
+      ? undefined
+      : () => Boolean((win.confirm as (message?: string) => boolean)('Quit Forward Email?')),
+  });
   installPointer(win);
   installKeys(win);
   installCentering(win);

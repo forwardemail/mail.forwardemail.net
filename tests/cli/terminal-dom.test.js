@@ -13,7 +13,9 @@ import { describe, expect, it } from 'vitest';
 import { installAnimations, installDomFixes } from '../../src/cli/dom-fixes';
 import { installFrames } from '../../src/cli/frames';
 import { createImageConstructor } from '../../src/cli/images';
-import { bytesFor, displayCombo } from '../../src/cli/hints';
+import { bytesFor, displayCombo, installHints } from '../../src/cli/hints';
+import { installClipboard } from '../../src/cli/clipboard';
+import { installNativeDialogs } from '../../src/cli/dialogs';
 import { installLinks, safeFileName, writeUnique } from '../../src/cli/links';
 import { MAX_SHOWN, installOriginalViewer } from '../../src/cli/original';
 import {
@@ -627,5 +629,166 @@ describe('the original message viewer', () => {
     const shown = term.document.querySelectorAll('#fe-terminal-original pre')[1].textContent;
     expect(shown.length).toBeLessThan(MAX_SHOWN + 200);
     expect(shown).toContain('Save .eml for the full message');
+  });
+});
+
+describe('copying the selection', () => {
+  const tick = (ms = 50) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  // A terminal we can type into, with the clipboard's OSC 52 output captured
+  // instead of going to a real stdout.
+  function selectableTerminal() {
+    let type;
+    const readable = new ReadableStream({
+      start(controller) {
+        type = (text) => controller.enqueue(text);
+      },
+    });
+    const term = new TermDOM({
+      html: '<body><p id="p">hello world</p></body>',
+      transport: { ...quietTransport(80, 24), interactive: true, readable },
+    });
+    const written = [];
+    installClipboard(term.window, { output: { write: (text) => written.push(String(text)) } });
+    // The text the clipboard sequence carries, decoded, or null if none.
+    const copied = () => {
+      // eslint-disable-next-line no-control-regex -- OSC 52 is ESC ] 52 … BEL
+      const match = /\x1b\]52;c;([^\u0007]*)\u0007/.exec(written.join(''));
+      return match ? Buffer.from(match[1], 'base64').toString('utf8') : null;
+    };
+    const select = (start, end) => {
+      const node = term.document.getElementById('p').firstChild;
+      const range = term.document.createRange();
+      range.setStart(node, start);
+      range.setEnd(node, end);
+      const selection = term.window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+    };
+    const mouseup = () =>
+      term.window.dispatchEvent(new term.window.MouseEvent('mouseup', { bubbles: true }));
+    return { term, type: (text) => type(text), copied, select, mouseup, written };
+  }
+
+  it('no longer copies on its own when text is selected', async () => {
+    const { term, select, mouseup, written } = selectableTerminal();
+    await term.attach();
+    try {
+      select(0, 11);
+      mouseup();
+      await tick();
+      // A selection alone writes nothing to the clipboard anymore.
+      expect(written.join('')).not.toContain('\u001b]52;');
+    } finally {
+      await term.dispose();
+    }
+  });
+
+  it('copies the selection on Ctrl+C and keeps the app open', async () => {
+    const { term, type, select, copied } = selectableTerminal();
+    const notices = [];
+    term.window.addEventListener('fe-terminal-notice', (event) => notices.push(event.detail));
+    await term.attach();
+    try {
+      select(0, 11);
+      await tick();
+      type('\x03');
+      await tick();
+      expect(term.window.closed).toBe(false);
+      expect(copied()).toBe('hello world');
+      expect(notices).toContain('Copied');
+      // The copy clears the selection, so a second Ctrl+C quits.
+      type('\x03');
+      await tick();
+      expect(term.window.closed).toBe(true);
+    } finally {
+      await term.dispose();
+    }
+  });
+
+  it('quits on Ctrl+C when nothing is selected (no confirm asked for)', async () => {
+    const { term, type, copied } = selectableTerminal();
+    await term.attach();
+    try {
+      type('\x03');
+      await tick();
+      expect(term.window.closed).toBe(true);
+      expect(copied()).toBeNull();
+    } finally {
+      if (!term.window.closed) await term.dispose();
+    }
+  });
+
+  it('confirms before quitting on Ctrl+C when a confirm is wired', async () => {
+    let push;
+    const readable = new ReadableStream({
+      start(controller) {
+        push = (text) => controller.enqueue(text);
+      },
+    });
+    const term = new TermDOM({
+      html: '<body><p>hi</p></body>',
+      transport: { ...quietTransport(80, 24), interactive: true, readable },
+    });
+    const win = term.window;
+    // A dialog terminal that answers the prompt with a queued key.
+    let answer = 'n';
+    installNativeDialogs(win, {
+      size: () => ({ columns: 80, rows: 24 }),
+      write() {},
+      passOn() {},
+      redraw() {},
+      readKeys: (wait) => {
+        if (wait === 0) return '';
+        const key = answer;
+        answer = '';
+        return key;
+      },
+    });
+    installClipboard(win, {
+      output: { write() {} },
+      confirmQuit: () => win.confirm('Quit Forward Email?'),
+    });
+    await term.attach();
+    try {
+      // "No" keeps the app open.
+      answer = 'n';
+      push('\x03');
+      await tick();
+      expect(win.closed).toBe(false);
+
+      // "Yes" lets it quit.
+      answer = 'y';
+      push('\x03');
+      await tick();
+      expect(win.closed).toBe(true);
+    } finally {
+      if (!win.closed) await term.dispose();
+    }
+  });
+
+  it('shows "Ctrl+C Copy" in the hint bar while text is selected', async () => {
+    const { term, select, mouseup } = selectableTerminal();
+    installHints(term.window, { columns: () => 200 });
+    await term.attach();
+    try {
+      const bar = () => term.document.getElementById('fe-terminal-hints').textContent;
+      expect(bar()).toContain('Quit');
+      expect(bar()).not.toContain('Copy');
+
+      select(0, 11);
+      mouseup();
+      await tick();
+      expect(bar()).toContain('Copy');
+      expect(bar()).not.toContain('Quit');
+
+      term.window.getSelection().removeAllRanges();
+      mouseup();
+      await tick();
+      expect(bar()).toContain('Quit');
+      expect(bar()).not.toContain('Copy');
+    } finally {
+      await term.dispose();
+    }
   });
 });

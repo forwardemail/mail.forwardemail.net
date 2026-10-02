@@ -124,6 +124,10 @@ export function installHints(win: AnyRecord, options: { columns: () => number })
   const manager = () =>
     (globalThis as Record<string, unknown>).__forwardemailShortcuts as ShortcutManager | undefined;
 
+  // Whether text is selected, from clipboard.ts. While it is, the Ctrl+C
+  // hint copies instead of quitting.
+  let selectionActive = false;
+
   // The current key for an action, as rebound by the user.
   const keyFor = (action: string): string | null => {
     const keys = (manager()?.getShortcutsList() ?? [])
@@ -165,7 +169,16 @@ export function installHints(win: AnyRecord, options: { columns: () => number })
 
   const hintsForScreen = (): Hint[] => {
     const shortcuts = action('help') ?? key('?', 'Shortcuts');
-    const quit = key('Ctrl+C', 'Quit');
+    // Ctrl+C quits, but while text is selected it copies the selection
+    // (clipboard.ts) and the bar says so. The hint is clickable: a press
+    // asks clipboard.ts to copy, the same as the key does.
+    const quit: Hint = selectionActive
+      ? {
+          keys: 'Ctrl+C',
+          label: 'Copy',
+          run: () => win.dispatchEvent(new win.CustomEvent('fe-terminal-copy')),
+        }
+      : key('Ctrl+C', 'Quit');
     const dialog = [...document.querySelectorAll('[role="dialog"], [role="alertdialog"]')].find(
       (el: AnyRecord) => isShown(el) && !el.closest('[data-testid="compose-modal"]'),
     );
@@ -250,6 +263,14 @@ export function installHints(win: AnyRecord, options: { columns: () => number })
       render();
     }, 2000);
     noticeTimer.unref?.();
+    render();
+  });
+
+  // The selection state that flips the Ctrl+C hint to "Copy" (clipboard.ts).
+  win.addEventListener('fe-terminal-selection', (event: AnyRecord) => {
+    const next = Boolean(event.detail?.active);
+    if (next === selectionActive) return;
+    selectionActive = next;
     render();
   });
 
