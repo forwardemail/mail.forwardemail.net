@@ -65,7 +65,9 @@ function p256PublicKey() {
  * @param {'granted'|'denied'|'default'} [options.answer] what the prompt answers
  * @param {boolean} [options.pushManager] whether window.PushManager exists
  * @param {Error|null} [options.subscribeError] what pushManager.subscribe rejects with
- * @param {boolean} [options.serviceWorker] whether a service worker is registered
+ * @param {boolean|'installing'} [options.serviceWorker] whether a service worker
+ *   is registered ('installing': registered, not active yet, as on a first
+ *   visit; `activate()` makes it active)
  */
 function installBrowser({
   permission = 'granted',
@@ -112,8 +114,10 @@ function installBrowser({
   if (pushManager) window.PushManager = function PushManager() {};
   else delete window.PushManager;
 
+  const installing = serviceWorker === 'installing';
+  let activate = () => {};
   const registration = {
-    active: { postMessage() {} },
+    active: installing ? null : { postMessage() {} },
     showNotification: vi.fn(async () => {}),
     pushManager: {
       getSubscription: async () => state.subscription,
@@ -134,20 +138,34 @@ function installBrowser({
   };
   Object.defineProperty(navigator, 'serviceWorker', {
     configurable: true,
-    value: serviceWorker
+    value: installing
       ? {
-          controller: {},
-          ready: Promise.resolve(registration),
+          // (no controller and no active worker yet; `ready` settles once
+          // the worker is active)
+          controller: null,
+          ready: new Promise((resolve) => {
+            activate = () => {
+              registration.active = { postMessage() {} };
+              resolve(registration);
+            };
+          }),
           getRegistration: async () => registration,
           addEventListener() {},
         }
-      : {
-          controller: null,
-          // never settles without a registered worker
-          ready: new Promise(() => {}),
-          getRegistration: async () => undefined,
-          addEventListener() {},
-        },
+      : serviceWorker
+        ? {
+            controller: {},
+            ready: Promise.resolve(registration),
+            getRegistration: async () => registration,
+            addEventListener() {},
+          }
+        : {
+            controller: null,
+            // never settles without a registered worker
+            ready: new Promise(() => {}),
+            getRegistration: async () => undefined,
+            addEventListener() {},
+          },
   });
 
   globalThis.fetch = vi.fn(async (url, init = {}) => {
@@ -183,7 +201,7 @@ function installBrowser({
     return new Response('{}', { status: 200 });
   });
 
-  return { state, registration };
+  return { state, registration, activate: () => activate() };
 }
 
 async function loadModules({ vapidKey = p256PublicKey() } = {}) {
@@ -372,6 +390,49 @@ describe('browser notifications when Web Push cannot deliver', () => {
       folder: 'INBOX',
       messageId: 'no-push-1',
     });
+  });
+
+  it('waits for a service worker that is still installing (a first visit) and shows new mail once', async () => {
+    const { state, registration, activate } = installBrowser({
+      pushManager: false,
+      serviceWorker: 'installing',
+    });
+    // (a worker without an active one rejects, as Chromium does)
+    registration.showNotification.mockImplementation(async () => {
+      if (!registration.active)
+        throw new TypeError('No active registration available on the ServiceWorkerRegistration.');
+    });
+    const { push, manager } = await loadModules();
+    await push.syncPushNotifications();
+
+    const ws = createWsClient();
+    cleanup = manager.connectNotifications(ws);
+    ws.emit('newMessage', newMessage('installing-1'));
+    await settle();
+    expect(registration.showNotification).not.toHaveBeenCalled();
+
+    activate();
+    await vi.waitFor(() => expect(registration.showNotification).toHaveBeenCalledTimes(1));
+    await settle();
+    expect(registration.showNotification).toHaveBeenCalledTimes(1);
+    expect(state.created).toHaveLength(0);
+  });
+
+  it('uses new Notification() once when the installing service worker does not become active in time', async () => {
+    const { state, registration } = installBrowser({
+      pushManager: false,
+      serviceWorker: 'installing',
+    });
+    const { push, manager } = await loadModules();
+    await push.syncPushNotifications();
+
+    const ws = createWsClient();
+    cleanup = manager.connectNotifications(ws);
+    ws.emit('newMessage', newMessage('installing-2'));
+
+    await vi.waitFor(() => expect(state.created).toHaveLength(1), { timeout: 5000 });
+    expect(state.created[0].title).toBe('Alice');
+    expect(registration.showNotification).not.toHaveBeenCalled();
   });
 
   it('falls back the same way when the build has no Web Push key', async () => {

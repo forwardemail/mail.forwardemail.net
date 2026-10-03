@@ -370,26 +370,41 @@ const SERVICE_WORKER_READY_TIMEOUT_MS = 3000;
  * there is none (no service worker support, a private window that disables
  * it, a development build). getRegistration() answers at once, unlike
  * `ready`, which never settles without a worker.
+ *
+ * Only a registration with an active worker can show one: on a first visit
+ * the worker is still installing, and showNotification() rejects with "No
+ * active registration". `ready` settles once a worker is active, so it is
+ * waited for, for a moment, before falling back to new Notification().
  */
+function canShowNotification(registration) {
+  return Boolean(registration?.active) && typeof registration.showNotification === 'function';
+}
+
 async function getNotificationRegistration() {
   const serviceWorker = typeof navigator !== 'undefined' ? navigator.serviceWorker : null;
   if (!serviceWorker) return null;
 
+  let registration = null;
   if (typeof serviceWorker.getRegistration === 'function') {
     try {
-      const registration = await serviceWorker.getRegistration();
-      if (typeof registration?.showNotification === 'function') return registration;
+      registration = await serviceWorker.getRegistration();
     } catch {
-      // Fall through to the controller check below.
+      // Fall through to the checks below.
     }
   }
 
-  if (!serviceWorker.controller) return null;
-  const registration = await Promise.race([
-    serviceWorker.ready,
-    new Promise((resolve) => setTimeout(() => resolve(null), SERVICE_WORKER_READY_TIMEOUT_MS)),
+  if (canShowNotification(registration)) return registration;
+  if (!registration && !serviceWorker.controller) return null;
+
+  let timer;
+  const ready = await Promise.race([
+    Promise.resolve(serviceWorker.ready).catch(() => null),
+    new Promise((resolve) => {
+      timer = setTimeout(() => resolve(null), SERVICE_WORKER_READY_TIMEOUT_MS);
+    }),
   ]);
-  return typeof registration?.showNotification === 'function' ? registration : null;
+  clearTimeout(timer);
+  return canShowNotification(ready) ? ready : null;
 }
 
 async function _notifyWeb({ title, body, icon, tag, data }) {

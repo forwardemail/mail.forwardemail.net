@@ -46,7 +46,8 @@ function installServiceWorker(showNotification) {
     configurable: true,
     value: {
       controller: {},
-      ready: Promise.resolve({ showNotification }),
+      // (a registration with an active worker, the only kind that shows one)
+      ready: Promise.resolve({ active: {}, showNotification }),
     },
   });
 }
@@ -129,8 +130,8 @@ describe('notification-bridge on the web', () => {
     expect(await requestPermission()).toBe('granted');
   });
   it('uses the service worker registration on a page it does not control yet', async () => {
-    // Chrome on Android: new Notification() throws, and a first visit or a
-    // hard reload leaves the page without a controller.
+    // Chrome on Android: new Notification() throws, and a hard reload leaves
+    // the page without a controller (its worker is still active).
     const created = installNotification({ throws: true });
     const showNotification = vi.fn(async () => {});
     Object.defineProperty(navigator, 'serviceWorker', {
@@ -138,7 +139,7 @@ describe('notification-bridge on the web', () => {
       value: {
         controller: null,
         ready: new Promise(() => {}),
-        getRegistration: vi.fn(async () => ({ showNotification })),
+        getRegistration: vi.fn(async () => ({ active: {}, showNotification })),
       },
     });
 

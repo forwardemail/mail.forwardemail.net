@@ -7,6 +7,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { TermDOM } from '@b9g/termdom';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
@@ -40,6 +41,15 @@ const mac = { platform: 'darwin', home: '/Users/me', wsl: null };
 const linux = { platform: 'linux', home: '/home/me', wsl: null };
 const windows = { platform: 'win32', home: 'C:\\Users\\me', wsl: null };
 const wsl = { platform: 'linux', home: '/home/me', wsl: { mountRoot: '/mnt/', distro: 'Ubuntu' } };
+
+// The tests below that use real files take this computer's path rules, as
+// its temporary folder is a Windows path on Windows (the CI runs there too).
+const onWindows = process.platform === 'win32';
+const host = onWindows ? { platform: 'win32', home: os.homedir(), wsl: null } : linux;
+const separator = onWindows ? '\\' : '/';
+// A file dropped on the terminal, as it pastes its path: quoted by Windows
+// Terminal, with escaped spaces by macOS Terminal.
+const dropped = (file) => (onWindows ? `"${file}"` : file.replace(/ /g, '\\ '));
 
 describe('dropped file paths', () => {
   it('reads macOS Terminal and iTerm2 drops: backslash escapes and a trailing space', () => {
@@ -160,15 +170,21 @@ describe('Tab completion of a typed path', () => {
     fs.mkdirSync(path.join(dir, 'Photos'));
   });
   afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const context = () => ({ ...linux, home: dir, cwd: dir });
+  const context = () => ({ ...host, home: dir, cwd: dir });
 
   it('fills in a single match, with a slash after a folder', async () => {
     expect(await completePath(`${dir}/no`, context())).toEqual({
       value: `${dir}/notes.txt`,
       matches: [],
     });
-    expect(await completePath('Ph', context())).toEqual({ value: 'Photos/', matches: [] });
-    expect(await completePath('~/ph', context())).toEqual({ value: '~/Photos/', matches: [] });
+    expect(await completePath('Ph', context())).toEqual({
+      value: `Photos${separator}`,
+      matches: [],
+    });
+    expect(await completePath('~/ph', context())).toEqual({
+      value: `~/Photos${separator}`,
+      matches: [],
+    });
   });
 
   it('fills in what several matches share and lists them', async () => {
@@ -360,7 +376,7 @@ function composeTerminal({ pick, html = COMPOSE, cwd, limit } = {}) {
   win.addEventListener('fe:mail-service-toast', (event) => toasts.push(event.detail));
   const picks = [];
   installAttachments(win, {
-    context: linux,
+    context: host,
     env: {},
     cwd: () => cwd ?? os.tmpdir(),
     limit,
@@ -426,8 +442,9 @@ describe('attaching in the compose window', () => {
     await session.term.attach();
     const body = session.document.getElementById('body');
     body.focus();
-    // macOS Terminal: escaped spaces and a trailing space.
-    session.paste(`${report.replace(/ /g, '\\ ')} ${notes} `);
+    // macOS Terminal: escaped spaces and a trailing space (Windows
+    // Terminal: quoted paths).
+    session.paste(`${dropped(report)} ${dropped(notes)} `);
     await waitUntil(() => session.attachments.length === 2);
 
     expect(body.value).toBe('');
@@ -458,7 +475,7 @@ describe('attaching in the compose window', () => {
     installHints(session.win, { columns: () => 100 });
     await session.term.attach();
     session.document.getElementById('body').focus();
-    session.paste(`file://${file.replace(/ /g, '%20')}\r\n`);
+    session.paste(`${pathToFileURL(file).href}\r\n`);
     await waitUntil(() => session.attachments.length === 1);
     expect(session.attachments[0].filename).toBe('a b.txt');
     expect(session.notices).toEqual([{ text: 'Attached a b.txt', failed: false }]);
@@ -500,7 +517,7 @@ describe('attaching in the compose window', () => {
     await session.term.attach();
     const body = session.document.getElementById('body');
     body.focus();
-    session.paste(`'${folder}'`);
+    session.paste(onWindows ? `"${folder}"` : `'${folder}'`);
     await waitUntil(() => session.notices.length === 1);
     expect(session.notices[0]).toEqual({ text: 'Not attached: Photos is a folder', failed: true });
     expect(body.value).toBe('');
