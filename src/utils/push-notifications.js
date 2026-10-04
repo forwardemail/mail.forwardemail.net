@@ -161,6 +161,11 @@ const LEGACY_MULTI_ACCOUNT_KEY = 'push_notification_multi_account';
 
 let initialized = false;
 let initializationPromise = null;
+// This browser has no push service it can register with (Ungoogled
+// Chromium, Brave with Google push messaging off): it will not have one
+// until the page is reloaded, so automatic syncs stop asking for the rest of
+// the page's life. Settings still tries again when the user asks.
+let webPushServiceUnavailable = false;
 let activeNativeProvider = null;
 let nativeListenerCleanups = [];
 let managementPromise = null;
@@ -1308,7 +1313,16 @@ async function initializePushNotifications() {
       console.info('[push] Initialized Web Push');
       return true;
     } catch (error) {
-      console.warn('[push] Web Push initialization failed:', error);
+      if (error instanceof PushRegistrationError && error.code === 'push-service-unavailable') {
+        // (expected in these browsers: the open app shows new mail instead)
+        webPushServiceUnavailable = true;
+        console.info(
+          '[push] This browser has no push service; new mail is shown while the app is open:',
+          error.detail,
+        );
+      } else {
+        console.warn('[push] Web Push initialization failed:', error);
+      }
       // From here on the open app shows new mail itself (notification-manager
       // draws the WebSocket copy when Web Push cannot deliver); Settings says so.
       if (error instanceof PushTimeoutError) {
@@ -1408,12 +1422,15 @@ export async function initPushNotifications() {
  * Safe to invoke after login, during bootstrap, and whenever the app resumes.
  * Registers push for ALL signed-in accounts, not just the active one.
  */
-export async function syncPushNotifications() {
+export async function syncPushNotifications({ retry = false } = {}) {
   if (isDemoMode() || !Local.get('alias_auth')) return false;
   if (isWebPushPlatform()) {
     // A browser only registers once the user has allowed notifications from
     // Settings; at boot it just keeps an existing registration current.
     if (getWebPushPermission() !== 'granted') return false;
+    // (and does not ask a push service it found missing again on its own)
+    if (webPushServiceUnavailable && !retry) return false;
+    webPushServiceUnavailable = false;
   } else if (!isNativePushPlatform) {
     return false;
   }
@@ -1449,7 +1466,7 @@ async function registerPendingAccounts() {
 export async function handleWebPushSubscriptionChange() {
   if (!isWebPushPlatform()) return false;
   initialized = false;
-  return syncPushNotifications();
+  return syncPushNotifications({ retry: true });
 }
 
 /**
@@ -1803,7 +1820,7 @@ export function allowBrowserNotifications() {
   return request.then(async (permission) => {
     if (permission === 'granted') {
       try {
-        await syncPushNotifications();
+        await syncPushNotifications({ retry: true });
       } catch (error) {
         console.warn('[push] Web Push registration after allowing notifications failed:', error);
       }
@@ -1825,7 +1842,7 @@ export function registerCurrentDevicePush() {
     if (guardCode) return { ok: false, code: guardCode, status: initialStatus };
 
     try {
-      await syncPushNotifications();
+      await syncPushNotifications({ retry: true });
     } catch (error) {
       if (error instanceof PushTimeoutError) {
         const status = await getPushNotificationStatus();
@@ -1884,7 +1901,7 @@ export function reregisterCurrentDevicePush() {
     }
 
     try {
-      await syncPushNotifications();
+      await syncPushNotifications({ retry: true });
     } catch (error) {
       if (error instanceof PushTimeoutError) {
         const status = await getPushNotificationStatus();

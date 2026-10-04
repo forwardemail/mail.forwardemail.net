@@ -1873,6 +1873,23 @@ function initKeyboardShortcuts() {
     mailboxApi?.selectPrevious?.();
   });
 
+  // Checking messages from the keyboard, as Shift+click does with the mouse
+  // (the terminal client too, where Shift+click is the terminal's own)
+  keyboardShortcuts.on('toggle-select', () => {
+    if (currentRoute() !== 'mailbox') return;
+    mailboxApi?.toggleSelectCurrent?.();
+  });
+
+  keyboardShortcuts.on('extend-selection-down', () => {
+    if (currentRoute() !== 'mailbox') return;
+    mailboxApi?.extendSelectionDown?.();
+  });
+
+  keyboardShortcuts.on('extend-selection-up', () => {
+    if (currentRoute() !== 'mailbox') return;
+    mailboxApi?.extendSelectionUp?.();
+  });
+
   // Search
   // Note: these previously used document.querySelector('.fe-search'), a
   // class that no longer exists anywhere in the rendered markup (leftover

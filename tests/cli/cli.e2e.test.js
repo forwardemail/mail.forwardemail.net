@@ -203,6 +203,22 @@ describe.runIf(canRunInteractive)('in a terminal', () => {
     expect(fs.existsSync(path.join(home, 'local-storage.json'))).toBe(true);
   });
 
+  // Shift+click is most terminals' own text selection, so messages are
+  // checked from the keyboard: Shift+Down and Shift+Up, and x.
+  it('checks messages with Shift+Down and Shift+Up, which shows the bulk actions', async () => {
+    session = startTerminal({ home: tempHome(), args: ['--demo'] });
+    await session.waitFor('Welcome to Forward Email!');
+    const count = (n) => (text) => new RegExp(`\\s${n}\\s+✕`).test(text);
+
+    // (what a terminal sends for Shift+Down and Shift+Up)
+    session.type('\u001b[1;2B');
+    await session.waitFor(count(1), { label: 'one message checked' });
+    session.type('\u001b[1;2B');
+    await session.waitFor(count(2), { label: 'two messages checked' });
+    session.type('\u001b[1;2A');
+    await session.waitFor(count(1), { label: 'back to one message checked' });
+  });
+
   it('composes a message: recipient, subject and a plain-text body', async () => {
     session = startTerminal({ home: tempHome(), args: ['--demo'] });
     await session.waitFor('Welcome to Forward Email!');
@@ -625,12 +641,13 @@ describe.runIf(canRunInteractive)('in a terminal', () => {
     expect(row).toContain('Edit');
     session.click('Edit', session.screen().split('\n').indexOf(row));
     await session.waitFor('Press a key');
-    session.type('x');
+    // (a key no shortcut has: x checks a message)
+    session.type('z');
     await session.waitFor('Shortcut updated');
 
     session.type(KEYS.escape);
     await session.waitFor('INBOX(');
-    await session.waitFor(() => bottom().includes('x Archive'), { label: 'the new key' });
+    await session.waitFor(() => bottom().includes('z Archive'), { label: 'the new key' });
   });
 
   it('hides the hint bar with --no-hints', async () => {

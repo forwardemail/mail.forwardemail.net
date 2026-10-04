@@ -385,7 +385,7 @@ export async function requestNotificationPermission() {
   if (!isTauri) {
     import('./push-notifications.js')
       .then(async ({ syncPushNotifications, refreshPushStatus }) => {
-        if (permissionGranted) await syncPushNotifications().catch(() => {});
+        if (permissionGranted) await syncPushNotifications({ retry: true }).catch(() => {});
         refreshPushStatus();
       })
       .catch(() => {});

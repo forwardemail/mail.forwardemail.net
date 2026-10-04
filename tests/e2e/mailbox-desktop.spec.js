@@ -176,6 +176,74 @@ test.describe('Desktop — Selection Mode', () => {
     await expect(row).toBeVisible();
   });
 
+  // Gmail: Shift+click on a checkbox checks (or unchecks) every row from the
+  // last checkbox clicked to this one, and leaves the other rows alone.
+  test('Shift+click on a checkbox checks or unchecks the rows in between', async ({ page }) => {
+    await enterSelectionMode(page);
+    const rows = page.locator('[data-conversation-row]');
+    await expect.poll(() => rows.count()).toBeGreaterThanOrEqual(3);
+    const checkbox = (i) =>
+      rows
+        .nth(i)
+        .getByLabel(/^(Select|Deselect)$/)
+        .first();
+    const checked = async () => {
+      const states = [];
+      for (let i = 0; i < 3; i++) {
+        states.push((await checkbox(i).getAttribute('aria-label')) === 'Deselect');
+      }
+      return states;
+    };
+
+    await checkbox(0).click();
+    await checkbox(2).click({ modifiers: ['Shift'] });
+    await expect.poll(checked).toEqual([true, true, true]);
+    // (no text was selected along the way)
+    expect(await page.evaluate(() => String(window.getSelection()))).toBe('');
+
+    // From row 2, Shift+click on checked row 1 unchecks rows 1 and 2.
+    await checkbox(1).click({ modifiers: ['Shift'] });
+    await expect.poll(checked).toEqual([true, false, false]);
+    await expect(page.getByLabel('Delete selected')).toBeVisible();
+  });
+
+  // The keyboard does the same (and is the way in the terminal client).
+  test('X checks the focused message and Shift+Down checks the ones below', async ({ page }) => {
+    const rows = page.locator('[data-conversation-row]');
+    await expect.poll(() => rows.count()).toBeGreaterThanOrEqual(3);
+    // (a row with the keyboard focus, e.g. reached with Tab; none is open)
+    await rows.nth(0).focus();
+    await expect(rows.nth(0)).toBeFocused();
+    await page.keyboard.press('x');
+    const selected = () =>
+      rows.evaluateAll((elements) =>
+        elements.slice(0, 3).map((row) => row.getAttribute('aria-selected') === 'true'),
+      );
+    await expect.poll(selected).toEqual([true, false, false]);
+    await expect(page.getByLabel('Delete selected')).toBeVisible();
+    await page.keyboard.press('Shift+ArrowDown');
+    await expect.poll(selected).toEqual([true, true, false]);
+    await page.keyboard.press('Shift+ArrowDown');
+    await expect.poll(selected).toEqual([true, true, true]);
+    await page.keyboard.press('Shift+ArrowUp');
+    await expect.poll(selected).toEqual([true, true, false]);
+    // X again unchecks the row it is on
+    await page.keyboard.press('x');
+    await expect.poll(selected).toEqual([false, true, false]);
+  });
+
+  test('Shift+Down from a focused row checks it and the next one', async ({ page }) => {
+    const rows = page.locator('[data-conversation-row]');
+    await expect.poll(() => rows.count()).toBeGreaterThanOrEqual(3);
+    await rows.nth(1).focus();
+    await page.keyboard.press('Shift+ArrowDown');
+    const selected = () =>
+      rows.evaluateAll((elements) =>
+        elements.slice(0, 3).map((row) => row.getAttribute('aria-selected') === 'true'),
+      );
+    await expect.poll(selected).toEqual([false, true, true]);
+  });
+
   test('shows bulk action bar when messages are selected', async ({ page }) => {
     await enterSelectionMode(page);
     await selectRowCheckbox(page, 'Welcome to Webmail');

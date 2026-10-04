@@ -745,6 +745,9 @@
   // and cmd/ctrl+click; range select then spans from anchor to clicked row
   // in the currently visible list order.
   let lastSelectionAnchorId: string | null = $state(null);
+  // The row a Shift+Arrow selection has reached (the other end from the
+  // anchor), so the reader pane does not have to follow it.
+  let selectionCursorId: string | null = $state(null);
 
   // Classic layout mode (vertical split) on desktop - switches to fullscreen at 900px
   const isVerticalDesktop = $derived(!isProductivityLayout && !isClassicMobileViewport());
@@ -2678,6 +2681,9 @@
     registerApi?.({
       selectNext,
       selectPrevious,
+      toggleSelectCurrent,
+      extendSelectionDown: () => extendSelection(1),
+      extendSelectionUp: () => extendSelection(-1),
       archiveSelected,
       deleteSelected,
       expandSelectedThread: () => {
@@ -2849,6 +2855,113 @@
     // Additive (cmd/ctrl) — or shift+click without an anchor — falls back to toggle.
     lastSelectionAnchorId = item?.id ?? null;
     toggleSelection(item, event);
+  };
+
+  // A checkbox (or the avatar on a phone layout): a plain click checks or
+  // unchecks its row, and Shift+click does the same to every row between the
+  // last one clicked and this one, keeping the rest, as Gmail does.
+  const handleCheckboxClick = (item, event, list) => {
+    event?.stopPropagation?.();
+    const id = item?.id ?? null;
+    if (id === null) return;
+    if (event?.shiftKey && lastSelectionAnchorId !== null && lastSelectionAnchorId !== id) {
+      const ids = (list || []).map((it) => it?.id).filter((it) => it !== undefined && it !== null);
+      const anchorIdx = ids.indexOf(lastSelectionAnchorId);
+      const targetIdx = ids.indexOf(id);
+      if (anchorIdx >= 0 && targetIdx >= 0) {
+        const [lo, hi] = anchorIdx <= targetIdx ? [anchorIdx, targetIdx] : [targetIdx, anchorIdx];
+        const current = $selectedConversationIds || [];
+        const check = !current.includes(id);
+        const range = new Set(ids.slice(lo, hi + 1));
+        const next = check
+          ? [...current, ...ids.slice(lo, hi + 1).filter((rowId) => !current.includes(rowId))]
+          : current.filter((rowId) => !range.has(rowId));
+        mailboxStore?.actions?.setSelectedIds?.(next);
+        lastSelectionAnchorId = id;
+        selectionCursorId = id;
+        return;
+      }
+    }
+    lastSelectionAnchorId = id;
+    selectionCursorId = id;
+    toggleSelection(item, event);
+  };
+
+  // (Shift+click would otherwise also select the text between the rows)
+  const preventShiftTextSelection = (event) => {
+    if (event?.shiftKey) event.preventDefault?.();
+  };
+
+  // ── Selecting from the keyboard (also the way in the terminal, where
+  //    Shift+click is usually the terminal's own text selection) ──────────
+  const visibleRows = () => ($threadingEnabled ? $filteredConversations : $filteredMessages) || [];
+
+  // The open conversation or message, or else the row with the keyboard focus.
+  const currentRowId = () => {
+    const list = visibleRows();
+    const openId = $threadingEnabled ? $selectedConversation?.id : $selectedMessage?.id;
+    if (openId !== undefined && list.some((item) => item?.id === openId)) return openId;
+    const focusedId = document.activeElement
+      ?.closest?.('[data-conversation-row]')
+      ?.getAttribute('data-message-id');
+    const focused = focusedId ? list.find((item) => String(item?.id) === focusedId) : null;
+    return focused ? focused.id : null;
+  };
+
+  const scrollRowIntoView = (id) => {
+    if (id === null || id === undefined) return;
+    const row = document.querySelector(
+      `[data-conversation-row][data-message-id="${CSS.escape(String(id))}"]`,
+    );
+    row?.scrollIntoView?.({ block: 'nearest' });
+  };
+
+  // X: check or uncheck the current row.
+  const toggleSelectCurrent = () => {
+    const id = currentRowId();
+    if (id === null) return;
+    const item = visibleRows().find((it) => it?.id === id);
+    if (!item) return;
+    lastSelectionAnchorId = id;
+    selectionCursorId = id;
+    toggleSelection(item, null);
+  };
+
+  // Shift+Down / Shift+Up: select from the anchor to one row further.
+  const extendSelection = (offset) => {
+    const ids = visibleRows()
+      .map((it) => it?.id)
+      .filter((it) => it !== undefined && it !== null);
+    if (ids.length === 0) return;
+    const selected = $selectedConversationIds || [];
+    let cursor =
+      selected.length > 0 && selectionCursorId !== null && ids.includes(selectionCursorId)
+        ? selectionCursorId
+        : null;
+    if (cursor === null) {
+      // A new selection starts at the current row (with none, at the end of
+      // the list it moves away from), which it includes.
+      const start = currentRowId();
+      if (start === null) {
+        const first = ids[offset > 0 ? 0 : ids.length - 1];
+        lastSelectionAnchorId = first;
+        selectionCursorId = first;
+        mailboxStore?.actions?.setSelectedIds?.([first]);
+        scrollRowIntoView(first);
+        return;
+      }
+      lastSelectionAnchorId = start;
+      cursor = start;
+    } else if (lastSelectionAnchorId === null || !ids.includes(lastSelectionAnchorId)) {
+      lastSelectionAnchorId = cursor;
+    }
+    const nextIdx = Math.min(Math.max(ids.indexOf(cursor) + offset, 0), ids.length - 1);
+    cursor = ids[nextIdx];
+    selectionCursorId = cursor;
+    const anchorIdx = ids.indexOf(lastSelectionAnchorId);
+    const [lo, hi] = anchorIdx <= nextIdx ? [anchorIdx, nextIdx] : [nextIdx, anchorIdx];
+    mailboxStore?.actions?.setSelectedIds?.(ids.slice(lo, hi + 1));
+    scrollRowIntoView(cursor);
   };
 
   const clearSelection = () => {
@@ -7014,10 +7127,9 @@
                                 aria-label={($selectedConversationIds || []).includes(conv.id)
                                   ? 'Deselect'
                                   : 'Select'}
-                                onclick={(e) => {
-                                  e.stopPropagation();
-                                  toggleSelection(conv, e);
-                                }}
+                                onmousedown={preventShiftTextSelection}
+                                onclick={(e) =>
+                                  handleCheckboxClick(conv, e, $filteredConversations || [])}
                               >
                                 {#if ($selectedConversationIds || []).includes(conv.id)}
                                   <svg
@@ -7123,10 +7235,9 @@
                                     ? 'Deselect'
                                     : 'Select'}
                                   data-slot="checkbox"
-                                  onclick={(e) => {
-                                    e.stopPropagation();
-                                    toggleSelection(conv, e);
-                                  }}
+                                  onmousedown={preventShiftTextSelection}
+                                  onclick={(e) =>
+                                    handleCheckboxClick(conv, e, $filteredConversations || [])}
                                 >
                                   {#if ($selectedConversationIds || []).includes(conv.id)}
                                     <CheckSquare class="h-5 w-5" />
@@ -7446,10 +7557,9 @@
                                 aria-label={($selectedConversationIds || []).includes(msg.id)
                                   ? 'Deselect'
                                   : 'Select'}
-                                onclick={(e) => {
-                                  e.stopPropagation();
-                                  toggleSelection({ id: msg.id }, e);
-                                }}
+                                onmousedown={preventShiftTextSelection}
+                                onclick={(e) =>
+                                  handleCheckboxClick({ id: msg.id }, e, $filteredMessages || [])}
                               >
                                 {#if ($selectedConversationIds || []).includes(msg.id)}
                                   <CheckSquare class="h-5 w-5" />

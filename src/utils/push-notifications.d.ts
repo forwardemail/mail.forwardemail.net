@@ -110,7 +110,7 @@ export interface PushNavigationAction {
 }
 
 export function initPushNotifications(): Promise<boolean>;
-export function syncPushNotifications(): Promise<boolean>;
+export function syncPushNotifications(options?: { retry?: boolean }): Promise<boolean>;
 export function handleWebPushSubscriptionChange(): Promise<boolean>;
 export function initPushTapHandling(): Promise<void>;
 export function cleanupPushNotifications(): Promise<boolean>;

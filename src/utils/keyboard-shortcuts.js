@@ -33,6 +33,17 @@ const DEFAULT_SHORTCUTS = {
   arrowleft: { action: 'collapse-thread', label: 'Collapse thread' },
   arrowdown: { action: 'next-message', label: 'Select next message', context: 'list' },
   arrowup: { action: 'previous-message', label: 'Select previous message', context: 'list' },
+  x: { action: 'toggle-select', label: 'Check / uncheck message', context: 'list' },
+  'shift+arrowdown': {
+    action: 'extend-selection-down',
+    label: 'Check messages below',
+    context: 'list',
+  },
+  'shift+arrowup': {
+    action: 'extend-selection-up',
+    label: 'Check messages above',
+    context: 'list',
+  },
 
   // Managing / Marking / Deleting / Tagging
   m: { action: 'toggle-read', label: 'Mark message read/unread' },

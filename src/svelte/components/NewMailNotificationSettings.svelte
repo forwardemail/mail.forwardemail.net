@@ -67,6 +67,14 @@
           'No notification could be shown. Check the notification settings for Forward Email.',
           'error',
         );
+      } else if (!isTauri) {
+        // The browser took it, but the system can still keep it from
+        // showing (macOS and Windows let each browser show notifications
+        // or not), and the page cannot tell.
+        toasts?.show?.(
+          'Test notification sent. If it did not appear, allow notifications for your browser in your system settings.',
+          'info',
+        );
       }
     } finally {
       busy = false;

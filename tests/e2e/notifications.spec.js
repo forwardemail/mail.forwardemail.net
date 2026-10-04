@@ -78,6 +78,8 @@ test.describe('New mail notifications setting', () => {
         }),
       ]);
     await expect(page.getByText('No notification could be shown')).toHaveCount(0);
+    // (the page cannot tell whether the system showed it, so it says where to look)
+    await expect(page.getByText('Test notification sent.')).toBeVisible();
   });
 });
 

@@ -141,18 +141,20 @@ Click a hint to press its key. Press `?` for every shortcut. To change one, choo
 
 What you type right after a new-message, reply or forward shortcut (Ctrl+N, `r`, `a`, `f`, or the keys you gave them) goes into the new message, even before its window has appeared.
 
-| Key                 | Action                                                                           |
-| :------------------ | :------------------------------------------------------------------------------- |
-| `Tab` / `Shift+Tab` | Move between controls, starting from where you clicked. Focus is highlighted.    |
-| `Enter` / `Space`   | Activate the focused button or link.                                             |
-| `↑` / `↓`           | Open the next or previous message, counting from the focused row in the list.    |
-| `Esc`               | Close a dialog or menu; otherwise go back (from a message, a contact, settings). |
-| `Ctrl+N`            | Compose a new message.                                                           |
-| `Ctrl+O`            | Attach a file to the message you are writing (see [Attachments](#attachments)).  |
-| `r` / `a` / `f`     | Reply, reply all, forward.                                                       |
-| `e` / `s` / `Del`   | Archive, star, delete.                                                           |
-| `?`                 | Show every keyboard shortcut.                                                    |
-| `Ctrl+C`            | Copy the selected text; with nothing selected, quit (after asking).              |
+| Key                   | Action                                                                           |
+| :-------------------- | :------------------------------------------------------------------------------- |
+| `Tab` / `Shift+Tab`   | Move between controls, starting from where you clicked. Focus is highlighted.    |
+| `Enter` / `Space`     | Activate the focused button or link.                                             |
+| `↑` / `↓`             | Open the next or previous message, counting from the focused row in the list.    |
+| `Shift+↓` / `Shift+↑` | Check messages below or above, for the bulk actions (archive, delete, …).        |
+| `x`                   | Check or uncheck the open or focused message.                                    |
+| `Esc`                 | Close a dialog or menu; otherwise go back (from a message, a contact, settings). |
+| `Ctrl+N`              | Compose a new message.                                                           |
+| `Ctrl+O`              | Attach a file to the message you are writing (see [Attachments](#attachments)).  |
+| `r` / `a` / `f`       | Reply, reply all, forward.                                                       |
+| `e` / `s` / `Del`     | Archive, star, delete.                                                           |
+| `?`                   | Show every keyboard shortcut.                                                    |
+| `Ctrl+C`              | Copy the selected text; with nothing selected, quit (after asking).              |
 
 Opening a message moves the keyboard into it, so `Tab` goes through its buttons and addresses. Going back to the list puts the focus on that message's row.
 
@@ -161,6 +163,8 @@ Opening a message moves the keyboard into it, so `Tab` goes through its buttons 
 A scroll bar on the right edge of the message list, a message, the compose window and other long panes shows when there is more to see. Click the bar above or below its thumb to scroll a page, or drag the thumb. In the compose window the message grows as you type, the window scrolls to keep the cursor in view, and the arrow keys scroll it back.
 
 Clicking and scrolling with the wheel work with the mouse in any terminal that reports mouse events. That includes most modern terminals: iTerm2, Terminal.app, GNOME Terminal, Konsole, kitty, WezTerm, Alacritty, foot and Windows Terminal. A terminal of 120 columns or more shows the full desktop layout. At 80 columns or fewer (the webmail's 640 px phone breakpoint), the folder list moves behind the `≡` menu, as on a phone.
+
+In the message list, Shift+click on a checkbox checks the messages between it and the last one clicked, as in the browser, in a terminal that passes Shift+click on to the app; most keep it for their own text selection, so `Shift+↓`, `Shift+↑` and `x` do the same from the keyboard.
 
 Drag over text, in a message or anywhere else, to select it, then press `Ctrl+C` to copy it. The bottom row shows **Ctrl+C Copy** while text is selected. A click on an address in an open message copies the address. A copy goes to your clipboard two ways: through the system's clipboard program (`pbcopy` on macOS, PowerShell or `clip.exe` on Windows and in WSL, `wl-copy` under Wayland, `xclip` or `xsel` under X11), and through the terminal's clipboard sequence (OSC 52), the way that works over SSH. The app says **Copied** when the text got there. It says the copy failed when a clipboard program failed, or when none is installed and the terminal ignores OSC 52 (GNOME Terminal and the other VTE terminals, Terminal.app, the Linux console). On Linux, install `wl-clipboard` or `xclip` for copies in those terminals. Over SSH, the terminal has to accept OSC 52: in tmux, add `set -g set-clipboard on` (or `set -g allow-passthrough on`); iTerm2 asks first, allow it under **Settings › General › Selection › Applications in terminal may access clipboard**. To use your terminal's own selection instead, hold its modifier while you drag: Option in iTerm2, Fn in Terminal.app, Shift in most others.
 

@@ -347,6 +347,34 @@ describe('browser notifications when Web Push cannot deliver', () => {
     expect(state.created).toHaveLength(0);
   });
 
+  it('does not ask a missing push service again on its own, but does when the user asks', async () => {
+    const { registration } = installBrowser({
+      // what Ungoogled Chromium rejects with: it has no push service
+      subscribeError: new DOMException('Registration failed - push service error', 'AbortError'),
+    });
+    const subscribe = vi.spyOn(registration.pushManager, 'subscribe');
+    const { push } = await loadModules();
+
+    await expect(push.syncPushNotifications()).resolves.toBe(false);
+    expect(subscribe).toHaveBeenCalledTimes(1);
+    // (an expected state, not a warning)
+    expect(console.warn).not.toHaveBeenCalledWith(
+      expect.stringContaining('Web Push initialization failed'),
+      expect.anything(),
+    );
+
+    // e.g. the mailbox loading after the app started
+    await expect(push.syncPushNotifications()).resolves.toBe(false);
+    expect(subscribe).toHaveBeenCalledTimes(1);
+    const status = await push.getPushNotificationStatus();
+    expect(status.browserNotifications.mode).toBe('fallback');
+    expect(status.browserNotifications.pushFailure).toBe('push-service-unavailable');
+
+    // Settings asks again
+    await expect(push.syncPushNotifications({ retry: true })).resolves.toBe(false);
+    expect(subscribe).toHaveBeenCalledTimes(2);
+  });
+
   it('shows each message once when the socket repeats it', async () => {
     const { registration } = installBrowser({
       subscribeError: new DOMException('Registration failed - push service error', 'AbortError'),
