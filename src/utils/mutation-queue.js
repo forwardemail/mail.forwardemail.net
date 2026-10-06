@@ -9,6 +9,7 @@ import { isOnline } from './network-status';
 import { swReadyWithTimeout, isTauri } from './platform.js';
 import { exponentialBackoff } from './backoff.js';
 import { labelChangeBody, queuedToggleBody } from './message-changes.ts';
+import { getAgentBackend } from './agent-api.ts';
 
 /**
  * Offline Mutation Queue
@@ -21,7 +22,7 @@ import { labelChangeBody, queuedToggleBody } from './message-changes.ts';
  *
  * Each mutation has:
  *   id:        unique identifier
- *   type:      'toggleRead' | 'toggleStar' | 'move' | 'delete' | 'label'
+ *   type:      'toggleRead' | 'toggleStar' | 'move' | 'delete' | 'label' | 'agentDecision'
  *   payload:   operation-specific data (messageId, folder, flags, etc.)
  *   status:    'pending' | 'processing' | 'failed'
  *   retryCount: number of attempts
@@ -208,6 +209,27 @@ async function executeMutation(mutation) {
         labelChangeBody(payload.labels, payload.previousLabels),
         { method: 'PUT', pathOverride: `/v1/messages/${encodeURIComponent(payload.messageId)}` },
       );
+      return true;
+    }
+
+    // An agent approval or rejection made offline (agent mode spec §5.5).
+    // The server's answer, including a 409 from another device deciding
+    // first or a refusal because policy tightened, is a final outcome rather
+    // than a failure, so it completes the mutation and is handed to the agent
+    // store. Only transport errors throw and get retried.
+    case 'agentDecision': {
+      const backend = getAgentBackend();
+      const result =
+        payload.verb === 'approve'
+          ? await backend.approve(payload.actionId, payload.ifVersion)
+          : await backend.reject(payload.actionId, payload.ifVersion);
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent('fe:agent-decision-settled', {
+            detail: { actionId: payload.actionId, verb: payload.verb, result },
+          }),
+        );
+      }
       return true;
     }
 

@@ -359,6 +359,19 @@ export const SETTINGS_REGISTRY: Record<string, SettingDefinition> = {
     localParse: (raw) => parseBoolean(raw, true),
     localSerialize: (value) => serializeBoolean(Boolean(value)),
   },
+  // Agent mode (preview). Off by default: nothing about agents shows until
+  // someone turns this on. Stands in for the account-level enablement the
+  // server will own; per device while the feature is a prototype.
+  agent_mode: {
+    id: 'agent_mode',
+    label: 'Agent Mode',
+    scope: SETTING_SCOPES.DEVICE,
+    localKey: 'agent_mode',
+    valueType: 'boolean',
+    defaultValue: false,
+    localParse: (raw) => parseBoolean(raw, false),
+    localSerialize: (value) => serializeBoolean(Boolean(value)),
+  },
   block_tracking_pixels: {
     id: 'block_tracking_pixels',
     portable: true,

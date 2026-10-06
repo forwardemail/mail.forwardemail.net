@@ -109,6 +109,7 @@ const SENSITIVE_META_KEY_PREFIXES = [
   'att_blob_',
   'att_cache_manifest',
   'saved_search_',
+  'agent_cache_',
 ];
 
 let aesKey: CryptoKey | null = null;

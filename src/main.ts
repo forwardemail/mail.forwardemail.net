@@ -13,10 +13,11 @@ import Profile from './svelte/Profile.svelte';
 import Diagnostics from './svelte/Diagnostics.svelte';
 import Calendar from './svelte/Calendar.svelte';
 import Contacts from './svelte/Contacts.svelte';
+import Agents from './svelte/Agents.svelte';
 import Compose from './svelte/Compose.svelte';
 import { mailService } from './stores/mailService';
 import { mailboxStore } from './stores/mailboxStore';
-import { effectiveTheme, getEffectiveSettingValue } from './stores/settingsStore';
+import { agentModeEnabled, effectiveTheme, getEffectiveSettingValue } from './stores/settingsStore';
 import {
   closeTab,
   activateTab,
@@ -158,6 +159,8 @@ style.textContent = `
   #calendar-root[style*="display: none"] *,
   #contacts-root[style*="display: none"],
   #contacts-root[style*="display: none"] *,
+  #agents-root[style*="display: none"],
+  #agents-root[style*="display: none"] *,
   #profile-root[style*="display: none"],
   #profile-root[style*="display: none"] * {
     pointer-events: none !important;
@@ -216,6 +219,12 @@ function detectRoute() {
     return 'contacts';
   }
 
+  // Agent mode is invisible until enabled (spec invariant 4), so its URLs
+  // fall back to the mailbox while the setting is off.
+  if (globalThis.location.pathname.startsWith('/agents')) {
+    return get(agentModeEnabled) ? 'agents' : 'mailbox';
+  }
+
   if (globalThis.location.pathname.startsWith('/mailbox/profile')) {
     return 'profile';
   }
@@ -247,7 +256,14 @@ function detectRoute() {
   return 'login';
 }
 
-const PROTECTED_ROUTES = new Set(['mailbox', 'settings', 'profile', 'calendar', 'contacts']);
+const PROTECTED_ROUTES = new Set([
+  'mailbox',
+  'settings',
+  'profile',
+  'calendar',
+  'contacts',
+  'agents',
+]);
 
 // api_key is included because getAuthHeader falls back to it when alias_auth
 // is absent, and QR pairing can import an account that authenticates only by
@@ -703,6 +719,47 @@ function mountContacts() {
   }
 }
 
+// Agent mode (preview). Mounted on first visit, and only reachable when the
+// agent_mode setting is on. Sub-routes under /agents don't change routeStore's
+// value, so the shell follows its own path store.
+const agentsRoot = document.querySelector('#agents-root') as HTMLElement | null;
+const agentsActive = writable(currentRoute() === 'agents');
+const agentsPath = writable(globalThis.location.pathname);
+let _agentsApp: ReturnType<typeof mount> | null = null;
+
+function mountAgents() {
+  if (_agentsApp || !agentsRoot) return;
+  try {
+    _agentsApp = mount(Agents, {
+      target: agentsRoot,
+      props: {
+        navigate: (path: string) => viewModel.navigate?.(path),
+        path: agentsPath,
+        active: agentsActive,
+      },
+    });
+  } catch (err) {
+    console.error('Failed to mount agents component', err);
+  }
+}
+
+// Turning agent mode off while on an agent screen leaves nothing to show.
+agentModeEnabled.subscribe((enabled) => {
+  if (!enabled && currentRoute() === 'agents') viewModel.navigate?.('/mailbox', { replace: true });
+});
+
+// Take over (agent mode spec §4.7): the agent's draft becomes the owner's.
+globalThis.addEventListener('fe:agent-take-over', (event: Event) => {
+  const detail = (event as CustomEvent<{ to: string[]; subject: string; body: string }>).detail;
+  if (!detail) return;
+  viewModel.mailboxView?.composeModal?.open?.({
+    to: detail.to,
+    subject: detail.subject,
+    body: detail.body,
+    text: detail.body,
+  });
+});
+
 // Wire WebSocket CustomEvents to the Calendar API.
 // The websocket-updater dispatches these events when CalDAV changes arrive.
 // We listen here because calendarApi is only available in main.ts scope.
@@ -1113,6 +1170,10 @@ const updateRouteVisibility = (route) => {
     contactsRoot.style.display = route === 'contacts' ? 'block' : 'none';
   }
 
+  if (agentsRoot) {
+    agentsRoot.style.display = route === 'agents' ? 'block' : 'none';
+  }
+
   if (profileRoot) {
     profileRoot.style.display = route === 'profile' ? 'block' : 'none';
   }
@@ -1154,14 +1215,17 @@ viewModel.navigate = (path, options) => {
           ? 'calendar'
           : path.startsWith('/contacts')
             ? 'contacts'
-            : 'login';
+            : path.startsWith('/agents')
+              ? 'agents'
+              : 'login';
 
   if (
     (targetRoute === 'mailbox' ||
       targetRoute === 'settings' ||
       targetRoute === 'profile' ||
       targetRoute === 'calendar' ||
-      targetRoute === 'contacts') &&
+      targetRoute === 'contacts' ||
+      targetRoute === 'agents') &&
     !Local.get('authToken') &&
     !Local.get('alias_auth')
   ) {
@@ -1194,6 +1258,7 @@ viewModel.navigate = (path, options) => {
   }
 
   routeStore.set(detectRoute());
+  agentsPath.set(globalThis.location.pathname);
 
   // Dispatch event for Login component to clear fields when adding account
   if (path.includes('add_account=true')) {
@@ -1609,7 +1674,8 @@ routeStore.subscribe((route) => {
     route === 'settings' ||
     route === 'profile' ||
     route === 'calendar' ||
-    route === 'contacts';
+    route === 'contacts' ||
+    route === 'agents';
   document.body.classList.toggle('mailbox-mode', mailboxMode);
   document.body.classList.toggle('settings-mode', route === 'settings');
   document.body.classList.toggle('route-mailbox', route === 'mailbox');
@@ -1622,6 +1688,8 @@ routeStore.subscribe((route) => {
   calendarActive.set(route === 'calendar');
   profileActive.set(route === 'profile');
   settingsActive.set(route === 'settings');
+  agentsActive.set(route === 'agents');
+  if (route === 'agents' && _bootstrapComplete) mountAgents();
   if (mailboxMode && _bootstrapComplete) {
     // Lazily mount Calendar and Contacts on first authenticated route.
     // They are deferred to avoid Svelte 5 runtime crashes on the login page.
@@ -2536,7 +2604,8 @@ async function bootstrap() {
       route === 'settings' ||
       route === 'profile' ||
       route === 'calendar' ||
-      route === 'contacts';
+      route === 'contacts' ||
+      route === 'agents';
     document.body.classList.toggle('mailbox-mode', mailboxMode);
     updateRouteVisibility(route);
 
@@ -2725,6 +2794,10 @@ async function bootstrap() {
     // Mark bootstrap complete so routeStore.subscribe can mount components
     // on subsequent route changes (e.g. navigating to calendar/contacts).
     _bootstrapComplete = true;
+
+    if (route === 'agents') {
+      mountAgents();
+    }
 
     // Mount Calendar and Contacts lazily on first authenticated route.
     //
@@ -3321,6 +3394,7 @@ if (document.readyState === 'loading') {
 
 globalThis.addEventListener('popstate', () => {
   const route = detectRoute();
+  agentsPath.set(globalThis.location.pathname);
   // Same rule as the bootstrap guard: a locked vault cannot tell us whether the
   // user is signed in, and a back gesture over the lock screen must not be
   // answered with a sign-out.

@@ -51,6 +51,10 @@
    * against --surface-sunken and misses AA on that one surface. */
   --fe-caution-deep: #92400e; /* 6.2:1 or better on every light surface */
 
+  /* Primary dark enough to carry white text at 4.5:1 (6.7:1). Agent mode
+   * fills the Notify autonomy cell with it. */
+  --fe-primary-deep: #1d4ed8;
+
   /* Semantic state hues */
   --fe-caution: #f59e0b; /* spam, quota, degraded */
   --fe-danger: #f87171; /* danger on dark */
@@ -156,6 +160,23 @@
   --state-active-fill: var(--fe-signal);
   --state-success-fill: var(--fe-mint);
   --state-caution-fill: var(--fe-caution);
+
+  /* Autonomy levels (agent mode). One fill per level, each carrying white or
+   * near-white text at 4.5:1 or better in both themes, so these are not
+   * redefined under .dark. Approve uses the existing --fe-caution-deep
+   * (amber-800) rather than amber-700: it is darker and already the
+   * caution text colour. Level is never conveyed by colour alone; the
+   * selected cell always shows the level name. */
+  --autonomy-off-bg: var(--fe-n-400);
+  --autonomy-off-fg: var(--fe-n-700);
+  --autonomy-draft-bg: var(--fe-n-400);
+  --autonomy-draft-fg: var(--fe-n-700);
+  --autonomy-approve-bg: var(--fe-caution-deep);
+  --autonomy-approve-fg: var(--fe-l-000);
+  --autonomy-notify-bg: var(--fe-primary-deep);
+  --autonomy-notify-fg: var(--fe-l-000);
+  --autonomy-silent-bg: var(--fe-mint-deep);
+  --autonomy-silent-fg: var(--fe-l-000);
 
   /* Focus */
   --focus-ring: var(--fe-primary);

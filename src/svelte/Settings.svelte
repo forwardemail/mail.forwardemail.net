@@ -227,6 +227,7 @@
   let blockRemoteImages = $state(false);
   let spamReportAddress = $state('');
   let notifyAppUpdates = $state(true);
+  let agentMode = $state(false);
   let blockTrackingPixels = $state(true);
   let viewPlainText = $state(false);
   let hideCompletedTodosValue = $state(false);
@@ -749,6 +750,7 @@
         getEffectiveSettingValue('spam_report_address', { account: currentAcct }) || '',
       ).trim() || DEFAULT_SPAM_REPORT_ADDRESS;
     notifyAppUpdates = getEffectiveSettingValue('notify_app_updates') !== false;
+    agentMode = getEffectiveSettingValue('agent_mode') === true;
     blockTrackingPixels = Boolean(
       getEffectiveSettingValue('block_tracking_pixels', { account: currentAcct }),
     );
@@ -1326,6 +1328,18 @@
       );
     } catch (err) {
       showMutationError(err, 'Failed to save send default');
+    }
+  };
+
+  const toggleAgentMode = () => {
+    try {
+      setSettingValue('agent_mode', agentMode, { account: getAccountId() });
+      toasts?.show?.(
+        agentMode ? 'Agent mode on. Switch to Agents from the sidebar.' : 'Agent mode off',
+        'success',
+      );
+    } catch (err) {
+      showMutationError(err, 'Failed to update agent mode');
     }
   };
 
@@ -2070,6 +2084,26 @@
             </Card.Content>
           </Card.Root>
         </div>
+
+        <Card.Root>
+          <Card.Header>
+            <Card.Title>Agent mode (preview)</Card.Title>
+            <Card.Description>
+              Supervise AI agents that send and receive as their own addresses on your domain.
+            </Card.Description>
+          </Card.Header>
+          <Card.Content class="space-y-4">
+            <label class="flex items-center gap-3">
+              <Checkbox bind:checked={agentMode} onCheckedChange={toggleAgentMode} />
+              <span>Show agent mode</span>
+            </label>
+            <p class="text-sm text-muted-foreground">
+              Adds a Mail and Agents switch to the sidebar. Agents run as your own software over the
+              API, SMTP or MCP; Forward Email enforces their policies, holds what needs your
+              approval and keeps an audit log. This preview uses sample data.
+            </p>
+          </Card.Content>
+        </Card.Root>
 
         <!-- In-app account deletion (App Store 5.1.1(v) / Google Play). Distinct
              from "Sign out", which only removes the account from this device. -->

@@ -521,4 +521,65 @@ describe('mutation-queue', () => {
     expect(count).toBe(1);
     expect(get(queueModule.mutationQueueCount)).toBe(1);
   });
+  describe('agentDecision', () => {
+    const useServer = () =>
+      localGetMock.mockImplementation((key: string) =>
+        key === 'email' ? 'user@example.com' : key === 'agent_mode_backend' ? 'server' : null,
+      );
+
+    // Another device decided first. That is an outcome to show, not a
+    // failure to retry, so the mutation completes and the store hears about it.
+    it('completes on a 409 and hands the current state to the agent store', async () => {
+      useServer();
+      const settled = vi.fn();
+      globalThis.addEventListener('fe:agent-decision-settled', settled);
+      remoteRequestMock.mockImplementation(
+        async (_action: string, _body: unknown, opts: { method?: string }) => {
+          if (opts?.method === 'POST') throw Object.assign(new Error('Conflict'), { status: 409 });
+          return { id: 'act_1', status: 'rejected', version: 2 };
+        },
+      );
+
+      await queueModule.queueMutation('agentDecision', {
+        actionId: 'act_1',
+        verb: 'approve',
+        ifVersion: 1,
+        mock: false,
+      });
+      await drainMicrotasks();
+
+      expect(remoteRequestMock).toHaveBeenCalledWith(
+        'AgentActionDecide',
+        { if_version: 1 },
+        { method: 'POST', pathOverride: '/v1/agent-actions/act_1/approve' },
+      );
+      expect(metaStore.get('mutation_queue_user@example.com')?.value).toEqual([]);
+      expect(settled).toHaveBeenCalledTimes(1);
+      expect((settled.mock.calls[0][0] as CustomEvent).detail.result).toMatchObject({
+        ok: false,
+        conflict: true,
+        action: { status: 'rejected' },
+      });
+      globalThis.removeEventListener('fe:agent-decision-settled', settled);
+    });
+
+    it('keeps the decision queued when the network fails', async () => {
+      useServer();
+      remoteRequestMock.mockRejectedValue(Object.assign(new Error('Network'), { status: 0 }));
+
+      await queueModule.queueMutation('agentDecision', {
+        actionId: 'act_1',
+        verb: 'reject',
+        ifVersion: 1,
+        mock: false,
+      });
+      await drainMicrotasks();
+
+      const [queued] = metaStore.get('mutation_queue_user@example.com')?.value as Array<{
+        status: string;
+        retryCount: number;
+      }>;
+      expect(queued).toMatchObject({ status: 'pending', retryCount: 1 });
+    });
+  });
 });

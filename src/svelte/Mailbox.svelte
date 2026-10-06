@@ -103,7 +103,10 @@
     getEffectiveSettingValue,
     setSettingValue,
     localSettingsVersion,
+    agentModeEnabled,
   } from '../stores/settingsStore';
+  import ModeSwitch from './components/agents/ModeSwitch.svelte';
+  import { loadAgents, waitingOnYou, unusual as agentUnusual } from '../stores/agentStore';
   import { hasAnsweredFlag } from '../utils/threading';
   import {
     folders as foldersStore,
@@ -265,6 +268,16 @@
     applyTheme = () => {},
     registerApi = () => {},
   }: Props = $props();
+
+  // Agent mode: fetch once when enabled so the switch can show a waiting count.
+  let agentsPrimed = false;
+  $effect(() => {
+    if ($agentModeEnabled && !agentsPrimed) {
+      agentsPrimed = true;
+      void loadAgents();
+    }
+  });
+  const agentWaitingCount = $derived($waitingOnYou.length + $agentUnusual.pending.length);
 
   // Handle active as either a boolean or a store
   let isActive = $state(typeof active === 'boolean' ? active : true);
@@ -6143,6 +6156,11 @@
             style={$sidebarOpen ? `width:${sidebarWidth}px;min-width:${sidebarWidth}px` : ''}
             data-testid="mailbox-sidebar"
           >
+            {#if $agentModeEnabled}
+              <div class="mb-2">
+                <ModeSwitch mode="mail" pendingCount={agentWaitingCount} {navigate} />
+              </div>
+            {/if}
             <div>
               <Button
                 class="w-full gap-2"

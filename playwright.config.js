@@ -67,7 +67,7 @@ export default defineConfig({
     {
       name: 'mobile-android-web',
       use: { ...devices['Pixel 7'] },
-      testMatch: [/smoke\//, /mailbox\.spec/, /adapters\/web\//],
+      testMatch: [/smoke\//, /mailbox\.spec/, /agents\.spec/, /adapters\/web\//],
     },
     {
       name: 'mobile-ios-web',

@@ -740,6 +740,17 @@
         });
         return res.ok;
       }
+      case 'agentDecision': {
+        // 409 (another device decided first) and 422 (policy has since
+        // tightened) are outcomes, not failures, so they complete; the page
+        // shows them on its next load.
+        const verb = payload.verb === 'approve' ? 'approve' : 'reject';
+        const res = await fetchWithTimeout(
+          `${base}/v1/agent-actions/${encodeURIComponent(payload.actionId)}/${verb}`,
+          { method: 'POST', headers, body: JSON.stringify({ if_version: payload.ifVersion }) },
+        );
+        return res.ok || res.status === 409 || res.status === 422;
+      }
       default:
         return false;
     }
@@ -764,6 +775,9 @@
         if (mutation.status === 'completed') continue;
         if (mutation.status === 'failed' && mutation.retryCount >= MUTATION_MAX_RETRIES) continue;
         if (mutation.nextRetryAt && Date.now() < mutation.nextRetryAt) continue;
+        // Agent decisions against the in-page mock backend have no server to
+        // reach. Leave them for the page to process.
+        if (mutation.type === 'agentDecision' && mutation.payload?.mock) continue;
 
         mutation.status = 'processing';
         modified = true;
