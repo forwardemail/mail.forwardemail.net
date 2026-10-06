@@ -28,7 +28,15 @@ const GITHUB_RELEASES_URL =
   'https://api.github.com/repos/forwardemail/mail.forwardemail.net/releases/latest';
 const CHECK_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes fallback polling
 const VISIBILITY_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes between visibility re-checks
-const VERSION_KEY = 'webmail_current_version';
+// Last reload we triggered for a release: { version, at }. Only used to stop
+// a reload loop when the server still hands out the old bundle (deploy lag,
+// service worker not yet swapped). It is never treated as the running version.
+const ATTEMPT_KEY = 'webmail_update_attempt';
+const ATTEMPT_COOLDOWN_MS = 10 * 60 * 1000;
+// Older builds stored the version they were about to reload into here and then
+// read it back as the running version, so a reload that still served the old
+// bundle looked up to date forever.
+const LEGACY_VERSION_KEY = 'webmail_current_version';
 
 let _currentVersion = null;
 let _latestVersion = null;
@@ -70,12 +78,15 @@ function compareSemver(a, b) {
 }
 
 /**
- * Get the current app version from the build metadata.
+ * Get the version of the bundle that is actually running.
+ *
+ * This must come from the code itself. Anything persisted (localStorage) can
+ * describe a version we tried to load rather than the one we got.
  */
 function getCurrentVersion() {
   if (_currentVersion) return _currentVersion;
 
-  // Try meta tag first (set during build by vite transformIndexHtml)
+  // Test/override hook; production builds do not emit this tag.
   try {
     const meta = document.querySelector('meta[name="app-version"]');
     if (meta?.content) {
@@ -86,21 +97,11 @@ function getCurrentVersion() {
     // ignore
   }
 
-  // Try localStorage (set during previous update check)
   try {
-    const stored = localStorage.getItem(VERSION_KEY);
-    if (stored) {
-      _currentVersion = stored;
-      return _currentVersion;
-    }
-  } catch {
-    // ignore
-  }
-
-  // Fallback: import.meta.env
-  try {
-    if (typeof import.meta !== 'undefined' && import.meta.env?.VITE_APP_VERSION) {
-      _currentVersion = import.meta.env.VITE_APP_VERSION;
+    const env = import.meta.env || {};
+    const bundled = env.VITE_PKG_VERSION || env.VITE_APP_VERSION;
+    if (bundled) {
+      _currentVersion = bundled;
       return _currentVersion;
     }
   } catch {
@@ -108,6 +109,35 @@ function getCurrentVersion() {
   }
 
   return null;
+}
+
+function readAttempt() {
+  try {
+    const raw = localStorage.getItem(ATTEMPT_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeAttempt(version) {
+  try {
+    localStorage.setItem(ATTEMPT_KEY, JSON.stringify({ version, at: Date.now() }));
+  } catch {
+    // ignore
+  }
+}
+
+function clearStaleAttempt(current) {
+  try {
+    localStorage.removeItem(LEGACY_VERSION_KEY);
+    const attempt = readAttempt();
+    if (attempt?.version && compareSemver(current, attempt.version) >= 0) {
+      localStorage.removeItem(ATTEMPT_KEY);
+    }
+  } catch {
+    // ignore
+  }
 }
 
 /**
@@ -141,35 +171,34 @@ async function checkGitHubReleases() {
  * Handle a new version being detected from any channel.
  * If the version is newer than the current one, invokes onUpdateAvailable.
  */
-function handleNewVersion(releaseInfo) {
+function handleNewVersion(releaseInfo, { force = false } = {}) {
   if (!releaseInfo?.version) return;
 
   const current = getCurrentVersion();
-  if (!current) {
-    // No current version known — store this as current and don't reload
-    _currentVersion = releaseInfo.version;
-    try {
-      localStorage.setItem(VERSION_KEY, releaseInfo.version);
-    } catch {
-      // ignore
-    }
-    return;
-  }
+  if (!current) return;
 
   // Only proceed if this is strictly newer than current
   if (compareSemver(releaseInfo.version, current) <= 0) return;
 
   // Only proceed if this is newer than any version we've already seen
-  if (_latestVersion && compareSemver(releaseInfo.version, _latestVersion) <= 0) return;
+  if (!force && _latestVersion && compareSemver(releaseInfo.version, _latestVersion) <= 0) {
+    return;
+  }
+
+  // We already reloaded for this release recently and still came back on the
+  // old bundle. Wait out the cooldown instead of looping; a later check retries.
+  // A manual check (force) always tries again.
+  const attempt = readAttempt();
+  if (
+    !force &&
+    attempt?.version === releaseInfo.version &&
+    Date.now() - Number(attempt.at || 0) < ATTEMPT_COOLDOWN_MS
+  ) {
+    return;
+  }
 
   _latestVersion = releaseInfo.version;
-
-  // Store the new version so we know it after reload
-  try {
-    localStorage.setItem(VERSION_KEY, releaseInfo.version);
-  } catch {
-    // ignore
-  }
+  writeAttempt(releaseInfo.version);
 
   if (_onUpdateAvailable) {
     _onUpdateAvailable({
@@ -235,6 +264,9 @@ function handleWsNewRelease(data) {
 function start(options = {}) {
   _onUpdateAvailable = options.onUpdateAvailable || null;
 
+  const current = getCurrentVersion();
+  if (current) clearStaleAttempt(current);
+
   // Subscribe to WebSocket newRelease events if a client is provided
   if (options.wsClient && typeof options.wsClient.on === 'function') {
     _wsUnsubscribe = options.wsClient.on('newRelease', handleWsNewRelease);
@@ -274,7 +306,7 @@ async function checkNow() {
   const release = await checkGitHubReleases();
   const current = getCurrentVersion();
   if (release) {
-    handleNewVersion(release);
+    handleNewVersion(release, { force: true });
     return {
       upToDate: compareSemver(release.version, current) <= 0,
       currentVersion: current,
@@ -286,6 +318,50 @@ async function checkNow() {
     currentVersion: current,
     latestVersion: current,
   };
+}
+
+/**
+ * Fetch the latest service worker and wait until it controls the origin.
+ *
+ * The precache serves index.html, so reloading while the old worker is still
+ * in charge just boots the old bundle again. registration.update() resolves
+ * as soon as the new script is fetched, long before its precache install has
+ * finished, which is why a fixed short delay was not enough.
+ *
+ * Resolves true once a new worker is activated, false when there was nothing
+ * new to install, it failed, or the timeout ran out.
+ */
+async function waitForServiceWorkerUpdate(registration, timeoutMs = 20_000) {
+  const reg =
+    registration ||
+    (typeof navigator !== 'undefined' && navigator.serviceWorker
+      ? await navigator.serviceWorker.getRegistration().catch(() => null)
+      : null);
+  if (!reg) return false;
+
+  await reg.update().catch(() => {});
+
+  const worker = reg.installing || reg.waiting;
+  if (!worker) return false;
+
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (result) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      worker.removeEventListener('statechange', onState);
+      resolve(result);
+    };
+    const onState = () => {
+      if (worker.state === 'installed') worker.postMessage({ type: 'SKIP_WAITING' });
+      else if (worker.state === 'activated') finish(true);
+      else if (worker.state === 'redundant') finish(false);
+    };
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    worker.addEventListener('statechange', onState);
+    onState();
+  });
 }
 
 /**
@@ -326,4 +402,5 @@ export {
   checkNow,
   compareSemver,
   handleWsNewRelease,
+  waitForServiceWorkerUpdate,
 };

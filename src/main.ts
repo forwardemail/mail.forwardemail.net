@@ -3082,32 +3082,17 @@ async function bootstrap() {
           // Notification permission may not be granted — that's fine
         }
 
-        // 4. Trigger SW update so the new precache manifest is fetched
+        // 4. Wait for the new service worker to take over. Its precache serves
+        // index.html, so reloading under the old worker boots the old bundle
+        // (and the old version in Settings) again.
         try {
-          const reg = globalThis.__swRegistration;
-          if (reg) {
-            await reg.update().catch(() => {});
-            // If a new SW is waiting, tell it to activate
-            if (reg.waiting) {
-              reg.waiting.postMessage({ type: 'SKIP_WAITING' });
-              // Give the SW a moment to activate before reload
-              await new Promise((r) => setTimeout(r, 500));
-            }
-          }
+          const { waitForServiceWorkerUpdate } = await import('./utils/web-updater.js');
+          await waitForServiceWorkerUpdate(globalThis.__swRegistration);
         } catch {
           // SW may not be available
         }
 
-        // 5. Store the new version so we recognise it after reload
-        if (version) {
-          try {
-            localStorage.setItem('webmail_current_version', version);
-          } catch {
-            // ignore
-          }
-        }
-
-        // 6. Reload after a short delay so the toast is visible
+        // 5. Reload after a short delay so the toast is visible
         setTimeout(() => {
           globalThis.location.reload();
         }, 1200);

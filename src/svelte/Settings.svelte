@@ -242,6 +242,9 @@
   let success = $state('');
   let alertClearTimer: ReturnType<typeof setTimeout> | undefined;
   let databaseVersion = $state(CURRENT_SCHEMA_VERSION);
+  // Version of the running bundle; on Tauri replaced by the native binary's
+  // version, which is what the stores and the updater see.
+  let appVersion = $state(import.meta.env.VITE_PKG_VERSION || '0.0.0');
   let databaseRecordCount = $state(0);
   let shortcutsList = $state<
     { label: string; key?: string; keys?: string[]; originalKey?: string }[]
@@ -493,7 +496,10 @@
       try {
         const { getAppVersion } = await import('../utils/tauri-bridge');
         const native = await getAppVersion();
-        if (native) installedVersion = native;
+        if (native) {
+          installedVersion = native;
+          appVersion = native;
+        }
       } catch {
         // keep the build-time fallback
       }
@@ -617,6 +623,14 @@
   };
 
   onMount(() => {
+    if (isTauri) {
+      import('../utils/tauri-bridge')
+        .then(({ getAppVersion }) => getAppVersion())
+        .then((native) => {
+          if (native) appVersion = native;
+        })
+        .catch(() => {});
+    }
     loadFromStorage();
     loadShortcuts();
     loadDatabaseInfo();
@@ -3482,7 +3496,7 @@
             <Card.Title>Version Information</Card.Title>
           </Card.Header>
           <Card.Content class="text-sm space-y-2">
-            <div><strong>App Version:</strong> {import.meta.env.VITE_PKG_VERSION || '0.0.0'}</div>
+            <div><strong>App Version:</strong> {appVersion}</div>
             <div><strong>Database Schema:</strong> v{databaseVersion}</div>
             <div class="pt-2">
               <Button

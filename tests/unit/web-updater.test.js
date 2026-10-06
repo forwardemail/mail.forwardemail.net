@@ -204,3 +204,158 @@ describe('start and stop lifecycle', () => {
     expect(unsub).toHaveBeenCalled();
   });
 });
+
+// ── running version vs persisted state ────────────────────────────────────
+
+describe('running version detection', () => {
+  let updater;
+  let updateCallback;
+
+  async function load(running) {
+    vi.resetModules();
+    const meta = document.createElement('meta');
+    meta.name = 'app-version';
+    meta.content = running;
+    document.head.appendChild(meta);
+    updater = await import('../../src/utils/web-updater.js');
+    updateCallback = vi.fn();
+    updater.start({ onUpdateAvailable: updateCallback });
+  }
+
+  beforeEach(() => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: false, json: async () => ({}) });
+  });
+
+  afterEach(() => {
+    updater?.stop();
+    document.querySelector('meta[name="app-version"]')?.remove();
+    localStorage.clear();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('still offers the update when an older build stored the new version as current', async () => {
+    // A reload that came back on the old bundle used to leave this behind and
+    // the stale tab then believed it was already up to date.
+    localStorage.setItem('webmail_current_version', '2.0.0');
+    await load('1.0.0');
+
+    updater.handleWsNewRelease({ release: { tagName: 'v2.0.0' } });
+
+    expect(updateCallback).toHaveBeenCalledWith(
+      expect.objectContaining({ currentVersion: '1.0.0', newVersion: '2.0.0' }),
+    );
+    expect(localStorage.getItem('webmail_current_version')).toBeNull();
+  });
+
+  it('does not reload again for the same release within the cooldown', async () => {
+    localStorage.setItem(
+      'webmail_update_attempt',
+      JSON.stringify({ version: '2.0.0', at: Date.now() - 60_000 }),
+    );
+    await load('1.0.0');
+
+    updater.handleWsNewRelease({ release: { tagName: 'v2.0.0' } });
+
+    expect(updateCallback).not.toHaveBeenCalled();
+  });
+
+  it('retries the same release once the cooldown has passed', async () => {
+    localStorage.setItem(
+      'webmail_update_attempt',
+      JSON.stringify({ version: '2.0.0', at: Date.now() - 11 * 60_000 }),
+    );
+    await load('1.0.0');
+
+    updater.handleWsNewRelease({ release: { tagName: 'v2.0.0' } });
+
+    expect(updateCallback).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears the attempt once the new bundle is running', async () => {
+    localStorage.setItem(
+      'webmail_update_attempt',
+      JSON.stringify({ version: '2.0.0', at: Date.now() }),
+    );
+    await load('2.0.0');
+
+    expect(localStorage.getItem('webmail_update_attempt')).toBeNull();
+  });
+
+  it('manual check reports the running version and retries inside the cooldown', async () => {
+    localStorage.setItem(
+      'webmail_update_attempt',
+      JSON.stringify({ version: '2.0.0', at: Date.now() }),
+    );
+    await load('1.0.0');
+    globalThis.fetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({ tag_name: 'v2.0.0' }),
+    });
+
+    const result = await updater.checkNow();
+
+    expect(result).toMatchObject({ upToDate: false, currentVersion: '1.0.0' });
+    expect(updateCallback).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── waitForServiceWorkerUpdate ────────────────────────────────────────────
+
+describe('waitForServiceWorkerUpdate', () => {
+  function fakeWorker(state) {
+    const listeners = new Set();
+    return {
+      state,
+      postMessage: vi.fn(),
+      addEventListener: (_type, fn) => listeners.add(fn),
+      removeEventListener: (_type, fn) => listeners.delete(fn),
+      go(next) {
+        this.state = next;
+        for (const fn of listeners) fn();
+      },
+    };
+  }
+
+  it('resolves false when there is no new worker', async () => {
+    const { waitForServiceWorkerUpdate } = await import('../../src/utils/web-updater.js');
+    const reg = { update: vi.fn().mockResolvedValue(undefined), installing: null, waiting: null };
+
+    await expect(waitForServiceWorkerUpdate(reg)).resolves.toBe(false);
+    expect(reg.update).toHaveBeenCalled();
+  });
+
+  it('waits for the installing worker to activate, asking it to skip waiting', async () => {
+    const { waitForServiceWorkerUpdate } = await import('../../src/utils/web-updater.js');
+    const worker = fakeWorker('installing');
+    const reg = { update: vi.fn().mockResolvedValue(undefined), installing: worker, waiting: null };
+
+    let settled = false;
+    const pending = waitForServiceWorkerUpdate(reg).then((v) => {
+      settled = true;
+      return v;
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    worker.go('installed');
+    expect(worker.postMessage).toHaveBeenCalledWith({ type: 'SKIP_WAITING' });
+    worker.go('activated');
+
+    await expect(pending).resolves.toBe(true);
+  });
+
+  it('gives up after the timeout', async () => {
+    vi.useFakeTimers();
+    const { waitForServiceWorkerUpdate } = await import('../../src/utils/web-updater.js');
+    const worker = fakeWorker('installing');
+    const reg = { update: vi.fn().mockResolvedValue(undefined), installing: worker, waiting: null };
+
+    const pending = waitForServiceWorkerUpdate(reg, 1000);
+    await vi.advanceTimersByTimeAsync(1000);
+
+    await expect(pending).resolves.toBe(false);
+    vi.useRealTimers();
+  });
+});
