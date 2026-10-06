@@ -24,6 +24,13 @@ fail() {
   exit 1
 }
 
+# A file's path with its folder's symlinks resolved, so one folder reached by
+# two paths compares equal. POSIX sh has no `test -ef`.
+physical_path() {
+  dir="$(cd -P -- "$(dirname -- "$1")" 2>/dev/null && pwd -P)" || return 1
+  printf '%s/%s\n' "$dir" "$(basename -- "$1")"
+}
+
 case "$(uname -s)" in
   Linux) os=linux ;;
   Darwin) os=darwin ;;
@@ -95,7 +102,8 @@ case ":${PATH}:" in
     # Another copy earlier on PATH (an npm install, an older download) is the
     # one a shell runs, and `forwardemail --version` would keep reporting it.
     found="$(command -v forwardemail 2>/dev/null || true)"
-    if [ -n "$found" ] && ! [ "$found" -ef "${INSTALL_DIR}/forwardemail" ]; then
+    if [ -n "$found" ] &&
+      [ "$(physical_path "$found")" != "$(physical_path "${INSTALL_DIR}/forwardemail")" ]; then
       other="$("$found" --version 2>/dev/null || true)"
       printf '\nAnother forwardemail (%s) comes first on your PATH: %s\n' "${other:-unknown version}" "$found"
       printf 'Remove it (an npm install: npm uninstall -g forwardemail) or put %s before it on your PATH.\n' "$INSTALL_DIR"
