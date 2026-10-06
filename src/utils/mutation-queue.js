@@ -8,12 +8,13 @@ import { warn } from './logger.ts';
 import { isOnline } from './network-status';
 import { swReadyWithTimeout, isTauri } from './platform.js';
 import { exponentialBackoff } from './backoff.js';
-import { labelChangeBody, queuedToggleBody } from './message-changes.ts';
+import { addFlagsBody, labelChangeBody, queuedToggleBody } from './message-changes.ts';
 
 /**
  * Offline Mutation Queue
  *
- * Queues mail operations (toggle read, star, move, delete, label) when offline.
+ * Queues mail operations (toggle read, star, move, delete, label, and flags
+ * set by a reply) when offline.
  * Processes the queue when connectivity is restored.
  *
  * Mutations are stored in the IndexedDB `meta` table under a per-account key
@@ -21,7 +22,7 @@ import { labelChangeBody, queuedToggleBody } from './message-changes.ts';
  *
  * Each mutation has:
  *   id:        unique identifier
- *   type:      'toggleRead' | 'toggleStar' | 'move' | 'delete' | 'label'
+ *   type:      'toggleRead' | 'toggleStar' | 'addFlags' | 'move' | 'delete' | 'label'
  *   payload:   operation-specific data (messageId, folder, flags, etc.)
  *   status:    'pending' | 'processing' | 'failed'
  *   retryCount: number of attempts
@@ -87,6 +88,10 @@ export async function getQueuedMessageIds(account) {
   const ids = new Set();
   for (const m of queue) {
     if (m.status === 'completed') continue;
+    // Not a flag only added (\Answered): holding the message back from sync
+    // would also hide it being moved or deleted elsewhere until the change
+    // goes through.
+    if (m.type === 'addFlags') continue;
     const id = m.payload?.messageId;
     if (id) ids.add(id);
   }
@@ -180,6 +185,16 @@ async function executeMutation(mutation) {
     case 'toggleRead':
     case 'toggleStar': {
       await Remote.request('MessageUpdate', queuedToggleBody(type, payload), {
+        method: 'PUT',
+        pathOverride: `/v1/messages/${encodeURIComponent(payload.messageId)}`,
+      });
+      return true;
+    }
+
+    // Flags only ever added (\Answered on the message a reply answered), so a
+    // change that keeps failing has nothing to undo.
+    case 'addFlags': {
+      await Remote.request('MessageUpdate', addFlagsBody(payload.flags, payload.add), {
         method: 'PUT',
         pathOverride: `/v1/messages/${encodeURIComponent(payload.messageId)}`,
       });
@@ -289,11 +304,16 @@ export async function processMutationQueue() {
       });
 
       if (permanentlyFailed.length && typeof window !== 'undefined') {
-        window.dispatchEvent(
-          new CustomEvent('mutation-queue-failed', {
-            detail: { count: permanentlyFailed.length },
-          }),
-        );
+        // A flag a reply set is not a change the user made, and there is
+        // nothing for them to try again.
+        const userChanges = permanentlyFailed.filter((m) => m.type !== 'addFlags');
+        if (userChanges.length) {
+          window.dispatchEvent(
+            new CustomEvent('mutation-queue-failed', {
+              detail: { count: userChanges.length },
+            }),
+          );
+        }
         dispatchPermanentFailures(permanentlyFailed);
       }
     }

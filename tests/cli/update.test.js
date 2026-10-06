@@ -12,10 +12,14 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   assetName,
   backgroundUpdate,
+  checkForTerminalUpdate,
   cleanupPreviousBinary,
   compareVersions,
+  detectInstall,
+  detectPackageManager,
   installBinary,
   parseChecksums,
+  updatePackageInstall,
 } from '../../src/cli/update';
 
 const sha256 = (data) => createHash('sha256').update(data).digest('hex');
@@ -222,5 +226,306 @@ describe('backgroundUpdate', () => {
         fetchImpl: localFetch,
       }),
     ).toBeNull();
+  });
+
+  it('says so when a newer binary cannot be installed, instead of keeping quiet', async () => {
+    // A folder that cannot take the new file, as for an executable installed
+    // where the user cannot write.
+    const target = path.join(dir, 'missing', 'forwardemail');
+    publish('9.9.9', 'new build');
+    const stateFile = path.join(dir, 'update.json');
+    const originalExecPath = process.execPath;
+    Object.defineProperty(process, 'execPath', { value: target, configurable: true });
+    try {
+      const message = await backgroundUpdate({
+        version: '1.0.0',
+        stateFile,
+        install: 'binary',
+        fetchImpl: localFetch,
+      });
+      expect(message).toContain('Forward Email 9.9.9 is available (you have 1.0.0)');
+      expect(message).toContain('installing it failed');
+
+      // Later that day it is still pointed out, without asking GitHub again.
+      routes.clear();
+      expect(
+        await backgroundUpdate({
+          version: '1.0.0',
+          stateFile,
+          install: 'binary',
+          fetchImpl: localFetch,
+        }),
+      ).toBe('Forward Email 9.9.9 is available (you have 1.0.0). Update with: forwardemail update');
+    } finally {
+      Object.defineProperty(process, 'execPath', { value: originalExecPath, configurable: true });
+    }
+  });
+});
+
+// The shell's view of PATH runs these stand-ins, and they need node and sh.
+const posixOnly = it.skipIf(process.platform === 'win32');
+const envWith = (...dirs) => ({
+  ...process.env,
+  PATH: [...dirs, path.dirname(process.execPath), '/usr/bin', '/bin'].join(path.delimiter),
+});
+
+// A global install laid out the way a package manager does it: the package
+// in its own folder, and a link to the package's entry in a bin folder.
+function globalInstall(root, packageDir) {
+  const entry = path.join(root, packageDir, 'dist', 'forwardemail.cjs');
+  fs.mkdirSync(path.dirname(entry), { recursive: true });
+  fs.writeFileSync(entry, '#!/usr/bin/env node\n', { mode: 0o755 });
+  const binDir = path.join(root, 'bin');
+  fs.mkdirSync(binDir, { recursive: true });
+  const link = path.join(binDir, 'forwardemail');
+  fs.symlinkSync(path.relative(binDir, entry), link);
+  return link;
+}
+
+// A `forwardemail` on PATH that prints `version`.
+function forwardemailOnPath(binDir, version) {
+  fs.mkdirSync(binDir, { recursive: true });
+  fs.writeFileSync(path.join(binDir, 'forwardemail'), `#!/bin/sh\necho ${version}\n`, {
+    mode: 0o755,
+  });
+}
+
+// A package manager on PATH that records its arguments and, with `upgradeTo`,
+// leaves a forwardemail that reports that version in its own folder.
+function packageManagerOnPath(binDir, name, { upgradeTo, exitCode = 0 } = {}) {
+  fs.mkdirSync(binDir, { recursive: true });
+  const log = path.join(binDir, `${name}-args.json`);
+  const installed = path.join(binDir, 'forwardemail');
+  const lines = [
+    '#!/usr/bin/env node',
+    "const fs = require('fs');",
+    `fs.writeFileSync(${JSON.stringify(log)}, JSON.stringify(process.argv.slice(2)));`,
+    upgradeTo
+      ? `fs.writeFileSync(${JSON.stringify(installed)}, '#!/bin/sh\\necho ${upgradeTo}\\n', { mode: 0o755 });`
+      : '',
+    `process.exit(${exitCode});`,
+  ];
+  fs.writeFileSync(path.join(binDir, name), lines.join('\n'), { mode: 0o755 });
+  return () => JSON.parse(fs.readFileSync(log, 'utf8'));
+}
+
+describe('which install this is', () => {
+  posixOnly('follows the bin link of a global npm install into node_modules', () => {
+    // Run as `forwardemail`, process.argv[1] is this link, not the package.
+    const link = globalInstall(
+      path.join(dir, 'prefix'),
+      path.join('lib', 'node_modules', 'forwardemail'),
+    );
+    expect(link.split(path.sep)).not.toContain('node_modules');
+    expect(detectInstall(link)).toBe('npm');
+    expect(detectPackageManager(link)).toBe('npm');
+  });
+
+  it('treats a copy outside node_modules as a source checkout', () => {
+    const file = path.join(dir, 'checkout', 'cli', 'dist', 'forwardemail.cjs');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, '');
+    expect(detectInstall(file)).toBe('source');
+  });
+
+  posixOnly('tells pnpm, Yarn and Bun global installs apart', () => {
+    const pnpm = globalInstall(
+      path.join(dir, 'pnpm-home'),
+      path.join(
+        'global',
+        '5',
+        'node_modules',
+        '.pnpm',
+        'forwardemail@1.0.0',
+        'node_modules',
+        'forwardemail',
+      ),
+    );
+    const yarn = globalInstall(
+      path.join(dir, '.config', 'yarn'),
+      path.join('global', 'node_modules', 'forwardemail'),
+    );
+    const bun = globalInstall(
+      path.join(dir, '.bun', 'install'),
+      path.join('global', 'node_modules', 'forwardemail'),
+    );
+    expect(detectPackageManager(pnpm)).toBe('pnpm');
+    expect(detectPackageManager(yarn)).toBe('yarn');
+    expect(detectPackageManager(bun)).toBe('bun');
+    for (const link of [pnpm, yarn, bun]) expect(detectInstall(link)).toBe('npm');
+  });
+
+  posixOnly('keeps npm for an npm install under a Node that pnpm manages', () => {
+    const link = globalInstall(
+      path.join(dir, '.local', 'share', 'pnpm', 'nodejs', '22'),
+      path.join('lib', 'node_modules', 'forwardemail'),
+    );
+    expect(detectPackageManager(link)).toBe('npm');
+  });
+});
+
+describe('forwardemail update for a package install', () => {
+  const run = (options) => {
+    const out = [];
+    const err = [];
+    return updatePackageInstall({
+      ...options,
+      print: (text) => out.push(text),
+      printError: (text) => err.push(text),
+    }).then((code) => ({ code, out: out.join('\n'), err: err.join('\n') }));
+  };
+
+  posixOnly('runs the package manager that installed it and reports the new version', async () => {
+    const bin = path.join(dir, 'bin');
+    forwardemailOnPath(bin, '1.0.0');
+    const args = packageManagerOnPath(bin, 'pnpm', { upgradeTo: '9.9.9' });
+    const result = await run({ version: '1.0.0', manager: 'pnpm', env: envWith(bin) });
+    expect(args()).toEqual(['add', '--global', 'forwardemail@latest']);
+    expect(result).toMatchObject({ code: 0, err: '' });
+    expect(result.out).toContain('Updated Forward Email 1.0.0 → 9.9.9.');
+  });
+
+  posixOnly('says where the copy on PATH is when it still reports an older version', async () => {
+    // An older forwardemail comes first on PATH; the update lands in the
+    // package manager's own folder after it.
+    const first = path.join(dir, 'first');
+    const second = path.join(dir, 'second');
+    forwardemailOnPath(first, '0.9.0');
+    packageManagerOnPath(second, 'npm', { upgradeTo: '9.9.9' });
+    const result = await run({ version: '1.0.0', manager: 'npm', env: envWith(first, second) });
+    expect(result.code).toBe(1);
+    expect(result.err).toContain(path.join(first, 'forwardemail'));
+    expect(result.err).toContain('is 0.9.0');
+  });
+
+  posixOnly('says so when the copy on PATH is this one, still old', async () => {
+    // The npm on PATH belongs to another Node.js install and put the update
+    // in its own folder.
+    const bin = path.join(dir, 'bin');
+    const tools = path.join(dir, 'tools');
+    forwardemailOnPath(bin, '0.9.0');
+    packageManagerOnPath(tools, 'npm');
+    const result = await run({
+      version: '1.0.0',
+      manager: 'npm',
+      env: envWith(bin, tools),
+      script: path.join(bin, 'forwardemail'),
+    });
+    expect(result.code).toBe(1);
+    expect(result.err).toContain(`(${path.join(bin, 'forwardemail')}) is still 0.9.0`);
+    expect(result.err).toContain('npm prefix --global');
+  });
+
+  posixOnly('succeeds when no forwardemail is on PATH to check', async () => {
+    const tools = path.join(dir, 'tools');
+    packageManagerOnPath(tools, 'npm');
+    const result = await run({ version: '1.0.0', manager: 'npm', env: envWith(tools) });
+    expect(result.code).toBe(0);
+    expect(result.err).toContain('no forwardemail is on your PATH');
+  });
+
+  posixOnly('reports the same version as up to date', async () => {
+    const bin = path.join(dir, 'bin');
+    forwardemailOnPath(bin, '1.0.0');
+    packageManagerOnPath(bin, 'bun');
+    const result = await run({ version: '1.0.0', manager: 'bun', env: envWith(bin) });
+    expect(result).toMatchObject({ code: 0, err: '' });
+    expect(result.out).toContain('Forward Email 1.0.0 is up to date.');
+  });
+
+  posixOnly('stops with the exit code when the package manager fails', async () => {
+    const bin = path.join(dir, 'bin');
+    packageManagerOnPath(bin, 'yarn', { exitCode: 3 });
+    const result = await run({ version: '1.0.0', manager: 'yarn', env: envWith(bin) });
+    expect(result.code).toBe(3);
+    expect(result.err).toContain('yarn global add forwardemail@latest failed');
+  });
+});
+
+describe("Settings' Check for Updates in the terminal client", () => {
+  it('installs a newer release for a standalone binary, for the next start', async () => {
+    const target = path.join(dir, 'forwardemail');
+    fs.writeFileSync(target, 'old build', { mode: 0o755 });
+    publish('9.9.9', 'new build');
+    const stateFile = path.join(dir, 'update.json');
+    const result = await checkForTerminalUpdate({
+      version: '1.0.0',
+      install: 'binary',
+      fetchImpl: localFetch,
+      target,
+      stateFile,
+    });
+    expect(result).toEqual({
+      upToDate: false,
+      currentVersion: '1.0.0',
+      latestVersion: '9.9.9',
+      message: 'v9.9.9 is installed; it takes effect the next time you start forwardemail',
+    });
+    expect(fs.readFileSync(target, 'utf8')).toBe('new build');
+    expect(JSON.parse(fs.readFileSync(stateFile, 'utf8'))).toMatchObject({
+      latest: '9.9.9',
+      applied: '9.9.9',
+    });
+  });
+
+  it('does not download a release this session already installed', async () => {
+    const target = path.join(dir, 'forwardemail');
+    fs.writeFileSync(target, 'installed build', { mode: 0o755 });
+    publish('9.9.9', 'another build');
+    const stateFile = path.join(dir, 'update.json');
+    fs.writeFileSync(stateFile, JSON.stringify({ latest: '9.9.9', applied: '9.9.9' }));
+    const requests = [];
+    const result = await checkForTerminalUpdate({
+      version: '1.0.0',
+      install: 'binary',
+      fetchImpl: (input, init) => {
+        requests.push(String(input));
+        return localFetch(input, init);
+      },
+      target,
+      stateFile,
+    });
+    expect(result.message).toBe(
+      'v9.9.9 is installed; it takes effect the next time you start forwardemail',
+    );
+    expect(requests.filter((url) => url.includes('/download/'))).toEqual([]);
+    expect(fs.readFileSync(target, 'utf8')).toBe('installed build');
+  });
+
+  it('tells a package install the command to run, and changes nothing', async () => {
+    publish('9.9.9', 'new build');
+    const result = await checkForTerminalUpdate({
+      version: '1.0.0',
+      install: 'npm',
+      fetchImpl: localFetch,
+    });
+    expect(result.message).toBe(
+      'v9.9.9 is available (you have v1.0.0). Quit and run: forwardemail update',
+    );
+  });
+
+  it('says when it is up to date, and when GitHub cannot be reached', async () => {
+    publish('1.0.0', 'same build');
+    const current = await checkForTerminalUpdate({
+      version: '1.0.0',
+      install: 'binary',
+      fetchImpl: localFetch,
+    });
+    expect(current).toMatchObject({
+      upToDate: true,
+      message: "You're on the latest version (v1.0.0)",
+    });
+
+    routes.clear();
+    const offline = await checkForTerminalUpdate({
+      version: '1.0.0',
+      install: 'binary',
+      fetchImpl: localFetch,
+    });
+    expect(offline).toMatchObject({
+      upToDate: false,
+      latestVersion: null,
+      message: 'Could not check for updates',
+    });
   });
 });

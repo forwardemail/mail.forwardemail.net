@@ -55,6 +55,9 @@ export async function saveDraft(draftData, options = {}) {
     attachments: draftData.attachments || [],
     inReplyTo: draftData.inReplyTo || null,
     references: draftData.references || null,
+    // kept on this device only; the send flags that message \Answered
+    replyToMessageId: draftData.replyToMessageId || null,
+    replyToMessageFolder: draftData.replyToMessageFolder || null,
     priority: draftData.priority || 'normal',
     requestReadReceipt: draftData.requestReadReceipt || false,
     serverId: draftData.serverId || null,

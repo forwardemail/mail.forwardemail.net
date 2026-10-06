@@ -37,6 +37,13 @@ describe('markMessageAnsweredInStore', () => {
     expect(get(messages)).toHaveLength(2);
   });
 
+  it('returns the flags it set, or null for a message not in the list', () => {
+    expect(markMessageAnsweredInStore('a')).toEqual(['\\Seen', '\\Answered']);
+    expect(markMessageAnsweredInStore('b')).toEqual(['\\Seen', '\\Answered']);
+    expect(markMessageAnsweredInStore('not-loaded')).toBeNull();
+    expect(markMessageAnsweredInStore('')).toBeNull();
+  });
+
   it('is a no-op for an empty id and survives a throwing hook', () => {
     const hook = vi.fn(() => {
       throw new Error('boom');

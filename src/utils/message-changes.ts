@@ -52,6 +52,20 @@ export function flagChangeBody(
 }
 
 /**
+ * Flags added and nothing else changed (\Answered on the message a reply
+ * answered). Without the message's flags only the addition is sent: a server
+ * without flags_add then changes nothing, where a guessed whole list would
+ * replace every flag the message has.
+ *
+ * @param flags - the message's flags after the change, or null if unknown
+ * @param add - the flags added
+ */
+export function addFlagsBody(flags: unknown, add: string[]): Partial<FlagChangeBody> {
+  if (Array.isArray(flags)) return flagChangeBody(flags, { add });
+  return list(add).length > 0 ? { flags_add: list(add) } : {};
+}
+
+/**
  * @param labels - the message's labels after the change
  * @param previous - its labels before; without them only the whole list is
  *   sent (a change queued by an older release)

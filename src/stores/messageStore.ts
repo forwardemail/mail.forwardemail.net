@@ -28,9 +28,11 @@ export const messages = deferredWritable<Message[]>([]);
  * `\Answered` to IndexedDB and the server, but the row renders from this
  * in-memory list, which otherwise doesn't reflect the flag until the folder
  * is reloaded. That reload gap is why the indicator only showed "sometimes".
+ * Returns the message's flags with `\Answered`, or null when it is not in the
+ * list.
  */
-export function markMessageAnsweredInStore(messageId: string | null | undefined): void {
-  if (!messageId) return;
+export function markMessageAnsweredInStore(messageId: string | null | undefined): string[] | null {
+  if (!messageId) return null;
   const target = String(messageId);
   let nextFlags: string[] | null = null;
   messages.update((list) =>
@@ -50,6 +52,7 @@ export function markMessageAnsweredInStore(messageId: string | null | undefined)
       // The hook only protects the optimistic state; never let it break a send.
     }
   }
+  return nextFlags;
 }
 
 type AnsweredFlagHook = (messageId: string, flags: string[] | null) => void;

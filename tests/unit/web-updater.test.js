@@ -359,3 +359,56 @@ describe('waitForServiceWorkerUpdate', () => {
     vi.useRealTimers();
   });
 });
+
+// ── terminal client ───────────────────────────────────────────────────────
+
+describe('in the terminal client', () => {
+  let updater;
+
+  // A running 1.0.0 bundle and a GitHub that has 9.9.9.
+  async function load() {
+    vi.resetModules();
+    const meta = document.createElement('meta');
+    meta.name = 'app-version';
+    meta.content = '1.0.0';
+    document.head.appendChild(meta);
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({ tag_name: 'v9.9.9', html_url: 'https://example.test/release' }),
+    });
+    updater = await import('../../src/utils/web-updater.js');
+    return fetchSpy;
+  }
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  afterEach(() => {
+    updater?.stop();
+    delete globalThis.__FORWARDEMAIL_TERMINAL__;
+    document.querySelector('meta[name="app-version"]')?.remove();
+    localStorage.clear();
+    vi.restoreAllMocks();
+  });
+
+  it('finds the update in a browser (the control for the test below)', async () => {
+    const fetchSpy = await load();
+    const onUpdateAvailable = vi.fn();
+    updater.start({ onUpdateAvailable });
+    await settle();
+    expect(fetchSpy).toHaveBeenCalled();
+    expect(onUpdateAvailable).toHaveBeenCalledWith(
+      expect.objectContaining({ currentVersion: '1.0.0', newVersion: '9.9.9' }),
+    );
+  });
+
+  it('neither checks for nor announces web updates, which would reload the same code', async () => {
+    const fetchSpy = await load();
+    globalThis.__FORWARDEMAIL_TERMINAL__ = true;
+    const onUpdateAvailable = vi.fn();
+    const on = vi.fn(() => vi.fn());
+    updater.start({ onUpdateAvailable, wsClient: { on } });
+    await settle();
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(on).not.toHaveBeenCalled();
+    expect(onUpdateAvailable).not.toHaveBeenCalled();
+  });
+});

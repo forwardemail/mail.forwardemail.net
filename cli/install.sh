@@ -92,7 +92,16 @@ printf 'Installed Forward Email %s to %s/forwardemail\n' "${installed:-$VERSION}
 
 case ":${PATH}:" in
   *":${INSTALL_DIR}:"*)
-    printf 'Run: forwardemail\n'
+    # Another copy earlier on PATH (an npm install, an older download) is the
+    # one a shell runs, and `forwardemail --version` would keep reporting it.
+    found="$(command -v forwardemail 2>/dev/null || true)"
+    if [ -n "$found" ] && ! [ "$found" -ef "${INSTALL_DIR}/forwardemail" ]; then
+      other="$("$found" --version 2>/dev/null || true)"
+      printf '\nAnother forwardemail (%s) comes first on your PATH: %s\n' "${other:-unknown version}" "$found"
+      printf 'Remove it (an npm install: npm uninstall -g forwardemail) or put %s before it on your PATH.\n' "$INSTALL_DIR"
+    else
+      printf 'Run: forwardemail\n'
+    fi
     ;;
   *)
     printf '\n%s is not on your PATH. Add it, for example:\n' "$INSTALL_DIR"

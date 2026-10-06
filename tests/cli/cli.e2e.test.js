@@ -3,6 +3,7 @@
  * the command line, and the webmail itself driven through a real
  * pseudo-terminal with the demo account.
  */
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
@@ -24,6 +25,64 @@ describe('command line', () => {
     expect(result.stdout.trim()).toBe(pkg.version);
     expect(runCli(['-v'], { home: tempHome() }).stdout.trim()).toBe(pkg.version);
   });
+
+  // A global npm install starts through a link in npm's bin folder, so
+  // process.argv[1] has no node_modules in it. It was taken for a source
+  // checkout: `forwardemail update` refused and the update notice never
+  // showed, so `forwardemail --version` stayed on the old version.
+  it.skipIf(process.platform === 'win32')(
+    'updates an npm install through npm when run through its bin link',
+    () => {
+      const home = tempHome();
+      const prefix = path.join(home, 'prefix');
+      const entry = path.join(
+        prefix,
+        'lib',
+        'node_modules',
+        'forwardemail',
+        'dist',
+        'forwardemail.cjs',
+      );
+      fs.mkdirSync(path.dirname(entry), { recursive: true });
+      fs.copyFileSync(CLI, entry);
+      fs.chmodSync(entry, 0o755);
+      const bin = path.join(prefix, 'bin');
+      fs.mkdirSync(bin);
+      fs.symlinkSync(path.relative(bin, entry), path.join(bin, 'forwardemail'));
+
+      // An npm that records its arguments and installs a "9.9.9" in place.
+      const tools = path.join(home, 'tools');
+      fs.mkdirSync(tools);
+      const log = path.join(tools, 'npm-args.json');
+      fs.writeFileSync(
+        path.join(tools, 'npm'),
+        [
+          '#!/usr/bin/env node',
+          "const fs = require('fs');",
+          `fs.writeFileSync(${JSON.stringify(log)}, JSON.stringify(process.argv.slice(2)));`,
+          `fs.writeFileSync(${JSON.stringify(entry)}, '#!/usr/bin/env node\\nconsole.log("9.9.9");\\n');`,
+        ].join('\n'),
+        { mode: 0o755 },
+      );
+
+      const result = spawnSync(path.join(bin, 'forwardemail'), ['update'], {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          FORWARDEMAIL_HOME: home,
+          PATH: [bin, tools, path.dirname(process.execPath), '/usr/bin', '/bin'].join(':'),
+        },
+      });
+      expect(result.stdout).not.toContain('source checkout');
+      expect(JSON.parse(fs.readFileSync(log, 'utf8'))).toEqual([
+        'install',
+        '--global',
+        'forwardemail@latest',
+      ]);
+      expect(result.stdout).toContain(`Updated Forward Email ${pkg.version} → 9.9.9.`);
+      expect(result.status).toBe(0);
+    },
+  );
 
   it('prints help with the commands, options and the data directory', () => {
     const home = tempHome();

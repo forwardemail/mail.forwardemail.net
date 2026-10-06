@@ -591,6 +591,10 @@
   // Svelte 5 re-evaluates {#each} item classes when the selection changes.
   const activeConvId = $derived($selectedConversation?.id ?? null);
   const activeMsgId = $derived($selectedMessage?.id ?? null);
+  // The checked rows as a Set. Each row reads its own state from it once
+  // ({@const} in the row), so checking a message re-renders that row only;
+  // before, every row scanned the whole selection several times per change.
+  const selectedIdSet = $derived(new Set(($selectedConversationIds || []) as string[]));
 
   let messageBody = chooseStore(source.state?.messageBody, mailboxView?.messageBody, '');
   // Read view_plain_text reactively — re-evaluates when localSettingsVersion
@@ -6449,7 +6453,11 @@
             bind:this={messagesPaneEl}
             data-testid="message-list-pane"
           >
-            {#if $filteredConversations.length || $filteredMessages.length || $unreadOnly || $hasAttachmentsOnly || $starredOnly || ($filterByLabel && $filterByLabel.length)}
+            <!-- The toolbar goes away only once the list has settled as empty
+                 (showEmptyState). Tied to the list's length, it vanished for
+                 any moment the list was empty while loading, as on an account
+                 switch, and left nothing on screen at all. -->
+            {#if $filteredConversations.length || $filteredMessages.length || !showEmptyState || $unreadOnly || $hasAttachmentsOnly || $starredOnly || ($filterByLabel && $filterByLabel.length)}
               <div
                 class="flex items-center gap-3 px-4 py-2 border-b border-border bg-muted/30 relative z-40 overflow-visible"
               >
@@ -6457,8 +6465,10 @@
                   {#if !outboxSelected && ($filteredConversations.length || $filteredMessages.length)}
                     {@const allSelected =
                       ($threadingEnabled ? $filteredConversations : $filteredMessages).length > 0 &&
+                      selectedIdSet.size >=
+                        ($threadingEnabled ? $filteredConversations : $filteredMessages).length &&
                       ($threadingEnabled ? $filteredConversations : $filteredMessages).every(
-                        (item) => ($selectedConversationIds || []).includes(item.id),
+                        (item) => selectedIdSet.has(item.id),
                       )}
                     <button
                       class={`inline-flex items-center justify-center h-11 w-11 transition-colors ${allSelected ? 'bg-accent text-fg-link' : selectionMode ? 'bg-accent/50 text-accent-foreground' : 'hover:bg-accent hover:text-accent-foreground'}`}
@@ -7003,9 +7013,21 @@
                       aria-multiselectable="true"
                     >
                       {#each convList as conv (conv.id)}
+                        <!-- Per-row state, so a tap, a swipe or a checked
+                             message re-renders the rows it changes and not all
+                             of them: the swipe values are read only by the row
+                             being swiped. -->
+                        {@const isChecked = selectedIdSet.has(conv.id)}
+                        {@const isSwiped = swipeItemId === conv.id}
+                        {@const isOpen = activeConvId === conv.id}
+                        {@const rowSwipeDistance = isSwiped ? swipeDistance : 0}
+                        {@const rowSwiping = isSwiped && swiping}
+                        {@const rowSwipeStyle = isSwiped
+                          ? `transform: translateX(${swipeDistance}px); will-change: transform; transition: ${swiping && !swipeAnimating ? 'none' : 'transform 0.25s cubic-bezier(0.25, 0.46, 0.45, 0.94)'};`
+                          : 'transform: translateX(0px); will-change: auto; transition: transform 0.25s cubic-bezier(0.25, 0.46, 0.45, 0.94);'}
                         <div
                           role="presentation"
-                          class={`fe-msg-row relative cursor-pointer hover:bg-accent/50 transition-colors ${swipeItemId === conv.id ? 'overflow-hidden' : ''} ${activeConvId === conv.id || ($selectedConversationIds || []).includes(conv.id) ? 'msg-active' : ''}`}
+                          class={`fe-msg-row relative cursor-pointer hover:bg-accent/50 transition-colors ${isSwiped ? 'overflow-hidden' : ''} ${isOpen || isChecked ? 'msg-active' : ''}`}
                           oncontextmenu={(e) => openContextMenu(e, conv)}
                           ondblclick={(e) => {
                             const message = conv?.messages?.[conv.messages.length - 1];
@@ -7016,7 +7038,7 @@
                             }
                           }}
                         >
-                          {#if swipeItemId === conv.id && swipeDistance !== 0}
+                          {#if rowSwipeDistance !== 0}
                             <!--
                               Gmail-style underlay: a full-bleed colored layer
                               behind the whole row, with the action pinned to
@@ -7071,14 +7093,13 @@
                             </div>
                           {/if}
                           <div
-                            class={`flex items-center gap-3 cursor-pointer ${isMobile ? 'px-4' : 'px-3'} ${swiping && swipeItemId === conv.id ? 'user-select-none' : ''} ${!isMobile ? 'cursor-grab active:cursor-grabbing' : ''}`}
+                            class={`flex items-center gap-3 cursor-pointer ${isMobile ? 'px-4' : 'px-3'} ${rowSwiping ? 'user-select-none' : ''} ${!isMobile ? 'cursor-grab active:cursor-grabbing' : ''}`}
                             data-conversation-row
                             data-testid="message-row"
                             data-message-id={conv.id}
                             data-unread={conv.hasUnread || conv.is_unread ? 'true' : 'false'}
                             role="option"
-                            aria-selected={activeConvId === conv.id ||
-                              ($selectedConversationIds || []).includes(conv.id)}
+                            aria-selected={isOpen || isChecked}
                             tabindex="0"
                             draggable={!isMobile}
                             onclick={(e) =>
@@ -7104,48 +7125,44 @@
                             ontouchend={() => handleSwipeEnd(conv)}
                             ondragstart={(e) => handleDragStart(e, conv)}
                             ondragend={handleDragEnd}
-                            style="transform: translateX({swipeItemId === conv.id
-                              ? swipeDistance
-                              : 0}px); will-change: {swipeItemId === conv.id
-                              ? 'transform'
-                              : 'auto'}; transition: {swiping &&
-                            swipeItemId === conv.id &&
-                            !swipeAnimating
-                              ? 'none'
-                              : 'transform 0.25s cubic-bezier(0.25, 0.46, 0.45, 0.94)'};"
+                            style={rowSwipeStyle}
                           >
                             {#if isMobile}
-                              <!-- Mobile: avatar + two-line layout -->
+                              <!-- Mobile: avatar + two-line layout. The
+                                   initials and the check are both always in
+                                   the row and checking swaps which one shows,
+                                   so a selection only changes attributes:
+                                   removing nodes on every check is what
+                                   WebKit's compositor trips over (see
+                                   utils/deferred-store.ts), and select-all did
+                                   it for every row at once. -->
                               <button
                                 class="relative w-10 h-10 rounded-full flex items-center justify-center shrink-0 text-white text-xs font-semibold"
                                 type="button"
-                                style="background: {($selectedConversationIds || []).includes(
-                                  conv.id,
-                                )
+                                style="background: {isChecked
                                   ? 'var(--primary)'
                                   : getAvatarColor(getConversationFromDisplay(conv))}"
-                                aria-label={($selectedConversationIds || []).includes(conv.id)
-                                  ? 'Deselect'
-                                  : 'Select'}
+                                aria-label={isChecked ? 'Deselect' : 'Select'}
                                 onmousedown={preventShiftTextSelection}
                                 onclick={(e) =>
                                   handleCheckboxClick(conv, e, $filteredConversations || [])}
                               >
-                                {#if ($selectedConversationIds || []).includes(conv.id)}
-                                  <svg
-                                    viewBox="0 0 24 24"
-                                    class="h-5 w-5"
-                                    fill="none"
-                                    stroke-width="3"
-                                    stroke-linecap="round"
-                                    stroke-linejoin="round"
-                                    style="stroke: var(--primary-foreground);"
-                                  >
-                                    <polyline points="20 6 9 17 4 12" />
-                                  </svg>
-                                {:else}
-                                  {getInitials(getConversationFromDisplay(conv))}
-                                {/if}
+                                <svg
+                                  viewBox="0 0 24 24"
+                                  class="h-5 w-5"
+                                  class:hidden={!isChecked}
+                                  fill="none"
+                                  stroke-width="3"
+                                  stroke-linecap="round"
+                                  stroke-linejoin="round"
+                                  style="stroke: var(--primary-foreground);"
+                                  aria-hidden="true"
+                                >
+                                  <polyline points="20 6 9 17 4 12" />
+                                </svg>
+                                <span class:hidden={isChecked}
+                                  >{getInitials(getConversationFromDisplay(conv))}</span
+                                >
                               </button>
                               <div class="flex-1 min-w-0 flex flex-col gap-0.5">
                                 <!-- Line 1: From + Date -->
@@ -7226,26 +7243,25 @@
                                 </div>
                               </div>
                             {:else}
-                              <!-- Desktop: checkbox shown only in classic view or while in selection mode -->
-                              {#if !cardView || selectionMode}
-                                <button
-                                  class={`relative w-8 h-8 rounded flex items-center justify-center shrink-0 transition-colors ${($selectedConversationIds || []).includes(conv.id) ? 'text-fg-link' : 'text-muted-foreground hover:text-foreground'}`}
-                                  type="button"
-                                  aria-label={($selectedConversationIds || []).includes(conv.id)
-                                    ? 'Deselect'
-                                    : 'Select'}
-                                  data-slot="checkbox"
-                                  onmousedown={preventShiftTextSelection}
-                                  onclick={(e) =>
-                                    handleCheckboxClick(conv, e, $filteredConversations || [])}
-                                >
-                                  {#if ($selectedConversationIds || []).includes(conv.id)}
-                                    <CheckSquare class="h-5 w-5" />
-                                  {:else}
-                                    <Square class="h-5 w-5" />
-                                  {/if}
-                                </button>
-                              {/if}
+                              <!-- Desktop: checkbox shown only in classic view or
+                                   while in selection mode. Always in the row and
+                                   hidden otherwise, like its two icons, so
+                                   entering or leaving selection mode, or checking
+                                   a row, adds and removes no nodes (see the
+                                   mobile avatar above). -->
+                              <button
+                                class={`relative w-8 h-8 rounded flex items-center justify-center shrink-0 transition-colors ${isChecked ? 'text-fg-link' : 'text-muted-foreground hover:text-foreground'}`}
+                                class:hidden={cardView && !selectionMode}
+                                type="button"
+                                aria-label={isChecked ? 'Deselect' : 'Select'}
+                                data-slot="checkbox"
+                                onmousedown={preventShiftTextSelection}
+                                onclick={(e) =>
+                                  handleCheckboxClick(conv, e, $filteredConversations || [])}
+                              >
+                                <CheckSquare class={isChecked ? 'h-5 w-5' : 'hidden h-5 w-5'} />
+                                <Square class={isChecked ? 'hidden h-5 w-5' : 'h-5 w-5'} />
+                              </button>
                               {#if cardView}
                                 <div class="flex-1 min-w-0 flex flex-col gap-0.5">
                                   <!-- Line 1: Sender (bold, slightly bigger) + icons + Date (right, muted) -->
@@ -7507,9 +7523,12 @@
                          there was nothing to carry the role. -->
                     <div role="listbox" aria-label="Messages" aria-multiselectable="true">
                       {#each msgList as msg (msg.id)}
+                        <!-- Per-row state, as in the conversation list. -->
+                        {@const isChecked = selectedIdSet.has(msg.id)}
+                        {@const isOpen = activeMsgId === msg.id}
                         <article
                           role="presentation"
-                          class={`fe-msg-row relative cursor-pointer hover:bg-accent/50 transition-colors ${activeMsgId === msg.id || ($selectedConversationIds || []).includes(msg.id) ? 'msg-active' : ''}`}
+                          class={`fe-msg-row relative cursor-pointer hover:bg-accent/50 transition-colors ${isOpen || isChecked ? 'msg-active' : ''}`}
                           oncontextmenu={(e) => openContextMenu(e, msg)}
                           ondblclick={(e) => {
                             if (isDraftMessage(msg)) {
@@ -7526,8 +7545,7 @@
                             data-message-id={msg.id}
                             data-unread={msg.is_unread ? 'true' : 'false'}
                             role="option"
-                            aria-selected={activeMsgId === msg.id ||
-                              ($selectedConversationIds || []).includes(msg.id)}
+                            aria-selected={isOpen || isChecked}
                             tabindex="0"
                             draggable={!isMobile}
                             onclick={(e) =>
@@ -7549,25 +7567,21 @@
                             ondragstart={(e) => handleDragStart(e, msg)}
                             ondragend={handleDragEnd}
                           >
-                            <!-- Desktop: checkbox shown only in classic view or while in selection mode -->
-                            {#if !cardView || selectionMode}
-                              <button
-                                class={`relative w-8 h-8 rounded flex items-center justify-center shrink-0 transition-colors ${($selectedConversationIds || []).includes(msg.id) ? 'text-fg-link' : 'text-muted-foreground hover:text-foreground'}`}
-                                type="button"
-                                aria-label={($selectedConversationIds || []).includes(msg.id)
-                                  ? 'Deselect'
-                                  : 'Select'}
-                                onmousedown={preventShiftTextSelection}
-                                onclick={(e) =>
-                                  handleCheckboxClick({ id: msg.id }, e, $filteredMessages || [])}
-                              >
-                                {#if ($selectedConversationIds || []).includes(msg.id)}
-                                  <CheckSquare class="h-5 w-5" />
-                                {:else}
-                                  <Square class="h-5 w-5" />
-                                {/if}
-                              </button>
-                            {/if}
+                            <!-- Checkbox shown only in classic view or while in
+                                 selection mode; always in the row, hidden
+                                 otherwise (see the conversation list). -->
+                            <button
+                              class={`relative w-8 h-8 rounded flex items-center justify-center shrink-0 transition-colors ${isChecked ? 'text-fg-link' : 'text-muted-foreground hover:text-foreground'}`}
+                              class:hidden={cardView && !selectionMode}
+                              type="button"
+                              aria-label={isChecked ? 'Deselect' : 'Select'}
+                              onmousedown={preventShiftTextSelection}
+                              onclick={(e) =>
+                                handleCheckboxClick({ id: msg.id }, e, $filteredMessages || [])}
+                            >
+                              <CheckSquare class={isChecked ? 'h-5 w-5' : 'hidden h-5 w-5'} />
+                              <Square class={isChecked ? 'hidden h-5 w-5' : 'h-5 w-5'} />
+                            </button>
                             {#if cardView}
                               <div class="flex-1 min-w-0 flex flex-col gap-0.5">
                                 <!-- Line 1: Sender (bold, slightly bigger) + icons + Date (right, muted) -->
@@ -9864,8 +9878,9 @@
    * the browser remember each row's real height after it renders once, so the
    * estimate only matters for rows that have never been on screen.
    *
-   * Degrades cleanly: engines without content-visibility (older WebKit) ignore
-   * these properties and render the full list as they do today.
+   * Degrades cleanly: engines without content-visibility (WebKit before
+   * Safari 18) ignore these properties and render the full list. It is off on
+   * Windows and phones (below).
    */
   .fe-msg-row {
     content-visibility: auto;
@@ -9876,11 +9891,27 @@
   }
 
   /* WebView2 mis-renders nowrap/ellipsis truncation inside content-visibility
-     subtrees, so long card-view subjects were not cut off on Windows. WebKit
-     ignores content-visibility, which is why only Windows showed it. Disable
-     the off-screen rendering optimization there until the engine behaves. */
-  :global(html[data-os='windows']) .fe-msg-row {
+     subtrees, so long card-view subjects were not cut off on Windows. Disable
+     the off-screen rendering optimization there until the engine behaves.
+
+     Phones too. WebKit has honored content-visibility since iOS 18 and Android
+     WebViews do as well. A mobile row is taller than the 48px estimate, and
+     checking a message, the bulk-action bar opening above the list, or a swipe
+     resizes the list, so the engine re-decides which rows are on screen and
+     paints the ones it skips as blank space for a moment: the list flashed
+     empty. Phones then lay out every row, as WebKit before iOS 18 always did.
+     A coarse pointer covers touch devices that report another OS, such as
+     iPad Safari, which presents itself as a Mac. */
+  :global(html[data-os='windows']) .fe-msg-row,
+  :global(html[data-os='ios']) .fe-msg-row,
+  :global(html[data-os='android']) .fe-msg-row {
     content-visibility: visible;
+  }
+
+  @media (pointer: coarse) {
+    .fe-msg-row {
+      content-visibility: visible;
+    }
   }
 
   /* Shared list layout tokens */

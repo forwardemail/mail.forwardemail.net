@@ -22,6 +22,13 @@ declare global {
       currentVersion: string | null;
       latestVersion: string | null;
     }>;
+    /** Set by the terminal client (src/cli/app.ts): its own update check. */
+    __forwardemailCheckForUpdates?: () => Promise<{
+      upToDate: boolean;
+      currentVersion: string;
+      latestVersion: string | null;
+      message: string;
+    }>;
     gtag?: (...args: unknown[]) => void;
     /**
      * E2E-only: supplies a decoder to the pairing scanner so the flow can be

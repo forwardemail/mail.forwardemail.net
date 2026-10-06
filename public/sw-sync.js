@@ -666,6 +666,10 @@
     return body;
   };
 
+  // flags only added; without the message's flags only the addition is sent
+  const addFlagsBody = (flags, add) =>
+    Array.isArray(flags) ? flagChangeBody(flags, { add }) : { flags_add: listOf(add) };
+
   const labelChangeBody = (labels, previous) => {
     const body = { labels: listOf(labels) };
     if (!Array.isArray(previous)) return body;
@@ -713,6 +717,14 @@
           method: 'PUT',
           headers,
           body: JSON.stringify(queuedToggleBody(type, payload)),
+        });
+        return res.ok;
+      }
+      case 'addFlags': {
+        const res = await fetchWithTimeout(`${base}${msgPath}`, {
+          method: 'PUT',
+          headers,
+          body: JSON.stringify(addFlagsBody(payload.flags, payload.add)),
         });
         return res.ok;
       }

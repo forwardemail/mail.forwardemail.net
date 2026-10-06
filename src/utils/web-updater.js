@@ -262,6 +262,11 @@ function handleWsNewRelease(data) {
  * @param {Object} [options.wsClient] - WebSocket client instance to subscribe to newRelease events
  */
 function start(options = {}) {
+  // The terminal client updates through its own updater (src/cli/update.ts).
+  // A reload there restarts the same code, so an update found here would be
+  // announced and never arrive.
+  if (globalThis.__FORWARDEMAIL_TERMINAL__ === true) return;
+
   _onUpdateAvailable = options.onUpdateAvailable || null;
 
   const current = getCurrentVersion();

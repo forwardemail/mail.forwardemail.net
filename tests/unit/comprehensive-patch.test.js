@@ -1639,8 +1639,8 @@ describe('round-2 fix regression guards', () => {
 
     // Only the explicit toolbar toggle enters checkbox mode.
     expect(mailboxSrcR2).toMatch(/if \(!selectionMode\) \{\s*selectionMode = true;/);
-    // Per-row checkboxes stay gated on selectionMode (card view).
-    expect(mailboxSrcR2).toContain('{#if !cardView || selectionMode}');
+    // That per-row checkboxes stay hidden outside selection mode (card view)
+    // is checked in the browser: tests/e2e/mailbox.spec.js.
   });
 
   it('does not grow folder rows (min-height) during drag', () => {

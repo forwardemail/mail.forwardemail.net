@@ -43,12 +43,37 @@ const queue = () => [
     status: 'pending',
     retryCount: 0,
   },
+  // the message a reply answered (answered-flag.ts)
+  {
+    id: 'q4',
+    type: 'addFlags',
+    payload: { messageId: 'm4', flags: ['\\Seen', '\\Answered'], add: ['\\Answered'] },
+    apiBase: 'https://api.test',
+    authHeader: 'Basic dGVzdA==',
+    status: 'pending',
+    retryCount: 0,
+  },
+  // its flags unknown here: only the addition
+  {
+    id: 'q5',
+    type: 'addFlags',
+    payload: { messageId: 'm5', flags: null, add: ['\\Answered'] },
+    apiBase: 'https://api.test',
+    authHeader: 'Basic dGVzdA==',
+    status: 'pending',
+    retryCount: 0,
+  },
 ];
 
 const expected = {
   'https://api.test/v1/messages/m1': { flags: ['\\Flagged', '\\Seen'], flags_add: ['\\Seen'] },
   'https://api.test/v1/messages/m2': { flags: ['\\Seen'], flags_remove: ['\\Flagged'] },
   'https://api.test/v1/messages/m3': { labels: ['work'], labels_remove: ['urgent'] },
+  'https://api.test/v1/messages/m4': {
+    flags: ['\\Seen', '\\Answered'],
+    flags_add: ['\\Answered'],
+  },
+  'https://api.test/v1/messages/m5': { flags_add: ['\\Answered'] },
 };
 
 function seed(indexedDB, name, stores) {

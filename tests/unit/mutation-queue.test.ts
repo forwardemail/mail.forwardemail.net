@@ -284,6 +284,68 @@ describe('mutation-queue', () => {
     );
   });
 
+  // \Answered on the message a reply answered (answered-flag.ts)
+  it('sends a queued flag addition, with only the addition when the flags are unknown', async () => {
+    await queueModule.queueMutation('addFlags', {
+      messageId: 'm1',
+      flags: ['\\Seen', '\\Answered'],
+      add: ['\\Answered'],
+    });
+    await queueModule.queueMutation('addFlags', {
+      messageId: 'm2',
+      flags: null,
+      add: ['\\Answered'],
+    });
+    await drainMicrotasks();
+
+    expect(remoteRequestMock).toHaveBeenCalledWith(
+      'MessageUpdate',
+      { flags: ['\\Seen', '\\Answered'], flags_add: ['\\Answered'] },
+      expect.objectContaining({ method: 'PUT', pathOverride: '/v1/messages/m1' }),
+    );
+    expect(remoteRequestMock).toHaveBeenCalledWith(
+      'MessageUpdate',
+      { flags_add: ['\\Answered'] },
+      expect.objectContaining({ method: 'PUT', pathOverride: '/v1/messages/m2' }),
+    );
+  });
+
+  it('gives up on a flag a reply set without asking the user to try again', async () => {
+    remoteRequestMock.mockRejectedValue(new Error('boom'));
+    const countListener = vi.fn();
+    window.addEventListener(
+      'mutation-queue-failed',
+      countListener as unknown as (ev: Event) => void,
+    );
+
+    await queueModule.queueMutation('addFlags', {
+      messageId: 'm1',
+      flags: ['\\Answered'],
+      add: ['\\Answered'],
+    });
+    // While it waits, sync still sees the message move or go away.
+    expect(await queueModule.getQueuedMessageIds('user@example.com')).toEqual(new Set());
+
+    for (let i = 0; i < 6; i += 1) {
+      const record = metaStore.get('mutation_queue_user@example.com');
+      if (record) {
+        (record.value as Array<{ nextRetryAt?: number }>).forEach((m) => {
+          delete m.nextRetryAt;
+        });
+      }
+      await queueModule.processMutationQueue();
+      await drainMicrotasks();
+    }
+
+    expect(remoteRequestMock).toHaveBeenCalledTimes(5);
+    expect(countListener).not.toHaveBeenCalled();
+    expect(metaStore.get('mutation_queue_user@example.com')?.value).toEqual([]);
+    window.removeEventListener(
+      'mutation-queue-failed',
+      countListener as unknown as (ev: Event) => void,
+    );
+  });
+
   it('reconcilePermanentlyFailedMutations reverts entries left behind by another processor (e.g. the SW)', async () => {
     // Simulate the SW marking a mutation 'failed' with retries exhausted
     // while this tab's processMutationQueue never ran it itself.

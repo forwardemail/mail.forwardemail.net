@@ -82,4 +82,16 @@ if (-not (($UserPath -split ';') -contains $InstallDir)) {
 
 $Installed = & $Target --version
 Write-Host "Installed Forward Email $Installed to $Target"
-Write-Host 'Run: forwardemail'
+
+# Another copy earlier on PATH (an npm install, an older download) is the one
+# a terminal runs, and `forwardemail --version` would keep reporting it.
+$Found = Get-Command forwardemail -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($Found -and $Found.Source -and ($Found.Source -ne $Target)) {
+  $Other = try { & $Found.Source --version 2>$null } catch { $null }
+  if (-not $Other) { $Other = 'unknown version' }
+  Write-Host ''
+  Write-Host "Another forwardemail ($Other) comes first on your PATH: $($Found.Source)"
+  Write-Host "Remove it (an npm install: npm uninstall -g forwardemail) or move $InstallDir before it in your PATH."
+} else {
+  Write-Host 'Run: forwardemail'
+}

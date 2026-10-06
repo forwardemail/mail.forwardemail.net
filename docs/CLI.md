@@ -280,9 +280,11 @@ export FORWARDEMAIL_API_URL=https://api.mail.example.com
 
 ## Updates
 
-**Standalone executables update themselves.** At most once a day, `forwardemail` checks the latest GitHub release in the background while you use it. If there is a newer version, it downloads the build for your system, verifies its SHA-256 checksum against the release's `SHA256SUMS.txt`, and replaces the executable atomically. The new version runs the next time you start the app, and a one-line note is printed when you quit. To update right away, run `forwardemail update`.
+**Standalone executables update themselves.** At most once a day, `forwardemail` checks the latest GitHub release in the background while you use it. If there is a newer version, it downloads the build for your system, verifies its SHA-256 checksum against the release's `SHA256SUMS.txt`, and replaces the executable atomically. The new version runs the next time you start the app, and a one-line note is printed when you quit. If the executable cannot be replaced (for example, it was installed somewhere you cannot write to), the note says so. To update right away, run `forwardemail update`.
 
-**npm installs** check the same way but do not change anything themselves. When an update is available, a note on exit says to run `forwardemail update`, which runs `npm install -g forwardemail@latest`.
+**npm, pnpm, Yarn and Bun installs** check the same way but do not change anything themselves. When an update is available, a note on exit says to run `forwardemail update`. That runs the package manager that installed the copy (`npm install -g`, `pnpm add -g`, `yarn global add` or `bun add -g` with `forwardemail@latest`), then checks what `forwardemail --version` reports. If the copy on your `PATH` still answers with the old version, it says where that copy is: another copy earlier on `PATH`, or this one, when the package manager installed the update into another folder (one that belongs to another Node.js install, for example).
+
+**Settings › Check for Updates** uses the same updater: an executable installs the new version for the next start, and a package install shows the command to run. The app keeps running the version it started with until you restart it.
 
 Turn the check off with `--no-update-check` or `FORWARDEMAIL_NO_UPDATE_CHECK=1`. A failed check (offline, rate-limited) is silent and is retried at the next start.
 
@@ -343,6 +345,8 @@ The terminal client runs the webmail's own code, so features behave the same way
 ```sh
 echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.profile
 ```
+
+**`forwardemail --version` shows the old version after updating.** Another copy comes first on your `PATH`, for example an npm install next to a downloaded executable. List every copy with `which -a forwardemail` (macOS and Linux) or `Get-Command -All forwardemail` (Windows), and remove the ones you do not use (an npm install: `npm uninstall -g forwardemail`). The installers warn about this, and so does `forwardemail update` for a package install.
 
 **Something else is wrong.** Run `FORWARDEMAIL_DEBUG=1 forwardemail`, reproduce the problem, and attach `forwardemail.log` from the data directory to an [issue](https://github.com/forwardemail/mail.forwardemail.net/issues). Check the log for anything private before posting it.
 

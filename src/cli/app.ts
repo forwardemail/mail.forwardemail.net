@@ -8,7 +8,7 @@ import { installFocus } from './focus';
 import { installHints } from './hints';
 import { createSystemNotifier } from './notifications';
 import { getPageMarkup, injectStyles } from './page';
-import { isStandaloneBinary } from './update';
+import { checkForTerminalUpdate, isStandaloneBinary } from './update';
 
 export interface StartOptions {
   version: string;
@@ -141,6 +141,9 @@ export async function startApp({
   notifications = true,
 }: StartOptions) {
   const logFile = redirectConsole(dataDir, Boolean(process.env.FORWARDEMAIL_DEBUG));
+  // Node's own fetch, before the page's replaces it: the page's also tells
+  // the app it is offline or back online, which a GitHub request must not.
+  const nodeFetch = globalThis.fetch;
   const resume = readResume(dataDir);
 
   let restarting = false;
@@ -195,8 +198,17 @@ export async function startApp({
   }
   process.on('SIGHUP', () => process.exit(0));
   await useAlternateScreen(env.window as unknown as Window, () => env.term.attach());
-  // Plain text by default for reading and writing (stores/settingsRegistry.ts).
+  // Plain text by default for reading and writing (stores/settingsRegistry.ts),
+  // and no web updater (main.ts): this client updates through update.ts.
   (globalThis as Record<string, unknown>).__FORWARDEMAIL_TERMINAL__ = true;
+  // Settings' "Check for Updates" asks this instead of the web updater, which
+  // could only reload the same code while announcing the new version.
+  (globalThis as Record<string, unknown>).__forwardemailCheckForUpdates = () =>
+    checkForTerminalUpdate({
+      version,
+      stateFile: path.join(dataDir, 'update.json'),
+      fetchImpl: nodeFetch,
+    });
   installFocus(env.window);
   __forwardemailLoadApp();
   if (hints) installHints(env.window, { columns: () => process.stdout.columns || 80 });

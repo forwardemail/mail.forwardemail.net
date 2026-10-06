@@ -81,7 +81,6 @@
   import { Accounts, Local } from '../utils/storage';
   import { db } from '../utils/db';
   import { getMessageApiId } from '../utils/sync-helpers';
-  import { flagChangeBody } from '../utils/message-changes';
   import { extractDisplayName, isValidEmail, normalizeEmail } from '../utils/address.ts';
   import {
     formatFromHeader,
@@ -115,7 +114,7 @@
     LocalSettings,
   } from '../stores/settingsStore';
   import { applySignatureHtml, applySignaturePlain, isSignatureEmpty } from '../utils/signature';
-  import { markMessageAnsweredInStore } from '../stores/messageStore';
+  import { markOriginalAnswered } from '../utils/answered-flag';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
   import { Textarea } from '$lib/components/ui/textarea';
@@ -1332,6 +1331,9 @@
     replyTo,
     inReplyTo,
     references,
+    // the message a reply answers, flagged \Answered when it is sent
+    replyToMessageId,
+    replyToMessageFolder,
     subject,
     body,
     isPlainText,
@@ -1570,6 +1572,8 @@
     replyTo = (d.data.replyTo as string) || '';
     inReplyTo = (d.data.inReplyTo as string) || '';
     references = (d.data.references as string) || '';
+    replyToMessageId = (d.data.replyToMessageId as string) || null;
+    replyToMessageFolder = (d.data.replyToMessageFolder as string) || null;
     subject = (d.data.subject as string) || '';
     body = (d.data.body as string) || '';
     isPlainText = (d.data.isPlainText as boolean) || false;
@@ -2495,37 +2499,10 @@
     return payload;
   };
 
-  const markOriginalAsAnswered = async () => {
-    if (!replyToMessageId) return;
-    // Reflect it in the visible list right away so the reply indicator shows
-    // without waiting for a folder reload (the IDB + server updates below only
-    // persist it; the row renders from the in-memory list).
-    markMessageAnsweredInStore(replyToMessageId);
-    const account = Local.get('email') || 'default';
-    try {
-      // Read current message from IDB to get existing flags
-      const records = await db.messages
-        .where('[account+id]')
-        .equals([account, replyToMessageId])
-        .toArray();
-      const msg = records?.[0];
-      if (!msg) return;
-      const currentFlags: string[] = Array.isArray(msg.flags) ? msg.flags : [];
-      if (currentFlags.includes('\\Answered')) return; // Already flagged
-      const newFlags = [...currentFlags, '\\Answered'];
-      // Optimistic IDB update
-      await db.messages
-        .where('[account+id]')
-        .equals([account, replyToMessageId])
-        .modify({ flags: newFlags });
-      // Sync to server
-      await Remote.request('MessageUpdate', flagChangeBody(newFlags, { add: ['\\Answered'] }), {
-        method: 'PUT',
-        pathOverride: `/v1/messages/${encodeURIComponent(replyToMessageId)}`,
-      });
-    } catch (err) {
-      console.warn('[Compose] Failed to set \\Answered flag on original message:', err);
-    }
+  // Not awaited: the send goes on to reset() the form, which clears
+  // replyToMessageId, so the id is passed before anything is awaited.
+  const markOriginalAsAnswered = () => {
+    void markOriginalAnswered(replyToMessageId);
   };
 
   const saveSentCopyWrapper = async (payload: Record<string, unknown>) => {
@@ -3063,6 +3040,8 @@
           replyTo = draft.replyTo || '';
           inReplyTo = draft.inReplyTo || '';
           references = draft.references || '';
+          replyToMessageId = draft.replyToMessageId || null;
+          replyToMessageFolder = draft.replyToMessageFolder || null;
           subject = draft.subject || '';
           body = draft.body || '';
           isPlainText = draft.isPlainText || false;

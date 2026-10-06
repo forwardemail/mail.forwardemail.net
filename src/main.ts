@@ -129,7 +129,6 @@ import {
   filteredMessages,
   loading,
   messageLoading,
-  markMessageAnsweredInStore,
 } from './stores/messageStore';
 import {
   threadingEnabled,
@@ -1486,33 +1485,9 @@ if (isTauriDesktop) {
         // Set \Answered flag on the original message if this was a reply
         const origId = result.sentCopyPayload.replyToMessageId as string;
         if (origId) {
-          // Show the reply indicator immediately in the visible list.
-          markMessageAnsweredInStore(origId);
           try {
-            const { Remote } = await import('./utils/remote');
-            const { flagChangeBody } = await import('./utils/message-changes');
-            const { db } = await import('./utils/db');
-            const account = (await import('./utils/storage')).Local.get('email') || 'default';
-            const records = await db.messages
-              .where('[account+id]')
-              .equals([account, origId])
-              .toArray();
-            const message = records?.[0];
-            if (message) {
-              const flags: string[] = Array.isArray(message.flags) ? message.flags : [];
-              if (!flags.includes(String.raw`\Answered`)) {
-                const newFlags = [...flags, String.raw`\Answered`];
-                await db.messages
-                  .where('[account+id]')
-                  .equals([account, origId])
-                  .modify({ flags: newFlags });
-                await Remote.request(
-                  'MessageUpdate',
-                  flagChangeBody(newFlags, { add: [String.raw`\Answered`] }),
-                  { method: 'PUT', pathOverride: `/v1/messages/${encodeURIComponent(origId)}` },
-                );
-              }
-            }
+            const { markOriginalAnswered } = await import('./utils/answered-flag');
+            await markOriginalAnswered(origId);
           } catch (error) {
             console.warn(String.raw`[main] Failed to set \Answered flag:`, error);
           }
@@ -1582,6 +1557,11 @@ if (isTauriDesktop) {
         bodyLoading: prefill?.bodyLoading,
         inReplyTo: prefill?.inReplyTo,
         references: prefill?.references,
+        // The message replied to, which the send marks \Answered. Without
+        // these the in-page compose never flagged it, so IMAP clients
+        // (Thunderbird) never showed a webmail reply.
+        replyToMessageId: prefill?.replyToMessageId ?? null,
+        replyToMessageFolder: prefill?.replyToMessageFolder ?? null,
       });
     },
     updateReplyBody: (body, options) => composeApi.updateReplyBody?.(body, options),
@@ -3032,7 +3012,14 @@ async function bootstrap() {
     //   - Draft-safe: saves any in-progress compose before reloading
     //   - Toast + push notification: always shown before reload
     //   - SW cache flush: triggers registration.update() + SKIP_WAITING
-    if (!isTauri && import.meta.env.PROD) {
+    //
+    // Not in the terminal client: it updates its own executable or package
+    // (src/cli/update.ts). A reload there restarts the same code, so this
+    // announced "Updated to vX" while `forwardemail --version` still printed
+    // the old version, and it reloaded again for every check.
+    const isTerminalClient =
+      (globalThis as { __FORWARDEMAIL_TERMINAL__?: boolean }).__FORWARDEMAIL_TERMINAL__ === true;
+    if (!isTauri && !isTerminalClient && import.meta.env.PROD) {
       let _updateInProgress = false;
 
       /**

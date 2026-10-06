@@ -506,8 +506,15 @@
     }
 
     try {
-      // Use the globally exposed checkNow from web-updater (web)
-      if (typeof window.__checkForWebUpdates === 'function') {
+      // The terminal client checks through its own updater (src/cli/update.ts)
+      // and says what to do; it never reloads into a version it does not run.
+      // Set on Node's globalThis there, which is not the terminal's window.
+      const terminalCheck = (globalThis as unknown as Window).__forwardemailCheckForUpdates;
+      if (typeof terminalCheck === 'function') {
+        const result = await terminalCheck();
+        updateCheckResult = result.message;
+      } else if (typeof window.__checkForWebUpdates === 'function') {
+        // Use the globally exposed checkNow from web-updater (web)
         const result = await window.__checkForWebUpdates();
         if (result.upToDate) {
           updateCheckResult = `You're on the latest version (v${result.currentVersion || result.latestVersion})`;

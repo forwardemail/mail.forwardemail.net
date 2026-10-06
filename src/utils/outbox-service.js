@@ -3,14 +3,13 @@ import { Local } from './storage';
 import { isActiveAccount } from './account-scope.ts';
 import { Remote } from './remote';
 import { getAuthHeaderForAccount } from './auth';
-import { flagChangeBody } from './message-changes.ts';
 import { writable } from 'svelte/store';
 import { saveSentCopy } from './sent-copy.js';
 import { warn } from './logger.ts';
 import { isDemoMode, showDemoBlockedToast } from './demo-mode';
 import { isOnline } from './network-status';
 import { exponentialBackoff } from './backoff.js';
-import { markMessageAnsweredInStore } from '../stores/messageStore';
+import { markOriginalAnswered } from './answered-flag.ts';
 
 /**
  * Outbox Service
@@ -348,32 +347,10 @@ async function recordSentSideEffects(item, account) {
     }
   }
 
-  // Mark original message as \Answered if this was a reply
-  const origMsgId = item.emailData?._replyToMessageId;
-  if (!origMsgId) return;
-
-  // Reflect it in the visible list immediately (the sends below persist it).
-  markMessageAnsweredInStore(origMsgId);
-  try {
-    const records = await db.messages.where('[account+id]').equals([account, origMsgId]).toArray();
-    const msg = records?.[0];
-    if (msg) {
-      const currentFlags = Array.isArray(msg.flags) ? msg.flags : [];
-      if (!currentFlags.includes('\\Answered')) {
-        const newFlags = [...currentFlags, '\\Answered'];
-        await db.messages
-          .where('[account+id]')
-          .equals([account, origMsgId])
-          .modify({ flags: newFlags });
-        await Remote.request('MessageUpdate', flagChangeBody(newFlags, { add: ['\\Answered'] }), {
-          method: 'PUT',
-          pathOverride: `/v1/messages/${encodeURIComponent(origMsgId)}`,
-        });
-      }
-    }
-  } catch (flagErr) {
-    warn('[Outbox] Failed to set \\Answered flag on original message:', flagErr);
-  }
+  // Mark original message as \Answered if this was a reply. Not awaited: the
+  // message is sent, and a slow or failing flag change must not hold the
+  // outbox row in 'sending' (it retries through the mutation queue).
+  void markOriginalAnswered(item.emailData?._replyToMessageId, { account });
 }
 
 /**

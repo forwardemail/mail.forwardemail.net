@@ -283,3 +283,108 @@ test.describe('Mobile — bottom overlays leave the tab bar usable', () => {
     }
   });
 });
+
+// ── Checking messages ────────────────────────────────────────────────────────
+
+// Counts the nodes removed inside the message list from now on. WebKit's
+// compositor can crash when list nodes are removed under it
+// (src/utils/deferred-store.ts), and the app then reloads empty, which on a
+// phone read as the list freezing and then flashing blank on every check.
+async function watchListRemovals(page) {
+  await page.evaluate(() => {
+    const list = document.querySelector(
+      '[role="listbox"][aria-label="Conversations"], [role="listbox"][aria-label="Messages"]',
+    );
+    const state = { removed: 0 };
+    window.__feListRemovals = state;
+    new MutationObserver((records) => {
+      for (const record of records) state.removed += record.removedNodes.length;
+    }).observe(list, { childList: true, subtree: true });
+  });
+  return () => page.evaluate(() => window.__feListRemovals.removed);
+}
+
+test.describe('Mailbox — checking messages', () => {
+  test.beforeEach(async ({ page }) => {
+    await setupAuthenticatedMailbox(page);
+    await navigateToMailbox(page);
+  });
+
+  test('checks and unchecks rows without removing anything from the list', async ({
+    page,
+  }, testInfo) => {
+    const rows = page.locator('[data-conversation-row]');
+    await expect.poll(() => rows.count()).toBeGreaterThanOrEqual(2);
+    const removed = await watchListRemovals(page);
+    const checkbox = (i) =>
+      rows
+        .nth(i)
+        .getByLabel(/^(Select|Deselect)$/)
+        .first();
+    // On a phone the avatar is the checkbox; on a desktop (card view) the
+    // checkboxes stay out of sight until selection mode.
+    if (!isMobileProject(testInfo)) {
+      await expect(checkbox(0)).toBeHidden();
+      await page.getByLabel('Enter selection mode').click();
+      await expect(checkbox(0)).toBeVisible();
+    }
+
+    await checkbox(0).click();
+    await checkbox(1).click();
+    await expect(checkbox(0)).toHaveAttribute('aria-label', 'Deselect');
+    await expect(checkbox(1)).toHaveAttribute('aria-label', 'Deselect');
+    await checkbox(0).click();
+    await checkbox(1).click();
+    await expect(checkbox(0)).toHaveAttribute('aria-label', 'Select');
+    await expect(checkbox(1)).toHaveAttribute('aria-label', 'Select');
+
+    expect(await removed()).toBe(0);
+  });
+
+  test('keeps every row rendered on phones', async ({ page }) => {
+    // Skipping off-screen rows (content-visibility) painted rows blank on
+    // phones whenever checking a message resized the list.
+    const row = page.locator('.fe-msg-row').first();
+    await expect(row).toBeVisible();
+    const { os, touch } = await page.evaluate(() => ({
+      os: document.documentElement.dataset.os,
+      touch: matchMedia('(pointer: coarse)').matches,
+    }));
+    const contentVisibility = await row.evaluate((el) => getComputedStyle(el).contentVisibility);
+    const rendersAll = touch || ['ios', 'android', 'windows'].includes(os);
+    expect(contentVisibility).toBe(rendersAll ? 'visible' : 'auto');
+  });
+});
+
+test.describe('Mailbox — loading', () => {
+  test('keeps the list toolbar on screen while the messages are still loading', async ({
+    page,
+  }) => {
+    await setupAuthenticatedMailbox(page);
+    // Hold every message list until the test lets it through, as on a slow
+    // link or right after switching accounts.
+    let release;
+    const released = new Promise((resolve) => {
+      release = resolve;
+    });
+    await page.route('**/v1/messages**', async (route) => {
+      const request = route.request();
+      const { pathname } = new URL(request.url());
+      if (request.method() === 'GET' && !/\/v1\/messages\/[^/]+$/.test(pathname)) await released;
+      return route.fallback();
+    });
+    await page.goto('/');
+    await page.goto('/mailbox#INBOX');
+
+    const pane = page.getByTestId('message-list-pane');
+    await expect(pane).toBeVisible({ timeout: 15_000 });
+    // The list is empty for now, but the pane is not blank: its toolbar stays.
+    await expect(pane.getByRole('button', { name: 'Refresh', exact: true })).toBeVisible();
+    expect(await page.locator('[data-conversation-row]').count()).toBe(0);
+
+    release();
+    await expect(page.locator('[data-conversation-row]').first()).toBeVisible({
+      timeout: 15_000,
+    });
+  });
+});

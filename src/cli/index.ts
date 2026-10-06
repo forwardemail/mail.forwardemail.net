@@ -9,7 +9,7 @@ import {
   detectInstall,
   fetchLatestRelease,
   installBinary,
-  updateWithNpm,
+  updatePackageInstall,
 } from './update';
 
 const VERSION = import.meta.env.VITE_PKG_VERSION as string;
@@ -66,10 +66,7 @@ function print(text: string, stream: NodeJS.WriteStream = process.stdout) {
 
 async function runUpdate(): Promise<number> {
   const install = detectInstall();
-  if (install === 'npm') {
-    print('Updating with npm…');
-    return updateWithNpm();
-  }
+  if (install === 'npm') return updatePackageInstall({ version: VERSION });
   if (install === 'source') {
     print('This copy runs from a source checkout; update it with git pull and pnpm build:cli.');
     return 1;
@@ -225,7 +222,13 @@ async function main(argv: string[]): Promise<number> {
   const checkUpdates = !values['no-update-check'] && !process.env.FORWARDEMAIL_NO_UPDATE_CHECK;
   let notice: string | null = null;
   if (checkUpdates) {
-    backgroundUpdate({ version: VERSION, stateFile: path.join(dataDir, 'update.json') }).then(
+    // Node's own fetch: once the app starts, the global one is the page's,
+    // which also reports the app offline when a request fails.
+    backgroundUpdate({
+      version: VERSION,
+      stateFile: path.join(dataDir, 'update.json'),
+      fetchImpl: globalThis.fetch,
+    }).then(
       (message) => {
         notice = message;
       },

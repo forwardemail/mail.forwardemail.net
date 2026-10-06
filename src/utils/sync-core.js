@@ -17,7 +17,7 @@
  */
 
 import { DB_NAME } from './db-constants.ts';
-import { labelChangeBody, queuedToggleBody } from './message-changes.ts';
+import { addFlagsBody, labelChangeBody, queuedToggleBody } from './message-changes.ts';
 
 const META_STORE = 'meta';
 const MUTATION_KEY_PREFIX = 'mutation_queue_';
@@ -124,7 +124,7 @@ export function createSyncCore({ postMessage, fetch, indexedDB }) {
 
   /**
    * Execute a single mutation via fetch.
-   * Same 5-case switch as executeMutationSW in sw-sync.js.
+   * Same switch as executeMutationSW in sw-sync.js.
    */
   async function executeMutation(mutation) {
     const { type, payload, apiBase, authHeader } = mutation;
@@ -148,6 +148,15 @@ export function createSyncCore({ postMessage, fetch, indexedDB }) {
           method: 'PUT',
           headers,
           body: JSON.stringify(queuedToggleBody(type, payload)),
+        });
+        return res.ok;
+      }
+
+      case 'addFlags': {
+        const res = await fetchWithTimeout(`${base}${msgPath}`, {
+          method: 'PUT',
+          headers,
+          body: JSON.stringify(addFlagsBody(payload.flags, payload.add)),
         });
         return res.ok;
       }
