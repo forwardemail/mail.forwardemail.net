@@ -957,7 +957,12 @@
     const base = account ? { account } : {};
     if (/^calendar/i.test(event)) return { ...base, appPath: '/calendar' };
     if (/^(?:contact|addressBook)/i.test(event)) return { ...base, appPath: '/contacts' };
-    return { ...base, folder: pushText(data.mailbox) || 'INBOX', ...(id ? { messageId: id } : {}) };
+    // Mail delivered to temporary storage has no id yet; the page finds it by
+    // subject and sender.
+    const lookup = id
+      ? { messageId: id }
+      : { subject: pushText(data.subject), sender: pushText(data.sender) };
+    return { ...base, folder: pushText(data.mailbox) || 'INBOX', ...lookup };
   };
 
   // Chromium and Firefox (outside iOS) do not require a notification while a

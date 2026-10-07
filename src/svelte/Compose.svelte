@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { tick, onMount, onDestroy } from 'svelte';
+  import { tick, onMount, onDestroy, untrack } from 'svelte';
+  import { SvelteMap } from 'svelte/reactivity';
   import { writable } from 'svelte/store';
   import { Editor, Node, Extension } from '@tiptap/core';
   import StarterKit from '@tiptap/starter-kit';
@@ -67,7 +68,8 @@
   import TableRow from '@tiptap/extension-table-row';
   import TableCell from '@tiptap/extension-table-cell';
   import TableHeader from '@tiptap/extension-table-header';
-  import { bufferToDataUrl, extractTextContent } from '../utils/mime-utils.js';
+  import { extractTextContent } from '../utils/mime-utils.js';
+  import { attachmentThumbnail, releaseAttachmentThumbnail } from '../utils/attachment-thumbnail';
   import { htmlToPlainText, sanitizeQuotedHtml } from '../utils/sanitize.js';
   import { hasRichFormatting } from '../utils/compose-format';
   import { buildEncryptedPayload } from '../utils/pgp-send';
@@ -369,10 +371,26 @@
     return ext ? IMAGE_EXTENSIONS.has(ext) : false;
   };
 
-  const getAttachmentPreviewUrl = (att: unknown) => {
-    if (!isImageAttachment(att)) return '';
-    return bufferToDataUrl(att);
-  };
+  // Small previews of the image attachments (utils/attachment-thumbnail.ts),
+  // made once per attachment and freed when it leaves the draft.
+  const thumbnails = new SvelteMap<unknown, string>();
+  $effect(() => {
+    const current = new Set(attachments);
+    untrack(() => {
+      for (const att of current) {
+        if (!isImageAttachment(att) || thumbnails.has(att)) continue;
+        thumbnails.set(att, '');
+        attachmentThumbnail(att).then((url) => {
+          if (thumbnails.has(att)) thumbnails.set(att, url);
+        });
+      }
+      for (const att of [...thumbnails.keys()]) {
+        if (current.has(att)) continue;
+        thumbnails.delete(att);
+        releaseAttachmentThumbnail(att);
+      }
+    });
+  });
 
   const getAttachmentBadge = (att: unknown) => {
     if (isImageAttachment(att)) return 'IMG';
@@ -387,7 +405,7 @@
       name: getAttachmentName(att),
       sizeLabel: formatAttachmentSize((att as { size?: number })?.size || 0),
       isImage: isImageAttachment(att),
-      previewUrl: getAttachmentPreviewUrl(att),
+      previewUrl: thumbnails.get(att) || '',
       badge: getAttachmentBadge(att),
     })),
   );
@@ -399,7 +417,8 @@
     attachments.reduce((total: number, att: unknown) => {
       const { content, size } = att as { content?: unknown; size?: number };
       if (typeof content === 'string') {
-        const base64 = content.replace(/\s/g, '');
+        // (copied only when it has line breaks: a file read here has none)
+        const base64 = /\s/.test(content) ? content.replace(/\s/g, '') : content;
         const padding = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0;
         return total + Math.max(0, Math.floor((base64.length * 3) / 4) - padding);
       }
@@ -1337,7 +1356,9 @@
     subject,
     body,
     isPlainText,
-    attachments: JSON.parse(JSON.stringify(attachments)),
+    // a plain copy for IndexedDB; the files' base64 strings are shared, not
+    // duplicated as a JSON round trip did on every autosave
+    attachments: $state.snapshot(attachments),
   });
 
   const hasUnsavedContent = () => {
@@ -1409,7 +1430,16 @@
     }
   };
 
+  let composeRoot = $state<HTMLElement | null>(null);
+
   const setVisible = (val: boolean) => {
+    // Let go of the focused field before compose leaves the page. Removing a
+    // focused field takes the keyboard down while its nodes are being torn
+    // out, and WebKit does not send focusout for it, so the page kept its
+    // keyboard state (Mailbox's body.keyboard-open) as well.
+    if (!val && composeRoot?.contains(document.activeElement)) {
+      (document.activeElement as HTMLElement).blur?.();
+    }
     visible = val;
     visibility.set(val);
   };
@@ -1516,11 +1546,34 @@
     setCompact(false);
     showFormatMenu = false;
     showFormatAdvanced = false;
-    editorView?.destroy();
+    // Destroyed after the frame in which compose leaves the page, not in the
+    // middle of it: ProseMirror takes its view out of the DOM on destroy.
+    destroyEditorLater(editorView);
     editorView = null;
     editorReady = false;
     clearRecipientSuggestions();
   };
+
+  // The editor reset() let go of, until it is destroyed.
+  let retiredEditor: Editor | null = null;
+
+  function destroyRetiredEditor() {
+    const editor = retiredEditor;
+    retiredEditor = null;
+    try {
+      editor?.destroy();
+    } catch (err) {
+      console.warn('[Compose] Failed to destroy editor:', err);
+    }
+  }
+
+  function destroyEditorLater(editor: Editor | null) {
+    if (!editor) return;
+    destroyRetiredEditor();
+    retiredEditor = editor;
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(destroyRetiredEditor);
+    else setTimeout(destroyRetiredEditor, 0);
+  }
 
   const isDesktopViewport = () => typeof window !== 'undefined' && window.innerWidth >= 768;
 
@@ -1910,6 +1963,9 @@
       setTimeout(() => initEditor(focusToField), 50);
       return;
     }
+    // Compose reopened before the previous editor was destroyed: destroy it
+    // now, or both would sit in the same element.
+    destroyRetiredEditor();
     editorView = new Editor({
       element: editorEl as HTMLElement,
       extensions: [
@@ -2946,6 +3002,9 @@
 
   const finishOpen = (shouldFocusToField = false) => {
     composeOpenedAt = Date.now();
+    // open() can run while compose is already open (a reply from the list);
+    // the previous draft's timer kept saving on its own interval otherwise
+    autosaveTimer?.stop();
     setVisible(true);
     setTimeout(() => {
       initEditor(shouldFocusToField);
@@ -3270,8 +3329,10 @@
   });
 
   onDestroy(() => {
+    destroyRetiredEditor();
     editorView?.destroy();
     autosaveTimer?.stop?.();
+    for (const att of thumbnails.keys()) releaseAttachmentThumbnail(att);
   });
 </script>
 
@@ -3303,6 +3364,7 @@
       class:md:mx-auto={!nativeWindow && expanded}
       role="dialog"
       aria-modal={!compact && !nativeWindow}
+      bind:this={composeRoot}
       data-testid="compose-modal"
       data-attachment-bytes={attachmentBytes}
       ondragenter={onComposeDragEnter}

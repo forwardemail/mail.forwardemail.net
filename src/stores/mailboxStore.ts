@@ -232,6 +232,9 @@ const createMailboxStore = () => {
     page.set(1);
     selectedConversationIds.set([]);
     selectedMessage.set(null);
+    // The reader shows this thread while it is set; it belongs to the folder
+    // being left.
+    selectedConversation.set(null);
 
     const effectiveQuery = buildSearchQuery(get(query) || '');
     if (effectiveQuery) {

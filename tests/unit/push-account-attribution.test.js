@@ -12,14 +12,29 @@
  * tests pin that capture and the resolution that depends on it.
  */
 
-const { registerPushTokenMock, registerForAccountMock, callbacks, listenerCleanup } = vi.hoisted(
-  () => ({
+const { registerPushTokenMock, registerForAccountMock, callbacks, listenerCleanup, sockets } =
+  vi.hoisted(() => ({
     registerPushTokenMock: vi.fn(),
     registerForAccountMock: vi.fn(),
     callbacks: {},
     listenerCleanup: { unregister: vi.fn(() => Promise.resolve()) },
-  }),
-);
+    sockets: new Map(),
+  }));
+
+// One fake connection per account; a test plays the server's side of it.
+vi.mock('../../src/utils/websocket-client.js', () => ({
+  createWebSocketClient: ({ email }) => {
+    const handlers = new Map();
+    const client = {
+      on: (event, handler) => handlers.set(event, handler),
+      connect: () => {},
+      destroy: () => sockets.delete(email),
+      emit: (event, payload) => handlers.get(event)?.(payload),
+    };
+    sockets.set(email, client);
+    return client;
+  },
+}));
 
 vi.mock('../../src/utils/platform.js', () => ({ isTauri: true, isTauriMobile: true }));
 
@@ -208,6 +223,37 @@ describe('push notification account attribution', () => {
     captured.stop();
 
     expect(captured.events).toHaveLength(1);
+  });
+
+  it('names the account from its connection when its registration has no alias', async () => {
+    // Bob's registration failed, so the push registrations do not know his
+    // alias. His WebSocket connection authenticated as that alias.
+    registerForAccountMock.mockResolvedValue(null);
+    await bootWithBothAccounts();
+    const { getWebSocketManager, destroyWebSocketManager } =
+      await import('../../src/utils/websocket-manager.js');
+    const manager = getWebSocketManager();
+    manager.reconcile();
+    sockets.get(BOB).emit('_authenticated', { aliasId: BOB_ALIAS });
+    sockets.get(ALICE).emit('_authenticated', { aliasId: ALICE_ALIAS });
+
+    const { resolveAccountForAliasId } = await import('../../src/utils/push-notifications.js');
+    expect(resolveAccountForAliasId(BOB_ALIAS)).toBe(BOB);
+
+    // A tap on Bob's notification opens in Bob's account.
+    const opened = [];
+    const handler = (event) => opened.push(event.detail);
+    window.addEventListener('fe:push-notification', handler);
+    await callbacks.received({
+      data: { event: 'newMessage', alias_id: BOB_ALIAS, mailbox: 'INBOX', message_id: 'm1' },
+    });
+    window.removeEventListener('fe:push-notification', handler);
+    expect(opened.map((detail) => detail._account)).toEqual([BOB]);
+
+    // Signed out since: the alias no longer names an account here.
+    accountList.splice(1, 1);
+    expect(resolveAccountForAliasId(BOB_ALIAS)).toBe('');
+    destroyWebSocketManager();
   });
 
   it('never attributes a push to the signed-out sentinel registration', async () => {

@@ -23,21 +23,27 @@ const open = await import('../../src/utils/notification-open.ts');
 
 describe('notification-open', () => {
   let navigated: string[];
+  let switched: string[];
   let ready: boolean;
+  const deps = () => ({
+    isReady: () => ready,
+    switchAccount: async (email: string) => {
+      switched.push(email);
+      localValues.set('email', email);
+    },
+    navigate: (path: string) => navigated.push(path),
+  });
 
   beforeEach(() => {
     open.__resetNotificationOpenForTests();
     navigated = [];
+    switched = [];
     ready = true;
     localValues.clear();
     localValues.set('email', 'alice@example.com');
     accounts.length = 0;
-    accounts.push({ email: 'alice@example.com' });
-    open.configureNotificationOpen({
-      isReady: () => ready,
-      switchAccount: async () => {},
-      navigate: (path) => navigated.push(path),
-    });
+    accounts.push({ email: 'alice@example.com' }, { email: 'bob@example.com' });
+    open.configureNotificationOpen(deps());
   });
 
   it('maps forwardemail:// links into the app, and leaves others alone', () => {
@@ -86,6 +92,95 @@ describe('notification-open', () => {
     expect(open.pushDataToTarget({ event: 'contactUpdated', id: 'c1' })).toEqual({
       appPath: '/contacts#contact=c1',
     });
+    // Delivered to temporary storage: no id yet, so subject and sender.
+    expect(
+      open.pushDataToTarget({
+        event: 'newMessage',
+        message_id: '',
+        mailbox: 'INBOX',
+        subject: 'Lunch on Friday',
+        sender: 'Dave <dave@example.com>',
+      }),
+    ).toEqual({ folder: 'INBOX', subject: 'Lunch on Friday', sender: 'Dave <dave@example.com>' });
+  });
+
+  it('hands the mailbox the subject and sender of a message without an id, once', async () => {
+    open.openNotificationTarget({
+      folder: 'INBOX',
+      subject: 'Lunch on Friday',
+      sender: 'Dave <dave@example.com>',
+    });
+    await vi.waitFor(() => expect(navigated).toEqual(['/mailbox#INBOX']));
+    const hint = open.takeNotificationMessageHint();
+    expect(hint).toEqual({
+      folder: 'INBOX',
+      subject: 'Lunch on Friday',
+      sender: 'Dave <dave@example.com>',
+    });
+    expect(open.takeNotificationMessageHint()).toBeNull();
+
+    const match = (subject: string, from: unknown) =>
+      open.messageMatchesHint({ subject, from }, hint);
+    expect(match('Lunch  on friday', 'Dave Smith <DAVE@example.com>')).toBe(true);
+    expect(match('Lunch on Friday', { value: [{ address: 'dave@example.com' }] })).toBe(true);
+    expect(match('Lunch on Friday', 'Carol <carol@example.com>')).toBe(false);
+    expect(match('Re: Lunch on Friday', 'dave@example.com')).toBe(false);
+  });
+
+  it('switches to the account as it is stored, whatever its case in the notification', async () => {
+    open.openNotificationTarget({ account: 'Bob@Example.com', folder: 'INBOX', messageId: 'm9' });
+    await vi.waitFor(() => expect(navigated).toEqual(['/mailbox#INBOX/m9']));
+    expect(switched).toEqual(['bob@example.com']);
+  });
+
+  it('keeps a tap saved until it has been opened, and never its subject', async () => {
+    let finishSwitch = () => {};
+    open.configureNotificationOpen({
+      ...deps(),
+      switchAccount: (email: string) =>
+        new Promise<void>((resolve) => {
+          finishSwitch = () => {
+            localValues.set('email', email);
+            resolve();
+          };
+        }),
+    });
+    open.openNotificationTarget({
+      account: 'bob@example.com',
+      folder: 'INBOX',
+      subject: 'Lunch on Friday',
+      sender: 'Dave <dave@example.com>',
+    });
+    // Mid-switch, the page could still die: the tap is still saved.
+    await Promise.resolve();
+    const saved = sessionStorage.getItem('fe_notification_open_pending') || '';
+    expect(JSON.parse(saved).target).toEqual({ account: 'bob@example.com', folder: 'INBOX' });
+
+    finishSwitch();
+    await vi.waitFor(() => expect(navigated).toEqual(['/mailbox#INBOX']));
+    expect(sessionStorage.getItem('fe_notification_open_pending')).toBeNull();
+  });
+
+  it('keeps a waiting tap across a reload of the page', async () => {
+    ready = false;
+    open.openNotificationTarget({ account: 'bob@example.com', folder: 'INBOX', messageId: 'm5' });
+    await open.flushPendingNotificationOpen();
+    expect(navigated).toEqual([]);
+
+    // A fresh copy of the module, as after a reload; sessionStorage remains.
+    vi.resetModules();
+    const reloaded = await import('../../src/utils/notification-open.ts');
+    ready = true;
+    reloaded.configureNotificationOpen(deps());
+    await vi.waitFor(() => expect(navigated).toEqual(['/mailbox#INBOX/m5']));
+    expect(switched).toEqual(['bob@example.com']);
+
+    // Opened once: another reload has nothing left.
+    vi.resetModules();
+    const again = await import('../../src/utils/notification-open.ts');
+    again.configureNotificationOpen(deps());
+    await again.flushPendingNotificationOpen();
+    expect(navigated).toEqual(['/mailbox#INBOX/m5']);
   });
 
   it('holds a tap until the app is ready, then opens it once', async () => {

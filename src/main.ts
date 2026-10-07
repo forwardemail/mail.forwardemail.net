@@ -79,6 +79,7 @@ import {
   start as startInactivityTimer,
   pause as pauseInactivityTimer,
   resume as resumeInactivityTimer,
+  lockIfDue as lockAppIfDue,
 } from './utils/inactivity-timer.js';
 import {
   startOutboxProcessor,
@@ -2608,10 +2609,13 @@ async function bootstrap() {
     // or behind the lock screen are held until here: signed in, unlocked, and
     // the account settled. See utils/notification-open.ts.
     configureNotificationOpen({
+      // lockAppIfDue() last: when a lock is due it locks now, and the tap
+      // opens once the app is unlocked.
       isReady: () =>
         !_lockScreenPromise &&
         !isVaultLocked() &&
-        Boolean(Local.get('authToken') || Local.get('alias_auth')),
+        Boolean(Local.get('authToken') || Local.get('alias_auth')) &&
+        !lockAppIfDue(),
       switchAccount: (email: string) => mailboxActions.switchAccount(email),
       navigate: (path: string) => {
         const current = `${window.location.pathname}${window.location.hash}`;

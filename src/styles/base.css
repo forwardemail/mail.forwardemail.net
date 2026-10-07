@@ -195,10 +195,8 @@ body:not(.mailbox-mode) {
     font-size: 16px !important;
   }
 
-  /* Smooth keyboard transitions */
-  body {
-    transition: height 0.3s ease;
-  }
+  /* No transition on the body's height: it re-laid out the whole document
+     on every frame of the keyboard's animation. */
 
   /* Prevent body scroll when keyboard is open */
   body.keyboard-open {

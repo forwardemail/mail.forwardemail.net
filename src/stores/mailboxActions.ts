@@ -2436,6 +2436,8 @@ const performAccountSwitch = async (email) => {
   indexProgress.set({ active: false, current: 0, total: 0, message: '' });
   mailboxStore.state.selectedConversationIds.set([]);
   mailboxStore.state.selectedMessage.set(null);
+  // The open thread is the previous account's.
+  selectedConversation.set(null);
   mailboxStore.state.messageBody.set('');
   mailboxStore.state.attachments.set([]);
   mailboxStore.state.page.set(1);
@@ -2619,6 +2621,8 @@ const resetMailboxStateForAccount = () => {
   });
   mailboxStore.state.selectedConversationIds.set([]);
   mailboxStore.state.selectedMessage.set(null);
+  // The open thread is the previous account's.
+  selectedConversation.set(null);
   mailboxStore.state.messageBody.set('');
   mailboxStore.state.messages.set([]);
   mailboxStore.state.folders.set([]);

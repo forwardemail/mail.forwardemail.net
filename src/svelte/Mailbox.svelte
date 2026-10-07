@@ -235,6 +235,11 @@
     openMessageTab,
   } from '../stores/tabStore';
   import { isTauriDesktop } from '../utils/platform.js';
+  import {
+    messageMatchesHint,
+    takeNotificationMessageHint,
+    type NotificationMessageHint,
+  } from '../utils/notification-open';
   import { onlineStatus, checkConnectivity } from '../utils/network-status';
 
   // App Store and Google Play builds hide billing and sign-up links (store-policy.js).
@@ -841,7 +846,14 @@
   let refreshAnimating = $state(false);
   let refreshAnimationTimer: ReturnType<typeof setTimeout> | null = null;
 
-  // Swipe gesture state for email list
+  // Swipe gesture state for email list. A touch only becomes a swipe once it
+  // moves sideways: until then the row it started on is kept outside Svelte
+  // state (swipeCandidateId), so a tap (checking a message, opening one)
+  // changes nothing on the row. Marking the row as swiped on touchstart gave
+  // every tap a compositor layer (will-change: transform) that was dropped
+  // again 200ms later; on iOS that layer churn, on top of the selection
+  // change, is where WebKit's content process went down.
+  let swipeCandidateId: string | null = null;
   let swipeItemId = $state<string | null>(null);
   let swipeDistance = $state(0);
   let swipeStartX = 0;
@@ -1898,6 +1910,19 @@
 
     lastSelectedMessageId = msg?.id;
 
+    // The reader shows the selected conversation's thread whenever there is
+    // one. A message opened on its own (a notification, a link, a message
+    // the list has not loaded) left the previous thread selected, and the
+    // reader kept showing that thread instead of the message.
+    const conversation = get(selectedConversation) as {
+      messages?: Array<{ id?: unknown }>;
+      previewMessages?: Array<{ id?: unknown }>;
+    } | null;
+    const threadMessages = conversation?.previewMessages || conversation?.messages || [];
+    if (conversation && !threadMessages.some((m) => String(m?.id) === String(msg?.id))) {
+      updateSelectedConversation(null);
+    }
+
     mailboxView?.selectMessage?.(msg);
     // Clear body/attachments BEFORE updating selectedMessage to prevent stale content
     // from the previous message flashing with the new message's subject/sender.
@@ -2322,6 +2347,62 @@
     // Bumped by every navigation, so a slow open-by-id for an earlier link
     // cannot replace what the user opened since.
     let messageNavigation = 0;
+
+    const openListedMessage = (msg: { id?: unknown }) => {
+      if (get(threadingEnabled)) {
+        const conv = get(filteredConversations).find((c) =>
+          c.messages?.some((m) => String(m.id) === String(msg.id)),
+        );
+        if (conv) {
+          selectConversation(conv, { updateUrl: false });
+          return;
+        }
+      }
+      selectMessage(msg, { updateUrl: false });
+    };
+
+    // Open the message a notification names by subject and sender: the newest
+    // unread one in its folder (an older read one with the same subject, say
+    // yesterday's digest, is not it). Mail from temporary storage reaches the
+    // list a little after the app connects, so keep looking for a while, but
+    // stop once the user opens something or leaves the folder.
+    const openHintedMessage = (hint: NotificationMessageHint, navigation: number) => {
+      const sameFolder = (a: unknown, b: unknown) =>
+        String(a ?? '').toUpperCase() === String(b ?? '').toUpperCase();
+      let attempts = 0;
+      const look = () => {
+        if (!isActive || navigation !== messageNavigation) return;
+        if (get(selectedMessage) || attempts++ >= 60) return;
+        const folder = get(selectedFolder);
+        if (!sameFolder(folder, hint.folder)) {
+          // still switching to it, or the user went elsewhere
+          if (attempts > 4) return;
+        } else if (!get(loading)) {
+          type Listed = {
+            id?: unknown;
+            folder?: unknown;
+            is_unread?: unknown;
+            subject?: unknown;
+            from?: unknown;
+            dateMs?: unknown;
+            date?: unknown;
+          };
+          const matches = ((get(messagesStore) || []) as Listed[]).filter(
+            (m) =>
+              m?.is_unread && sameFolder(m.folder ?? folder, folder) && messageMatchesHint(m, hint),
+          );
+          if (matches.length) {
+            const newest = matches.reduce((a, b) =>
+              (Number(b?.dateMs ?? b?.date) || 0) > (Number(a?.dateMs ?? a?.date) || 0) ? b : a,
+            );
+            openListedMessage(newest);
+            return;
+          }
+        }
+        setTimeout(look, 500);
+      };
+      look();
+    };
     const navigateToMessage = (
       linkFolder: string,
       messageId: string | null,
@@ -2359,6 +2440,10 @@
       if (!messageId) {
         source.state?.selectedMessage?.set?.(null);
         closeReaderFullscreen({ updateUrl: false }); // URL already correct from popstate/navigation
+        // A notification for mail that had no id yet (delivered to temporary
+        // storage) names its subject and sender instead.
+        const hint = takeNotificationMessageHint();
+        if (hint) openHintedMessage(hint, navigation);
         return;
       }
 
@@ -2367,17 +2452,7 @@
         const currentMessages = get(messagesStore);
         const msg = currentMessages.find((m) => String(m.id) === String(messageId));
         if (msg) {
-          if (get(threadingEnabled)) {
-            const convs = get(filteredConversations);
-            const conv = convs.find((c) =>
-              c.messages?.some((m) => String(m.id) === String(messageId)),
-            );
-            if (conv) {
-              selectConversation(conv, { updateUrl: false });
-              return true;
-            }
-          }
-          selectMessage(msg, { updateUrl: false });
+          openListedMessage(msg);
           return true;
         }
         return false;
@@ -2630,24 +2705,44 @@
         readerLabelMenuOpen = false;
       }
     };
-    // Mobile keyboard handling
+    // Mobile keyboard handling. Fields that take text include the message
+    // editor (contenteditable), so moving between To and the body keeps the
+    // class: dropping and adding it again re-laid out the whole document
+    // (body position: fixed) each time, while the keyboard was moving.
+    // Compose places its own fields, so nothing here scrolls inside it; the
+    // smooth scroll it got raced WebKit's own scroll to the focused field.
+    const takesText = (el: EventTarget | null): el is HTMLElement =>
+      el instanceof HTMLElement &&
+      (el.isContentEditable ||
+        el.tagName === 'TEXTAREA' ||
+        (el instanceof HTMLInputElement &&
+          !['checkbox', 'radio', 'range', 'button', 'submit', 'reset', 'file', 'color'].includes(
+            el.type,
+          )));
+    const inCompose = (el: Element) => Boolean(el.closest('[data-testid="compose-modal"]'));
+
     const handleFocusIn = (e) => {
       if (window.innerWidth > 640) return;
 
       const target = e.target;
-      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) {
-        // Add keyboard-open class to body
+      if (!takesText(target)) return;
+      if (!document.body.classList.contains('keyboard-open')) {
         document.body.classList.add('keyboard-open');
-
-        // Scroll element into view after a short delay to let keyboard appear
-        setTimeout(() => {
-          target.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        }, 300);
       }
+      if (inCompose(target)) return;
+
+      // Scroll element into view after a short delay to let keyboard appear
+      setTimeout(() => {
+        if (document.activeElement === target) {
+          target.scrollIntoView({ block: 'nearest' });
+        }
+      }, 300);
     };
 
-    const handleFocusOut = () => {
+    const handleFocusOut = (e: FocusEvent) => {
       if (window.innerWidth > 640) return;
+      // focus moving to another field keeps the keyboard up
+      if (takesText(e?.relatedTarget)) return;
       document.body.classList.remove('keyboard-open');
     };
 
@@ -2661,11 +2756,9 @@
         const offsetTop = viewport.offsetTop;
 
         // Adjust scroll when keyboard appears
-        if (offsetTop > 0 && document.activeElement) {
-          const activeElement = document.activeElement;
-          if (activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA') {
-            activeElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          }
+        const activeElement = document.activeElement;
+        if (offsetTop > 0 && takesText(activeElement) && !inCompose(activeElement)) {
+          activeElement.scrollIntoView({ block: 'nearest' });
         }
       };
       window.visualViewport.addEventListener('resize', visualViewportHandler);
@@ -3076,13 +3169,17 @@
   };
 
   const handleSwipeStart = (e, item) => {
+    swipeCandidateId = null;
     // Only on mobile
     if (window.innerWidth > 640) return;
     if (swipeAnimating) return;
+    // A touch on a control in the row (the avatar that checks the message)
+    // is a tap on that control, never the start of a swipe.
+    if (e.target?.closest?.('button, a, input, label, [role="checkbox"]')) return;
     // Do not archive a row when the user intended the app-level back gesture.
     if (isEdgeSwipeStart(e.touches[0].clientX)) return;
 
-    swipeItemId = item.id;
+    swipeCandidateId = item.id;
     swipeStartX = e.touches[0].clientX;
     swipeStartY = e.touches[0].clientY;
     swipeStartTime = Date.now();
@@ -3091,7 +3188,7 @@
   };
 
   const handleSwipeMove = (e, item) => {
-    if (!swipeItemId || swipeItemId !== item.id) return;
+    if (!swipeCandidateId || swipeCandidateId !== item.id) return;
     if (window.innerWidth > 640) return;
     if (swipeAnimating) return;
 
@@ -3105,6 +3202,7 @@
       // Horizontal swipe detected - require more horizontal than vertical movement
       if (Math.abs(deltaX) > Math.abs(deltaY) * 1.5) {
         swiping = true;
+        swipeItemId = item.id;
       } else {
         // Vertical scroll detected, cancel swipe
         resetSwipe();
@@ -3133,6 +3231,11 @@
   };
 
   const handleSwipeEnd = async (item) => {
+    if (swipeCandidateId === item.id && swipeItemId !== item.id) {
+      // a tap or a scroll: the row was never touched
+      swipeCandidateId = null;
+      return;
+    }
     if (!swipeItemId || swipeItemId !== item.id) return;
     if (swipeAnimating) return;
 
@@ -3180,6 +3283,7 @@
   };
 
   const resetSwipe = () => {
+    swipeCandidateId = null;
     swipeItemId = null;
     swipeDistance = 0;
     swiping = false;
@@ -6765,108 +6869,113 @@
               </div>
             {/if}
 
-            {#if $selectedConversationIds && $selectedConversationIds.length}
-              <div class="flex items-center gap-3 px-4 py-2 bg-muted/50 sticky top-0 z-30">
-                <div
-                  class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium bg-primary text-primary-foreground"
+            <!-- The bulk-action bar stays in the page and is shown or hidden,
+                 so checking the first message or clearing the last one adds
+                 and removes no nodes (see utils/deferred-store.ts on WebKit
+                 and synchronous node removal). -->
+            <div
+              class={`${$selectedConversationIds?.length ? 'flex' : 'hidden'} items-center gap-3 px-4 py-2 bg-muted/50 sticky top-0 z-30`}
+              data-testid="bulk-actions"
+            >
+              <div
+                class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium bg-primary text-primary-foreground"
+              >
+                <span>{selectedMessageCount}</span>
+              </div>
+              <div class="flex items-center gap-1 flex-wrap">
+                <button
+                  class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                  type="button"
+                  aria-label="Clear selection"
+                  data-tooltip="Clear selection"
+                  data-tooltip-position="bottom"
+                  onclick={clearSelection}
                 >
-                  <span>{selectedMessageCount}</span>
-                </div>
-                <div class="flex items-center gap-1 flex-wrap">
+                  <X class="h-5 w-5" />
+                </button>
+                {#if !matchesFolderKey( $selectedFolder, ['ARCHIVE'], ) && !listIsSpamOrJunk && !listIsDraftFolder && !listIsTrashFolder}
                   <button
                     class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
                     type="button"
-                    aria-label="Clear selection"
-                    data-tooltip="Clear selection"
+                    aria-label="Archive selected"
+                    data-tooltip="Archive selected"
                     data-tooltip-position="bottom"
-                    onclick={clearSelection}
+                    onclick={bulkArchive}
                   >
-                    <X class="h-5 w-5" />
+                    <Archive class="h-5 w-5" />
                   </button>
-                  {#if !matchesFolderKey( $selectedFolder, ['ARCHIVE'], ) && !listIsSpamOrJunk && !listIsDraftFolder && !listIsTrashFolder}
-                    <button
-                      class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
-                      type="button"
-                      aria-label="Archive selected"
-                      data-tooltip="Archive selected"
-                      data-tooltip-position="bottom"
-                      onclick={bulkArchive}
-                    >
-                      <Archive class="h-5 w-5" />
-                    </button>
-                  {/if}
-                  <button
-                    class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
-                    type="button"
-                    aria-label="Delete selected"
-                    data-tooltip="Delete selected"
-                    data-tooltip-position="bottom"
-                    onclick={bulkDelete}
-                  >
-                    <Trash2 class="h-5 w-5" />
-                  </button>
-                  {#if !isMobile}
-                    <!-- Mark read/unread are hidden on mobile so the bulk bar
+                {/if}
+                <button
+                  class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                  type="button"
+                  aria-label="Delete selected"
+                  data-tooltip="Delete selected"
+                  data-tooltip-position="bottom"
+                  onclick={bulkDelete}
+                >
+                  <Trash2 class="h-5 w-5" />
+                </button>
+                {#if !isMobile}
+                  <!-- Mark read/unread are hidden on mobile so the bulk bar
                          stays on a single row instead of wrapping to two. -->
-                    <button
-                      class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
-                      type="button"
-                      aria-label="Mark selected as read"
-                      data-tooltip="Mark selected as read"
-                      data-tooltip-position="bottom"
-                      onclick={bulkMarkAsRead}
+                  <button
+                    class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                    type="button"
+                    aria-label="Mark selected as read"
+                    data-tooltip="Mark selected as read"
+                    data-tooltip-position="bottom"
+                    onclick={bulkMarkAsRead}
+                  >
+                    <MailOpen class="h-5 w-5" />
+                  </button>
+                  <button
+                    class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                    type="button"
+                    aria-label="Mark selected as unread"
+                    data-tooltip="Mark selected as unread"
+                    data-tooltip-position="bottom"
+                    onclick={bulkMarkAsUnread}
+                  >
+                    <MailIcon class="h-5 w-5" />
+                  </button>
+                {/if}
+                <div class="relative" data-bulk-move>
+                  <button
+                    class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                    type="button"
+                    aria-label="Move selected"
+                    data-tooltip="Move selected"
+                    data-tooltip-position="bottom"
+                    onclick={() => {
+                      bulkLabelOpen = false;
+                      bulkMoreOpen = false;
+                      if (bulkMoveOpen?.update) {
+                        bulkMoveOpen.update((v) => !v);
+                      } else if (mailboxView?.toggleBulkMove) {
+                        mailboxView.toggleBulkMove();
+                      }
+                    }}
+                  >
+                    <FolderInput class="h-5 w-5" />
+                  </button>
+                  {#if $bulkMoveOpen}
+                    <div
+                      class="absolute right-0 z-50 mt-1 min-w-[160px] max-h-[300px] overflow-y-auto border border-border bg-popover p-1 shadow-md"
                     >
-                      <MailOpen class="h-5 w-5" />
-                    </button>
-                    <button
-                      class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
-                      type="button"
-                      aria-label="Mark selected as unread"
-                      data-tooltip="Mark selected as unread"
-                      data-tooltip-position="bottom"
-                      onclick={bulkMarkAsUnread}
-                    >
-                      <MailIcon class="h-5 w-5" />
-                    </button>
+                      {#each availableMoveTargetsFromStore.length ? availableMoveTargetsFromStore : $availableMoveTargets as folder}
+                        <button
+                          type="button"
+                          class="flex items-center w-full px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground cursor-pointer"
+                          onclick={() => bulkMoveTo(folder.path)}
+                        >
+                          {folder.path || folder.name}
+                        </button>
+                      {/each}
+                    </div>
                   {/if}
-                  <div class="relative" data-bulk-move>
-                    <button
-                      class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
-                      type="button"
-                      aria-label="Move selected"
-                      data-tooltip="Move selected"
-                      data-tooltip-position="bottom"
-                      onclick={() => {
-                        bulkLabelOpen = false;
-                        bulkMoreOpen = false;
-                        if (bulkMoveOpen?.update) {
-                          bulkMoveOpen.update((v) => !v);
-                        } else if (mailboxView?.toggleBulkMove) {
-                          mailboxView.toggleBulkMove();
-                        }
-                      }}
-                    >
-                      <FolderInput class="h-5 w-5" />
-                    </button>
-                    {#if $bulkMoveOpen}
-                      <div
-                        class="absolute right-0 z-50 mt-1 min-w-[160px] max-h-[300px] overflow-y-auto border border-border bg-popover p-1 shadow-md"
-                      >
-                        {#each availableMoveTargetsFromStore.length ? availableMoveTargetsFromStore : $availableMoveTargets as folder}
-                          <button
-                            type="button"
-                            class="flex items-center w-full px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground cursor-pointer"
-                            onclick={() => bulkMoveTo(folder.path)}
-                          >
-                            {folder.path || folder.name}
-                          </button>
-                        {/each}
-                      </div>
-                    {/if}
-                  </div>
                 </div>
               </div>
-            {/if}
+            </div>
 
             <div
               class="fe-message-list-wrapper relative flex-1 min-h-0 overflow-y-auto"
@@ -7044,9 +7153,13 @@
                         {@const isOpen = activeConvId === conv.id}
                         {@const rowSwipeDistance = isSwiped ? swipeDistance : 0}
                         {@const rowSwiping = isSwiped && swiping}
+                        <!-- Only the row being swiped gets a transform. An
+                             inline transform and transition on every row made
+                             each one its own render layer in WebKit, up to a
+                             thousand of them in a long list. -->
                         {@const rowSwipeStyle = isSwiped
                           ? `transform: translateX(${swipeDistance}px); will-change: transform; transition: ${swiping && !swipeAnimating ? 'none' : 'transform 0.25s cubic-bezier(0.25, 0.46, 0.45, 0.94)'};`
-                          : 'transform: translateX(0px); will-change: auto; transition: transform 0.25s cubic-bezier(0.25, 0.46, 0.45, 0.94);'}
+                          : undefined}
                         <div
                           role="presentation"
                           class={`fe-msg-row relative cursor-pointer hover:bg-accent/50 transition-colors ${isSwiped ? 'overflow-hidden' : ''} ${isOpen || isChecked ? 'msg-active' : ''}`}

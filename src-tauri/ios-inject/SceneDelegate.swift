@@ -30,6 +30,13 @@ class TaoSceneDelegate: UIResponder, UIWindowSceneDelegate {
     private static var recoveryInstalledClasses = Set<ObjectIdentifier>()
     /// Last renderer recovery reload, to avoid reload loops.
     private static var lastRecoveryReload: Date?
+    /// Reloads in a row whose page died again within seconds; each waits
+    /// longer (recoveryBackoff) so a page that keeps dying is not reloaded in
+    /// a tight loop, and is not left dead either.
+    private static var recoveryRetries = 0
+    private static let recoveryBackoff: [TimeInterval] = [5, 15, 60]
+    /// A recovery reload waiting for its backoff.
+    private static var pendingRecovery: DispatchWorkItem?
     /// True while a frame cycle is in flight. Foreground activation fires
     /// twice (will-enter-foreground and did-become-active) and a recovery
     /// reload can schedule one too; two overlapping cycles would capture each
@@ -176,11 +183,11 @@ class TaoSceneDelegate: UIResponder, UIWindowSceneDelegate {
     /// webview's width. When it is still wrong: reload once if allowed (only
     /// at launch), otherwise cycle again, up to three times.
     ///
-    /// Also used after every renderer recovery reload. A page reloaded after
-    /// its WebContent process was killed can come back with the wrong layout
-    /// viewport, and the app then renders its desktop layout on a phone (a
-    /// search box, toolbar and folder count in the header instead of the
-    /// mobile bar), until it is force-quit.
+    /// Also used to repair a renderer recovery reload (see ensureViewport). A
+    /// page reloaded after its WebContent process was killed can come back
+    /// with the wrong layout viewport, and the app then renders its desktop
+    /// layout on a phone (a search box, toolbar and folder count in the
+    /// header instead of the mobile bar), until it is force-quit.
     static func cycleViewport(
         _ webView: WKWebView,
         attempt: Int,
@@ -363,36 +370,104 @@ class TaoSceneDelegate: UIResponder, UIWindowSceneDelegate {
         let selector = sel_registerName("webViewWebContentProcessDidTerminate:")
         let block: @convention(block) (AnyObject, WKWebView) -> Void = { _, terminatedWebView in
             NSLog("[SceneDelegate] WebContent process terminated")
-            TaoSceneDelegate.recoverRenderer(terminatedWebView, reason: "process terminated")
+            TaoSceneDelegate.recoverRenderer(terminatedWebView, reason: "process terminated",
+                                             userReturned: false)
         }
         _ = class_replaceMethod(cls, selector, imp_implementationWithBlock(block as Any), "v@:@")
         NSLog("[SceneDelegate] Renderer recovery installed on %@", NSStringFromClass(cls))
     }
 
-    /// Reload a webview whose content process is gone. Rate-limited so a page
-    /// that dies again immediately is not reloaded in a tight loop.
-    private static func recoverRenderer(_ webView: WKWebView, reason: String) {
+    /// Reload a webview whose content process is gone. A page that dies again
+    /// within seconds of its reload is reloaded after a backoff (5s, 15s,
+    /// 60s) rather than left frozen: dropping that second termination left a
+    /// dead webview on screen, with no input, until the app was force-quit.
+    /// The user bringing the app back reloads at once: they are looking at
+    /// the dead page.
+    private static func recoverRenderer(_ webView: WKWebView, reason: String, userReturned: Bool) {
         DispatchQueue.main.async {
-            let now = Date()
-            if let last = lastRecoveryReload, now.timeIntervalSince(last) < 5 {
-                NSLog("[SceneDelegate] Skipping renderer reload (%@): reloaded %.1fs ago",
-                      reason, now.timeIntervalSince(last))
+            // The foreground event and the liveness check both report one
+            // dead page; the first one reloads it.
+            if userReturned, let last = lastRecoveryReload, Date().timeIntervalSince(last) < 2 {
                 return
             }
-            lastRecoveryReload = now
-            NSLog("[SceneDelegate] Reloading webview (%@)", reason)
-            if webView.url != nil {
-                webView.reload()
-            } else {
-                webView.reloadFromOrigin()
+            if let pending = pendingRecovery {
+                guard userReturned else {
+                    NSLog("[SceneDelegate] Renderer reload already scheduled (%@)", reason)
+                    return
+                }
+                pending.cancel()
+                pendingRecovery = nil
+                reloadRenderer(webView, reason: reason)
+                return
             }
-            // The fresh content process can lay the page out at the wrong
-            // viewport width (the launch-time fix below only ever ran once),
-            // which rendered the desktop layout on a phone. Check it again once
-            // the reload has started, and repair it without another reload.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                cycleViewport(webView, attempt: 1, cycles: 1, allowReload: false)
+            if userReturned {
+                reloadRenderer(webView, reason: reason)
+                return
             }
+            let now = Date()
+            var backoff: TimeInterval = 0
+            if let last = lastRecoveryReload {
+                let since = now.timeIntervalSince(last)
+                if since > 60 {
+                    recoveryRetries = 0
+                } else if since < 5 {
+                    guard recoveryRetries < recoveryBackoff.count else {
+                        NSLog("[SceneDelegate] Renderer keeps dying (%@); waiting for the next foreground",
+                              reason)
+                        return
+                    }
+                    backoff = recoveryBackoff[recoveryRetries]
+                    recoveryRetries += 1
+                }
+            }
+            let delay = backoff
+            let work = DispatchWorkItem {
+                pendingRecovery = nil
+                // A delayed retry first asks whether the page is in fact
+                // alive: two reports of one termination (the delegate hook
+                // and the foreground liveness check) must not reload twice.
+                if delay > 0 {
+                    webView.evaluateJavaScript("1") { _, error in
+                        let nsError = error as NSError?
+                        let dead = nsError?.domain == WKErrorDomain
+                            && nsError?.code == WKError.Code.webContentProcessTerminated.rawValue
+                        if dead { reloadRenderer(webView, reason: reason) }
+                    }
+                } else {
+                    reloadRenderer(webView, reason: reason)
+                }
+            }
+            pendingRecovery = work
+            if delay > 0 {
+                NSLog("[SceneDelegate] Renderer died again (%@); reloading in %.0fs", reason, delay)
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+        }
+    }
+
+    private static func reloadRenderer(_ webView: WKWebView, reason: String) {
+        lastRecoveryReload = Date()
+        NSLog("[SceneDelegate] Reloading webview (%@)", reason)
+        if webView.url != nil {
+            webView.reload()
+        } else {
+            webView.reloadFromOrigin()
+        }
+        // The fresh content process can lay the page out at the wrong viewport
+        // width, which rendered the desktop layout on a phone. Once the page
+        // has loaded, check it and repair it only if it is wrong: cycling the
+        // frame every time resized the webview twice while the app was
+        // building its first screen.
+        ensureViewportAfterLoad(webView, attempt: 1)
+    }
+
+    private static func ensureViewportAfterLoad(_ webView: WKWebView, attempt: Int) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            if webView.isLoading && attempt < 30 {
+                ensureViewportAfterLoad(webView, attempt: attempt + 1)
+                return
+            }
+            ensureViewport(webView)
         }
     }
 
@@ -404,7 +479,8 @@ class TaoSceneDelegate: UIResponder, UIWindowSceneDelegate {
             guard let nsError = error as NSError? else { return }
             if nsError.domain == WKErrorDomain,
                nsError.code == WKError.Code.webContentProcessTerminated.rawValue {
-                TaoSceneDelegate.recoverRenderer(webView, reason: "liveness check")
+                TaoSceneDelegate.recoverRenderer(webView, reason: "liveness check",
+                                                 userReturned: true)
             }
         }
     }
@@ -482,7 +558,8 @@ class TaoSceneDelegate: UIResponder, UIWindowSceneDelegate {
                 if name == "fe:app-foreground",
                    nsError.domain == WKErrorDomain,
                    nsError.code == WKError.Code.webContentProcessTerminated.rawValue {
-                    TaoSceneDelegate.recoverRenderer(webView, reason: "foreground dispatch failed")
+                    TaoSceneDelegate.recoverRenderer(webView, reason: "foreground dispatch failed",
+                                                     userReturned: true)
                 }
             }
         }

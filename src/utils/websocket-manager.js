@@ -26,6 +26,7 @@
 
 import { createWebSocketClient } from './websocket-client.js';
 import { Accounts, Local } from './storage';
+import { rememberAccountAlias } from './alias-accounts.js';
 
 // ── Singleton ─────────────────────────────────────────────────────────────
 let _instance = null;
@@ -136,7 +137,9 @@ function createWebSocketManager() {
     });
 
     // Also forward internal events for debugging/status
-    client.on('_authenticated', () => {
+    client.on('_authenticated', (data) => {
+      // Push payloads name the account by this id; see alias-accounts.js.
+      if (data?.aliasId) rememberAccountAlias(email, data.aliasId);
       dispatch('_authenticated', email, {});
     });
     client.on('_disconnected', (data) => {

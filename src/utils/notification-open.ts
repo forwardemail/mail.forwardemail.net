@@ -20,6 +20,13 @@
  *     overwrote the navigation. Here the navigation waits for the switch.
  *   - Only the newest tap matters: a second tap replaces a pending first one
  *     rather than queueing a string of navigations.
+ *   - A pending tap is kept in sessionStorage (its ids only, never a subject
+ *     or sender) until it has been opened. On iOS the system can end the
+ *     page's process while the PIN pad is up or mid-switch; the app reloads,
+ *     and the tap the page had already taken from the native queue was lost.
+ *   - New mail delivered to temporary storage has no message id yet. Its
+ *     notification carries the subject and sender, and the newest message
+ *     that matches them is opened instead of leaving the user on the inbox.
  *
  * The mailbox side of the navigation (#FOLDER/MESSAGE_ID) is handled by
  * Mailbox.svelte, which opens the message even when it is not in the loaded
@@ -38,6 +45,16 @@ export interface NotificationOpenTarget {
   messageId?: string;
   /** Another app route: /calendar#event=…, /contacts#contact=… */
   appPath?: string;
+  /** Subject of the message, to find it when there is no message id. */
+  subject?: string;
+  /** Sender of the message ("Name <address>"), for the same purpose. */
+  sender?: string;
+}
+
+export interface NotificationMessageHint {
+  folder: string;
+  subject: string;
+  sender: string;
 }
 
 export interface NotificationOpenDeps {
@@ -57,11 +74,47 @@ const PENDING_TTL_MS = 10 * 60 * 1000;
 // Upper bound on waiting for an account switch before navigating anyway.
 const SWITCH_DEADLINE_MS = 20_000;
 const ALLOWED_APP_PATH = /^\/(?:calendar|contacts)(?:[#?][^\s]*)?$/;
+const PENDING_STORAGE_KEY = 'fe_notification_open_pending';
+// How long the mailbox looks for the message a hint describes. Mail delivered
+// to temporary storage reaches the mailbox once the app has connected.
+const HINT_TTL_MS = 30_000;
 
 let deps: NotificationOpenDeps | null = null;
 let pending: { target: NotificationOpenTarget; at: number } | null = null;
 let flushing = false;
 let generation = 0;
+let messageHint: (NotificationMessageHint & { at: number }) | null = null;
+
+function savePending(): void {
+  try {
+    if (pending) {
+      const { account, folder, messageId, appPath } = pending.target;
+      const target = { account, folder, messageId, appPath };
+      sessionStorage.setItem(PENDING_STORAGE_KEY, JSON.stringify({ target, at: pending.at }));
+    } else {
+      sessionStorage.removeItem(PENDING_STORAGE_KEY);
+    }
+  } catch {
+    // Private mode or a full quota: the tap still works without a reload.
+  }
+}
+
+function restorePending(): void {
+  if (pending) return;
+  try {
+    const raw = sessionStorage.getItem(PENDING_STORAGE_KEY);
+    if (!raw) return;
+    sessionStorage.removeItem(PENDING_STORAGE_KEY);
+    const saved = JSON.parse(raw) as { target?: unknown; at?: unknown };
+    const target = normalizeNotificationTarget(saved?.target);
+    const at = Number(saved?.at);
+    if (!target || !Number.isFinite(at) || Date.now() - at > PENDING_TTL_MS) return;
+    pending = { target, at };
+    savePending();
+  } catch {
+    // Unreadable entry: nothing to restore.
+  }
+}
 
 function clean(value: unknown): string {
   if (typeof value === 'number' && Number.isFinite(value)) return String(value);
@@ -97,6 +150,14 @@ export function normalizeNotificationTarget(input: unknown): NotificationOpenTar
   const appPath = clean(raw.appPath);
   if (appPath && ALLOWED_APP_PATH.test(appPath)) target.appPath = appPath;
 
+  // Only needed to find a message that has no id yet.
+  if (!target.messageId && !target.appPath) {
+    const subject = clean(raw.subject);
+    const sender = clean(raw.sender);
+    if (subject) target.subject = subject;
+    if (sender) target.sender = sender;
+  }
+
   if (!target.folder && !target.messageId && !target.appPath && !target.account) return null;
   return target;
 }
@@ -114,16 +175,26 @@ export function notificationTargetPath(target: NotificationOpenTarget): string {
   return '';
 }
 
-function isSignedInAccount(email: string): boolean {
+/**
+ * The signed-in account a notification names, spelled the way the account
+ * list stores it, or '' when it is not signed in on this device. The switch
+ * compares emails exactly, so "Alice@…" from a notification would not match
+ * the stored "alice@…".
+ */
+function signedInAccount(email: string): string {
   try {
     const accounts = Accounts.getAll() || [];
     if (accounts.length) {
-      return accounts.some((account: { email?: string }) => sameAccount(account?.email, email));
+      const match = accounts.find((account: { email?: string }) =>
+        sameAccount(account?.email, email),
+      );
+      return match?.email || '';
     }
   } catch {
     // fall through to the single-account check
   }
-  return sameAccount(Local.get('email'), email);
+  const active = Local.get('email');
+  return sameAccount(active, email) ? active : '';
 }
 
 function withDeadline<T>(promise: Promise<T>, ms: number): Promise<T | undefined> {
@@ -144,6 +215,7 @@ export async function flushPendingNotificationOpen(): Promise<boolean> {
   if (!deps || !pending || flushing) return false;
   if (Date.now() - pending.at > PENDING_TTL_MS) {
     pending = null;
+    savePending();
     return false;
   }
   let ready = false;
@@ -154,20 +226,23 @@ export async function flushPendingNotificationOpen(): Promise<boolean> {
   }
   if (!ready) return false;
 
+  // Taken from memory now; the saved copy stays until it has been opened,
+  // so a page that dies during the account switch opens it after reloading.
   const { target } = pending;
   pending = null;
   flushing = true;
   const myGeneration = ++generation;
   try {
     if (target.account && !sameAccount(target.account, Local.get('email'))) {
-      if (!isSignedInAccount(target.account)) {
+      const account = signedInAccount(target.account);
+      if (!account) {
         // Not an account on this device (it was signed out after the push was
         // sent). Its message ids mean nothing in the account on screen.
         console.warn('[notification-open] ignoring tap for an account not signed in');
         return false;
       }
       await withDeadline(
-        Promise.resolve(deps.switchAccount(target.account)).catch((err) => {
+        Promise.resolve(deps.switchAccount(account)).catch((err) => {
           console.warn('[notification-open] account switch failed:', err);
         }),
         SWITCH_DEADLINE_MS,
@@ -178,10 +253,21 @@ export async function flushPendingNotificationOpen(): Promise<boolean> {
     }
 
     const path = notificationTargetPath(target);
+    messageHint =
+      !target.messageId && !target.appPath && (target.subject || target.sender)
+        ? {
+            folder: target.folder || 'INBOX',
+            subject: target.subject || '',
+            sender: target.sender || '',
+            at: Date.now(),
+          }
+        : null;
     if (path) deps.navigate(path);
     return true;
   } finally {
     flushing = false;
+    // Done with it (or replaced by a newer tap, which is saved instead).
+    savePending();
     // A tap that came in while this one was being handled.
     if (pending) queueMicrotask(() => void flushPendingNotificationOpen());
   }
@@ -194,6 +280,7 @@ export function openNotificationTarget(input: unknown): boolean {
   const target = normalizeNotificationTarget(input);
   if (!target) return false;
   pending = { target, at: Date.now() };
+  savePending();
   generation++;
   void flushPendingNotificationOpen();
   return true;
@@ -205,7 +292,64 @@ export function openNotificationTarget(input: unknown): boolean {
  */
 export function configureNotificationOpen(next: NotificationOpenDeps): void {
   deps = next;
+  // A tap taken before the page was reloaded.
+  restorePending();
   void flushPendingNotificationOpen();
+}
+
+/**
+ * The message a just-opened notification describes without an id, for the
+ * mailbox to look for. Read once.
+ */
+export function takeNotificationMessageHint(): NotificationMessageHint | null {
+  const hint = messageHint;
+  messageHint = null;
+  if (!hint || Date.now() - hint.at > HINT_TTL_MS) return null;
+  return { folder: hint.folder, subject: hint.subject, sender: hint.sender };
+}
+
+function normalizeSubject(value: unknown): string {
+  return typeof value === 'string' ? value.replace(/\s+/g, ' ').trim().toLowerCase() : '';
+}
+
+function addresses(value: unknown): string[] {
+  let text = '';
+  if (typeof value === 'string') text = value;
+  else if (value && typeof value === 'object') {
+    try {
+      text = JSON.stringify(value);
+    } catch {
+      text = '';
+    }
+  }
+  return (text.match(/[^\s<>"',;:()[\]{}]+@[^\s<>"',;:()[\]{}]+/g) || []).map((a) =>
+    a.toLowerCase(),
+  );
+}
+
+/**
+ * Whether a message in the list is the one a hint describes: the same subject
+ * (its start, when the notification cut it short) and a sender with the same
+ * address.
+ */
+export function messageMatchesHint(
+  message: { subject?: unknown; from?: unknown } | null | undefined,
+  hint: NotificationMessageHint | null | undefined,
+): boolean {
+  if (!message || !hint) return false;
+  const subject = normalizeSubject(hint.subject);
+  const senders = addresses(hint.sender);
+  if (!subject && !senders.length) return false;
+  if (subject) {
+    const listed = normalizeSubject(message.subject);
+    const truncated = hint.subject.length >= MAX_FIELD;
+    if (truncated ? !listed.startsWith(subject) : listed !== subject) return false;
+  }
+  if (senders.length) {
+    const from = addresses(message.from);
+    if (!senders.some((address) => from.includes(address))) return false;
+  }
+  return true;
 }
 
 /**
@@ -235,11 +379,14 @@ export function pushDataToTarget(
   }
 
   // newMessage and anything unrecognised: the message, or the folder it
-  // arrived in, or the inbox.
+  // arrived in, or the inbox. Without an id (mail delivered to temporary
+  // storage) the subject and sender identify it.
   return normalizeNotificationTarget({
     ...base,
     folder: clean(data.mailbox) || clean(data.folder) || 'INBOX',
     messageId: id,
+    subject: clean(data.subject),
+    sender: clean(data.sender) || clean(data.from),
   });
 }
 
@@ -340,4 +487,6 @@ export function __resetNotificationOpenForTests(): void {
   pending = null;
   flushing = false;
   generation = 0;
+  messageHint = null;
+  savePending();
 }

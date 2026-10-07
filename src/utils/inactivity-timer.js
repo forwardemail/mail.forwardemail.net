@@ -413,6 +413,31 @@ function getTimeRemaining() {
 }
 
 /**
+ * Lock now if a lock is already due but has not happened yet, and say so.
+ *
+ * A notification tap brings the app back before the resume handlers above
+ * run: on Android the tap arrives ahead of the window's focus event, and on
+ * any platform the inactivity timeout may have run out while timers were
+ * frozen. The tap used to open its message in those moments; the lock
+ * screen then came up over it and threw the vault key away, and after
+ * unlocking the message was blank or gone. A tap checks this first, so the
+ * lock comes first and the tap opens after unlocking.
+ *
+ * @returns {boolean} true if the app was locked
+ */
+function lockIfDue() {
+  if (!_started || _paused || !_onLock) return false;
+  if (checkMinimizeLockOnResume()) return true;
+  const prefs = getLockPrefs();
+  const timeoutMs = prefs.timeoutMs || 5 * 60 * 1000;
+  if (timeoutMs > 0 && Date.now() - _lastActivity >= timeoutMs) {
+    _onLock();
+    return true;
+  }
+  return false;
+}
+
+/**
  * Call when lock preferences change to immediately apply the new timeout.
  */
 function onPrefsChanged() {
@@ -421,4 +446,14 @@ function onPrefsChanged() {
   }
 }
 
-export { start, stop, pause, resume, resetTimer, isRunning, getTimeRemaining, onPrefsChanged };
+export {
+  start,
+  stop,
+  pause,
+  resume,
+  resetTimer,
+  isRunning,
+  getTimeRemaining,
+  onPrefsChanged,
+  lockIfDue,
+};

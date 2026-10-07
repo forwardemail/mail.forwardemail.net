@@ -15,6 +15,13 @@ const hasStorage = typeof sessionStorage !== 'undefined';
 
 const sanitize = (str: string | undefined): string => redact(str);
 
+// console.error as it was before setupGlobalHandlers() captured it. The
+// logger reports its own failures here: through the captured one, a failure
+// to save (storage full) logged an error, which saved again, which failed
+// again, without end.
+const reportOwnError: (...args: unknown[]) => void =
+  typeof console !== 'undefined' ? console.error.bind(console) : () => {};
+
 export interface LogEntry {
   type: string;
   timestamp: string;
@@ -48,6 +55,8 @@ export interface ExportedLogs {
 
 class ErrorLogger {
   sessionLogs: LogEntry[];
+  // set while an entry is being logged, so logging cannot recurse
+  private logging = false;
 
   constructor() {
     this.sessionLogs = [];
@@ -63,7 +72,7 @@ class ErrorLogger {
         this.sessionLogs = JSON.parse(stored);
       }
     } catch (error) {
-      console.error('Failed to load logs from sessionStorage:', error);
+      reportOwnError('Failed to load logs from sessionStorage:', error);
     }
   }
 
@@ -88,7 +97,7 @@ class ErrorLogger {
 
       sessionStorage.setItem(LOG_KEY, JSON.stringify(this.sessionLogs));
     } catch (error) {
-      console.error('Failed to save logs to sessionStorage:', error);
+      reportOwnError('Failed to save logs to sessionStorage:', error);
       // If quota exceeded, clear old logs
       this.sessionLogs = this.sessionLogs.slice(-50);
       try {
@@ -144,8 +153,14 @@ class ErrorLogger {
       ...data,
     };
 
-    this.sessionLogs.push(entry);
-    this.saveLogs();
+    if (this.logging) return;
+    this.logging = true;
+    try {
+      this.sessionLogs.push(entry);
+      this.saveLogs();
+    } finally {
+      this.logging = false;
+    }
   }
 
   /**

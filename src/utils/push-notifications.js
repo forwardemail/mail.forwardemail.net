@@ -45,6 +45,7 @@ import {
   requestPermission as requestNotificationPermission,
 } from './notification-bridge.js';
 import { openNotificationTarget, pushDataToTarget } from './notification-open.ts';
+import { accountForAlias } from './alias-accounts.js';
 import {
   drainUnifiedPushMessages,
   getUnifiedPushState,
@@ -281,7 +282,9 @@ export function resolveAccountForAliasId(aliasId) {
     if (email === '__active_session__') continue;
     if (reg?.aliasId && reg.aliasId === aliasId) return email;
   }
-  return '';
+  // An account whose push registration has not recorded its alias yet; its
+  // WebSocket connection reported it.
+  return accountForAlias(aliasId);
 }
 
 /**

@@ -260,7 +260,11 @@ export async function toggleStarBySubject(page, subject) {
  * Click the delete button in the reader toolbar.
  */
 export async function clickDeleteInReader(page) {
-  const deleteBtn = page.getByLabel(/Delete/i).first();
+  // (the bulk-action bar's Delete selected is in the page, hidden, too)
+  const deleteBtn = page
+    .getByLabel(/Delete/i)
+    .filter({ visible: true })
+    .first();
   await deleteBtn.click();
   await page.waitForTimeout(300);
 }
@@ -269,7 +273,10 @@ export async function clickDeleteInReader(page) {
  * Click the archive button in the reader toolbar.
  */
 export async function clickArchiveInReader(page) {
-  const archiveBtn = page.getByLabel(/Archive/i).first();
+  const archiveBtn = page
+    .getByLabel(/Archive/i)
+    .filter({ visible: true })
+    .first();
   await archiveBtn.click();
   await page.waitForTimeout(300);
 }
