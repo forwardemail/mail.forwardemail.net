@@ -1437,11 +1437,12 @@ export const loadLabels = async (options = {}) => {
     return palette[idx];
   };
   const normalizeLabel = (flag = '', folderPath = '') => {
-    const id = String(flag || '').trim();
+    const raw = String(flag || '').trim();
+    const id = canonicalizeLabelKeyword(raw);
     if (isHiddenLabel(id)) return null;
-    const normalized = id.replace(/^\$?label/i, '').replace(/^[\s-_]+/, '');
-    const readable = normalized || id.replace(/^[\\$]+/, '');
-    const name = readable.replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim() || id;
+    const normalized = raw.replace(/^\$?label/i, '').replace(/^[\s-_]+/, '');
+    const readable = normalized || raw.replace(/^[\\$]+/, '');
+    const name = readable.replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim() || raw;
     return {
       id,
       name,
@@ -1459,9 +1460,13 @@ export const loadLabels = async (options = {}) => {
       .equals(account)
       .toArray()
       .catch(() => []);
+    // Ids are lowercase keywords, the same form the server stores on
+    // messages. Older caches may still hold `Work` next to `work`.
     (cached || []).forEach((l) => {
-      if (!l?.id || isHiddenLabel(l.id)) return;
-      labelMap.set(l.id, l);
+      const id = canonicalizeLabelKeyword(l?.id);
+      if (!id || isHiddenLabel(id)) return;
+      const existing = labelMap.get(id);
+      labelMap.set(id, { ...l, ...existing, id });
     });
   } catch (err) {
     warn('loadLabels cache failed', err);
@@ -1476,7 +1481,7 @@ export const loadLabels = async (options = {}) => {
     registryAuthoritative = Boolean(registry?.authoritative);
     if ((Local.get('email') || 'default') !== initialAccount) return;
     settingsLabelsList.forEach((lbl) => {
-      const id = lbl.keyword || lbl.id || lbl.name;
+      const id = canonicalizeLabelKeyword(lbl.keyword || lbl.id || lbl.name);
       if (!id || isHiddenLabel(id)) return;
       registeredIds.add(id);
       const existing = labelMap.get(id);
@@ -1513,8 +1518,8 @@ export const loadLabels = async (options = {}) => {
       for (const msg of allMessages || []) {
         if ((Local.get('email') || 'default') !== initialAccount) break;
         for (const lbl of msg.labels || []) {
-          const key = String(lbl);
-          if (isHiddenLabel(key)) continue;
+          const key = canonicalizeLabelKeyword(lbl);
+          if (!key || isHiddenLabel(key)) continue;
           discoveredIds.add(key);
           if (!labelMap.has(key)) {
             labelMap.set(key, {
@@ -1629,7 +1634,7 @@ export const loadLabels = async (options = {}) => {
 export const mergeNewLabels = async (messages, account) => {
   if (!messages?.length) return;
   const existing = get(availableLabels) || [];
-  const existingIds = new Set(existing.map((l) => l.id));
+  const existingIds = new Set(existing.map((l) => canonicalizeLabelKeyword(l.id)));
   const palette = LABEL_PALETTE;
   const colorFor = (name = '') => {
     let hash = 0;
@@ -1642,7 +1647,7 @@ export const mergeNewLabels = async (messages, account) => {
   const newLabels = [];
   for (const msg of messages) {
     for (const lbl of msg.labels || []) {
-      const key = String(lbl);
+      const key = canonicalizeLabelKeyword(lbl);
       if (!key || existingIds.has(key)) continue;
       if (isHiddenLabel(key)) continue;
       existingIds.add(key);
@@ -2762,11 +2767,15 @@ export const downloadOriginal = async (msg) => {
 export const getSpamReportAddress = () =>
   resolveSpamReportAddress(getEffectiveSettingValue('spam_report_address'));
 
+/** Reported spam moves to Junk unless the user opted to delete it instead. */
+export const shouldDeleteReportedSpam = () =>
+  getEffectiveSettingValue('spam_report_delete') === true;
+
 /**
  * Forwards a message to the configured spam report address as an .eml
  * attachment and queues it through the outbox. The caller is responsible
- * for deleting the message afterwards so it can reuse the existing delete
- * flow (selection advance, toasts, reload).
+ * for moving the message to Junk (or deleting it) afterwards so it can reuse
+ * the existing move and delete flows (selection advance, toasts, reload).
  *
  * Returns { address } on success, throws when the report cannot be built.
  */

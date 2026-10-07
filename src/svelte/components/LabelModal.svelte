@@ -4,7 +4,7 @@
   import { Input } from '$lib/components/ui/input';
   import { Label } from '$lib/components/ui/label';
   import * as Alert from '$lib/components/ui/alert';
-  import { LABEL_PALETTE } from '../../utils/labels.js';
+  import { LABEL_PALETTE, canonicalizeLabelKeyword } from '../../utils/labels.js';
 
   interface Props {
     visible?: boolean;
@@ -40,6 +40,10 @@
     mode === 'edit' ? 'Edit label' : mode === 'adopt' ? 'Add label to settings' : 'New label',
   );
 
+  // New labels are tagged on messages with the lowercase keyword (what the
+  // server and Thunderbird store); the name keeps the casing typed here.
+  const createKeyword = $derived(mode === 'create' ? canonicalizeLabelKeyword(name) : '');
+
   const handleOpenChange = (open: boolean) => {
     if (!open) onClose();
   };
@@ -57,6 +61,14 @@
               Messages already carrying this keyword will show the name and color you pick.
             </span>
           {/if}
+        </Dialog.Description>
+      {:else if createKeyword}
+        <Dialog.Description>
+          Keyword: <code class="rounded bg-muted px-1.5 py-0.5 text-sm">{createKeyword}</code>
+          <span class="block mt-1">
+            Messages are tagged with this lowercase keyword so the label matches in IMAP clients
+            like Thunderbird. The name can use any capitalization.
+          </span>
         </Dialog.Description>
       {/if}
     </Dialog.Header>

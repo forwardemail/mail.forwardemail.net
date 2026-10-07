@@ -5,6 +5,7 @@
 // touching Remote/db/Local/stores belongs back in settingsStore.ts.
 
 import type { Label } from '../types';
+import { canonicalizeLabelKeyword } from '../utils/labels.js';
 import type { SettingDefinition } from './settingsRegistry';
 
 export interface RemoteSettings {
@@ -104,28 +105,58 @@ export function describeLabelError(action: string, err: unknown): string {
 }
 
 /**
+ * Collapse labels whose keywords differ only by case into one lowercase entry.
+ *
+ * The keyword is the IMAP flag that goes on messages, and the server and
+ * Thunderbird both lowercase it. Older clients saved definitions like `Work`
+ * next to messages flagged `work`, so a merge keeps whichever display name
+ * carries the user's casing and the first color it finds.
+ */
+export function canonicalizeLabels(labels: Label[] = []): Array<Label & { keyword: string }> {
+  const byKeyword = new Map<string, Label & { keyword: string }>();
+  for (const label of labels || []) {
+    const keyword = canonicalizeLabelKeyword(label?.keyword);
+    if (!keyword) continue;
+    const name = label.name || label.keyword || keyword;
+    const existing = byKeyword.get(keyword);
+    if (!existing) {
+      byKeyword.set(keyword, { ...label, keyword, name });
+      continue;
+    }
+    byKeyword.set(keyword, {
+      ...existing,
+      name: existing.name === keyword && name !== keyword ? name : existing.name,
+      color: existing.color || label.color,
+    });
+  }
+  return [...byKeyword.values()];
+}
+
+/**
  * Convert API label_settings map into an array of labels with keyword
  */
 export function mapLabelSettingsToArray(
   labelSettings: Record<string, LabelSettingValue> = {},
 ): Label[] {
   if (!labelSettings || typeof labelSettings !== 'object') return [];
-  return Object.entries(labelSettings).map(([keyword, value = {}]) => ({
-    keyword,
-    name: value.name || keyword,
-    color: value.color,
-    hidden: Boolean(value.hidden),
-    source: value.source || 'custom',
-  }));
+  return canonicalizeLabels(
+    Object.entries(labelSettings).map(([keyword, value = {}]) => ({
+      keyword,
+      name: value.name || keyword,
+      color: value.color,
+      hidden: Boolean(value.hidden),
+      source: value.source || 'custom',
+    })),
+  );
 }
 
 /**
- * Convert label array into API label_settings map
+ * Convert label array into API label_settings map. Keys are always lowercase,
+ * so the next save also rewrites any mixed-case keys an older client stored.
  */
 export function labelsArrayToMap(labels: Label[] = []): Record<string, LabelSettingValue> {
   const map: Record<string, LabelSettingValue> = {};
-  (labels || []).forEach((label) => {
-    if (!label?.keyword) return;
+  canonicalizeLabels(labels).forEach((label) => {
     map[label.keyword] = {
       name: label.name || label.keyword,
       color: label.color,
@@ -146,7 +177,7 @@ export function extractSettingsFromAccount(response: AccountResponse = {}): Remo
   const aliases = settings.aliases || {};
   const labelMap = settings.label_settings || response.label_settings;
   const labels = Array.isArray(settings.labels)
-    ? settings.labels
+    ? canonicalizeLabels(settings.labels)
     : mapLabelSettingsToArray(labelMap);
 
   return {

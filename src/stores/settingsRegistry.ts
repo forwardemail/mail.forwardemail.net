@@ -338,6 +338,18 @@ export const SETTINGS_REGISTRY: Record<string, SettingDefinition> = {
     localParse: (raw) => (raw == null ? '' : String(raw).trim()),
     localSerialize: (value) => String(value ?? '').trim(),
   },
+  spam_report_delete: {
+    id: 'spam_report_delete',
+    portable: true,
+    label: 'Delete Reported Spam',
+    scope: SETTING_SCOPES.DEVICE,
+    localKey: (account) => `spam_report_delete_${account}`,
+    valueType: 'boolean',
+    defaultValue: false,
+    accountScoped: true,
+    localParse: (raw) => parseBoolean(raw, false),
+    localSerialize: (value) => serializeBoolean(Boolean(value)),
+  },
   block_remote_images: {
     id: 'block_remote_images',
     portable: true,

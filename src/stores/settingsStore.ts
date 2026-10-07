@@ -24,11 +24,13 @@ import {
   writePgpPassphrases,
 } from '../utils/pgp-local';
 import { warn } from '../utils/logger.ts';
+import { canonicalizeLabelKeyword } from '../utils/labels.js';
 import { getAuthHeader } from '../utils/auth';
 import {
   DEFAULT_REMOTE_SETTINGS,
   describeLabelError,
   labelsArrayToMap,
+  canonicalizeLabels,
   extractSettingsFromAccount,
   buildAccountUpdatePayload,
   normalizeTasksSort,
@@ -570,7 +572,7 @@ async function cacheLabels(account: string, labels: Label[]): Promise<void> {
 async function loadCachedLabels(account: string): Promise<Label[]> {
   try {
     const cached = await db.settingsLabels.get(account);
-    return cached?.labels || [];
+    return canonicalizeLabels(cached?.labels || []);
   } catch (err) {
     warn('[settingsStore] Failed to load cached labels:', err);
     // Attempt recovery if this is a database worker error
@@ -844,9 +846,11 @@ export async function fetchLabelsWithSource(
  */
 export async function createLabel(label: LabelCreateInput): Promise<LabelResult> {
   const account = Local.get('email') || 'default';
-  const keyword = (label?.keyword || '').trim();
   const name = (label?.name || '').trim();
-  const keywordCheck = validateLabelName(keyword || name);
+  // The keyword is the IMAP flag stored on messages. The server and
+  // Thunderbird both lowercase it, so only the display name keeps its casing.
+  const keyword = canonicalizeLabelKeyword(label?.keyword || name);
+  const keywordCheck = validateLabelName(keyword);
   if (!keywordCheck.ok) {
     return { success: false, error: keywordCheck.error, status: 400 };
   }
@@ -862,7 +866,7 @@ export async function createLabel(label: LabelCreateInput): Promise<LabelResult>
 
   try {
     // Check if label with same keyword already exists
-    if (previousLabels.some((l) => l.keyword === label.keyword)) {
+    if (previousLabels.some((l) => canonicalizeLabelKeyword(l.keyword) === keyword)) {
       return {
         success: false,
         error: 'A label with this keyword already exists',
@@ -871,7 +875,7 @@ export async function createLabel(label: LabelCreateInput): Promise<LabelResult>
     }
 
     const newLabel: Label = {
-      keyword: keyword || keywordCheck.value,
+      keyword: keywordCheck.value,
       name: name || nameCheck.value,
       color: label.color,
       hidden: label.hidden || false,
@@ -921,7 +925,10 @@ export async function updateLabel(keyword: string, updates: Partial<Label>): Pro
   const previousLabels = get(settingsLabels) || [];
 
   try {
-    const labelIndex = previousLabels.findIndex((l) => l.keyword === keyword);
+    const target = canonicalizeLabelKeyword(keyword);
+    const labelIndex = previousLabels.findIndex(
+      (l) => canonicalizeLabelKeyword(l.keyword) === target,
+    );
 
     if (labelIndex === -1) {
       return {
@@ -992,7 +999,10 @@ export async function deleteLabel(keyword: string): Promise<LabelResult> {
 
   try {
     // Remove label from array
-    const updatedLabels = previousLabels.filter((l) => l.keyword !== keyword);
+    const target = canonicalizeLabelKeyword(keyword);
+    const updatedLabels = previousLabels.filter(
+      (l) => canonicalizeLabelKeyword(l.keyword) !== target,
+    );
 
     if (updatedLabels.length === previousLabels.length) {
       return {

@@ -904,7 +904,9 @@ describe('loadLabels folder-flag fetch (#2 fan-out)', () => {
     expect(opts.method).toBe('GET');
     expect(opts.pathOverride).toBe('/v1/folders/inbox-id');
     const labels = get(availableLabels);
-    expect(labels.some((l) => l.id === 'ProjectX')).toBe(true);
+    // Ids are the lowercase keyword the server stores; the name keeps the
+    // casing the folder reported.
+    expect(labels.find((l) => l.id === 'projectx')?.name).toBe('ProjectX');
   });
 });
 

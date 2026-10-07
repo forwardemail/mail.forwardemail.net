@@ -226,6 +226,7 @@
   let editingKeyPassphrase = $state('');
   let blockRemoteImages = $state(false);
   let spamReportAddress = $state('');
+  let spamReportDelete = $state(false);
   let notifyAppUpdates = $state(true);
   let blockTrackingPixels = $state(true);
   let viewPlainText = $state(false);
@@ -769,6 +770,8 @@
       String(
         getEffectiveSettingValue('spam_report_address', { account: currentAcct }) || '',
       ).trim() || DEFAULT_SPAM_REPORT_ADDRESS;
+    spamReportDelete =
+      getEffectiveSettingValue('spam_report_delete', { account: currentAcct }) === true;
     notifyAppUpdates = getEffectiveSettingValue('notify_app_updates') !== false;
     blockTrackingPixels = Boolean(
       getEffectiveSettingValue('block_tracking_pixels', { account: currentAcct }),
@@ -1246,6 +1249,18 @@
       toasts?.show?.(`Spam reports will be sent to ${trimmed}`, 'success');
     } catch (err) {
       showMutationError(err, 'Failed to save spam report address');
+    }
+  };
+
+  const toggleSpamReportDelete = () => {
+    try {
+      setSettingValue('spam_report_delete', spamReportDelete, { account: getAccountId() });
+      toasts?.show?.(
+        spamReportDelete ? 'Reported spam will be deleted' : 'Reported spam will be moved to Junk',
+        'success',
+      );
+    } catch (err) {
+      showMutationError(err, 'Failed to update spam report setting');
     }
   };
 
@@ -2600,10 +2615,14 @@
             </div>
             <p class="text-sm text-muted-foreground">
               Choosing <strong>Report spam</strong> on a message forwards the original email
-              (including full headers) as an attachment to this address, then deletes the message
-              from your mailbox. Reports go to {DEFAULT_SPAM_REPORT_ADDRESS} by default, which helps Forward
+              (including full headers) as an attachment to this address, then moves the message to
+              your Junk folder. Reports go to {DEFAULT_SPAM_REPORT_ADDRESS} by default, which helps Forward
               Email improve spam detection for everyone. No copy is kept in your Sent folder.
             </p>
+            <label class="flex items-center gap-3">
+              <Checkbox bind:checked={spamReportDelete} onCheckedChange={toggleSpamReportDelete} />
+              <span>Delete reported messages instead of moving them to Junk</span>
+            </label>
           </Card.Content>
         </Card.Root>
       {/if}

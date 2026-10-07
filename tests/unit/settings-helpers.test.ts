@@ -116,6 +116,46 @@ describe('labelsArrayToMap', () => {
     expect(labelsArrayToMap()).toEqual({});
     expect(labelsArrayToMap([])).toEqual({});
   });
+
+  it('writes lowercase keys so a save rewrites mixed-case keys from older clients', () => {
+    // The key is the IMAP keyword on messages. The server and Thunderbird
+    // store `work`, so a `Work` key would never match a tagged message.
+    expect(labelsArrayToMap(asLabels([{ keyword: 'Work', name: 'Work' }]))).toEqual({
+      work: { name: 'Work', color: undefined, hidden: false, source: 'custom' },
+    });
+  });
+});
+
+describe('legacy mixed-case label keywords', () => {
+  // Real shape from a user who created `Work` in webmail and then created
+  // `work` again so tagging would sync with Thunderbird.
+  it('merges keys that differ only by case and keeps the cased display name', () => {
+    for (const map of [
+      { Work: { name: 'Work', color: '#f00' }, work: { name: 'work' } },
+      { work: { name: 'work' }, Work: { name: 'Work', color: '#f00' } },
+    ]) {
+      expect(mapLabelSettingsToArray(map)).toEqual([
+        { keyword: 'work', name: 'Work', color: '#f00', hidden: false, source: 'custom' },
+      ]);
+    }
+  });
+
+  it('keeps a deliberate display name on the lowercase key over a bare legacy entry', () => {
+    const out = mapLabelSettingsToArray({
+      work: { name: 'Work Stuff', color: '#0f0' },
+      Work: { name: 'Work', color: '#f00' },
+    });
+    expect(out).toEqual([
+      { keyword: 'work', name: 'Work Stuff', color: '#0f0', hidden: false, source: 'custom' },
+    ]);
+  });
+
+  it('canonicalizes a labels array returned by the account response', () => {
+    const out = extractSettingsFromAccount({
+      settings: { labels: asLabels([{ keyword: 'Clients', name: 'Clients' }]) },
+    } as never);
+    expect(out.labels).toEqual([{ keyword: 'clients', name: 'Clients' }]);
+  });
 });
 
 describe('extractSettingsFromAccount', () => {

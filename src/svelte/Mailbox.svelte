@@ -91,6 +91,7 @@
     syncProgress,
     indexProgress,
     reportSpamMessage,
+    shouldDeleteReportedSpam,
     toggleStar,
     openServerDraft,
   } from '../stores/mailboxActions';
@@ -2226,8 +2227,14 @@
       showMutationError(err, 'Failed to report spam');
       return;
     }
-    // Reuse the standard delete flow so selection advance and demo-mode
-    // preflight behave exactly like a normal delete.
+    // Reuse the standard move and delete flows so selection advance and
+    // demo-mode preflight behave exactly like a normal move or delete.
+    if (spamFolderPath && !shouldDeleteReportedSpam()) {
+      await moveReaderTo(spamFolderPath, {
+        successToast: `Reported to ${address} and moved to ${spamFolderName}`,
+      });
+      return;
+    }
     await deleteSelected();
     showToast(`Reported to ${address} and deleted`, 'success');
   };
@@ -4135,7 +4142,7 @@
       showMutationError(err, 'Failed to move messages');
     }
   };
-  const moveReaderTo = async (path) => {
+  const moveReaderTo = async (path, { successToast = 'Message moved' } = {}) => {
     if (!path) return;
     const msg = getActiveMessage();
     if (!msg) return;
@@ -4155,7 +4162,7 @@
         moveResult = await mailboxView.bulkMoveTo(path);
       }
       if (moveResult?.success !== false) {
-        showToast('Message moved', 'success');
+        showToast(successToast, 'success');
         if (fallback) {
           if ($threadingEnabled) selectConversation(fallback);
           else selectMessage(fallback);
@@ -4508,6 +4515,17 @@
     try {
       const result = await reportSpamMessage(messageToReport);
       if (!result) return;
+      if (spamFolderPath && !shouldDeleteReportedSpam()) {
+        if (mailboxStore?.actions?.moveMessage)
+          await mailboxStore.actions.moveMessage(messageToReport, spamFolderPath, {
+            stayInFolder: true,
+          });
+        else
+          await mailboxView?.moveMessage?.(messageToReport, spamFolderPath, { stayInFolder: true });
+        showToast(`Reported to ${result.address} and moved to ${spamFolderName}`, 'success');
+        await reloadMessages();
+        return;
+      }
       let delRes;
       if (mailboxStore?.actions?.deleteMessage)
         delRes = await mailboxStore.actions.deleteMessage(messageToReport);
@@ -4593,6 +4611,10 @@
   const inboxFolderPath = $derived(resolveFolderPath(null, ['INBOX'], $folders));
   const spamFolderPath = $derived(
     resolveFolderPath('getSpamFolderPath', ['SPAM', 'JUNK'], $folders),
+  );
+  // Name of the configured junk folder as the folder list shows it, for toasts.
+  const spamFolderName = $derived(
+    ($folders || []).find((f) => f.path === spamFolderPath)?.name || spamFolderPath,
   );
 
   // ── Mobile tab bar state ──────────────────────────────────────────────────
