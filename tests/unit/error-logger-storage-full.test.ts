@@ -20,7 +20,11 @@ describe('error logger with session storage full', () => {
     // Importing it puts its handler on console.error.
     await import('../../src/utils/error-logger.ts');
 
-    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+    // The storage the logger writes to. Node 25 and later have their own
+    // sessionStorage, which wins over jsdom's, so its prototype is not
+    // jsdom's Storage.prototype.
+    const storage = Object.getPrototypeOf(sessionStorage) as Storage;
+    const setItem = vi.spyOn(storage, 'setItem').mockImplementation(() => {
       throw new DOMException('The quota has been exceeded.', 'QuotaExceededError');
     });
 

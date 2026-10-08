@@ -1058,8 +1058,14 @@ pub fn run() {
                         }
                     }
                     "reload" => {
+                        // The native reload, not location.reload() run in
+                        // the page: a page whose WebKit content process died
+                        // (the window gone blank) runs no script, so Reload
+                        // did nothing at the one time it was needed.
                         if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.eval("window.location.reload()");
+                            if let Err(e) = window.reload() {
+                                log::error!("[menu] reload failed: {}", e);
+                            }
                         }
                     }
                     "website" => {

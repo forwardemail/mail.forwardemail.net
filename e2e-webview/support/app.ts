@@ -6,10 +6,34 @@ export function appUrl(): string {
   return process.platform === 'win32' ? 'http://tauri.localhost' : 'tauri://localhost';
 }
 
+// A webview that has only just been created can answer every script with
+// "JavaScript execution returned a result of an unsupported type" until its
+// first page is in; browser.url() itself runs a script. On the macOS runner a
+// spec failed on its very first command that way, and its retry right after.
+// Keep asking until the frontend answers, up to this long.
+const OPEN_APP_TIMEOUT_MS = 45_000;
+
 export async function openApp(browser: WebdriverIO.Browser): Promise<void> {
-  await browser.url(appUrl());
-  await waitForFrontendReady(browser);
-  await ensureUsableViewport(browser);
+  const deadline = Date.now() + OPEN_APP_TIMEOUT_MS;
+  let lastError: unknown;
+  while (Date.now() < deadline) {
+    try {
+      await browser.url(appUrl());
+      await waitForFrontendReady(browser, Math.max(1_000, deadline - Date.now()));
+      await ensureUsableViewport(browser);
+      return;
+    } catch (error) {
+      if (!isScriptUnavailable(error)) throw error;
+      lastError = error;
+      await new Promise((r) => setTimeout(r, 1_000));
+    }
+  }
+  throw lastError;
+}
+
+function isScriptUnavailable(error: unknown): boolean {
+  const message = String((error as { message?: string })?.message || error);
+  return /unsupported type|JavaScript exception occurred/i.test(message);
 }
 
 /**
