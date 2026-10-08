@@ -125,6 +125,7 @@
   import FeedbackModal from './FeedbackModal.svelte';
   import LabelModal from './components/LabelModal.svelte';
   import GetStartedCard from './components/GetStartedCard.svelte';
+  import CatchallPasswordsCard from './components/CatchallPasswordsCard.svelte';
   import PushNotificationSettings from './components/PushNotificationSettings.svelte';
   import { hasWebPushKey } from '../utils/web-push.js';
   import NewMailNotificationSettings from './components/NewMailNotificationSettings.svelte';
@@ -2079,6 +2080,8 @@
             </Button>
           </Card.Content>
         </Card.Root>
+
+        <CatchallPasswordsCard onToast={(message, type) => toasts?.show?.(message, type)} />
 
         <div bind:this={notificationsAnchor} class="scroll-mt-4 space-y-6">
           {#if isTauriMobile || isTauriMacOS || (!isTauri && hasWebPushKey())}

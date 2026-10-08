@@ -18,6 +18,8 @@ const h = vi.hoisted(() => ({
   blockedToast: vi.fn(),
   // Credentials held for other signed-in accounts, keyed by email.
   authHeaders: new Map<string, string>(),
+  // Catch-all auth headers, keyed by the address being sent from.
+  catchallHeaders: new Map<string, string>(),
 }));
 
 vi.mock('../../src/utils/storage', () => ({
@@ -28,6 +30,9 @@ vi.mock('../../src/utils/remote', () => ({
 }));
 vi.mock('../../src/utils/auth', () => ({
   getAuthHeaderForAccount: (email: string) => h.authHeaders.get(email) || '',
+}));
+vi.mock('../../src/utils/catchall-credentials', () => ({
+  buildCatchallAuthHeader: (address: string) => h.catchallHeaders.get(address) || '',
 }));
 vi.mock('../../src/utils/sent-copy.js', () => ({
   saveSentCopy: (...a: unknown[]) => h.saveSentCopy(...a),
@@ -655,5 +660,102 @@ describe('cancelScheduledEmail', () => {
 
     expect(await cancelScheduledEmail('a')).toEqual({ success: true });
     expect(h.outbox.has('a')).toBe(false);
+  });
+});
+
+// An address on a domain with a saved catch-all password. That login can only
+// send (the API refuses it everywhere but POST /v1/emails), so the Sent copy
+// has to be filed by the account the item was composed in, and a scheduled
+// send cannot be handed to the server, which would need reading back and
+// cancelling later.
+describe('processOutbox catch-all send', () => {
+  const catchallItem = {
+    account: 'me@test.com',
+    id: 'c',
+    status: 'pending',
+    retryCount: 0,
+    nextRetryAt: 0,
+    sendAs: 'sales@example.com',
+    emailData: { ...email, from: 'sales@example.com' },
+  };
+
+  afterEach(() => {
+    h.authHeaders.clear();
+    h.catchallHeaders.clear();
+  });
+
+  it('sends with the catch-all password and files Sent under the composing account', async () => {
+    vi.useFakeTimers();
+    h.catchallHeaders.set('sales@example.com', 'Basic catchall-creds');
+    h.outbox.set('c', { ...catchallItem });
+
+    const p = processOutbox();
+    await vi.runAllTimersAsync();
+    await p;
+
+    expect(h.remoteRequest).toHaveBeenCalledWith(
+      'Emails',
+      expect.objectContaining({ from: 'sales@example.com' }),
+      expect.objectContaining({ method: 'POST', authHeader: 'Basic catchall-creds' }),
+    );
+    expect(h.saveSentCopy).toHaveBeenCalledWith(
+      catchallItem.emailData,
+      'me@test.com',
+      null,
+      null,
+      {},
+    );
+  });
+
+  it('prefers a signed-in account over the catch-all password for the same address', async () => {
+    vi.useFakeTimers();
+    h.authHeaders.set('sales@example.com', 'Basic alias-creds');
+    h.catchallHeaders.set('sales@example.com', 'Basic catchall-creds');
+    h.outbox.set('c', { ...catchallItem });
+
+    const p = processOutbox();
+    await vi.runAllTimersAsync();
+    await p;
+
+    expect(h.remoteRequest).toHaveBeenCalledWith(
+      'Emails',
+      expect.anything(),
+      expect.objectContaining({ authHeader: 'Basic alias-creds' }),
+    );
+    expect(h.saveSentCopy).toHaveBeenCalledWith(
+      catchallItem.emailData,
+      'sales@example.com',
+      null,
+      null,
+      { authHeader: 'Basic alias-creds' },
+    );
+  });
+
+  it('waits when the catch-all password was removed', async () => {
+    vi.useFakeTimers();
+    h.outbox.set('c', { ...catchallItem });
+
+    const p = processOutbox();
+    await vi.runAllTimersAsync();
+    await p;
+
+    expect(h.remoteRequest).not.toHaveBeenCalled();
+    expect(await getOutboxItem('c')).toMatchObject({
+      status: 'pending',
+      lastError: expect.stringContaining('catch-all password'),
+    });
+  });
+
+  it('keeps a scheduled catch-all send local instead of handing it to the server', async () => {
+    h.catchallHeaders.set('sales@example.com', 'Basic catchall-creds');
+    const sendAt = Date.now() + 60_000;
+
+    const { record, serverScheduled } = await scheduleEmail(email, sendAt, {
+      sendAs: 'sales@example.com',
+    });
+
+    expect(serverScheduled).toBe(false);
+    expect(h.remoteRequest).not.toHaveBeenCalled();
+    expect(record).toMatchObject({ status: 'scheduled', sendAs: 'sales@example.com', sendAt });
   });
 });

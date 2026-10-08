@@ -101,6 +101,9 @@ const SENSITIVE_LOCAL_KEYS = new Set([
   // account (storage.js Accounts), so it must be protected like the
   // active-account credentials above.
   'accounts',
+  // Domain-wide catch-all passwords (catchall-credentials.ts). Each one can
+  // send as any address on its domain.
+  'catchall_credentials',
   // PGP keys are stored as pgp_keys_{email} and pgp_passphrases_{email}
 ]);
 

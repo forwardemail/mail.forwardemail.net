@@ -3,6 +3,7 @@ import {
   formatFromHeader,
   isFromHeaderRejection,
   listSendableAccounts,
+  resolveSenderAuth,
 } from '../../src/utils/send-as';
 
 describe('listSendableAccounts', () => {
@@ -56,5 +57,33 @@ describe('isFromHeaderRejection', () => {
     ).toBe(true);
     expect(isFromHeaderRejection('From header must end with @example.com')).toBe(true);
     expect(isFromHeaderRejection('Rate limit exceeded')).toBe(false);
+  });
+});
+
+describe('resolveSenderAuth', () => {
+  const accountAuth = (email: string) => (email === 'other@example.org' ? 'Basic other' : '');
+  const catchallAuth = (email: string) =>
+    email.endsWith('@example.org') || email.endsWith('@example.net') ? `Basic ca:${email}` : '';
+  const resolve = (address: string | null) =>
+    resolveSenderAuth(address, 'me@example.com', { accountAuth, catchallAuth });
+
+  it('uses the active session for the active account or no address', () => {
+    expect(resolve(null)).toEqual({ kind: 'active' });
+    expect(resolve('ME@example.com')).toEqual({ kind: 'active' });
+  });
+
+  it('uses a signed-in account before a catch-all password for the same address', () => {
+    expect(resolve('other@example.org')).toEqual({ kind: 'account', authHeader: 'Basic other' });
+  });
+
+  it('falls back to the domain catch-all password for any other address on it', () => {
+    expect(resolve('sales@example.net')).toEqual({
+      kind: 'catchall',
+      authHeader: 'Basic ca:sales@example.net',
+    });
+  });
+
+  it('returns null when nothing can authenticate, so callers never use the active session', () => {
+    expect(resolve('someone@elsewhere.com')).toBeNull();
   });
 });

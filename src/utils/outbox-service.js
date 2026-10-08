@@ -2,7 +2,7 @@ import { db } from './db';
 import { Local } from './storage';
 import { isActiveAccount } from './account-scope.ts';
 import { Remote } from './remote';
-import { getAuthHeaderForAccount } from './auth';
+import { missingSenderMessage, resolveSenderAuth, senderRequestOptions } from './send-as';
 import { writable } from 'svelte/store';
 import { saveSentCopy } from './sent-copy.js';
 import { warn } from './logger.ts';
@@ -84,22 +84,28 @@ function getAccount() {
 }
 
 /**
- * Request options for the account an item is sent as.
+ * How an item authenticates (see resolveSenderAuth in send-as.ts).
  *
  * An item lives in the outbox of the account it was composed in, but may go
- * out as another account signed in on this device (picked in the compose From
+ * out as another account signed in on this device, or as an address on a
+ * domain with a saved catch-all password (both picked in the compose From
  * menu). The API only accepts a From address with that alias's own
- * credentials, so every request about the item uses them. Returns null when
- * those credentials are unavailable: signed out, or locked behind App Lock.
+ * credentials or the catch-all password, so the send uses them. Null when
+ * they are unavailable: signed out, removed, or locked behind App Lock.
  */
-function requestOptionsFor(sendAs) {
-  if (!sendAs) return {};
-  const authHeader = getAuthHeaderForAccount(sendAs);
-  return authHeader ? { authHeader } : null;
+function senderFor(item) {
+  return resolveSenderAuth(item?.sendAs, item?.account || getAccount());
 }
 
-const missingSenderMessage = (sendAs) =>
-  `Can't send as ${sendAs}: sign in to that account on this device again.`;
+function requestOptionsFor(item) {
+  const sender = senderFor(item);
+  return sender ? senderRequestOptions(sender) : null;
+}
+
+/** True for an address that would send with a catch-all password. */
+function sendsWithCatchall(sendAs, account) {
+  return resolveSenderAuth(sendAs, account)?.kind === 'catchall';
+}
 
 /**
  * Calculate exponential backoff delay (shared formula — see ./backoff.js)
@@ -202,11 +208,13 @@ export async function scheduleEmail(emailData, sendAt, { sendAs = null } = {}) {
   const scheduledDate = formatRfc3339(sendAt);
   if (!scheduledDate) throw new Error('Invalid schedule time');
 
-  if (!isOnline()) {
+  // A catch-all login can only send: it cannot read the scheduled email back
+  // or cancel it, so it stays here and sends at its time while the app runs.
+  if (!isOnline() || sendsWithCatchall(sendAs, getAccount())) {
     return { record: await queueEmail(emailData, { sendAt, sendAs }), serverScheduled: false };
   }
 
-  const requestOptions = requestOptionsFor(sendAs);
+  const requestOptions = requestOptionsFor({ sendAs, account: getAccount() });
   if (!requestOptions) throw new Error(missingSenderMessage(sendAs));
 
   try {
@@ -335,12 +343,18 @@ function isServerScheduled(item) {
 async function recordSentSideEffects(item, account) {
   // Save copy to Sent folder (client-side workaround). Skipped when the
   // payload opts out, e.g. spam reports that would put spam back in Sent.
-  // The copy belongs in the Sent folder of the account it went out as.
+  // The copy belongs in the Sent folder of the account it went out as. A
+  // catch-all address has no mailbox (and its login cannot open one), so its
+  // copy goes to the Sent folder of the account it was composed in.
   if (item.emailData?.save_sent !== false) {
     try {
-      const requestOptions = requestOptionsFor(item.sendAs);
-      if (!requestOptions) throw new Error(missingSenderMessage(item.sendAs));
-      await saveSentCopyToFolder(item.emailData, item.sendAs || account, requestOptions);
+      const sender = senderFor(item);
+      if (!sender) throw new Error(missingSenderMessage(item.sendAs));
+      if (sender.kind === 'account') {
+        await saveSentCopyToFolder(item.emailData, item.sendAs, senderRequestOptions(sender));
+      } else {
+        await saveSentCopyToFolder(item.emailData, account);
+      }
     } catch (sentErr) {
       console.error('[Outbox] Failed to save sent copy:', sentErr);
       // Don't fail the overall send if saving to Sent fails
@@ -402,7 +416,7 @@ async function settleServerScheduledItem(item, account) {
 
   let status = null;
   try {
-    const requestOptions = requestOptionsFor(item.sendAs);
+    const requestOptions = requestOptionsFor(item);
     if (!requestOptions) throw new Error(missingSenderMessage(item.sendAs));
     const email = await Remote.request(
       'EmailStatus',
@@ -475,9 +489,10 @@ async function sendOutboxItem(item) {
     return { success: false, deferred: true, error: 'Account not active' };
   }
 
-  // Sending as another signed-in account needs its credentials. Without them
-  // (App Lock, or signed out) wait rather than fail: unlocking brings them back.
-  const requestOptions = requestOptionsFor(item.sendAs);
+  // Sending as another signed-in account, or with a catch-all password, needs
+  // those credentials. Without them (App Lock, signed out, password removed)
+  // wait rather than fail: unlocking or saving the password brings them back.
+  const requestOptions = requestOptionsFor(item);
   if (!requestOptions) {
     await db.outbox.update([account, item.id], {
       lastError: missingSenderMessage(item.sendAs),
@@ -750,7 +765,7 @@ export async function cancelScheduledEmail(id) {
   // If the email has a server ID, it was submitted to the server and we must cancel there first
   if (item.serverId) {
     try {
-      const requestOptions = requestOptionsFor(item.sendAs);
+      const requestOptions = requestOptionsFor(item);
       if (!requestOptions) throw new Error(missingSenderMessage(item.sendAs));
       await Remote.request(
         'EmailCancel',

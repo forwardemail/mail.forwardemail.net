@@ -88,8 +88,12 @@
     formatFromHeader,
     isFromHeaderRejection,
     listSendableAccounts,
+    missingSenderMessage,
+    resolveSenderAuth,
+    senderRequestOptions,
     type SendableAccount,
   } from '../utils/send-as';
+  import { getCatchallCredentialFor, listCatchallDomains } from '../utils/catchall-credentials';
   import { getAuthHeaderForAccount } from '../utils/auth';
   import { MAX_SCHEDULE_LEAD_MS, queueEmail, scheduleEmail } from '../utils/outbox-service';
   import {
@@ -219,9 +223,16 @@
   let showScheduleTimePicker = $state(false);
   let fromAddress = $state('');
   // From menu: the active account plus the other accounts signed in on this
-  // device. The API only accepts a From address with that alias's own
-  // credentials, so these are exactly the addresses that can send.
+  // device, then one "other address" entry per domain with a saved catch-all
+  // password. The API only accepts a From address with that alias's own
+  // credentials or its domain's catch-all password.
   let sendableAccounts = $state<SendableAccount[]>([]);
+  let catchallDomains = $state<string[]>([]);
+  // Set while sending from a typed address on a catch-all domain: the From
+  // line becomes an input for the part before the @.
+  let customFromDomain = $state('');
+  let customFromLocal = $state('');
+  let customFromInputEl = $state<HTMLInputElement | undefined>();
   let toInput = $state('');
   let ccInput = $state('');
   let bccInput = $state('');
@@ -249,12 +260,20 @@
       activeAccount(),
       (email) => Boolean(getAuthHeaderForAccount(email)),
     );
+    catchallDomains = listCatchallDomains();
   };
 
-  const sendingAddress = $derived(fromAddress || activeAccount());
-  // The account to send as when it isn't the active one; null means active.
+  const customFromAddress = $derived(
+    customFromDomain && customFromLocal.trim()
+      ? `${customFromLocal.trim()}@${customFromDomain}`
+      : '',
+  );
+  const sendingAddress = $derived(
+    customFromDomain ? customFromAddress : fromAddress || activeAccount(),
+  );
+  // The address to send as when it isn't the active account; null means active.
   const sendAsAccount = $derived(
-    fromAddress && !sameEmail(fromAddress, activeAccount()) ? fromAddress : null,
+    sendingAddress && !sameEmail(sendingAddress, activeAccount()) ? sendingAddress : null,
   );
   const fromDisplayName = $derived(
     sendAsAccount ? getProfileNameFor(sendAsAccount) : $profileName || '',
@@ -264,19 +283,38 @@
   // account we can send as, otherwise fall back to the active account.
   const selectFrom = (address: string) => {
     refreshSendableAccounts();
+    customFromDomain = '';
+    customFromLocal = '';
     const match = sendableAccounts.find((acct) => sameEmail(acct.email, address || ''));
-    fromAddress = match && !sameEmail(match.email, activeAccount()) ? match.email : '';
+    if (match) {
+      fromAddress = sameEmail(match.email, activeAccount()) ? '' : match.email;
+      return;
+    }
+    fromAddress = '';
+    // A draft (or the desktop compose window) sent from an address on a
+    // catch-all domain keeps that address.
+    const credential = isValidEmail(address || '') ? getCatchallCredentialFor(address) : null;
+    if (credential) {
+      customFromDomain = credential.domain;
+      customFromLocal = address.slice(0, address.lastIndexOf('@'));
+    }
   };
 
-  /** Request options that authenticate as the From account. Null when its credentials are gone. */
+  const startCustomFrom = async (domain: string) => {
+    fromAddress = '';
+    customFromDomain = domain;
+    customFromLocal = '';
+    await tick();
+    customFromInputEl?.focus();
+  };
+
+  /** Request options that authenticate as the From address. Null when its credentials are gone. */
   const sendAsRequestOptions = (): { authHeader?: string } | null => {
-    if (!sendAsAccount) return {};
-    const authHeader = getAuthHeaderForAccount(sendAsAccount);
-    return authHeader ? { authHeader } : null;
+    const sender = resolveSenderAuth(sendAsAccount, activeAccount());
+    return sender ? senderRequestOptions(sender) : null;
   };
 
-  const missingSenderError = () =>
-    `Can't send as ${sendAsAccount}: sign in to that account on this device again.`;
+  const missingSenderError = () => missingSenderMessage(sendAsAccount || sendingAddress);
 
   const describeSendError = (message: string) =>
     isFromHeaderRejection(message)
@@ -1492,6 +1530,8 @@
 
   const reset = () => {
     fromAddress = '';
+    customFromDomain = '';
+    customFromLocal = '';
     toList = [];
     ccList = [];
     bccList = [];
@@ -2506,6 +2546,10 @@
       return null;
     }
 
+    if (customFromDomain && !customFromAddress) {
+      error = `Enter the address to send from @${customFromDomain}.`;
+      return null;
+    }
     if (!sendAsRequestOptions()) {
       error = missingSenderError();
       return null;
@@ -2820,8 +2864,13 @@
       // insert) instead of waiting for the backend indexer.
       let sentCopyResponse: unknown = null;
       // Sent as another signed-in account: the copy goes to that account's
-      // Sent folder, filed with its credentials.
-      const sentAs = sendAsAccount;
+      // Sent folder, filed with its credentials. An address sent with a
+      // catch-all password has no mailbox of its own, so its copy goes to
+      // the active account's Sent folder like a normal send.
+      const sentAs =
+        resolveSenderAuth(sendAsAccount, activeAccount())?.kind === 'account'
+          ? sendAsAccount
+          : null;
       const sentAsFolder = sentAs ? await resolveSentFolderForAccount(sentAs) : null;
       if (sentAs) {
         try {
@@ -3627,6 +3676,22 @@
             data-testid="compose-from"
           >
             <span class="shrink-0 text-muted-foreground">From</span>
+            {#if customFromDomain}
+              <div class="flex min-w-0 flex-1 items-center" data-testid="compose-from-custom">
+                <input
+                  bind:this={customFromInputEl}
+                  bind:value={customFromLocal}
+                  type="text"
+                  autocomplete="off"
+                  autocapitalize="off"
+                  spellcheck="false"
+                  placeholder="name"
+                  aria-label={`Address to send from at ${customFromDomain}`}
+                  class="min-w-0 flex-1 bg-transparent outline-none"
+                />
+                <span class="shrink-0 text-muted-foreground">@{customFromDomain}</span>
+              </div>
+            {/if}
             <DropdownMenu.Root
               onOpenChange={(open) => {
                 if (open) refreshSendableAccounts();
@@ -3636,13 +3701,19 @@
                 {#snippet child({ props })}
                   <button
                     type="button"
-                    class="flex min-w-0 flex-1 items-center gap-1 text-left"
+                    class={customFromDomain
+                      ? 'flex shrink-0 items-center'
+                      : 'flex min-w-0 flex-1 items-center gap-1 text-left'}
                     aria-label="Choose the account to send from"
                     {...props}
                   >
-                    <span class="truncate">
-                      {fromDisplayName ? `${fromDisplayName} <${sendingAddress}>` : sendingAddress}
-                    </span>
+                    {#if !customFromDomain}
+                      <span class="truncate">
+                        {fromDisplayName
+                          ? `${fromDisplayName} <${sendingAddress}>`
+                          : sendingAddress}
+                      </span>
+                    {/if}
                     <ChevronDown class="h-4 w-4 shrink-0 text-muted-foreground" />
                   </button>
                 {/snippet}
@@ -3662,6 +3733,19 @@
                     </div>
                   </DropdownMenu.Item>
                 {/each}
+                {#if catchallDomains.length}
+                  <DropdownMenu.Separator />
+                  {#each catchallDomains as domain (domain)}
+                    <DropdownMenu.Item onclick={() => startCustomFrom(domain)}>
+                      <div class="min-w-0">
+                        <div class="truncate">Other address @{domain}…</div>
+                        <div class="truncate text-xs text-muted-foreground">
+                          Uses the domain's catch-all password
+                        </div>
+                      </div>
+                    </DropdownMenu.Item>
+                  {/each}
+                {/if}
                 {#if onAddAccount}
                   <DropdownMenu.Separator />
                   <DropdownMenu.Item onclick={addAccountForSending}>

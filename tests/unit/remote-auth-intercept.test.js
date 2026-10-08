@@ -112,6 +112,37 @@ describe('Remote.request — 401 interception', () => {
     expect(authExpiredEvents.length).toBe(0);
   });
 
+  it('ignores 401s for requests made with other credentials, e.g. sending as a catch-all address', async () => {
+    const kyInstance = ky.create();
+    // Past the 30s cooldown left by the earlier test, so a dispatch would show.
+    vi.spyOn(Date, 'now').mockReturnValue(Date.UTC(2100, 0, 1));
+    kyInstance.mockResolvedValueOnce(makeOkResponse({ ok: true })); // resets the counter
+    await Remote.request('Account');
+
+    for (let i = 0; i < 3; i++) kyInstance.mockRejectedValueOnce(make401Error());
+    for (let i = 0; i < 3; i++) {
+      await expect(
+        Remote.request('Emails', {}, { method: 'POST', authHeader: 'Basic c2FsZXM6d3Jvbmc=' }),
+      ).rejects.toThrow();
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, 10);
+    });
+    expect(authExpiredEvents.length).toBe(0);
+
+    // The same 401s with the active session's own header still count.
+    for (let i = 0; i < 3; i++) kyInstance.mockRejectedValueOnce(make401Error());
+    for (let i = 0; i < 3; i++) {
+      await expect(
+        Remote.request('Account', {}, { authHeader: 'Basic dGVzdDp0ZXN0' }),
+      ).rejects.toThrow();
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, 10);
+    });
+    expect(authExpiredEvents.length).toBe(1);
+  });
+
   it('does not fire fe:auth-expired for non-401 errors', async () => {
     const kyInstance = ky.create();
 

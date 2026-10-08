@@ -42,6 +42,13 @@ function recordAuthSuccess() {
   _consecutiveAuthFailures = 0;
 }
 
+// True when a request authenticates as the active session: either it uses
+// the session's own header, or a caller-bound header that is the same one.
+function usesActiveCredentials(options = {}) {
+  if (!options.authHeader) return true;
+  return options.authHeader === getAuthHeader({ allowApiKey: true });
+}
+
 function recordAuthFailure() {
   _consecutiveAuthFailures++;
   if (
@@ -252,8 +259,11 @@ export const Remote = {
         err.status = error.response.status;
         err.isAuthError = error.response.status === 401 || error.response.status === 403;
 
-        // Track consecutive auth failures for global interception
-        if (err.isAuthError) {
+        // Track consecutive auth failures for global interception. Only a
+        // failure with the active session's credentials says the session
+        // expired; one with another account's or a domain catch-all password
+        // (send-as) must not sign the user out.
+        if (err.isAuthError && usesActiveCredentials(options)) {
           recordAuthFailure();
         }
 
