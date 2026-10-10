@@ -84,6 +84,75 @@ describe('threading utils', () => {
   });
 });
 
+// Rows as the lightweight list stores them: the server sends thread_id and
+// the Message-ID, but no In-Reply-To or References.
+const lightweightRow = (id, threadId, subject, dateMs, folder = 'INBOX') => ({
+  id,
+  message_id: `<${id}@example.com>`,
+  header_message_id: `<${id}@example.com>`,
+  thread_id: threadId,
+  in_reply_to: null,
+  references: null,
+  subject,
+  folder,
+  dateMs,
+});
+
+describe('groupIntoConversations with server threads', () => {
+  it('groups lightweight rows that share a thread_id across folders', () => {
+    const grouped = groupIntoConversations([
+      lightweightRow('c', 'thread-1', 'Re: Plans', 3000),
+      lightweightRow('b', 'thread-1', 'Re: Plans', 2000, 'Sent'),
+      lightweightRow('a', 'thread-1', 'Plans', 1000),
+    ]);
+
+    expect(grouped).toHaveLength(1);
+    expect(grouped[0].messages.map((m) => m.id)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('keeps different threads apart even with the same subject', () => {
+    const grouped = groupIntoConversations([
+      lightweightRow('a', 'thread-1', 'Invoice', 2000),
+      lightweightRow('b', 'thread-2', 'Invoice', 1000),
+    ]);
+
+    expect(grouped).toHaveLength(2);
+  });
+
+  it('joins a header-linked cached row and a thread-only row in one conversation', () => {
+    // Newest first, as the list is sorted. The cached reply has headers but
+    // no thread_id; the newer row only has the thread; the root has both.
+    const grouped = groupIntoConversations([
+      lightweightRow('c', 'thread-1', 'Re: Plans', 3000),
+      {
+        id: 'b',
+        message_id: '<b@example.com>',
+        in_reply_to: '<a@example.com>',
+        references: '<a@example.com>',
+        subject: 'Re: Plans',
+        dateMs: 2000,
+      },
+      { ...lightweightRow('a', 'thread-1', 'Plans', 1000) },
+    ]);
+
+    expect(grouped).toHaveLength(1);
+    expect(grouped[0].messageCount).toBe(3);
+  });
+
+  it('keeps the id of the conversation seen first when two are merged', () => {
+    const newest = lightweightRow('c', 'thread-1', 'Re: Plans', 3000);
+    const alone = groupIntoConversations([newest]);
+    const merged = groupIntoConversations([
+      newest,
+      { id: 'b', message_id: '<b@example.com>', in_reply_to: '<a@example.com>', dateMs: 2000 },
+      lightweightRow('a', 'thread-1', 'Plans', 1000),
+    ]);
+
+    expect(merged).toHaveLength(1);
+    expect(merged[0].id).toBe(alone[0].id);
+  });
+});
+
 describe('hasAnsweredFlag', () => {
   it('reads the IMAP flag case-insensitively and the derived fields', () => {
     expect(hasAnsweredFlag({ flags: ['\\Seen', '\\Answered'] })).toBe(true);

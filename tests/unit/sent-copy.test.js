@@ -34,6 +34,21 @@ describe('buildSentCopyPayload', () => {
     expect(resolveSentFolder).toHaveBeenCalled();
   });
 
+  it('files the copy with the Message-ID the message was sent with', () => {
+    const payload = buildSentCopyPayload(
+      { ...baseEmail, messageId: '<abc@example.com>' },
+      'me@example.com',
+      null,
+      'Sent',
+    );
+    expect(payload.messageId).toBe('<abc@example.com>');
+  });
+
+  it('leaves the Message-ID to the server when the send had none', () => {
+    const payload = buildSentCopyPayload(baseEmail, 'me@example.com', null, 'Sent');
+    expect(payload).not.toHaveProperty('messageId');
+  });
+
   it('carries attachments through to the sent copy', () => {
     const attachments = [
       {

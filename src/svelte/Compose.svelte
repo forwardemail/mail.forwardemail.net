@@ -121,6 +121,7 @@
   } from '../stores/settingsStore';
   import { applySignatureHtml, applySignaturePlain, isSignatureEmpty } from '../utils/signature';
   import { markOriginalAnswered } from '../utils/answered-flag';
+  import { createMessageId } from '../utils/message-id';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
   import { Textarea } from '$lib/components/ui/textarea';
@@ -2565,6 +2566,8 @@
       to: toRecipients,
       subject: subject || '(No subject)',
       save_sent: true,
+      // Set here so the delivered message and the Sent copy share it.
+      messageId: createMessageId(email),
     };
     if (ccRecipients.length) payload.cc = ccRecipients;
     if (bccRecipients.length) payload.bcc = bccRecipients;
@@ -2748,6 +2751,7 @@
         replyTo: payload.reply_to as string,
         inReplyTo: payload.inReplyTo as string,
         references: payload.references as string,
+        messageId: payload.messageId as string,
       });
       if (!encrypted.ok) {
         error = encrypted.message || 'Could not encrypt this message.';

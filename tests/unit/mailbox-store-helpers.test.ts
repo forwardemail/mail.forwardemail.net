@@ -276,12 +276,41 @@ describe('mergeMissingLabels', () => {
 });
 
 describe('mergeMissingAddressFields', () => {
-  it('does not hit the cache when every address field is present', async () => {
+  it('does not hit the cache when every address and threading field is present', async () => {
     const bulkGet = mockBulkGet({});
-    const list = [{ id: '1', from: 'a@b.com', to: 'me@x.com', cc: 'c@x.com' }];
+    const list = [
+      {
+        id: '1',
+        from: 'a@b.com',
+        to: 'me@x.com',
+        cc: 'c@x.com',
+        in_reply_to: '<p@x.com>',
+        references: '<r@x.com> <p@x.com>',
+      },
+    ];
     const out = await mergeMissingAddressFields(bulkGet, 'acct', list);
     expect(out).toBe(list);
     expect(bulkGet).not.toHaveBeenCalled();
+  });
+
+  it('keeps cached threading headers that a lightweight row leaves out', async () => {
+    // A lightweight list row: addresses present, no In-Reply-To or References.
+    const bulkGet = mockBulkGet({
+      '1': { in_reply_to: '<p@x.com>', references: '<r@x.com> <p@x.com>' },
+    });
+    const row = {
+      id: '1',
+      from: 'a@b.com',
+      to: 'me@x.com',
+      cc: 'c@x.com',
+      in_reply_to: null,
+      references: null,
+    };
+    const out = await mergeMissingAddressFields(bulkGet, 'acct', [row]);
+    expect(out[0]).toMatchObject({
+      in_reply_to: '<p@x.com>',
+      references: '<r@x.com> <p@x.com>',
+    });
   });
 
   it('backfills from from the cached record', async () => {

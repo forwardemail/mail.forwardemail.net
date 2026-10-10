@@ -31,6 +31,9 @@ export const buildSentCopyPayload = (
     replyTo: emailPayload.replyTo,
     inReplyTo: emailPayload.inReplyTo,
     references: emailPayload.references || '',
+    // The Message-ID the delivered message went out with, so replies to it
+    // thread with this copy in every mail client.
+    ...(emailPayload.messageId ? { messageId: emailPayload.messageId } : {}),
     subject: emailPayload.subject || '',
     html: emailPayload.html,
     text: emailPayload.text,

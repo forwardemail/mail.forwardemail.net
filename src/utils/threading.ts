@@ -2,7 +2,8 @@
  * Gmail-style email threading utilities
  *
  * This module implements conversation grouping similar to Gmail:
- * 1. Primary grouping by Message-ID, In-Reply-To, and References headers
+ * 1. Primary grouping by the server's thread_id, then Message-ID, In-Reply-To,
+ *    and References headers
  * 2. Deduplication by Message-ID
  * 3. Cross-folder threading (Inbox + Sent + Archive)
  */
@@ -202,6 +203,20 @@ function getReferences(message: MessageLike | null | undefined): string[] {
 }
 
 /**
+ * The server's thread for a message (`thread_id` from the API). The server
+ * puts a message in a thread when its normalized subject matches and its
+ * Message-ID, In-Reply-To or References overlap the thread's, and that thread
+ * is what IMAP clients like Thunderbird see. The lightweight list leaves out
+ * In-Reply-To and References, so this is often the only way to tell that two
+ * list rows belong together.
+ */
+function getThreadId(message: MessageLike | null | undefined): string | null {
+  if (!message) return null;
+  const value = message.thread_id ?? message.threadId;
+  return value ? String(value) : null;
+}
+
+/**
  * Simple string hash function for generating conversation IDs
  */
 function simpleHash(str: string | null | undefined): string {
@@ -311,41 +326,87 @@ export function groupIntoConversations(messages: MessageLike[]): ConversationRes
   }
 
   const messageIdToConvId = new Map<string, string>();
+  const threadIdToConvId = new Map<string, string>();
   const conversationMap = new Map<string, ConversationAccumulator>();
 
+  // A message can link to two conversations that were started apart, e.g.
+  // an older cached row matched by headers and a lightweight row matched only
+  // by thread_id. Those get merged, and the conversation seen first keeps its
+  // id so a selected conversation stays selected.
+  const parent = new Map<string, string>();
+  const order = new Map<string, number>();
+  const find = (id: string): string => {
+    let root = id;
+    while (parent.get(root) !== root) root = parent.get(root)!;
+    parent.set(id, root);
+    return root;
+  };
+  const track = (id: string) => {
+    if (!parent.has(id)) {
+      parent.set(id, id);
+      order.set(id, order.size);
+    }
+  };
+  const union = (a: string, b: string) => {
+    const rootA = find(a);
+    const rootB = find(b);
+    if (rootA === rootB) return;
+    if (order.get(rootA)! <= order.get(rootB)!) parent.set(rootB, rootA);
+    else parent.set(rootA, rootB);
+  };
+
   // First pass: assign conversation IDs and build lookup map
+  const assigned: Array<[MessageLike, string]> = [];
   for (const message of messages) {
     const messageId = getMessageId(message);
     const references = getReferences(message);
     const inReplyTo = getInReplyTo(message);
+    const threadId = getThreadId(message);
+
+    const known = [
+      threadId ? threadIdToConvId.get(threadId) : undefined,
+      inReplyTo ? messageIdToConvId.get(inReplyTo) : undefined,
+      ...references.map((ref) => messageIdToConvId.get(ref)),
+    ].filter((id): id is string => Boolean(id));
 
     let convId: string;
-
-    // 1. Check if we're replying to a known message
-    if (inReplyTo && messageIdToConvId.has(inReplyTo)) {
-      convId = messageIdToConvId.get(inReplyTo)!;
-    }
-    // 2. Check references chain
-    else if (references.length > 0) {
-      const knownRef = references.find((ref) => messageIdToConvId.has(ref));
-      if (knownRef) {
-        convId = messageIdToConvId.get(knownRef)!;
-      } else {
-        convId = simpleHash(references[0]);
-      }
-    }
-    // 3. Use In-Reply-To hash
-    else if (inReplyTo) {
+    if (known.length > 0) {
+      // Joins a conversation already seen: same server thread, or a reply
+      // to (or a reference of) a message already grouped.
+      convId = known[0];
+      for (const other of known.slice(1)) union(convId, other);
+    } else if (references.length > 0) {
+      convId = simpleHash(references[0]);
+    } else if (inReplyTo) {
       convId = simpleHash(inReplyTo);
     } else {
       convId = simpleHash(
         messageId || (message.id as string) || (message.uid as string) || String(Date.now()),
       );
     }
+    track(convId);
+
+    // Parents not seen yet point here too, so a parent that arrives later
+    // (or a sibling replying to the same parent) joins this conversation.
+    for (const parentId of [inReplyTo, ...references]) {
+      if (parentId && !messageIdToConvId.has(parentId)) messageIdToConvId.set(parentId, convId);
+    }
 
     if (messageId) {
-      messageIdToConvId.set(messageId, convId);
+      const previous = messageIdToConvId.get(messageId);
+      if (previous) union(previous, convId);
+      else messageIdToConvId.set(messageId, convId);
     }
+    if (threadId) {
+      const previous = threadIdToConvId.get(threadId);
+      if (previous) union(previous, convId);
+      else threadIdToConvId.set(threadId, convId);
+    }
+    assigned.push([message, convId]);
+  }
+
+  for (const [message, assignedId] of assigned) {
+    const convId = find(assignedId);
 
     if (!conversationMap.has(convId)) {
       conversationMap.set(convId, {
@@ -426,7 +487,7 @@ export function groupIntoConversations(messages: MessageLike[]): ConversationRes
     }
   }
 
-  // Second pass: sort messages within each conversation
+  // Last pass: sort messages within each conversation
   const results: ConversationResult[] = [];
 
   for (const conversation of conversationMap.values()) {

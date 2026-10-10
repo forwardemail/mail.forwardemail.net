@@ -121,13 +121,20 @@ describe('markOriginalAnswered', () => {
     expect(h.queue).not.toHaveBeenCalled();
   });
 
-  it("leaves the server alone when another account's outbox send finishes", async () => {
+  it('queues the change for the replying account when another account is on screen', async () => {
     h.rows.set('other@example.com|m7', { id: 'm7', flags: [] });
     await markOriginalAnswered('m7', { account: 'other@example.com' });
     // Its own cached copy is still marked.
     expect(h.rows.get('other@example.com|m7')?.flags).toEqual(['\\Answered']);
+    // Nothing goes out as the account on screen, which cannot change it...
     expect(h.request).not.toHaveBeenCalled();
-    expect(h.queue).not.toHaveBeenCalled();
+    // ...but the change waits in the replying account's queue instead of
+    // being dropped, and goes out once that account is active again.
+    expect(h.queue).toHaveBeenCalledWith(
+      'addFlags',
+      { messageId: 'm7', flags: ['\\Answered'], add: ['\\Answered'] },
+      { account: 'other@example.com' },
+    );
   });
 
   it('does nothing without a message id', async () => {

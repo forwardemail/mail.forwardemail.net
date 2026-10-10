@@ -110,6 +110,26 @@ describe('mutation-queue', () => {
     expect(get(queueModule.mutationQueueCount)).toBe(1);
   });
 
+  it('queues for another account without sending it as the active one', async () => {
+    const auth = await import('../../src/utils/auth');
+    vi.mocked(auth.getAuthHeaderForAccount).mockReturnValueOnce('Basic other-account');
+
+    const mutation = await queueModule.queueMutation(
+      'addFlags',
+      { messageId: 'm9', flags: ['\\Answered'], add: ['\\Answered'] },
+      { account: 'other@example.com' },
+    );
+    await drainMicrotasks();
+
+    // Filed in the other account's queue, with that account's credentials
+    // for the service worker, and nothing sent as the account on screen.
+    expect(mutation.payload.account).toBe('other@example.com');
+    expect(mutation.authHeader).toBe('Basic other-account');
+    expect(metaStore.get('mutation_queue_other@example.com')?.value).toHaveLength(1);
+    expect(metaStore.get('mutation_queue_user@example.com')).toBeUndefined();
+    expect(remoteRequestMock).not.toHaveBeenCalled();
+  });
+
   it('drains the queue immediately when online and executes in order', async () => {
     await queueModule.queueMutation('toggleRead', {
       messageId: 'm1',

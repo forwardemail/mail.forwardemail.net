@@ -10,6 +10,7 @@ import { isDemoMode, showDemoBlockedToast } from './demo-mode';
 import { isOnline } from './network-status';
 import { exponentialBackoff } from './backoff.js';
 import { markOriginalAnswered } from './answered-flag.ts';
+import { isEmailAlreadyExistsError } from './message-id.ts';
 
 /**
  * Outbox Service
@@ -539,6 +540,15 @@ async function sendOutboxItem(item) {
         updatedAt: Date.now(),
       });
       return { success: false, error: UNCONFIRMED_SEND_MESSAGE };
+    }
+
+    // The server already has this exact email (same Message-ID, Date and
+    // envelope) from an earlier attempt whose answer never reached us. It went
+    // out, so finish the send instead of reporting a failure.
+    if (isEmailAlreadyExistsError(err)) {
+      await recordSentSideEffects(item, account);
+      await markOutboxSent(item, account);
+      return { success: true };
     }
 
     // The server rejected the message itself (bad recipient, too large, ...).

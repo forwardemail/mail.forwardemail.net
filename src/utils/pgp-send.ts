@@ -18,6 +18,7 @@ export interface EncryptedSendInput extends MessageParts {
   replyTo?: string;
   inReplyTo?: string;
   references?: string;
+  messageId?: string;
 }
 
 export interface EncryptedSendResult {
@@ -133,6 +134,7 @@ export async function buildEncryptedPayload(
     replyTo: input.replyTo,
     inReplyTo: input.inReplyTo,
     references: input.references,
+    messageId: input.messageId,
   });
 
   return { ok: true, signed: Boolean(result.signed), payload: { raw } };

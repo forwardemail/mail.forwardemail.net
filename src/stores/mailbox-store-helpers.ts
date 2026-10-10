@@ -348,8 +348,13 @@ export const mergeMissingLabels = async (
 // a record missing them renders "To:" with nothing after it.
 const BACKFILLED_ADDRESS_FIELDS = ['from', 'to', 'cc'] as const;
 
-// Backfill missing address fields onto list messages by reading the cached copy
-// from IndexedDB, same cache-lookup strategy as mergeMissingLabels. A message
+// The lightweight list leaves out In-Reply-To and References too. Without the
+// backfill, every refresh wrote nulls over headers the cache already had (from
+// an older full list or an opened message), which split threads apart.
+const BACKFILLED_FIELDS = [...BACKFILLED_ADDRESS_FIELDS, 'in_reply_to', 'references'] as const;
+
+// Backfill missing address and threading fields onto list messages by reading
+// the cached copy from IndexedDB, same cache-lookup strategy as mergeMissingLabels. A message
 // is looked up when ANY of the address fields is absent, and each field is
 // filled independently, so a response that carries `from` but no `to` still
 // gets its recipients back.
@@ -360,7 +365,7 @@ export const mergeMissingAddressFields = async (bulkGet: MessageBulkGet, account
     const fallbackKeys = [];
     const fallbackIndex = new Map();
     list.forEach((msg, idx) => {
-      if (BACKFILLED_ADDRESS_FIELDS.some((field) => !hasFromValue(msg?.[field]))) {
+      if (BACKFILLED_FIELDS.some((field) => !hasFromValue(msg?.[field]))) {
         lookup.push([account, msg.id]);
         indices.push(idx);
       }
@@ -404,7 +409,7 @@ export const mergeMissingAddressFields = async (bulkGet: MessageBulkGet, account
       };
 
       const patch = {};
-      for (const field of BACKFILLED_ADDRESS_FIELDS) {
+      for (const field of BACKFILLED_FIELDS) {
         if (hasFromValue(next[idx]?.[field])) continue;
         if (hasFromValue(record?.[field])) {
           patch[field] = record[field];

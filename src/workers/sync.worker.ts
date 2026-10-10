@@ -1668,6 +1668,33 @@ async function fetchMessagePage(payload = {}) {
         });
         toStore = next;
       }
+
+      // The lightweight list leaves out In-Reply-To and References. Keep the
+      // ones already cached (from an older full list or an opened message)
+      // rather than writing nulls over them, which split threads apart.
+      const headerIndices: number[] = [];
+      toStore.forEach((msg: Record<string, unknown>, idx: number) => {
+        if (!hasFromValue(msg?.in_reply_to) || !hasFromValue(msg?.references)) {
+          headerIndices.push(idx);
+        }
+      });
+      if (headerIndices.length) {
+        const cached = (await db.messages.bulkGet(
+          headerIndices.map((idx) => [account, toStore[idx].id]),
+        )) as Array<Record<string, unknown> | undefined>;
+        const next = toStore.slice();
+        cached.forEach((record: Record<string, unknown> | undefined, i: number) => {
+          const idx = headerIndices[i];
+          const patch: Record<string, unknown> = {};
+          for (const field of ['in_reply_to', 'references'] as const) {
+            if (!hasFromValue(next[idx]?.[field]) && hasFromValue(record?.[field])) {
+              patch[field] = record?.[field];
+            }
+          }
+          if (Object.keys(patch).length) next[idx] = { ...next[idx], ...patch };
+        });
+        toStore = next;
+      }
     }
 
     await db.messages.bulkPut(toStore);

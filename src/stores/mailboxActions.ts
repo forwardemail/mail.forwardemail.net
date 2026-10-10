@@ -52,7 +52,7 @@ import { validateLabelName } from '../utils/label-validation.ts';
 import { resolveSearchBodyIndexing } from '../utils/search-body-indexing.js';
 import { LABEL_PALETTE, canonicalizeLabelKeyword } from '../utils/labels.js';
 import { isHiddenLabel } from '../utils/label-filters';
-import { queueMutation } from '../utils/mutation-queue';
+import { processMutationQueue, queueMutation } from '../utils/mutation-queue';
 import { flagChangeBody, labelChangeBody } from '../utils/message-changes';
 import { config } from '../config';
 import { createInboxUpdater } from '../utils/websocket-updater';
@@ -1102,7 +1102,8 @@ export const replyTo = async (msg, options = {}) => {
     date: msg?.date || msg?.dateMs,
     html: '<p><br></p>', // Start with empty paragraph for cursor position
     bodyLoading: true, // Signal that body is loading
-    inReplyTo,
+    // Bracketed, since an encrypted send writes it into the raw headers as is
+    inReplyTo: normalizedInReplyTo,
     references,
     replyToMessageId: replyToApiId || null,
     replyToMessageFolder: msg?.folder || null,
@@ -2407,6 +2408,10 @@ const performAccountSwitch = async (email) => {
   });
   // A newer switch started while the cache was read: let it win.
   if ((Local.get('email') || '') !== email) return;
+
+  // Changes queued for this account while another one was active (such as
+  // \Answered on a reply sent just before switching) can go out now.
+  void processMutationQueue();
 
   // Multi-account WebSocket: do NOT destroy the updater on account switch.
   // All accounts keep their WebSocket connections alive. Just reconcile

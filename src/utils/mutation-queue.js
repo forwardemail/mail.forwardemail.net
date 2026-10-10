@@ -1,7 +1,7 @@
 import { db } from './db';
 import { Local } from './storage';
 import { Remote } from './remote';
-import { getAuthHeader } from './auth';
+import { getAuthHeader, getAuthHeaderForAccount } from './auth';
 import { config } from '../config';
 import { writable } from 'svelte/store';
 import { warn } from './logger.ts';
@@ -113,15 +113,20 @@ async function writeQueue(account, queue) {
  *
  * @param {string} type - Mutation type
  * @param {Object} payload - Operation-specific payload
+ * @param {Object} [options]
+ * @param {string} [options.account] - Queue it for this signed-in account
+ *   instead of the active one. It runs the next time that account is active.
  * @returns {Promise<Object>} The queued mutation record
  */
-export async function queueMutation(type, payload) {
-  const account = getAccount();
+export async function queueMutation(type, payload, { account: forAccount } = {}) {
+  const account = forAccount || getAccount();
 
   // Store auth info so the SW can process mutations when the tab is closed
   let authHeader = '';
   try {
-    authHeader = getAuthHeader({ required: false });
+    authHeader = forAccount
+      ? getAuthHeaderForAccount(forAccount)
+      : getAuthHeader({ required: false });
   } catch {
     // Auth not available — SW will skip if header is missing
   }
@@ -142,7 +147,9 @@ export async function queueMutation(type, payload) {
     await writeQueue(account, queue);
   });
 
-  // If online, process immediately; otherwise register Background Sync
+  // If online, process immediately; otherwise register Background Sync.
+  // Another account's queue only drains once that account is active.
+  if (account !== getAccount()) return mutation;
   if (isOnline()) {
     processMutationQueue();
   } else {

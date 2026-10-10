@@ -67,11 +67,18 @@ export async function markOriginalAnswered(
       .catch(() => {});
   }
 
-  // Requests go out as the account on screen. The user may have switched
-  // since an outbox send began; that account cannot change this message.
-  if (account && !isActiveAccount(account)) return;
-
   const change = { messageId: id, flags, add: [ANSWERED] };
+
+  // Requests go out as the account on screen. The user may have switched
+  // since an outbox send began, and that account cannot change this message,
+  // so it waits in the replying account's queue until that account is active.
+  if (account && !isActiveAccount(account)) {
+    await queueMutation('addFlags', change, { account }).catch((error: unknown) =>
+      warn('[answered-flag] Could not queue \\Answered', error),
+    );
+    return;
+  }
+
   try {
     if (!isOnline()) {
       await queueMutation('addFlags', change);

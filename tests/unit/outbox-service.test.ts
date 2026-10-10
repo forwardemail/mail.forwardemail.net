@@ -250,6 +250,24 @@ describe('processOutbox never sends the same email twice by guesswork', () => {
     expect(h.remoteRequest).toHaveBeenCalledTimes(1);
   });
 
+  it('finishes a send the server already has from an earlier attempt', async () => {
+    // A retried scheduled send: same Message-ID, Date and envelope as one the
+    // server accepted but whose answer never came back.
+    h.remoteRequest.mockRejectedValue(
+      Object.assign(
+        new Error('Email already exists with the same Message-ID, Date, and Envelope.'),
+        { status: 400 },
+      ),
+    );
+    h.outbox.set('a', pending());
+
+    await drain();
+
+    expect((await getOutboxItem('a'))?.status).toBe('sent');
+    expect(h.saveSentCopy).toHaveBeenCalled();
+    expect(h.remoteRequest).toHaveBeenCalledTimes(1);
+  });
+
   it('does not retry a message the server rejected outright', async () => {
     h.remoteRequest.mockRejectedValue(
       Object.assign(new Error('Invalid recipient'), { status: 400 }),
