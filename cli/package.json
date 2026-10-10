@@ -1,6 +1,6 @@
 {
   "name": "forwardemail",
-  "version": "0.14.28",
+  "version": "0.14.29",
   "description": "Forward Email in your terminal: the webmail, calendar and contacts",
   "keywords": [
     "email",
