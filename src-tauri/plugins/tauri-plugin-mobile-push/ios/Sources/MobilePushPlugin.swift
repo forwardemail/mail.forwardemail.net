@@ -157,6 +157,15 @@ private final class PushNotificationHandler: NSObject, UNUserNotificationCenterD
 private var observersInstalled = false
 private var appDelegateFallbackChecked = false
 
+/// The app delegate, held for the life of the process. UIApplication owns
+/// the delegate UIApplicationMain created and gives that ownership up when
+/// `delegate` is set again, even to the same object, and nothing else holds
+/// Tao's delegate. Re-assigning it (ensureAppDelegateCallbacks() below) can
+/// free it while UIKit still points at it; the next message UIKit sends it
+/// then crashes the app in objc_opt_respondsToSelector. TestFlight crash
+/// reports from 0.12.30 and 0.12.33 show that crash a few seconds after launch.
+private var retainedAppDelegate: UIApplicationDelegate?
+
 // MARK: - Pending notification taps
 
 /// Taps the page has not taken yet. A tap is what launches the app on a cold
@@ -296,7 +305,9 @@ private func ensureAppDelegateCallbacks() {
 
     // UIApplication caches respondsToSelector: when the delegate is set.
     // Re-assigning the SAME object refreshes that cache; assigning nil first
-    // tears down the scene lifecycle on iOS 26, so never do that.
+    // tears down the scene lifecycle on iOS 26, so never do that. Hold the
+    // delegate first: re-assigning it ends UIApplication's ownership of it.
+    retainedAppDelegate = delegate
     UIApplication.shared.delegate = delegate
 }
 

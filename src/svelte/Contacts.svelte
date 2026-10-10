@@ -39,6 +39,12 @@
   import User from '@lucide/svelte/icons/user';
   import AlertCircle from '@lucide/svelte/icons/alert-circle';
 
+  // The terminal client draws no images, so a photo chosen there could not be
+  // seen. Its avatar is not a photo picker: a click on the initials opened the
+  // system file dialog with nothing on screen to say why.
+  const isTerminalClient =
+    (globalThis as { __FORWARDEMAIL_TERMINAL__?: boolean }).__FORWARDEMAIL_TERMINAL__ === true;
+
   let accountUnsub: Unsubscriber | null = null;
 
   interface ToastApi {
@@ -1382,7 +1388,11 @@
     </Alert.Root>
   {/if}
 
-  <div class="grid flex-1 min-h-0 grid-cols-1 md:grid-cols-[320px_1fr] overflow-hidden">
+  <div class="grid flex-1 min-h-0 grid-cols-1 grid-rows-1 md:grid-cols-[320px_1fr] overflow-hidden">
+    <!-- One row the height of the page (grid-rows-1, above): with an auto row
+         the list and the details grew to fit their content, so in the terminal
+         client neither scrolled. The list also needs min-h-0 to shrink below
+         its content, and relative so the avatars in it are clipped with it. -->
     <!-- Contact List -->
     <div
       class="flex flex-col min-h-0 border-r border-border {selectedContact
@@ -1405,7 +1415,7 @@
         </div>
       </div>
       <ul
-        class="fe-mobile-page-scroll fe-above-footer flex-1 overflow-y-auto"
+        class="fe-mobile-page-scroll fe-above-footer relative flex-1 min-h-0 overflow-y-auto"
         data-testid="contact-list"
         data-loading={loading ? 'true' : 'false'}
         data-count={filtered.length}
@@ -1486,8 +1496,10 @@
             </Button>
             <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
             <label
-              for="contact-photo-upload"
-              class="group relative h-14 w-14 shrink-0 cursor-pointer overflow-hidden rounded-full"
+              for={isTerminalClient ? undefined : 'contact-photo-upload'}
+              class="group relative h-14 w-14 shrink-0 overflow-hidden rounded-full {isTerminalClient
+                ? ''
+                : 'cursor-pointer'}"
               style="background-color: {getAvatarColor(draft)}"
               onclick={async (e) => {
                 if (!isTauriDesktop) return;

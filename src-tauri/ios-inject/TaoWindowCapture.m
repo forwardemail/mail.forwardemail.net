@@ -32,6 +32,13 @@ static BOOL _apnsMethodsInjected = NO;
 // Original IMP for UIApplication.setDelegate:
 static void (*_originalSetDelegate)(id, SEL, id<UIApplicationDelegate>) = NULL;
 
+// The app delegate, retained for the life of the process. UIApplication owns
+// the delegate UIApplicationMain creates, and setting the delegate again (even
+// to the same object) gives that ownership up; nothing else holds Tao's
+// delegate, which would then be freed while UIKit still sends it messages.
+// Retained by hand so this holds with or without ARC.
+static CFTypeRef _heldAppDelegate = NULL;
+
 // Forward declaration
 static void _injectApnsMethodsIntoClass(Class cls);
 
@@ -97,6 +104,13 @@ static void _injectApnsMethodsIntoClass(Class cls);
                 // respondsToSelector: cache with our methods already present.
                 if (_originalSetDelegate) {
                     _originalSetDelegate(self, setDelegateSel, delegate);
+                }
+
+                // Keep the delegate alive (see _heldAppDelegate).
+                if (delegate && (__bridge CFTypeRef)delegate != _heldAppDelegate) {
+                    CFTypeRef previous = _heldAppDelegate;
+                    _heldAppDelegate = CFBridgingRetain(delegate);
+                    if (previous) CFRelease(previous);
                 }
             });
 

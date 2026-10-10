@@ -128,3 +128,9 @@ opt-level = "s"
 # store native libraries uncompressed and Play never strips them.
 strip = "none"
 debug = "line-tables-only"
+
+# Vendored tauri 2.10.3 with the upstream iOS/Android plugin deadlock fixes
+# (tauri 2.11.0 and 2.11.3). See vendor/tauri/README.forwardemail.md; drop
+# this patch when the tauri crate and @tauri-apps/api move to 2.11.3 or later.
+[patch.crates-io]
+tauri = { path = "vendor/tauri" }

@@ -212,9 +212,14 @@ export async function notify({ title, body, icon, tag, data, channelId, number }
 /**
  * Initialize notification channels for the email app (Android only).
  * Call once during app bootstrap on Tauri.
+ *
+ * Other platforms have no channels: iOS answers createChannel with "not
+ * implemented" and desktop has no such command. On iOS each call was also a
+ * native plugin round trip racing the click handler's at startup, the pattern
+ * behind the 0.14.28 watchdog kills (see src-tauri/vendor/tauri).
  */
 export async function initNotificationChannels() {
-  if (!isTauri) return;
+  if (!isTauri || !isAndroid) return;
   const mod = await ensureTauriNotification();
   if (!mod || !mod.createChannel) return;
   try {
