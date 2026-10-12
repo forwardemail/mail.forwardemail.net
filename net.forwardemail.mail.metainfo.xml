@@ -36,6 +36,14 @@
   </screenshots>
   <!-- scripts/sync-version.cjs prepends a release entry on every version bump. -->
   <releases>
+    <release version="0.14.31" date="2026-10-12">
+      <description>
+        <p>Fixes</p>
+        <ul>
+          <li>The app no longer shows a blank screen while it starts</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.14.30" date="2026-10-12">
       <description>
         <p>Fixes</p>

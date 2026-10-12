@@ -6,6 +6,13 @@ release notes are taken from here. To change what a commit says, add a
 `Release-note: <text>` line to its message (or `Release-note: none` to leave
 it out).
 
+## 0.14.31 (2026-10-12)
+
+### Fixes
+
+- The app no longer shows a blank screen while it starts
+- No more white flash when opening the app in dark mode _(iOS)_
+
 ## 0.14.30 (2026-10-11)
 
 ### Fixes
