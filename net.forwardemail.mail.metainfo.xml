@@ -36,7 +36,14 @@
   </screenshots>
   <!-- scripts/sync-version.cjs prepends a release entry on every version bump. -->
   <releases>
-    <release version="0.14.30" date="2026-10-12"/>
+    <release version="0.14.30" date="2026-10-12">
+      <description>
+        <p>Fixes</p>
+        <ul>
+          <li>Thread on server thread_id, keep cached threading headers, share Message-ID with Sent copy</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.14.29" date="2026-10-10"/>
     <release version="0.14.28" date="2026-10-08"/>
     <release version="0.14.27" date="2026-10-07"/>

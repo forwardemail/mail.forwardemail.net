@@ -100,6 +100,24 @@ jobs:
           printf '%s\n' "$fingerprint" > fdroid/repository-fingerprint.txt
           chmod 600 fdroid/config.yml
 
+      # F-Droid clients show metadata/<app id>/<locale>/changelogs/<versionCode>.txt
+      # as the release's "What's new". versionCode follows sync-version.cjs.
+      - name: Write the F-Droid changelog
+        env:
+          TAG: ${{ inputs.tag || github.event.inputs.tag }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          IFS=. read -r MAJOR MINOR PATCH <<< "${VERSION%%-*}"
+          VERSION_CODE=$((MAJOR * 10000 + MINOR * 100 + PATCH))
+          DIR=fdroid/metadata/net.forwardemail.mail/en-US/changelogs
+          mkdir -p "$DIR"
+          if ! node scripts/release-notes.mjs print --version "$VERSION" --target android \
+            > "$DIR/$VERSION_CODE.txt"; then
+            echo "Bug fixes and performance improvements." > "$DIR/$VERSION_CODE.txt"
+          fi
+          cat "$DIR/$VERSION_CODE.txt"
+
       - name: Generate the signed F-Droid indexes
         run: |
           set -euo pipefail

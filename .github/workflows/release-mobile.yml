@@ -313,6 +313,20 @@ jobs:
           echo "path=$AAB" >> "$GITHUB_OUTPUT"
           echo "Uploading $AAB to Play track '${{ vars.PLAY_TRACK || 'internal' }}'"
 
+      # Play's "What's new" text, from this version's CHANGELOG.md section.
+      - name: Write Play release notes
+        if: steps.play_check.outputs.enabled == 'true'
+        env:
+          VERSION: ${{ inputs.version || inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/whatsnew"
+          if ! node scripts/release-notes.mjs print --version "$VERSION" --target android \
+            > "$RUNNER_TEMP/whatsnew/whatsnew-en-US"; then
+            echo "Bug fixes and performance improvements." > "$RUNNER_TEMP/whatsnew/whatsnew-en-US"
+          fi
+          cat "$RUNNER_TEMP/whatsnew/whatsnew-en-US"
+
       - name: Upload AAB to Google Play
         if: steps.play_check.outputs.enabled == 'true'
         uses: r0adkll/upload-google-play@e738b9dd8f2476ea806d921b64aacd24f34515a5 # v1.1.5
@@ -322,6 +336,7 @@ jobs:
           releaseFiles: ${{ steps.play_aab.outputs.path }}
           track: ${{ vars.PLAY_TRACK || 'internal' }}
           status: completed
+          whatsNewDirectory: ${{ runner.temp }}/whatsnew
 
       - name: Clean up Android credentials
         if: always()
@@ -856,6 +871,32 @@ jobs:
           done
           echo "::error::App Store Connect still cannot find the app for this bundle ID. Accept any pending agreements in App Store Connect (Business > Agreements), check that the app exists there and that the API key (APP_STORE_CONNECT_KEY_ID) has access to it, then re-run this job."
           exit 1
+
+      # TestFlight's "What to Test" text, from this version's CHANGELOG.md
+      # section. altool can't set it, and the build has to finish appearing in
+      # App Store Connect first, so this polls. The build is already uploaded,
+      # so a failure here only costs the notes and must not fail the release.
+      - name: Set TestFlight release notes
+        if: steps.check.outputs.enabled == 'true'
+        continue-on-error: true
+        timeout-minutes: 35
+        env:
+          ASC_KEY: ${{ secrets.APP_STORE_CONNECT_API_KEY }}
+          ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          ASC_ISSUER: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          BUNDLE_ID: net.forwardemail.mail
+          APP_VERSION: ${{ inputs.version || inputs.tag || github.ref_name }}
+          # Must match IOS_BUILD_NUMBER in the repack step.
+          BUILD_NUMBER: ${{ github.run_number }}.${{ github.run_attempt }}
+          WHATS_NEW_FILE: ${{ runner.temp }}/whats-new-ios.txt
+        run: |
+          set -euo pipefail
+          if ! node scripts/release-notes.mjs print --version "$APP_VERSION" --target ios \
+            > "$WHATS_NEW_FILE"; then
+            echo "Bug fixes and performance improvements." > "$WHATS_NEW_FILE"
+          fi
+          cat "$WHATS_NEW_FILE"
+          node scripts/testflight-whats-new.mjs
 
       - name: Resolve release ID (prefer published over draft)
         if: steps.check.outputs.enabled == 'true'

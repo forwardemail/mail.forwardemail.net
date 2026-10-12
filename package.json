@@ -46,6 +46,7 @@
     "prerelease": "pnpm run docs:toc && bash scripts/prerelease.sh",
     "release": "npm_config_ignore_scripts=false np --no-cleanup --no-release-draft",
     "release:desktop": "bash scripts/release-desktop.sh",
+    "release:notes": "node scripts/release-notes.mjs preview",
     "tauri:check-cache": "bash scripts/check-cargo-cache.sh",
     "tauri:sync-version": "node scripts/sync-version.cjs",
     "tauri:dev": "pnpm tauri:check-cache && pnpm tauri:sync-version && tauri dev",
@@ -62,7 +63,7 @@
     "tauri:ios:build": "bash scripts/ios-build.sh",
     "tauri:icon": "tauri icon src-tauri/app-icon-manifest.json",
     "tauri:signer:generate": "tauri signer generate -w ~/.tauri/forwardemail.key",
-    "version": "node scripts/sync-version.cjs && git add src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock net.forwardemail.mail.metainfo.xml net.forwardemail.mail.yml cli/package.json"
+    "version": "node scripts/sync-version.cjs && node scripts/release-notes.mjs write && git add CHANGELOG.md src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock net.forwardemail.mail.metainfo.xml net.forwardemail.mail.yml cli/package.json"
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.3.0",

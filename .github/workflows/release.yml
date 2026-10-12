@@ -107,12 +107,15 @@ jobs:
               gh api -X DELETE "repos/${GH_REPO}/releases/${did}" || true
             done
 
-            # Create a new release with np-style commit list as body.
-            # Find the previous tag to generate a commit log between versions.
+            # The body is this version's CHANGELOG.md section (the same notes
+            # the app stores get), falling back to the commit list for a tag
+            # cut before the changelog existed.
             PREV_TAG=$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || echo "")
             if [ -n "$PREV_TAG" ]; then
-              COMMITS=$(git log --pretty=format:'- %s  %H' "${PREV_TAG}..${TAG}" | grep -v '^- chore(release):' || true)
-              BODY=$(printf '%s\n\n---\n\nhttps://github.com/%s/compare/%s...%s' "$COMMITS" "$GH_REPO" "$PREV_TAG" "$TAG")
+              if ! NOTES=$(node scripts/release-notes.mjs print --version "$TAG" --target github); then
+                NOTES=$(git log --pretty=format:'- %s  %H' "${PREV_TAG}..${TAG}" | grep -v '^- chore(release):' || true)
+              fi
+              BODY=$(printf '%s\n\n---\n\nhttps://github.com/%s/compare/%s...%s' "$NOTES" "$GH_REPO" "$PREV_TAG" "$TAG")
             else
               BODY="https://github.com/${GH_REPO}/releases/tag/${TAG}"
             fi
