@@ -120,6 +120,90 @@ fn set_badge_count(count: u32) -> Result<(), String> {
     Ok(())
 }
 
+/// The app's page canvas (`--surface-canvas` in fe-tokens.css) as RGB 0..1.
+#[cfg(target_os = "ios")]
+fn ios_canvas_rgb(dark: bool) -> (f64, f64, f64) {
+    if dark {
+        // #182238
+        (24.0 / 255.0, 34.0 / 255.0, 56.0 / 255.0)
+    } else {
+        // #f5f8ff
+        (245.0 / 255.0, 248.0 / 255.0, 1.0)
+    }
+}
+
+/// Whether iOS is in dark mode, which is what the "system" theme follows.
+#[cfg(target_os = "ios")]
+fn ios_system_is_dark() -> bool {
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
+    unsafe {
+        let screen: *mut AnyObject = msg_send![objc2::class!(UIScreen), mainScreen];
+        if screen.is_null() {
+            return false;
+        }
+        let traits: *mut AnyObject = msg_send![screen, traitCollection];
+        if traits.is_null() {
+            return false;
+        }
+        // UIUserInterfaceStyleDark
+        let style: isize = msg_send![traits, userInterfaceStyle];
+        style == 2
+    }
+}
+
+/// Paints the WKWebView and the strips around it (status bar and home
+/// indicator) in the app canvas color. A WKWebView is opaque white until the
+/// page paints, so without this every launch and every renderer reload
+/// flashes white, which stands out in dark mode.
+///
+/// # Safety
+/// `wk` must be the app's WKWebView, and this must run on the main thread.
+#[cfg(target_os = "ios")]
+unsafe fn apply_ios_shell_background(wk: *mut objc2::runtime::AnyObject, dark: bool) {
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
+
+    if wk.is_null() {
+        return;
+    }
+    let (red, green, blue) = ios_canvas_rgb(dark);
+    let color: *mut AnyObject = msg_send![
+        objc2::class!(UIColor),
+        colorWithRed: red,
+        green: green,
+        blue: blue,
+        alpha: 1.0_f64
+    ];
+    let _: () = msg_send![wk, setOpaque: false];
+    let _: () = msg_send![wk, setBackgroundColor: color];
+    let scroll_view: *mut AnyObject = msg_send![wk, scrollView];
+    if !scroll_view.is_null() {
+        let _: () = msg_send![scroll_view, setBackgroundColor: color];
+    }
+    let superview: *mut AnyObject = msg_send![wk, superview];
+    if !superview.is_null() {
+        let _: () = msg_send![superview, setBackgroundColor: color];
+    }
+}
+
+/// Repaints the native background on iOS when the app theme changes, so it
+/// also follows a theme the user picked over the system one. No-op elsewhere.
+#[tauri::command]
+async fn set_shell_background(app: tauri::AppHandle, dark: bool) -> Result<(), String> {
+    #[cfg(target_os = "ios")]
+    if let Some(window) = app.get_webview_window("main") {
+        window
+            .with_webview(move |webview| unsafe {
+                apply_ios_shell_background(webview.inner().cast(), dark);
+            })
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(not(target_os = "ios"))]
+    let _ = (app, dark);
+    Ok(())
+}
+
 /// Shows or hides the main window (for tray icon toggle).
 /// Only operates on the "main" window label — never arbitrary windows.
 #[cfg(desktop)]
@@ -1016,6 +1100,7 @@ pub fn run() {
             get_platform,
             get_build_info,
             set_badge_count,
+            set_shell_background,
             get_pending_deep_links,
             diagnostics::get_log_path,
             diagnostics::read_recent_logs,
@@ -1153,16 +1238,12 @@ pub fn run() {
                         return;
                     }
 
-                    // Paint the exposed strips in the app shell background so
-                    // the trays read as chrome rather than a rendering gap.
-                    let bg: *mut AnyObject = msg_send![
-                        objc2::class!(UIColor),
-                        colorWithRed: 0.0392_f64,
-                        green: 0.0392_f64,
-                        blue: 0.0392_f64,
-                        alpha: 1.0_f64
-                    ];
-                    let _: () = msg_send![superview, setBackgroundColor: bg];
+                    // Paint the webview and the exposed strips in the app
+                    // canvas color, so the trays read as part of the app and
+                    // the webview is not white before the page paints. This
+                    // follows the system appearance; the page corrects it
+                    // through set_shell_background if the user picked a theme.
+                    apply_ios_shell_background(wk, ios_system_is_dark());
 
                     // Replace WRY's full-screen autoresizing frame with
                     // constraints against the safe area layout guide. Rotation

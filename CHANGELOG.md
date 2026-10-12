@@ -10,4 +10,7 @@ it out).
 
 ### Fixes
 
-- Thread on server thread_id, keep cached threading headers, share Message-ID with Sent copy
+- Conversations stay together and match Thunderbird and other mail apps. Most noticeable on mobile, where replies could split into separate threads
+- Replies to an email you sent now join the same conversation as your Sent copy
+- Replying from an account that isn't on screen still marks the original email as replied
+- A send retried after a dropped connection no longer shows as failed when the email already went out

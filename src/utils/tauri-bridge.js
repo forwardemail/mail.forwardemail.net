@@ -73,6 +73,7 @@ const ALLOWED_COMMANDS = new Set([
   'get_platform',
   'get_build_info',
   'set_badge_count',
+  'set_shell_background',
   'toggle_window_visibility',
   'is_default_mailto_handler',
   'set_default_mailto_handler',
@@ -178,6 +179,14 @@ export async function setBadgeCount(count) {
   }
 
   return invoke('set_badge_count', { count: n });
+}
+
+/**
+ * Paint the native area around the iOS webview (status bar and home indicator
+ * strips) in the app's light or dark canvas color. No-op off iOS.
+ */
+export async function setShellBackground(dark) {
+  return invoke('set_shell_background', { dark: Boolean(dark) });
 }
 
 /**

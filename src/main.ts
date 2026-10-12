@@ -55,8 +55,10 @@ import {
   isTauriDesktop,
   isTauriMacOS,
   isTauriMobile,
+  nativePlatform,
 } from './utils/platform.js';
 import { initOsTextScale } from './utils/os-text-scale';
+import { checkClearManifest } from './utils/clear-manifest';
 import { installViewportGuard } from './utils/viewport-guard';
 import { openComposeWindow, initComposeWindowListener } from './utils/compose-window';
 import {
@@ -96,6 +98,7 @@ import { setNotificationToasts } from './utils/notification-manager';
 import { bindExternalLinkInterceptor } from './utils/external-links.js';
 import { bindEdgeSwipeBack } from './utils/mobile-edge-swipe';
 import { onBackButton } from './utils/tauri-bridge.js';
+import { setShellBackground } from './utils/tauri-bridge.js';
 import { installPasteNormalizer } from './utils/paste-normalizer';
 // Database initialization with recovery support
 import {
@@ -1940,6 +1943,8 @@ function showShortcutsHelp() {
   mailboxApi?.showShortcutsHelp?.();
 }
 
+let lastShellDark: boolean | undefined;
+
 function applyTheme(pref) {
   const theme = pref || getEffectiveSettingValue('theme') || 'system';
   const prefersDark =
@@ -1952,6 +1957,15 @@ function applyTheme(pref) {
   // Keep legacy body classes for backward compatibility during migration
   document.body.classList.remove('light-mode', 'dark-mode');
   document.body.classList.add(isDark ? 'dark-mode' : 'light-mode');
+
+  // The strips around the iOS webview are native views. They start in the
+  // system appearance; this keeps them on the theme the user picked.
+  if (isTauriMobile && nativePlatform === 'ios' && isDark !== lastShellDark) {
+    lastShellDark = isDark;
+    setShellBackground(isDark).catch(() => {
+      lastShellDark = undefined;
+    });
+  }
 }
 
 /**
@@ -2019,71 +2033,6 @@ function initStarfield() {
       dispose?.();
     }
   };
-}
-
-/**
- * Check if a deployed clear-manifest.json requires this client to wipe
- * local caches and reload. Runs before any DB or store initialization.
- * This is a kill switch for bad releases — update clear_below in the
- * manifest to force all clients below that version to reset.
- */
-async function checkClearManifest() {
-  try {
-    const res = await fetch('/clear-manifest.json', { cache: 'no-store' });
-    if (!res.ok) {
-      return;
-    }
-
-    const manifest = await res.json();
-    if (!manifest.clear_below) {
-      return;
-    }
-
-    // Compare semver portion only (strip build hash suffix like "-a1b2c3d4")
-    const raw = import.meta.env.VITE_PKG_VERSION || '0.0.0';
-    const parts = raw.split('.').map(Number);
-    const threshold = manifest.clear_below.split('.').map(Number);
-    const isBelow =
-      parts[0] < threshold[0] ||
-      (parts[0] === threshold[0] && parts[1] < threshold[1]) ||
-      (parts[0] === threshold[0] && parts[1] === threshold[1] && parts[2] < threshold[2]);
-    if (!isBelow) {
-      return;
-    }
-
-    console.warn(
-      '[clear-manifest] Client version %s is below %s — clearing site data',
-      raw,
-      manifest.clear_below,
-    );
-
-    // Nuke IndexedDB
-    if (typeof indexedDB.databases === 'function') {
-      const dbs = await indexedDB.databases();
-      await Promise.all(dbs.map((db) => indexedDB.deleteDatabase(db.name)));
-    } else {
-      // Safari fallback — delete known DB name
-      const { DB_NAME } = await import('./utils/db-constants');
-      indexedDB.deleteDatabase(DB_NAME);
-    }
-
-    // Nuke SW caches and unregister service worker
-    const cacheKeys = await caches.keys();
-    await Promise.all(cacheKeys.map(async (k) => caches.delete(k)));
-    if ('serviceWorker' in navigator) {
-      const reg = await navigator.serviceWorker.getRegistration();
-      await reg?.unregister();
-    }
-
-    // Clear web storage
-    localStorage.clear();
-    sessionStorage.clear();
-
-    // Reload — fresh assets will have the current version, so this won't loop
-    globalThis.location.reload();
-  } catch {
-    // Manifest fetch failed or parse error — continue normally
-  }
 }
 
 // ── App Lock helpers (used by bootstrap and exported for Settings) ──
@@ -2226,12 +2175,6 @@ async function bootstrap() {
     void showLockScreen();
   }
 
-  // Check if this client needs a forced reset before any initialization
-  await checkClearManifest();
-
-  // Mark as ready early to avoid blank screen if async init stalls.
-  root.classList.add('ready');
-
   // Follow the OS text size before the first paint of real content, so text
   // does not visibly resize a moment after the app appears. No-op off iOS.
   try {
@@ -2248,6 +2191,16 @@ async function bootstrap() {
   } catch {
     /* the native side repairs the viewport as well */
   }
+
+  // Show the app before anything async. Until this class lands the whole
+  // body is visibility:hidden, so an await before it is a blank screen,
+  // on every launch and every iOS renderer reload.
+  root.classList.add('ready');
+
+  // Check if this web client needs a forced reset before any initialization.
+  // The apps bundle the manifest with the build, so the check can never fire
+  // there and would only delay startup.
+  if (!isTauri) await checkClearManifest();
 
   // Request durable IndexedDB storage (best-effort, non-blocking). Without this,
   // some engines — notably Linux WebKitGTK under the tauri:// origin — can evict
