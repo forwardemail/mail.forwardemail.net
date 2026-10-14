@@ -176,7 +176,7 @@
       enabled = false;
       prefs = getLockPrefs();
       showDisableConfirm = false;
-      success = 'App lock disabled. Data has been decrypted.';
+      success = 'App lock disabled. Your mail will download again from the server.';
     } catch (err) {
       console.error('[AppLockSettings] Disable failed:', err);
       error = 'Failed to disable app lock.';
@@ -541,8 +541,8 @@
       {:else}
         <div class="rounded-md border border-destructive/50 bg-destructive/5 p-4 space-y-3">
           <p class="text-sm text-destructive">
-            Disabling app lock will decrypt all stored data. Your emails and credentials will be
-            stored in plaintext on this device.
+            Disabling app lock stores your credentials, drafts and outbox unencrypted on this
+            device. Cached mail is removed and downloads again from the server, unencrypted.
           </p>
           <div class="flex gap-2">
             <Button variant="destructive" size="sm" onclick={handleDisableLock} disabled={loading}>

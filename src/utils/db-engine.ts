@@ -709,45 +709,100 @@ const REENCRYPT_CHUNK_SIZE = 200;
  */
 async function reencryptAll(direction: 'encrypt' | 'decrypt'): Promise<Record<string, number>> {
   await ensureReady();
-  const state = getDbCryptoState();
-  if (!state.hasKey) {
-    throw new Error(`reencryptAll(${direction}) requires the encryption key to be configured`);
-  }
+  requireKey(`reencryptAll(${direction})`);
 
   const changedByTable: Record<string, number> = {};
   for (const tableName of SENSITIVE_TABLES) {
-    const tableObj = (db as unknown as Record<string, Table>)[tableName];
-    if (!tableObj) continue;
-    const primKeys = await tableObj.toCollection().primaryKeys();
-    let changed = 0;
-
-    for (let i = 0; i < primKeys.length; i += REENCRYPT_CHUNK_SIZE) {
-      const chunkKeys = primKeys.slice(i, i + REENCRYPT_CHUNK_SIZE);
-      const rows = (await tableObj.bulkGet(chunkKeys)) as Array<
-        Record<string, unknown> | undefined
-      >;
-      const updates: unknown[] = [];
-
-      for (const row of rows) {
-        if (!row || !recordIsSensitive(tableName, row)) continue;
-        if (direction === 'encrypt') {
-          if (row._enc) continue; // already sealed
-          const sealed = await sealRecord(tableName, row);
-          if (sealed !== row) updates.push(sealed);
-        } else {
-          if (!row._enc) continue; // already plaintext
-          updates.push(await openRecord(tableName, row));
-        }
-      }
-
-      if (updates.length) {
-        await tableObj.bulkPut(updates);
-        changed += updates.length;
-      }
-    }
-    changedByTable[tableName] = changed;
+    changedByTable[tableName] = await sweepTable(tableName, direction);
   }
   return changedByTable;
+}
+
+function requireKey(operation: string): void {
+  if (!getDbCryptoState().hasKey) {
+    throw new Error(`${operation} requires the encryption key to be configured`);
+  }
+}
+
+/** Seal or unseal every sensitive row of one table, a chunk at a time. */
+async function sweepTable(tableName: string, direction: 'encrypt' | 'decrypt'): Promise<number> {
+  const tableObj = (db as unknown as Record<string, Table>)[tableName];
+  if (!tableObj) return 0;
+  const primKeys = await tableObj.toCollection().primaryKeys();
+  let changed = 0;
+
+  for (let i = 0; i < primKeys.length; i += REENCRYPT_CHUNK_SIZE) {
+    const chunkKeys = primKeys.slice(i, i + REENCRYPT_CHUNK_SIZE);
+    const rows = (await tableObj.bulkGet(chunkKeys)) as Array<Record<string, unknown> | undefined>;
+    const updates: unknown[] = [];
+
+    for (const row of rows) {
+      if (!row || !recordIsSensitive(tableName, row)) continue;
+      if (direction === 'encrypt') {
+        if (row._enc) continue; // already sealed
+        const sealed = await sealRecord(tableName, row);
+        if (sealed !== row) updates.push(sealed);
+      } else {
+        if (!row._enc) continue; // already plaintext
+        updates.push(await openRecord(tableName, row));
+      }
+    }
+
+    if (updates.length) {
+      await tableObj.bulkPut(updates);
+      changed += updates.length;
+    }
+  }
+  return changed;
+}
+
+// Copies of server data: the tables Settings > Clear Cache drops, and the
+// meta families that cache contacts and downloaded attachments. Turning App
+// Lock off drops these and lets sync fetch them again, rather than decrypting
+// them. Decrypting a large cache took many minutes (a 10 GB one was reported)
+// with the settings button stuck on "Disabling...".
+const SERVER_COPY_TABLES = [
+  'messages',
+  'messageBodies',
+  'folders',
+  'syncManifests',
+  'searchIndex',
+  'indexMeta',
+];
+const SERVER_COPY_META_PREFIXES = ['contacts_', 'att_blob_', 'att_cache_manifest'];
+
+/**
+ * Leave at-rest encryption for good (App Lock being turned off). Drops the
+ * server copies and decrypts what exists only on this device: drafts, the
+ * outbox, queued changes and saved searches. Needs the key, like
+ * reencryptAll, so the local-only data is never lost.
+ */
+async function unsealForDisable(): Promise<{
+  cleared: string[];
+  decrypted: Record<string, number>;
+}> {
+  await ensureReady();
+  requireKey('unsealForDisable');
+
+  const tables = db as unknown as Record<string, Table | undefined>;
+  const cleared: string[] = [];
+  for (const tableName of SERVER_COPY_TABLES) {
+    const tableObj = tables[tableName];
+    if (!tableObj) continue;
+    await tableObj.clear();
+    cleared.push(tableName);
+  }
+  for (const prefix of SERVER_COPY_META_PREFIXES) {
+    // A key range delete: attachment blobs are never read into memory.
+    await db!.meta.where('key').startsWith(prefix).delete();
+  }
+
+  const decrypted: Record<string, number> = {};
+  for (const tableName of SENSITIVE_TABLES) {
+    if (SERVER_COPY_TABLES.includes(tableName)) continue;
+    decrypted[tableName] = await sweepTable(tableName, 'decrypt');
+  }
+  return { cleared, decrypted };
 }
 
 // ============================================================================
@@ -821,6 +876,8 @@ export async function executeOperation(op: DbOperation): Promise<unknown> {
       return configureDbCrypto(
         (payload ?? {}) as { required?: boolean; rawKey?: ArrayBuffer | Uint8Array | null },
       );
+    case 'unsealForDisable':
+      return unsealForDisable();
     case 'reencryptAll':
       return reencryptAll(
         (payload as { direction?: 'encrypt' | 'decrypt' })?.direction ?? 'encrypt',

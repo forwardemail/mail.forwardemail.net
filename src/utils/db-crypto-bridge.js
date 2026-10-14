@@ -19,6 +19,7 @@ import {
   applyCryptoConfig,
   sendCryptoConfig,
   reencryptAllDb,
+  unsealDbForDisable,
 } from './db-worker-client.js';
 import { db } from './db';
 import {
@@ -94,9 +95,10 @@ export async function encryptAllIdbData() {
 }
 
 /**
- * Pre-disable sweep: unwrap every sealed record back to plaintext. MUST be
- * awaited by crypto-store.disableLock BEFORE the DEK is wiped, because afterwards
- * the sealed data would be unreachable.
+ * Pre-disable sweep: decrypt the data that exists only on this device and drop
+ * the server copies, which sync fetches again. MUST be awaited by
+ * crypto-store.disableLock BEFORE the DEK is wiped, because afterwards the
+ * sealed drafts and outbox would be unreachable.
  */
 export async function decryptAllIdbData() {
   await initDbCryptoBridge();
@@ -110,7 +112,7 @@ export async function decryptAllIdbData() {
   // post-disable end state anyway).
   await sendCryptoConfig({ required: false, rawKey });
   try {
-    const result = await reencryptAllDb('decrypt');
+    const result = await unsealDbForDisable();
     // Success: the cache is plaintext now, so drop the key too.
     await sendCryptoConfig({ required: false, rawKey: null });
     return result;

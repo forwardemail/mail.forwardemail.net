@@ -191,6 +191,74 @@ describe('db-engine with at-rest encryption', () => {
     expect(contacts.value).toEqual([{ email: 'friend@x.com' }]);
   });
 
+  it('unsealForDisable drops server copies and decrypts what exists only on this device', async () => {
+    const A = 'a@example.com';
+    // A cache sealed by App Lock, mixing server copies and local-only data.
+    await run('bulkPut', 'messages', { records: [msg('m1'), msg('m2')] });
+    await run('put', 'messageBodies', { record: { account: A, id: 'm1', body: '<p>secret</p>' } });
+    await run('put', 'folders', { record: { account: A, path: 'INBOX' } });
+    await run('put', 'drafts', { record: { account: A, id: 'd1', subject: 'unsent draft' } });
+    await run('put', 'outbox', {
+      record: { account: A, id: 'o1', status: 'pending', subject: 'queued send' },
+    });
+    for (const record of [
+      { key: `contacts_v2_${A}`, value: [{ email: 'friend@x.com' }] },
+      { key: 'att_blob_m1_0', value: 'base64-attachment' },
+      { key: 'att_cache_manifest', value: { totalBytes: 17, entries: [] } },
+      { key: `mutation_queue_${A}`, value: [{ type: 'flag', id: 'm1' }] },
+      { key: `saved_search_${A}_invoices`, value: { query: 'invoice' } },
+      { key: 'app_lock_enabled', value: true, updatedAt: 1 },
+    ]) {
+      await run('put', 'meta', { record });
+    }
+    await configure(true, true);
+    await run('reencryptAll', undefined, { direction: 'encrypt' });
+    expect((await rawGet('drafts', [A, 'd1']))?._enc).toBeDefined();
+
+    // Turn App Lock off: key still present, encryption no longer required.
+    await configure(false, true);
+    const result = (await run('unsealForDisable')) as {
+      cleared: string[];
+      decrypted: Record<string, number>;
+    };
+    await configure(false, false);
+
+    expect(result.cleared).toEqual(expect.arrayContaining(['messages', 'messageBodies']));
+    expect(result.decrypted).toMatchObject({ drafts: 1, outbox: 1, meta: 2 });
+    // Server copies are gone, to be synced again.
+    expect(await rawGet('messages', [A, 'm1'])).toBeUndefined();
+    expect(await rawGet('messageBodies', [A, 'm1'])).toBeUndefined();
+    expect(await rawGet('folders', [A, 'INBOX'])).toBeUndefined();
+    expect(await rawGet('meta', `contacts_v2_${A}`)).toBeUndefined();
+    expect(await rawGet('meta', 'att_blob_m1_0')).toBeUndefined();
+    expect(await rawGet('meta', 'att_cache_manifest')).toBeUndefined();
+    // Local-only data survives, as plaintext on disk.
+    const draft = await rawGet('drafts', [A, 'd1']);
+    expect(draft?.subject).toBe('unsent draft');
+    expect(draft?._enc).toBeUndefined();
+    expect((await rawGet('outbox', [A, 'o1']))?.subject).toBe('queued send');
+    expect((await rawGet('meta', `mutation_queue_${A}`))?.value).toEqual([
+      { type: 'flag', id: 'm1' },
+    ]);
+    expect((await rawGet('meta', `saved_search_${A}_invoices`))?.value).toEqual({
+      query: 'invoice',
+    });
+    expect((await rawGet('meta', 'app_lock_enabled'))?.value).toBe(true);
+
+    await run('clear', 'drafts');
+    await run('clear', 'outbox');
+  });
+
+  it('unsealForDisable refuses to run without a key, leaving the sealed data alone', async () => {
+    await configure(true, true);
+    await run('put', 'drafts', { record: { account: 'a@example.com', id: 'd1', subject: 's' } });
+    await configure(true, false);
+    await expect(run('unsealForDisable')).rejects.toThrow(/requires the encryption key/);
+    expect((await rawGet('drafts', ['a@example.com', 'd1']))?._enc).toBeDefined();
+    await configure(false, false);
+    await run('clear', 'drafts');
+  });
+
   it('reencryptAll refuses to run without a key', async () => {
     await configure(true, false);
     await expect(run('reencryptAll', undefined, { direction: 'encrypt' })).rejects.toThrow(

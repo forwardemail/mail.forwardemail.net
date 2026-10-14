@@ -412,6 +412,14 @@ export async function reencryptAllDb(direction) {
 }
 
 /**
+ * Turn at-rest encryption off: drop the server copies and decrypt the
+ * local-only tables. See unsealForDisable in db-engine.ts.
+ */
+export async function unsealDbForDisable() {
+  return send('unsealForDisable');
+}
+
+/**
  * Connect to db worker via MessageChannel (for other workers)
  * @param {MessagePort} port - The MessagePort connected to db.worker
  */
