@@ -216,4 +216,96 @@ describe('push notification taps', () => {
     await push.initPushTapHandling();
     await vi.waitFor(() => expect(navigated).toEqual(['/mailbox#INBOX']));
   });
+  it('does not open a tap in the wrong account when its alias is not mapped yet', async () => {
+    // Bob signed in but his registration has not recorded an alias ID yet, so
+    // the map cannot say whose alias-b2 is. Opening msg-8 in Alice's mailbox
+    // (the account on screen) asked the wrong mailbox for it and failed
+    // silently.
+    localValues.set(
+      'push_registrations',
+      JSON.stringify({
+        'alice@example.com': { regId: 'r1', token: 't', platform: 'ios', aliasId: 'alias-a' },
+        'bob@example.com': { regId: 'r2', token: 't', platform: 'ios' },
+      }),
+    );
+    const unmatched = vi.fn();
+    window.addEventListener('fe:notification-unmatched', unmatched);
+    setPlatform('Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)');
+    invokeMock.mockResolvedValueOnce([tapFor('alias-b2', 'msg-8')]);
+    const { push } = await load();
+
+    await push.initPushTapHandling();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    window.removeEventListener('fe:notification-unmatched', unmatched);
+
+    expect(navigated).toEqual([]);
+    expect(switched).toEqual([]);
+    expect(unmatched).toHaveBeenCalledTimes(1);
+    // Bob is registered again so the alias map fills in; Alice is left alone.
+    const registrations = JSON.parse(localValues.get('push_registrations'));
+    expect(registrations['bob@example.com'].reregister).toBe(true);
+    expect(registrations['alice@example.com'].reregister).toBeUndefined();
+  });
+
+  it('tells the user when a tap names an alias no signed-in account claims', async () => {
+    const unmatched = vi.fn();
+    window.addEventListener('fe:notification-unmatched', unmatched);
+    setPlatform('Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)');
+    invokeMock.mockResolvedValueOnce([tapFor('alias-gone', 'msg-9')]);
+    const { push } = await load();
+
+    await push.initPushTapHandling();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    window.removeEventListener('fe:notification-unmatched', unmatched);
+
+    expect(navigated).toEqual([]);
+    expect(unmatched).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens a tap on a single-account install even before its alias is recorded', async () => {
+    accounts.length = 0;
+    accounts.push({ email: 'alice@example.com' });
+    localValues.set(
+      'push_registrations',
+      JSON.stringify({ 'alice@example.com': { regId: 'r1', token: 't', platform: 'ios' } }),
+    );
+    setPlatform('Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)');
+    invokeMock.mockResolvedValueOnce([tapFor('alias-a', 'msg-10')]);
+    const { push } = await load();
+
+    await push.initPushTapHandling();
+
+    await vi.waitFor(() => expect(navigated).toEqual(['/mailbox#INBOX/msg-10']));
+    expect(switched).toEqual([]);
+  });
+});
+
+describe('push provider per account', () => {
+  beforeEach(() => {
+    localValues.clear();
+    localValues.set('email', 'alice@example.com');
+  });
+
+  it("reports each account's own registration, not the active account's", async () => {
+    localValues.set(
+      'push_registrations',
+      JSON.stringify({
+        'alice@example.com': { regId: 'r1', token: 't', platform: 'ios', aliasId: 'alias-a' },
+        // Signed in on this device, but registering failed: no server row.
+        'bob@example.com': { token: 't', platform: 'ios' },
+        // Marked by a sign-in to be registered again; the old row may be gone.
+        'carol@example.com': { regId: 'r3', token: 't', platform: 'ios', reregister: true },
+      }),
+    );
+    vi.resetModules();
+    const push = await import('../../src/utils/push-notifications.js');
+
+    expect(push.getPushProviderForAccount('alice@example.com')).toBe('apns');
+    // A WebSocket tag can differ in case from the stored key.
+    expect(push.getPushProviderForAccount('Alice@Example.com')).toBe('apns');
+    expect(push.getPushProviderForAccount('bob@example.com')).toBeNull();
+    expect(push.getPushProviderForAccount('carol@example.com')).toBeNull();
+    expect(push.getPushProviderForAccount('dave@example.com')).toBeNull();
+    expect(push.getActivePushProvider()).toBe('apns');
+  });
 });

@@ -131,6 +131,7 @@ export function removePushRegistration(registrationId: string): Promise<PushMana
 export function getStoredPushToken(): string | null;
 export function getPushPlatform(): PushPlatform | PushProvider | null;
 export function getActivePushProvider(): PushProvider | null;
+export function getPushProviderForAccount(account: string): PushProvider | null;
 export function isSystemPushAlertExpected(eventName: string, data: unknown): boolean;
 export function __resetPushTapHandlingForTests(): void;
 export function isPushInitialized(): boolean;

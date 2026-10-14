@@ -85,6 +85,70 @@ function trackNotification(data) {
   _lastNotificationTime = Date.now();
 }
 
+// ── Tap targets by notification id ──────────────────────────────────────────
+//
+// On iOS the plugin's tap event (actionPerformed) carries only the
+// notification's id, title and body: tauri-plugin-notification 2.3.3 builds it
+// from ActiveNotification, which has no `extra`. So the target of every local
+// notification is kept here under the id the app gave it, and the tap is
+// resolved from that. Kept in localStorage so a page reload (the renderer
+// being restarted while the app stays alive) does not lose it. Bounded, and it
+// holds only the account, folder and ids, never a subject or sender.
+
+const TAP_TARGETS_KEY = 'webmail_notification_tap_targets';
+const MAX_TAP_TARGETS = 50;
+let tapTargets = null;
+
+function loadTapTargets() {
+  if (tapTargets) return tapTargets;
+  tapTargets = new Map();
+  try {
+    const raw = localStorage.getItem(TAP_TARGETS_KEY);
+    const entries = raw ? JSON.parse(raw) : [];
+    if (Array.isArray(entries)) {
+      for (const entry of entries.slice(-MAX_TAP_TARGETS)) {
+        if (Array.isArray(entry) && entry[1] && typeof entry[1] === 'object') {
+          tapTargets.set(String(entry[0]), entry[1]);
+        }
+      }
+    }
+  } catch {
+    // Unreadable or no storage: start empty.
+  }
+  return tapTargets;
+}
+
+function rememberTapTarget(id, extra) {
+  const targets = loadTapTargets();
+  const key = String(id);
+  // Re-inserting moves a replaced notification to the newest end.
+  targets.delete(key);
+  targets.set(key, extra);
+  while (targets.size > MAX_TAP_TARGETS) {
+    targets.delete(targets.keys().next().value);
+  }
+  try {
+    localStorage.setItem(TAP_TARGETS_KEY, JSON.stringify([...targets]));
+  } catch {
+    // Private mode or a full quota: taps still resolve until a reload.
+  }
+}
+
+function tapTargetFor(id) {
+  if (id === undefined || id === null || id === '') return null;
+  return loadTapTargets().get(String(id)) || null;
+}
+
+/** Test helper: forget remembered tap targets. */
+export function __resetTapTargetsForTests() {
+  tapTargets = null;
+  try {
+    localStorage.removeItem(TAP_TARGETS_KEY);
+  } catch {
+    // ignore
+  }
+}
+
 // Opening goes through notification-open.ts, which switches account first
 // when the notification is for another signed-in account and waits for App
 // Lock and boot. (Switching and then navigating 150ms later lost the
@@ -280,7 +344,15 @@ export async function initTauriNotificationClickHandler() {
     try {
       if (mod.onAction) {
         await mod.onAction((event) => {
-          const extra = event?.extra || event?.notification?.extra || event?.data;
+          // Swiping a notification away is not a request to open it.
+          if (event?.actionId === 'dismiss') return;
+          // Android sends the notification as it was scheduled, extra
+          // included. iOS sends only its id (see rememberTapTarget).
+          const extra =
+            event?.notification?.extra ||
+            event?.extra ||
+            event?.data ||
+            tapTargetFor(event?.notification?.id ?? event?.id);
           navigateToNotification(extra);
           _lastNotificationData = null; // prevent focus fallback double-fire
         });
@@ -338,6 +410,11 @@ function stableNotificationId(tag) {
   return hash;
 }
 
+// Any non-zero 31-bit integer: the plugin's ids are Int32 on every platform.
+function randomNotificationId() {
+  return 1 + Math.floor(Math.random() * 0x7ffffffe);
+}
+
 async function _notifyTauri({ title, body, channelId, data, number, tag }) {
   const mod = await ensureTauriNotification();
   if (!mod) return false;
@@ -345,7 +422,10 @@ async function _notifyTauri({ title, body, channelId, data, number, tag }) {
     const granted = await mod.isPermissionGranted();
     if (!granted) return false;
     const payload = { title, body: body || '', actionTypeId: 'default-mail' };
-    if (typeof tag === 'string' && tag) payload.id = stableNotificationId(tag);
+    // Every notification gets an id the app chose, so a tap that reports only
+    // the id (iOS) can be traced back to its target.
+    payload.id =
+      typeof tag === 'string' && tag ? stableNotificationId(tag) : randomNotificationId();
     if (channelId) payload.channelId = channelId;
     // Android uses the number field for app icon badge count
     if (typeof number === 'number' && number > 0) payload.number = number;
@@ -354,7 +434,10 @@ async function _notifyTauri({ title, body, channelId, data, number, tag }) {
       for (const key of ['account', 'folder', 'messageId', 'appPath', 'path', 'url']) {
         if (data[key]) extra[key] = String(data[key]);
       }
-      if (Object.keys(extra).length) payload.extra = extra;
+      if (Object.keys(extra).length) {
+        payload.extra = extra;
+        rememberTapTarget(payload.id, extra);
+      }
     }
     mod.sendNotification(payload);
     if (data) trackNotification(data);

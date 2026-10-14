@@ -67,7 +67,7 @@ const { systemPushAlertExpected } = vi.hoisted(() => ({
   systemPushAlertExpected: vi.fn(),
 }));
 vi.mock('../../src/utils/push-notifications.js', () => ({
-  getActivePushProvider: () => 'apns',
+  getPushProviderForAccount: () => 'apns',
   isSystemPushAlertExpected: systemPushAlertExpected,
 }));
 

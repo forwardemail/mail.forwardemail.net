@@ -34,7 +34,7 @@ import { Remote } from './remote.js';
 import { decodeMimeHeader } from './mime-utils.js';
 import { extractFromField, extractRecipientsField } from './sync-helpers.ts';
 import { extractEmail } from './address.ts';
-import { Local } from './storage.js';
+import { Accounts, Local } from './storage.js';
 import { isActiveAccount, sameAccount } from './account-scope.ts';
 import { createRealtimeEventCoalescer } from './realtime-event-coalescer.js';
 import {
@@ -56,6 +56,24 @@ let _toasts = null;
  */
 export function setNotificationToasts(toasts) {
   _toasts = toasts;
+  installUnmatchedTapNotice();
+}
+
+// A tapped push named an alias no signed-in account claims
+// (push-notifications.js). The app stays on the current view, so tell the
+// user why nothing opened.
+let unmatchedTapNoticeInstalled = false;
+
+function installUnmatchedTapNotice() {
+  if (unmatchedTapNoticeInstalled || typeof window === 'undefined') return;
+  unmatchedTapNoticeInstalled = true;
+  window.addEventListener('fe:notification-unmatched', () => {
+    _toasts?.show?.(
+      'Could not match this email to an account on this device. Refreshing notifications.',
+      'info',
+      6000,
+    );
+  });
 }
 
 // ── Input sanitisation ──────────────────────────────────────────────────────
@@ -879,20 +897,30 @@ async function prependNewMessageToStore({ msg, mailbox, from, subject, uid, acco
   }
 }
 
-async function handleNewMessage(data, { suppressVisual = false, source = '' } = {}) {
+async function handleNewMessage(
+  data,
+  { suppressVisual = false, source = '', otherAccount = false } = {},
+) {
   if (!data || typeof data !== 'object') return;
 
   // Belt-and-suspenders: wrap the entire handler so that no unhandled
   // rejection can escape.  On iOS WKWebView an unhandled rejection during
   // cold start terminates the webview process (instant crash on app open).
   try {
-    await _handleNewMessageInner(data, { suppressVisual, source });
+    await _handleNewMessageInner(data, { suppressVisual, source, otherAccount });
   } catch (err) {
     console.warn('[notification-manager] handleNewMessage error:', err);
   }
 }
 
-async function _handleNewMessageInner(data, { suppressVisual = false, source = '' } = {}) {
+// `otherAccount` marks a delivery for a signed-in account that is not the one
+// on screen. It still gets a notice, but nothing that reads or changes the
+// active account's state: the badge, the visible list and the folder lookups
+// all belong to the account on screen.
+async function _handleNewMessageInner(
+  data,
+  { suppressVisual = false, source = '', otherAccount = false } = {},
+) {
   // Reconstruct a message-like object from flat push data fields when
   // data.message is missing (push-only scenario, e.g. WS disconnected).
   // The server includes sender/subject/snippet in the push data payload.
@@ -915,7 +943,11 @@ async function _handleNewMessageInner(data, { suppressVisual = false, source = '
   // The mailbox identifier lives at the top level of the WS payload
   // (data.mailbox), NOT inside data.message.
   const rawMailbox = data.mailbox || msg.mailbox || 'INBOX';
-  const { path: mailbox, specialUse } = await resolveMailbox(rawMailbox);
+  // The folder list in the store is the active account's, so another
+  // account's mailbox is taken as the path the server sent.
+  const { path: mailbox, specialUse } = otherAccount
+    ? { path: String(rawMailbox), specialUse: null }
+    : await resolveMailbox(rawMailbox);
 
   // Suppress notifications for messages that aren't a fresh user-facing
   // delivery. Five signals from strongest to weakest, because server payloads
@@ -932,13 +964,15 @@ async function _handleNewMessageInner(data, { suppressVisual = false, source = '
   if (hasSeenFlag(msg)) return;
   if (specialUse && SILENT_SPECIAL_USE.has(specialUse)) return;
 
-  try {
-    const { mailboxStore } = await import('../stores/mailboxStore');
-    const sentPath = mailboxStore.actions?.getSentFolderPath?.();
-    const draftsPath = mailboxStore.actions?.getDraftsFolderPath?.();
-    if (mailbox && (mailbox === sentPath || mailbox === draftsPath)) return;
-  } catch {
-    // Store not ready — fall through to name-based filter
+  if (!otherAccount) {
+    try {
+      const { mailboxStore } = await import('../stores/mailboxStore');
+      const sentPath = mailboxStore.actions?.getSentFolderPath?.();
+      const draftsPath = mailboxStore.actions?.getDraftsFolderPath?.();
+      if (mailbox && (mailbox === sentPath || mailbox === draftsPath)) return;
+    } catch {
+      // Store not ready — fall through to name-based filter
+    }
   }
 
   const upperPath = (mailbox || '').toUpperCase();
@@ -952,7 +986,8 @@ async function _handleNewMessageInner(data, { suppressVisual = false, source = '
   const accountEmail = eventAccount || (Local.get('email') || '').toLowerCase();
   if (sameAccount(fromAddr, accountEmail)) return;
 
-  incrementBadge(1);
+  // The badge counts the active account's unread mail.
+  if (!otherAccount) incrementBadge(1);
 
   let from =
     msg.from?.text ||
@@ -980,7 +1015,8 @@ async function _handleNewMessageInner(data, { suppressVisual = false, source = '
   // Skipped for other accounts' events: Remote.request runs under the active
   // session auth, so it would search the wrong account's mailbox and the
   // subject-match fallback could attribute someone else's sender.
-  const isActiveAccountEvent = isActiveAccount(eventAccount, { treatUnknownAsActive: true });
+  const isActiveAccountEvent =
+    !otherAccount && isActiveAccount(eventAccount, { treatUnknownAsActive: true });
   if (!from && isActiveAccountEvent) {
     try {
       // Deliberately NOT lightweight: this fetch exists only to recover the
@@ -1037,17 +1073,19 @@ async function _handleNewMessageInner(data, { suppressVisual = false, source = '
   // arrives before the backend indexer makes the message queryable, so the
   // subsequent refreshFolder()→loadMessages() returns the old list and the
   // user only sees the new mail after folder-switch (10-30s later).
-  prependNewMessageToStore({ msg, mailbox, from, subject, uid, account: data?._account }).catch(
-    () => {
-      // Failure here only affects the in-place refresh — refreshFolder() runs
-      // separately in websocket-updater and will eventually catch up.
-    },
-  );
+  if (!otherAccount) {
+    prependNewMessageToStore({ msg, mailbox, from, subject, uid, account: data?._account }).catch(
+      () => {
+        // Failure here only affects the in-place refresh — refreshFolder() runs
+        // separately in websocket-updater and will eventually catch up.
+      },
+    );
+  }
 
   // Sender still unknown: the row above renders as "Unknown" until some
   // later reload happens to replace it. Patch it as soon as the backend
   // indexer can answer for this message.
-  if (!from) {
+  if (!from && !otherAccount) {
     scheduleSenderReconcile({
       id: String(msg?.id ?? msg?.Uid ?? msg?.uid ?? uid),
       mailbox,
@@ -1078,29 +1116,41 @@ async function _handleNewMessageInner(data, { suppressVisual = false, source = '
     // OS already showed this notification via push (FCM/APNs) — skip all visuals.
   } else if (appVisible) {
     // Foreground: in-app toast only — no OS notification interruption.
-    _toasts?.show?.(`New email from ${displayName}: ${safeSubject}`, 'info', 5000, {
+    // Mail for another signed-in account says which account it is for, since
+    // the list on screen will not show it.
+    const toastText = otherAccount
+      ? `New email for ${sanitizePlain(openAccount, MAX_TITLE_LEN)} from ${displayName}: ${safeSubject}`
+      : `New email from ${displayName}: ${safeSubject}`;
+    _toasts?.show?.(toastText, 'info', 5000, {
       label: 'View',
       callback() {
-        // The gate above means this is normally the active account already;
-        // the router still switches if the user changed accounts during the
-        // toast's five-second lifetime.
+        // The router switches to the target's account first when it is not
+        // the one on screen (another account's mail, or the user changed
+        // accounts during the toast's five-second lifetime).
         openNotificationTarget(openTarget);
       },
     });
   } else {
-    // Background WebSocket event on a device whose alerts are owned by FCM:
-    // Firebase draws the tray notification itself before the app hears about
-    // the push, and onMessageReceived never fires for an OS-drawn message, so
-    // the coalescer cannot suppress this WebSocket copy. Skip the client-drawn
-    // duplicate and let the push own background alerts. UnifiedPush and
-    // unregistered devices keep the client-drawn notification. Tradeoff: an
-    // FCM delivery outage also silences background WS alerts; the planned
-    // data-only FCM migration removes this special case.
+    // Background WebSocket event for an account whose new-mail alerts the
+    // system draws from a push. Drawing here as well shows the same mail
+    // twice. The check is for the event's own account: one whose registration
+    // failed or is waiting to be redone gets the client-drawn alert. Tradeoff:
+    // a push delivery outage also silences background WS alerts for that
+    // account.
     if (source === 'websocket') {
       try {
         const push = await import('./push-notifications.js');
-        const provider = push.getActivePushProvider();
+        const provider = push.getPushProviderForAccount(openAccount);
+        // Firebase draws the tray notification itself before the app hears
+        // about the push, and onMessageReceived never fires for an OS-drawn
+        // message, so the coalescer cannot pair the two.
         if (provider === 'fcm') return;
+        // The server sends new mail to iOS as an APNs alert, which iOS draws
+        // while the app is in the background. macOS is left to the coalescer:
+        // it draws the alert only while the app is not focused, and the push
+        // reports whether it did (displayedBySystem), so a socket copy whose
+        // push never arrives is still drawn here.
+        if (provider === 'apns' && isTauriMobile && !isTauriMacOS) return;
         // A browser registered for Web Push gets the same alert from its
         // service worker (public/sw-sync.js), which also covers closed tabs.
         // Unless it cannot receive pushes (its push service is unreachable,
@@ -1320,6 +1370,19 @@ const ROUTED_NOTIFICATION_EVENTS = new Set([
 // the active-account gate below.
 const ACCOUNT_AGNOSTIC_EVENTS = new Set([WS_EVENTS.NEW_RELEASE]);
 
+// Whether `account` is one of the accounts signed in on this device. An event
+// for an account that has been signed out here (a push registration the server
+// has not pruned yet, say) is not news for anyone using this device.
+function isSignedInOnDevice(account) {
+  if (!account) return false;
+  try {
+    const accounts = Accounts.getAll() || [];
+    return accounts.some((entry) => sameAccount(entry?.email, account));
+  } catch {
+    return false;
+  }
+}
+
 function routeNotificationEvent(eventName, data, options) {
   // Wrap the entire routing in a try/catch to prevent unhandled exceptions
   // from crashing iOS WKWebView.  Async handlers (handleNewMessage) return
@@ -1335,10 +1398,21 @@ function routeNotificationEvent(eventName, data, options) {
     // single-account install and a device whose push registrations predate alias
     // capture; a push that names an alias we know is not ours never reaches this
     // point (see dispatchPushPayload).
+    //
+    // New mail is the one exception. A delivery for another account signed in
+    // on this device still gets its notice, which names that account and
+    // switches to it when opened. It leaves the badge and the list on screen
+    // alone (see _handleNewMessageInner).
     if (
       !ACCOUNT_AGNOSTIC_EVENTS.has(eventName) &&
       !isActiveAccount(data?._account, { treatUnknownAsActive: true })
     ) {
+      if (eventName === WS_EVENTS.NEW_MESSAGE && isSignedInOnDevice(data?._account)) {
+        handleNewMessage(data, { ...options, otherAccount: true }).catch((err) => {
+          console.warn('[notification-manager] handleNewMessage failed:', err);
+        });
+        return true;
+      }
       // Returning true marks the event consumed: it was routed and deliberately
       // produced nothing. Returning false would let a caller treat it as
       // unhandled and look for another home for it.

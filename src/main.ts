@@ -1165,8 +1165,7 @@ viewModel.navigate = (path, options) => {
       targetRoute === 'profile' ||
       targetRoute === 'calendar' ||
       targetRoute === 'contacts') &&
-    !Local.get('authToken') &&
-    !Local.get('alias_auth')
+    !hasReadableCredentials()
   ) {
     history.replaceState({ route: 'login' }, '', '/');
     routeStore.set('login');
@@ -2487,7 +2486,7 @@ async function bootstrap() {
       // Re-check auth: on cold start the route was set to 'login' because
       // encrypted credentials couldn't be read before unlock. Now that the
       // vault is open, credentials are in sessionStorage — redirect to mailbox.
-      if (route === 'login' && (Local.get('authToken') || Local.get('alias_auth'))) {
+      if (route === 'login' && hasReadableCredentials()) {
         route = 'mailbox';
         routeStore.set('mailbox');
         history.replaceState({ route: 'mailbox' }, '', '/mailbox');
@@ -2506,7 +2505,7 @@ async function bootstrap() {
       // this as a belt-and-braces fallback for pre-encryption sessions.
       restoreSessionCredentials();
       // Same cold-start redirect as above — credentials are now decrypted.
-      if (route === 'login' && (Local.get('authToken') || Local.get('alias_auth'))) {
+      if (route === 'login' && hasReadableCredentials()) {
         route = 'mailbox';
         routeStore.set('mailbox');
         history.replaceState({ route: 'mailbox' }, '', '/mailbox');
@@ -2565,10 +2564,7 @@ async function bootstrap() {
       // lockAppIfDue() last: when a lock is due it locks now, and the tap
       // opens once the app is unlocked.
       isReady: () =>
-        !_lockScreenPromise &&
-        !isVaultLocked() &&
-        Boolean(Local.get('authToken') || Local.get('alias_auth')) &&
-        !lockAppIfDue(),
+        !_lockScreenPromise && !isVaultLocked() && hasReadableCredentials() && !lockAppIfDue(),
       switchAccount: (email: string) => mailboxActions.switchAccount(email),
       navigate: (path: string) => {
         const current = `${window.location.pathname}${window.location.hash}`;

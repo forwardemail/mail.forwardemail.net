@@ -51,7 +51,7 @@ vi.mock('../../src/utils/storage.js', () => ({
   Local: { get: vi.fn(() => 'user@example.com') },
 }));
 vi.mock('../../src/utils/push-notifications.js', () => ({
-  getActivePushProvider: () => null,
+  getPushProviderForAccount: () => null,
   canReceiveWebPush: async () => false,
 }));
 

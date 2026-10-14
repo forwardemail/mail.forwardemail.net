@@ -40,7 +40,7 @@ vi.mock('../../src/utils/storage.js', () => ({
     remove: vi.fn((key) => store.delete(key)),
   },
 }));
-vi.mock('../../src/utils/push-notifications.js', () => ({ getActivePushProvider: () => null }));
+vi.mock('../../src/utils/push-notifications.js', () => ({ getPushProviderForAccount: () => null }));
 vi.mock('../../src/utils/notification-open.ts', () => ({
   openNotificationTarget: vi.fn(),
   notificationDataToTarget: vi.fn(),

@@ -69,8 +69,13 @@ const basicToAccount = (header) => {
   return Object.keys(ACCOUNTS).find((email) => ACCOUNTS[email] === decoded) || '';
 };
 
+// Each account's WebSocket, by the alias it authenticated as, so a test can
+// deliver mail on one account's connection the way the server does.
+let sockets = {};
+
 /** Sign in alice@example.com (on screen) and bob@example.com; route the API per account. */
 async function setup(page) {
+  sockets = {};
   await page.addInitScript((accounts) => {
     try {
       if (localStorage.getItem('__seeded')) return;
@@ -106,6 +111,7 @@ async function setup(page) {
       }
       if (frame?.event !== 'auth') return;
       const aliasId = frame.username === 'bob@example.com' ? 'alias-b' : 'alias-a';
+      sockets[frame.username] = ws;
       ws.send(JSON.stringify({ event: 'connected', aliasId }));
     });
   });
@@ -246,6 +252,63 @@ test.describe('Opening a push notification', () => {
         { timeout: 15_000 },
       )
       .toEqual({ 'alias-a': 'alice@example.com', 'alias-b': 'bob@example.com' });
+  });
+});
+
+// New mail announced while the app is open: an in-app toast whose View opens
+// the message. Mail for the account on screen says who it is from; mail for
+// the other signed-in account also says which account it is for, and View
+// switches to that account first.
+test.describe('Opening the new-mail toast', () => {
+  test.beforeEach(async ({ page }) => {
+    // A headless window never has focus; the toast is for a user in the app.
+    await page.addInitScript(() => {
+      Document.prototype.hasFocus = () => true;
+    });
+  });
+
+  /** A newMessage frame on `account`'s connection, shaped like helpers/imap/on-append.js. */
+  async function deliver(account, mail) {
+    await expect.poll(() => Boolean(sockets[account]), { timeout: 15_000 }).toBe(true);
+    sockets[account].send(
+      JSON.stringify({
+        event: 'newMessage',
+        mailbox: 'INBOX',
+        message: { ...mail, flags: [], is_unread: true },
+      }),
+    );
+  }
+
+  test('opens a new message for the account on screen', async ({ page }) => {
+    await setup(page);
+    await openInbox(page);
+
+    await deliver('alice@example.com', MAIL['alice@example.com'].extra[0]);
+
+    const toast = page.getByText('New email from Dave: Server alert overnight');
+    await expect(toast).toBeVisible({ timeout: 15_000 });
+    await page.getByTestId('toast').getByRole('button', { name: 'View', exact: true }).click();
+
+    await expect(reader(page)).toContainText('Server alert overnight', { timeout: 15_000 });
+    expect(await activeAccount(page)).toBe('alice@example.com');
+  });
+
+  test('switches to the other signed-in account and opens its new message', async ({ page }) => {
+    await setup(page);
+    await openInbox(page);
+
+    await deliver('bob@example.com', MAIL['bob@example.com'].extra[0]);
+
+    const toast = page.getByText('New email for bob@example.com from Carol: Contract signed today');
+    await expect(toast).toBeVisible({ timeout: 15_000 });
+    // Alice's list is left alone: Bob's mail is not filed under her.
+    await expect(
+      page.locator('[data-conversation-row]', { hasText: 'Contract signed today' }),
+    ).toHaveCount(0);
+    await page.getByTestId('toast').getByRole('button', { name: 'View', exact: true }).click();
+
+    await expect(reader(page)).toContainText('Contract signed today', { timeout: 15_000 });
+    expect(await activeAccount(page)).toBe('bob@example.com');
   });
 });
 

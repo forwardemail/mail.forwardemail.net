@@ -535,9 +535,15 @@ function dispatchPushPayload(notification, tapped = false, displayedBySystem = f
   // so a legacy install, or one mid-way through filling the map in, keeps the
   // old permissive behaviour rather than losing notifications.
   const aliasId = typeof data.alias_id === 'string' ? data.alias_id : '';
-  const account = resolveAccountForAliasId(aliasId);
-  if (!account && aliasId && hasCompleteAliasIdMap()) {
+  let account = resolveAccountForAliasId(aliasId);
+  const completeMap = Boolean(aliasId) && !account && hasCompleteAliasIdMap();
+  // With one account signed in, an alias the map has not recorded yet can only
+  // be that account's.
+  if (!account && aliasId && !completeMap) account = soleSignedInAccount();
+  const unmatched = Boolean(aliasId) && !account;
+  if (unmatched && completeMap) {
     console.warn('[push] Dropping notification for unknown alias:', aliasId);
+    if (tapped) handleUnmatchedTap();
     return;
   }
 
@@ -554,9 +560,55 @@ function dispatchPushPayload(notification, tapped = false, displayedBySystem = f
   // the tap only fed the data pipeline above and nothing navigated, so every
   // tapped push landed wherever the app happened to be (usually the inbox).
   if (tapped) {
+    // Without a known account the message id means nothing: opening it in
+    // the account on screen asked the wrong mailbox for it, which failed
+    // silently and left the user wondering what happened.
+    if (unmatched) {
+      handleUnmatchedTap();
+      return;
+    }
     const target = pushDataToTarget(data, account);
     if (target) openNotificationTarget(target);
   }
+}
+
+/** The only account signed in on this device, or '' when there are more. */
+function soleSignedInAccount() {
+  try {
+    const accounts = Accounts.getAll() || [];
+    return accounts.length === 1 && accounts[0]?.email ? accounts[0].email : '';
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * A tapped push named an alias this device cannot place. The app stays where
+ * it is and says so (notification-manager listens for the event and shows a
+ * toast), and push is registered again so the alias map catches up: the
+ * registration response carries each account's alias ID. Accounts missing
+ * one are redone; when none is missing, every account is, since an alias can
+ * change under a stored one.
+ */
+function handleUnmatchedTap() {
+  try {
+    window.dispatchEvent(new CustomEvent('fe:notification-unmatched'));
+  } catch {
+    // No window (tests without a DOM): nothing to show.
+  }
+  try {
+    const registrations = getAccountRegistrations() || {};
+    const accounts = (Accounts.getAll() || []).filter((entry) => entry?.email);
+    const missing = accounts.filter((entry) => !registrations[entry.email]?.aliasId);
+    for (const entry of missing.length ? missing : accounts) {
+      refreshAccountPushOnNextSync(entry.email);
+    }
+  } catch {
+    // Storage unreadable (locked vault): the next sync on unlock tries again.
+  }
+  syncPushNotifications().catch((error) => {
+    console.warn('[push] Re-sync after an unmatched notification failed:', error);
+  });
 }
 
 // ── Notification taps ─────────────────────────────────────────────────────
@@ -1972,13 +2024,28 @@ export function getPushPlatform() {
 
 /**
  * Effective push provider ('fcm' | 'apns' | 'unified-push') for the active
- * account's registration, or null when the active account has none. Used by
- * notification-manager to decide whether backgrounded alerts are OS-drawn.
+ * account's registration, or null when the active account has none. Shown in
+ * diagnostics; notification-manager asks per account (getPushProviderForAccount)
+ * because new mail can be for any signed-in account.
  */
 export function getActivePushProvider() {
-  const email = Local.get('email') || '';
-  if (!email) return null;
-  const record = getAccountRegistrations()[email];
+  return getPushProviderForAccount(Local.get('email') || '');
+}
+
+/**
+ * Effective push provider for one account's registration on this device, or
+ * null when it has none. Matched case-insensitively, since a WebSocket
+ * `_account` tag and the stored registration key can differ in case.
+ *
+ * @param {string} account - account email
+ * @returns {'fcm' | 'apns' | 'unified-push' | 'web-push' | null}
+ */
+export function getPushProviderForAccount(account) {
+  if (!account || account === '__active_session__') return null;
+  const registrations = getAccountRegistrations() || {};
+  const wanted = String(account).trim().toLowerCase();
+  const key = Object.keys(registrations).find((email) => email.trim().toLowerCase() === wanted);
+  const record = key ? registrations[key] : null;
   // (a registration waiting to be made again may be gone from the server, so
   // the app draws its own alerts until it is)
   if (!record || !record.regId || record.reregister) return null;

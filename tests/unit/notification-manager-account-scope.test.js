@@ -63,12 +63,16 @@ vi.mock('../../src/utils/remote.js', () => ({
   Remote: { request: vi.fn() },
 }));
 
-// Active account is a@example.com for every test.
+// Active account is a@example.com for every test, and b@example.com is signed
+// in on this device too.
 vi.mock('../../src/utils/storage.js', () => ({
   Local: {
     get: vi.fn((key) => (key === 'email' ? 'a@example.com' : null)),
     set: vi.fn(),
     remove: vi.fn(),
+  },
+  Accounts: {
+    getAll: () => [{ email: 'a@example.com' }, { email: 'b@example.com' }],
   },
 }));
 
@@ -177,13 +181,22 @@ describe('notification-manager multi-account store scoping', () => {
     });
   });
 
-  it("ignores another account's delivery entirely — no row, no notification", async () => {
+  it("never puts another signed-in account's delivery in the list on screen", async () => {
     wsClient.emit('newMessage', newMessageEvent({ account: 'b@example.com', uid: 101 }));
+
+    // It is announced (for its own account, so opening it switches there),
+    // but the list belongs to the account on screen. Bob's mail shows up in
+    // his list when the user switches to him.
+    await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
+    expect(notify.mock.calls[0][0].data.account).toBe('b@example.com');
+    await settle();
+    expect(messagesStore.value).toHaveLength(0);
+  });
+
+  it('ignores a delivery for an account that is not signed in on this device', async () => {
+    wsClient.emit('newMessage', newMessageEvent({ account: 'c@example.com', uid: 107 }));
     await settle();
 
-    // Notifications describe the mailbox on screen. An account the user is not
-    // looking at gets no OS notification, no toast and no row: it refreshes
-    // when they switch to it.
     expect(notify).not.toHaveBeenCalled();
     expect(messagesStore.value).toHaveLength(0);
   });

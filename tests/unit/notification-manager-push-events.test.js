@@ -61,11 +61,16 @@ vi.mock('../../src/utils/address.ts', () => ({
   extractEmail: vi.fn((value) => (typeof value === 'string' ? value : '')),
 }));
 // Controls the backgrounded-WS visual skip: 'fcm' means the OS tray owns
-// background alerts, null means no push registration.
+// background alerts, null means no push registration. The provider is looked
+// up for the event's own account, which is recorded so tests can check it.
 let mockPushProvider = null;
 let mockCanReceiveWebPush = false;
+const providerLookups = [];
 vi.mock('../../src/utils/push-notifications.js', () => ({
-  getActivePushProvider: () => mockPushProvider,
+  getPushProviderForAccount: (account) => {
+    providerLookups.push(account);
+    return mockPushProvider;
+  },
   canReceiveWebPush: async () => mockCanReceiveWebPush,
 }));
 
@@ -103,6 +108,7 @@ describe('notification-manager push event listener', () => {
     vi.clearAllMocks();
     mockPushProvider = null;
     mockCanReceiveWebPush = false;
+    providerLookups.length = 0;
     // Simulate background so handleNewMessage fires OS notification (not toast)
     Object.defineProperty(document, 'visibilityState', {
       value: 'hidden',
@@ -334,6 +340,8 @@ describe('notification-manager push event listener', () => {
 
     await vi.waitFor(() => expect(getBadgeCount()).toBe(1));
     expect(notify).not.toHaveBeenCalled();
+    // An untagged event belongs to the account on screen.
+    expect(providerLookups).toEqual(['user@example.com']);
   });
 
   it('skips the background visual for a WS newMessage when Web Push can deliver it', async () => {
