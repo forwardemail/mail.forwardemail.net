@@ -36,6 +36,18 @@
   </screenshots>
   <!-- scripts/sync-version.cjs prepends a release entry on every version bump. -->
   <releases>
+    <release version="0.14.32" date="2026-10-14">
+      <description>
+        <p>Fixes</p>
+        <ul>
+          <li>If the app keeps going blank right after it opens, it now shows a troubleshooting page with diagnostics and a reset, instead of reloading forever</li>
+          <li>New Help &gt; Troubleshooting menu item</li>
+          <li>Turning off App Lock no longer hangs on a large mailbox. Cached mail</li>
+          <li>New mail for another signed-in account now shows a notice that names the</li>
+          <li>Accounts added with an API key no longer get stuck when opening a</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.14.31" date="2026-10-12">
       <description>
         <p>Fixes</p>

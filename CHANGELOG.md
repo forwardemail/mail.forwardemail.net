@@ -6,6 +6,19 @@ release notes are taken from here. To change what a commit says, add a
 `Release-note: <text>` line to its message (or `Release-note: none` to leave
 it out).
 
+## 0.14.32 (2026-10-14)
+
+### Fixes
+
+- If the app keeps going blank right after it opens, it now shows a troubleshooting page with diagnostics and a reset, instead of reloading forever _(Desktop)_
+- New Help > Troubleshooting menu item _(Desktop)_
+- Turning off App Lock no longer hangs on a large mailbox. Cached mail
+- Tapping a new-mail notification now opens the message, including _(iOS)_
+- New mail no longer shows two notifications when push is set up _(iOS)_
+- New mail for another signed-in account now shows a notice that names the
+- Accounts added with an API key no longer get stuck when opening a
+- Tapping a notification after the app was closed no longer crashes it, and opens the right email _(iOS)_
+
 ## 0.14.31 (2026-10-12)
 
 ### Fixes
