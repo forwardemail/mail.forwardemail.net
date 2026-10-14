@@ -35,7 +35,10 @@ time = "0.3"
 
 [dependencies]
 tauri = { version = "2.10.3", features = ["tray-icon", "image-png"] }
-tauri-plugin-notification = "2.3.3"
+# Vendored fork: 2.3.3 without the iOS force unwrap that crashed a tap on a
+# notification from before the app was relaunched, and with `extra` on the iOS
+# tap event. See plugins/tauri-plugin-notification/README.md.
+tauri-plugin-notification = { path = "plugins/tauri-plugin-notification" }
 tauri-plugin-deep-link = "2.4.8"
 tauri-plugin-process = "2.3.1"
 # Vendored fork: 2.5.4 + a main-thread fix for UIApplication.open on iOS

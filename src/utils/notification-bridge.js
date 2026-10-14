@@ -87,13 +87,14 @@ function trackNotification(data) {
 
 // ── Tap targets by notification id ──────────────────────────────────────────
 //
-// On iOS the plugin's tap event (actionPerformed) carries only the
-// notification's id, title and body: tauri-plugin-notification 2.3.3 builds it
-// from ActiveNotification, which has no `extra`. So the target of every local
-// notification is kept here under the id the app gave it, and the tap is
-// resolved from that. Kept in localStorage so a page reload (the renderer
-// being restarted while the app stays alive) does not lose it. Bounded, and it
-// holds only the account, folder and ids, never a subject or sender.
+// Upstream tauri-plugin-notification 2.3.3 sends an iOS tap (actionPerformed)
+// with only the notification's id, title and body, no `extra`. Our fork in
+// src-tauri/plugins/tauri-plugin-notification adds `extra` back. As a fallback
+// for a build without it, the target of every local notification is also kept
+// here under the id the app gave it, and the tap is resolved from that. Kept in
+// localStorage so a page reload (the renderer being restarted while the app
+// stays alive) does not lose it. Bounded, and it holds only the account,
+// folder and ids, never a subject or sender.
 
 const TAP_TARGETS_KEY = 'webmail_notification_tap_targets';
 const MAX_TAP_TARGETS = 50;
@@ -347,7 +348,8 @@ export async function initTauriNotificationClickHandler() {
           // Swiping a notification away is not a request to open it.
           if (event?.actionId === 'dismiss') return;
           // Android sends the notification as it was scheduled, extra
-          // included. iOS sends only its id (see rememberTapTarget).
+          // included, and so does iOS with our plugin fork. Upstream iOS
+          // sends only the id (see rememberTapTarget).
           const extra =
             event?.notification?.extra ||
             event?.extra ||

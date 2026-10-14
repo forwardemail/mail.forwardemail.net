@@ -43,13 +43,20 @@ function androidTap(notification) {
 }
 
 // iOS (NotificationHandler.swift didReceive): ReceivedNotification built from
-// ActiveNotification, which has the id, title and body but no `extra`.
-function iosTap({ id, title = 'Carol Chen', body = 'Quarterly numbers' }) {
-  return {
-    actionId: 'tap',
-    inputValue: null,
-    notification: { id, title, body, sound: '', actionTypeId: 'default-mail', attachments: null },
+// ActiveNotification. Upstream it has the id, title and body but no `extra`;
+// our fork (src-tauri/plugins/tauri-plugin-notification) adds the `extra` it
+// stored in userInfo, which is what a tap after a relaunch looks like.
+function iosTap({ id, title = 'Carol Chen', body = 'Quarterly numbers', extra }) {
+  const notification = {
+    id,
+    title,
+    body,
+    sound: '',
+    actionTypeId: 'default-mail',
+    attachments: null,
   };
+  if (extra) notification.extra = extra;
+  return { actionId: 'tap', inputValue: null, notification };
 }
 
 vi.mock('@tauri-apps/api/window', () => ({
@@ -223,5 +230,37 @@ describe('notification-bridge click routing', () => {
     await actionHandler(iosTap({ id }));
 
     await vi.waitFor(() => expect(navigated).toEqual(['/mailbox#INBOX/m-77']));
+  });
+
+  it('iOS fork: opens a tap after the app was relaunched, from the extra iOS kept', async () => {
+    const bridge = await import('../../src/utils/notification-bridge.js');
+    const { sendNotification } = await import('@tauri-apps/plugin-notification');
+    await bridge.notify({
+      title: 'Carol Chen',
+      body: 'Quarterly numbers',
+      tag: 'new-message-bob@example.com-m-88',
+      data: { account: 'bob@example.com', folder: 'INBOX', messageId: 'm-88' },
+    });
+    const { id, extra } = sendNotification.mock.calls[0][0];
+
+    // iOS killed the app: nothing the page stored about this notification is
+    // left, only what the system kept with the notification itself.
+    localStorage.clear();
+    vi.resetModules();
+    const open = await import('../../src/utils/notification-open.ts');
+    open.configureNotificationOpen({
+      isReady: () => true,
+      switchAccount: async (email) => {
+        switched.push(email);
+        session.active = email;
+      },
+      navigate: (path) => navigated.push(path),
+    });
+    const relaunched = await import('../../src/utils/notification-bridge.js');
+    await relaunched.initTauriNotificationClickHandler();
+    await actionHandler(iosTap({ id, extra }));
+
+    await vi.waitFor(() => expect(navigated).toEqual(['/mailbox#INBOX/m-88']));
+    expect(switched).toEqual(['bob@example.com']);
   });
 });
