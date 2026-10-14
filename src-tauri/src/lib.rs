@@ -870,7 +870,24 @@ fn setup_menu(app: &tauri::App) -> Result<Menu<tauri::Wry>, Box<dyn std::error::
     // Help menu
     let website = MenuItem::with_id(app, "website", "Forward Email Website", true, None::<&str>)?;
     let support = MenuItem::with_id(app, "support", "Support", true, None::<&str>)?;
-    let help_menu = Submenu::with_items(app, "Help", true, &[&website, &support])?;
+    let troubleshooting = MenuItem::with_id(
+        app,
+        "troubleshooting",
+        "Troubleshooting…",
+        true,
+        None::<&str>,
+    )?;
+    let help_menu = Submenu::with_items(
+        app,
+        "Help",
+        true,
+        &[
+            &website,
+            &support,
+            &PredefinedMenuItem::separator(app)?,
+            &troubleshooting,
+        ],
+    )?;
 
     let menu = Menu::with_items(
         app,
@@ -1150,6 +1167,19 @@ pub fn run() {
                         if let Some(window) = app.get_webview_window("main") {
                             if let Err(e) = window.reload() {
                                 log::error!("[menu] reload failed: {}", e);
+                            }
+                        }
+                    }
+                    "troubleshooting" => {
+                        // Diagnostics, sign-out and reset live in the page,
+                        // so they vanish when the app cannot start. The
+                        // troubleshooting page loads none of the app.
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.unminimize();
+                            let _ = window.set_focus();
+                            if let Err(e) = renderer_watchdog::open_safe_mode(&window, "menu") {
+                                log::error!("[menu] troubleshooting page failed: {}", e);
                             }
                         }
                     }

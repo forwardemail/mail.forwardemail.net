@@ -21,18 +21,31 @@ export const isVersionBelow = (version: string, threshold: string): boolean => {
   return false;
 };
 
-const clearSiteData = async () => {
+// Settles once the delete has run, failed or been blocked by another open
+// connection; a request that is merely fired can be dropped by a navigation.
+const deleteDatabase = (name: string) =>
+  new Promise<void>((resolve) => {
+    const req = indexedDB.deleteDatabase(name);
+    req.onsuccess = req.onerror = req.onblocked = () => resolve();
+  });
+
+/** Deletes everything the app stores in this browser or webview, which signs out every account. */
+export const clearSiteData = async () => {
   if (typeof indexedDB.databases === 'function') {
     const dbs = await indexedDB.databases();
-    await Promise.all(dbs.map((db) => db.name && indexedDB.deleteDatabase(db.name)));
+    await Promise.all(dbs.map((db) => (db.name ? deleteDatabase(db.name) : undefined)));
   } else {
     // Safari fallback: delete the known DB name
     const { DB_NAME } = await import('./db-constants');
-    indexedDB.deleteDatabase(DB_NAME);
+    await deleteDatabase(DB_NAME);
   }
 
-  const cacheKeys = await caches.keys();
-  await Promise.all(cacheKeys.map(async (k) => caches.delete(k)));
+  // The desktop and mobile webviews may have no Cache Storage or service
+  // worker at all.
+  if (typeof caches !== 'undefined') {
+    const cacheKeys = await caches.keys();
+    await Promise.all(cacheKeys.map(async (k) => caches.delete(k)));
+  }
   if ('serviceWorker' in navigator) {
     const reg = await navigator.serviceWorker.getRegistration();
     await reg?.unregister();

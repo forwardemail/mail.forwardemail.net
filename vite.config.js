@@ -282,6 +282,7 @@ export default defineConfig({
       input: {
         main: './index.html',
         compose: './compose.html',
+        'safe-mode': './safe-mode.html',
       },
       output: {
         manualChunks: {

@@ -1,0 +1,147 @@
+/* Troubleshooting page (safe-mode.html). Standalone on purpose: it must not
+   depend on the app's stylesheets or components. Colors follow the app canvas. */
+:root {
+  --sm-bg: #f5f8ff;
+  --sm-panel: #ffffff;
+  --sm-text: #111827;
+  --sm-muted: #4b5563;
+  --sm-border: #d1d5db;
+  --sm-primary: #2563eb;
+  --sm-primary-text: #ffffff;
+  --sm-danger: #b91c1c;
+  color-scheme: light;
+}
+
+:root.dark {
+  --sm-bg: #182238;
+  --sm-panel: #1f2b45;
+  --sm-text: #f3f4f6;
+  --sm-muted: #a8b3c7;
+  --sm-border: #34425f;
+  --sm-primary: #3b82f6;
+  --sm-primary-text: #ffffff;
+  --sm-danger: #f87171;
+  color-scheme: dark;
+}
+
+/* Follow the system until the page reads the app's own theme choice. */
+@media (prefers-color-scheme: dark) {
+  :root:not(.light) {
+    --sm-bg: #182238;
+    --sm-panel: #1f2b45;
+    --sm-text: #f3f4f6;
+    --sm-muted: #a8b3c7;
+    --sm-border: #34425f;
+    --sm-primary: #3b82f6;
+    --sm-primary-text: #ffffff;
+    --sm-danger: #f87171;
+    color-scheme: dark;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--sm-bg);
+  color: var(--sm-text);
+  font:
+    15px/1.5 -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    Roboto,
+    sans-serif;
+}
+
+.sm {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 32px 16px 48px;
+}
+
+h1 {
+  font-size: 24px;
+  margin: 0 0 8px;
+}
+
+h2 {
+  font-size: 16px;
+  margin: 0 0 4px;
+}
+
+p {
+  margin: 0 0 12px;
+}
+
+.sm-lead {
+  color: var(--sm-muted);
+  margin-bottom: 24px;
+}
+
+section {
+  background: var(--sm-panel);
+  border: 1px solid var(--sm-border);
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+button {
+  font: inherit;
+  padding: 8px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--sm-border);
+  background: transparent;
+  color: var(--sm-text);
+  cursor: pointer;
+  margin: 0 8px 8px 0;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.sm-primary {
+  background: var(--sm-primary);
+  border-color: var(--sm-primary);
+  color: var(--sm-primary-text);
+}
+
+.sm-danger {
+  border-color: var(--sm-danger);
+  color: var(--sm-danger);
+}
+
+.sm-warning {
+  color: var(--sm-danger);
+  font-weight: 600;
+}
+
+.sm-status:empty {
+  display: none;
+}
+
+.sm-muted {
+  color: var(--sm-muted);
+  font-size: 13px;
+  word-break: break-all;
+}
+
+textarea {
+  width: 100%;
+  height: 200px;
+  font:
+    12px/1.4 ui-monospace,
+    Menlo,
+    monospace;
+  background: var(--sm-bg);
+  color: var(--sm-text);
+  border: 1px solid var(--sm-border);
+  border-radius: 6px;
+  padding: 8px;
+  margin-bottom: 8px;
+}

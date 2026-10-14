@@ -485,7 +485,13 @@ export const checkRendererWatchdog = (): Promise<DiagnosticResult> =>
     }
     const { invoke } = await import('./tauri-bridge.js');
     const status = (await invoke('renderer_watchdog_status')) as
-      | { reloads: number; lastReloadUnixMs: number | null; missed: number; armed: boolean }
+      | {
+          reloads: number;
+          lastReloadUnixMs: number | null;
+          missed: number;
+          armed: boolean;
+          safeModeEntries?: number;
+        }
       | undefined;
     if (!status) {
       return { status: 'fail', message: 'Watchdog status unavailable' };
@@ -496,11 +502,16 @@ export const checkRendererWatchdog = (): Promise<DiagnosticResult> =>
         ? new Date(status.lastReloadUnixMs).toISOString()
         : null,
       armed: status.armed,
+      safeModeEntries: status.safeModeEntries ?? 0,
     };
     if (status.reloads > 0) {
+      const entries = status.safeModeEntries ?? 0;
+      const safeMode = entries
+        ? `, troubleshooting page opened ${entries} time${entries === 1 ? '' : 's'}`
+        : '';
       return {
         status: 'warn',
-        message: `Renderer reloaded ${status.reloads} time${status.reloads === 1 ? '' : 's'} this session`,
+        message: `Renderer reloaded ${status.reloads} time${status.reloads === 1 ? '' : 's'} this session${safeMode}`,
         detail,
       };
     }
@@ -511,6 +522,13 @@ export const checkRendererWatchdog = (): Promise<DiagnosticResult> =>
   });
 
 // ── Composer ────────────────────────────────────────────────────────────────
+
+export const collectPlatform = (): DiagnosticsReport['platform'] => ({
+  runtime: getPlatform(),
+  userAgent: typeof navigator === 'undefined' ? 'n/a' : navigator.userAgent,
+  language: typeof navigator === 'undefined' ? 'n/a' : navigator.language,
+  online: typeof navigator === 'undefined' ? true : navigator.onLine,
+});
 
 /** Run every check and assemble a report. Each check has its own try/catch. */
 export const runDiagnostics = async (): Promise<DiagnosticsReport> => {
@@ -530,16 +548,7 @@ export const runDiagnostics = async (): Promise<DiagnosticsReport> => {
     checkAppLock(),
     checkRendererWatchdog(),
   ]);
-  return {
-    generatedAt: new Date().toISOString(),
-    platform: {
-      runtime: getPlatform(),
-      userAgent: typeof navigator === 'undefined' ? 'n/a' : navigator.userAgent,
-      language: typeof navigator === 'undefined' ? 'n/a' : navigator.language,
-      online: typeof navigator === 'undefined' ? true : navigator.onLine,
-    },
-    results,
-  };
+  return { generatedAt: new Date().toISOString(), platform: collectPlatform(), results };
 };
 
 // ── Reporting ───────────────────────────────────────────────────────────────

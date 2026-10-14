@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; style-src-attr 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.forwardemail.net wss://api.forwardemail.net https://api.github.com; worker-src 'self' blob:; frame-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; manifest-src 'self'; media-src 'none'"
+    />
+    <title>Troubleshooting — Forward Email</title>
+  </head>
+  <!--
+    Opened by the renderer watchdog when the app keeps stopping right after it
+    starts, and by Help > Troubleshooting. Loads none of the app (no stores,
+    workers, sync or database), so whatever breaks the app cannot run here.
+  -->
+  <body>
+    <main class="sm">
+      <h1>Troubleshooting</h1>
+      <p id="sm-reason" class="sm-lead">
+        If Forward Email is not working, these steps can help. Your mail is stored on the server and
+        is not affected by anything on this page.
+      </p>
+
+      <section>
+        <h2>Open Forward Email</h2>
+        <p>Start the app normally again.</p>
+        <button id="sm-open" type="button" class="sm-primary">Open Forward Email</button>
+      </section>
+
+      <section>
+        <h2>Copy diagnostics</h2>
+        <p>
+          Copies a short report and the app's recent log so you can paste it into an email to
+          support. The log has passwords and keys removed.
+        </p>
+        <button id="sm-copy" type="button">Copy diagnostics</button>
+        <p id="sm-copy-status" class="sm-status" role="status"></p>
+        <textarea id="sm-report" readonly hidden aria-label="Diagnostics report"></textarea>
+        <p id="sm-log-path" class="sm-muted"></p>
+      </section>
+
+      <section>
+        <h2>Sign out and reset</h2>
+        <p>
+          Signs out of every account and removes all data this app keeps on this computer: cached
+          mail, settings, unsent drafts that were never saved to the server, and any PGP private
+          keys imported into the app. Export those keys first if you need them. You can sign in
+          again afterwards.
+        </p>
+        <button id="sm-reset" type="button" class="sm-danger">Sign out and reset…</button>
+        <div id="sm-reset-confirm" hidden>
+          <p class="sm-warning">This cannot be undone.</p>
+          <button id="sm-reset-yes" type="button" class="sm-danger">Yes, sign out and reset</button>
+          <button id="sm-reset-no" type="button">Cancel</button>
+        </div>
+        <p id="sm-reset-status" class="sm-status" role="status"></p>
+      </section>
+    </main>
+    <script type="module" src="/src/safe-mode.ts"></script>
+  </body>
+</html>
