@@ -14,6 +14,9 @@ const h = vi.hoisted(() => ({
   server: new Map<string, Record<string, unknown>[]>(),
   // folder path -> total reported by the folder list
   folderTotals: new Map<string, number>(),
+  // folder path -> unseen_count reported by the folder list
+  folderUnseen: new Map<string, number>(),
+  folderAuth: [] as unknown[],
   noContent: false,
   listRequests: [] as Array<Record<string, unknown>>,
   folderRequests: 0,
@@ -54,14 +57,20 @@ const serverMessage = (folder: string, raw: Record<string, unknown>) => ({
 
 vi.mock('../../src/utils/remote', () => ({
   Remote: {
-    request: async (action: string, params: Record<string, unknown> = {}) => {
+    request: async (
+      action: string,
+      params: Record<string, unknown> = {},
+      options: Record<string, unknown> = {},
+    ) => {
       if (action === 'Folders') {
         h.folderRequests += 1;
+        h.folderAuth.push(options.authHeader);
         return [...h.folderTotals.entries()].map(([path, total]) => ({
           id: `id-${path}`,
           path,
           name: path,
           total,
+          ...(h.folderUnseen.has(path) ? { unseen_count: h.folderUnseen.get(path) } : {}),
         }));
       }
       if (action === 'MessageList') {
@@ -155,7 +164,8 @@ const { db } = (await import('../../src/utils/db')) as unknown as {
     folders: { clear: () => Promise<void>; bulkPut: (rows: unknown[]) => Promise<unknown> };
   };
 };
-const { mailboxStore } = await import('../../src/stores/mailboxStore');
+const { mailboxStore, __resetUnreadTrackingForTests } =
+  await import('../../src/stores/mailboxStore');
 const { messages, selectedMessage, searchResults, searchActive, page, filteredMessages } =
   await import('../../src/stores/messageStore');
 const { folders, selectedFolder } = await import('../../src/stores/folderStore');
@@ -220,6 +230,8 @@ beforeEach(async () => {
   h.activeEmail = ME;
   h.server.clear();
   h.folderTotals.clear();
+  h.folderUnseen.clear();
+  h.folderAuth = [];
   h.noContent = false;
   h.listRequests = [];
   h.folderRequests = 0;
@@ -232,6 +244,7 @@ beforeEach(async () => {
   await db.folders.clear();
   mailboxStore.actions.resetForAccount();
   mailboxStore.actions.clearFolderMessageCache();
+  __resetUnreadTrackingForTests();
   unreadOnly.set(false);
   searchActive.set(false);
   searchResults.set([]);
@@ -759,5 +772,125 @@ describe('search while changes arrive', () => {
     for (const cb of h.syncComplete) cb({ taskType: 'metadata', folder: 'INBOX', account: ME });
 
     await vi.waitFor(() => expect(ids(get(searchResults))).toEqual(['m3', 'm1']));
+  });
+});
+
+describe('unread counts and read state from another device', () => {
+  const unread = { flags: [], is_unread: true, is_unread_index: 1 };
+  const inboxCount = () => get(folders).find((f) => f.path === 'INBOX')?.count;
+  const cachedUnread = async () =>
+    ids(
+      await db.messages
+        .where('[account+folder+is_unread_index]')
+        .equals([ME, 'INBOX', 1])
+        .toArray(),
+    ).sort();
+
+  it('shows the server count and marks read what was read while this device was closed', async () => {
+    // Six messages, all unread when this device last synced. Since then five
+    // were read on another device; the server has one unread.
+    h.server.set(
+      'INBOX',
+      [6, 5, 4, 3, 2, 1].map((n) => msg(n, n === 6 ? { flags: [] } : {})),
+    );
+    h.folderTotals.set('INBOX', 6);
+    h.folderUnseen.set('INBOX', 1);
+    const stale = [1, 2, 3, 4, 5, 6].map((n) => cached(n, ME, 'INBOX', unread));
+    await db.messages.bulkPut(stale);
+    messages.setImmediate(stale as never);
+
+    await mailboxStore.actions.loadFolders({ force: true });
+
+    await vi.waitFor(() => expect(inboxCount()).toBe(1));
+    await vi.waitFor(async () => expect(await cachedUnread()).toEqual(['m6']));
+    expect(
+      get(messages)
+        .filter((m) => m.is_unread)
+        .map((m) => m.id),
+    ).toEqual(['m6']);
+    expect(h.listRequests.at(-1)).toMatchObject({ folder: 'INBOX', is_unread: true });
+    expect(inboxCount()).toBe(1);
+  });
+
+  it('counts unread mail this device has not cached yet', async () => {
+    // Three unread on the server; only the newest is cached here.
+    h.server.set(
+      'INBOX',
+      [3, 2, 1].map((n) => msg(n, { flags: [] })),
+    );
+    h.folderTotals.set('INBOX', 3);
+    h.folderUnseen.set('INBOX', 3);
+    await db.messages.bulkPut([cached(3, ME, 'INBOX', unread)]);
+
+    await mailboxStore.actions.loadFolders({ force: true });
+    await vi.waitFor(() => expect(inboxCount()).toBe(3));
+
+    // Reading it here takes the badge down at once.
+    await mailboxStore.actions.applyRemoteFlags({
+      account: ME,
+      folder: 'INBOX',
+      ids: ['m3'],
+      action: 'add',
+      flags: ['\\Seen'],
+    });
+    await mailboxStore.actions.updateFolderUnreadCounts();
+    expect(inboxCount()).toBe(2);
+  });
+
+  it('keeps the badge when sync caches older unread mail the server already counted', async () => {
+    h.folderTotals.set('INBOX', 40);
+    h.folderUnseen.set('INBOX', 30);
+    await db.messages.bulkPut([cached(40, ME, 'INBOX', unread)]);
+    await mailboxStore.actions.loadFolders({ force: true });
+    await vi.waitFor(() => expect(inboxCount()).toBe(30));
+
+    // Backfill writes ten older unread messages, then reports it.
+    await db.messages.bulkPut(
+      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => cached(n, ME, 'INBOX', unread)),
+    );
+    await mailboxStore.actions.rebaseFolderUnread(ME, 'INBOX');
+    await mailboxStore.actions.updateFolderUnreadCounts();
+
+    expect(inboxCount()).toBe(30);
+  });
+
+  it('leaves alone a message marked unread here while the server list was loading', async () => {
+    h.server.set('INBOX', [msg(2), msg(1)]);
+    h.folderTotals.set('INBOX', 2);
+    h.folderUnseen.set('INBOX', 0);
+    await db.messages.bulkPut([cached(1, ME, 'INBOX', unread), cached(2)]);
+
+    let release = () => {};
+    h.holdNextList = (r) => {
+      release = r;
+    };
+    await mailboxStore.actions.loadFolders({ force: true });
+    await vi.waitFor(() => expect(h.listRequests).toHaveLength(1));
+
+    // The list the server is sending predates this.
+    mailboxStore.actions.addPendingFlagMutation('m2', unread);
+    await db.messages.bulkPut([cached(2, ME, 'INBOX', unread)]);
+    release();
+
+    await vi.waitFor(async () => expect(await cachedUnread()).toEqual(['m2']));
+  });
+
+  it("does not put one account's folders back after a switch to another", async () => {
+    setFolders([{ path: 'INBOX', total: 5 }]);
+    await db.messages.bulkPut([cached(1, ME, 'INBOX', unread)]);
+
+    const counting = mailboxStore.actions.updateFolderUnreadCounts();
+    h.activeEmail = OTHER;
+    setFolders([{ path: 'INBOX', total: 9 }, { path: 'Receipts' }]);
+    await counting;
+
+    expect(get(folders).map((f) => f.path)).toEqual(['INBOX', 'Receipts']);
+    expect(inboxCount()).toBe(0);
+  });
+
+  it('fetches the folder list with the credentials of the account it is for', async () => {
+    h.folderTotals.set('INBOX', 0);
+    await mailboxStore.actions.loadFolders({ force: true });
+    expect(h.folderAuth).toEqual([`auth:${ME}`]);
   });
 });

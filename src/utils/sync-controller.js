@@ -9,7 +9,8 @@ import {
   connectSyncSearchPort,
 } from './sync-worker-client.js';
 import { warn } from './logger.ts';
-import { getPendingDeleteIds } from '../stores/mailboxStore';
+import { getPendingDeleteIds, mailboxStore } from '../stores/mailboxStore';
+import { Local } from './storage.js';
 import { nextBackfillDecision } from '../workers/sync-pure.ts';
 
 let searchPortConnected = false;
@@ -115,10 +116,32 @@ function updateProgress(folder, payload) {
   });
 }
 
+// How long after sync changes a folder's newest messages to fetch the server
+// folder counts again. Sync tasks come in bursts; one fetch covers them.
+const FOLDER_COUNT_REFRESH_MS = 2000;
+let folderCountRefreshTimer = null;
+
+// Sync wrote to a folder's cache. What it wrote the server had already counted
+// when the folder list was fetched (older history), or will count in the next
+// one (new mail, mail read elsewhere), so the badge stays put for now. When the
+// newest messages changed, fetch the counts again shortly.
+function noteFolderSynced(account, folder, result, { newest = false } = {}) {
+  if (!account || !folder || !(result?.inserted || result?.updated)) return;
+  Promise.resolve(mailboxStore.actions.rebaseFolderUnread?.(account, folder)).catch(() => {});
+  if (!newest) return;
+  if (folderCountRefreshTimer) clearTimeout(folderCountRefreshTimer);
+  folderCountRefreshTimer = setTimeout(() => {
+    folderCountRefreshTimer = null;
+    if ((Local.get('email') || 'default') !== account) return;
+    Promise.resolve(mailboxStore.actions.loadFolders?.({ force: true })).catch(() => {});
+  }, FOLDER_COUNT_REFRESH_MS);
+}
+
 async function runTask(task) {
   const settings = getSyncSettings();
+  const account = currentAccount;
   if (task.type === 'metadata') {
-    await sendSyncTask(
+    const result = await sendSyncTask(
       {
         ...task,
         account: currentAccount,
@@ -128,6 +151,7 @@ async function runTask(task) {
       },
       { timeout: 120_000 },
     );
+    noteFolderSynced(account, task.folder, result, { newest: true });
     if (task.wantBodies) {
       unshiftTask({
         type: 'bodies',
@@ -165,6 +189,7 @@ async function runTask(task) {
       backfillNoProgressStreakByFolder.delete(task.folder);
       return;
     }
+    noteFolderSynced(account, task.folder, result);
     // Re-queue the next batch only while the worker reports !done AND batches
     // keep making progress. nextBackfillDecision caps consecutive zero-page
     // batches so a misbehaving worker can't spin the queue forever. The append

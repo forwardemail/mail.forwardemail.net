@@ -108,6 +108,12 @@ import {
   createPendingFlagTracker,
   createPendingInsertTracker,
 } from './optimistic-trackers';
+import {
+  createUnreadAnchors,
+  needsUnreadReconcile,
+  planUnreadReconcile,
+  RECONCILE_PAGE_SIZE,
+} from './folder-unread';
 
 // Folders that are always protected from rename/delete
 const ALWAYS_PROTECTED = new Set(['INBOX', 'OUTBOX']);
@@ -115,6 +121,16 @@ const ALWAYS_PROTECTED = new Set(['INBOX', 'OUTBOX']);
 const EXPANDED_FOLDERS_KEY = 'folder_expansion_state';
 const FOLDERS_CACHE_TTL = 15000;
 const folderLoadState = new Map();
+
+// Folder badges start from the server's unread count; see folder-unread.ts.
+const unreadAnchors = createUnreadAnchors();
+// When each folder's cached read state was last checked against the server.
+const UNREAD_RECONCILE_INTERVAL_MS = 15 * 60_000;
+const unreadReconciledAt = new Map<string, number>();
+export const __resetUnreadTrackingForTests = () => {
+  unreadAnchors.clear();
+  unreadReconciledAt.clear();
+};
 
 // Sliding-window cap for the live in-memory message list. Infinite scroll
 // appends a page on every scroll-to-bottom (shouldAppend, below), so without a
@@ -143,7 +159,17 @@ const confirmDeletes = pendingDeleteTracker.confirm;
 const cancelPendingDelete = pendingDeleteTracker.cancel;
 
 const pendingFlagTracker = createPendingFlagTracker();
-const addPendingFlagMutation = pendingFlagTracker.add;
+// Ids whose read state changed while a reconcile was listing the server's
+// unread messages. That list can predate the change, so those ids are skipped.
+const flagChangeWatchers = new Set<Set<string>>();
+const noteFlagChange = (ids: Iterable<string>) => {
+  if (!flagChangeWatchers.size) return;
+  for (const watcher of flagChangeWatchers) for (const id of ids) watcher.add(String(id));
+};
+const addPendingFlagMutation: typeof pendingFlagTracker.add = (id, mutation) => {
+  noteFlagChange([id]);
+  pendingFlagTracker.add(id, mutation);
+};
 const applyPendingFlagMutations = pendingFlagTracker.apply;
 const confirmFlagMutations = pendingFlagTracker.confirm;
 const cancelPendingFlag = pendingFlagTracker.cancel;
@@ -438,6 +464,30 @@ const createMailboxStore = () => {
     selectedConversationIds.set(Array.isArray(ids) ? ids : []);
   };
 
+  // Unread messages per folder in this account's cache.
+  const countCachedUnread = async (account: string, paths: string[]) => {
+    const counts = new Map<string, number>();
+    for (const path of paths) {
+      if (!path || typeof path !== 'string') continue;
+      try {
+        const key = [account, path, 1];
+        const isValidKey =
+          typeof Dexie.isValidKey === 'function'
+            ? Dexie.isValidKey(key)
+            : isValidDexieKeyFallback(key);
+        if (!isValidKey) continue;
+        const count = await db.messages
+          .where('[account+folder+is_unread_index]')
+          .equals(key)
+          .count();
+        counts.set(path, count || 0);
+      } catch (err) {
+        warn('[mailboxStore] Failed to count unread messages', err);
+      }
+    }
+    return counts;
+  };
+
   const updateFolderUnreadCounts = async () => {
     // Demo mode is IndexedDB-free (WebKitGTK stalls IndexedDB under tauri://).
     // This recomputes per-folder counts via `await db.messages...count()`, which
@@ -446,53 +496,208 @@ const createMailboxStore = () => {
     if (isDemoMode()) return;
     try {
       const account = Local.get('email') || 'default';
+      const listed = get(folders);
+      if (!listed?.length) return;
+
+      const unreadCounts = await countCachedUnread(
+        account,
+        listed.map((folder) => folder?.path),
+      );
+
+      // The counts took a while: the account may have switched (its folders
+      // are on screen now) or the list may have been replaced since.
+      if ((Local.get('email') || 'default') !== account) return;
       const currentFolders = get(folders);
       if (!currentFolders?.length) return;
 
-      // Get unread counts per folder using indexed lookups
-      const unreadCounts = new Map();
-
-      for (const folder of currentFolders) {
-        const path = folder?.path;
-        if (!path || typeof path !== 'string') continue;
-        try {
-          const key = [account, path, 1];
-          const isValidKey =
-            typeof Dexie.isValidKey === 'function'
-              ? Dexie.isValidKey(key)
-              : isValidDexieKeyFallback(key);
-          if (!isValidKey) continue;
-          const count = await db.messages
-            .where('[account+folder+is_unread_index]')
-            .equals(key)
-            .count();
-          unreadCounts.set(path, count || 0);
-        } catch (err) {
-          warn('[mailboxStore] Failed to count unread messages', err);
-        }
-      }
-
-      // Update folder counts
       const updatedFolders = currentFolders.map((folder) => {
-        const computed = unreadCounts.has(folder.path)
-          ? unreadCounts.get(folder.path)
-          : folder.count || 0;
+        if (!unreadCounts.has(folder.path)) return folder;
+        const local = unreadCounts.get(folder.path) ?? 0;
         const total = Number.isFinite(folder.totalCount) ? folder.totalCount : null;
-        const next = total != null ? Math.min(computed, total) : computed;
-        return { ...folder, count: next };
+        const server = folder.serverCount;
+        const next =
+          typeof server === 'number' && Number.isFinite(server)
+            ? unreadAnchors.display(account, folder.path, {
+                server,
+                at: folder.serverCountAt ?? 0,
+                local,
+                total,
+              })
+            : total != null
+              ? Math.min(local, total)
+              : local;
+        return next === folder.count ? folder : { ...folder, count: next };
       });
 
-      folders.set(updatedFolders);
+      if (updatedFolders.some((folder, idx) => folder !== currentFolders[idx])) {
+        folders.set(updatedFolders);
+      }
 
       // Sync badge count to INBOX unread count
       const inbox = updatedFolders.find((f) => f.path?.toUpperCase?.() === 'INBOX');
-      if (inbox && typeof inbox.count === 'number') {
+      const inboxCount = inbox?.count;
+      if (typeof inboxCount === 'number') {
         import('../utils/notification-manager.js')
-          .then(({ setBadgeCount }) => setBadgeCount(inbox.count))
+          .then(({ setBadgeCount }) => setBadgeCount(inboxCount))
           .catch(() => {});
       }
     } catch (err) {
       warn('[mailboxStore] Failed to update folder unread counts', err);
+    }
+  };
+
+  // Sync wrote to a folder's cache: older history, or flags the server already
+  // counts. Keep its badge where it is (see folder-unread.ts).
+  const rebaseFolderUnread = async (account: string, path: string) => {
+    if (isDemoMode() || !account || !path || !unreadAnchors.has(account, path)) return;
+    const counts = await countCachedUnread(account, [path]);
+    const local = counts.get(path);
+    if (local !== undefined) unreadAnchors.rebase(account, path, local);
+  };
+
+  // Mark read the cached messages the server no longer has as unread, and
+  // unread the ones it does, for folders where the cache disagrees with the
+  // server's count. Mail read on another device while this one was closed
+  // otherwise stays unread here for good: sync only walks the newest pages.
+  const reconcileUnreadState = async (account: string) => {
+    if (isDemoMode() || !isOnline()) return;
+    const listed = get(folders) || [];
+    const withServerCount = listed.filter((f) => f?.path && Number.isFinite(f.serverCount));
+    if (!withServerCount.length) return;
+    const local = await countCachedUnread(
+      account,
+      withServerCount.map((f) => f.path),
+    );
+    const selected = get(selectedFolder);
+    const now = Date.now();
+    const due = withServerCount.filter((folder) => {
+      if (!local.has(folder.path)) return false;
+      const key = `${account}\u0000${folder.path}`;
+      if (now - (unreadReconciledAt.get(key) || 0) < UNREAD_RECONCILE_INTERVAL_MS) return false;
+      return needsUnreadReconcile({
+        server: Number(folder.serverCount),
+        local: local.get(folder.path) ?? 0,
+        selected: sameFolderPath(folder.path, selected),
+      });
+    });
+    for (const folder of due) {
+      if ((Local.get('email') || 'default') !== account) return;
+      unreadReconciledAt.set(`${account}\u0000${folder.path}`, Date.now());
+      try {
+        await reconcileFolderUnread(account, folder.path, Number(folder.serverCount));
+      } catch (err) {
+        warn('[mailboxStore] unread reconcile failed', err);
+      }
+    }
+  };
+
+  const reconcileFolderUnread = async (account: string, path: string, serverCount: number) => {
+    const authHeader = getAuthHeaderForAccount(account);
+    if (!authHeader) return;
+    const touched = new Set<string>();
+    flagChangeWatchers.add(touched);
+    try {
+      // Every unread message the server has in this folder.
+      const serverUnread = new Set<string>();
+      const pages = Math.max(1, Math.ceil(serverCount / RECONCILE_PAGE_SIZE));
+      for (let page = 1; page <= pages + 1; page += 1) {
+        const res = await Remote.request(
+          'MessageList',
+          {
+            folder: path,
+            is_unread: true,
+            page,
+            limit: RECONCILE_PAGE_SIZE,
+            lightweight: true,
+            include_body: 0,
+            raw: false,
+            attachments: false,
+          },
+          { method: 'GET', pathOverride: '/v1/messages', timeout: 60_000, authHeader },
+        );
+        const list = extractMessageList('main', res);
+        for (const item of list) {
+          const id = item?.id ?? item?._id;
+          if (id != null) serverUnread.add(String(id));
+        }
+        if (list.length < RECONCILE_PAGE_SIZE) break;
+        // More unread than the folder list said: new mail arrived in the
+        // meantime. Not conclusive, so try again next time.
+        if (page > pages) return;
+      }
+
+      const localRows = ((await db.messages
+        .where('[account+folder+is_unread_index]')
+        .equals([account, path, 1])
+        .toArray()) || []) as Array<Record<string, unknown>>;
+
+      const skip = new Set<string>([...(await getLocallyMovingIds(account)), ...touched]);
+      for (const id of pendingFlagTracker.getIds()) skip.add(String(id));
+      const { markRead, markUnread } = planUnreadReconcile({
+        localUnreadIds: localRows.map((row) => String(row.id)),
+        serverUnreadIds: serverUnread,
+        skip,
+      });
+      if (!markRead.length && !markUnread.length) return;
+
+      // Each slice is read again just before it is written, so a move, label
+      // or flag change made while this ran is not overwritten with the row as
+      // it was. Slices also keep a large inbox from tying up the database.
+      const wanted = [
+        ...markRead.map((id) => ({ id, action: 'add' })),
+        ...markUnread.map((id) => ({ id, action: 'remove' })),
+      ];
+      const changes = new Map<string, Record<string, unknown>>();
+      for (let i = 0; i < wanted.length; i += 500) {
+        const slice = wanted.slice(i, i + 500);
+        const moving = await getLocallyMovingIds(account);
+        const pending = new Set(pendingFlagTracker.getIds().map(String));
+        const fresh = ((await db.messages.bulkGet(slice.map(({ id }) => [account, id]) as never)) ||
+          []) as Array<Record<string, unknown> | undefined>;
+        const writes: Array<Record<string, unknown>> = [];
+        slice.forEach(({ id, action }, idx) => {
+          const row = fresh[idx];
+          if (!row || !sameFolderPath(row.folder, path)) return;
+          // A change of ours or from another device landed while we listed.
+          if (touched.has(id) || moving.has(id) || pending.has(id)) return;
+          const next = applyRemoteFlagChange(row, action, ['\\Seen']);
+          if (next === row) return;
+          changes.set(id, next);
+          writes.push({ ...next, account, updatedAt: Date.now() });
+        });
+        if (writes.length) await db.messages.bulkPut(writes as never);
+      }
+      if (!changes.size) return;
+
+      if (isActiveAccountName(account)) {
+        const patch = <T extends { id?: unknown; folder?: unknown }>(m: T): T => {
+          if (m?.id == null || !sameFolderPath(m.folder, path)) return m;
+          const next = changes.get(String(m.id));
+          if (!next || touched.has(String(m.id))) return m;
+          return {
+            ...m,
+            flags: next.flags,
+            is_unread: next.is_unread,
+            is_unread_index: next.is_unread_index,
+          };
+        };
+        messages.update((list) => {
+          const nextList = (list || []).map(patch);
+          return nextList.some((m, idx) => m !== list[idx]) ? nextList : list;
+        });
+        const results = get(searchResults) || [];
+        const nextResults = results.map(patch);
+        if (nextResults.some((m, idx) => m !== results[idx])) searchResults.set(nextResults);
+        const open = get(selectedMessage);
+        const nextOpen = open ? patch(open) : open;
+        if (nextOpen !== open) selectedMessage.set(nextOpen);
+        invalidateFolderInMemCache(account, path);
+      }
+      // The cache now matches the server, so the badge keeps showing the
+      // server's count.
+      await rebaseFolderUnread(account, path);
+    } finally {
+      flagChangeWatchers.delete(touched);
     }
   };
 
@@ -601,11 +806,21 @@ const createMailboxStore = () => {
           const res = await sendSyncRequest('folders', { account });
           list = res?.folders || [];
         } catch {
-          // Fallback to main thread fetch
+          // Fallback to main thread fetch, bound to the account this load is
+          // for. A switch rejects the worker request above, and without its
+          // own credentials this fetched the new account's folders and cached
+          // them as this one's.
+          const authHeader = getAuthHeaderForAccount(account);
+          if (!authHeader) throw new Error('account_switched');
           const res = await Remote.request(
             'Folders',
             {},
-            { method: 'GET', pathOverride: '/v1/folders?limit=100', timeout: 120_000 },
+            {
+              method: 'GET',
+              pathOverride: '/v1/folders?limit=100',
+              timeout: 120_000,
+              authHeader,
+            },
           );
           const raw = res?.Result || res || [];
           list = Array.isArray(raw) ? raw : raw.Items || raw.items || [];
@@ -649,8 +864,11 @@ const createMailboxStore = () => {
           }
         }
 
-        // Update unread counts from messages
-        updateFolderUnreadCounts();
+        // Badges from the server counts just fetched, then fix cached read
+        // state that has drifted from them.
+        void updateFolderUnreadCounts()
+          .then(() => reconcileUnreadState(account))
+          .catch((err) => warn('[mailboxStore] unread reconcile failed', err));
         state.lastFetchAt = Date.now();
       } catch (err) {
         if (err?.message === 'account_switched') {
@@ -678,7 +896,12 @@ const createMailboxStore = () => {
     }
   };
 
+  // Tells one fetched folder list's server counts from the next (see
+  // unreadAnchors.display).
+  let folderListBuild = 0;
   const buildFolderList = (list = []) => {
+    folderListBuild += 1;
+    const builtAt = folderListBuild;
     const readNumber = (value) => {
       if (value == null || value === '') return null;
       const parsed = Number(value);
@@ -712,6 +935,9 @@ const createMailboxStore = () => {
         count: unreadCount ?? 0,
         totalCount,
         countSource: unreadCount !== null ? 'server' : 'local',
+        // The badge is worked out from this (updateFolderUnreadCounts).
+        serverCount: unreadCount,
+        serverCountAt: builtAt,
         flags: f.flags || f.Flags || [],
         specialUse: f.specialUse || f.special_use || undefined,
         // Milliseconds the server keeps a message in this folder before
@@ -1885,6 +2111,7 @@ const createMailboxStore = () => {
       if (!matchesRemoteMessage(m, locator)) return m;
       if (m?.id != null) {
         patched.add(String(m.id));
+        noteFlagChange([String(m.id)]);
         cancelPendingFlag(String(m.id));
       }
       return change(m);
@@ -1909,6 +2136,7 @@ const createMailboxStore = () => {
       const changed = [];
       for (const row of rows) {
         patched.add(String(row.id));
+        noteFlagChange([String(row.id)]);
         const next = change(row);
         if (next !== row) changed.push({ ...(next as object), account, updatedAt: Date.now() });
       }
@@ -3634,6 +3862,7 @@ const createMailboxStore = () => {
       deleteFolder,
       markFolderAsRead,
       updateFolderUnreadCounts,
+      rebaseFolderUnread,
       buildFolderList,
       // Bulk folder actions
       getSpamFolderPath,

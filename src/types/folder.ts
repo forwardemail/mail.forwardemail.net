@@ -15,6 +15,12 @@ export interface Folder {
   subscribed?: boolean;
   unreadCount?: number;
   totalCount?: number;
+  // The badge shown in the sidebar (see updateFolderUnreadCounts).
+  count?: number;
+  // The server's unseen_count from the folder list, and which list it came
+  // from (buildFolderList).
+  serverCount?: number | null;
+  serverCountAt?: number;
   uidNext?: number;
   uidValidity?: number;
   modseq?: string | null;
