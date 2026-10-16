@@ -100,9 +100,12 @@ describe('Accounts.setActive credential handover', () => {
     expect(Local.get('email')).toBe(SESSION_API_KEY.email);
     expect(Local.get('alias_auth')).toBeNull();
     expect(Local.get('api_key')).toBe(SESSION_API_KEY.apiKey);
-    // The localStorage copy is gone too — a sessionStorage-only clear would be
-    // undone by the next Local.get(), which falls back to localStorage.
-    expect(localMap.get('webmail_alias_auth')).toBeUndefined();
+    // localStorage still holds the persistent account's credentials, which is
+    // what a restart should come back to. A session-only tab must not fall
+    // back to them, or the next Local.get() would revive the old password.
+    expect(localMap.get('webmail_alias_auth')).toBe(PERSISTENT_ALIAS.aliasAuth);
+    expect(localMap.get('webmail_api_key')).toBeUndefined();
+    expect(Local.get('alias_auth')).toBeNull();
   });
 
   it('authenticates as the account that is actually active', () => {

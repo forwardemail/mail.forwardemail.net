@@ -576,21 +576,34 @@ export const clearPgpKeyCache = (): void => {
  * Invalidate cached message bodies that contain PGP-encrypted content.
  * Called after PGP keys are added/removed so the next load re-attempts decryption.
  */
+// How many cached bodies invalidatePgpCachedBodies reads at a time. Bodies can
+// be large (a locked PGP body keeps its whole ciphertext), and every tab and
+// worker shares one database worker, so a read of a whole account's bodies
+// held up everything else, opening a message included, for many seconds.
+const PGP_INVALIDATE_BATCH = 50;
+
 export const invalidatePgpCachedBodies = async (account: string): Promise<void> => {
   try {
-    const allBodies = await db.messageBodies
+    const keys = ((await db.messageBodies
       .where('[account+id]')
       .between([account, Dexie.minKey], [account, Dexie.maxKey])
-      .toArray();
-    const staleKeys = allBodies
-      .filter(
-        (b) =>
-          (b.raw && typeof b.raw === 'string' && isPgpEncrypted(b.raw)) ||
-          (b.body && typeof b.body === 'string' && isPgpEncrypted(b.body)),
-      )
-      .map((b) => [b.account, b.id]);
-    if (staleKeys.length) {
-      await db.messageBodies.bulkDelete(staleKeys);
+      .primaryKeys()) || []) as unknown[];
+    for (let i = 0; i < keys.length; i += PGP_INVALIDATE_BATCH) {
+      const batch = keys.slice(i, i + PGP_INVALIDATE_BATCH);
+      const bodies = ((await db.messageBodies.bulkGet(batch)) || []) as Array<
+        | { account?: string; id?: string; raw?: unknown; body?: unknown; pgpLocked?: boolean }
+        | undefined
+      >;
+      const staleKeys = bodies
+        .filter(
+          (b) =>
+            b &&
+            (b.pgpLocked ||
+              (typeof b.raw === 'string' && isPgpEncrypted(b.raw)) ||
+              (typeof b.body === 'string' && isPgpEncrypted(b.body))),
+        )
+        .map((b) => [b!.account, b!.id]);
+      if (staleKeys.length) await db.messageBodies.bulkDelete(staleKeys);
     }
   } catch {
     // Non-critical — worst case user refreshes
@@ -1575,67 +1588,76 @@ export const mailService = {
     const messageId = getMessageApiId(message);
     const account = Local.get('email') || 'default';
 
-    // Check attachment blob cache first (for offline access)
-    try {
-      const cachedBlob = await getCachedAttachmentBlob(messageId, filename);
-      if (cachedBlob) {
-        triggerDownload(cachedBlob, filename);
-        return;
-      }
-    } catch {
-      // Blob cache miss, continue
-    }
+    // A message can carry two attachments with the same filename, so the blob
+    // cache key also names the part: its part id or content id when it has
+    // one, otherwise which of the same-named attachments it is.
+    const knownPart = attachment.partId ?? attachment.contentId;
+    const blobKeyFor = (rank: number) => ({ filename, partId: knownPart ?? rank });
 
-    // Check IndexedDB messageBodies cache
+    let cachedHit: AttachmentMatch | null = null;
     try {
       const cached = (await db.messageBodies
         .where('[account+id]')
         .equals([account, messageId])
         .first()) as CachedBody | undefined;
-
       if (cached?.attachments?.length) {
-        const cachedMatch = cached.attachments.find((a) => {
-          const att = a as Record<string, unknown>;
-          return (
-            (att.filename || att.name) === filename ||
-            (att.name || att.filename) === (attachment as Record<string, unknown>).name
-          );
-        }) as Record<string, unknown> | undefined;
+        cachedHit = findAttachmentMatch(cached.attachments, attachment, filename);
+      }
+    } catch {
+      // Cache lookup failed, fall through to the blob cache and the API
+    }
 
-        if (cachedMatch) {
-          if (cachedMatch.url) {
-            triggerDownload(cachedMatch.url as string, filename);
-            return;
-          } else if (cachedMatch.content) {
-            const cachedContentType = (cachedMatch.contentType ||
-              cachedMatch.mimeType ||
-              contentType) as string;
-            const bytes = contentToBytes(cachedMatch.content);
-            const isLarge = (attachment.size || 0) > LARGE_ATTACHMENT_BYTES;
-            // For large attachments we skip the data-URL stage entirely
-            // (it would build a multi-hundred-MB base64 string and OOM
-            // the renderer). Smaller files keep the cache write so they
-            // stay available offline.
-            if (bytes && (isLarge || !bytes.byteLength)) {
-              triggerDownloadBytes(bytes, filename, cachedContentType);
-              return;
-            }
-            const dataUrl = bufferToDataUrl({
-              content: cachedMatch.content,
-              contentType: cachedContentType,
-            });
-            if (!isLarge) {
-              cacheAttachmentBlob(messageId, filename, dataUrl, attachment.size || 0).catch(
-                () => {},
-              );
-            }
-            triggerDownload(dataUrl, filename);
+    // Check attachment blob cache first (for offline access). Without a part
+    // id and no cached list to place the attachment in, the key is unknown.
+    if (knownPart != null || cachedHit) {
+      try {
+        const cachedBlob = await getCachedAttachmentBlob(
+          messageId,
+          blobKeyFor(cachedHit?.rank ?? 0),
+        );
+        if (cachedBlob) {
+          triggerDownload(cachedBlob, filename);
+          return;
+        }
+      } catch {
+        // Blob cache miss, continue
+      }
+    }
+
+    // Use the content in the IndexedDB messageBodies cache
+    try {
+      if (cachedHit) {
+        const cachedMatch = cachedHit.match;
+        if (cachedMatch.url) {
+          triggerDownload(cachedMatch.url as string, filename);
+          return;
+        } else if (cachedMatch.content) {
+          const cachedContentType = (cachedMatch.contentType ||
+            cachedMatch.mimeType ||
+            contentType) as string;
+          const bytes = contentToBytes(cachedMatch.content);
+          const isLarge = (attachment.size || 0) > LARGE_ATTACHMENT_BYTES;
+          // For large attachments we skip the data-URL stage entirely
+          // (it would build a multi-hundred-MB base64 string and OOM
+          // the renderer). Smaller files keep the cache write so they
+          // stay available offline.
+          if (bytes && (isLarge || !bytes.byteLength)) {
+            triggerDownloadBytes(bytes, filename, cachedContentType);
             return;
           }
+          const dataUrl = bufferToDataUrl({
+            content: cachedMatch.content,
+            contentType: cachedContentType,
+          });
+          if (!isLarge) {
+            cacheAttachmentBlob(messageId, blobKeyFor(cachedHit.rank), dataUrl).catch(() => {});
+          }
+          triggerDownload(dataUrl, filename);
+          return;
         }
       }
     } catch {
-      // Cache lookup failed, fall through to API call
+      // Reading the cached content failed, fall through to API call
     }
 
     // Fall back to API call if not found in cache
@@ -1656,14 +1678,11 @@ export const mailService = {
         result?.attachments ||
         []) as unknown[];
 
-      const match = serverAttachments.find((att: unknown) => {
-        const a = att as Record<string, unknown>;
-        return (a.filename || a.name) === filename || (a.name || a.filename) === attachment.name;
-      }) as Record<string, unknown> | undefined;
-
-      if (!match) {
+      const serverHit = findAttachmentMatch(serverAttachments, attachment, filename);
+      if (!serverHit) {
         return;
       }
+      const match = serverHit.match;
 
       if (match.url) {
         triggerDownload(match.url as string, filename);
@@ -1680,7 +1699,7 @@ export const mailService = {
           contentType: matchContentType,
         });
         if (!isLarge) {
-          cacheAttachmentBlob(messageId, filename, dataUrl, attachment.size || 0).catch(() => {});
+          cacheAttachmentBlob(messageId, blobKeyFor(serverHit.rank), dataUrl).catch(() => {});
         }
         triggerDownload(dataUrl, filename);
       }
@@ -1689,6 +1708,43 @@ export const mailService = {
     }
   },
 };
+
+interface AttachmentMatch {
+  match: Record<string, unknown>;
+  // Position among the attachments that share its filename.
+  rank: number;
+}
+
+const attachmentContentLength = (a: Record<string, unknown>): number =>
+  (a.content as ArrayBuffer)?.byteLength || (a.content as Uint8Array)?.length || 0;
+
+/**
+ * Find the entry in a message's attachment list for the attachment the user
+ * picked. Filenames can repeat within one message, so among same-named
+ * entries the content id and then the size decide which one it is.
+ */
+function findAttachmentMatch(
+  list: unknown[],
+  attachment: Attachment & { name?: string },
+  filename: string,
+): AttachmentMatch | null {
+  const sameName = (list || []).filter((att) => {
+    const a = (att || {}) as Record<string, unknown>;
+    return (a.filename || a.name) === filename || (a.name || a.filename) === attachment.name;
+  }) as Record<string, unknown>[];
+  if (!sameName.length) return null;
+
+  let rank = -1;
+  const contentId = attachment.contentId || attachment.cid;
+  if (contentId) {
+    rank = sameName.findIndex((a) => (a.contentId || a.cid) === contentId);
+  }
+  if (rank === -1 && attachment.size && sameName.length > 1) {
+    rank = sameName.findIndex((a) => (a.size || attachmentContentLength(a)) === attachment.size);
+  }
+  if (rank === -1) rank = 0;
+  return { match: sameName[rank], rank };
+}
 
 async function cacheMessageContent(
   message: Message,

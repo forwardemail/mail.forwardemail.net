@@ -25,6 +25,7 @@ vi.mock('../../src/utils/remote', () => ({
   Remote: { request: (...a: unknown[]) => h.remoteRequest(...a) },
 }));
 vi.mock('../../src/utils/mutation-queue', () => ({
+  mutationQueueCount: { subscribe: () => () => {} },
   queueMutation: (...a: unknown[]) => h.queueMutation(...a),
   getQueuedMessageIds: vi.fn().mockResolvedValue(new Set()),
 }));
@@ -150,13 +151,16 @@ describe('deleteMessage (permanent / already in Trash)', () => {
     expect(h.queueMutation).toHaveBeenCalledWith(
       'delete',
       expect.objectContaining({ messageId: 'api-1', permanent: true }),
+      { account: 'me@test.com' },
     );
   });
 
   it('a server error queues the delete for retry', async () => {
     h.remoteRequest.mockRejectedValue(Object.assign(new Error('500'), { status: 500 }));
     await mailboxStore.actions.deleteMessage(trashMsg(), { permanent: true });
-    expect(h.queueMutation).toHaveBeenCalledWith('delete', expect.anything());
+    expect(h.queueMutation).toHaveBeenCalledWith('delete', expect.anything(), {
+      account: 'me@test.com',
+    });
   });
 
   it('a 404 is treated as already-deleted (no queue)', async () => {
@@ -176,6 +180,7 @@ describe('deleteMessage (permanent / already in Trash)', () => {
     expect(h.queueMutation).toHaveBeenCalledWith(
       'delete',
       expect.objectContaining({ snapshot: existingRow, internalId: 'm1' }),
+      { account: 'me@test.com' },
     );
   });
 });
@@ -269,6 +274,14 @@ describe('revertFailedMutation', () => {
       { id: 'm5', account: 'me@test.com', folder: 'INBOX', is_unread: false, flags: ['\\Seen'] },
     ] as never);
     await flushRaf();
+    vi.mocked(db.messages.get).mockResolvedValueOnce({
+      id: 'm5',
+      account: 'me@test.com',
+      folder: 'INBOX',
+      is_unread: false,
+      is_unread_index: 0,
+      flags: ['\\Seen'],
+    } as never);
 
     await mailboxStore.actions.revertFailedMutation({
       type: 'toggleRead',
@@ -281,8 +294,8 @@ describe('revertFailedMutation', () => {
       },
     });
 
-    expect(db.messages.where().equals().modify).toHaveBeenCalledWith(
-      expect.objectContaining({ is_unread: true, is_unread_index: 1, flags: [] }),
+    expect(db.messages.put).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'm5', is_unread: true, is_unread_index: 1, flags: [] }),
     );
     const [restored] = get(messages) as Array<{ id: string; is_unread: boolean }>;
     expect(restored.is_unread).toBe(true);
@@ -293,6 +306,12 @@ describe('revertFailedMutation', () => {
       { id: 'm6', account: 'me@test.com', folder: 'INBOX', labels: ['work'] },
     ] as never);
     await flushRaf();
+    vi.mocked(db.messages.get).mockResolvedValueOnce({
+      id: 'm6',
+      account: 'me@test.com',
+      folder: 'INBOX',
+      labels: ['work'],
+    } as never);
 
     await mailboxStore.actions.revertFailedMutation({
       type: 'label',
@@ -305,9 +324,7 @@ describe('revertFailedMutation', () => {
       },
     });
 
-    expect(db.messages.where().equals().modify).toHaveBeenCalledWith(
-      expect.objectContaining({ labels: [] }),
-    );
+    expect(db.messages.put).toHaveBeenCalledWith(expect.objectContaining({ id: 'm6', labels: [] }));
     const [restored] = get(messages) as Array<{ id: string; labels: string[] }>;
     expect(restored.labels).toEqual([]);
   });

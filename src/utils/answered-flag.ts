@@ -19,6 +19,7 @@ import { markMessageAnsweredInStore } from '../stores/messageStore';
 import { db } from './db';
 import { Local } from './storage';
 import { Remote } from './remote';
+import { getAuthHeaderForAccount } from './auth';
 import { isActiveAccount } from './account-scope.ts';
 import { addFlagsBody } from './message-changes';
 import { queueMutation } from './mutation-queue';
@@ -45,8 +46,11 @@ export async function markOriginalAnswered(
 ): Promise<void> {
   if (!messageId) return;
   const id = String(messageId);
+  // Read once, before anything is awaited: the user can switch accounts while
+  // IndexedDB answers, and the change belongs to the mailbox it was made in.
+  const owner = account || Local.get('email') || 'default';
   const shownFlags = markMessageAnsweredInStore(id);
-  const key = [account || Local.get('email') || 'default', id];
+  const key = [owner, id];
 
   let storedFlags: string[] | null = null;
   try {
@@ -72,8 +76,8 @@ export async function markOriginalAnswered(
   // Requests go out as the account on screen. The user may have switched
   // since an outbox send began, and that account cannot change this message,
   // so it waits in the replying account's queue until that account is active.
-  if (account && !isActiveAccount(account)) {
-    await queueMutation('addFlags', change, { account }).catch((error: unknown) =>
+  if (!isActiveAccount(owner)) {
+    await queueMutation('addFlags', change, { account: owner }).catch((error: unknown) =>
       warn('[answered-flag] Could not queue \\Answered', error),
     );
     return;
@@ -81,13 +85,14 @@ export async function markOriginalAnswered(
 
   try {
     if (!isOnline()) {
-      await queueMutation('addFlags', change);
+      await queueMutation('addFlags', change, { account: owner });
       return;
     }
     try {
       await Remote.request('MessageUpdate', addFlagsBody(flags, [ANSWERED]), {
         method: 'PUT',
         pathOverride: `/v1/messages/${encodeURIComponent(id)}`,
+        authHeader: getAuthHeaderForAccount(owner) || undefined,
       });
     } catch (error) {
       if (!canRetry(error)) {
@@ -95,9 +100,46 @@ export async function markOriginalAnswered(
         return;
       }
       warn('[answered-flag] Setting \\Answered failed, queuing for retry', error);
-      await queueMutation('addFlags', change);
+      await queueMutation('addFlags', change, { account: owner });
     }
   } catch (error) {
     warn('[answered-flag] Could not queue \\Answered', error);
   }
+}
+
+export interface RepliedMessageTarget {
+  /** the account whose mailbox holds the message (the composer's account) */
+  ownerAccount?: string | null;
+  /** the API id of the message the reply answered */
+  replyToMessageId?: string | null;
+  replyToMessageFolder?: string | null;
+}
+
+interface ListedMessage {
+  id?: unknown;
+  folder?: unknown;
+}
+
+/**
+ * The message to archive after "Send & Archive": the one the reply answered,
+ * never simply what is selected. It is looked up on screen only while the
+ * replying account is the one shown; for another account nothing is archived,
+ * since its archive folder and list are not loaded here.
+ */
+export function repliedMessageToArchive<T extends ListedMessage>(
+  target: RepliedMessageTarget | null | undefined,
+  view: {
+    isActive: (account: string) => boolean;
+    messages: T[];
+    selected?: T | null;
+  },
+): T | { id: string; folder: string } | null {
+  const id = target?.replyToMessageId ? String(target.replyToMessageId) : '';
+  if (!id) return null;
+  if (target?.ownerAccount && !view.isActive(target.ownerAccount)) return null;
+  const listed =
+    (view.messages || []).find((m) => String(m?.id ?? '') === id) ||
+    (view.selected && String(view.selected.id ?? '') === id ? view.selected : null);
+  if (listed) return listed;
+  return target?.replyToMessageFolder ? { id, folder: String(target.replyToMessageFolder) } : null;
 }

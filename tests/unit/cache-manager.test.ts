@@ -19,16 +19,35 @@ vi.mock('../../src/utils/storage.js', () => ({
   Local: { get: () => 'me@test.com', set: vi.fn() },
 }));
 vi.mock('../../src/utils/logger.ts', () => ({ warn: vi.fn() }));
+// evictOldest scans [account+id] a page at a time and asks only for summary
+// fields plus the stored size. These tables fit in one page.
+const { pagedTable } = vi.hoisted(() => {
+  const summaryPage = (rows: Record<string, unknown>[], fields: string[]) =>
+    rows.map((row) => ({
+      ...Object.fromEntries(fields.map((f) => [f, row[f]])),
+      approxBytes: JSON.stringify(row).length,
+    }));
+  return {
+    pagedTable: (rows: () => Record<string, unknown>[]) => ({
+      where: () => ({
+        between: () => ({
+          limit: () => ({ summaries: async (fields: string[]) => summaryPage(rows(), fields) }),
+        }),
+      }),
+    }),
+  };
+});
+
 vi.mock('../../src/utils/db.js', () => ({
   db: {
     messageBodies: {
-      where: () => ({ equals: () => ({ toArray: async () => h.bodies }) }),
+      ...pagedTable(() => h.bodies),
       bulkDelete: vi.fn(async (keys: unknown[]) => {
         h.bulkDeletedBodies.push(...keys);
       }),
     },
     messages: {
-      where: () => ({ equals: () => ({ sortBy: async () => h.messages }) }),
+      ...pagedTable(() => h.messages),
       bulkDelete: vi.fn(async (keys: unknown[]) => {
         h.bulkDeletedMessages.push(...keys);
       }),

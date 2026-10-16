@@ -1,7 +1,12 @@
 /**
  * IndexedDB Recovery Module
  *
- * Simple recovery for database errors - delete and let Dexie recreate.
+ * Recovery is proportional to the error. Timeouts and transient or quota
+ * errors never touch stored data. Only corruption that survives a reopen
+ * rebuilds the database, and a rebuild first copies out what exists only on
+ * this device (drafts, the outbox, queued changes and other meta rows) into a
+ * separate stash database, then puts it back once the new database is open.
+ * If that copy cannot be made the rebuild is abandoned instead.
  */
 
 import { DB_NAME } from './db-constants';
@@ -19,17 +24,22 @@ export function setTerminateWorkersCallback(callback) {
   terminateWorkersCallback = callback;
 }
 
-/**
- * Known error types that indicate a need for database recovery
- */
-const RECOVERABLE_ERRORS = [
-  'VersionError',
-  'InvalidStateError',
+// Errors that can mean the database itself is broken. Even these only lead
+// to a rebuild when they come back after the database has been reopened.
+const CORRUPTION_ERRORS = ['VersionError', 'InvalidStateError', 'NotFoundError', 'UnknownError'];
+
+// Errors that say nothing about the stored data: an aborted or inactive
+// transaction, a bad key from the caller, a locked vault, an upgrade blocked
+// by another tab. Retrying later is the fix; deleting data never is.
+const TRANSIENT_ERRORS = [
   'AbortError',
-  'NotFoundError',
   'DataError',
-  'QuotaExceededError',
-  'UnknownError',
+  'TransactionInactiveError',
+  'ReadOnlyError',
+  'ConstraintError',
+  'TimeoutError',
+  'DatabaseClosedError',
+  'DbLockedError',
 ];
 
 /**
@@ -38,28 +48,56 @@ const RECOVERABLE_ERRORS = [
 const SCHEMA_ERROR_PATTERNS = [
   /version.*mismatch/i,
   /schema.*change/i,
-  /upgrade.*blocked/i,
   /older.*version/i,
   /cannot.*downgrade/i,
   /object.*store.*not.*found/i,
   /index.*not.*found/i,
   /keypath.*invalid/i,
-  /blocked/i,
 ];
 
+const TIMEOUT_CODES = [
+  'DB_WORKER_INIT_TIMEOUT',
+  'DB_WORKER_NO_BOOT',
+  'DB_WORKER_PROBE_TIMEOUT',
+  'DB_REQUEST_TIMEOUT',
+];
+const TIMEOUT_PATTERN =
+  /Database worker init timeout|Database worker terminated|Database worker not initialized|Database request timed out/i;
+
 /**
- * Check if an error is recoverable by deleting and recreating the database
+ * Sort a database error into what recovery it calls for:
+ * - 'timeout': the worker is stuck or gone. Restart it; never delete.
+ * - 'quota': storage is full. Free space from server copies.
+ * - 'transient': nothing to repair.
+ * - 'corruption': may need a rebuild if it survives a reopen.
+ * Returns null for errors that are not database errors at all.
+ */
+export function classifyDatabaseError(error) {
+  if (!error) return null;
+  const name = error.name || '';
+  const code = error.code;
+  const message = error.message || '';
+
+  if (TIMEOUT_CODES.includes(code) || TIMEOUT_PATTERN.test(message)) return 'timeout';
+  if (name === 'QuotaExceededError' || /quota/i.test(message)) return 'quota';
+  if (code === 'DB_LOCKED' || TRANSIENT_ERRORS.includes(name)) return 'transient';
+  // Dexie wraps the real cause of a failed open.
+  if (name === 'OpenFailedError' && error.inner) {
+    return classifyDatabaseError(error.inner) || 'transient';
+  }
+  if (CORRUPTION_ERRORS.includes(name)) return 'corruption';
+  if (SCHEMA_ERROR_PATTERNS.some((pattern) => pattern.test(message))) return 'corruption';
+  if (/blocked/i.test(message)) return 'transient';
+  return null;
+}
+
+/**
+ * True only for errors that can justify rebuilding the database (possible
+ * corruption). Quota, timeout and transient errors are not recoverable this
+ * way: rebuilding would destroy data without fixing anything.
  */
 export function isRecoverableError(error) {
-  if (!error) return false;
-
-  const errorName = error.name || '';
-  if (RECOVERABLE_ERRORS.includes(errorName)) {
-    return true;
-  }
-
-  const message = error.message || '';
-  return SCHEMA_ERROR_PATTERNS.some((pattern) => pattern.test(message));
+  return classifyDatabaseError(error) === 'corruption';
 }
 
 async function terminateWorkers() {
@@ -192,20 +230,241 @@ export async function deleteDatabase() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Local-only data stash
+// ---------------------------------------------------------------------------
+
+// Separate database so it survives deleting the cache. Its name does not
+// start with the cache prefix, so cleanupOldDatabases leaves it alone.
+export const RECOVERY_STASH_DB = 'webmail-recovery-stash';
+const STASH_STORE = 'rows';
+
+// Tables whose rows exist only on this device.
+const LOCAL_ONLY_TABLES = ['drafts', 'outbox'];
+// Meta rows that are copies of server data or downloaded blobs. They can be
+// fetched again and can be large, so they are not stashed.
+const META_SKIP_PREFIXES = [
+  'att_blob_',
+  'att_cache_manifest',
+  'contacts_',
+  'calendars_',
+  'calendar_events_',
+  '__db_worker_probe__',
+];
+
+function keyAfterPrefix(prefix) {
+  return prefix.slice(0, -1) + String.fromCharCode(prefix.charCodeAt(prefix.length - 1) + 1);
+}
+
+function requestToPromise(request) {
+  return new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+/** Open the cache database as it is, without creating or upgrading it. */
+function openExistingDatabase() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME);
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error('Could not open database'));
+    request.onupgradeneeded = (event) => {
+      // No database yet: nothing to save. Abort so we do not create one.
+      try {
+        event.target.transaction.abort();
+      } catch {
+        /* ignore */
+      }
+      resolve(null);
+    };
+  });
+}
+
+function readAllRows(idb, storeName) {
+  return new Promise((resolve, reject) => {
+    const rows = [];
+    const tx = idb.transaction(storeName, 'readonly');
+    const request = tx.objectStore(storeName).openCursor();
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (!cursor) {
+        resolve(rows);
+        return;
+      }
+      if (storeName === 'meta' && typeof cursor.key === 'string') {
+        const skip = META_SKIP_PREFIXES.find((prefix) => cursor.key.startsWith(prefix));
+        if (skip) {
+          // Jump past the whole family without reading the rest of it.
+          cursor.continue(keyAfterPrefix(skip));
+          return;
+        }
+      }
+      rows.push(cursor.value);
+      cursor.continue();
+    };
+    request.onerror = () => reject(request.error);
+    tx.onabort = () => reject(tx.error || new Error(`Reading ${storeName} was aborted`));
+  });
+}
+
 /**
- * Attempt to recover the database by deleting it
+ * Copy drafts, the outbox and the meta rows that matter (queued changes,
+ * saved searches, flags) straight out of IndexedDB, exactly as stored: sealed
+ * rows stay sealed. Throws if any of it cannot be read.
  */
-export async function attemptRecovery(originalError) {
-  warn('[DB Recovery] Attempting recovery due to:', originalError?.message);
+export async function snapshotLocalOnlyData() {
+  if (typeof indexedDB === 'undefined') throw new Error('IndexedDB not available');
+  const idb = await openExistingDatabase();
+  if (!idb) return {};
+  try {
+    const snapshot = {};
+    for (const table of [...LOCAL_ONLY_TABLES, 'meta']) {
+      // A store that is missing holds nothing to lose.
+      if (!idb.objectStoreNames.contains(table)) continue;
+      const rows = await readAllRows(idb, table);
+      if (rows.length) snapshot[table] = rows;
+    }
+    return snapshot;
+  } finally {
+    idb.close();
+  }
+}
+
+function openStash() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(RECOVERY_STASH_DB, 1);
+    request.onupgradeneeded = () => {
+      const stash = request.result;
+      if (!stash.objectStoreNames.contains(STASH_STORE)) {
+        stash.createObjectStore(STASH_STORE, { keyPath: 'table' });
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function writeStash(snapshot) {
+  const stash = await openStash();
+  try {
+    await new Promise((resolve, reject) => {
+      const tx = stash.transaction(STASH_STORE, 'readwrite');
+      const store = tx.objectStore(STASH_STORE);
+      for (const [table, rows] of Object.entries(snapshot)) {
+        // Merge with rows left over from an earlier rebuild that was never
+        // restored, so a second rebuild cannot drop them.
+        const getReq = store.get(table);
+        getReq.onsuccess = () => {
+          const previous = getReq.result?.rows || [];
+          store.put({ table, rows: [...previous, ...rows], savedAt: Date.now() });
+        };
+      }
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error || new Error('Writing the recovery stash was aborted'));
+    });
+  } finally {
+    stash.close();
+  }
+}
+
+async function stashExists() {
+  if (typeof indexedDB === 'undefined') return false;
+  if (typeof indexedDB.databases === 'function') {
+    try {
+      const dbs = await indexedDB.databases();
+      return dbs.some((info) => info.name === RECOVERY_STASH_DB);
+    } catch {
+      // fall through and open it
+    }
+  }
+  return true;
+}
+
+/**
+ * Put stashed rows back through `restore(table, rows)` once the rebuilt
+ * database is open, then delete the stash. Rows already present are not
+ * overwritten (restoreRaw in the engine handles that). Safe to call on every
+ * boot: it does nothing when there is no stash. The stash is kept if any
+ * table fails to restore, so the next boot tries again.
+ */
+export async function restorePendingStash(restore) {
+  if (!(await stashExists())) return null;
+  let stash;
+  try {
+    stash = await openStash();
+  } catch (err) {
+    warn('[DB Recovery] Could not open recovery stash:', err);
+    return null;
+  }
+  let entries = [];
+  try {
+    const tx = stash.transaction(STASH_STORE, 'readonly');
+    entries = await requestToPromise(tx.objectStore(STASH_STORE).getAll());
+  } finally {
+    stash.close();
+  }
+  if (!entries.length) {
+    await deleteDatabaseByName(RECOVERY_STASH_DB, { timeoutMs: 2000 }).catch(() => {});
+    return null;
+  }
+  const restored = {};
+  for (const entry of entries) {
+    if (!entry?.rows?.length) continue;
+    // Throws to the caller and keeps the stash if the restore fails.
+    restored[entry.table] = await restore(entry.table, entry.rows);
+  }
+  await deleteDatabaseByName(RECOVERY_STASH_DB, { timeoutMs: 2000 }).catch((err) => {
+    warn('[DB Recovery] Could not delete recovery stash:', err);
+  });
+  return restored;
+}
+
+/**
+ * Delete and recreate the cache database without losing what exists only on
+ * this device. The local-only rows are copied into the stash first; if that
+ * copy fails, nothing is deleted and recovery reports failure instead.
+ * Callers restore the stash with restorePendingStash after reopening.
+ */
+export async function rebuildDatabasePreservingLocalData() {
+  let snapshot;
+  try {
+    snapshot = await snapshotLocalOnlyData();
+    if (Object.keys(snapshot).length) {
+      await writeStash(snapshot);
+    }
+  } catch (error) {
+    console.error('[DB Recovery] Could not save local data; not rebuilding the database:', error);
+    return { recovered: false, error, reason: 'snapshot-failed' };
+  }
 
   try {
     await deleteDatabase();
     await delay(100);
-    return { recovered: true };
   } catch (deleteError) {
     console.error('[DB Recovery] Recovery failed:', deleteError);
     return { recovered: false, error: deleteError };
   }
+  const preserved = {};
+  for (const [table, rows] of Object.entries(snapshot)) preserved[table] = rows.length;
+  return { recovered: true, preserved };
+}
+
+/**
+ * Attempt to recover the database from a corruption-class error by
+ * rebuilding it. Any other error is refused: deleting the cache does not fix
+ * a full disk, a timeout or an aborted transaction, and used to wipe drafts
+ * and the outbox for every account.
+ */
+export async function attemptRecovery(originalError) {
+  const kind = classifyDatabaseError(originalError);
+  if (kind !== 'corruption') {
+    warn('[DB Recovery] Not rebuilding the database for a non-corruption error:', kind);
+    return { recovered: false, skipped: true, reason: kind || 'unknown' };
+  }
+  warn('[DB Recovery] Attempting recovery due to:', originalError?.message);
+  return rebuildDatabasePreservingLocalData();
 }
 
 /**
@@ -298,7 +557,11 @@ export async function forceDeleteAllDatabases() {
   await delay(200);
 
   const databases = (await indexedDB.databases?.()) || [];
-  const webmailDbs = databases.filter((db) => db.name?.startsWith('webmail-cache'));
+  // The recovery stash holds drafts and queued changes, so a full sign-out
+  // removes it too.
+  const webmailDbs = databases.filter(
+    (db) => db.name?.startsWith('webmail-cache') || db.name === RECOVERY_STASH_DB,
+  );
   const deleted = [];
 
   for (const dbInfo of webmailDbs) {

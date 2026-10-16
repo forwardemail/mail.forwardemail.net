@@ -1,46 +1,123 @@
-import { describe, expect, it } from 'vitest';
 import {
-  createUnreadAnchors,
+  createUnreadDeltas,
+  isCompleteUnreadListing,
   needsUnreadReconcile,
   planUnreadReconcile,
   RECONCILE_MAX_UNREAD,
+  UNREAD_DELTA_TTL_MS,
 } from '../../src/stores/folder-unread';
 
 const ME = 'me@test.com';
 
+const clock = (start = 1_000) => {
+  let t = start;
+  return { now: () => t, tick: (ms = 1) => (t += ms) };
+};
+
 describe('unread badge', () => {
-  it('is the server count, moved by reads and unreads made here', () => {
-    const anchors = createUnreadAnchors();
-    // Server says 37; this device has 12 of them cached.
-    expect(anchors.display(ME, 'INBOX', { server: 37, at: 1, local: 12 })).toBe(37);
-    // Two read here.
-    expect(anchors.display(ME, 'INBOX', { server: 37, at: 1, local: 10 })).toBe(35);
-    // The next folder list already counts those two.
-    expect(anchors.display(ME, 'INBOX', { server: 35, at: 2, local: 10 })).toBe(35);
+  it('is the server count, moved by reads made here until the server has them', () => {
+    const c = clock();
+    const deltas = createUnreadDeltas({ now: c.now });
+    expect(deltas.adjust(ME, 'INBOX', { server: 37, fetchedAt: c.now() })).toBe(37);
+
+    deltas.read(ME, 'm1', 'INBOX', false);
+    deltas.read(ME, 'm2', 'INBOX', false);
+    c.tick();
+    // A list fetched while the reads were on their way still says 37.
+    expect(deltas.adjust(ME, 'INBOX', { server: 37, fetchedAt: c.now() })).toBe(35);
+
+    deltas.settle(ME, 'm1');
+    deltas.settle(ME, 'm2');
+    c.tick();
+    // The next list counts them; they are not taken off twice.
+    expect(deltas.adjust(ME, 'INBOX', { server: 35, fetchedAt: c.now() })).toBe(35);
   });
 
-  it('ignores older history that sync caches', () => {
-    const anchors = createUnreadAnchors();
-    anchors.display(ME, 'INBOX', { server: 37, at: 1, local: 12 });
-    anchors.rebase(ME, 'INBOX', 400);
-    expect(anchors.display(ME, 'INBOX', { server: 37, at: 1, local: 400 })).toBe(37);
-    // A read after that still counts.
-    expect(anchors.display(ME, 'INBOX', { server: 37, at: 1, local: 399 })).toBe(36);
+  it('does not move when cached history changes, only when this device acts', () => {
+    const deltas = createUnreadDeltas();
+    // Nothing noted: whatever sync writes, the badge is the server count.
+    expect(deltas.adjust(ME, 'INBOX', { server: 37, fetchedAt: 5 })).toBe(37);
+  });
+
+  it('counts a read then unread of the same message once', () => {
+    const deltas = createUnreadDeltas();
+    deltas.read(ME, 'm1', 'INBOX', false);
+    deltas.read(ME, 'm1', 'INBOX', true);
+    expect(deltas.adjust(ME, 'INBOX', { server: 10, fetchedAt: 0 })).toBe(10);
+  });
+
+  it('moves an unread message from one badge to the other, and a delete takes it off', () => {
+    const deltas = createUnreadDeltas();
+    deltas.move(ME, 'm1', 'INBOX', 'Archive', true);
+    deltas.move(ME, 'm2', 'INBOX', null, true);
+    deltas.move(ME, 'm3', 'INBOX', 'Archive', false);
+    expect(deltas.adjust(ME, 'INBOX', { server: 10, fetchedAt: 0 })).toBe(8);
+    expect(deltas.adjust(ME, 'Archive', { server: 0, fetchedAt: 0 })).toBe(1);
+  });
+
+  it('keeps a change in a list read back from the cache', () => {
+    const c = clock();
+    const deltas = createUnreadDeltas({ now: c.now });
+    deltas.read(ME, 'm1', 'INBOX', false);
+    deltas.settle(ME, 'm1');
+    // The cached list's time is unknown, so it may predate the read.
+    expect(deltas.adjust(ME, 'INBOX', { server: 4, fetchedAt: 0 })).toBe(3);
+  });
+
+  it('forgets a change rolled back after it failed', () => {
+    const deltas = createUnreadDeltas();
+    deltas.read(ME, 'm1', 'INBOX', false);
+    deltas.drop(ME, 'm1');
+    expect(deltas.adjust(ME, 'INBOX', { server: 4, fetchedAt: 0 })).toBe(4);
+  });
+
+  it('forgets changes the server never confirmed after a while', () => {
+    const c = clock();
+    const deltas = createUnreadDeltas({ now: c.now });
+    deltas.read(ME, 'm1', 'INBOX', false);
+    c.tick(UNREAD_DELTA_TTL_MS + 1);
+    expect(deltas.adjust(ME, 'INBOX', { server: 4, fetchedAt: 0 })).toBe(4);
+  });
+
+  it('lists the changes still on their way', () => {
+    const deltas = createUnreadDeltas();
+    deltas.read(ME, 'm1', 'INBOX', false);
+    deltas.read(ME, 'm2', 'INBOX', false);
+    deltas.settle(ME, 'm2');
+    expect(deltas.unsettledIds(ME)).toEqual(['m1']);
   });
 
   it('stays between zero and the folder total', () => {
-    const anchors = createUnreadAnchors();
-    anchors.display(ME, 'INBOX', { server: 3, at: 1, local: 10 });
-    expect(anchors.display(ME, 'INBOX', { server: 3, at: 1, local: 0 })).toBe(0);
-    expect(anchors.display(ME, 'INBOX', { server: 3, at: 1, local: 20, total: 5 })).toBe(5);
+    const deltas = createUnreadDeltas();
+    deltas.read(ME, 'm1', 'INBOX', false);
+    expect(deltas.adjust(ME, 'INBOX', { server: 0, fetchedAt: 0 })).toBe(0);
+    deltas.read(ME, 'm2', 'INBOX', true);
+    deltas.read(ME, 'm3', 'INBOX', true);
+    expect(deltas.adjust(ME, 'INBOX', { server: 5, fetchedAt: 0, total: 5 })).toBe(5);
   });
 
   it('keeps accounts apart', () => {
-    const anchors = createUnreadAnchors();
-    anchors.display(ME, 'INBOX', { server: 37, at: 1, local: 12 });
-    expect(anchors.display('other@test.com', 'INBOX', { server: 4, at: 1, local: 4 })).toBe(4);
-    anchors.rebase('other@test.com', 'INBOX', 100);
-    expect(anchors.display(ME, 'INBOX', { server: 37, at: 1, local: 12 })).toBe(37);
+    const deltas = createUnreadDeltas();
+    deltas.read('other@test.com', 'm1', 'INBOX', false);
+    expect(deltas.adjust(ME, 'INBOX', { server: 37, fetchedAt: 0 })).toBe(37);
+    expect(deltas.adjust('other@test.com', 'INBOX', { server: 4, fetchedAt: 0 })).toBe(3);
+  });
+
+  it('treats INBOX in any case as the same folder when told to', () => {
+    const deltas = createUnreadDeltas({
+      samePath: (a, b) => a === b || (a.toUpperCase() === 'INBOX' && b.toUpperCase() === 'INBOX'),
+    });
+    deltas.read(ME, 'm1', 'Inbox', false);
+    expect(deltas.adjust(ME, 'INBOX', { server: 2, fetchedAt: 0 })).toBe(1);
+  });
+});
+
+describe('unread listing', () => {
+  it('is only complete when it adds up to the count', () => {
+    expect(isCompleteUnreadListing(37, 37)).toBe(true);
+    expect(isCompleteUnreadListing(0, 37)).toBe(false);
+    expect(isCompleteUnreadListing(36, 37)).toBe(false);
+    expect(isCompleteUnreadListing(0, 0)).toBe(true);
   });
 });
 

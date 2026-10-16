@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy, tick } from 'svelte';
   import { readable, type Readable, type Unsubscriber } from 'svelte/store';
-  import { Local } from '../utils/storage';
+  import { Local, clearAccountPgpData } from '../utils/storage';
   import { keyboardShortcuts } from '../utils/keyboard-shortcuts';
   import { getDatabaseInfo, CURRENT_SCHEMA_VERSION, db } from '../utils/db';
   import { cacheManager } from '../utils/cache-manager';
@@ -1670,9 +1670,21 @@
     }
   };
 
-  const clearData = () => {
-    Local.clear();
-    window.location.replace('/');
+  // Clears this account's saved PGP keys and passphrases. It used to clear all
+  // local storage, which signed out every account and dropped their settings.
+  const clearData = async () => {
+    const currentAcct = getAccountId();
+    clearAccountPgpData(currentAcct);
+    pgpKeys = [];
+    cancelKeyForm();
+    refreshSyncWorkerPgpKeys();
+    clearPgpKeyCache();
+    try {
+      await invalidatePgpCachedBodies(currentAcct);
+    } catch (err) {
+      console.warn('[Settings] invalidatePgpCachedBodies failed:', err);
+    }
+    setSuccess('Saved encryption keys cleared.');
   };
 
   const signOut = async () => {

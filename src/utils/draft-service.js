@@ -14,6 +14,75 @@ function getAccount() {
   return Local.get('email') || 'default';
 }
 
+// Saves and the sync worker's draft task must not create the same draft on
+// the server twice. Saves of one draft run one after another, and each reads
+// the server id an earlier save (or the worker) stored, so only the first
+// creates it and later ones update it. The worker's task waits for saves in
+// flight and saves wait for it. The Web Lock does the same across windows
+// (the desktop compose window saves drafts too).
+const draftChains = new Map();
+const draftActivity = new Map();
+
+function activityFor(account) {
+  let entry = draftActivity.get(account);
+  if (!entry) {
+    entry = { saves: new Set(), sync: null };
+    draftActivity.set(account, entry);
+  }
+  return entry;
+}
+
+function withWebLock(name, mode, fn) {
+  const locks = typeof navigator !== 'undefined' ? navigator?.locks : null;
+  if (locks && typeof locks.request === 'function') {
+    return locks.request(name, { mode }, () => fn());
+  }
+  return fn();
+}
+
+// A save waits for a worker task already started when it was asked for; the
+// task waits for saves already asked for when it started. Deciding both at
+// call time means neither can end up waiting on the other.
+async function runAsSync(account, fn) {
+  const activity = activityFor(account);
+  const previous = activity.sync;
+  const saves = [...activity.saves];
+  const run = (async () => {
+    if (previous) await previous.catch(() => {});
+    await Promise.allSettled(saves);
+    return withWebLock(`draft-sync:${account}`, 'exclusive', fn);
+  })();
+  activity.sync = run;
+  try {
+    return await run;
+  } finally {
+    if (activity.sync === run) activity.sync = null;
+  }
+}
+
+function withDraftLock(account, id, fn) {
+  const activity = activityFor(account);
+  const workerRun = activity.sync;
+  const key = `${account}\u0000${id}`;
+  const previous = draftChains.get(key) || Promise.resolve();
+  const run = (async () => {
+    await previous;
+    if (workerRun) await workerRun.catch(() => {});
+    return withWebLock(`draft-sync:${account}`, 'shared', fn);
+  })();
+  const tail = run.then(
+    () => {},
+    () => {},
+  );
+  activity.saves.add(tail);
+  draftChains.set(key, tail);
+  tail.then(() => {
+    activity.saves.delete(tail);
+    if (draftChains.get(key) === tail) draftChains.delete(key);
+  });
+  return run;
+}
+
 /**
  * Get the drafts folder path from user settings or auto-detect
  */
@@ -38,7 +107,23 @@ function getDraftsFolder() {
 export async function saveDraft(draftData, options = {}) {
   const account = getAccount();
   const id = draftData.id || `${DRAFT_PREFIX}${Date.now()}`;
+  return withDraftLock(account, id, () => saveDraftNow(account, id, draftData, options));
+}
+
+async function saveDraftNow(account, id, draftData, options) {
   const { sync = true } = options;
+
+  // The server id an earlier save or the sync worker got for this draft.
+  // The caller's copy can predate it, and saving without it creates a
+  // second draft on the server.
+  let storedServerId = null;
+  if (!draftData.serverId) {
+    try {
+      storedServerId = (await db.drafts.get([account, id]))?.serverId || null;
+    } catch {
+      storedServerId = null;
+    }
+  }
 
   const draft = {
     id,
@@ -60,7 +145,7 @@ export async function saveDraft(draftData, options = {}) {
     replyToMessageFolder: draftData.replyToMessageFolder || null,
     priority: draftData.priority || 'normal',
     requestReadReceipt: draftData.requestReadReceipt || false,
-    serverId: draftData.serverId || null,
+    serverId: draftData.serverId || storedServerId,
     syncStatus: 'pending',
     lastError: null,
     lastSyncedAt: draftData.lastSyncedAt || null,
@@ -124,10 +209,12 @@ export async function listDrafts() {
 /**
  * Delete a draft by ID
  * @param {string} id - Draft ID
+ * @param {Object} [options]
+ * @param {string} [options.account] - whose draft (default: the active account)
  * @returns {Promise<void>}
  */
-export async function deleteDraft(id) {
-  const account = getAccount();
+export async function deleteDraft(id, { account: forAccount } = {}) {
+  const account = forAccount || getAccount();
   try {
     await db.drafts.delete([account, id]);
   } catch (err) {
@@ -276,7 +363,7 @@ async function syncDraftToServer(draft) {
 export async function syncPendingDrafts() {
   const account = getAccount();
   try {
-    await sendSyncTask({ type: 'drafts', account });
+    await runAsSync(account, () => sendSyncTask({ type: 'drafts', account }));
   } catch {
     // ignore sync scheduling failures
   }

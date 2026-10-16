@@ -10,7 +10,10 @@ import * as openpgp from 'openpgp';
 import {
   normalizeMessageForCache,
   mergeFlagsAndMetadata,
+  mergeServerRow,
+  applyPendingFlagChange,
   extractFromField,
+  type PendingFlagChange,
 } from '../utils/sync-helpers.ts';
 import { normalizeSubject } from '../utils/threading.ts';
 import {
@@ -42,6 +45,12 @@ let dbPort = null;
 let dbRequestId = 0;
 const dbPendingRequests = new Map();
 
+// How long a database request may go unanswered. A port whose db worker died
+// never replies, and without a deadline every sync waiting on it hangs.
+const DB_REQUEST_TIMEOUT_MS = 60_000;
+// How long opening a message waits for its cached body before downloading it.
+const CACHE_LOOKUP_WAIT_MS = 3_000;
+
 function dbSend(action, table = null, payload = {}) {
   return new Promise((resolve, reject) => {
     if (!dbPort) {
@@ -50,9 +59,24 @@ function dbSend(action, table = null, payload = {}) {
     }
 
     const id = ++dbRequestId;
-    dbPendingRequests.set(id, { resolve, reject });
+    const timer = setTimeout(() => {
+      if (!dbPendingRequests.has(id)) return;
+      dbPendingRequests.delete(id);
+      reject(new Error(`Database request "${action}" timed out after ${DB_REQUEST_TIMEOUT_MS}ms`));
+    }, DB_REQUEST_TIMEOUT_MS);
+    dbPendingRequests.set(id, { resolve, reject, timer });
     dbPort.postMessage({ id, action, table, payload });
   });
+}
+
+// Fail every request still waiting on the current port. Used when a new port
+// replaces it, since the db worker closes the old one and will not answer.
+function rejectPendingDbRequests(error) {
+  for (const pending of dbPendingRequests.values()) {
+    clearTimeout(pending.timer);
+    pending.reject(error);
+  }
+  dbPendingRequests.clear();
 }
 
 function handleDbResponse(event) {
@@ -61,6 +85,7 @@ function handleDbResponse(event) {
   if (!pending) return;
 
   dbPendingRequests.delete(id);
+  clearTimeout(pending.timer);
   if (ok) {
     pending.resolve(result);
   } else {
@@ -77,10 +102,15 @@ const db = {
   messages: {
     bulkGet: (keys) => dbSend('bulkGet', 'messages', { keys }),
     bulkPut: (records) => dbSend('bulkPut', 'messages', { records }),
+    bulkDelete: (keys) => dbSend('bulkDelete', 'messages', { keys }),
+    // Field-level write: only `changes` are written, read and merged inside
+    // the db worker, so fields another writer changed meanwhile survive.
+    update: (key, changes) => dbSend('update', 'messages', { key, changes }),
     where: (index) => ({
       equals: (value) => ({
         toArray: () => dbSend('queryEquals', 'messages', { index, value }),
         delete: () => dbSend('queryEqualsDelete', 'messages', { index, value }),
+        modify: (changes) => dbSend('queryEqualsModify', 'messages', { index, value, changes }),
       }),
     }),
   },
@@ -88,6 +118,7 @@ const db = {
     get: (key) => dbSend('get', 'messageBodies', { key }),
     bulkGet: (keys) => dbSend('bulkGet', 'messageBodies', { keys }),
     put: (record) => dbSend('put', 'messageBodies', { record }),
+    bulkDelete: (keys) => dbSend('bulkDelete', 'messageBodies', { keys }),
     where: (index) => ({
       equals: (value) => ({
         toArray: () => dbSend('queryEquals', 'messageBodies', { index, value }),
@@ -95,6 +126,7 @@ const db = {
     }),
   },
   folders: {
+    get: (key) => dbSend('get', 'folders', { key }),
     bulkPut: (records) => dbSend('bulkPut', 'folders', { records }),
     where: (index) => ({
       equals: (value) => ({
@@ -130,6 +162,16 @@ let apiBase = '';
 const authHeaders = new Map<string, string>();
 
 let unlockedPgpKeys = [];
+// Bumped whenever the unlocked keys change. A PGP body cached still encrypted
+// (pgpLocked) is tried again once per key set: a pass that ran before the
+// keys were unlocked must not leave it encrypted for good, and one encrypted
+// to a key we do not have must not be retried on every pass.
+let pgpKeysVersion = 0;
+const pgpLockedTried = new Map<string, number>();
+const lockedTriedWithCurrentKeys = (account: string, id: string) =>
+  pgpLockedTried.get(`${account}::${id}`) === pgpKeysVersion;
+const canTryLockedBody = (account: string, id: string) =>
+  unlockedPgpKeys.length > 0 && !lockedTriedWithCurrentKeys(account, id);
 let pgpPassphrases = {};
 let searchPort = null;
 
@@ -299,7 +341,15 @@ function fetchWithTimeout(url, options = {}, timeoutMs = FETCH_TIMEOUT_MS) {
 // Message Operations
 // ============================================================================
 
-async function writeMessages(account, folder, normalized, pendingDeleteIds: string[] = []) {
+type PendingFlagMap = Record<string, PendingFlagChange>;
+
+async function writeMessages(
+  account,
+  folder,
+  normalized,
+  pendingDeleteIds: string[] = [],
+  pendingFlags: PendingFlagMap | null = null,
+) {
   if (!dbPort) {
     console.warn('[sync.worker] No db connection for writeMessages');
     return { inserted: 0, updated: 0 };
@@ -326,14 +376,16 @@ async function writeMessages(account, folder, normalized, pendingDeleteIds: stri
     if (pendingSet?.has(msg.id)) return;
 
     const existing = existingRecords[idx];
+    const pendingFlag = pendingFlags?.[msg.id] || null;
     if (!existing) {
-      toUpsert.push(msg);
-      changedForIndex.push(msg);
+      const fresh = applyPendingFlagChange(msg, pendingFlag);
+      toUpsert.push(fresh);
+      changedForIndex.push(fresh);
       inserted += 1;
       return;
     }
 
-    const { record, changed } = mergeFlagsAndMetadata(existing, msg);
+    const { record, changed } = mergeFlagsAndMetadata(existing, msg, pendingFlag);
     if (changed) {
       toUpsert.push(record);
       changedForIndex.push(record);
@@ -433,6 +485,7 @@ async function runMetadataTask(task, postProgress) {
       folder,
       normalized,
       task.pendingDeleteIds || [],
+      task.pendingFlagMutations || null,
     );
 
     totalFetched += normalized.length;
@@ -503,24 +556,105 @@ async function runMetadataTask(task, postProgress) {
 // Backfill (background historical pagination)
 // ============================================================================
 //
-// runMetadataTask is forward-only — once initial sync stops at the
-// sync_max_headers cap, the oldest synced message becomes a permanent floor
-// (the API doesn't expose before_uid). runBackfillTask walks the `page`
-// offset backwards in small batches and lets writeMessages dedupe; the
-// controller re-schedules the task after each batch so foreground work
-// (folder navigation, manual refresh, body fetch) can preempt.
+// runMetadataTask is forward-only: once initial sync stops at the
+// sync_max_headers cap, the oldest synced message becomes a floor. The list
+// API pages by offset (page/limit, newest created first) and has no stable
+// cursor: its `before` filter matches on any of three dates, so imported mail
+// would repeat forever. runBackfillTask therefore walks pages in small
+// batches, writes through writeMessages (which dedupes), and guards the offset
+// paging instead:
 //
-// Stop conditions: server returned an empty page BACKFILL_EMPTY_STREAK_LIMIT
-// times in a row, hit the per-folder safety cap, or this batch returned
-// only duplicates (already in IDB).
+// - Messages leaving the folder mid-walk shift later ones onto pages already
+//   read. When the server total drops between pages the walk steps back far
+//   enough to cover the shift, and the overlap is deduped.
+// - An empty or short page only ends the walk when it agrees with the server
+//   total (the API clamps `limit` to 100, so pages here never ask for more).
+//   An empty page while the total says there is more is transient: the batch
+//   stops without marking the folder complete and resumes at the same page.
+// - A finished walk records the server total. When the total later grows, or
+//   the last full walk is older than BACKFILL_SWEEP_INTERVAL_MS, a new walk
+//   starts from page 1.
+// - A walk from page 1 that reached the end collects every id the server
+//   listed. Cached rows in the folder the listing did not include are then
+//   checked one by one against the server and removed only on a 404 (see
+//   pruneUnlisted). Nothing is pruned from a partial listing.
 
 const BACKFILL_PAGES_PER_BATCH = 5;
 const BACKFILL_EMPTY_STREAK_LIMIT = 3;
 const BACKFILL_THROTTLE_MS = 800;
-const BACKFILL_DEFAULT_LIMIT = 50;
+// The server's maximum page size for /v1/messages. Asking for more returns
+// 100, which would make every page look short.
+const BACKFILL_LIMIT = 100;
+// How often a finished folder is walked again from page 1 to pick up anything
+// a shifted page skipped and to find messages deleted on the server.
+const BACKFILL_SWEEP_INTERVAL_MS = 12 * 60 * 60_000;
+// A finished walk that saw fewer messages than the server reports is retried
+// from page 1 this many times before it is accepted as done.
+const BACKFILL_MAX_RESTARTS = 2;
+// Unlisted rows checked against the server per batch.
+const PRUNE_VERIFY_PER_BATCH = 25;
 // Per-folder safety cap. Folders with truly enormous history won't backfill
 // forever; users who want more can raise this via a settings extension later.
 const BACKFILL_SAFETY_CAP = 20_000;
+
+interface BackfillWalk {
+  // Every id the server listed during this walk, when it started at page 1.
+  ids: Set<string>;
+  startedAt: number;
+  // Messages left the folder during the walk. Ids listed before that may
+  // belong to them, so the listing cannot be trusted for pruning.
+  shifted?: boolean;
+}
+
+// In memory only. A walk resumed by a fresh worker has no listing and so
+// never prunes; it still pages and verifies totals as usual.
+const backfillWalks = new Map<string, BackfillWalk>();
+// Unlisted ids waiting for their per-id check, keyed `${account}::${folder}`.
+const pruneQueues = new Map<string, { ids: string[]; startedAt: number }>();
+
+// The server's message count for a folder as of the last folder list. Pages
+// also carry it in X-Item-Count when the browser exposes that header (see
+// fetchListPage), which is fresher and preferred once seen.
+async function readFolderTotal(account: string, folder: string): Promise<number | null> {
+  if (!dbPort) return null;
+  try {
+    const row = (await db.folders.get([account, folder])) as Record<string, unknown> | undefined;
+    const value = row?.total ?? row?.totalCount;
+    const total = value === null || value === undefined || value === '' ? NaN : Number(value);
+    return Number.isFinite(total) && total >= 0 ? total : null;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchListPage(
+  account: string,
+  params: Record<string, unknown>,
+): Promise<{ list: unknown[]; total: number | null }> {
+  const url = new URL(`${apiBase.replace(/\/$/, '')}/v1/messages`);
+  Object.entries(params).forEach(([k, v]) => {
+    if (v !== undefined && v !== null && v !== '') url.searchParams.set(k, String(v));
+  });
+  const res = await fetchWithTimeout(url.toString(), {
+    method: 'GET',
+    headers: {
+      Accept: 'application/json',
+      Authorization: requireAuth(account),
+      'Content-Type': 'application/json',
+    },
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || res.statusText || 'Request failed');
+  }
+  const header = res.headers?.get?.('X-Item-Count');
+  const headerTotal =
+    header === null || header === undefined || header === '' ? NaN : Number(header);
+  const total = Number.isFinite(headerTotal) && headerTotal >= 0 ? headerTotal : null;
+  if (res.status === 204) return { list: [], total };
+  const list = parseResultList(await res.json());
+  return { list: Array.isArray(list) ? list : [], total };
+}
 
 async function runBackfillTask(task, postProgress) {
   const account = accountKey(task.account);
@@ -528,7 +662,7 @@ async function runBackfillTask(task, postProgress) {
   if (!account || !folder) return { done: true, reason: 'invalid_task' };
 
   // Without API config there's nothing to fetch. Bail as "done" rather than
-  // letting fetchMessageList throw on `new URL('')` below: the caller treats a
+  // letting the fetch throw on `new URL('')` below: the caller treats a
   // thrown/zero-progress batch as transient and re-queues, so an unconfigured
   // worker (e.g. a backfill that runs before the init message lands, common in
   // dev) would spin "Syncing <folder>" forever with no network activity.
@@ -536,57 +670,140 @@ async function runBackfillTask(task, postProgress) {
     return { done: true, reason: 'not_configured' };
   }
 
+  const key = toKey(account, folder);
+  const limit = BACKFILL_LIMIT;
+
+  // Finish checking unlisted rows from a completed walk before anything else.
+  if (pruneQueues.get(key)?.ids.length) {
+    const result = await pruneUnlisted(account, folder, task.pendingDeleteIds || []);
+    return {
+      done: !pruneQueues.get(key)?.ids.length,
+      reason: 'pruning',
+      inserted: 0,
+      pruned: result.pruned,
+      prunedIds: result.prunedIds,
+      pagesProcessed: result.checked ? 1 : 0,
+    };
+  }
+
   let manifest = await getManifest(account, folder);
+  let total = await readFolderTotal(account, folder);
+
   if (manifest.backfillComplete) {
-    return { done: true, reason: 'already_complete' };
+    const grown =
+      total !== null && Number.isFinite(manifest.backfillTotal) && total > manifest.backfillTotal;
+    const sweepDue = Date.now() - (manifest.lastSweepAt || 0) >= BACKFILL_SWEEP_INTERVAL_MS;
+    if (!grown && !sweepDue) return { done: true, reason: 'already_complete' };
+    manifest = await updateManifest(account, folder, {
+      backfillComplete: false,
+      backfillPage: 1,
+      backfillLimit: limit,
+      backfillEmptyStreak: 0,
+      backfillRestarts: 0,
+      backfillPrevTotal: total,
+    });
   }
   if ((manifest.backfillTotalInserted || 0) >= BACKFILL_SAFETY_CAP) {
-    await updateManifest(account, folder, { backfillComplete: true });
+    await updateManifest(account, folder, {
+      backfillComplete: true,
+      backfillTotal: total,
+      lastSweepAt: Date.now(),
+    });
     return { done: true, reason: 'safety_cap' };
   }
 
-  const limit = task.pageSize || BACKFILL_DEFAULT_LIMIT;
-  // First-ever backfill starts AFTER what forward sync covered. messagesFetched
-  // is a running total from runMetadataTask; ceil(/limit) + 1 is the first
-  // page below the forward-sync floor. Bumped to >= 2 because page 1 is
-  // always the newest and would just duplicate.
-  let page =
-    manifest.backfillPage ?? Math.max(2, Math.ceil((manifest.messagesFetched || 0) / limit) + 1);
+  // A first walk starts at page 1. Skipping the pages forward sync already
+  // covered saved a few requests, but its running count also grows with every
+  // new message, so the start drifted past older history, and only a walk
+  // from page 1 yields the full listing that skip detection and pruning need.
+  // A saved page from a different page size is converted by offset, rounding
+  // down so nothing is skipped.
+  let page;
+  if (manifest.backfillPage == null) {
+    page = 1;
+  } else {
+    const savedLimit = manifest.backfillLimit || task.pageSize || 50;
+    page =
+      savedLimit === limit
+        ? manifest.backfillPage
+        : Math.floor(((manifest.backfillPage - 1) * savedLimit) / limit) + 1;
+  }
+
+  // A walk from page 1 collects the listing used for pruning.
+  let walk = backfillWalks.get(key) || null;
+  if (page === 1) {
+    walk = { ids: new Set(), startedAt: Date.now() };
+    backfillWalks.set(key, walk);
+  } else if (walk && manifest.backfillPage !== page) {
+    // The saved position no longer lines up with the listing in memory.
+    backfillWalks.delete(key);
+    walk = null;
+  }
+
+  let prevTotal = Number.isFinite(manifest.backfillPrevTotal) ? manifest.backfillPrevTotal : total;
+  // Messages left the folder (going by the last folder list) since the last
+  // batch: later ones moved up onto pages already read, so start back far
+  // enough to read them.
+  if (total !== null && prevTotal !== null && total < prevTotal) {
+    page = Math.max(1, page - Math.ceil((prevTotal - total) / limit));
+    if (walk) walk.shifted = true;
+  }
+  if (total !== null) prevTotal = total;
   let emptyStreak = manifest.backfillEmptyStreak || 0;
   let totalInsertedThisRun = 0;
   let pagesThisRun = 0;
-  let exhausted = false;
+  let reachedEnd = false;
+  let capped = false;
+  let stalled = false;
 
   while (pagesThisRun < BACKFILL_PAGES_PER_BATCH) {
-    const params = {
-      folder,
-      page,
-      limit,
-      include_body: 0,
-      raw: false,
-      attachments: false,
-    };
-
     let res;
     try {
-      res = await fetchMessageList(account, params);
+      res = await fetchListPage(account, {
+        folder,
+        page,
+        limit,
+        include_body: 0,
+        raw: false,
+        attachments: false,
+      });
     } catch (err) {
-      // Network/auth hiccup — return partial progress; the controller
-      // will retry on the next batch.
+      // Network/auth hiccup: keep the position and let a later batch retry.
       console.warn('[sync.worker] backfill fetch failed:', err);
       break;
     }
+    pagesThisRun += 1;
+    // Messages left the folder since the last page: later ones moved up onto
+    // pages already read. After this page the walk steps back over the shift
+    // and reads it again; writeMessages dedupes the overlap.
+    const droppedBy =
+      res.total !== null && prevTotal !== null && res.total < prevTotal ? prevTotal - res.total : 0;
+    if (res.total !== null) {
+      total = res.total;
+      prevTotal = res.total;
+    }
+    const stepBack = () => {
+      page = Math.max(1, page - Math.ceil(droppedBy / limit));
+      if (walk) walk.shifted = true;
+    };
 
-    const rawList = parseResultList(res);
-    if (!Array.isArray(rawList) || !rawList.length) {
-      emptyStreak += 1;
-      page += 1;
-      pagesThisRun += 1;
-      if (emptyStreak >= BACKFILL_EMPTY_STREAK_LIMIT) {
-        exhausted = true;
+    const rawList = res.list;
+    if (!rawList.length && droppedBy) {
+      stepBack();
+      continue;
+    }
+    if (!rawList.length) {
+      const moreOnServer = total !== null && (page - 1) * limit < total;
+      if (moreOnServer || (total === null && emptyStreak + 1 < BACKFILL_EMPTY_STREAK_LIMIT)) {
+        // Either the server says there is more, or with no total to go on we
+        // want a few empty answers in a row before believing it. Stop here
+        // without marking anything complete; the next batch asks again.
+        emptyStreak += 1;
+        stalled = moreOnServer;
         break;
       }
-      continue;
+      reachedEnd = true;
+      break;
     }
     emptyStreak = 0;
 
@@ -600,12 +817,19 @@ async function runBackfillTask(task, postProgress) {
         folder,
         normalized,
         task.pendingDeleteIds || [],
+        task.pendingFlagMutations || null,
       );
       totalInsertedThisRun += writeResult.inserted;
+      const listing = walk;
+      if (listing) normalized.forEach((item) => listing.ids.add(String(item.id)));
     }
 
+    if (droppedBy) {
+      stepBack();
+      await new Promise((resolve) => setTimeout(resolve, BACKFILL_THROTTLE_MS));
+      continue;
+    }
     page += 1;
-    pagesThisRun += 1;
 
     postProgress?.({
       type: 'progress',
@@ -616,8 +840,22 @@ async function runBackfillTask(task, postProgress) {
       inserted: totalInsertedThisRun,
     });
 
+    // `limit` is within the server's clamp, so a short page is the last one.
+    if (rawList.length < limit) {
+      reachedEnd = true;
+      break;
+    }
+    // Only a total that came with this page is fresh enough to end on. The
+    // folder list's count can be behind new mail and would stop the walk
+    // short of older history.
+    if (res.total !== null && (page - 1) * limit >= res.total) {
+      reachedEnd = true;
+      break;
+    }
+
     if (totalInsertedThisRun + (manifest.backfillTotalInserted || 0) >= BACKFILL_SAFETY_CAP) {
-      exhausted = true;
+      reachedEnd = true;
+      capped = true;
       break;
     }
 
@@ -627,26 +865,187 @@ async function runBackfillTask(task, postProgress) {
     await new Promise((resolve) => setTimeout(resolve, BACKFILL_THROTTLE_MS));
   }
 
-  const nextManifest = {
+  const nextManifest: Record<string, unknown> = {
     backfillPage: page,
+    backfillLimit: limit,
     backfillEmptyStreak: emptyStreak,
+    backfillPrevTotal: prevTotal,
     backfillTotalInserted: (manifest.backfillTotalInserted || 0) + totalInsertedThisRun,
     lastBackfillAt: Date.now(),
   };
-  if (exhausted) {
-    nextManifest.backfillComplete = true;
+
+  let complete = false;
+  let restarted = false;
+  if (reachedEnd) {
+    // A walk stopped by the safety cap is not a full listing either way.
+    const verdict = capped ? 'done' : await judgeFinishedWalk(account, folder, walk, total);
+    if (verdict === 'restart' && (manifest.backfillRestarts || 0) < BACKFILL_MAX_RESTARTS) {
+      // The listing may have missed messages that shifted, or hold ids that
+      // left during the walk. Walk again from the top; the overlap dedupes.
+      nextManifest.backfillPage = 1;
+      nextManifest.backfillRestarts = (manifest.backfillRestarts || 0) + 1;
+      nextManifest.backfillPrevTotal = total;
+      backfillWalks.delete(key);
+      restarted = true;
+    } else {
+      complete = true;
+      Object.assign(nextManifest, {
+        backfillComplete: true,
+        backfillTotal: total,
+        backfillRestarts: 0,
+        lastSweepAt: Date.now(),
+      });
+      if (verdict === 'prune' && walk) {
+        await queueUnlisted(account, folder, walk);
+      }
+      backfillWalks.delete(key);
+    }
   }
   await updateManifest(account, folder, nextManifest);
 
+  let pruned = 0;
+  let prunedIds: string[] = [];
+  if (complete && pruneQueues.get(key)?.ids.length) {
+    const result = await pruneUnlisted(account, folder, task.pendingDeleteIds || []);
+    pruned = result.pruned;
+    prunedIds = result.prunedIds;
+  }
+
+  const pruneLeft = Boolean(pruneQueues.get(key)?.ids.length);
   // backfillBatchDone: a zero-page batch (first fetch threw before the network)
   // reports done so the controller stops re-queuing instead of spinning a tight,
-  // no-progress loop; the next metadata sync resumes from the saved page.
+  // no-progress loop; the next metadata sync resumes from the saved page. A
+  // stalled batch (empty page the total disagrees with) also stops for now.
   return {
-    done: backfillBatchDone({ exhausted, pagesProcessed: pagesThisRun }),
+    done:
+      !pruneLeft &&
+      !restarted &&
+      backfillBatchDone({ exhausted: complete || stalled, pagesProcessed: pagesThisRun }),
     inserted: totalInsertedThisRun,
     page,
     pagesProcessed: pagesThisRun,
+    ...(pruned ? { pruned, prunedIds } : {}),
   };
+}
+
+/**
+ * Decide what a walk that reached the end of the listing means:
+ * 'prune' when it started at page 1 and listed at least the server's total,
+ * 'restart' when messages left the folder during the walk (its listing may
+ * hold ids that are gone, so a fresh one is needed before pruning) or the
+ * cache holds fewer messages for the folder than the server reports (some
+ * page was skipped), 'done' otherwise.
+ */
+async function judgeFinishedWalk(
+  account: string,
+  folder: string,
+  walk: BackfillWalk | null,
+  total: number | null,
+): Promise<'prune' | 'restart' | 'done'> {
+  if (walk?.shifted) return 'restart';
+  if (total === null) return 'done';
+  // A walk object only exists for a walk that began at page 1.
+  if (walk && walk.ids.size >= total) return 'prune';
+  let cached = 0;
+  try {
+    const rows = (await db.messages
+      .where('[account+folder]')
+      .equals([account, folder])
+      .toArray()) as unknown[];
+    cached = rows.length;
+  } catch {
+    return 'done';
+  }
+  return cached < total ? 'restart' : 'done';
+}
+
+// Cached rows of the folder the finished listing did not include. Rows written
+// after the walk started (new mail, a local move) are left alone: the listing
+// may simply predate them.
+async function queueUnlisted(account: string, folder: string, walk: BackfillWalk) {
+  let rows: Array<{ id?: string; updatedAt?: number }> = [];
+  try {
+    rows = (await db.messages
+      .where('[account+folder]')
+      .equals([account, folder])
+      .toArray()) as Array<{
+      id?: string;
+      updatedAt?: number;
+    }>;
+  } catch {
+    return;
+  }
+  const ids = rows
+    .filter((row) => row?.id && !walk.ids.has(String(row.id)))
+    .filter((row) => Number(row.updatedAt || 0) < walk.startedAt)
+    .map((row) => String(row.id));
+  if (ids.length) pruneQueues.set(toKey(account, folder), { ids, startedAt: walk.startedAt });
+}
+
+/**
+ * Check queued unlisted rows against the server, a few per batch. A 404 means
+ * the message is gone and its cached row, body and search entry are removed.
+ * A message found elsewhere has its row moved to that folder. Anything else
+ * (found in this folder, an error, a non-ObjectId id) keeps the row.
+ */
+async function pruneUnlisted(account: string, folder: string, pendingDeleteIds: string[]) {
+  const key = toKey(account, folder);
+  const queue = pruneQueues.get(key);
+  if (!queue?.ids.length) return { pruned: 0, prunedIds: [], checked: 0 };
+  const batch = queue.ids.splice(0, PRUNE_VERIFY_PER_BATCH);
+  if (!queue.ids.length) pruneQueues.delete(key);
+  const skip = new Set(pendingDeleteIds);
+  const gone: string[] = [];
+  let checked = 0;
+  for (const id of batch) {
+    if (skip.has(id)) continue;
+    let res;
+    try {
+      const url = new URL(`${apiBase.replace(/\/$/, '')}/v1/messages/${encodeURIComponent(id)}`);
+      url.searchParams.set('raw', 'false');
+      url.searchParams.set('nodemailer', 'false');
+      url.searchParams.set('attachments', 'false');
+      res = await fetchWithTimeout(url.toString(), {
+        method: 'GET',
+        headers: { Accept: 'application/json', Authorization: requireAuth(account) },
+      });
+    } catch (err) {
+      console.warn('[sync.worker] prune check failed for', id, err);
+      if (isPassWideFailure(err)) break;
+      continue;
+    }
+    checked += 1;
+    if (res.status === 404) {
+      gone.push(id);
+      continue;
+    }
+    if (!res.ok) continue;
+    try {
+      const detail = await res.json();
+      const record = normalizeMessageForCache(detail?.Result || detail, folder, account);
+      if (record?.id === id && record.folder && record.folder !== folder) {
+        // Moved by another client: follow it rather than dropping it.
+        await db.messages.update([account, id], {
+          folder: record.folder,
+          ...(record.folder_id ? { folder_id: record.folder_id } : {}),
+          ...(record.uid ? { uid: record.uid } : {}),
+        });
+      }
+    } catch {
+      // Unreadable answer: keep the row.
+    }
+  }
+  if (gone.length) {
+    const keys = gone.map((id) => [account, id]);
+    await db.messages.bulkDelete(keys);
+    try {
+      await db.messageBodies.bulkDelete(keys);
+    } catch {
+      // A body left behind is harmless; it is never shown without its row.
+    }
+    postToSearch('remove', { account, ids: gone });
+  }
+  return { pruned: gone.length, prunedIds: gone, checked };
 }
 
 // Keyed `${account}::${folder}` — prevents repeated heal scans within a
@@ -680,7 +1079,10 @@ async function runHealFromFieldPass(account, folder, limit = 25) {
     try {
       const fixedFrom = await refetchAndExtractFrom(msg, account);
       if (fixedFrom && fixedFrom !== msg.from) {
-        await db.messages.bulkPut([{ ...msg, from: fixedFrom }]);
+        // Write only the sender. The row was read before a network round
+        // trip, so writing all of it back would undo a flag, label or move
+        // made in the meantime, or restore a row that was deleted.
+        await db.messages.update([account, msg.id], { from: fixedFrom });
         healed += 1;
       }
     } catch (err) {
@@ -730,7 +1132,29 @@ async function runBodiesTask(task, postProgress) {
   // The db proxy resolves to `unknown`; cast to the minimal shapes used here so
   // the worklist stays type-clean without leaning on `any`.
   type BodyHeaderRecord = { id: string; date?: number; dateMs?: number; has_attachment?: boolean };
-  type BodyCacheRecord = { body?: string | null; attachments?: unknown[] };
+  type BodyCacheRecord = {
+    body?: string | null;
+    raw?: string | null;
+    pgpLocked?: boolean;
+    attachments?: unknown[];
+  };
+  // Leave out messages whose last fetch failed and are still backing off, and
+  // PGP messages cached still encrypted that the keys we have cannot open
+  // (none unlocked, or these keys were already tried on them). A locked body
+  // the current keys have not tried is decrypted from the cached copy, with
+  // no second download.
+  const wanted = (headers: BodyHeaderRecord[], bodies: BodyCacheRecord[]) => {
+    const now = Date.now();
+    const keptHeaders: BodyHeaderRecord[] = [];
+    const keptBodies: BodyCacheRecord[] = [];
+    headers.forEach((header, idx) => {
+      if (isPgpLockedBody(bodies[idx]) && !canTryLockedBody(account, header.id)) return;
+      if (bodyRetryBlocked(account, header.id, now)) return;
+      keptHeaders.push(header);
+      keptBodies.push(bodies[idx]);
+    });
+    return { headers: keptHeaders, bodies: keptBodies };
+  };
 
   let worklist;
   if (idTargeted) {
@@ -743,7 +1167,8 @@ async function runBodiesTask(task, postProgress) {
     const bodies = (await db.messageBodies.bulkGet(
       headers.map((m) => [account, m.id]),
     )) as BodyCacheRecord[];
-    worklist = worklistFromHeaders(headers, bodies, headers.length);
+    const kept = wanted(headers, bodies);
+    worklist = worklistFromHeaders(kept.headers, kept.bodies, kept.headers.length);
   } else {
     const headers = (await db.messages
       .where('[account+folder]')
@@ -754,7 +1179,8 @@ async function runBodiesTask(task, postProgress) {
     const bodies = (await db.messageBodies.bulkGet(
       sample.map((m) => [account, m.id]),
     )) as BodyCacheRecord[];
-    worklist = worklistFromHeaders(sample, bodies, maxMessages).slice(0, limit);
+    const kept = wanted(sample, bodies);
+    worklist = worklistFromHeaders(kept.headers, kept.bodies, maxMessages).slice(0, limit);
   }
 
   if (!worklist.length) {
@@ -766,11 +1192,24 @@ async function runBodiesTask(task, postProgress) {
   }
 
   let completed = 0;
+  let failed = 0;
   for (const msg of worklist) {
     // All prefetched ids come from the current folder list, so the task folder
     // is the right one to cache under (and keeps types clean — HeaderLike has
     // no `folder`).
-    await fetchAndCacheBody(account, folder, msg, { returnPayload: false });
+    try {
+      await fetchAndCacheBody(account, folder, msg, { returnPayload: false });
+      clearBodyFailure(account, msg.id);
+    } catch (err) {
+      // One message that will not download (deleted on the server, a parse
+      // error, a timeout) must not stop the rest of the pass. It backs off
+      // and is tried again on a later pass. A pass-wide problem (the backend
+      // is backing off, or this account was signed out) ends the pass.
+      if (isPassWideFailure(err)) throw err;
+      noteBodyFailure(account, msg.id);
+      failed += 1;
+      console.warn('[sync.worker] body fetch failed for', msg.id, err);
+    }
     completed += 1;
     // Prefetch is silent: a handful of look-ahead bodies must not drive the
     // "Downloading bodies X/Y" sync status UI.
@@ -789,10 +1228,48 @@ async function runBodiesTask(task, postProgress) {
 
   if (!idTargeted) {
     await updateManifest(account, folder, {
-      hasBodiesPass: completed >= worklist.length,
+      hasBodiesPass: completed >= worklist.length && failed === 0,
       lastSyncAt: Date.now(),
     });
   }
+}
+
+// Per-message memo of failed body downloads, so a message that keeps failing
+// is retried with growing gaps instead of on every pass. In memory only: a
+// fresh worker gives everything another try.
+const BODY_RETRY_BASE_MS = 60_000;
+const BODY_RETRY_MAX_MS = 6 * 60 * 60_000;
+const bodyFailures = new Map<string, { count: number; retryAt: number }>();
+
+function noteBodyFailure(account: string, id: string, now = Date.now()) {
+  const key = `${account}::${id}`;
+  const count = (bodyFailures.get(key)?.count || 0) + 1;
+  const delay = Math.min(BODY_RETRY_BASE_MS * 2 ** (count - 1), BODY_RETRY_MAX_MS);
+  bodyFailures.set(key, { count, retryAt: now + delay });
+}
+
+function clearBodyFailure(account: string, id: string) {
+  bodyFailures.delete(`${account}::${id}`);
+}
+
+function bodyRetryBlocked(account: string, id: string, now = Date.now()) {
+  const entry = bodyFailures.get(`${account}::${id}`);
+  return Boolean(entry && entry.retryAt > now);
+}
+
+function isPassWideFailure(err: unknown): boolean {
+  const e = err as { circuitOpen?: boolean; message?: string } | null;
+  if (e?.circuitOpen) return true;
+  return /No credentials for account|Database worker not connected/.test(String(e?.message || ''));
+}
+
+// A body record written for a PGP message the worker could not decrypt: the
+// ciphertext is cached in `raw` and there is no readable body yet.
+function isPgpLockedBody(
+  record: { body?: string | null; raw?: string | null; pgpLocked?: boolean } | null | undefined,
+) {
+  if (!record || record.body) return false;
+  return Boolean(record.pgpLocked) && typeof record.raw === 'string' && isPgpContent(record.raw);
 }
 
 async function fetchAndCacheBody(account, folder, msg, options = {}) {
@@ -956,18 +1433,32 @@ async function fetchAndCacheBodyWithOptions(account, folder, msg, options = {}) 
   if (!apiId) return;
 
   const requestKey = `${account}::${apiId}`;
+  // Someone is waiting on this body (the reader). Caching it is not their
+  // concern: when the database is slow (another tab, a large clean-up), waiting
+  // for the write kept the reader on a skeleton until it gave up. Background
+  // passes still wait, so they do not run ahead of the database.
+  const cacheWrite = async (write, label) => {
+    const done = Promise.resolve()
+      .then(write)
+      .catch((err) => console.warn(`[sync.worker] ${label} failed`, err));
+    if (!returnPayload) await done;
+  };
   const persistBody = async (body, textContent, attachments = [], meta = null) => {
     if (dbPort) {
-      await db.messageBodies.put({
-        id: apiId,
-        account,
-        folder,
-        body,
-        textContent,
-        attachments,
-        meta,
-        updatedAt: Date.now(),
-      });
+      await cacheWrite(
+        () =>
+          db.messageBodies.put({
+            id: apiId,
+            account,
+            folder,
+            body,
+            textContent,
+            attachments,
+            meta,
+            updatedAt: Date.now(),
+          }),
+        'caching message body',
+      );
     }
 
     postToSearch('index', {
@@ -999,12 +1490,42 @@ async function fetchAndCacheBodyWithOptions(account, folder, msg, options = {}) 
       meta,
     };
   };
+  // A PGP body cached still encrypted that the current keys may open.
+  let lockedCopy = null;
   if (dbPort) {
     try {
-      const cached = await db.messageBodies.get([account, apiId]);
+      // The reader would rather download again than wait on a busy database.
+      const lookup = db.messageBodies.get([account, apiId]);
+      const cached = returnPayload
+        ? await Promise.race([
+            lookup,
+            new Promise((resolve) => setTimeout(() => resolve(undefined), CACHE_LOOKUP_WAIT_MS)),
+          ])
+        : await lookup;
       // Detect stale cache: raw PGP/MIME was incorrectly stored as body
       const isStalePgpBody =
         cached?.body && typeof cached.body === 'string' && isPgpContent(cached.body);
+      // Already downloaded and still not decryptable here: hand back the cached
+      // ciphertext instead of downloading it again. With keys unlocked since,
+      // decrypt that copy below.
+      if (isPgpLockedBody(cached) && canTryLockedBody(account, String(apiId))) {
+        lockedCopy = cached;
+      } else if (isPgpLockedBody(cached)) {
+        if (returnPayload) {
+          return {
+            id: apiId,
+            folder: cached.folder || folder,
+            pgpLocked: true,
+            raw: cached.raw,
+            // The reader reads the ciphertext from meta.raw, as on a download.
+            meta: {
+              ...((cached as { meta?: Record<string, unknown> }).meta || {}),
+              raw: cached.raw,
+            },
+          };
+        }
+        return;
+      }
       if (cached?.body && !isStalePgpBody) {
         if (returnPayload) {
           return {
@@ -1029,7 +1550,7 @@ async function fetchAndCacheBodyWithOptions(account, folder, msg, options = {}) 
     return;
   }
 
-  const requestPromise = (async () => {
+  const downloadDetail = async () => {
     const url = new URL(
       `${apiBase.replace(/\/$/, '')}/v1/messages/${encodeURIComponent(apiId)}?folder=${encodeURIComponent(folder || '')}&raw=true`,
     );
@@ -1047,7 +1568,17 @@ async function fetchAndCacheBodyWithOptions(account, folder, msg, options = {}) 
       throw new Error(text || res.statusText || 'Request failed');
     }
     const json = await res.json();
-    const result = json?.Result || json;
+    return json?.Result || json;
+  };
+
+  const requestPromise = (async () => {
+    // A locked PGP copy is decrypted where it is: the ciphertext is the same.
+    const result = lockedCopy
+      ? {
+          ...((lockedCopy as { meta?: Record<string, unknown> }).meta || {}),
+          raw: lockedCopy.raw,
+        }
+      : await downloadDetail();
     const raw = result?.raw;
     let body = '';
     let textContent = '';
@@ -1058,6 +1589,29 @@ async function fetchAndCacheBodyWithOptions(account, folder, msg, options = {}) 
       if (isPgp) {
         const decrypted = await decryptPgp(raw);
         if (!decrypted) {
+          pgpLockedTried.set(`${account}::${apiId}`, pgpKeysVersion);
+          // Keep the ciphertext so later passes do not download it again. The
+          // reader decrypts from `raw` (handleCachedPgpRaw), and changing PGP
+          // keys clears these records (invalidatePgpCachedBodies).
+          if (dbPort) {
+            await cacheWrite(
+              () =>
+                db.messageBodies.put({
+                  id: apiId,
+                  account,
+                  folder,
+                  body: '',
+                  textContent: '',
+                  attachments: [],
+                  raw,
+                  // The ciphertext is already in `raw`; do not store it twice.
+                  meta: { ...result, raw: undefined },
+                  pgpLocked: true,
+                  updatedAt: Date.now(),
+                }),
+              'caching locked PGP body',
+            );
+          }
           // Return raw data so main thread can attempt PGP decryption without re-fetching
           return { id: apiId, folder, pgpLocked: true, raw, meta: result };
         }
@@ -1073,7 +1627,12 @@ async function fetchAndCacheBodyWithOptions(account, folder, msg, options = {}) 
             if (typeof parsed.subject === 'string' && parsed.subject.trim()) {
               changes.subject = parsed.subject;
             }
-            await db.messages.where('[account+id]').equals([account, apiId]).modify(changes);
+            // Only these fields are written; the rest of the row is left as
+            // it is in the database now.
+            await cacheWrite(
+              () => db.messages.update([account, apiId], changes),
+              'recording PGP badge',
+            );
           } catch {
             // Best effort; the interactive decrypt path persists the same info.
           }
@@ -1513,14 +2072,25 @@ async function fetchFolders(account) {
   const list = Array.isArray(raw) ? raw : raw.Items || raw.items || [];
 
   if (dbPort) {
-    await db.folders.where('account').equals(account).delete();
-    await db.folders.bulkPut(
-      list.map((f) => ({
-        ...f,
-        account,
-        updatedAt: Date.now(),
-      })),
-    );
+    // Replace the account's folders in one transaction so a failure between
+    // the delete and the write cannot leave the account with no folders.
+    const records = list.map((f) => ({
+      ...f,
+      account,
+      updatedAt: Date.now(),
+    }));
+    await dbSend('transaction', null, {
+      mode: 'rw',
+      tables: ['folders'],
+      operations: [
+        {
+          action: 'queryEqualsDelete',
+          table: 'folders',
+          payload: { index: 'account', value: account },
+        },
+        { action: 'bulkPut', table: 'folders', payload: { records } },
+      ],
+    });
   }
 
   return { folders: list };
@@ -1697,15 +2267,44 @@ async function fetchMessagePage(payload = {}) {
       }
     }
 
-    await db.messages.bulkPut(toStore);
-    postToSearch('index', {
-      account,
-      includeBody: false,
-      messages: toStore,
-    });
+    toStore = await writeMessagePageRows(account, toStore, payload);
   }
 
   return { messages: toStore, hasNextPage: list.length >= limit };
+}
+
+/**
+ * Write a list page into the cache without clobbering local state. Each row
+ * is merged into the cached one (mergeServerRow keeps the PGP badge, the
+ * decrypted subject and fields the list shape left out), a pending read/star
+ * change from this device stays on top, and an id the user just deleted or
+ * moved away is not written back. Returns the rows as they now stand, with
+ * the pending-delete ones left as the server sent them so the caller can still
+ * see that the server reported them.
+ */
+async function writeMessagePageRows(account, rows, payload: Record<string, unknown> = {}) {
+  const pendingDeletes = new Set(
+    Array.isArray(payload.pendingDeleteIds) ? (payload.pendingDeleteIds as string[]) : [],
+  );
+  const pendingFlags = (payload.pendingFlagMutations as PendingFlagMap) || null;
+  assertAccountScoped('sync.worker.messagePage', account, rows);
+  const existing = (await db.messages.bulkGet(rows.map((msg) => [account, msg.id]))) as Array<
+    Record<string, unknown> | undefined
+  >;
+  const merged = rows.map((msg, idx) => {
+    if (pendingDeletes.has(msg.id)) return msg;
+    return mergeServerRow(existing[idx], applyPendingFlagChange(msg, pendingFlags?.[msg.id]));
+  });
+  const toWrite = merged.filter((msg) => !pendingDeletes.has(msg.id));
+  if (toWrite.length) {
+    await db.messages.bulkPut(toWrite);
+    postToSearch('index', {
+      account,
+      includeBody: false,
+      messages: toWrite,
+    });
+  }
+  return merged;
 }
 
 async function fetchMessageDetail(payload = {}) {
@@ -1837,6 +2436,7 @@ async function updatePgpKeys(keys = [], passphrases = {}) {
     }
   }
   unlockedPgpKeys = unlocked;
+  pgpKeysVersion += 1;
 }
 
 function isRetryablePgpUnlockError(errorMessage = '') {
@@ -1889,6 +2489,7 @@ async function unlockPgpKeyWithPassphrase({
         );
         if (!alreadyUnlocked) {
           unlockedPgpKeys.push(privateKey);
+          pgpKeysVersion += 1;
         }
       }
       return { success: true, alreadyUnlocked: true, needsPassphrase: false };
@@ -1929,6 +2530,7 @@ async function unlockPgpKeyWithPassphrase({
       unlockedPgpKeys[existingIndex] = unlockedKey;
     } else {
       unlockedPgpKeys.push(unlockedKey);
+      pgpKeysVersion += 1;
     }
 
     return {
@@ -1969,6 +2571,14 @@ self.onmessage = (event) => {
 
   // Handle database port connection
   if (data.type === 'connectDbPort' && event.ports?.[0]) {
+    if (dbPort && dbPort !== event.ports[0]) {
+      rejectPendingDbRequests(new Error('Database worker reconnected'));
+      try {
+        dbPort.close();
+      } catch {
+        // already closed
+      }
+    }
     dbPort = event.ports[0];
     dbPort.onmessage = handleDbResponse;
     dbPort.start();

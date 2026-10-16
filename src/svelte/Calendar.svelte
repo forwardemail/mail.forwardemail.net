@@ -56,6 +56,12 @@
     type TasksSortKey,
   } from '../stores/settingsStore';
   import { currentAccount } from '../stores/mailboxActions';
+  import {
+    applyPendingEventMutations as overlayPendingEventMutations,
+    icalUid,
+    swapCreatedEvent,
+    type PendingEventMutation,
+  } from '../utils/calendar-pending';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
   import { Textarea } from '$lib/components/ui/textarea';
@@ -1541,6 +1547,11 @@
 
   const resetCalendarState = () => {
     loadRequestId += 1;
+    // Optimistic changes belong to the account they were made in. Left in
+    // place, a pending create would be appended to the next account's list.
+    // Clearing also tells their in-flight writes (which check that they still
+    // own their entry) not to roll back or swap ids in the new account's view.
+    pendingEventMutations.clear();
     calendars = [];
     selectedCalendarIds = [];
     activeCalendarId = '';
@@ -3161,7 +3172,12 @@
     };
     const draft = { ...newEvent };
     const token = ++pendingMutationToken;
-    pendingEventMutations.set(tempId, { token, patch: optimisticEvent, insert: true });
+    pendingEventMutations.set(tempId, {
+      token,
+      patch: optimisticEvent,
+      insert: true,
+      icalUid: icalUid(icalData),
+    });
     allEvents = [...allEvents, optimisticEvent];
     applySelectedEvents();
     newEventModal = false;
@@ -3178,12 +3194,15 @@
         method: 'POST',
       })) as Record<string, unknown>;
     } catch (err) {
-      if (pendingEventMutations.get(tempId)?.token === token) {
-        pendingEventMutations.delete(tempId);
-        allEvents = allEvents.filter((ev) => (ev as Record<string, unknown>).id !== tempId);
-        applySelectedEvents();
-        persistEventsCache(resolvedCalendarId);
+      if (pendingEventMutations.get(tempId)?.token !== token) {
+        // The account changed while the request was out (resetCalendarState
+        // dropped the entry). Do not reopen the draft over the other account.
+        return;
       }
+      pendingEventMutations.delete(tempId);
+      allEvents = allEvents.filter((ev) => (ev as Record<string, unknown>).id !== tempId);
+      applySelectedEvents();
+      persistEventsCache(resolvedCalendarId);
       // Bring the draft back so nothing the user typed is lost.
       newEvent = draft;
       modalDirty = true;
@@ -3197,19 +3216,21 @@
       return;
     }
 
-    // Swap the provisional id for the server one.
+    // The account changed while the request was out. The event exists on
+    // the server under the old account; nothing here belongs to this view,
+    // and invites would go out from the wrong organizer.
+    if (pendingEventMutations.get(tempId)?.token !== token) return;
+    pendingEventMutations.delete(tempId);
+
+    // Swap the provisional id for the server one. A refetch that landed while
+    // the POST was out may already hold the server copy; then the provisional
+    // copy is dropped rather than renamed into a duplicate.
     const realId = (created?.id || created?.uid || created?.event_id || tempId) as string;
-    if (pendingEventMutations.get(tempId)?.token === token) {
-      pendingEventMutations.delete(tempId);
-    }
-    allEvents = allEvents.map((ev) =>
-      (ev as Record<string, unknown>).id === tempId
-        ? {
-            ...(ev as Record<string, unknown>),
-            id: realId,
-            raw: created ? JSON.parse(JSON.stringify(created)) : null,
-          }
-        : ev,
+    allEvents = swapCreatedEvent(
+      allEvents,
+      tempId,
+      realId,
+      created ? JSON.parse(JSON.stringify(created)) : null,
     );
     applySelectedEvents();
     if (editEvent.id === tempId) {
@@ -3522,33 +3543,10 @@
   // means the item is pending delete. The token lets a failed write know
   // whether a newer change already superseded it before rolling back.
   let pendingMutationToken = 0;
-  const pendingEventMutations = new Map<
-    string,
-    { token: number; patch: Record<string, unknown> | null; insert?: boolean }
-  >();
+  const pendingEventMutations = new Map<string, PendingEventMutation>();
 
-  const applyPendingEventMutations = (list: unknown[]): unknown[] => {
-    if (!pendingEventMutations.size) return list;
-    const seen = new Set<string>();
-    const result: unknown[] = [];
-    for (const ev of list) {
-      const id = (ev as Record<string, unknown>).id as string;
-      const entry = pendingEventMutations.get(id);
-      if (!entry) {
-        result.push(ev);
-        continue;
-      }
-      seen.add(id);
-      if (entry.patch === null) continue;
-      result.push({ ...(ev as Record<string, unknown>), ...entry.patch });
-    }
-    // Pending creates are not on the server yet, so a fetched list would
-    // silently drop them. Append any the fetch did not return.
-    for (const [id, entry] of pendingEventMutations) {
-      if (entry.insert && entry.patch && !seen.has(id)) result.push(entry.patch);
-    }
-    return result;
-  };
+  const applyPendingEventMutations = (list: unknown[]): unknown[] =>
+    overlayPendingEventMutations(list, pendingEventMutations);
 
   // Server writes for the same item run in order. Without this, rapid
   // toggles could race and the older PUT could arrive at the server last.

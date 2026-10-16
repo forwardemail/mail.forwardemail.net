@@ -46,6 +46,14 @@ import {
   upsertMultipleContactsInCache,
 } from '../../src/utils/contact-cache.js';
 
+// The signed-in account. Contact refreshes authenticate as the account they
+// cache for, so the active credentials have to be present.
+const ACTIVE_STORAGE = {
+  email: 'user@example.com',
+  alias_auth: 'user@example.com:alias-password',
+};
+const ACTIVE_AUTH = { authHeader: `Basic ${btoa('user@example.com:alias-password')}` };
+
 function makeRawContact(index) {
   return {
     id: `contact-${index}`,
@@ -59,7 +67,7 @@ describe('contact-cache pagination', () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
-    localGetMock.mockImplementation((key) => (key === 'email' ? 'user@example.com' : null));
+    localGetMock.mockImplementation((key) => ACTIVE_STORAGE[key] ?? null);
     isOnlineMock.mockReturnValue(true);
     metaGetMock.mockResolvedValue(null);
     metaPutMock.mockResolvedValue(undefined);
@@ -78,14 +86,24 @@ describe('contact-cache pagination', () => {
     const contacts = await getContacts({ forceRefresh: true });
 
     expect(remoteRequestMock).toHaveBeenCalledTimes(2);
-    expect(remoteRequestMock).toHaveBeenNthCalledWith(1, 'Contacts', {
-      page: 1,
-      limit: 500,
-    });
-    expect(remoteRequestMock).toHaveBeenNthCalledWith(2, 'Contacts', {
-      page: 2,
-      limit: 500,
-    });
+    expect(remoteRequestMock).toHaveBeenNthCalledWith(
+      1,
+      'Contacts',
+      {
+        page: 1,
+        limit: 500,
+      },
+      ACTIVE_AUTH,
+    );
+    expect(remoteRequestMock).toHaveBeenNthCalledWith(
+      2,
+      'Contacts',
+      {
+        page: 2,
+        limit: 500,
+      },
+      ACTIVE_AUTH,
+    );
     expect(contacts).toHaveLength(754);
     expect(contacts[0]).toMatchObject({
       id: 'contact-1:contact1@example.com',
@@ -138,14 +156,24 @@ describe('contact-cache pagination', () => {
       );
     });
 
-    expect(remoteRequestMock).toHaveBeenNthCalledWith(1, 'Contacts', {
-      page: 1,
-      limit: 500,
-    });
-    expect(remoteRequestMock).toHaveBeenNthCalledWith(2, 'Contacts', {
-      page: 2,
-      limit: 500,
-    });
+    expect(remoteRequestMock).toHaveBeenNthCalledWith(
+      1,
+      'Contacts',
+      {
+        page: 1,
+        limit: 500,
+      },
+      ACTIVE_AUTH,
+    );
+    expect(remoteRequestMock).toHaveBeenNthCalledWith(
+      2,
+      'Contacts',
+      {
+        page: 2,
+        limit: 500,
+      },
+      ACTIVE_AUTH,
+    );
     expect(metaPutMock.mock.calls.at(-1)[0].value).toHaveLength(502);
     expect(warnMock).not.toHaveBeenCalled();
   });
@@ -154,7 +182,7 @@ describe('contact-cache pagination', () => {
 describe('contact-cache multi-address CardDAV support', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    localGetMock.mockImplementation((key) => (key === 'email' ? 'user@example.com' : null));
+    localGetMock.mockImplementation((key) => ACTIVE_STORAGE[key] ?? null);
     isOnlineMock.mockReturnValue(true);
     metaGetMock.mockResolvedValue(null);
     metaPutMock.mockResolvedValue(undefined);
@@ -279,7 +307,7 @@ describe('contact-cache multi-address CardDAV support', () => {
 describe('contact-cache multi-address deletion', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    localGetMock.mockImplementation((key) => (key === 'email' ? 'user@example.com' : null));
+    localGetMock.mockImplementation((key) => ACTIVE_STORAGE[key] ?? null);
     metaPutMock.mockResolvedValue(undefined);
   });
 

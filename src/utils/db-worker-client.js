@@ -38,6 +38,11 @@ let cryptoConfigProvider = null;
 // (notably WebKitGTK/Linux), so every operation runs the engine on the main
 // thread instead of postMessaging the (terminated) worker.
 let useMainThread = false;
+// Notified whenever the engine moves (new worker, worker torn down, or the
+// main-thread fallback taking over). The sync and search workers hold a
+// MessagePort into the db worker; when that worker goes away their port is
+// dead and they must reconnect or stop using it.
+const workerChangeListeners = new Set();
 
 // The worker init + IndexedDB probe race against setTimeout() deadlines that
 // run on the MAIN thread — the most contended resource during startup. On a
@@ -60,6 +65,26 @@ const WORKER_PROBE_TIMEOUT_MS = import.meta.env?.DEV ? 10000 : 6000;
 // long init ceiling. Generous in dev because the inline worker bundle is
 // compiled on first use.
 const WORKER_BOOT_TIMEOUT_MS = import.meta.env?.DEV ? 12000 : 5000;
+
+// Every postMessage request gets a deadline. A request posted to a worker that
+// has died (or to a port whose worker was replaced) gets no reply at all, and
+// without this the caller would wait forever. The long-running maintenance
+// actions are exempt; they legitimately take minutes on a large cache.
+let requestTimeoutMs = 60_000;
+const UNTIMED_ACTIONS = new Set([
+  'init',
+  'reencryptAll',
+  'unsealForDisable',
+  'abandonSealed',
+  'clearCache',
+  'reset',
+  'restoreRaw',
+]);
+
+/** Override the per-request deadline (tests, or 0 to disable). */
+export function setDbRequestTimeout(ms) {
+  requestTimeoutMs = Number.isFinite(ms) && ms >= 0 ? ms : requestTimeoutMs;
+}
 
 // Determine if we're running in a worker context
 const isWorkerContext =
@@ -105,7 +130,12 @@ async function send(action, table = null, payload = {}) {
   const attemptSend = () =>
     new Promise((resolve, reject) => {
       const id = ++requestId;
-      pendingRequests.set(id, { resolve, reject });
+      let timer = null;
+      const settle = (fn) => (value) => {
+        if (timer) clearTimeout(timer);
+        fn(value);
+      };
+      pendingRequests.set(id, { resolve: settle(resolve), reject: settle(reject) });
 
       const message = { id, action, table, payload };
 
@@ -118,6 +148,17 @@ async function send(action, table = null, payload = {}) {
       } else {
         pendingRequests.delete(id);
         reject(new Error('Database worker not initialized'));
+        return;
+      }
+
+      if (requestTimeoutMs > 0 && !UNTIMED_ACTIONS.has(action)) {
+        timer = setTimeout(() => {
+          if (!pendingRequests.has(id)) return;
+          pendingRequests.delete(id);
+          const err = new Error(`Database request timed out: ${action}`);
+          err.code = 'DB_REQUEST_TIMEOUT';
+          reject(err);
+        }, requestTimeoutMs);
       }
     });
 
@@ -126,6 +167,10 @@ async function send(action, table = null, payload = {}) {
   } catch (error) {
     if (!isWorkerContext && error?.message?.includes('Database worker terminated')) {
       await initDbClient();
+      // The re-init may have landed on the main-thread engine.
+      if (useMainThread) {
+        return executeOperation({ action, table, payload: payload || {} });
+      }
       return attemptSend();
     }
     throw error;
@@ -181,6 +226,7 @@ export async function initDbClient() {
         const result = await initMainThread();
         initialized = true;
         await applyCryptoConfig();
+        notifyWorkerChange();
         return result;
       }
 
@@ -188,6 +234,7 @@ export async function initDbClient() {
         const result = await initViaWorker();
         initialized = true;
         await applyCryptoConfig();
+        notifyWorkerChange();
         return result;
       } catch (workerErr) {
         // Defensive catch-all for any OTHER environment where the worker's
@@ -200,10 +247,11 @@ export async function initDbClient() {
           '[db-worker-client] DB worker IndexedDB unavailable; using main-thread engine:',
           workerErr?.message,
         );
-        terminateDbWorker();
+        teardownWorker();
         const result = await initMainThread();
         initialized = true;
         await applyCryptoConfig();
+        notifyWorkerChange();
         return result;
       }
     } catch (error) {
@@ -237,9 +285,27 @@ export function shouldUseMainThreadDb() {
 /**
  * Initialize the Dexie engine on the main thread (the WebKitGTK fallback path).
  */
+function initPayload() {
+  // Ask the engine to hold sensitive reads and writes until the crypto config
+  // is pushed, when there is a provider that will push one. Without this the
+  // window between init and configureCrypto stores plaintext under App Lock.
+  return { dbName: DB_NAME, cryptoGate: Boolean(cryptoConfigProvider) };
+}
+
 async function initMainThread() {
+  // A worker from an earlier attempt must not keep running next to the
+  // main-thread engine: it has no crypto config and other workers may still
+  // be talking to it.
+  if (worker) {
+    try {
+      worker.terminate();
+    } catch {
+      // already gone
+    }
+    worker = null;
+  }
   useMainThread = true;
-  const result = await executeOperation({ action: 'init', payload: { dbName: DB_NAME } });
+  const result = await executeOperation({ action: 'init', payload: initPayload() });
   if (result?.success === false) {
     const err = new Error(result?.error || 'Main-thread database init failed');
     err.code = 'DB_INIT_FAILED';
@@ -254,6 +320,17 @@ async function initMainThread() {
  * the caller then falls back to the main-thread engine.
  */
 async function initViaWorker() {
+  // Requests must go to the new worker, not to a main-thread engine left over
+  // from an earlier fallback, and an earlier worker must not linger.
+  useMainThread = false;
+  if (worker) {
+    try {
+      worker.terminate();
+    } catch {
+      // already gone
+    }
+    worker = null;
+  }
   worker = createWorker();
   worker.onerror = (event) => {
     console.error('[db-worker-client] Worker error', event);
@@ -278,7 +355,7 @@ async function initViaWorker() {
 
   // Send init now; the browser queues it until the worker's handler attaches,
   // so there's no race with boot. Completing init also satisfies the boot gate.
-  const initSend = send('init', null, { dbName: DB_NAME });
+  const initSend = send('init', null, initPayload());
   initSend.then(resolveBooted, () => {});
 
   // Phase 1 — the worker must show signs of life within the short boot window.
@@ -383,11 +460,18 @@ export async function setCryptoConfigProvider(provider) {
  */
 export async function applyCryptoConfig() {
   if (!cryptoConfigProvider) return;
+  let config;
   try {
-    const config = await cryptoConfigProvider();
-    if (config) {
-      await send('configureCrypto', null, config);
-    }
+    config = (await cryptoConfigProvider()) || { required: false, rawKey: null };
+  } catch (error) {
+    // The provider only throws when App Lock is on and the key could not be
+    // derived. Fail closed rather than leave the engine waiting or writing
+    // plaintext.
+    console.error('[db-worker-client] Crypto config provider failed:', error);
+    config = { required: true, rawKey: null };
+  }
+  try {
+    await send('configureCrypto', null, config);
   } catch (error) {
     console.error('[db-worker-client] Failed to apply crypto config:', error);
   }
@@ -420,16 +504,73 @@ export async function unsealDbForDisable() {
 }
 
 /**
+ * Drop sealed rows that can no longer be opened (App Lock turned off without
+ * the key). See abandonSealed in db-engine.ts.
+ */
+export async function abandonSealedDb() {
+  return send('abandonSealed');
+}
+
+/**
+ * Put raw rows back after a recovery rebuild without resealing them or
+ * overwriting newer rows. See restoreRaw in db-engine.ts.
+ */
+export async function restoreRawRows(table, records) {
+  return send('restoreRaw', table, { records });
+}
+
+/**
  * Connect to db worker via MessageChannel (for other workers)
  * @param {MessagePort} port - The MessagePort connected to db.worker
  */
 export function connectToDbWorker(port) {
-  if (initialized) return;
+  if (!port) return;
+  if (messagePort === port) return;
+  // A new port means the db worker was replaced. Requests sent down the old
+  // port will never be answered, so fail them now and switch over.
+  if (messagePort) {
+    try {
+      messagePort.close();
+    } catch {
+      // already closed
+    }
+    rejectAllPending(new Error('Database worker terminated'));
+  }
 
   messagePort = port;
   messagePort.onmessage = handleMessage;
   messagePort.start();
   initialized = true;
+}
+
+function rejectAllPending(error) {
+  for (const [, pending] of pendingRequests) {
+    pending.reject(error);
+  }
+  pendingRequests.clear();
+}
+
+/**
+ * Subscribe to engine moves: a new db worker came up, the worker was torn
+ * down, or the main-thread fallback took over. The listener receives
+ * `{ worker, useMainThread }`. Any MessagePort handed out for the previous
+ * worker is dead after this fires. Returns an unsubscribe function.
+ */
+export function onDbWorkerChange(listener) {
+  if (typeof listener !== 'function') return () => {};
+  workerChangeListeners.add(listener);
+  return () => workerChangeListeners.delete(listener);
+}
+
+function notifyWorkerChange() {
+  const info = { worker, useMainThread };
+  for (const listener of workerChangeListeners) {
+    try {
+      listener(info);
+    } catch (err) {
+      console.error('[db-worker-client] Worker change listener failed:', err);
+    }
+  }
 }
 
 /**
@@ -454,6 +595,16 @@ export function isDbUsingMainThread() {
  * Terminate the database worker
  */
 export function terminateDbWorker() {
+  const hadWorker = teardownWorker();
+  initialized = false;
+  initPromise = null;
+  if (hadWorker) notifyWorkerChange();
+}
+
+// Stop the worker and fail its in-flight requests, leaving the init state
+// alone so an init that is switching to the main thread keeps its promise.
+function teardownWorker() {
+  const hadWorker = Boolean(worker);
   if (worker) {
     worker.terminate();
     worker = null;
@@ -462,13 +613,8 @@ export function terminateDbWorker() {
     messagePort.close();
     messagePort = null;
   }
-  initialized = false;
-  initPromise = null;
-  // Reject all pending requests
-  for (const [, pending] of pendingRequests) {
-    pending.reject(new Error('Database worker terminated'));
-  }
-  pendingRequests.clear();
+  rejectAllPending(new Error('Database worker terminated'));
+  return hadWorker;
 }
 
 // ============================================================================
@@ -476,32 +622,35 @@ export function terminateDbWorker() {
 // ============================================================================
 
 class QueryBuilder {
-  constructor(tableName, index, value) {
+  constructor(tableName, index) {
     this._table = tableName;
     this._index = index;
-    this._value = value;
+    this._where = { op: 'equals', value: null };
     this._options = {};
   }
 
   equals(value) {
-    this._value = value;
+    this._where = { op: 'equals', value };
+    return this;
+  }
+
+  // Dexie accepts anyOf(a, b, c) and anyOf([a, b, c]); a compound index takes
+  // an array of key arrays, e.g. anyOf([[account, id1], [account, id2]]).
+  anyOf(...args) {
+    const values = args.length === 1 && Array.isArray(args[0]) ? args[0] : args;
+    this._where = { op: 'anyOf', values };
     return this;
   }
 
   between(lower, upper, includeLower = true, includeUpper = false) {
-    this._lower = lower;
-    this._upper = upper;
+    this._where = { op: 'between', lower, upper, includeLower, includeUpper };
     this._options.includeLower = includeLower;
     this._options.includeUpper = includeUpper;
-    this._isBetween = true;
-    this._isStartsWith = false;
     return this;
   }
 
   startsWith(value) {
-    this._value = value;
-    this._isStartsWith = true;
-    this._isBetween = false;
+    this._where = { op: 'startsWith', value };
     return this;
   }
 
@@ -515,57 +664,95 @@ class QueryBuilder {
     return this;
   }
 
-  sortBy(field) {
-    this._options.sortBy = field;
-    return this;
-  }
-
   reverse() {
     this._options.reverse = true;
     return this;
   }
 
+  // Like Dexie, sortBy() ends the chain and resolves to the sorted array.
+  sortBy(field) {
+    this._options.sortBy = field;
+    return this.toArray();
+  }
+
+  _query(queryMode, extra = {}) {
+    return send('query', this._table, {
+      index: this._index,
+      where: this._where,
+      queryMode,
+      options: this._options,
+      ...extra,
+    });
+  }
+
   async toArray() {
-    if (this._isBetween) {
+    const { op } = this._where;
+    if (op === 'between') {
       return send('queryBetween', this._table, {
         index: this._index,
-        lower: this._lower,
-        upper: this._upper,
+        lower: this._where.lower,
+        upper: this._where.upper,
         options: this._options,
       });
     }
-    if (this._isStartsWith) {
+    if (op === 'startsWith') {
       return send('queryStartsWith', this._table, {
         index: this._index,
-        value: this._value,
+        value: this._where.value,
         options: this._options,
       });
+    }
+    if (op === 'anyOf') {
+      return this._query('toArray');
     }
     return send('queryEquals', this._table, {
       index: this._index,
-      value: this._value,
+      value: this._where.value,
       options: this._options,
     });
   }
 
   async first() {
+    if (this._where.op !== 'equals') return this._query('first');
     return send('queryEqualsFirst', this._table, {
       index: this._index,
-      value: this._value,
+      value: this._where.value,
     });
   }
 
   async count() {
+    if (this._where.op !== 'equals') return this._query('count');
     return send('queryEqualsCount', this._table, {
       index: this._index,
-      value: this._value,
+      value: this._where.value,
     });
   }
 
+  async primaryKeys() {
+    return this._query('primaryKeys');
+  }
+
+  /**
+   * Not a Dexie method: resolve to `{ ...fields, approxBytes }` per matching
+   * row, read straight from storage without decrypting or shipping whole
+   * records. For housekeeping scans such as cache eviction.
+   * @param {string[]} fields - plaintext fields to copy into each summary
+   */
+  async summaries(fields = []) {
+    return this._query('summaries', { fields });
+  }
+
   async delete() {
+    const captured = captureWrite(this._table, 'query', {
+      index: this._index,
+      where: this._where,
+      queryMode: 'delete',
+    });
+    if (captured) return captured;
+    if (this._where.op !== 'equals') return this._query('delete');
     return send('queryEqualsDelete', this._table, {
       index: this._index,
-      value: this._value,
+      value: this._where.value,
     });
   }
 
@@ -573,9 +760,17 @@ class QueryBuilder {
     if (typeof changes === 'function') {
       throw new Error('db worker modify does not support function callbacks; pass an object');
     }
+    const captured = captureWrite(this._table, 'query', {
+      index: this._index,
+      where: this._where,
+      queryMode: 'modify',
+      changes,
+    });
+    if (captured) return captured;
+    if (this._where.op !== 'equals') return this._query('modify', { changes });
     return send('queryEqualsModify', this._table, {
       index: this._index,
-      value: this._value,
+      value: this._where.value,
       changes,
     });
   }
@@ -596,19 +791,22 @@ class TableProxy {
   }
 
   put(record) {
-    return send('put', this._table, { record });
+    return captureWrite(this._table, 'put', { record }) || send('put', this._table, { record });
   }
 
   delete(key) {
-    return send('delete', this._table, { key });
+    return captureWrite(this._table, 'delete', { key }) || send('delete', this._table, { key });
   }
 
   update(key, changes) {
-    return send('update', this._table, { key, changes });
+    return (
+      captureWrite(this._table, 'update', { key, changes }) ||
+      send('update', this._table, { key, changes })
+    );
   }
 
   clear() {
-    return send('clear', this._table);
+    return captureWrite(this._table, 'clear', {}) || send('clear', this._table);
   }
 
   count() {
@@ -629,16 +827,20 @@ class TableProxy {
   }
 
   bulkPut(records) {
-    return send('bulkPut', this._table, { records });
+    return (
+      captureWrite(this._table, 'bulkPut', { records }) || send('bulkPut', this._table, { records })
+    );
   }
 
   bulkDelete(keys) {
-    return send('bulkDelete', this._table, { keys });
+    return (
+      captureWrite(this._table, 'bulkDelete', { keys }) || send('bulkDelete', this._table, { keys })
+    );
   }
 
   // Query builder
   where(index) {
-    return new QueryBuilder(this._table, index, null);
+    return new QueryBuilder(this._table, index);
   }
 }
 
@@ -671,11 +873,39 @@ class TableCollectionBuilder {
 // Transaction Support
 // ============================================================================
 
+// The read-write transaction whose callback is running right now, if any.
+// While it is set, writes made through the table proxies to its tables are
+// collected instead of sent, and the whole batch is sent as one engine
+// transaction when the callback returns.
+let activeTx = null;
+
 /**
- * Run multiple operations in a transaction
+ * Queue a write into the running transaction. Returns a resolved promise when
+ * the write was captured, or null when it should be sent on its own.
+ */
+function captureWrite(table, action, payload) {
+  if (!activeTx || !activeTx.tables.has(table)) return null;
+  activeTx.ops.push({ action, table, payload });
+  return Promise.resolve(undefined);
+}
+
+/**
+ * Run multiple operations in one transaction, Dexie style:
+ *
+ *   await db.transaction('rw', db.folders, async () => {
+ *     await db.folders.where('account').equals(account).delete();
+ *     await db.folders.bulkPut(rows);
+ *   });
+ *
+ * Writes made on the listed tables while the callback runs are collected and
+ * then committed by the engine as a single IndexedDB transaction, so either
+ * all of them land or none do. Two consequences of batching: a captured write
+ * resolves immediately with no value, and a read inside the callback sees the
+ * data as it was before the transaction. Keep the callback to writes plus
+ * synchronous logic, which is what every caller in the app does.
+ *
  * @param {string} mode - 'r' for read, 'rw' for read-write
- * @param {string[]} tables - Table names involved in transaction
- * @param {Function} callback - Async function that returns array of operations
+ * @param {...(string|object)} args - Tables involved, then the callback
  */
 export async function transaction(mode, ...args) {
   if (!args.length) {
@@ -689,29 +919,50 @@ export async function transaction(mode, ...args) {
 
   const tablesArg = args.length === 1 ? args[0] : args;
   const tables = normalizeTables(tablesArg);
+  const writable = typeof mode === 'string' && mode.includes('w');
 
-  // Build operations from callback (optional, for txProxy usage)
+  // A transaction opened inside another one joins it, as in Dexie.
+  if (activeTx && writable) {
+    for (const t of tables) activeTx.tables.add(t);
+    return callback(activeTx.proxy);
+  }
+
   const ops = [];
+  let usedProxy = false;
   const txProxy = {
-    table: (name) => ({
-      get: (key) => ops.push({ action: 'get', table: name, payload: { key } }),
-      put: (record) => ops.push({ action: 'put', table: name, payload: { record } }),
-      delete: (key) => ops.push({ action: 'delete', table: name, payload: { key } }),
-      bulkPut: (records) => ops.push({ action: 'bulkPut', table: name, payload: { records } }),
-      bulkDelete: (keys) => ops.push({ action: 'bulkDelete', table: name, payload: { keys } }),
-      clear: () => ops.push({ action: 'clear', table: name }),
-      update: (key, changes) =>
-        ops.push({ action: 'update', table: name, payload: { key, changes } }),
-    }),
+    table: (name) => {
+      usedProxy = true;
+      return {
+        get: (key) => ops.push({ action: 'get', table: name, payload: { key } }),
+        put: (record) => ops.push({ action: 'put', table: name, payload: { record } }),
+        delete: (key) => ops.push({ action: 'delete', table: name, payload: { key } }),
+        bulkPut: (records) => ops.push({ action: 'bulkPut', table: name, payload: { records } }),
+        bulkDelete: (keys) => ops.push({ action: 'bulkDelete', table: name, payload: { keys } }),
+        clear: () => ops.push({ action: 'clear', table: name }),
+        update: (key, changes) =>
+          ops.push({ action: 'update', table: name, payload: { key, changes } }),
+      };
+    },
   };
 
-  const result = await callback(txProxy);
+  let result;
+  if (writable) {
+    activeTx = { tables: new Set(tables), ops, proxy: txProxy };
+    try {
+      result = await callback(txProxy);
+    } finally {
+      activeTx = null;
+    }
+  } else {
+    result = await callback(txProxy);
+  }
 
   if (!ops.length) {
     return result;
   }
 
-  return send('transaction', null, { mode, tables, operations: ops });
+  const txResult = await send('transaction', null, { mode, tables, operations: ops });
+  return usedProxy ? txResult : result;
 }
 
 function normalizeTables(tables) {
@@ -736,8 +987,13 @@ export async function getDatabaseInfo() {
   return send('getInfo');
 }
 
-export async function clearCache() {
-  return send('clearCache');
+/**
+ * Drop the cached server copies for every account. Drafts and the outbox are
+ * kept unless `includeLocalOnly` is set.
+ * @param {{includeLocalOnly?: boolean}} [options]
+ */
+export async function clearCache(options = {}) {
+  return send('clearCache', null, { includeLocalOnly: Boolean(options.includeLocalOnly) });
 }
 
 export async function resetDatabase() {

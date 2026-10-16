@@ -24,6 +24,12 @@ function getFolderPriority(folder) {
   return FOLDER_PRIORITY[folder] ?? FOLDER_PRIORITY[upper] ?? 30;
 }
 
+// Rows read per eviction scan request, and how many rows one eviction pass
+// may delete from each table.
+const EVICTION_PAGE_SIZE = 200;
+const MAX_BODY_EVICTIONS = 50;
+const MAX_MESSAGE_EVICTIONS = 100;
+
 function calculateEvictionScore(body) {
   const priority = getFolderPriority(body.folder);
   const ageMs = Date.now() - (body.updatedAt || 0);
@@ -178,6 +184,11 @@ export class CacheManager {
   /**
    * Evict cached data using priority-based scoring to free up space.
    * Lower priority folders (SPAM, TRASH) are evicted before higher priority ones (INBOX, DRAFTS).
+   *
+   * The cache can be many gigabytes, so it is scanned a page at a time along
+   * the [account+id] index, keeping only the best few eviction candidates in
+   * memory. Only plaintext summary fields and stored sizes are read; bodies
+   * are never decrypted or loaded as a whole.
    */
   async evictOldest(targetBytes) {
     const account = Local.get('email') || 'default';
@@ -185,19 +196,20 @@ export class CacheManager {
     const evicted = { bodies: 0, messages: 0 };
 
     try {
-      // Strategy 1: Get all bodies and sort by eviction score (lowest priority first)
-      const allBodies = await db.messageBodies.where('account').equals(account).toArray();
-      allBodies.sort((a, b) => calculateEvictionScore(a) - calculateEvictionScore(b));
+      // Strategy 1: the lowest-scored bodies (low-priority folders, oldest first)
+      const bodyCandidates = await this.collectLowest(
+        'messageBodies',
+        account,
+        ['id', 'folder', 'updatedAt'],
+        MAX_BODY_EVICTIONS,
+        (row) => calculateEvictionScore(row),
+      );
 
       const bodiesToDelete = [];
-
-      for (const body of allBodies) {
+      for (const body of bodyCandidates) {
         if (freedBytes >= targetBytes) break;
-        if (bodiesToDelete.length >= 50) break; // Limit batch size
-
-        const bodySize = JSON.stringify(body).length;
         bodiesToDelete.push([account, body.id]);
-        freedBytes += bodySize;
+        freedBytes += body.approxBytes || 0;
         evicted.bodies++;
       }
 
@@ -207,19 +219,20 @@ export class CacheManager {
 
       // Strategy 2: If still need more space, remove oldest message metadata
       if (freedBytes < targetBytes) {
-        const oldMessages = await db.messages.where('account').equals(account).sortBy('updatedAt');
+        const oldMessages = await this.collectLowest(
+          'messages',
+          account,
+          ['id', 'updatedAt'],
+          MAX_MESSAGE_EVICTIONS,
+          (row) => row.updatedAt || 0,
+        );
 
         const messagesToDelete = [];
-
         for (const msg of oldMessages) {
           if (freedBytes >= targetBytes) break;
-
-          const msgSize = JSON.stringify(msg).length;
           messagesToDelete.push([account, msg.id]);
-          freedBytes += msgSize;
+          freedBytes += msg.approxBytes || 0;
           evicted.messages++;
-
-          if (messagesToDelete.length >= 100) break;
         }
 
         if (messagesToDelete.length > 0) {
@@ -236,6 +249,35 @@ export class CacheManager {
       console.error('[CacheManager] Eviction failed:', error);
       return { freedBytes: 0, evicted, error: error.message };
     }
+  }
+
+  /**
+   * Walk one account's rows of `table` in pages (keyset paging on
+   * [account+id]) and return the `limit` rows with the lowest `score`,
+   * lowest first. Memory stays at one page plus `limit` summaries.
+   */
+  async collectLowest(table, account, fields, limit, score) {
+    const best = [];
+    let lastId = null;
+    for (;;) {
+      // Number ids sort before strings in IndexedDB, -Infinity before both;
+      // an empty array sorts after every string, closing the account range.
+      const lower = lastId === null ? [account, -Infinity] : [account, lastId];
+      const page = await db[table]
+        .where('[account+id]')
+        .between(lower, [account, []], lastId === null, false)
+        .limit(EVICTION_PAGE_SIZE)
+        .summaries(fields);
+      if (!Array.isArray(page) || !page.length) break;
+      for (const row of page) {
+        best.push({ ...row, score: score(row) });
+      }
+      best.sort((a, b) => a.score - b.score);
+      if (best.length > limit) best.length = limit;
+      if (page.length < EVICTION_PAGE_SIZE) break;
+      lastId = page[page.length - 1].id;
+    }
+    return best;
   }
 
   /**

@@ -1,4 +1,5 @@
 import { getDbWorker, initializeDatabase, isDbUsingMainThread } from './db.js';
+import { onDbWorkerChange } from './db-worker-client.js';
 import SearchWorker from '../workers/search.worker.ts?worker&inline';
 import { createPendingRequests } from './pending-requests.js';
 
@@ -11,6 +12,8 @@ export class SearchWorkerClient {
     this.counter = 0;
     this.dbConnected = false;
     this.dbConnectionPromise = null;
+    // The db worker this client last opened a port to.
+    this.connectedDbWorker = null;
 
     this.worker.onmessage = (event) => {
       const { id, ok, result, error } = event.data || {};
@@ -25,6 +28,17 @@ export class SearchWorkerClient {
       this.requests.clear(new Error(errorMsg));
     };
 
+    // When the db worker is replaced, the port to the old one is dead. Mark the
+    // connection stale and open a new port to the replacement.
+    this.stopWatchingDbWorker = onDbWorkerChange(({ worker, useMainThread }) => {
+      this.dbConnected = false;
+      this.connectedDbWorker = null;
+      if (useMainThread || !worker) return;
+      this.dbConnectionPromise = this.connectToDbWorker(worker).catch((err) => {
+        console.error('[SearchWorkerClient] Reconnecting to db.worker failed:', err);
+      });
+    });
+
     // Connect to db worker via MessageChannel (store promise for awaiting)
     this.dbConnectionPromise = this.connectToDbWorker();
   }
@@ -33,13 +47,13 @@ export class SearchWorkerClient {
    * Connect this worker to db.worker via MessageChannel
    * @throws {Error} If connection fails after initialization attempt
    */
-  async connectToDbWorker() {
+  async connectToDbWorker(knownDbWorker = null) {
     // When the DB runs on the main thread (WebKitGTK worker-IndexedDB fallback)
     // there is no db worker to connect a MessageChannel to. Skip rather than
     // throwing; search degrades gracefully on this platform.
     if (isDbUsingMainThread()) return;
 
-    let dbWorker = getDbWorker();
+    let dbWorker = knownDbWorker || getDbWorker();
     if (!dbWorker) {
       try {
         await initializeDatabase();
@@ -53,6 +67,10 @@ export class SearchWorkerClient {
     if (!dbWorker) {
       throw new Error('[SearchWorkerClient] db.worker not available after initialization');
     }
+    // Starting the database announces the new db worker, and the change
+    // listener may already have opened a port to it while we waited.
+    if (this.connectedDbWorker === dbWorker) return;
+    this.connectedDbWorker = dbWorker;
 
     // Create a MessageChannel
     const channel = new MessageChannel();
@@ -126,6 +144,7 @@ export class SearchWorkerClient {
   }
 
   terminate() {
+    this.stopWatchingDbWorker?.();
     this.worker?.terminate?.();
     this.requests.clear(new Error('Search worker terminated'));
   }

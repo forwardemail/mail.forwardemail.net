@@ -76,6 +76,110 @@ const getCachedAccountIds = async () => {
   return Array.from(accounts);
 };
 
+// Per-account rows in the `meta` table. Keys built as `${prefix}${account}`
+// with nothing after the address are deleted by exact key; keys that continue
+// past the address carry a trailing `_` so that removing a@x.com does not also
+// match a@x.com.au. Writers: mutation-queue.js, contact-cache.js,
+// search-service.js, attachment-cache.js and Calendar.svelte.
+const META_EXACT_KEY_PREFIXES = [
+  'mutation_queue_',
+  'contacts_v2_',
+  'calendars_',
+  'calendar_prefs_',
+];
+const META_KEY_PREFIXES = ['saved_search_', 'att_blob_', 'calendar_events_'];
+const ATTACHMENT_MANIFEST_KEY = 'att_cache_manifest';
+
+const accountKeyVariants = (email) =>
+  Array.from(new Set([email, String(email || '').toLowerCase()].filter(Boolean)));
+
+// Lists keys first and then deletes them by primary key. A prefix delete
+// through the db worker client has not always honoured startsWith, and an
+// explicit key list behaves the same on every backend.
+const deleteMetaKeysWithPrefix = async (prefix) => {
+  const rows = await db.meta.where('key').startsWith(prefix).toArray();
+  const keys = (rows || [])
+    .map((row) => row?.key)
+    .filter((key) => typeof key === 'string' && key.startsWith(prefix));
+  if (keys.length) await db.meta.bulkDelete(keys);
+  return keys;
+};
+
+const pruneAttachmentManifest = async (removedKeys) => {
+  if (!removedKeys.length) return;
+  const removed = new Set(removedKeys);
+  const record = await db.meta.get(ATTACHMENT_MANIFEST_KEY);
+  const manifest = record?.value;
+  if (!manifest || !Array.isArray(manifest.entries)) return;
+  const entries = manifest.entries.filter((entry) => !removed.has(entry?.key));
+  if (entries.length === manifest.entries.length) return;
+  const totalBytes = entries.reduce((sum, entry) => sum + (Number(entry?.size) || 0), 0);
+  await db.meta.put({
+    key: ATTACHMENT_MANIFEST_KEY,
+    value: { ...manifest, entries, totalBytes },
+    updatedAt: Date.now(),
+  });
+};
+
+const clearAccountMetaData = async (email) => {
+  const exactKeys = [];
+  for (const variant of accountKeyVariants(email)) {
+    for (const prefix of META_EXACT_KEY_PREFIXES) exactKeys.push(`${prefix}${variant}`);
+  }
+  await db.meta.bulkDelete(exactKeys);
+
+  const removedAttachmentKeys = [];
+  for (const variant of accountKeyVariants(email)) {
+    for (const prefix of META_KEY_PREFIXES) {
+      const removed = await deleteMetaKeysWithPrefix(`${prefix}${variant}_`);
+      if (prefix === 'att_blob_') removedAttachmentKeys.push(...removed);
+    }
+  }
+  await pruneAttachmentManifest(removedAttachmentKeys);
+};
+
+// Per-account localStorage values, all stored as `${name}${account}`. The
+// profile keys are written lowercased (settingsStore.ts); the rest use the
+// account string as stored, so both spellings are removed.
+const ACCOUNT_LOCAL_KEY_PREFIXES = [
+  'pgp_keys_',
+  'pgp_passphrases_',
+  'pgp_recipients_',
+  'signature_',
+  'signature_html_',
+  'signature_enabled_',
+  'profile_name_',
+  'profile_image_',
+  'archive_folder_',
+  'sent_folder_',
+  'drafts_folder_',
+  'trash_folder_',
+  'junk_folder_',
+  'font_',
+  'spam_report_address_',
+  'spam_report_delete_',
+  'prefetch_folders_',
+  'default_calendar_id_',
+];
+
+const clearAccountLocalData = (email) => {
+  for (const variant of accountKeyVariants(email)) {
+    for (const prefix of ACCOUNT_LOCAL_KEY_PREFIXES) Local.remove(`${prefix}${variant}`);
+  }
+};
+
+/**
+ * Remove the locally saved PGP material (private keys and their passphrases)
+ * for one account, leaving every other account and setting alone.
+ */
+export const clearAccountPgpData = (email) => {
+  if (!email) return;
+  for (const variant of accountKeyVariants(email)) {
+    Local.remove(`pgp_keys_${variant}`);
+    Local.remove(`pgp_passphrases_${variant}`);
+  }
+};
+
 const clearAccountCacheData = async (email) => {
   await db.transaction(
     'rw',
@@ -106,13 +210,10 @@ const clearAccountCacheData = async (email) => {
         db.outbox.where('account').equals(email).delete(),
         db.labels.where('account').equals(email).delete(),
         db.syncManifests.where('account').equals(email).delete(),
-        // Clean up account-specific meta entries (mutation queue, contacts, saved searches)
-        db.meta.where('key').startsWith(`mutation_queue_${email}`).delete(),
-        db.meta.where('key').startsWith(`contacts_${email}`).delete(),
-        db.meta.where('key').startsWith(`saved_search_${email}_`).delete(),
       ]);
     },
   );
+  await clearAccountMetaData(email);
 };
 
 const cleanupAccountList = async (accounts) => {
@@ -151,6 +252,64 @@ const ENCRYPTED_PREFIX = '\x00ENC\x01';
 const hasLocalStorage = typeof localStorage !== 'undefined';
 const hasSessionStorage = typeof sessionStorage !== 'undefined';
 
+// Tab-scoped keys that authenticate requests. `email` is tab-scoped too but
+// names the account rather than proving it.
+const CREDENTIAL_KEYS = new Set(['alias_auth', 'api_key', 'authToken']);
+
+const normalizeEmail = (value) => (typeof value === 'string' ? value.trim().toLowerCase() : '');
+
+const readSessionAccountList = () => {
+  try {
+    if (!hasSessionStorage) return [];
+    const parsed = JSON.parse(sessionStorage.getItem(SESSION_ACCOUNTS_KEY) || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
+/**
+ * True when `email` was signed in without "Stay signed in" in this tab. Such
+ * an account's credentials must only ever live in sessionStorage.
+ */
+const isSessionOnlyAccount = (email) => {
+  const target = normalizeEmail(email);
+  if (!target) return false;
+  return readSessionAccountList().some((account) => normalizeEmail(account?.email) === target);
+};
+
+const tabEmail = () => {
+  if (!hasSessionStorage) return null;
+  const value = sessionStorage.getItem(`${PREFIX}email`);
+  return value && !value.startsWith(ENCRYPTED_PREFIX) ? value : null;
+};
+
+// The account a tab-scoped write belongs to: the address being written for
+// `email` itself, otherwise the account this tab is locked to.
+const tabScopedOwner = (key, value) => (key === 'email' ? value : tabEmail());
+
+/**
+ * Whether this tab may adopt the credentials held in localStorage.
+ *
+ * localStorage holds one credential set, for the persistent account that was
+ * activated last in any tab. A tab that is already locked to an account must
+ * not pick up that set when it belongs to someone else: a missing alias_auth
+ * in an API-key tab would otherwise be filled with another tab's alias
+ * password, and every request would then go out as that alias. A tab locked
+ * to a session-only account never reads credentials from localStorage at all.
+ */
+export const localCredentialsBelongToTab = () => {
+  try {
+    const owner = tabEmail();
+    if (!owner) return true;
+    if (isSessionOnlyAccount(owner)) return false;
+    if (!hasLocalStorage) return false;
+    return normalizeEmail(localStorage.getItem(`${PREFIX}email`)) === normalizeEmail(owner);
+  } catch {
+    return false;
+  }
+};
+
 export const Local = {
   get(key) {
     try {
@@ -167,6 +326,7 @@ export const Local = {
           }
           return sessionValue;
         }
+        if (CREDENTIAL_KEYS.has(key) && !localCredentialsBelongToTab()) return null;
         // First read in this tab — copy from localStorage to lock in the account
         const localValue = localStorage.getItem(prefixedKey);
         if (localValue !== null) {
@@ -200,7 +360,14 @@ export const Local = {
       // encrypted at rest whenever the App Lock vault is unlocked, not just
       // in the one-time setup sweep. Tab-scoped sessionStorage keeps the
       // plaintext copy (same model as restoreSessionCredentials).
-      localStorage.setItem(`${PREFIX}${key}`, protectLocalValue(key, value));
+      //
+      // A session-only account ("Stay signed in" off) keeps its tab-scoped
+      // keys in sessionStorage alone, so nothing survives a restart.
+      const sessionOnly =
+        TAB_SCOPED_KEYS.has(key) && isSessionOnlyAccount(tabScopedOwner(key, value));
+      if (!sessionOnly) {
+        localStorage.setItem(`${PREFIX}${key}`, protectLocalValue(key, value));
+      }
       if (TAB_SCOPED_KEYS.has(key) && hasSessionStorage) {
         sessionStorage.setItem(`${PREFIX}${key}`, value);
       }
@@ -214,7 +381,10 @@ export const Local = {
   remove(key) {
     try {
       if (!hasLocalStorage) return false;
-      localStorage.removeItem(`${PREFIX}${key}`);
+      // The localStorage copy belongs to the last persistent account, not to a
+      // session-only one, so a session-only tab leaves it alone.
+      const sessionOnly = TAB_SCOPED_KEYS.has(key) && isSessionOnlyAccount(tabEmail());
+      if (!sessionOnly) localStorage.removeItem(`${PREFIX}${key}`);
       if (TAB_SCOPED_KEYS.has(key) && hasSessionStorage) {
         sessionStorage.removeItem(`${PREFIX}${key}`);
       }
@@ -316,6 +486,85 @@ export async function cleanupPendingAccountDeletes() {
   return { cleaned, remaining };
 }
 
+// Session-only accounts register a lease in localStorage, keyed by a hash of
+// the address rather than the address itself, and refresh it while their tab
+// is open. Other tabs read it before treating that account's cache as
+// orphaned. A tab that is closed without signing out stops refreshing, so its
+// cache becomes eligible for cleanup once the lease runs out.
+const SESSION_LEASES_KEY = `${PREFIX}session_account_leases`;
+const SESSION_LEASE_TTL_MS = 24 * 60 * 60 * 1000;
+const SESSION_LEASE_HEARTBEAT_MS = 5 * 60 * 1000;
+let sessionLeaseTimer = null;
+
+const leaseId = (email) => {
+  // FNV-1a. Only needs to tell accounts apart; a collision just keeps a cache
+  // around longer.
+  const text = normalizeEmail(email);
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < text.length; i += 1) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash.toString(36);
+};
+
+const readSessionLeases = () => {
+  try {
+    if (!hasLocalStorage) return {};
+    const parsed = JSON.parse(localStorage.getItem(SESSION_LEASES_KEY) || '{}');
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+};
+
+const writeSessionLeases = (leases) => {
+  try {
+    if (!hasLocalStorage) return;
+    if (Object.keys(leases).length) {
+      localStorage.setItem(SESSION_LEASES_KEY, JSON.stringify(leases));
+    } else {
+      localStorage.removeItem(SESSION_LEASES_KEY);
+    }
+  } catch {
+    // A missing lease only means another tab may clean this cache early.
+  }
+};
+
+const refreshSessionLeases = () => {
+  const session = readSessionAccountList();
+  const now = Date.now();
+  const leases = readSessionLeases();
+  for (const [id, seen] of Object.entries(leases)) {
+    if (typeof seen !== 'number' || now - seen >= SESSION_LEASE_TTL_MS) delete leases[id];
+  }
+  for (const account of session) {
+    if (account?.email) leases[leaseId(account.email)] = now;
+  }
+  writeSessionLeases(leases);
+  return session.length;
+};
+
+const keepSessionLeasesAlive = () => {
+  const count = refreshSessionLeases();
+  if (count && !sessionLeaseTimer && typeof setInterval === 'function') {
+    sessionLeaseTimer = setInterval(() => {
+      if (!refreshSessionLeases() && sessionLeaseTimer) {
+        clearInterval(sessionLeaseTimer);
+        sessionLeaseTimer = null;
+      }
+    }, SESSION_LEASE_HEARTBEAT_MS);
+  }
+};
+
+const dropSessionLease = (email) => {
+  const leases = readSessionLeases();
+  const id = leaseId(email);
+  if (!(id in leases)) return;
+  delete leases[id];
+  writeSessionLeases(leases);
+};
+
 /**
  * Reconcile cached account data with local account list.
  * Orphaned account data is scheduled for cleanup.
@@ -330,16 +579,30 @@ export async function reconcileOrphanedAccountData() {
 
   const knownAccounts = new Set(
     Accounts.getAll()
-      .map((account) => account?.email)
+      .map((account) => normalizeEmail(account?.email))
       .filter(Boolean),
   );
-  const activeEmail = Local.get('email');
+  const activeEmail = normalizeEmail(Local.get('email'));
   if (activeEmail) knownAccounts.add(activeEmail);
+
+  // Session-only accounts signed in from another tab are invisible here (their
+  // list lives in that tab's sessionStorage). Their lease in localStorage says
+  // they are still alive, so their cache is not ours to delete.
+  const leases = readSessionLeases();
+  const now = Date.now();
+  const isLeased = (account) => {
+    const seen = leases[leaseId(account)];
+    return typeof seen === 'number' && now - seen < SESSION_LEASE_TTL_MS;
+  };
 
   const pending = new Set([...readPendingDeletesLocal(), ...(await readPendingDeletesMeta())]);
   const cachedAccounts = await getCachedAccountIds();
   const orphans = cachedAccounts.filter(
-    (account) => account && !knownAccounts.has(account) && !pending.has(account),
+    (account) =>
+      account &&
+      !knownAccounts.has(normalizeEmail(account)) &&
+      !pending.has(account) &&
+      !isLeased(account),
   );
 
   if (!orphans.length) {
@@ -444,15 +707,21 @@ export const Accounts = {
   setActive(email) {
     try {
       const accounts = this.getAll();
-      const account = accounts.find((a) => a.email === email);
+      const target = normalizeEmail(email);
+      const account = accounts.find((a) => normalizeEmail(a.email) === target);
 
       if (!account) {
         return false;
       }
 
-      // Store active account in both storages for compatibility
-      if (hasLocalStorage) localStorage.setItem(ACTIVE_ACCOUNT_KEY, email);
-      if (hasSessionStorage) sessionStorage.setItem(ACTIVE_ACCOUNT_KEY, email);
+      // The tab always records its active account. localStorage only does so
+      // for persistent accounts: it is what a restart comes back to, and a
+      // session-only account must not be remembered past this tab.
+      if (hasLocalStorage && account.persistent) {
+        localStorage.setItem(ACTIVE_ACCOUNT_KEY, account.email);
+      }
+      if (hasSessionStorage) sessionStorage.setItem(ACTIVE_ACCOUNT_KEY, account.email);
+      if (!account.persistent) keepSessionLeasesAlive();
 
       // Load account credentials into appropriate storage
       const storage = account.persistent ? Local : Session;
@@ -505,7 +774,9 @@ export const Accounts = {
         return false;
       }
 
-      const existingIndex = accounts.findIndex((a) => a.email === email);
+      const existingIndex = accounts.findIndex(
+        (a) => normalizeEmail(a.email) === normalizeEmail(email),
+      );
 
       const accountData = {
         email,
@@ -531,7 +802,9 @@ export const Accounts = {
         if (!otherAvailable) throw new Error('skip');
         const otherAccounts = readAccountsList(otherStorage, otherKey);
         if (otherAccounts !== null && otherAccounts.length) {
-          const filtered = otherAccounts.filter((a) => a.email !== email);
+          const filtered = otherAccounts.filter(
+            (a) => normalizeEmail(a.email) !== normalizeEmail(email),
+          );
           if (filtered.length !== otherAccounts.length) {
             if (filtered.length > 0) {
               writeAccountsList(otherStorage, otherKey, filtered);
@@ -543,6 +816,8 @@ export const Accounts = {
       } catch {
         // Ignore cleanup errors
       }
+
+      if (!staySignedIn) keepSessionLeasesAlive();
 
       return true;
     } catch (error) {
@@ -560,6 +835,11 @@ export const Accounts = {
     try {
       // Remove from both storages
       let found = false;
+      const target = normalizeEmail(email);
+      const keep = (a) => normalizeEmail(a.email) !== target;
+      // Per-account data is keyed by the address as it was stored, which may
+      // differ in case from the one passed in.
+      const storedEmails = new Set([email]);
 
       // Remove from persistent storage (refuse while the vault is locked;
       // getPersistent would read [] and the write would clobber the list)
@@ -568,9 +848,10 @@ export const Accounts = {
         return false;
       }
       const persistent = this.getPersistent();
-      const filteredPersistent = persistent.filter((a) => a.email !== email);
+      const filteredPersistent = persistent.filter(keep);
       if (filteredPersistent.length !== persistent.length) {
         found = true;
+        persistent.filter((a) => !keep(a)).forEach((a) => storedEmails.add(a.email));
         if (hasLocalStorage) {
           if (filteredPersistent.length > 0) {
             writeAccountsList(localStorage, ACCOUNTS_KEY, filteredPersistent);
@@ -582,50 +863,54 @@ export const Accounts = {
 
       // Remove from session storage
       const session = this.getSession();
-      const filteredSession = session.filter((a) => a.email !== email);
+      const filteredSession = session.filter(keep);
       if (filteredSession.length !== session.length) {
         found = true;
+        session.filter((a) => !keep(a)).forEach((a) => storedEmails.add(a.email));
         if (filteredSession.length > 0 && hasSessionStorage) {
           sessionStorage.setItem(SESSION_ACCOUNTS_KEY, JSON.stringify(filteredSession));
         } else if (hasSessionStorage) {
           sessionStorage.removeItem(SESSION_ACCOUNTS_KEY);
         }
       }
+      dropSessionLease(email);
 
-      if (!found) {
-        warn('Account not found:', email);
-        return false;
-      }
+      if (found) {
+        // If this was the active account, switch to another or clear active
+        const activeAccount = this.getActive();
+        const remaining = this.getAll();
 
-      // If this was the active account, switch to another or clear active
-      const activeAccount = this.getActive();
-      const remaining = this.getAll();
-
-      if (activeAccount === email) {
-        if (remaining.length > 0) {
-          this.setActive(remaining[0].email);
-        } else {
-          if (hasLocalStorage) localStorage.removeItem(ACTIVE_ACCOUNT_KEY);
-          if (hasSessionStorage) sessionStorage.removeItem(ACTIVE_ACCOUNT_KEY);
-          Local.clear();
-          Session.clear();
+        if (normalizeEmail(activeAccount) === target) {
+          if (remaining.length > 0) {
+            this.setActive(remaining[0].email);
+          } else {
+            if (hasLocalStorage) localStorage.removeItem(ACTIVE_ACCOUNT_KEY);
+            if (hasSessionStorage) sessionStorage.removeItem(ACTIVE_ACCOUNT_KEY);
+            Local.clear();
+            Session.clear();
+          }
         }
+      } else {
+        // Still clear what this account left behind: a caller asking to
+        // remove it wants its data gone even if the list entry already is.
+        warn('Account not found:', email);
       }
 
-      // Clean up PGP keys and passphrases for this account
-      Local.remove(`pgp_keys_${email}`);
-      Local.remove(`pgp_passphrases_${email}`);
+      // Clean up PGP keys, signatures, profile and other per-account values
+      for (const stored of storedEmails) clearAccountLocalData(stored);
 
       // Clear IndexedDB cache for this account if requested
       if (clearCache) {
-        const pending = Array.from(new Set([...readPendingDeletesLocal(), email]));
-        await persistPendingDeletes(pending);
-        await clearAccountCacheData(email);
-        const nextPending = pending.filter((item) => item !== email);
-        await persistPendingDeletes(nextPending);
+        for (const stored of storedEmails) {
+          const pending = Array.from(new Set([...readPendingDeletesLocal(), stored]));
+          await persistPendingDeletes(pending);
+          await clearAccountCacheData(stored);
+          const nextPending = pending.filter((item) => item !== stored);
+          await persistPendingDeletes(nextPending);
+        }
       }
 
-      return true;
+      return found;
     } catch (error) {
       console.error('Failed to remove account:', error);
       return false;
@@ -637,7 +922,7 @@ export const Accounts = {
    */
   exists(email) {
     const accounts = this.getAll();
-    return accounts.some((a) => a.email === email);
+    return accounts.some((a) => normalizeEmail(a.email) === normalizeEmail(email));
   },
 
   /**
@@ -645,7 +930,7 @@ export const Accounts = {
    */
   isPersistent(email) {
     const persistent = this.getPersistent();
-    return persistent.some((a) => a.email === email);
+    return persistent.some((a) => normalizeEmail(a.email) === normalizeEmail(email));
   },
 
   /**
@@ -660,10 +945,31 @@ export const Accounts = {
       // after unlock.
       if (isVaultLocked()) return true;
 
+      // Older builds wrote session-only credentials to localStorage as well.
+      // Anything there that no persistent account owns, written by a sign-in
+      // that said "Stay signed in: off", is such a leftover, and adopting it
+      // would sign that account back in. Without that answer (builds from
+      // before the setting, or an older single-account sign-in) the
+      // credentials are the user's real sign-in and are migrated below.
+      const signMe = Local.get('signMe');
+      const persistentAccounts = this.getPersistent();
+      const storedEmail = hasLocalStorage ? localStorage.getItem(`${PREFIX}email`) : null;
+      const ownedByPersistent = persistentAccounts.some(
+        (a) => normalizeEmail(a.email) === normalizeEmail(storedEmail),
+      );
+      const isLegacySingleAccount = persistentAccounts.length === 0 && signMe !== '0';
+      if (storedEmail && !ownedByPersistent && !isLegacySingleAccount) {
+        for (const key of ['email', ...CREDENTIAL_KEYS]) localStorage.removeItem(`${PREFIX}${key}`);
+        if (
+          normalizeEmail(localStorage.getItem(ACTIVE_ACCOUNT_KEY)) === normalizeEmail(storedEmail)
+        ) {
+          localStorage.removeItem(ACTIVE_ACCOUNT_KEY);
+        }
+      }
+
       // Check if we have old-style credentials but no accounts list
       const existingAccounts = this.getAll();
       const email = Local.get('email');
-      const staySignedIn = Local.get('signMe') === '1';
 
       if (email && existingAccounts.length === 0) {
         // Migrate from old system
@@ -673,7 +979,9 @@ export const Accounts = {
             apiKey: Local.get('api_key'),
             aliasAuth: Local.get('alias_auth'),
           },
-          staySignedIn,
+          // Credentials found in localStorage were kept across restarts, so
+          // they stay that way unless the sign-in said otherwise.
+          signMe !== '0',
         );
 
         this.setActive(email);
@@ -686,3 +994,13 @@ export const Accounts = {
     }
   },
 };
+
+// A reload keeps sessionStorage, so a tab that already holds session-only
+// accounts resumes refreshing their leases.
+if (hasSessionStorage && hasLocalStorage && typeof window !== 'undefined') {
+  try {
+    if (readSessionAccountList().length) keepSessionLeasesAlive();
+  } catch {
+    // Storage blocked; nothing to keep alive.
+  }
+}

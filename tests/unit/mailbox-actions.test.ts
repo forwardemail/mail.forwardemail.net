@@ -75,11 +75,14 @@ vi.mock('../../src/utils/remote', () => ({
 
 vi.mock('../../src/utils/auth', () => ({
   getAuthHeader: vi.fn(() => ''),
-  getAuthHeaderForAccount: vi.fn(() => ''),
+  getAuthHeaderForAccount: vi.fn((account: string) =>
+    account ? `Basic ${Buffer.from(`${account}:secret`).toString('base64')}` : '',
+  ),
 }));
 
 vi.mock('../../src/utils/mutation-queue', () => ({
   queueMutation: (...a: unknown[]) => hoisted.queueMutation(...a),
+  supersedeQueuedMutations: vi.fn().mockResolvedValue([]),
   initMutationQueue: vi.fn(),
   mutationQueueCount: writable(0),
   mutationQueueProcessing: writable(false),

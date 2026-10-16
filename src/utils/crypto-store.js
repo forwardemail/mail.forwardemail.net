@@ -26,6 +26,7 @@
  */
 
 import { ARGON2_SALT_BYTES as ARGON2_SALT_BYTES_SHARED, deriveArgon2Key } from './argon2-kdf.js';
+import { localCredentialsBelongToTab } from './storage.js';
 
 const VAULT_KEY = 'webmail_crypto_vault';
 const LOCK_PREFS_KEY = 'webmail_lock_prefs';
@@ -555,6 +556,23 @@ async function getIdbCryptoMaterial() {
   );
 }
 
+/**
+ * The IDB subkey as standard base64, for handing to the desktop compose
+ * window with compose:init (compose-main.ts decodes it with atob and passes
+ * it to setExternalIdbKey). Returns undefined unless App Lock is on and this
+ * window is unlocked, so nothing is sent when there is no key to share.
+ *
+ * @returns {Promise<string|undefined>}
+ */
+async function getIdbKeyForComposeWindow() {
+  if (!isLockEnabled() || !isVaultConfigured() || !isUnlocked()) return undefined;
+  const rawKey = await getIdbCryptoMaterial();
+  if (!rawKey) return undefined;
+  let binary = '';
+  for (const byte of rawKey) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
 // =========================================================================
 // Setup Flows
 // =========================================================================
@@ -1069,6 +1087,36 @@ function revealLocalValue(value) {
   }
 }
 
+// Tab-scoped keys mirrored from localStorage into sessionStorage. `email`
+// goes last so the ownership check runs against the tab's current account.
+const SESSION_COPY_KEYS = ['alias_auth', 'api_key', 'authToken', 'email'];
+const SESSION_CREDENTIAL_KEYS = new Set(['alias_auth', 'api_key', 'authToken']);
+
+/**
+ * Without App Lock, credentials sit in localStorage as plaintext. Give this
+ * tab a session copy of any tab-scoped key it is missing, since the browser
+ * can drop sessionStorage (memory pressure, crash recovery) and Local.get()
+ * would then come up empty. Credentials are only copied when they belong to
+ * the account this tab is signed in to (see localCredentialsBelongToTab).
+ */
+function copyPlainCredentialsToSession() {
+  const prefix = 'webmail_';
+  const mayAdoptCredentials = localCredentialsBelongToTab();
+  for (const key of SESSION_COPY_KEYS) {
+    if (SESSION_CREDENTIAL_KEYS.has(key) && !mayAdoptCredentials) continue;
+    const fullKey = `${prefix}${key}`;
+    try {
+      if (sessionStorage.getItem(fullKey) !== null) continue;
+      const localValue = localStorage.getItem(fullKey);
+      if (localValue && !isEncrypted(localValue)) {
+        sessionStorage.setItem(fullKey, localValue);
+      }
+    } catch {
+      // Storage may be unavailable
+    }
+  }
+}
+
 /**
  * After unlocking the vault, restore decrypted tab-scoped credentials
  * (alias_auth, api_key, authToken) into sessionStorage so that
@@ -1079,9 +1127,15 @@ function revealLocalValue(value) {
  */
 function restoreSessionCredentials() {
   if (!_dek) return;
+  // localStorage holds the credentials of whichever persistent account was
+  // activated last, in any tab. When this tab is signed in to a different
+  // account, leave its session copies alone. That includes `email`: the
+  // decrypt branch below overwrites it, which would move the tab to the other
+  // account while it still holds its own credentials. A tab with no email of
+  // its own always passes this check, so a missing email is still restored.
+  if (!localCredentialsBelongToTab()) return;
   const prefix = 'webmail_';
-  const tabScopedSensitive = ['alias_auth', 'api_key', 'authToken', 'email'];
-  for (const key of tabScopedSensitive) {
+  for (const key of SESSION_COPY_KEYS) {
     const fullKey = `${prefix}${key}`;
     const localValue = localStorage.getItem(fullKey);
     if (!localValue) continue;
@@ -1196,12 +1250,14 @@ export {
   writeSensitiveLocal,
   isSensitiveLocalKey,
   restoreSessionCredentials,
+  copyPlainCredentialsToSession,
   protectLocalValue,
   revealLocalValue,
 
   // Session continuity + DB engine key material
   restoreSessionDek,
   getIdbCryptoMaterial,
+  getIdbKeyForComposeWindow,
 
   // Re-encryption
   createReEncryptor,

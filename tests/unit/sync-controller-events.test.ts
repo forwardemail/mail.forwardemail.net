@@ -28,7 +28,10 @@ vi.mock('../../src/utils/sync-worker-client.js', () => ({
   connectSyncSearchPort: vi.fn(),
 }));
 vi.mock('../../src/utils/logger.ts', () => ({ warn: vi.fn() }));
-vi.mock('../../src/stores/mailboxStore', () => ({ getPendingDeleteIds: () => [] }));
+vi.mock('../../src/stores/mailboxStore', () => ({
+  getPendingDeleteIds: () => [],
+  getPendingFlagMutations: () => ({}),
+}));
 vi.mock('../../src/workers/sync-pure.ts', () => ({
   nextBackfillDecision: () => ({ requeue: false, noProgressStreak: 0 }),
 }));

@@ -27,7 +27,7 @@ import { getEffectiveSettingValue } from './settingsStore';
 import { sortMessages, normalizeSortDate, getMessageUidValue } from '../utils/message-sort.ts';
 import { decodeMimeHeader } from '../utils/mime-utils.js';
 import { validateFolderName } from '../utils/folder-validation.ts';
-import { queueMutation, getQueuedMessageIds } from '../utils/mutation-queue';
+import { queueMutation, getQueuedMessageIds, mutationQueueCount } from '../utils/mutation-queue';
 import { flagChangeBody } from '../utils/message-changes';
 import { hasServerLabels } from '../workers/sync-pure';
 import { nextCandidate } from '../svelte/mailbox/utils/mailbox-helpers.js';
@@ -102,6 +102,7 @@ import {
   applyRemoteFlagChange,
   applyRemoteLabelChange,
   sameFolderPath,
+  revertFlagChange,
 } from './mailbox-store-helpers';
 import {
   createPendingDeleteTracker,
@@ -109,7 +110,8 @@ import {
   createPendingInsertTracker,
 } from './optimistic-trackers';
 import {
-  createUnreadAnchors,
+  createUnreadDeltas,
+  isCompleteUnreadListing,
   needsUnreadReconcile,
   planUnreadReconcile,
   RECONCILE_PAGE_SIZE,
@@ -122,14 +124,49 @@ const EXPANDED_FOLDERS_KEY = 'folder_expansion_state';
 const FOLDERS_CACHE_TTL = 15000;
 const folderLoadState = new Map();
 
-// Folder badges start from the server's unread count; see folder-unread.ts.
-const unreadAnchors = createUnreadAnchors();
-// When each folder's cached read state was last checked against the server.
+// Folder badges are the server's unread count plus changes made here that it
+// does not count yet; see folder-unread.ts.
+// The store fills these in: recount the badges when a change is noted, and
+// fetch fresh server counts once one settles. A folder list requested while a
+// change was on its way may or may not include it; one requested after it
+// settled does.
+const unreadDeltaHooks = {
+  noted: (_account: string) => {},
+  settled: (_account: string) => {},
+};
+const unreadDeltas = createUnreadDeltas({
+  samePath: sameFolderPath,
+  onChange: (event, account) => unreadDeltaHooks[event](account),
+});
+// When each folder's cached read state was last checked against the server,
+// and the folders being checked right now.
 const UNREAD_RECONCILE_INTERVAL_MS = 15 * 60_000;
+// How long after a change reaches the server to fetch fresh folder counts.
+// Changes come in bursts (mark all read, a drag of several messages).
+const UNREAD_SETTLED_REFRESH_MS = 600;
 const unreadReconciledAt = new Map<string, number>();
+const unreadReconciling = new Set<string>();
 export const __resetUnreadTrackingForTests = () => {
-  unreadAnchors.clear();
+  unreadDeltas.clear();
   unreadReconciledAt.clear();
+  unreadReconciling.clear();
+};
+
+const activeAccountName = () => Local.get('email') || 'default';
+
+// The folder a message on screen is in, for noting a read change against it.
+const findMessageFolder = (id: string): string | null => {
+  const match = (list: unknown) =>
+    Array.isArray(list)
+      ? (list as Array<{ id?: unknown; folder?: unknown }>).find((m) => String(m?.id) === id)
+      : undefined;
+  const open = get(selectedMessage) as { id?: unknown; folder?: unknown } | null;
+  const found =
+    match(get(messages)) ||
+    match(get(searchResults)) ||
+    (open && String(open.id) === id ? open : undefined);
+  const folder = found?.folder ?? get(selectedFolder);
+  return typeof folder === 'string' && folder ? folder : null;
 };
 
 // Sliding-window cap for the live in-memory message list. Infinite scroll
@@ -168,11 +205,34 @@ const noteFlagChange = (ids: Iterable<string>) => {
 };
 const addPendingFlagMutation: typeof pendingFlagTracker.add = (id, mutation) => {
   noteFlagChange([id]);
+  // Every read or unread made here comes through this, so the folder badge
+  // moves with it until the server count includes it.
+  if (id && typeof mutation?.is_unread === 'boolean') {
+    const folder = findMessageFolder(String(id));
+    if (folder) unreadDeltas.read(activeAccountName(), String(id), folder, mutation.is_unread);
+  }
   pendingFlagTracker.add(id, mutation);
 };
 const applyPendingFlagMutations = pendingFlagTracker.apply;
-const confirmFlagMutations = pendingFlagTracker.confirm;
-const cancelPendingFlag = pendingFlagTracker.cancel;
+export const getPendingFlagMutations = () => pendingFlagTracker.snapshot();
+// The server now reports the state we set, so it has the change.
+const confirmFlagMutations: typeof pendingFlagTracker.confirm = (serverMsgs) => {
+  const before = new Set(pendingFlagTracker.getIds());
+  pendingFlagTracker.confirm(serverMsgs);
+  const after = new Set(pendingFlagTracker.getIds());
+  const account = activeAccountName();
+  for (const id of before) if (!after.has(id)) unreadDeltas.settle(account, String(id));
+};
+// A newer state arrived from the server for this message.
+const supersedePendingFlag = (account: string, id: string) => {
+  pendingFlagTracker.cancel(id);
+  unreadDeltas.settle(account, id);
+};
+// The change failed for good and was rolled back here.
+const cancelPendingFlag = (id: string, account = activeAccountName()) => {
+  pendingFlagTracker.cancel(id);
+  unreadDeltas.drop(account, String(id));
+};
 
 // Keep an optimistic \Answered across the list reload that follows a send.
 // Read and star register their mutations at their own call sites; the
@@ -488,44 +548,90 @@ const createMailboxStore = () => {
     return counts;
   };
 
+  // Changes made here that may still be on their way to the server: settle
+  // the ones that are not pending or queued any more, so a folder list fetched
+  // after this stops adding them.
+  const settleArrivedUnreadChanges = async (account: string) => {
+    const unsettled = unreadDeltas.unsettledIds(account);
+    if (!unsettled.length) return;
+    const waiting = new Set([
+      ...pendingFlagTracker.getIds().map(String),
+      ...getPendingDeleteIds().map(String),
+    ]);
+    try {
+      for (const id of await getQueuedMessageIds(account)) waiting.add(String(id));
+    } catch {
+      // The queue is unreadable; keep everything unsettled until next time.
+      return;
+    }
+    for (const id of unsettled) if (!waiting.has(id)) unreadDeltas.settle(account, id);
+  };
+
+  // Recounts overlap (every folder change asks for one); a second request while
+  // one runs is folded into a single rerun so an older count never lands last.
+  let unreadRecount: Promise<void> | null = null;
+  let unreadRecountAgain = false;
   const updateFolderUnreadCounts = async () => {
     // Demo mode is IndexedDB-free (WebKitGTK stalls IndexedDB under tauri://).
-    // This recomputes per-folder counts via `await db.messages...count()`, which
-    // would hang; demo folder badge counts are served by the demo Folders
-    // interceptor (recomputeFolderCounts) instead, so skip the db recompute.
+    // Demo folder badge counts are served by the demo Folders interceptor
+    // (recomputeFolderCounts) instead.
     if (isDemoMode()) return;
+    if (unreadRecount) {
+      unreadRecountAgain = true;
+      return unreadRecount;
+    }
+    // The flag is cleared in the same step the loop ends, so a request that
+    // comes after the last pass starts a new run instead of being dropped.
+    unreadRecount = (async () => {
+      try {
+        do {
+          unreadRecountAgain = false;
+          await recountFolderUnread();
+        } while (unreadRecountAgain);
+      } finally {
+        unreadRecount = null;
+      }
+    })();
+    return unreadRecount;
+  };
+
+  const recountFolderUnread = async () => {
     try {
-      const account = Local.get('email') || 'default';
+      const account = activeAccountName();
       const listed = get(folders);
       if (!listed?.length) return;
 
+      await settleArrivedUnreadChanges(account);
+      // Folders the server gave no count for fall back to the cache.
       const unreadCounts = await countCachedUnread(
         account,
-        listed.map((folder) => folder?.path),
+        listed
+          .filter((folder) => !Number.isFinite(folder?.serverCount))
+          .map((folder) => folder?.path),
       );
 
       // The counts took a while: the account may have switched (its folders
       // are on screen now) or the list may have been replaced since.
-      if ((Local.get('email') || 'default') !== account) return;
+      if (activeAccountName() !== account) return;
       const currentFolders = get(folders);
       if (!currentFolders?.length) return;
 
       const updatedFolders = currentFolders.map((folder) => {
-        if (!unreadCounts.has(folder.path)) return folder;
-        const local = unreadCounts.get(folder.path) ?? 0;
         const total = Number.isFinite(folder.totalCount) ? folder.totalCount : null;
         const server = folder.serverCount;
-        const next =
-          typeof server === 'number' && Number.isFinite(server)
-            ? unreadAnchors.display(account, folder.path, {
-                server,
-                at: folder.serverCountAt ?? 0,
-                local,
-                total,
-              })
-            : total != null
-              ? Math.min(local, total)
-              : local;
+        let next: number;
+        if (typeof server === 'number' && Number.isFinite(server)) {
+          next = unreadDeltas.adjust(account, folder.path, {
+            server,
+            fetchedAt: folder.serverCountAt ?? 0,
+            total,
+          });
+        } else if (unreadCounts.has(folder.path)) {
+          const local = unreadCounts.get(folder.path) ?? 0;
+          next = total != null ? Math.min(local, total) : local;
+        } else {
+          return folder;
+        }
         return next === folder.count ? folder : { ...folder, count: next };
       });
 
@@ -546,13 +652,19 @@ const createMailboxStore = () => {
     }
   };
 
-  // Sync wrote to a folder's cache: older history, or flags the server already
-  // counts. Keep its badge where it is (see folder-unread.ts).
-  const rebaseFolderUnread = async (account: string, path: string) => {
-    if (isDemoMode() || !account || !path || !unreadAnchors.has(account, path)) return;
-    const counts = await countCachedUnread(account, [path]);
-    const local = counts.get(path);
-    if (local !== undefined) unreadAnchors.rebase(account, path, local);
+  // A message was moved (to=null: deleted) here. Unread ones move a badge.
+  const noteUnreadMove = (
+    account: string,
+    msg: { id?: unknown; folder?: unknown; is_unread?: unknown } | null | undefined,
+    to: string | null,
+  ) => {
+    if (msg?.id == null || typeof msg.folder !== 'string' || !msg.folder) return;
+    unreadDeltas.move(account, String(msg.id), msg.folder, to, msg.is_unread === true);
+  };
+
+  // The server has a change made here (its request returned).
+  const settleUnreadChange = (id: unknown, account = activeAccountName()) => {
+    if (id != null) unreadDeltas.settle(account, String(id));
   };
 
   // Mark read the cached messages the server no longer has as unread, and
@@ -582,11 +694,19 @@ const createMailboxStore = () => {
     });
     for (const folder of due) {
       if ((Local.get('email') || 'default') !== account) return;
-      unreadReconciledAt.set(`${account}\u0000${folder.path}`, Date.now());
+      // Another run (a second folder load) may have taken this folder since
+      // the list above was made.
+      const key = `${account}\u0000${folder.path}`;
+      if (unreadReconciling.has(key)) continue;
+      if (Date.now() - (unreadReconciledAt.get(key) || 0) < UNREAD_RECONCILE_INTERVAL_MS) continue;
+      unreadReconciledAt.set(key, Date.now());
+      unreadReconciling.add(key);
       try {
         await reconcileFolderUnread(account, folder.path, Number(folder.serverCount));
       } catch (err) {
         warn('[mailboxStore] unread reconcile failed', err);
+      } finally {
+        unreadReconciling.delete(key);
       }
     }
   };
@@ -596,6 +716,9 @@ const createMailboxStore = () => {
     if (!authHeader) return;
     const touched = new Set<string>();
     flagChangeWatchers.add(touched);
+    // Rows sync writes after this point may hold mail that arrived after the
+    // listing below, so they are left alone.
+    const startedAt = Date.now();
     try {
       // Every unread message the server has in this folder.
       const serverUnread = new Set<string>();
@@ -615,6 +738,12 @@ const createMailboxStore = () => {
           },
           { method: 'GET', pathOverride: '/v1/messages', timeout: 60_000, authHeader },
         );
+        // Anything but a list (an empty 204, an error page) says nothing
+        // about which messages are unread.
+        const body = res as { Result?: { List?: unknown } | unknown } | null;
+        const rawList =
+          (body?.Result as { List?: unknown } | undefined)?.List ?? body?.Result ?? body;
+        if (!Array.isArray(rawList)) return;
         const list = extractMessageList('main', res);
         for (const item of list) {
           const id = item?.id ?? item?._id;
@@ -625,11 +754,16 @@ const createMailboxStore = () => {
         // meantime. Not conclusive, so try again next time.
         if (page > pages) return;
       }
+      // Pages shift when mail is read or arrives during the listing, which can
+      // skip a message. Only a listing that adds up to the count is used.
+      if (!isCompleteUnreadListing(serverUnread.size, serverCount)) return;
 
-      const localRows = ((await db.messages
-        .where('[account+folder+is_unread_index]')
-        .equals([account, path, 1])
-        .toArray()) || []) as Array<Record<string, unknown>>;
+      const localRows = (
+        ((await db.messages
+          .where('[account+folder+is_unread_index]')
+          .equals([account, path, 1])
+          .toArray()) || []) as Array<Record<string, unknown>>
+      ).filter((row) => !(Number(row.updatedAt) > startedAt));
 
       const skip = new Set<string>([...(await getLocallyMovingIds(account)), ...touched]);
       for (const id of pendingFlagTracker.getIds()) skip.add(String(id));
@@ -658,8 +792,10 @@ const createMailboxStore = () => {
         slice.forEach(({ id, action }, idx) => {
           const row = fresh[idx];
           if (!row || !sameFolderPath(row.folder, path)) return;
-          // A change of ours or from another device landed while we listed.
+          // A change of ours or from another device landed while we listed,
+          // or sync wrote the row after the listing started.
           if (touched.has(id) || moving.has(id) || pending.has(id)) return;
+          if (Number(row.updatedAt) > startedAt) return;
           const next = applyRemoteFlagChange(row, action, ['\\Seen']);
           if (next === row) return;
           changes.set(id, next);
@@ -693,9 +829,6 @@ const createMailboxStore = () => {
         if (nextOpen !== open) selectedMessage.set(nextOpen);
         invalidateFolderInMemCache(account, path);
       }
-      // The cache now matches the server, so the badge keeps showing the
-      // server's count.
-      await rebaseFolderUnread(account, path);
     } finally {
       flagChangeWatchers.delete(touched);
     }
@@ -760,7 +893,7 @@ const createMailboxStore = () => {
         const res = await Remote.request('Folders', {}, { method: 'GET' });
         const raw = res?.Result || res || [];
         const list = Array.isArray(raw) ? raw : raw.Items || raw.items || [];
-        const mapped = buildFolderList(list);
+        const mapped = buildFolderList(list, { fetchedAt: Date.now() });
         folders.set(mapped);
         const currentFolder = get(selectedFolder);
         if ((!currentFolder || currentFolder === '') && mapped.length) {
@@ -797,11 +930,13 @@ const createMailboxStore = () => {
         // otherwise a transient worker stall leaves the sidebar with zero
         // folders even though the list is available from the server (or, in
         // demo mode, the synchronous demo interceptor).
-        if (await hydrateFoldersFromCache(account)) {
-          // Update unread counts from cached messages
-          updateFolderUnreadCounts();
+        // Only when nothing is on screen yet: the cached list is older than
+        // the one showing, and its counts would flash back to stale numbers.
+        if (!get(folders)?.length && (await hydrateFoldersFromCache(account))) {
+          void updateFolderUnreadCounts();
         }
         let list = null;
+        const fetchedAt = Date.now();
         try {
           const res = await sendSyncRequest('folders', { account });
           list = res?.folders || [];
@@ -845,7 +980,7 @@ const createMailboxStore = () => {
           }
         }
 
-        const mapped = buildFolderList(list || []);
+        const mapped = buildFolderList(list || [], { fetchedAt });
 
         const activeNow = Local.get('email') || 'default';
         if (activeNow !== account) {
@@ -853,6 +988,7 @@ const createMailboxStore = () => {
         }
 
         folders.set(mapped);
+        unreadDeltas.covered(account, fetchedAt);
 
         // Always set default folder to INBOX if no folder is selected
         const currentFolder = get(selectedFolder);
@@ -896,12 +1032,10 @@ const createMailboxStore = () => {
     }
   };
 
-  // Tells one fetched folder list's server counts from the next (see
-  // unreadAnchors.display).
-  let folderListBuild = 0;
-  const buildFolderList = (list = []) => {
-    folderListBuild += 1;
-    const builtAt = folderListBuild;
+  // `fetchedAt` is when the request for this list started; changes made here
+  // that reached the server before then are in its counts (see
+  // unreadDeltas.adjust). 0 for a list read back from the cache.
+  const buildFolderList = (list = [], { fetchedAt = 0 }: { fetchedAt?: number } = {}) => {
     const readNumber = (value) => {
       if (value == null || value === '') return null;
       const parsed = Number(value);
@@ -937,7 +1071,7 @@ const createMailboxStore = () => {
         countSource: unreadCount !== null ? 'server' : 'local',
         // The badge is worked out from this (updateFolderUnreadCounts).
         serverCount: unreadCount,
-        serverCountAt: builtAt,
+        serverCountAt: fetchedAt,
         flags: f.flags || f.Flags || [],
         specialUse: f.specialUse || f.special_use || undefined,
         // Milliseconds the server keeps a message in this folder before
@@ -1231,6 +1365,10 @@ const createMailboxStore = () => {
           const res = await sendSyncRequest('messagePage', {
             account,
             ...params,
+            // Rows deleted or with a flag change still on its way are not
+            // written over with the server's older copy.
+            pendingDeleteIds: getPendingDeleteIds(),
+            pendingFlagMutations: getPendingFlagMutations(),
           });
           return { source: 'worker', res };
         } catch {
@@ -2112,7 +2250,7 @@ const createMailboxStore = () => {
       if (m?.id != null) {
         patched.add(String(m.id));
         noteFlagChange([String(m.id)]);
-        cancelPendingFlag(String(m.id));
+        supersedePendingFlag(account, String(m.id));
       }
       return change(m);
     };
@@ -2529,6 +2667,7 @@ const createMailboxStore = () => {
     const list = get(messages).filter((m) => m.id !== msg.id);
     messages.set(list);
     addPendingDeletes([msg.id]);
+    noteUnreadMove(account, msg, null);
     if (originalSelected?.id === msg.id) {
       selectedMessage.set(null);
     }
@@ -2564,7 +2703,7 @@ const createMailboxStore = () => {
     };
 
     if (!isOnline()) {
-      await queueMutation('delete', mutationPayload);
+      await queueMutation('delete', mutationPayload, { account });
       return;
     }
 
@@ -2572,12 +2711,14 @@ const createMailboxStore = () => {
       let path = `/v1/messages/${encodeURIComponent(apiId)}`;
       if (permanent) path += '?permanent=1';
       await Remote.request('MessageDelete', {}, { method: 'DELETE', pathOverride: path });
+      settleUnreadChange(recordId, account);
     } catch (err) {
       // 404 means the message is already gone server-side — treat as success
       const is404 = err?.status === 404 || /not (found|exist)/i.test(err?.message || '');
+      if (is404) settleUnreadChange(recordId, account);
       if (!is404) {
         warn('deleteMessage failed, queuing for retry', err);
-        await queueMutation('delete', mutationPayload);
+        await queueMutation('delete', mutationPayload, { account });
       }
     }
   };
@@ -2648,11 +2789,24 @@ const createMailboxStore = () => {
       }
     }
 
+    // Rows as they are before the delete, so a delete that fails for good can
+    // put them back (see revertFailedMutation).
+    const snapshots = new Map<unknown, unknown>();
+    try {
+      const rows = await db.messages.bulkGet(validMessages.map((m) => [account, m.id]));
+      validMessages.forEach((m, idx) => {
+        if (rows?.[idx]) snapshots.set(m.id, rows[idx]);
+      });
+    } catch {
+      // No snapshots: a failed delete then converges on the next sync.
+    }
+
     // Optimistic UI update - remove all messages at once
     const originalList = get(messages);
     const idsToRemove = new Set(validMessages.map((m) => m.id));
     messages.set(originalList.filter((m) => !idsToRemove.has(m.id)));
     addPendingDeletes([...idsToRemove]);
+    for (const msg of validMessages) noteUnreadMove(account, msg, null);
 
     // Invalidate in-memory folder cache so stale entries don't reappear on refresh
     const affectedFolders = new Set(validMessages.map((m) => m.folder).filter(Boolean));
@@ -2673,6 +2827,7 @@ const createMailboxStore = () => {
     const CONCURRENCY = 8;
     const results = [];
     const successfulDeletes = [];
+    const queuedDeletes = [];
 
     for (let i = 0; i < validMessages.length; i += CONCURRENCY) {
       const chunk = validMessages.slice(i, i + CONCURRENCY);
@@ -2700,40 +2855,41 @@ const createMailboxStore = () => {
             results.push(true);
           } else {
             results.push(false);
-            // Unlike the single-message path, this row's IDB entry was never
-            // touched (the batch DB cleanup below only runs for
-            // successfulDeletes), so there's nothing to snapshot — queuing
-            // for retry (and, if that's ultimately exhausted, un-suppressing
-            // it) is enough to converge back to server truth.
+            // Queued for retry. The cached row goes too (below), as in the
+            // single-message path, or it would come back once the pending
+            // delete expires; the snapshot restores it if the retry fails.
             const failedMsg = chunk[idx];
             const failedApiId = getMessageApiId(failedMsg);
             if (failedApiId) {
-              await queueMutation('delete', {
-                messageId: failedApiId,
-                internalId: failedMsg.id,
-                subject: failedMsg.subject,
-                permanent,
-                sourceFolder: failedMsg.folder,
-                snapshot: null,
-              });
+              await queueMutation(
+                'delete',
+                {
+                  messageId: failedApiId,
+                  internalId: failedMsg.id,
+                  subject: failedMsg.subject,
+                  permanent,
+                  sourceFolder: failedMsg.folder,
+                  snapshot: snapshots.get(failedMsg.id) || null,
+                },
+                { account },
+              );
+              queuedDeletes.push(failedMsg);
             }
           }
         }
       }
     }
 
-    // Batch DB cleanup for successful deletes
-    if (successfulDeletes.length > 0) {
+    for (const msg of successfulDeletes) settleUnreadChange(msg.id, account);
+
+    // Batch DB cleanup for deleted and queued messages
+    const removed = [...successfulDeletes, ...queuedDeletes];
+    if (removed.length > 0) {
       try {
-        const deleteIds = successfulDeletes.map((m) => m.id);
-        await db.messages
-          .where('[account+id]')
-          .anyOf(deleteIds.map((id) => [account, id]))
-          .delete();
-        await db.messageBodies
-          .where('[account+id]')
-          .anyOf(deleteIds.map((id) => [account, id]))
-          .delete();
+        const deleteIds = removed.map((m) => m.id);
+        const keys = deleteIds.map((id) => [account, id]);
+        await db.messages.bulkDelete(keys);
+        await db.messageBodies.bulkDelete(keys);
         await searchStore.actions.removeFromIndex(deleteIds);
       } catch (err) {
         console.error('bulkDeleteMessages DB cleanup failed', err);
@@ -2795,6 +2951,7 @@ const createMailboxStore = () => {
 
     const originalList = stayInFolder ? get(messages) : null;
     const originalSelected = stayInFolder ? get(selectedMessage) : null;
+    noteUnreadMove(account, msg, target);
 
     // Optimistic update
     if (stayInFolder) {
@@ -2876,7 +3033,7 @@ const createMailboxStore = () => {
     };
 
     if (!isOnline()) {
-      await queueMutation('move', mutationPayload);
+      await queueMutation('move', mutationPayload, { account });
       result.success = true;
       return result;
     }
@@ -2887,10 +3044,11 @@ const createMailboxStore = () => {
         { folder: target },
         { method: 'PUT', pathOverride: `/v1/messages/${encodeURIComponent(apiId)}` },
       );
+      settleUnreadChange(recordId, account);
       result.success = true;
     } catch (err) {
       warn('moveMessage failed, queuing for retry', err);
-      await queueMutation('move', mutationPayload);
+      await queueMutation('move', mutationPayload, { account });
       result.success = true; // Queued successfully, treat as success from UI perspective
     }
 
@@ -2966,6 +3124,7 @@ const createMailboxStore = () => {
     const idsToRemove = new Set(validMessages.map((m) => m.id));
     messages.set(originalList.filter((m) => !idsToRemove.has(m.id)));
     addPendingDeletes([...idsToRemove]);
+    for (const msg of validMessages) noteUnreadMove(account, msg, target);
 
     // Invalidate in-memory folder cache so stale entries don't reappear on refresh
     const affectedFolders = new Set(validMessages.map((m) => m.folder).filter(Boolean));
@@ -2990,6 +3149,7 @@ const createMailboxStore = () => {
     const CONCURRENCY = 8;
     const results = [];
     const successfulMoves = [];
+    const queuedMoves = [];
 
     for (let i = 0; i < validMessages.length; i += CONCURRENCY) {
       const chunk = validMessages.slice(i, i + CONCURRENCY);
@@ -3011,38 +3171,45 @@ const createMailboxStore = () => {
           results.push(true);
         } else {
           results.push(false);
-          // This row's IDB folder was never touched (the batch DB update
-          // below only runs for successfulMoves), so there's nothing to
-          // snapshot — queuing for retry (and, if that's ultimately
-          // exhausted, un-suppressing it) is enough to converge back to
-          // server truth.
+          // Queued for retry. The cached row moves too (below), as in the
+          // single-message path, or the message would reappear in the source
+          // folder once the pending delete expires while still offline. A
+          // retry that fails for good moves it back (revertFailedMutation).
           const failedMsg = chunk[idx];
           const failedApiId = getMessageApiId(failedMsg);
           if (failedApiId) {
-            await queueMutation('move', {
-              messageId: failedApiId,
-              internalId: failedMsg.id,
-              subject: failedMsg.subject,
-              targetFolder: target,
-              sourceFolder: failedMsg.folder,
-            });
+            await queueMutation(
+              'move',
+              {
+                messageId: failedApiId,
+                internalId: failedMsg.id,
+                subject: failedMsg.subject,
+                targetFolder: target,
+                sourceFolder: failedMsg.folder,
+              },
+              { account },
+            );
+            queuedMoves.push(failedMsg);
           }
         }
       }
     }
 
-    // Batch DB updates for successful moves
-    if (successfulMoves.length > 0) {
+    for (const msg of successfulMoves) settleUnreadChange(msg.id, account);
+
+    // Batch DB updates for moved and queued messages
+    const moved = [...successfulMoves, ...queuedMoves];
+    if (moved.length > 0) {
       try {
         // Get existing records in batch
-        const recordIds = successfulMoves.map((m) => [account, m.id]);
+        const recordIds = moved.map((m) => [account, m.id]);
         const existingMessages = await db.messages.bulkGet(recordIds);
         const existingBodies = await db.messageBodies.bulkGet(recordIds);
 
         // Prepare batch updates — use normalizeMessageForCache as fallback
         // when the IDB record is missing, to ensure only cloneable data is sent
         // to the db worker via postMessage
-        const messageUpdates = successfulMoves.map((msg, idx) => ({
+        const messageUpdates = moved.map((msg, idx) => ({
           ...(existingMessages[idx] || normalizeMessageForCache(msg, msg.folder, account)),
           id: msg.id,
           account,
@@ -3106,6 +3273,7 @@ const createMailboxStore = () => {
     try {
       if (type === 'delete' || type === 'move') {
         cancelPendingDelete(id);
+        unreadDeltas.drop(account, String(id));
 
         if (type === 'delete' && payload.snapshot) {
           await db.messages.put(payload.snapshot).catch(() => {});
@@ -3143,32 +3311,27 @@ const createMailboxStore = () => {
       }
 
       if (type === 'toggleRead' || type === 'toggleStar' || type === 'label') {
-        cancelPendingFlag(id);
+        cancelPendingFlag(String(id), account);
 
-        const restoreFields =
-          type === 'toggleRead'
-            ? {
-                is_unread: payload.isUnread,
-                is_unread_index: payload.isUnread ? 1 : 0,
-                flags: payload.flags || [],
-              }
-            : type === 'toggleStar'
-              ? { is_starred: payload.isStarred, flags: payload.flags || [] }
-              : { labels: payload.previousLabels || [] };
-
-        await db.messages
-          .where('[account+id]')
-          .equals([account, id])
-          .modify(restoreFields)
-          .catch(() => {});
-
-        const current = get(messages);
-        if (current.some((m) => m.id === id)) {
-          messages.set(current.map((m) => (m.id === id ? { ...m, ...restoreFields } : m)));
+        // Put back only what this change touched, on the row as it is now.
+        const row = await db.messages.get([account, id]).catch(() => null);
+        if (row) {
+          const restored = revertFlagChange(row, type, payload);
+          if (restored !== row) {
+            await db.messages.put({ ...restored, updatedAt: Date.now() }).catch(() => {});
+          }
         }
-        const selected = get(selectedMessage);
-        if (selected?.id === id) {
-          selectedMessage.set({ ...selected, ...restoreFields });
+
+        if (isActiveAccountName(account)) {
+          const current = get(messages);
+          const next = current.map((m) => (m.id === id ? revertFlagChange(m, type, payload) : m));
+          if (next.some((m, idx) => m !== current[idx])) messages.set(next);
+          const selected = get(selectedMessage);
+          if (selected?.id === id) {
+            const nextSelected = revertFlagChange(selected, type, payload);
+            if (nextSelected !== selected) selectedMessage.set(nextSelected);
+          }
+          if (type === 'toggleRead') void updateFolderUnreadCounts();
         }
 
         toasts?.show?.(`Couldn't sync a change to ${subjectLabel} (reverted)`, 'error');
@@ -3513,90 +3676,142 @@ const createMailboxStore = () => {
       return { success: true, count: unread.length };
     }
 
-    try {
-      // Get all unread messages in folder
-      const allFolderMessages = await db.messages
-        .where('[account+folder]')
-        .equals([account, folderPath])
-        .toArray();
-      const unreadMessages = allFolderMessages.filter((m) => m.is_unread === true);
-      if (!unreadMessages.length) {
-        return { success: true, count: 0 };
+    const authHeader = getAuthHeaderForAccount(account);
+    const seen = new Set<string>();
+    let marked = 0;
+
+    // Flip one message to read: the badge, the pending override that keeps
+    // list reloads from showing it unread, then the server. A failed request
+    // is queued so the change still reaches the server.
+    const markOne = async (msg: Record<string, unknown>) => {
+      const id = msg?.id != null ? String(msg.id) : '';
+      if (!id || seen.has(id)) return;
+      seen.add(id);
+      const apiId = getMessageApiId(msg);
+      if (!apiId) return;
+      const flags = Array.isArray(msg.flags) ? (msg.flags as string[]) : [];
+      const nextFlags = flags.includes('\\Seen') ? flags : [...flags, '\\Seen'];
+      unreadDeltas.read(account, id, folderPath, false);
+      noteFlagChange([id]);
+      pendingFlagTracker.add(id, { is_unread: false, is_unread_index: 0, flags: nextFlags });
+      marked += 1;
+      const payload = {
+        messageId: apiId,
+        internalId: id,
+        subject: msg.subject,
+        isUnread: true,
+        flags,
+        folder: folderPath,
+        account,
+      };
+      if (!isOnline() || !authHeader) {
+        await queueMutation('toggleRead', payload, { account }).catch(() => {});
+        return;
       }
+      try {
+        await Remote.request('MessageUpdate', flagChangeBody(nextFlags, { add: ['\\Seen'] }), {
+          method: 'PUT',
+          pathOverride: `/v1/messages/${encodeURIComponent(apiId)}`,
+          authHeader,
+        });
+        unreadDeltas.settle(account, id);
+      } catch (err) {
+        const status = (err as { status?: number })?.status;
+        if (status === 404) {
+          unreadDeltas.settle(account, id);
+          return;
+        }
+        warn('Failed to mark message as read, queuing for retry', id, err);
+        await queueMutation('toggleRead', payload, { account }).catch(() => {});
+      }
+    };
 
-      // Mark as read via API. The server's PUT /v1/messages controller
-      // accepts `body.flags` (the IMAP flag array) — it does NOT accept
-      // `body.is_unread`. Previously we sent { is_unread: false } and the
-      // server silently no-op'd, so "Mark all as read" appeared local-only
-      // and reverted on the next sync. Send a proper flags payload that
-      // preserves existing flags (e.g. \Flagged) and adds \Seen.
-      for (const msg of unreadMessages) {
-        const apiId = getMessageApiId(msg);
-        if (!apiId) continue;
-
-        const existingFlags = Array.isArray(msg.flags) ? msg.flags : [];
-        if (existingFlags.includes('\\Seen')) continue;
-        const newFlags = [...existingFlags, '\\Seen'];
-
-        try {
-          await Remote.request('MessageUpdate', flagChangeBody(newFlags, { add: ['\\Seen'] }), {
-            method: 'PUT',
-            pathOverride: `/v1/messages/${encodeURIComponent(apiId)}`,
+    // Write \Seen into the cached rows as they are now, a slice at a time, so
+    // a move, delete or label change made while this ran is kept.
+    const markCachedRead = async (ids: string[]) => {
+      for (let i = 0; i < ids.length; i += 500) {
+        const slice = ids.slice(i, i + 500);
+        const rows = ((await db.messages.bulkGet(slice.map((id) => [account, id]) as never)) ||
+          []) as Array<Record<string, unknown> | undefined>;
+        const writes = [];
+        for (const row of rows) {
+          if (!row || !sameFolderPath(row.folder, folderPath) || row.is_unread !== true) continue;
+          writes.push({
+            ...applyRemoteFlagChange(row, 'add', ['\\Seen']),
+            account,
+            updatedAt: Date.now(),
           });
-        } catch (err) {
-          warn('Failed to mark message as read', msg.id, err);
+        }
+        if (writes.length) await db.messages.bulkPut(writes as never);
+      }
+    };
+
+    // A few requests at a time, as the bulk move and delete paths do.
+    const markAll = async (list: Array<Record<string, unknown>>) => {
+      for (let i = 0; i < list.length; i += 8) {
+        await Promise.all(list.slice(i, i + 8).map((msg) => markOne(msg)));
+      }
+    };
+
+    try {
+      // Unread messages this device has cached.
+      const cachedUnread = ((await db.messages
+        .where('[account+folder+is_unread_index]')
+        .equals([account, folderPath, 1])
+        .toArray()) || []) as Array<Record<string, unknown>>;
+      await markAll(cachedUnread);
+
+      // And every unread message the server has, cached or not. Each pass
+      // reads the first page again: what was just marked drops out of it.
+      if (isOnline() && authHeader) {
+        const folder = (get(folders) || []).find((f) => sameFolderPath(f.path, folderPath));
+        const expected = Number.isFinite(folder?.serverCount) ? Number(folder.serverCount) : 0;
+        const maxPasses = Math.ceil(expected / RECONCILE_PAGE_SIZE) + 5;
+        for (let pass = 0; pass < maxPasses; pass += 1) {
+          let list: Array<Record<string, unknown>>;
+          try {
+            const res = await Remote.request(
+              'MessageList',
+              {
+                folder: folderPath,
+                is_unread: true,
+                page: 1,
+                limit: RECONCILE_PAGE_SIZE,
+                lightweight: true,
+                include_body: 0,
+                raw: false,
+                attachments: false,
+              },
+              { method: 'GET', pathOverride: '/v1/messages', timeout: 60_000, authHeader },
+            );
+            list = extractMessageList('main', res);
+          } catch (err) {
+            warn('markFolderAsRead could not list unread messages', err);
+            break;
+          }
+          const fresh = list.filter((item) => {
+            const id = item?.id ?? item?._id;
+            return id != null && !seen.has(String(id));
+          });
+          // Nothing new: done, or the rest failed and are queued.
+          if (!fresh.length) break;
+          await markAll(
+            fresh.map((item) => normalizeMessageForCache(item, folderPath, account) || item),
+          );
         }
       }
 
-      // Update IndexedDB optimistically (and stamp \Seen into the flags
-      // array so subsequent sync passes don't flip the bit back).
-      //
-      // Using bulkPut instead of .modify((m) => …): the db worker rejects
-      // function callbacks ("db worker modify does not support function
-      // callbacks; pass an object") because callbacks can't be serialised
-      // across the worker boundary. Read-then-bulkPut preserves existing
-      // per-message flags (e.g. \Flagged) which a flat object-style modify
-      // would erase.
-      const updated = allFolderMessages.map((m) => {
-        const flags = Array.isArray(m.flags) ? m.flags : [];
-        const nextFlags = flags.includes('\\Seen') ? flags : [...flags, '\\Seen'];
-        return {
-          ...m,
-          is_unread: false,
-          is_unread_index: 0,
-          flags: nextFlags,
-        };
-      });
-      await db.messages.bulkPut(updated);
+      if (!marked) return { success: true, count: 0 };
+      await markCachedRead([...seen]);
+      invalidateFolderInMemCache(account, folderPath);
 
-      // Stage each flip as a pending flag mutation. Without this, the
-      // loadMessages() call below re-merges server data (which still
-      // reports is_unread=true in demo mode, and may briefly report it
-      // in production while the server processes the bulk update) and
-      // clobbers the optimistic state. applyPendingFlagMutations
-      // re-applies the override on every messages.set() until either
-      // confirmFlagMutations sees server agreement or the 30s TTL
-      // expires.
-      for (const m of unreadMessages) {
-        if (!m?.id) continue;
-        const flags = Array.isArray(m.flags) ? m.flags : [];
-        const nextFlags = flags.includes('\\Seen') ? flags : [...flags, '\\Seen'];
-        addPendingFlagMutation(m.id, {
-          is_unread: false,
-          is_unread_index: 0,
-          flags: nextFlags,
-        });
+      if (isActiveAccountName(account)) {
+        messages.set(applyPendingFlagMutations(get(messages)));
+        if (sameFolderPath(get(selectedFolder), folderPath)) await loadMessages();
+        await updateFolderUnreadCounts();
       }
 
-      // Reload current folder if it matches
-      if (get(selectedFolder) === folderPath) {
-        await loadMessages();
-      }
-
-      // Update folder unread counts
-      await updateFolderUnreadCounts();
-
-      return { success: true, count: unreadMessages.length };
+      return { success: true, count: marked };
     } catch (err) {
       console.error('markFolderAsRead failed', err);
       throw err;
@@ -3646,6 +3861,8 @@ const createMailboxStore = () => {
    */
   const enumerateFolderMessages = async (folderPath: string, account: string) => {
     const PAGE_SIZE = 250;
+    const authHeader = getAuthHeaderForAccount(account);
+    if (!authHeader) throw new Error('account_switched');
     const cached = await db.messages
       .where('[account+folder]')
       .equals([account, folderPath])
@@ -3659,7 +3876,7 @@ const createMailboxStore = () => {
         const res = await Remote.request(
           'MessageList',
           { folder: folderPath, page, limit: PAGE_SIZE, raw: false, attachments: false },
-          { method: 'GET', pathOverride: '/v1/messages', timeout: 60_000 },
+          { method: 'GET', pathOverride: '/v1/messages', timeout: 60_000, authHeader },
         );
         return extractMessageList('main', res);
       },
@@ -3691,7 +3908,11 @@ const createMailboxStore = () => {
         selectedConversationIds.set([]);
       }
 
-      // Delete from server in parallel batches
+      // Delete from server in parallel batches, as the account this started
+      // for even if another is switched to meanwhile.
+      const authHeader = getAuthHeaderForAccount(account);
+      if (!authHeader) return { success: false, count: 0, error: 'Account changed' };
+      for (const msg of folderMessages) noteUnreadMove(account, msg, null);
       const CONCURRENCY = 8;
       let successCount = 0;
       let failCount = 0;
@@ -3708,15 +3929,18 @@ const createMailboxStore = () => {
               {
                 method: 'DELETE',
                 pathOverride: `/v1/messages/${encodeURIComponent(apiId)}?permanent=1`,
+                authHeader,
               },
             );
             return msg.id;
           }),
         );
 
-        results.forEach((result) => {
+        results.forEach((result, idx) => {
+          const msg = chunk[idx];
           if (result.status === 'fulfilled') {
             successCount++;
+            settleUnreadChange(msg?.id, account);
           } else {
             // Treat 404 / "not found" as success — message already gone server-side
             const reason = result.reason;
@@ -3724,8 +3948,10 @@ const createMailboxStore = () => {
               reason?.status === 404 || /not (found|exist)/i.test(reason?.message || '');
             if (is404) {
               successCount++;
+              settleUnreadChange(msg?.id, account);
             } else {
               failCount++;
+              if (msg?.id != null) unreadDeltas.drop(account, String(msg.id));
             }
           }
         });
@@ -3785,6 +4011,36 @@ const createMailboxStore = () => {
     }
     return emptyFolder(spamPath);
   };
+
+  // Badge follow-up for changes made here (see unreadDeltaHooks). A read shows
+  // in the badge at once, not when its request returns; once changes reach
+  // the server, one fresh folder list replaces the guesswork.
+  let unreadRecountTimer: ReturnType<typeof setTimeout> | null = null;
+  let unreadRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+  unreadDeltaHooks.noted = (account) => {
+    if (!isActiveAccountName(account) || unreadRecountTimer) return;
+    unreadRecountTimer = setTimeout(() => {
+      unreadRecountTimer = null;
+      void updateFolderUnreadCounts();
+    }, 0);
+  };
+  unreadDeltaHooks.settled = (account) => {
+    if (!isActiveAccountName(account) || isDemoMode()) return;
+    if (unreadRefreshTimer) clearTimeout(unreadRefreshTimer);
+    unreadRefreshTimer = setTimeout(() => {
+      unreadRefreshTimer = null;
+      if (!isActiveAccountName(account)) return;
+      loadFolders({ force: true }).catch(() => {});
+    }, UNREAD_SETTLED_REFRESH_MS);
+  };
+  // The offline queue sending changes settles them (settleArrivedUnreadChanges
+  // runs in the recount).
+  let lastQueueCount = 0;
+  mutationQueueCount.subscribe((count: number) => {
+    const drained = count < lastQueueCount;
+    lastQueueCount = count;
+    if (drained) void updateFolderUnreadCounts();
+  });
 
   return {
     state: {
@@ -3862,7 +4118,7 @@ const createMailboxStore = () => {
       deleteFolder,
       markFolderAsRead,
       updateFolderUnreadCounts,
-      rebaseFolderUnread,
+      settleUnreadChange,
       buildFolderList,
       // Bulk folder actions
       getSpamFolderPath,

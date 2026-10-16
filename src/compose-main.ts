@@ -25,6 +25,49 @@ import { createToastHost } from './svelte/toastsHost';
 import { getEffectiveSettingValue } from './stores/settingsStore';
 import { installPasteNormalizer } from './utils/paste-normalizer';
 import { installRuntimeErrorNotifier } from './utils/runtime-error-notifier';
+import { initDbCryptoBridge, setExternalIdbKey } from './utils/db-crypto-bridge.js';
+import { listenForComposeLockState } from './utils/compose-crypto-sync';
+import {
+  isLockEnabled,
+  isUnlocked,
+  isVaultConfigured,
+  restoreSessionDek,
+  wasUnlockedThisSession,
+} from './utils/crypto-store.js';
+
+// This window writes drafts and the outbox to IndexedDB like the main window
+// does, so it needs the same at-rest encryption wiring or those rows are
+// stored as plaintext while App Lock is on. Register the config provider
+// before anything can touch the database (the registration itself is
+// synchronous): the db client then holds sensitive writes until the config
+// is pushed, and fails closed while no key is available.
+initDbCryptoBridge().catch((err) => {
+  console.error('[compose] db crypto bridge init failed:', err);
+});
+// Lock, unlock and turning App Lock off in the main window after this window
+// opened.
+void listenForComposeLockState();
+// Same-session DEK restore as main.ts. Compose windows usually have their own
+// sessionStorage, in which case this finds nothing and the key arrives with
+// compose:init instead (see applyHandedOverIdbKey).
+if (isLockEnabled() && isVaultConfigured() && wasUnlockedThisSession() && !isUnlocked()) {
+  restoreSessionDek().catch((err: unknown) => {
+    console.warn('[compose] session DEK restore failed:', err);
+  });
+}
+
+/** Install the IDB subkey the main window sent with compose:init (base64). */
+async function applyHandedOverIdbKey(idbKey: unknown) {
+  if (typeof idbKey !== 'string' || !idbKey) return;
+  try {
+    const binary = atob(idbKey);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+    await setExternalIdbKey(bytes);
+  } catch (err) {
+    console.error('[compose] Could not apply the database key from the main window:', err);
+  }
+}
 
 // Undo WebKit's percent-encoded uri-list paste for text copied out of the
 // editor. See paste-normalizer.ts for details.
@@ -157,13 +200,19 @@ async function initFromTauriEvent() {
       if (initialized) return;
       initialized = true;
 
-      const { action, prefill, auth, sentFolder, undoSendDelay } = event.payload as {
+      const { action, prefill, auth, sentFolder, undoSendDelay, idbKey } = event.payload as {
         action?: string;
         prefill?: Record<string, unknown>;
         auth?: Record<string, string>;
         sentFolder?: string;
         undoSendDelay?: string;
+        idbKey?: string;
       };
+
+      // App Lock: the main window may pass its IDB subkey so drafts and the
+      // outbox written here are sealed like everywhere else. Without it this
+      // window fails closed (local draft and outbox writes are refused).
+      void applyHandedOverIdbKey(idbKey);
 
       // Mirror the undo-send device setting into this webview's localStorage so
       // getEffectiveSettingValue('undo_send_delay') reads it here too. Safe to

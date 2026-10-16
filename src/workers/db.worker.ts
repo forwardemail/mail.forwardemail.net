@@ -58,6 +58,10 @@ self.addEventListener('message', (event: MessageEvent<DbWorkerMessage>) => {
     const port = (event as MessageEvent & { ports: MessagePort[] }).ports[0];
 
     if (port && workerId) {
+      // A worker that reconnects (for example after its own restart) gets a
+      // fresh channel; close the old one so it does not linger.
+      const previous = connectedPorts.get(workerId);
+      if (previous && previous !== port) previous.close();
       connectedPorts.set(workerId, port);
 
       port.onmessage = async (portEvent: MessageEvent<DbWorkerMessage>) => {

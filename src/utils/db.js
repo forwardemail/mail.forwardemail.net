@@ -26,6 +26,7 @@ import {
   getDatabaseInfo as getDbInfo,
   clearCache as clearDbCache,
   resetDatabase as resetDb,
+  restoreRawRows,
 } from './db-worker-client.js';
 import { bootstrapReady } from './bootstrap-ready.js';
 import { SCHEMA_VERSION, DEXIE_VERSION } from './db-constants.ts';
@@ -34,10 +35,12 @@ import {
   clearRecoveryState,
   setTerminateWorkersCallback,
   getRawDatabaseInfo,
-  deleteDatabase,
   isRecoverableError,
   attemptRecovery,
   cleanupOldDatabases,
+  classifyDatabaseError,
+  rebuildDatabasePreservingLocalData,
+  restorePendingStash,
 } from './db-recovery.js';
 import { warn } from './logger.ts';
 
@@ -103,7 +106,10 @@ async function ensureVersionCompatibility() {
       }
 
       try {
-        await deleteDatabase();
+        const rebuilt = await rebuildDatabasePreservingLocalData();
+        if (!rebuilt.recovered) {
+          throw rebuilt.error || new Error('Database rebuild was abandoned');
+        }
         clearRecoveryState();
         if (dbRecoveryCallbacks.onRecoveryComplete) {
           try {
@@ -170,6 +176,7 @@ export async function initializeDatabase() {
       if (result?.success) {
         dbInitialized = true;
         await getDbInfo();
+        await restoreStashedLocalData();
       }
 
       return { success: true, recovered: false };
@@ -221,6 +228,7 @@ export async function initializeDatabase() {
           try {
             await initDbClient();
             dbInitialized = true;
+            await restoreStashedLocalData();
             return { success: true, recovered: true };
           } catch (retryError) {
             console.error('[DB] Retry after recovery failed:', retryError);
@@ -279,7 +287,8 @@ export async function resetDatabase() {
 }
 
 /**
- * Clear all cached data but keep database structure
+ * Clear cached server data for every account but keep drafts, the outbox and
+ * the meta table.
  */
 export async function clearCache() {
   try {
@@ -292,110 +301,118 @@ export async function clearCache() {
 }
 
 /**
- * Handle database errors with automatic recovery fallback
- * For worker timeouts: terminates worker and deletes database for clean restart
- * For other recoverable errors: attempts cache clear or database reset
+ * Bring back drafts, outbox items and queued changes saved by a recovery
+ * rebuild (possibly in an earlier session that reloaded before restoring).
+ */
+async function restoreStashedLocalData() {
+  try {
+    await restorePendingStash((table, rows) => restoreRawRows(table, rows));
+  } catch (err) {
+    warn('[DB] Restoring local data after a rebuild failed; will retry next boot', err);
+  }
+}
+
+// A corruption-class error gets one reopen. If another one arrives within
+// this window the reopen did not help, and the database is rebuilt.
+const CORRUPTION_REOPEN_WINDOW_MS = 5 * 60 * 1000;
+let lastCorruptionReopenAt = 0;
+
+function fireRecoveryCallback(name, arg) {
+  const callback = dbRecoveryCallbacks[name];
+  if (!callback) return;
+  try {
+    callback(arg);
+  } catch {
+    // ignore callback errors
+  }
+}
+
+async function freeSpaceForQuota() {
+  try {
+    const { cacheManager } = await import('./cache-manager.js');
+    const info = await cacheManager.getStorageInfo();
+    const target = Math.max((info.quota || 0) * cacheManager.evictionTarget, 5 * 1024 * 1024);
+    const result = await cacheManager.evictOldest(target);
+    return result?.freedBytes > 0;
+  } catch (err) {
+    warn('[DB] Freeing space after a quota error failed:', err);
+    return false;
+  }
+}
+
+/**
+ * Handle a database error with recovery proportional to its cause. Stored
+ * data is only ever rebuilt for corruption that survives a reopen, and even
+ * then drafts, the outbox and queued changes are carried over (or the rebuild
+ * is abandoned). Every other path leaves stored data alone:
+ * - timeout (stuck or dead worker): restart the worker, which falls back to
+ *   the main thread if it has to. Never deletes the database.
+ * - quota: evict cached message bodies and metadata, oldest and least
+ *   important first. Drafts and the outbox are never evicted.
+ * - transient (aborted transaction, locked vault, blocked upgrade): nothing.
  *
  * @param {Error} error - The database error
  * @returns {Promise<{recovered: boolean, method: string | null}>}
  */
 export async function handleDatabaseError(error) {
-  const errorMessage = error?.message || '';
-  const errorCode = error?.code;
+  const kind = classifyDatabaseError(error);
 
-  // Check if this is a worker init timeout or related error
-  const isWorkerTimeout =
-    errorCode === 'DB_WORKER_INIT_TIMEOUT' ||
-    /Database worker init timeout/i.test(errorMessage) ||
-    /Database worker terminated/i.test(errorMessage) ||
-    /Database worker not initialized/i.test(errorMessage);
+  if (kind === 'timeout') {
+    try {
+      terminateDbWorker();
+      await initDbClient();
+      dbInitialized = true;
+      return { recovered: true, method: 'restart-worker' };
+    } catch (restartError) {
+      console.error('[DB] Restarting the database worker failed:', restartError);
+      return { recovered: false, method: null };
+    }
+  }
 
-  if (!isWorkerTimeout && !isRecoverableError(error)) {
+  if (kind === 'quota') {
+    const freed = await freeSpaceForQuota();
+    return { recovered: freed, method: freed ? 'evict' : null };
+  }
+
+  if (kind !== 'corruption') {
     return { recovered: false, method: null };
   }
 
-  warn('[DB] Attempting recovery for database error:', errorMessage);
+  warn('[DB] Database error that may be corruption:', error?.message);
 
-  if (dbRecoveryCallbacks.onRecoveryStart) {
+  const now = Date.now();
+  if (now - lastCorruptionReopenAt > CORRUPTION_REOPEN_WINDOW_MS) {
+    lastCorruptionReopenAt = now;
     try {
-      dbRecoveryCallbacks.onRecoveryStart(error);
-    } catch {
-      // ignore
-    }
-  }
-
-  // For worker timeout errors, use aggressive recovery (terminate + delete)
-  if (isWorkerTimeout) {
-    try {
-      // Step 1: Terminate the stuck worker
       terminateDbWorker();
+      await initDbClient();
+      await getDbInfo();
+      dbInitialized = true;
+      return { recovered: true, method: 'reopen' };
+    } catch (reopenError) {
+      warn('[DB] Reopen did not help; rebuilding:', reopenError?.message);
+    }
+  }
 
-      // Step 2: Delete the database using raw IndexedDB API (bypasses worker)
-      await deleteDatabase();
-
-      // Step 3: Clear recovery state
+  // The error came back after a reopen: rebuild, keeping local-only data.
+  fireRecoveryCallback('onRecoveryStart', error);
+  try {
+    terminateDbWorker();
+    const rebuilt = await rebuildDatabasePreservingLocalData();
+    if (rebuilt.recovered) {
       clearRecoveryState();
-
-      if (dbRecoveryCallbacks.onRecoveryComplete) {
-        try {
-          dbRecoveryCallbacks.onRecoveryComplete();
-        } catch {
-          // ignore
-        }
-      }
-
-      return { recovered: true, method: 'force-reset' };
-    } catch (forceResetError) {
-      console.error('[DB] Force reset failed:', forceResetError);
-      // Fall through to try other methods
+      await initDbClient();
+      dbInitialized = true;
+      await restoreStashedLocalData();
+      lastCorruptionReopenAt = 0;
+      fireRecoveryCallback('onRecoveryComplete');
+      return { recovered: true, method: 'rebuild' };
     }
+  } catch (rebuildError) {
+    console.error('[DB] Rebuilding the database failed:', rebuildError);
   }
 
-  // For other recoverable errors, try gentler approaches
-
-  // Step 1: Try to clear cache
-  try {
-    const cacheCleared = await clearCache();
-    if (cacheCleared) {
-      if (dbRecoveryCallbacks.onRecoveryComplete) {
-        try {
-          dbRecoveryCallbacks.onRecoveryComplete();
-        } catch {
-          // ignore
-        }
-      }
-      return { recovered: true, method: 'cache-clear' };
-    }
-  } catch (cacheError) {
-    warn('[DB] Failed to clear cache:', cacheError);
-  }
-
-  // Step 2: Try to reset database if cache clear failed
-  try {
-    const resetSuccess = await resetDatabase();
-    if (resetSuccess) {
-      if (dbRecoveryCallbacks.onRecoveryComplete) {
-        try {
-          dbRecoveryCallbacks.onRecoveryComplete();
-        } catch {
-          // ignore
-        }
-      }
-      return { recovered: true, method: 'database-reset' };
-    }
-  } catch (resetError) {
-    console.error('[DB] Failed to reset database:', resetError);
-  }
-
-  // Recovery failed
-  if (dbRecoveryCallbacks.onRecoveryFailed) {
-    try {
-      dbRecoveryCallbacks.onRecoveryFailed(error);
-    } catch {
-      // ignore
-    }
-  }
-
+  fireRecoveryCallback('onRecoveryFailed', error);
   return { recovered: false, method: null };
 }
 

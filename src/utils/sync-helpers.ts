@@ -426,10 +426,63 @@ interface MergeResult {
   changed: boolean;
 }
 
+/**
+ * A read, star or answered change made on this device that the server may not
+ * have applied yet. Same shape as the main thread's pending flag tracker
+ * (optimistic-trackers.ts), without its timestamp.
+ */
+export interface PendingFlagChange {
+  is_unread?: boolean;
+  is_starred?: boolean;
+  is_answered?: boolean;
+  flags?: string[];
+}
+
+const withFlag = (flags: string[], flag: string, on: boolean): string[] => {
+  const rest = flags.filter((f) => String(f).toLowerCase() !== flag.toLowerCase());
+  return on ? [...rest, flag] : rest;
+};
+
+/**
+ * Lay a pending local change over a server record. A list response can
+ * predate the change, so for the fields the change covers the local value
+ * stands until the server reports it (the main thread drops the pending entry
+ * once it does). The flag list is kept consistent with those fields.
+ */
+export function applyPendingFlagChange(
+  incoming: Partial<Message>,
+  pending: PendingFlagChange | null | undefined,
+): Partial<Message> {
+  if (!pending) return incoming;
+  let flags = Array.isArray(pending.flags)
+    ? [...pending.flags]
+    : Array.isArray(incoming.flags)
+      ? [...incoming.flags]
+      : undefined;
+  const next: Partial<Message> = { ...incoming };
+  if (typeof pending.is_unread === 'boolean') {
+    next.is_unread = pending.is_unread;
+    if (flags) flags = withFlag(flags, '\\Seen', !pending.is_unread);
+  }
+  if (typeof pending.is_starred === 'boolean') {
+    next.is_starred = pending.is_starred;
+    next.is_flagged = pending.is_starred;
+    if (flags) flags = withFlag(flags, '\\Flagged', pending.is_starred);
+  }
+  if (typeof pending.is_answered === 'boolean') {
+    next.is_answered = pending.is_answered;
+    if (flags) flags = withFlag(flags, '\\Answered', pending.is_answered);
+  }
+  if (flags) next.flags = flags;
+  return next;
+}
+
 export function mergeFlagsAndMetadata(
   existing: Partial<Message> = {},
-  incoming: Partial<Message> = {},
+  serverRecord: Partial<Message> = {},
+  pending: PendingFlagChange | null = null,
 ): MergeResult {
+  const incoming = applyPendingFlagChange(serverRecord, pending);
   const next = { ...existing };
   let changed = false;
 
@@ -457,6 +510,20 @@ export function mergeFlagsAndMetadata(
   const nextStarred = incoming.is_starred ?? existing.is_starred;
   if (nextStarred !== existing.is_starred) {
     next.is_starred = nextStarred;
+    changed = true;
+  }
+
+  // is_flagged mirrors is_starred and is_answered drives the reply indicator.
+  // Both change on other clients (a star or a reply sent from Thunderbird) and
+  // used to stay at whatever the row was first cached with.
+  const nextFlagged = incoming.is_flagged ?? existing.is_flagged;
+  if (typeof nextFlagged === 'boolean' && nextFlagged !== existing.is_flagged) {
+    next.is_flagged = nextFlagged;
+    changed = true;
+  }
+  const nextAnswered = incoming.is_answered ?? existing.is_answered;
+  if (typeof nextAnswered === 'boolean' && nextAnswered !== existing.is_answered) {
+    next.is_answered = nextAnswered;
     changed = true;
   }
 
@@ -515,6 +582,52 @@ export function mergeFlagsAndMetadata(
   }
 
   return { record: changed ? next : existing, changed };
+}
+
+// Fields a list row can leave out (the lightweight shape drops addresses and
+// thread headers). An empty value there means "not sent", not "cleared".
+const KEEP_WHEN_EMPTY = [
+  'from',
+  'to',
+  'cc',
+  'bcc',
+  'reply_to',
+  'in_reply_to',
+  'references',
+  'thread_id',
+  'root_id',
+  'header_message_id',
+] as const;
+
+/**
+ * Fold a server list row into the cached row for the same message instead of
+ * replacing it. The cached row carries things only this device knows: the
+ * PGP badge flags and, for protected-headers mail, the decrypted subject
+ * (the server only has the "..." placeholder), plus whether the body was
+ * already indexed. Server fields still win where the server actually sent a
+ * value.
+ */
+export function mergeServerRow(
+  existing: Partial<Message> | null | undefined,
+  incoming: Partial<Message>,
+): Partial<Message> {
+  if (!existing) return incoming;
+  const merged: Record<string, unknown> = { ...existing };
+  for (const [key, value] of Object.entries(incoming)) {
+    if (value === undefined) continue;
+    merged[key] = value;
+  }
+  for (const key of KEEP_WHEN_EMPTY) {
+    const value = (incoming as Record<string, unknown>)[key];
+    const isEmpty = value === null || value === undefined || value === '';
+    const prior = (existing as Record<string, unknown>)[key];
+    if (isEmpty && prior !== null && prior !== undefined && prior !== '') merged[key] = prior;
+  }
+  if (existing.pgpEncrypted && typeof existing.subject === 'string' && existing.subject.trim()) {
+    merged.subject = existing.subject;
+  }
+  if (existing.bodyIndexed) merged.bodyIndexed = true;
+  return merged as Partial<Message>;
 }
 
 export function isCachedBodyComplete(

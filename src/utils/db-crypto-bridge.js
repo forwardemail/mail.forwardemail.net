@@ -20,6 +20,7 @@ import {
   sendCryptoConfig,
   reencryptAllDb,
   unsealDbForDisable,
+  abandonSealedDb,
 } from './db-worker-client.js';
 import { db } from './db';
 import {
@@ -33,18 +34,86 @@ import { warn } from './logger.ts';
 const APP_LOCK_FLAG_KEY = 'app_lock_enabled';
 
 let bridgeInitialized = false;
+// IDB subkey handed over by another window of this app (the desktop compose
+// window has no DEK of its own). Only used while this window is not unlocked.
+let externalIdbKey = null;
+// What the window that owns the vault last said about App Lock: 'disabling'
+// (keep the key for reads, write plaintext) or 'off' (nothing is sealed any
+// more). Null until it says anything. Only the compose window sets this.
+let externalLockState = null;
+// Set while App Lock is being turned off. Any config pushed in that window
+// (including after a worker restart) keeps the key for reading but stores new
+// writes as plaintext, so nothing written during the sweep is sealed with a
+// key that is about to be discarded.
+let disablingKey = null;
 
 function atRestEncryptionEnabled() {
   return isLockEnabled() && isVaultConfigured();
 }
 
 async function currentCryptoConfig() {
+  if (disablingKey) {
+    return { required: false, rawKey: disablingKey, sealWrites: false };
+  }
+  if (externalLockState === 'disabling') {
+    return { required: false, rawKey: externalIdbKey, sealWrites: false };
+  }
+  if (externalLockState === 'off') return { required: false, rawKey: null };
   const required = atRestEncryptionEnabled();
   let rawKey = null;
-  if (required && isUnlocked()) {
-    rawKey = await getIdbCryptoMaterial();
+  if (required) {
+    if (isUnlocked()) {
+      rawKey = await getIdbCryptoMaterial();
+    } else if (externalIdbKey) {
+      rawKey = externalIdbKey;
+    }
   }
   return { required, rawKey };
+}
+
+/**
+ * Use an IDB subkey supplied by another window (see compose-main.ts). Pass
+ * null to forget it. Pushes the resulting config to the engine right away.
+ * @param {Uint8Array|null} rawKey
+ */
+export async function setExternalIdbKey(rawKey) {
+  externalIdbKey = rawKey && rawKey.byteLength === 32 ? rawKey : null;
+  await initDbCryptoBridge();
+  await applyCryptoConfig();
+}
+
+/**
+ * Follow an App Lock change made in the window that owns the vault (see
+ * compose-crypto-sync.ts). 'locked' forgets the key, 'unlocked' takes a new
+ * one, 'disabling' stops sealing while the key is still needed for reads,
+ * and 'off' drops the key once nothing is sealed.
+ * @param {{ state: 'locked'|'unlocked'|'disabling'|'off', rawKey?: Uint8Array|null }} change
+ */
+export async function applyExternalLockChange({ state, rawKey = null }) {
+  if (state === 'unlocked') {
+    externalLockState = null;
+    externalIdbKey = rawKey && rawKey.byteLength === 32 ? rawKey : null;
+  } else if (state === 'locked') {
+    externalLockState = null;
+    externalIdbKey = null;
+  } else if (state === 'disabling') {
+    externalLockState = 'disabling';
+  } else if (state === 'off') {
+    externalLockState = 'off';
+    externalIdbKey = null;
+  } else {
+    return;
+  }
+  await initDbCryptoBridge();
+  await applyCryptoConfig();
+}
+
+// Tell open compose windows about a change here. Loaded lazily: it pulls in
+// Tauri APIs that only the desktop build has.
+function notifyComposeWindows(state) {
+  import('./compose-crypto-sync.ts')
+    .then(({ broadcastComposeLockState }) => broadcastComposeLockState(state))
+    .catch(() => {});
 }
 
 async function updateSwGateFlag() {
@@ -78,6 +147,8 @@ export async function syncDbCryptoState() {
   await initDbCryptoBridge();
   await applyCryptoConfig();
   await updateSwGateFlag();
+  if (!atRestEncryptionEnabled()) notifyComposeWindows('off');
+  else notifyComposeWindows(isUnlocked() ? 'unlocked' : 'locked');
 }
 
 /**
@@ -107,19 +178,30 @@ export async function decryptAllIdbData() {
     warn('[db-crypto-bridge] Cannot decrypt IDB data without an unlocked vault');
     return null;
   }
-  // Keep the key available for the sweep but drop the fail-closed flag so
-  // concurrent writes during the sweep land as plaintext (which is the
-  // post-disable end state anyway).
-  await sendCryptoConfig({ required: false, rawKey });
+  // Keep the key available so the sweep can open sealed rows, but stop
+  // sealing: a write that races the sweep must land as plaintext (the
+  // post-disable end state). Sealing it with this key would lose it once the
+  // key is dropped below. The sweep only rewrites rows it finds unchanged, so
+  // it does not overwrite those writes either.
+  disablingKey = rawKey;
+  await sendCryptoConfig({ required: false, rawKey, sealWrites: false });
+  // Compose windows seal with the same key; they must stop before it goes.
+  await import('./compose-crypto-sync.ts')
+    .then(({ broadcastComposeLockState }) => broadcastComposeLockState('disabling'))
+    .catch(() => {});
   try {
     const result = await unsealDbForDisable();
     // Success: the cache is plaintext now, so drop the key too.
+    disablingKey = null;
     await sendCryptoConfig({ required: false, rawKey: null });
     return result;
   } catch (err) {
     // The sweep failed and the cache is still (partly) sealed. Restore the
     // live config (required + key) so reads/writes keep working and the caller
-    // can abort the disable with data intact, then rethrow.
+    // can abort the disable with data intact, then rethrow. Rows written as
+    // plaintext in the meantime stay readable and are sealed again by the
+    // next encrypt sweep.
+    disablingKey = null;
     await syncDbCryptoState().catch(() => {});
     throw err;
   }
@@ -128,16 +210,19 @@ export async function decryptAllIdbData() {
 /**
  * Give up on an unreadable encrypted cache. Used when disabling App Lock with
  * no key available (e.g. the DEK couldn't be restored): the sealed records
- * can't be decrypted, so clear them and drop the engine's fail-closed flag so
+ * can't be decrypted, so remove them and drop the engine's fail-closed flag so
  * the app recovers and re-syncs from the server instead of throwing
- * DbLockedError on every write.
+ * DbLockedError on every write. Sealed meta rows (queued changes, saved
+ * searches, contact, calendar and attachment caches) go too, so nothing is
+ * left behind that can never be read; plaintext rows are kept.
  */
 export async function abandonEncryptedCache() {
   await initDbCryptoBridge();
+  externalIdbKey = null;
+  disablingKey = null;
   await sendCryptoConfig({ required: false, rawKey: null });
   try {
-    const { clearCache } = await import('./db-worker-client.js');
-    await clearCache();
+    await abandonSealedDb();
   } catch (err) {
     warn('[db-crypto-bridge] Failed to clear encrypted cache', err);
   }

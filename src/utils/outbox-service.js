@@ -11,6 +11,7 @@ import { isOnline } from './network-status';
 import { exponentialBackoff } from './backoff.js';
 import { markOriginalAnswered } from './answered-flag.ts';
 import { isEmailAlreadyExistsError } from './message-id.ts';
+import { withNamedLock } from './sync-core.js';
 
 /**
  * Outbox Service
@@ -83,6 +84,29 @@ let processorInterval = null;
 function getAccount() {
   return Local.get('email') || 'default';
 }
+
+// Claiming an item for sending and cancelling it (Undo send) take turns per
+// item, in this tab through the chain and across tabs through the Web Lock.
+// The processor works from a list read before it started, so without this an
+// item undone while the list was being worked through was still sent.
+const itemLockChains = new Map();
+
+function withOutboxItemLock(account, id, fn) {
+  const key = `${account}\u0000${id}`;
+  const locked = () => withNamedLock(`outbox-item:${key}`, fn);
+  const run = (itemLockChains.get(key) || Promise.resolve()).then(locked, locked);
+  const tail = run.then(
+    () => {},
+    () => {},
+  );
+  itemLockChains.set(key, tail);
+  tail.then(() => {
+    if (itemLockChains.get(key) === tail) itemLockChains.delete(key);
+  });
+  return run;
+}
+
+const CLAIMABLE = new Set(['pending', 'scheduled']);
 
 /**
  * How an item authenticates (see resolveSenderAuth in send-as.ts).
@@ -472,7 +496,8 @@ async function settleServerScheduledItem(item, account) {
  * Send a single email from outbox
  * @returns {Promise<{success: boolean, error?: string}>}
  */
-async function sendOutboxItem(item) {
+async function sendOutboxItem(queuedItem) {
+  let item = queuedItem;
   // Bind to the account that OWNS this item, not to whatever is active now.
   // processOutbox awaits a network send plus a 500ms pause between items, so
   // the user can switch accounts mid-drain. Reading the active account here
@@ -509,11 +534,21 @@ async function sendOutboxItem(item) {
     return settleServerScheduledItem(item, account);
   }
 
-  // Mark as sending
-  await db.outbox.update([account, item.id], {
-    status: 'sending',
-    updatedAt: Date.now(),
+  // Claim it: only an item still waiting to go out is marked sending. One
+  // undone or already sent since the list was read is left alone.
+  const claimed = await withOutboxItemLock(account, item.id, async () => {
+    const current = await db.outbox.get([account, item.id]);
+    if (!current || !CLAIMABLE.has(current.status)) return null;
+    await db.outbox.update([account, item.id], {
+      status: 'sending',
+      updatedAt: Date.now(),
+    });
+    return current;
   });
+  if (!claimed) {
+    return { success: false, deferred: true, error: 'No longer queued' };
+  }
+  item = claimed;
 
   try {
     const payload = buildSendPayload(item.emailData, item.sendAt);
@@ -750,6 +785,28 @@ export async function retryAllFailed() {
 }
 
 /**
+ * Undo a send that is still waiting in the outbox. Takes the item away only
+ * if the processor has not claimed it, so a message is never both reopened
+ * in the composer and sent.
+ *
+ * @param {string} id - Outbox item ID
+ * @param {Object} [options]
+ * @param {string} [options.account] - the outbox it was queued in (default: active)
+ * @returns {Promise<{cancelled: boolean, item: Object|null}>}
+ */
+export async function cancelQueuedSend(id, { account: forAccount } = {}) {
+  const account = forAccount || getAccount();
+  const result = await withOutboxItemLock(account, id, async () => {
+    const item = await db.outbox.get([account, id]);
+    if (!item || !CLAIMABLE.has(item.status)) return { cancelled: false, item: item || null };
+    await db.outbox.delete([account, id]);
+    return { cancelled: true, item };
+  });
+  await updateOutboxCount();
+  return result;
+}
+
+/**
  * Delete an outbox item (sent or failed)
  */
 export async function deleteOutboxItem(id) {
@@ -903,6 +960,7 @@ export const outboxService = {
   // Cleanup
   deleteOutboxItem,
   cancelScheduledEmail,
+  cancelQueuedSend,
   clearSentItems,
 
   // Background processor

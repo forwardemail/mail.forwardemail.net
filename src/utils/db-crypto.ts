@@ -96,24 +96,80 @@ const PLAINTEXT_FIELDS: Record<string, Set<string>> = {
     'updatedAt',
   ]),
   searchIndex: new Set(['account', 'key', 'updatedAt']),
+  // The cached account settings blob is free-form server data (signatures,
+  // alias defaults and whatever else the API grows), so only the key stays
+  // readable.
+  settings: new Set(['account', 'updatedAt']),
   meta: new Set(['key', 'updatedAt']),
 };
 
 // The meta table is a grab-bag key-value store; only these key families hold
 // sensitive content (queued mutations embed auth headers, contact cache,
-// attachment blobs, saved searches). Everything else (migration flags, probe
-// records, the app_lock_enabled flag the SW reads) stays plaintext.
-const SENSITIVE_META_KEY_PREFIXES = [
+// attachment blobs, saved searches, the calendar list and event caches that
+// Calendar.svelte and CalendarInviteCard.svelte keep). Everything else
+// (migration flags, probe records, sweep progress, the app_lock_enabled flag
+// the SW reads, calendar_prefs_ which only holds calendar ids) stays plaintext.
+export const SENSITIVE_META_KEY_PREFIXES = [
   'mutation_queue_',
   'contacts_',
   'att_blob_',
   'att_cache_manifest',
   'saved_search_',
+  'calendars_',
+  'calendar_events_',
 ];
 
 let aesKey: CryptoKey | null = null;
 let encryptionRequired = false;
 let loggedLockedRead = false;
+// When false the key is still used to open sealed records but new writes are
+// stored as plaintext. Set while App Lock is being turned off, so a write that
+// races the decrypt sweep is not sealed with a key that is about to be thrown
+// away.
+let sealWrites = true;
+
+// Boot gate. The main thread arms it at init when it is going to push a crypto
+// config. Until that config arrives we do not know whether the vault is on, so
+// a sensitive write could land as plaintext and a sealed read would come back
+// stripped. Both wait here instead. If the config never arrives the wait gives
+// up and the operation fails closed.
+const CRYPTO_GATE_TIMEOUT_MS = 20_000;
+let gatePending = false;
+let gatePromise: Promise<void> | null = null;
+let releaseGate: (() => void) | null = null;
+
+/** Hold sensitive reads and writes until configureDbCrypto runs. */
+export function armCryptoGate(): void {
+  if (gatePending) return;
+  gatePending = true;
+  gatePromise = new Promise<void>((resolve) => {
+    releaseGate = resolve;
+  });
+}
+
+function openCryptoGate(): void {
+  gatePending = false;
+  releaseGate?.();
+  releaseGate = null;
+  gatePromise = null;
+}
+
+export function isCryptoGatePending(): boolean {
+  return gatePending;
+}
+
+async function waitForCryptoGate(): Promise<void> {
+  if (!gatePending || !gatePromise) return;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const timedOut = await Promise.race([
+    gatePromise.then(() => false),
+    new Promise<boolean>((resolve) => {
+      timer = setTimeout(() => resolve(true), CRYPTO_GATE_TIMEOUT_MS);
+    }),
+  ]);
+  if (timer) clearTimeout(timer);
+  if (timedOut && gatePending) throw new DbLockedError();
+}
 
 export function isSensitiveTable(table: string | undefined | null): boolean {
   return Boolean(table && PLAINTEXT_FIELDS[table]);
@@ -142,11 +198,11 @@ export function changesTouchSensitiveFields(table: string, changes: unknown): bo
 }
 
 export function isDbCryptoActive(): boolean {
-  return aesKey !== null || encryptionRequired;
+  return aesKey !== null || encryptionRequired || gatePending;
 }
 
-export function getDbCryptoState(): { required: boolean; hasKey: boolean } {
-  return { required: encryptionRequired, hasKey: aesKey !== null };
+export function getDbCryptoState(): { required: boolean; hasKey: boolean; sealWrites: boolean } {
+  return { required: encryptionRequired, hasKey: aesKey !== null, sealWrites };
 }
 
 /**
@@ -156,8 +212,10 @@ export function getDbCryptoState(): { required: boolean; hasKey: boolean } {
 export async function configureDbCrypto(options: {
   required?: boolean;
   rawKey?: ArrayBuffer | Uint8Array | null;
-}): Promise<{ required: boolean; hasKey: boolean }> {
+  sealWrites?: boolean;
+}): Promise<{ required: boolean; hasKey: boolean; sealWrites: boolean }> {
   encryptionRequired = Boolean(options?.required);
+  sealWrites = options?.sealWrites !== false;
   const raw = options?.rawKey ?? null;
   if (raw) {
     const bytes = raw instanceof Uint8Array ? raw : new Uint8Array(raw);
@@ -172,6 +230,7 @@ export async function configureDbCrypto(options: {
     aesKey = null;
   }
   loggedLockedRead = false;
+  openCryptoGate();
   return getDbCryptoState();
 }
 
@@ -252,11 +311,21 @@ export async function sealRecord(table: string, record: unknown): Promise<unknow
   const rec = record as DbRecord;
   if (!recordIsSensitive(table, rec)) return record;
 
+  await waitForCryptoGate();
+
   const { plain, secret, hasSecret } = splitRecord(table, rec);
 
   if (!aesKey) {
     if (encryptionRequired) throw new DbLockedError();
     return record;
+  }
+
+  if (!sealWrites) {
+    // Leaving encryption: store plaintext. A record that still carries an
+    // envelope (a cursor modify on a sealed row) is opened and merged first.
+    if (!isEnvelope(rec._enc)) return record;
+    const existing = await decryptFields(rec._enc);
+    return { ...plain, ...existing, ...secret };
   }
 
   if (isEnvelope(rec._enc)) {
@@ -284,6 +353,8 @@ export async function openRecord(table: string, record: unknown): Promise<unknow
   const rec = record as DbRecord;
   if (!isEnvelope(rec._enc)) return record;
 
+  await waitForCryptoGate();
+
   const { _enc, ...plain } = rec;
   if (!aesKey) {
     if (!loggedLockedRead) {
@@ -306,8 +377,25 @@ export async function openRecord(table: string, record: unknown): Promise<unknow
   }
 }
 
+/**
+ * Open a sealed record or throw. Unlike openRecord it never falls back to the
+ * plaintext shell, so a sweep that is about to overwrite the stored row can
+ * tell a real decrypt from a failed one and leave the row alone.
+ */
+export async function openRecordStrict(table: string, record: unknown): Promise<unknown> {
+  if (!record || typeof record !== 'object') return record;
+  const rec = record as DbRecord;
+  if (!isEnvelope(rec._enc)) return record;
+  if (!aesKey) throw new DbLockedError();
+  const { _enc, ...plain } = rec;
+  const secret = await decryptFields(_enc);
+  return { ...plain, ...secret };
+}
+
 export async function sealRecords(table: string, records: unknown[]): Promise<unknown[]> {
   if (!isDbCryptoActive() || !isSensitiveTable(table)) return records;
+  // Wait once up front so a large batch does not queue a timer per record.
+  await waitForCryptoGate();
   return Promise.all(records.map((r) => sealRecord(table, r)));
 }
 

@@ -2,6 +2,7 @@ import { config } from '../config.js';
 import SyncWorker from '../workers/sync.worker.ts?worker&inline';
 import { Local } from './storage.js';
 import { getDbWorker, initializeDatabase, isDbUsingMainThread } from './db.js';
+import { onDbWorkerChange } from './db-worker-client.js';
 import { getAuthHeader } from './auth.ts';
 import { createPendingRequests } from './pending-requests.js';
 import { warn } from './logger.ts';
@@ -92,7 +93,7 @@ function handleWorkerError(event) {
  * Connect sync worker to db.worker via MessageChannel
  * @throws {Error} If connection fails after initialization attempt
  */
-async function connectToDbWorker() {
+async function connectToDbWorker(knownDbWorker = null) {
   if (dbConnected || !worker) return;
 
   // When the DB runs on the main thread (WebKitGTK worker-IndexedDB fallback),
@@ -100,7 +101,7 @@ async function connectToDbWorker() {
   // rather than throwing — the sync worker simply can't reach the DB here.
   if (isDbUsingMainThread()) return;
 
-  let dbWorker = getDbWorker();
+  let dbWorker = knownDbWorker || getDbWorker();
   if (!dbWorker) {
     try {
       await initializeDatabase();
@@ -108,6 +109,9 @@ async function connectToDbWorker() {
     } catch (err) {
       throw new Error(`Failed to initialize database worker: ${err.message || 'Unknown error'}`);
     }
+    // Starting the database announces the new db worker, and the listener
+    // below may have connected to it while we waited.
+    if (dbConnected || !worker) return;
   }
   if (!dbWorker) {
     throw new Error('Database worker not available after initialization');
@@ -123,6 +127,19 @@ async function connectToDbWorker() {
   worker.postMessage({ type: 'connectDbPort' }, [channel.port2]);
   dbConnected = true;
 }
+
+// The db worker can be replaced (a crash, a wake from suspend, or a fallback to
+// the main thread). The sync worker's port to the old one is dead, so drop it
+// and open a new one to the replacement.
+onDbWorkerChange(({ worker: dbWorker, useMainThread }) => {
+  dbConnected = false;
+  if (useMainThread || !dbWorker || !worker) return;
+  connectToDbWorker(dbWorker).catch((err) => {
+    // Make the next ensureSyncWorkerReady() try the connection again.
+    workerReady = false;
+    warn('[sync-worker-client] Reconnecting to the database worker failed', err);
+  });
+});
 
 export async function ensureSyncWorkerReady() {
   if (isDemoMode()) return; // Don't spawn worker in demo mode

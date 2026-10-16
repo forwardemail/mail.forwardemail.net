@@ -227,21 +227,16 @@ export async function cleanupDemoAccount({ preserveCredentials = false } = {}) {
 export function exitDemoAndRedirect({ openSignUp = !shouldHidePurchaseLinks() } = {}) {
   deactivateDemoMode();
 
-  // Clear demo credentials from storage
+  // Clear the demo credentials. Local.remove also drops the tab's copy in
+  // sessionStorage; the rest of sessionStorage is left alone, since other
+  // accounts signed in only for this session live there too.
   try {
     Accounts.remove(DEMO_EMAIL);
-    Local.remove('email');
-    Local.remove('alias_auth');
-    Local.remove('api_token');
+    for (const key of ['email', 'alias_auth', 'api_key', 'api_token', 'authToken']) {
+      Local.remove(key);
+    }
   } catch {
     // Best effort cleanup
-  }
-
-  // Clear tab-scoped session keys
-  try {
-    sessionStorage.clear();
-  } catch {
-    // ignore
   }
 
   // Open sign-up page

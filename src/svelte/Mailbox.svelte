@@ -10,6 +10,7 @@
   import { isTauri } from '../utils/platform.js';
   import { shouldHidePurchaseLinks } from '../utils/store-policy.js';
   import { searchStore } from '../stores/searchStore';
+  import { getPendingDeleteIds, getPendingFlagMutations } from '../stores/mailboxStore';
   import { Remote } from '../utils/remote';
   import { isDemoBlockedError, isDemoMode } from '../utils/demo-mode';
   import { evaluateEdgeSwipe, isEdgeSwipeStart } from '../utils/mobile-edge-swipe';
@@ -71,6 +72,9 @@
   import { isLockEnabled, isVaultConfigured } from '../utils/crypto-store.js';
   import { getMessageApiId, normalizeMessageForCache } from '../utils/sync-helpers.ts';
   import { flagChangeBody } from '../utils/message-changes';
+  import { queueOrRevertFailedChange, supersedeQueuedMutations } from '../utils/mutation-queue';
+  import { getAuthHeaderForAccount } from '../utils/auth';
+  import { isActiveAccount } from '../utils/account-scope';
   import { prefetchMessages } from '../utils/sync-controller.js';
   import { getSyncSettings } from '../utils/sync-settings.js';
   import { parseMailto, mailtoToPrefill } from '../utils/mailto';
@@ -4286,12 +4290,109 @@
   // the API call, then write to IDB + invalidate caches.  The bulk
   // wrappers below call these sequentially for each selected message.
 
+  // A read change failed. When the failure can pass it is queued and sent
+  // again, like the store's toggleRead; otherwise only this message is put
+  // back, and only while its account is still on screen. Restoring the whole
+  // list from before could bring back another account's messages after a
+  // switch, and the change was never retried.
+  const recoverReadChange = async ({ err, account, previous, updated, apiId }) => {
+    const payload = {
+      messageId: apiId,
+      internalId: previous.id,
+      subject: previous.subject,
+      isUnread: Boolean(previous.is_unread),
+      flags: Array.isArray(previous.flags) ? previous.flags : [],
+      folder: previous.folder,
+    };
+    let outcome = 'revert';
+    try {
+      outcome = await queueOrRevertFailedChange('toggleRead', payload, err, { account });
+    } catch {
+      outcome = 'revert';
+    }
+    if (outcome === 'queued') {
+      // Cached as shown, so a reload before the retry does not flip it back
+      await db.messages
+        .where('[account+id]')
+        .equals([account, updated.id])
+        .modify({
+          is_unread: updated.is_unread,
+          is_unread_index: updated.is_unread ? 1 : 0,
+          flags: updated.flags,
+        })
+        .catch(() => {});
+      return;
+    }
+    // The message is gone from the server; the next sync removes it here.
+    if (outcome === 'gone' || !isActiveAccount(account)) return;
+    // Clears the pending flag change and restores this one message
+    await mailboxStore?.actions?.revertFailedMutation?.({
+      type: 'toggleRead',
+      payload: { ...payload, account },
+    });
+  };
+
+  // Sends a read or unread change made here, as the account it was made in.
+  // Shared by the single and bulk read actions below.
+  const sendReadChange = async ({ previous, updated, account, label }) => {
+    const apiId = getMessageApiId(updated);
+    if (!apiId) {
+      console.warn(`${label} failed: missing message id`);
+      return { missingId: true };
+    }
+    try {
+      // A change to this message still waiting in the offline queue would be
+      // sent after this one and undo it.
+      await supersedeQueuedMutations({ account, messageIds: [apiId], type: 'toggleRead' }).catch(
+        () => [],
+      );
+      await Remote.request(
+        'MessageUpdate',
+        flagChangeBody(
+          updated.flags,
+          updated.is_unread ? { remove: ['\\Seen'] } : { add: ['\\Seen'] },
+        ),
+        {
+          method: 'PUT',
+          pathOverride: `/v1/messages/${encodeURIComponent(apiId)}`,
+          authHeader: getAuthHeaderForAccount(account) || undefined,
+        },
+      );
+    } catch (err) {
+      // A message the server no longer has needs no count kept for it
+      const gone = err?.status === 404 || /not (found|exist)/i.test(err?.message || '');
+      if (gone) mailboxStore?.actions?.settleUnreadChange?.(updated.id, account);
+      console.warn(`${label} failed`, err);
+      await recoverReadChange({ err, account, previous, updated, apiId });
+      return { failed: true };
+    }
+    // The server has the change, so the next unread count includes it
+    mailboxStore?.actions?.settleUnreadChange?.(updated.id, account);
+    await db.messages
+      .where('[account+id]')
+      .equals([account, updated.id])
+      .modify({
+        is_unread: updated.is_unread,
+        is_unread_index: updated.is_unread ? 1 : 0,
+        flags: updated.flags,
+      })
+      .catch(() => {});
+    if (isActiveAccount(account)) {
+      mailboxStore.actions.updateFolderUnreadCounts();
+      // Invalidate the LRU cache so future loadMessages() reads fresh data from IDB
+      const folder = updated.folder || get(selectedFolder);
+      if (folder) mailboxStore.actions.invalidateFolderInMemCache(account, folder);
+    }
+    return { ok: true };
+  };
+
   const markMessageUnread = async (msg) => {
     if (!msg) return;
+    // The account the change is made in, read before anything is awaited
+    const account = Local.get('email') || 'default';
     const list = source.state?.messages ? get(messagesStore) || [] : [];
     const current = list.find((m) => m.id === msg.id) || msg;
     if (current.is_unread) return; // already unread
-    const previousList = list;
     const currentFlags = Array.isArray(current.flags) ? current.flags : [];
     const newFlags = currentFlags.filter((f) => f !== '\\Seen');
     const updated = {
@@ -4308,31 +4409,15 @@
       is_unread_index: 1,
       flags: updated.flags,
     });
-    try {
-      const apiId = getMessageApiId(updated);
-      if (!apiId) {
-        console.warn('markMessageUnread failed: missing message id');
-        showMissingMessageIdToast('mark as unread');
-        reloadMessages();
-        return;
-      }
-      await Remote.request('MessageUpdate', flagChangeBody(updated.flags, { remove: ['\\Seen'] }), {
-        method: 'PUT',
-        pathOverride: `/v1/messages/${encodeURIComponent(apiId)}`,
-      });
-      const account = Local.get('email') || 'default';
-      const changes = { is_unread: true, is_unread_index: 1, flags: updated.flags };
-      await db.messages.where('[account+id]').equals([account, updated.id]).modify(changes);
-      mailboxStore.actions.updateFolderUnreadCounts();
-      const folder = get(selectedFolder);
-      if (account && folder) {
-        mailboxStore.actions.invalidateFolderInMemCache(account, folder);
-      }
-    } catch (err) {
-      console.warn('markMessageUnread failed', err);
-      if (source.state?.messages?.set && previousList) {
-        mailboxStore.state.messages.set(previousList);
-      }
+    const { missingId } = await sendReadChange({
+      previous: current,
+      updated,
+      account,
+      label: 'markMessageUnread',
+    });
+    if (missingId) {
+      showMissingMessageIdToast('mark as unread');
+      reloadMessages();
     }
   };
 
@@ -4953,6 +5038,7 @@
 
   const toggleReadMessage = async (msg) => {
     if (!msg) return;
+    const account = Local.get('email') || 'default';
     const list = source.state?.messages ? get(messagesStore) || [] : [];
     const current = list.find((m) => m.id === msg.id) || msg;
     const newIsUnread = !current.is_unread;
@@ -5001,52 +5087,27 @@
     }
     mailboxView?.selectedMessage?.set?.({ ...updated });
     actionMenuOpen = false;
-    try {
-      const apiId = getMessageApiId(updated);
-      if (!apiId) {
-        console.warn('toggleRead failed: missing message id');
-        showMissingMessageIdToast('update read status');
-        reloadMessages();
-        return;
-      }
-      await Remote.request(
-        'MessageUpdate',
-        flagChangeBody(updated.flags, newIsUnread ? { remove: ['\\Seen'] } : { add: ['\\Seen'] }),
-        {
-          method: 'PUT',
-          pathOverride: `/v1/messages/${encodeURIComponent(apiId)}`,
-        },
-      );
-      const account = Local.get('email') || 'default';
-      await db.messages
-        .where('[account+id]')
-        .equals([account, updated.id])
-        .modify({
-          is_unread: newIsUnread,
-          is_unread_index: newIsUnread ? 1 : 0,
-          flags: updated.flags,
-        });
-      mailboxStore.actions.updateFolderUnreadCounts();
-      // Invalidate the LRU cache so future loadMessages() reads fresh data from IDB
-      const folder = get(selectedFolder);
-      if (account && folder) {
-        mailboxStore.actions.invalidateFolderInMemCache(account, folder);
-      }
-      // Do NOT call refresh() here — the optimistic update above already set the
-      // correct is_unread in the messages store.  Calling refresh() would read
-      // stale LRU cache data and could revert the unread dot.
-    } catch (err) {
-      console.warn('toggleRead failed', err);
+    // Do NOT call refresh() after this: the optimistic update above already
+    // set the correct is_unread in the messages store. Calling refresh() would
+    // read stale LRU cache data and could revert the unread dot.
+    const { missingId } = await sendReadChange({
+      previous: current,
+      updated,
+      account,
+      label: 'toggleRead',
+    });
+    if (missingId) {
+      showMissingMessageIdToast('update read status');
       reloadMessages();
     }
   };
 
   const markMessageRead = async (msg) => {
     if (!msg?.is_unread) return;
+    const account = Local.get('email') || 'default';
     const list = source.state?.messages ? get(messagesStore) || [] : [];
     const current = list.find((m) => m.id === msg.id) || msg;
     if (!current.is_unread) return;
-    const previousList = list;
     const currentFlags = Array.isArray(current.flags) ? current.flags : [];
     const newFlags = new Set(currentFlags);
     newFlags.add('\\Seen');
@@ -5074,50 +5135,15 @@
       }
     }
     mailboxView?.selectedMessage?.set?.({ ...updated });
-    try {
-      const apiId = getMessageApiId(updated);
-      if (!apiId) {
-        console.warn('markMessageRead failed: missing message id');
-        showMissingMessageIdToast('mark as read');
-        reloadMessages();
-        return;
-      }
-      await Remote.request('MessageUpdate', flagChangeBody(updated.flags, { add: ['\\Seen'] }), {
-        method: 'PUT',
-        pathOverride: `/v1/messages/${encodeURIComponent(apiId)}`,
-      });
-      const account = Local.get('email') || 'default';
-      const changes = { is_unread: false, is_unread_index: 0, flags: updated.flags };
-      await db.messages.where('[account+id]').equals([account, updated.id]).modify(changes);
-      mailboxStore.actions.updateFolderUnreadCounts();
-      // Invalidate the LRU cache so future loadMessages() reads fresh data from IDB
-      const folder = get(selectedFolder);
-      if (account && folder) {
-        mailboxStore.actions.invalidateFolderInMemCache(account, folder);
-      }
-    } catch (err) {
-      console.warn('markMessageRead failed', err);
-      if (source.state?.messages?.set && previousList) {
-        mailboxStore.state.messages.set(previousList);
-      }
-      if (source.state?.selectedMessage?.set) {
-        mailboxStore.state.selectedMessage.set(current);
-      }
-      if (typeof mailboxView?.messages === 'function') {
-        try {
-          const existing = mailboxView.messages?.() || [];
-          mailboxView.messages(
-            existing.map((m) =>
-              m.id === current.id
-                ? { ...m, is_unread: current.is_unread, flags: current.flags }
-                : m,
-            ),
-          );
-        } catch {
-          // ignore
-        }
-      }
-      mailboxView?.selectedMessage?.set?.({ ...current });
+    const { missingId } = await sendReadChange({
+      previous: current,
+      updated,
+      account,
+      label: 'markMessageRead',
+    });
+    if (missingId) {
+      showMissingMessageIdToast('mark as read');
+      reloadMessages();
     }
   };
 
@@ -5968,6 +5994,10 @@
         ...($unreadOnly ? { is_unread: true } : {}),
         ...($hasAttachmentsOnly ? { has_attachments: true } : {}),
         // Note: label filtering is done client-side
+        // Rows deleted or with a flag change still on its way are not
+        // written over with the server's older copy.
+        pendingDeleteIds: getPendingDeleteIds(),
+        pendingFlagMutations: getPendingFlagMutations(),
       });
 
       const messages = res?.messages || [];

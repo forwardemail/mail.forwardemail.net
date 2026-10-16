@@ -2602,6 +2602,17 @@
     return payload;
   };
 
+  // Whose mailbox this message was written in and the message it answers,
+  // handed to the main window with onSent. It deletes the draft and archives
+  // the answered message ("Send & Archive") for that account. Using whatever
+  // the main window shows then archived the wrong message after a switch, or
+  // whatever happened to be selected.
+  const replyContextFor = (payload: Record<string, unknown>) => ({
+    ownerAccount: activeAccount() || null,
+    replyToMessageId: (payload._replyToMessageId as string) || null,
+    replyToMessageFolder: (payload._replyToMessageFolder as string) || null,
+  });
+
   // Not awaited: the send goes on to reset() the form, which clears
   // replyToMessageId, so the id is passed before anything is awaited.
   const markOriginalAsAnswered = () => {
@@ -2681,6 +2692,7 @@
       setVisible(false);
       reset();
       onSent?.({
+        ...replyContextFor(payload),
         queued: true,
         scheduled: true,
         sendAt,
@@ -2792,6 +2804,7 @@
         const shouldArchive = archiveAfterSend;
         reset();
         onSent?.({
+          ...replyContextFor(payload),
           queued: true,
           undoSend: true,
           outboxId: queued.id,
@@ -2835,6 +2848,7 @@
         const shouldArchive = archiveAfterSend;
         reset();
         onSent?.({
+          ...replyContextFor(payload),
           queued: true,
           archive: shouldArchive,
           toast: nativeWindow
@@ -2962,6 +2976,7 @@
       const optimisticSent = buildOptimisticSentSource(payload, sentCopyResponse);
       reset();
       onSent?.({
+        ...replyContextFor(payload),
         archive: shouldArchive,
         draftId: draftIdToDelete,
         serverDraftId: serverDraftIdToDelete,
@@ -3002,6 +3017,7 @@
           const shouldArchive = archiveAfterSend;
           reset();
           onSent?.({
+            ...replyContextFor(payload),
             queued: true,
             archive: shouldArchive,
             toast: nativeWindow

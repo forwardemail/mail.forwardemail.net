@@ -26,7 +26,7 @@ import { get } from 'svelte/store';
 import { mailboxStore } from '../stores/mailboxStore';
 import { Accounts, Local } from './storage';
 import { isVaultLocked } from './crypto-store.js';
-import { isActiveAccount } from './account-scope.ts';
+import { isActiveAccount, sameAccount } from './account-scope.ts';
 import { syncFolderForEvent } from './sync-controller';
 import { createReleaseWatcher, WS_EVENTS } from './websocket-client';
 import {
@@ -50,6 +50,10 @@ const FALLBACK_POLL_INTERVAL_MS = 60_000; // 1 min fallback when WS disconnected
 const SETTINGS_SYNC_THROTTLE_MS = 30_000; // Throttle visibility-based settings sync
 const CALDAV_RESYNC_THROTTLE_MS = 30_000; // Throttle visibility-based calendar/contacts reload
 const CATCH_UP_DELAY_MS = 2_000; // Collapse reconnect and dropped-message catch-ups
+// How long a change for the account being switched to waits for its list to
+// replace the previous account's on screen, and how often that is checked.
+const SWITCH_SETTLE_MS = 10_000;
+const SWITCH_CHECK_MS = 100;
 
 /**
  * @typedef {Object} InboxUpdater
@@ -222,6 +226,71 @@ function createWebSocketUpdater() {
   }
 
   /**
+   * The account whose messages the list on screen holds. During a switch the
+   * active account changes first, and the previous account's list stays up
+   * until the new one's cache has been read (up to a few seconds). The store
+   * patches the list on screen for events of the active account, so an event
+   * of the new account landing then changed the previous account's rows that
+   * share a UID and folder with it.
+   */
+  function visibleAccount() {
+    const fromStore = mailboxStore.actions.getVisibleAccount?.();
+    if (isNonEmptyString(fromStore)) return fromStore;
+    const listStore = mailboxStore.state.messages;
+    const list = listStore ? get(listStore) : null;
+    const row = Array.isArray(list) ? list.find((m) => isNonEmptyString(m?.account)) : null;
+    return row?.account || Local.get('email') || 'default';
+  }
+
+  // Changes that wait for a switch to finish, in the order they arrived
+  const waitingForSwitch = [];
+  let switchTimer = null;
+
+  function runWhenListSettled() {
+    switchTimer = null;
+    const now = Date.now();
+    while (waitingForSwitch.length) {
+      if (destroyed || !started) {
+        waitingForSwitch.length = 0;
+        return;
+      }
+      const next = waitingForSwitch[0];
+      const stillActive = isActiveAccount(next.account);
+      if (stillActive && !sameAccount(visibleAccount(), next.account)) {
+        if (next.expires > now) break;
+        // The list never caught up. The switch loads the folder from the
+        // server anyway, so only the refresh is kept.
+        waitingForSwitch.shift();
+        next.skip?.();
+        continue;
+      }
+      // Shown now, or switched away again (the change then only touches the
+      // cache, which is what it is for).
+      waitingForSwitch.shift();
+      next.run();
+    }
+    if (waitingForSwitch.length && !switchTimer) {
+      switchTimer = setTimeout(runWhenListSettled, SWITCH_CHECK_MS);
+    }
+  }
+
+  /**
+   * Run a change to an account's messages now, unless that account is the
+   * active one and its list is not on screen yet; then it waits for the list.
+   */
+  function whenListShows(account, run, skip) {
+    const waiting =
+      waitingForSwitch.length > 0 ||
+      (isActiveAccount(account) && !sameAccount(visibleAccount(), account));
+    if (!waiting) {
+      run();
+      return;
+    }
+    waitingForSwitch.push({ account, run, skip, expires: Date.now() + SWITCH_SETTLE_MS });
+    if (!switchTimer) switchTimer = setTimeout(runWhenListSettled, SWITCH_CHECK_MS);
+  }
+
+  /**
    * Apply the change an event describes (`apply` receives the account and the
    * resolved folder path), then refresh the affected folders. The refresh
    * waits for the change, so it does not read back rows the change removes.
@@ -233,6 +302,10 @@ function createWebSocketUpdater() {
       return;
     }
 
+    whenListShows(account, () => applyNow(account, mailbox, path, apply, refresh), refresh);
+  }
+
+  function applyNow(account, mailbox, path, apply, refresh) {
     Promise.resolve()
       .then(async () => {
         const folder = await mailboxStore.actions.resolveRealtimeFolder(account, mailbox, path);
@@ -384,14 +457,68 @@ function createWebSocketUpdater() {
       if (path) change = { type: 'created', path };
     }
 
-    if (change && account) {
-      Promise.resolve(
-        mailboxStore.actions.applyRemoteMailboxChange?.({ account, ...change }),
-      ).catch((err) => console.warn('[updater] Failed to apply folder change:', err));
-    }
-
     // Forced: a list fetched within the folder cache window predates this change
-    if (active) mailboxStore.actions.loadFolders?.({ force: true });
+    const reload = () => {
+      if (active) mailboxStore.actions.loadFolders?.({ force: true });
+    };
+    if (!change || !account) {
+      reload();
+      return;
+    }
+    whenListShows(
+      account,
+      () => {
+        const applyChange = (next) =>
+          Promise.resolve(mailboxStore.actions.applyRemoteMailboxChange?.({ account, ...next }));
+        // Read before the folder reload below replaces the list
+        const children =
+          change.type === 'renamed'
+            ? childRenames(account, change.oldPath, change.newPath)
+            : Promise.resolve([]);
+        // The folders inside a renamed one move with it: Parent/Child is
+        // NewParent/Child now, and its cached messages and the view follow.
+        applyChange(change)
+          .then(() => children)
+          .then((renames) => Promise.all(renames.map(applyChange)))
+          .catch((err) => console.warn('[updater] Failed to apply folder change:', err));
+        reload();
+      },
+      reload,
+    );
+  }
+
+  /**
+   * Renames for the folders below a renamed one, from the account's folder
+   * list (the one on screen, or the cached one for another account).
+   */
+  async function childRenames(account, oldPath, newPath) {
+    let list = [];
+    if (isActiveAccount(account) && sameAccount(visibleAccount(), account)) {
+      list = get(mailboxStore.state.folders) || [];
+    } else {
+      try {
+        const { db } = await import('./db');
+        list = (await db.folders.where('account').equals(account).toArray()) || [];
+      } catch {
+        list = [];
+      }
+    }
+    const renames = [];
+    const seen = new Set();
+    for (const folder of list) {
+      const path = folder?.path;
+      if (!isNonEmptyString(path)) continue;
+      const delimiter = isNonEmptyString(folder.delimiter) ? folder.delimiter : '/';
+      const prefix = `${oldPath}${delimiter}`;
+      if (!path.startsWith(prefix) || seen.has(path)) continue;
+      seen.add(path);
+      renames.push({
+        type: 'renamed',
+        oldPath: path,
+        newPath: `${newPath}${delimiter}${path.slice(prefix.length)}`,
+      });
+    }
+    return renames;
   }
 
   // Catch up on anything a dropped message or a reconnect may have missed.
@@ -673,6 +800,11 @@ function createWebSocketUpdater() {
     stop() {
       started = false;
       stopFallbackPoll();
+      if (switchTimer) {
+        clearTimeout(switchTimer);
+        switchTimer = null;
+      }
+      waitingForSwitch.length = 0;
       if (visibilityHandler) {
         document.removeEventListener('visibilitychange', visibilityHandler);
         visibilityHandler = null;

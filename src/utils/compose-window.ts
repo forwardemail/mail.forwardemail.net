@@ -16,6 +16,7 @@ import { get } from 'svelte/store';
 import { Local } from './storage';
 import { folders as foldersStore } from '../stores/folderStore';
 import { resolveSentFolder } from './sent-folder';
+import { getIdbKeyForComposeWindow } from './crypto-store.js';
 
 let composeCounter = 0;
 
@@ -80,15 +81,23 @@ export async function initComposeWindowListener() {
   try {
     const { listen, emitTo } = await import('@tauri-apps/api/event');
 
-    listen('compose:ready', (event) => {
+    listen('compose:ready', async (event) => {
       const label = (event.payload as { label?: string })?.label;
       if (!label) return;
 
       const initData = pendingInits.get(label);
       pendingInits.delete(label);
 
+      // Under App Lock the compose window needs the IndexedDB key to seal its
+      // drafts and outbox; without it, it refuses to write them. Read now, not
+      // when the window was opened, so a lock in between sends no key.
+      const idbKey = await getIdbKeyForComposeWindow().catch(() => undefined);
+
       // Send init data to the compose window that just signaled ready
-      emitTo(label, 'compose:init', initData || { action: 'open', prefill: {} });
+      emitTo(label, 'compose:init', {
+        ...(initData || { action: 'open', prefill: {} }),
+        ...(idbKey ? { idbKey } : {}),
+      });
     });
   } catch {
     // Not in Tauri — no-op

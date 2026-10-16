@@ -21,6 +21,7 @@ vi.mock('../../src/utils/remote', () => ({
   Remote: { request: (...a: unknown[]) => h.remoteRequest(...a) },
 }));
 vi.mock('../../src/utils/mutation-queue', () => ({
+  mutationQueueCount: { subscribe: () => () => {} },
   queueMutation: vi.fn().mockResolvedValue(undefined),
   getQueuedMessageIds: vi.fn().mockResolvedValue(new Set()),
 }));

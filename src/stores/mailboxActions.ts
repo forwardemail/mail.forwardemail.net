@@ -52,7 +52,12 @@ import { validateLabelName } from '../utils/label-validation.ts';
 import { resolveSearchBodyIndexing } from '../utils/search-body-indexing.js';
 import { LABEL_PALETTE, canonicalizeLabelKeyword } from '../utils/labels.js';
 import { isHiddenLabel } from '../utils/label-filters';
-import { processMutationQueue, queueMutation } from '../utils/mutation-queue';
+import {
+  processMutationQueue,
+  queueMutation,
+  supersedeQueuedMutations,
+} from '../utils/mutation-queue';
+import { getAuthHeaderForAccount } from '../utils/auth';
 import { flagChangeBody, labelChangeBody } from '../utils/message-changes';
 import { config } from '../config';
 import { createInboxUpdater } from '../utils/websocket-updater';
@@ -440,11 +445,37 @@ function prefetchAdjacentAccounts(activeAccount) {
   }, 5000);
 }
 
+// A message no longer on the server. There is nothing left to change.
+const isMessageGone = (err) => err?.status === 404 || /not (found|exist)/i.test(err?.message || '');
+
+// Sends a flag or label change to one message as the account it was made in,
+// even when the user has switched accounts since. A change to the same
+// message still waiting in the offline queue would be sent after this one and
+// undo it, so that entry is dropped first. When the account has no usable
+// credentials right now the change is queued instead and this returns false.
+const sendMessageUpdate = async ({ account, apiId, type, body, payload }) => {
+  await supersedeQueuedMutations({ account, messageIds: [apiId], type }).catch(() => []);
+  const authHeader = getAuthHeaderForAccount(account);
+  if (!authHeader) {
+    await queueMutation(type, payload, { account });
+    return false;
+  }
+  await Remote.request('MessageUpdate', body, {
+    method: 'PUT',
+    pathOverride: `/v1/messages/${encodeURIComponent(apiId)}`,
+    authHeader,
+  });
+  return true;
+};
+
 /**
  * Toggle read/unread status for a message
  */
 export const toggleRead = async (msg) => {
   if (!msg?.id) return;
+  // The account this change belongs to, kept for the whole call so a switch
+  // while it is in flight cannot send or queue it as another account.
+  const account = Local.get('email') || 'default';
 
   const isUnread = msg.is_unread;
   const newFlags = isUnread
@@ -469,7 +500,6 @@ export const toggleRead = async (msg) => {
 
   // Invalidate in-memory folder cache so stale flags don't survive into
   // the next loadMessages() cycle triggered by a WebSocket sync refresh.
-  const account = Local.get('email') || 'default';
   mailboxStore.actions.invalidateFolderInMemCache?.(account, msg.folder);
 
   const apiId = getMessageApiId(msg);
@@ -502,19 +532,27 @@ export const toggleRead = async (msg) => {
   };
 
   if (!isOnline()) {
-    await queueMutation('toggleRead', mutationPayload);
+    await queueMutation('toggleRead', mutationPayload, { account });
     return;
   }
 
   try {
-    await Remote.request(
-      'MessageUpdate',
-      flagChangeBody(newFlags, isUnread ? { add: ['\\Seen'] } : { remove: ['\\Seen'] }),
-      { method: 'PUT', pathOverride: `/v1/messages/${encodeURIComponent(apiId)}` },
-    );
+    const sent = await sendMessageUpdate({
+      account,
+      apiId,
+      type: 'toggleRead',
+      body: flagChangeBody(newFlags, isUnread ? { add: ['\\Seen'] } : { remove: ['\\Seen'] }),
+      payload: mutationPayload,
+    });
+    // The server has the change, so the next unread count includes it
+    if (sent) mailboxStore.actions.settleUnreadChange?.(msg.id, account);
   } catch (err) {
+    if (isMessageGone(err)) {
+      mailboxStore.actions.settleUnreadChange?.(msg.id, account);
+      return;
+    }
     warn('toggleRead failed, queuing for retry', err);
-    await queueMutation('toggleRead', mutationPayload);
+    await queueMutation('toggleRead', mutationPayload, { account });
   }
 };
 
@@ -523,6 +561,7 @@ export const toggleRead = async (msg) => {
  */
 export const toggleStar = async (msg) => {
   if (!msg?.id) return;
+  const account = Local.get('email') || 'default';
 
   const isStarred = msg.is_starred || (msg.flags || []).includes('\\Flagged');
   const newFlags = new Set(msg.flags || []);
@@ -548,7 +587,6 @@ export const toggleStar = async (msg) => {
 
   // Invalidate in-memory folder cache so stale flags don't survive into
   // the next loadMessages() cycle triggered by a WebSocket sync refresh.
-  const account = Local.get('email') || 'default';
   mailboxStore.actions.invalidateFolderInMemCache?.(account, msg.folder);
 
   const currentSelected = get(mailboxStore.state.selectedMessage);
@@ -591,22 +629,24 @@ export const toggleStar = async (msg) => {
   };
 
   if (!isOnline()) {
-    await queueMutation('toggleStar', mutationPayload);
+    await queueMutation('toggleStar', mutationPayload, { account });
     return;
   }
 
   try {
-    await Remote.request(
-      'MessageUpdate',
-      flagChangeBody(
+    await sendMessageUpdate({
+      account,
+      apiId,
+      type: 'toggleStar',
+      body: flagChangeBody(
         Array.from(newFlags),
         isStarred ? { remove: ['\\Flagged'] } : { add: ['\\Flagged'] },
       ),
-      { method: 'PUT', pathOverride: `/v1/messages/${encodeURIComponent(apiId)}` },
-    );
+      payload: mutationPayload,
+    });
   } catch (err) {
     warn('toggleStar failed, queuing for retry', err);
-    await queueMutation('toggleStar', mutationPayload);
+    await queueMutation('toggleStar', mutationPayload, { account });
   }
 };
 
@@ -1357,7 +1397,7 @@ export const contextLabel = async (msgOrLabel, labelMaybe, options = {}) => {
   };
 
   if (!isOnline()) {
-    await queueMutation('label', mutationPayload);
+    await queueMutation('label', mutationPayload, { account });
     if (!silent) {
       const verb =
         action === 'add'
@@ -1373,9 +1413,12 @@ export const contextLabel = async (msgOrLabel, labelMaybe, options = {}) => {
   }
 
   try {
-    await Remote.request('MessageUpdate', labelChangeBody(nextLabels, currentLabels), {
-      method: 'PUT',
-      pathOverride: `/v1/messages/${encodeURIComponent(apiId)}`,
+    const sent = await sendMessageUpdate({
+      account,
+      apiId,
+      type: 'label',
+      body: labelChangeBody(nextLabels, currentLabels),
+      payload: mutationPayload,
     });
     if (!silent) {
       const verb =
@@ -1386,11 +1429,14 @@ export const contextLabel = async (msgOrLabel, labelMaybe, options = {}) => {
             : hasLabel
               ? 'Removed'
               : 'Applied';
-      toastsRef?.show?.(`${verb} label ${labelName}`, 'success');
+      toastsRef?.show?.(
+        sent ? `${verb} label ${labelName}` : `${verb} label ${labelName} (will sync when online)`,
+        'success',
+      );
     }
   } catch (err) {
     warn('contextLabel failed, queuing for retry', err);
-    await queueMutation('label', mutationPayload);
+    await queueMutation('label', mutationPayload, { account });
     if (!silent) {
       const verb =
         action === 'add'
@@ -2097,15 +2143,13 @@ const clearSensitiveClientStorage = (account?: string) => {
     Local.remove(`pgp_keys_${account}`);
   }
 
+  // Only this account's tab-scoped keys. Clearing all of sessionStorage also
+  // dropped the list of other session-only accounts in this tab, so they were
+  // treated as signed out too and the last-account teardown wiped everything.
   Local.remove('alias_auth');
   Local.remove('api_key');
   Local.remove('authToken');
   Local.remove('email');
-  try {
-    sessionStorage.clear();
-  } catch (err) {
-    warn('Failed to clear sessionStorage during sign out', err);
-  }
 };
 
 /**
@@ -2266,15 +2310,28 @@ let switchCooldownTimer = null;
 let switchPendingEmail = null;
 let switchPendingResolve = null;
 
+// The stored spelling of an account address. Links and notifications may
+// carry a lowercased address for an account that was added as `Alice@...`.
+const resolveAccountEmail = (email: string): string => {
+  const target = String(email || '')
+    .trim()
+    .toLowerCase();
+  const match = Accounts.getAll().find((a) => String(a.email || '').toLowerCase() === target);
+  return match?.email || email;
+};
+
+const isSameAccount = (a: string, b: string): boolean =>
+  String(a || '').toLowerCase() === String(b || '').toLowerCase();
+
 export const switchAccount = (accountObj) => {
-  const email = accountObj?.email || accountObj;
-  if (!email) return Promise.resolve();
+  const requested = accountObj?.email || accountObj;
+  if (!requested) return Promise.resolve();
+  const email = resolveAccountEmail(requested);
 
-  // Ignore if the requested account is already active
-  const active = get(currentAccount) || Local.get('email') || '';
-  if (active === email) return Promise.resolve();
-
-  // If a cooldown is active, replace the pending target (trailing call wins)
+  // If a cooldown is active, replace the pending target (trailing call wins).
+  // This runs before the "already active" check: A, then B, then back to A
+  // inside one burst must end on A, and A is the active account at that point
+  // only because the leading call already ran.
   if (switchCooldownTimer) {
     switchPendingEmail = email;
     return new Promise((resolve) => {
@@ -2284,6 +2341,10 @@ export const switchAccount = (accountObj) => {
     });
   }
 
+  // Ignore if the requested account is already active
+  const active = get(currentAccount) || Local.get('email') || '';
+  if (isSameAccount(active, email)) return Promise.resolve();
+
   // Leading edge: execute immediately
   switchCooldownTimer = setTimeout(async () => {
     const pending = switchPendingEmail;
@@ -2291,8 +2352,11 @@ export const switchAccount = (accountObj) => {
     switchCooldownTimer = null;
     switchPendingEmail = null;
     switchPendingResolve = null;
-    // If a different account was requested during cooldown, execute it now
-    if (pending && pending !== email) {
+    // If the burst ended on an account other than the one now active, switch
+    // to it. Comparing with the active account rather than the leading call
+    // matters when the burst returns to where it started.
+    const nowActive = get(currentAccount) || Local.get('email') || '';
+    if (pending && !isSameAccount(pending, nowActive)) {
       try {
         await performAccountSwitch(pending);
       } finally {
@@ -2371,9 +2435,10 @@ const preloadAccountCache = async (account) => {
   };
 };
 
-const performAccountSwitch = async (email) => {
+const performAccountSwitch = async (requestedEmail) => {
   // Per-account push: NO teardown on switch. All accounts keep their
   // registrations alive so push notifications arrive for every account.
+  const email = resolveAccountEmail(requestedEmail);
 
   // Use Accounts.setActive to properly switch account credentials
   const switched = Accounts.setActive(email);

@@ -25,7 +25,7 @@ import {
 } from '../utils/pgp-local';
 import { warn } from '../utils/logger.ts';
 import { canonicalizeLabelKeyword } from '../utils/labels.js';
-import { getAuthHeader } from '../utils/auth';
+import { getAuthHeader, getAuthHeaderForAccount } from '../utils/auth';
 import {
   DEFAULT_REMOTE_SETTINGS,
   describeLabelError,
@@ -100,7 +100,10 @@ interface AccountCacheEntry {
 
 const accountFetchCache = new Map<string, AccountCacheEntry>();
 
-export async function fetchAccountData({ force = false } = {}): Promise<unknown> {
+export async function fetchAccountData({
+  force = false,
+  account: requestedAccount,
+}: { force?: boolean; account?: string } = {}): Promise<unknown> {
   // Bail early if no credentials are available (e.g. on the login page).
   // Settings.svelte is always mounted and its onMount calls fetchSettings()
   // which calls this function — without this guard it would make an API call
@@ -109,7 +112,13 @@ export async function fetchAccountData({ force = false } = {}): Promise<unknown>
     throw new Error('No credentials available');
   }
 
-  const account = Local.get('email') || 'default';
+  const account = requestedAccount || Local.get('email') || 'default';
+  // A caller that names its account gets that account's answer even if the
+  // user switches while the request is in flight.
+  const authHeader = requestedAccount ? getAuthHeaderForAccount(requestedAccount) : '';
+  if (requestedAccount && !authHeader) {
+    throw new Error('No credentials available');
+  }
   const now = Date.now();
   const entry = accountFetchCache.get(account);
 
@@ -122,7 +131,7 @@ export async function fetchAccountData({ force = false } = {}): Promise<unknown>
     return entry.promise;
   }
 
-  const promise = Remote.request('Account', {});
+  const promise = Remote.request('Account', {}, authHeader ? { authHeader } : {});
   accountFetchCache.set(account, { promise, fetchAt: 0, result: entry?.result ?? null });
   try {
     const result = await promise;
@@ -581,16 +590,23 @@ async function loadCachedLabels(account: string): Promise<Label[]> {
   }
 }
 
+const activeSettingsAccount = (): string => Local.get('email') || 'default';
+
+const isStillActive = (account: string): boolean =>
+  activeSettingsAccount().toLowerCase() === account.toLowerCase();
+
+const mergeWithDefaults = (response: RemoteSettings): RemoteSettings => ({
+  mail: { ...DEFAULT_REMOTE_SETTINGS.mail, ...response.mail },
+  labels: response.labels || DEFAULT_REMOTE_SETTINGS.labels,
+  aliases: { ...DEFAULT_REMOTE_SETTINGS.aliases, ...response.aliases },
+});
+
 /**
  * Apply API response to settings store
  * Merges response with defaults to ensure all fields exist
  */
 export function applySettings(response: RemoteSettings): RemoteSettings {
-  const merged: RemoteSettings = {
-    mail: { ...DEFAULT_REMOTE_SETTINGS.mail, ...response.mail },
-    labels: response.labels || DEFAULT_REMOTE_SETTINGS.labels,
-    aliases: { ...DEFAULT_REMOTE_SETTINGS.aliases, ...response.aliases },
-  };
+  const merged = mergeWithDefaults(response);
   remoteSettings.set(merged);
   return merged;
 }
@@ -600,7 +616,11 @@ export function applySettings(response: RemoteSettings): RemoteSettings {
  * Settings are embedded in the account response under the 'settings' property
  */
 export async function fetchSettings(): Promise<RemoteSettings> {
-  const account = Local.get('email') || 'default';
+  // Everything below is for the account that was active when the call began.
+  // The user can switch while the cache read or the request is pending, and
+  // the result must then be cached for this account without being shown on
+  // the other one.
+  const account = activeSettingsAccount();
 
   settingsLoading.set(true);
   settingsError.set(null);
@@ -608,27 +628,34 @@ export async function fetchSettings(): Promise<RemoteSettings> {
   try {
     // Load cached settings first for immediate UI hydration
     const cached = await loadCachedSettings(account);
-    if (cached) {
+    if (cached && isStillActive(account)) {
       applySettings(cached);
     }
 
     // Load cached labels
     const cachedLabels = await loadCachedLabels(account);
-    if (cachedLabels.length) {
+    if (cachedLabels.length && isStillActive(account)) {
       settingsLabels.set(cachedLabels);
     }
 
     // Fetch account data which includes settings
-    const response = await fetchAccountData();
+    const response = await fetchAccountData(account === 'default' ? {} : { account });
 
     const settingsData = extractSettingsFromAccount(response as AccountResponse);
-    const merged = applySettings(settingsData);
+    const merged = mergeWithDefaults(settingsData);
     await cacheSettings(account, merged);
+    if (Array.isArray(merged.labels)) {
+      await cacheLabels(account, merged.labels);
+    }
 
-    // Also cache labels from settings (converted to array)
+    if (!isStillActive(account)) {
+      return get(remoteSettings);
+    }
+
+    applySettings(merged);
+    // Also show labels from settings (converted to array)
     if (Array.isArray(merged.labels)) {
       settingsLabels.set(merged.labels);
-      await cacheLabels(account, merged.labels);
     }
 
     settingsSynced.set(true);
@@ -645,7 +672,7 @@ export async function fetchSettings(): Promise<RemoteSettings> {
 
     // Use cached settings if API fails
     const cached = await loadCachedSettings(account);
-    if (cached) {
+    if (cached && isStillActive(account)) {
       applySettings(cached);
     }
 
@@ -660,7 +687,8 @@ export async function fetchSettings(): Promise<RemoteSettings> {
  * Settings can be sent directly at the top level of the request body
  */
 export async function updateSettings(changes: SettingsChanges): Promise<boolean> {
-  const account = Local.get('email') || 'default';
+  const account = activeSettingsAccount();
+  const authHeader = account === 'default' ? '' : getAuthHeaderForAccount(account);
   const previousSettings = structuredClone(get(remoteSettings));
   const previousLabels = get(settingsLabels);
 
@@ -684,18 +712,28 @@ export async function updateSettings(changes: SettingsChanges): Promise<boolean>
     settingsLabels.set(changes.labels);
   }
 
+  // Snapshot this account's updated values now. By the time the server answers
+  // the stores may hold another account's settings.
+  const updatedSettings = structuredClone(get(remoteSettings));
+  const updatedLabels = get(settingsLabels);
+
   try {
     // Convert to API payload (nested settings + label_settings map)
     const payload = buildAccountUpdatePayload(changes);
-    await Remote.request('AccountUpdate', payload, { method: 'PUT' });
-    await cacheSettings(account, get(remoteSettings));
+    await Remote.request(
+      'AccountUpdate',
+      payload,
+      authHeader ? { method: 'PUT', authHeader } : { method: 'PUT' },
+    );
+    await cacheSettings(account, updatedSettings);
     if (changes.labels) {
-      await cacheLabels(account, get(settingsLabels));
+      await cacheLabels(account, updatedLabels);
     }
     return true;
   } catch (err: unknown) {
     warn('[settingsStore] Failed to update settings:', err);
-    // Revert on error
+    // Revert on error, unless the stores now belong to another account
+    if (!isStillActive(account)) return false;
     remoteSettings.set(previousSettings);
     if (changes.labels) {
       settingsLabels.set(previousLabels);

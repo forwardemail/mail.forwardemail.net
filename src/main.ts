@@ -70,6 +70,7 @@ import {
   lock as lockCryptoStore,
   restoreSessionCredentials,
   restoreSessionDek,
+  copyPlainCredentialsToSession,
 } from './utils/crypto-store.js';
 import {
   canRouteAsSignedIn,
@@ -83,12 +84,9 @@ import {
   resume as resumeInactivityTimer,
   lockIfDue as lockAppIfDue,
 } from './utils/inactivity-timer.js';
-import {
-  startOutboxProcessor,
-  processOutbox,
-  getOutboxItem,
-  deleteOutboxItem,
-} from './utils/outbox-service';
+import { startOutboxProcessor, processOutbox, cancelQueuedSend } from './utils/outbox-service';
+import { repliedMessageToArchive, type RepliedMessageTarget } from './utils/answered-flag';
+import { isActiveAccount } from './utils/account-scope';
 import { initMutationQueue, processMutationQueue } from './utils/mutation-queue';
 import { initNetworkStatus } from './utils/network-status';
 import { syncPendingDrafts, deleteDraft } from './utils/draft-service';
@@ -811,12 +809,31 @@ const composeMailboxView = writable(null);
 // window closes on send.
 const undoSendTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
-interface UndoSendResult {
+interface UndoSendResult extends RepliedMessageTarget {
   undoSend?: boolean;
   outboxId?: string;
   undoWindowMs?: number;
   subject?: string;
   archive?: boolean;
+}
+
+// "Send & Archive" archives the message the reply answered, for the account
+// it was written in. It used to archive whatever the main window had
+// selected when the send finished, which after an account switch or a new
+// selection was some other message.
+function archiveRepliedMessage(target: RepliedMessageTarget | undefined) {
+  const message = repliedMessageToArchive(target, {
+    isActive: (account) => isActiveAccount(account),
+    messages: (get(mailboxStore.state.messages) || []) as Array<{ id?: unknown; folder?: unknown }>,
+    selected: get(selectedMessage) as { id?: unknown; folder?: unknown } | null,
+  });
+  if (!message) {
+    if (target?.replyToMessageId) {
+      console.warn('[main] Not archiving the replied message: its account is not on screen');
+    }
+    return Promise.resolve();
+  }
+  return mailboxActions.archiveMessage(message);
 }
 
 function outboxDataToPrefill(data: Record<string, unknown>): Record<string, unknown> {
@@ -865,7 +882,9 @@ function handleUndoSend(result: UndoSendResult) {
   const subject = (result?.subject || '(No subject)').slice(0, 40);
   // Archive the replied-to message only once we commit to sending, so an undo
   // leaves the conversation untouched.
-  const toArchive = result?.archive ? get(selectedMessage) : null;
+  const archiveTarget = result?.archive ? result : null;
+  // The outbox the item went into, should the user switch before undoing.
+  const outboxAccount = result?.ownerAccount || Local.get('email') || 'default';
 
   let toastId: number | null = null;
 
@@ -873,8 +892,8 @@ function handleUndoSend(result: UndoSendResult) {
     undoSendTimers.delete(outboxId);
     if (toastId != null) toasts?.dismiss?.(toastId);
     processOutbox();
-    if (toArchive) {
-      mailboxActions.archiveMessage(toArchive).catch(() => {});
+    if (archiveTarget) {
+      archiveRepliedMessage(archiveTarget).catch(() => {});
     }
   };
 
@@ -886,12 +905,13 @@ function handleUndoSend(result: UndoSendResult) {
     }
     if (toastId != null) toasts?.dismiss?.(toastId);
     try {
-      const item = await getOutboxItem(outboxId);
-      if (!item || item.status === 'sending' || item.status === 'sent') {
+      // Taken out of the outbox only if the processor has not claimed it, so
+      // the message is never both reopened here and sent.
+      const { cancelled, item } = await cancelQueuedSend(outboxId, { account: outboxAccount });
+      if (!cancelled || !item) {
         toasts?.show?.('Message already sent', 'info');
         return;
       }
-      await deleteOutboxItem(outboxId);
       await reopenComposeFromOutbox(item);
     } catch (err) {
       console.warn('[main] Undo send failed', err);
@@ -963,12 +983,9 @@ if (composeRoot) {
             return;
           }
           if (result?.archive) {
-            const message = get(selectedMessage);
-            if (message) {
-              mailboxActions.archiveMessage(message).catch((error) => {
-                console.error('[Compose] Failed to archive after send:', error);
-              });
-            }
+            archiveRepliedMessage(result).catch((error) => {
+              console.error('[Compose] Failed to archive after send:', error);
+            });
           }
           // A queued (offline) send isn't in Sent yet — the outbox surfaces it
           // when it actually goes out, so only refresh on a real send.
@@ -1402,8 +1419,16 @@ if (isTauriDesktop) {
             outboxId?: string;
             undoWindowMs?: number;
             subject?: string;
+            ownerAccount?: string | null;
+            replyToMessageId?: string | null;
+            replyToMessageFolder?: string | null;
           }
         | undefined;
+
+      // The account the compose window wrote in. Its draft, its source draft
+      // message and the message it answered are that account's, whichever one
+      // this window shows by now.
+      const ownerAccount = result?.ownerAccount || Local.get('email') || 'default';
 
       // Undo-send from a compose window: the message is already in the outbox;
       // run the Undo toast + timer here. The compose window has already closed.
@@ -1428,7 +1453,7 @@ if (isTauriDesktop) {
       // Clean up local draft record (IDB)
       if (result?.draftId) {
         try {
-          await deleteDraft(result.draftId);
+          await deleteDraft(result.draftId, { account: ownerAccount });
         } catch (error) {
           console.warn('[main] Failed to delete local draft after send:', error);
         }
@@ -1449,7 +1474,9 @@ if (isTauriDesktop) {
         try {
           const { Remote } = await import('./utils/remote');
           const { db } = await import('./utils/db');
-          const account = (await import('./utils/storage')).Local.get('email') || 'default';
+          const { getAuthHeaderForAccount } = await import('./utils/auth');
+          const account = ownerAccount;
+          const authHeader = getAuthHeaderForAccount(account) || undefined;
           for (const id of idsToDelete) {
             // Server delete (404 = already gone)
             try {
@@ -1459,6 +1486,7 @@ if (isTauriDesktop) {
                 {
                   method: 'DELETE',
                   pathOverride: `/v1/messages/${encodeURIComponent(id)}?permanent=1`,
+                  authHeader,
                 },
               );
             } catch (error) {
@@ -1490,7 +1518,7 @@ if (isTauriDesktop) {
         if (origId) {
           try {
             const { markOriginalAnswered } = await import('./utils/answered-flag');
-            await markOriginalAnswered(origId);
+            await markOriginalAnswered(origId, { account: ownerAccount });
           } catch (error) {
             console.warn(String.raw`[main] Failed to set \Answered flag:`, error);
           }
@@ -1510,11 +1538,7 @@ if (isTauriDesktop) {
       }
 
       if (result?.archive) {
-        const message = get(selectedMessage);
-        if (message) {
-          await mailboxActions.archiveMessage(message).catch(() => {});
-        }
-
+        await archiveRepliedMessage(result).catch(() => {});
         return;
       }
 
@@ -2520,20 +2544,8 @@ async function bootstrap() {
       // Ensure sessionStorage has a copy of each tab-scoped key.  The browser
       // can clear sessionStorage under memory pressure or after a crash,
       // leaving Local.get() with no session copy and causing silent 401s.
-      const tabKeys = ['alias_auth', 'api_key', 'authToken', 'email'];
-      for (const key of tabKeys) {
-        const prefixed = `webmail_${key}`;
-        try {
-          if (sessionStorage.getItem(prefixed) === null) {
-            const lv = localStorage.getItem(prefixed);
-            if (lv) {
-              sessionStorage.setItem(prefixed, lv);
-            }
-          }
-        } catch {
-          // ignore
-        }
-      }
+      // Credentials are skipped when localStorage holds another account's.
+      copyPlainCredentialsToSession();
     }
 
     // The vault was shut when the guards above ran, so "is this session signed

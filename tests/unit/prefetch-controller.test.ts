@@ -30,7 +30,10 @@ vi.mock('../../src/utils/sync-worker-client.js', () => ({
 }));
 
 vi.mock('../../src/utils/logger.ts', () => ({ warn: vi.fn() }));
-vi.mock('../../src/stores/mailboxStore', () => ({ getPendingDeleteIds: () => [] }));
+vi.mock('../../src/stores/mailboxStore', () => ({
+  getPendingDeleteIds: () => [],
+  getPendingFlagMutations: () => ({}),
+}));
 vi.mock('../../src/workers/sync-pure.ts', () => ({ nextBackfillDecision: () => ({}) }));
 
 const tick = (ms = 60) => new Promise((resolve) => setTimeout(resolve, ms));

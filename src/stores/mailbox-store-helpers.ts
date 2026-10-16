@@ -689,3 +689,55 @@ export const collectFolderMessages = async ({
   }
   return { messages: [...byId.values()], complete: false };
 };
+
+// Undo one queued flag or label change that failed for good, on the row as it
+// is now. Only what that change touched is put back, so a later change to the
+// same message (a star after the read, another label) survives. Returns the
+// row unchanged when the message no longer shows the failed change, since
+// something newer has already replaced it.
+export const revertFlagChange = <T extends Record<string, unknown>>(
+  row: T,
+  type: string,
+  payload: {
+    isUnread?: boolean;
+    isStarred?: boolean;
+    labels?: unknown[];
+    previousLabels?: unknown[];
+  },
+): T => {
+  if (!row) return row;
+  const flags = Array.isArray(row.flags) ? (row.flags as string[]) : [];
+  const withFlag = (flag: string, on: boolean) =>
+    on ? (flags.includes(flag) ? flags : [...flags, flag]) : flags.filter((f) => f !== flag);
+
+  if (type === 'toggleRead' && typeof payload.isUnread === 'boolean') {
+    const wasUnread = payload.isUnread;
+    if (Boolean(row.is_unread) === wasUnread) return row;
+    return {
+      ...row,
+      is_unread: wasUnread,
+      is_unread_index: wasUnread ? 1 : 0,
+      flags: withFlag('\\Seen', !wasUnread),
+    };
+  }
+
+  if (type === 'toggleStar' && typeof payload.isStarred === 'boolean') {
+    const wasStarred = payload.isStarred;
+    if (Boolean(row.is_starred) === wasStarred) return row;
+    return { ...row, is_starred: wasStarred, flags: withFlag('\\Flagged', wasStarred) };
+  }
+
+  if (type === 'label' && Array.isArray(payload.previousLabels)) {
+    const before = payload.previousLabels.map(String);
+    const after = Array.isArray(payload.labels) ? payload.labels.map(String) : [];
+    const added = after.filter((l) => !before.includes(l));
+    const removed = before.filter((l) => !after.includes(l));
+    const current = Array.isArray(row.labels) ? (row.labels as unknown[]).map(String) : [];
+    const next = current.filter((l) => !added.includes(l));
+    for (const l of removed) if (!next.includes(l)) next.push(l);
+    if (next.length === current.length && next.every((l, i) => l === current[i])) return row;
+    return { ...row, labels: next };
+  }
+
+  return row;
+};

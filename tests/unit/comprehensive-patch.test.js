@@ -1423,7 +1423,12 @@ describe('pre-release regression guards', () => {
     // The bug surfaced as "db worker modify does not support function
     // callbacks; pass an object". Switching to bulkPut preserves \Flagged
     // while clearing the function-callback path entirely.
-    expect(mailboxStorePrSrc).toContain('await db.messages.bulkPut(updated)');
+    expect(
+      mailboxStorePrSrc.slice(
+        mailboxStorePrSrc.indexOf('const markFolderAsRead'),
+        mailboxStorePrSrc.indexOf('const getSpamFolderPath'),
+      ),
+    ).toContain('await db.messages.bulkPut(writes as never)');
     // Defence-in-depth: assert there's no `.modify(` with an arrow-fn body
     // sitting inside the markFolderAsRead helper specifically.
     const markStart = mailboxStorePrSrc.indexOf('const markFolderAsRead');

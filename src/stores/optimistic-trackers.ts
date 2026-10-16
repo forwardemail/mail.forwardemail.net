@@ -144,6 +144,13 @@ export function createPendingFlagTracker({
     cancel(id: string) {
       pending.delete(id);
     },
+    // The live changes by id, for the sync worker to lay over server rows.
+    snapshot(): Record<string, Omit<PendingFlagMutation, 'ts'>> {
+      prune();
+      const out: Record<string, Omit<PendingFlagMutation, 'ts'>> = {};
+      for (const [id, { ts: _ts, ...mutation }] of pending) out[id] = mutation;
+      return out;
+    },
     clear() {
       pending.clear();
     },

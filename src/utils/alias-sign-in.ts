@@ -1,6 +1,6 @@
 import { Remote } from './remote';
 import { buildAliasAuthHeader } from './auth.ts';
-import { Local, Accounts } from './storage';
+import { Local, Session, Accounts } from './storage';
 import { isDemoMode, cleanupDemoAccount } from './demo-mode';
 
 const LOGIN_FOLDERS_TIMEOUT_MS = 120_000;
@@ -42,9 +42,12 @@ export async function signInWithAliasPassword(
 
   // Store preference for next login
   Local.set('signMe', staySignedIn ? '1' : '0');
-  // Always set email in Local for API compatibility
-  Local.set('email', email);
-  Local.set('alias_auth', `${email}:${password}`);
+  // setActive already placed the credentials. Writing them again here keeps
+  // the API layer working if the account list could not be updated, but
+  // without "Stay signed in" the password must stay in this tab only.
+  const store = staySignedIn ? Local : Session;
+  store.set('email', email);
+  store.set('alias_auth', `${email}:${password}`);
   Local.remove('api_token');
   Local.remove('locale');
 }

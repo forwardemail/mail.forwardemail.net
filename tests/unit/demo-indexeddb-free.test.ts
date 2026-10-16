@@ -91,6 +91,7 @@ vi.mock('../../src/utils/perf-logger.ts', () => ({
   createPerfTracer: () => ({ stage: vi.fn(), end: vi.fn() }),
 }));
 vi.mock('../../src/utils/mutation-queue', () => ({
+  mutationQueueCount: { subscribe: () => () => {} },
   queueMutation: vi.fn(),
   getQueuedMessageIds: vi.fn().mockResolvedValue(new Set()),
 }));

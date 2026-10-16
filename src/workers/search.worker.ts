@@ -6,7 +6,7 @@
  */
 
 import { parseSearchQuery, applySearchFilters } from '../utils/search-query.js';
-import { SearchService, setSearchDbClient } from '../utils/search-service.js';
+import { SearchService, setSearchDbClient, SEARCH_INDEX_KEY } from '../utils/search-service.js';
 import { mapMessageToDoc } from '../utils/search-mapping.js';
 import { dbClient, connectToDbWorker } from '../utils/db-worker-client.js';
 
@@ -77,16 +77,10 @@ interface SearchPayload {
   includeBody?: boolean;
 }
 
-interface ServiceEntry {
-  service: SearchService;
-  includeBody: boolean;
-}
-
 interface QueueEntry {
   messages: Message[];
   ids: Set<string>;
   timer: ReturnType<typeof setTimeout> | null;
-  includeBody: boolean;
 }
 
 interface SearchWorkerMessage {
@@ -119,10 +113,45 @@ let dbConnected = false;
 // Search Service Management
 // ============================================================================
 
-const services = new Map<string, ServiceEntry>(); // key: account -> { service, includeBody }
+// One service per account for the life of the worker. Whether bodies are
+// indexed is a setting of that service (see applyIncludeBody), never a reason
+// to build another one. Swapping services used to reload the last persisted
+// index, which brought back messages removed since that write and dropped the
+// body text whenever a caller asked for the other mode.
+const services = new Map<string, SearchService>();
+const loadingServices = new Map<string, Promise<SearchService>>();
+
+// Removal sequence per account. An index call that awaits the database can
+// finish after a removal of one of its messages; it compares sequences and
+// leaves those out instead of adding them back.
+let removalSeq = 0;
+const lastRemovedAt = new Map<string, Map<string, number>>();
+const REMOVAL_LOG_LIMIT = 5000;
+
+function noteRemoved(key: string, ids: string[]): void {
+  let log = lastRemovedAt.get(key);
+  if (!log) {
+    log = new Map();
+    lastRemovedAt.set(key, log);
+  }
+  removalSeq += 1;
+  for (const id of ids) {
+    log.delete(id);
+    log.set(id, removalSeq);
+  }
+  // Oldest first (Map keeps insertion order), so trimming drops the oldest.
+  while (log.size > REMOVAL_LOG_LIMIT) {
+    log.delete(log.keys().next().value as string);
+  }
+}
+
+function removedSince(key: string, id: string, seq: number): boolean {
+  const at = lastRemovedAt.get(key)?.get(id);
+  return at !== undefined && at > seq;
+}
 
 // Batch queue for incremental indexing from sync worker
-const indexQueue = new Map<string, QueueEntry>(); // key: account -> { messages: [], timer: null, includeBody: boolean }
+const indexQueue = new Map<string, QueueEntry>(); // key: account -> { messages: [], ids, timer }
 const INDEX_BATCH_DELAY = 100; // ms to wait before processing batch
 const INDEX_BATCH_SIZE = 100;
 
@@ -130,31 +159,68 @@ function accountKey(account: string | undefined | null): string {
   return account || 'default';
 }
 
+// The mode the index was last saved with, so a service created by the sync
+// worker's port (which has no say in the setting) keeps the user's choice.
+async function persistedIncludeBody(key: string): Promise<boolean> {
+  if (!dbConnected) return false;
+  try {
+    const meta = await dbClient.indexMeta.get([key, SEARCH_INDEX_KEY]);
+    return Boolean(meta?.value?.includeBody);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The account's search service, created and loaded once. `includeBody` only
+ * picks the mode when the service does not exist yet; changing the mode of a
+ * live service is applyIncludeBody's job. Concurrent callers share one load,
+ * so a removal that arrives while the cache is loading lands on the same
+ * service instead of one that is about to be replaced.
+ */
 async function ensureService(
   account: string = 'default',
-  includeBody: boolean = false,
+  includeBody?: boolean,
 ): Promise<SearchService> {
   const key = accountKey(account);
   const existing = services.get(key);
-  if (existing && existing.includeBody === includeBody) {
-    return existing.service;
-  }
+  if (existing) return existing;
+  const loading = loadingServices.get(key);
+  if (loading) return loading;
 
-  const service = new SearchService({ includeBody, account: key });
-  await service.loadFromCache();
-  services.set(key, { service, includeBody });
+  const load = (async () => {
+    const mode = typeof includeBody === 'boolean' ? includeBody : await persistedIncludeBody(key);
+    const service = new SearchService({ includeBody: mode, account: key });
+    await service.loadFromCache();
+    services.set(key, service);
+    return service;
+  })().finally(() => {
+    loadingServices.delete(key);
+  });
+  loadingServices.set(key, load);
+  return load;
+}
+
+// Explicit mode change from the user's setting (init) or a rebuild.
+async function applyIncludeBody(account: string, includeBody: boolean): Promise<SearchService> {
+  const service = await ensureService(account, includeBody);
+  service.setIncludeBody(includeBody);
   return service;
 }
 
 async function indexMessages(
   payload: IndexPayload = {},
 ): Promise<{ count: number; stats?: SearchStats }> {
-  const { account = 'default', includeBody = false, messages = [] } = payload;
+  const { account = 'default', messages = [] } = payload;
   if (!messages.length) return { count: 0 };
-  const service = await ensureService(account, includeBody);
+  const key = accountKey(account);
+  const startSeq = removalSeq;
+  // payload.includeBody only says whether these messages carry body text.
+  // Whether the index stores bodies is the service's own setting.
+  const service = await ensureService(key);
 
   let bodyMap: Map<string, string> | null = null;
-  if (includeBody && dbConnected) {
+  if (service.includeBody && dbConnected) {
     const keys = messages.map((msg) => [accountKey(account), msg.id]);
     try {
       const bodies = await dbClient.messageBodies.bulkGet(keys);
@@ -167,7 +233,8 @@ async function indexMessages(
     }
   }
 
-  service.upsertEntries(messages.map((msg) => mapMessageToDoc(msg, bodyMap?.get(msg.id) || '')));
+  const live = messages.filter((msg) => !removedSince(key, msg.id, startSeq));
+  service.upsertEntries(live.map((msg) => mapMessageToDoc(msg, bodyMap?.get(msg.id) || '')));
   // Debounced: a sync burst of many batches collapses into a few writes.
   // processIndexQueue flushes when the queue drains; stats come from the
   // in-memory index, so the returned count is correct without awaiting a write.
@@ -180,7 +247,16 @@ async function removeFromIndex(
 ): Promise<{ count: number; stats?: SearchStats }> {
   const { account = 'default', ids = [] } = payload;
   if (!ids.length) return { count: 0 };
-  const service = await ensureService(account);
+  const key = accountKey(account);
+  noteRemoved(key, ids);
+  // A queued sync batch that still holds one of these would add it back.
+  const queue = indexQueue.get(key);
+  if (queue?.messages.length) {
+    const gone = new Set(ids);
+    queue.messages = queue.messages.filter((msg) => !gone.has(msg.id));
+    gone.forEach((id) => queue.ids.delete(id));
+  }
+  const service = await ensureService(key);
   service.removeEntriesByIds(ids);
   service.schedulePersist();
   return { count: service.getStats().count, stats: service.getStats() };
@@ -192,22 +268,24 @@ async function rebuildFromCache(
 ): Promise<{ count: number; stats: SearchStats }> {
   const { account = 'default', includeBody = false } = payload;
   const key = accountKey(account);
-
-  // Create fresh service
-  const service = new SearchService({ includeBody, account: key });
-  services.set(key, { service, includeBody });
+  // The database snapshot read below can predate a removal that lands while
+  // it is being read, so anything removed after this point is left out.
+  const startSeq = removalSeq;
+  // Rebuild the live service in place rather than replacing it, so nothing
+  // else holds on to a service that is no longer the account's.
+  const service = await applyIncludeBody(key, includeBody);
 
   if (!dbConnected) {
     console.warn('[search.worker] No db connection for rebuildFromCache');
-    await service.persist();
+    await service.reset([]);
     return { count: 0, stats: service.getStats() };
   }
 
   // Load all messages from database
-  const messages = await dbClient.messages.where('account').equals(key).toArray();
+  const messages: Message[] = await dbClient.messages.where('account').equals(key).toArray();
 
   if (!messages?.length) {
-    await service.persist();
+    await service.reset([]);
     return { count: 0, stats: service.getStats() };
   }
 
@@ -226,10 +304,11 @@ async function rebuildFromCache(
     }
   }
 
-  // Index all messages
-  const docs = messages.map((msg: Message) => mapMessageToDoc(msg, bodyMap?.get(msg.id) || ''));
-  service.upsertEntries(docs);
-  await service.persist();
+  // Index all messages, leaving out any removed while the snapshot was read
+  const docs = messages
+    .filter((msg: Message) => !removedSince(key, msg.id, startSeq))
+    .map((msg: Message) => mapMessageToDoc(msg, bodyMap?.get(msg.id) || ''));
+  await service.reset(docs);
 
   return { count: service.getStats().count, stats: service.getStats() };
 }
@@ -324,13 +403,13 @@ async function syncMissingMessages(
 
 // Queue messages for batched indexing (used by sync worker channel)
 function queueForIndexing(payload: IndexPayload = {}): void {
-  const { account = 'default', includeBody = false, messages = [] } = payload;
+  const { account = 'default', messages = [] } = payload;
   if (!messages.length) return;
 
   const key = accountKey(account);
   let queue = indexQueue.get(key);
   if (!queue) {
-    queue = { messages: [], ids: new Set(), timer: null, includeBody };
+    queue = { messages: [], ids: new Set(), timer: null };
     indexQueue.set(key, queue);
   }
 
@@ -341,8 +420,6 @@ function queueForIndexing(payload: IndexPayload = {}): void {
       queue.ids.add(msg.id);
     }
   }
-
-  if (includeBody) queue.includeBody = true;
 
   if (queue.timer) clearTimeout(queue.timer);
   queue.timer = setTimeout(() => processIndexQueue(key), INDEX_BATCH_DELAY);
@@ -365,11 +442,7 @@ async function processIndexQueue(account: string): Promise<void> {
   }
 
   try {
-    await indexMessages({
-      account,
-      includeBody: queue.includeBody,
-      messages,
-    });
+    await indexMessages({ account, messages });
   } catch (err) {
     console.warn('[search.worker] batch index failed', err);
   }
@@ -381,7 +454,7 @@ async function processIndexQueue(account: string): Promise<void> {
     // index durably persisted rather than waiting on the debounce timer
     // (which a worker teardown could skip). Fire-and-forget; the in-memory
     // index is already up to date for queries.
-    const service = services.get(account)?.service;
+    const service = services.get(account);
     service?.flush?.()?.catch((err: unknown) => {
       console.warn('[search.worker] index write failed', err);
     });
@@ -525,6 +598,10 @@ function handleSyncWorkerMessage(event: MessageEvent): void {
   const { action, payload } = event.data || {};
   if (action === 'index') {
     queueForIndexing(payload);
+  } else if (action === 'remove') {
+    removeFromIndex(payload).catch((err) => {
+      console.warn('[search.worker] remove from sync worker failed', err);
+    });
   }
 }
 
@@ -558,9 +635,9 @@ self.onmessage = async (event: MessageEvent<SearchWorkerMessage>) => {
 
   try {
     if (action === 'init') {
-      await ensureService(
+      await applyIncludeBody(
         (payload?.account as string) || 'default',
-        (payload?.includeBody as boolean) || false,
+        Boolean(payload?.includeBody),
       );
       respond(id, true, { ok: true });
       return;

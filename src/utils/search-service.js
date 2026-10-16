@@ -179,8 +179,37 @@ export class SearchService {
 
   updateEntry(entry) {
     if (!entry?.id) return;
+    // A metadata update (flags, labels, folder) arrives without the body. A
+    // message body never changes, so keep the text already indexed rather
+    // than wiping it until the body happens to be fetched again.
+    const previous = this._entries.get(entry.id);
+    const next =
+      this.includeBody && previous?.body && !(entry.body || entry.textContent)
+        ? { ...entry, body: previous.body }
+        : entry;
     this.removeEntry(entry.id);
-    this.addEntry(entry);
+    this.addEntry(next);
+  }
+
+  /**
+   * Switch body indexing on or off in place. The entries already in memory
+   * carry over, including any removals that have not been written yet, so
+   * nothing deleted comes back from the last persisted copy. Turning it off
+   * drops the body text; turning it on keeps the entries and their bodies fill
+   * in as messages are indexed again. Returns true when the mode changed.
+   */
+  setIncludeBody(includeBody) {
+    const next = Boolean(includeBody);
+    if (next === this.includeBody) return false;
+    const entries = this.entries;
+    this.includeBody = next;
+    this.preset = next ? 'FULL' : 'MINIMAL';
+    this.index = createDocument(next);
+    this._entries = new Map();
+    this.sizeBytes = 0;
+    entries.forEach((entry) => this.addEntry(entry));
+    this.schedulePersist();
+    return true;
   }
 
   upsertEntries(entries = []) {

@@ -22,6 +22,7 @@ vi.mock('../../src/utils/remote', () => ({
   Remote: { request: (...args: unknown[]) => h.request(...args) },
 }));
 vi.mock('../../src/utils/mutation-queue', () => ({
+  mutationQueueCount: { subscribe: () => () => {} },
   queueMutation: (...args: unknown[]) => h.queue(...args),
 }));
 vi.mock('../../src/utils/network-status', () => ({ isOnline: () => h.online }));
@@ -97,17 +98,19 @@ describe('markOriginalAnswered', () => {
     h.online = false;
     await markOriginalAnswered('m4');
     expect(h.request).not.toHaveBeenCalled();
-    expect(h.queue).toHaveBeenCalledWith('addFlags', {
-      messageId: 'm4',
-      flags: null,
-      add: ['\\Answered'],
-    });
+    expect(h.queue).toHaveBeenCalledWith(
+      'addFlags',
+      { messageId: 'm4', flags: null, add: ['\\Answered'] },
+      { account: 'me@example.com' },
+    );
 
     h.online = true;
     h.queue.mockClear();
     h.request.mockRejectedValueOnce(httpError(503));
     await markOriginalAnswered('m5');
-    expect(h.queue).toHaveBeenCalledWith('addFlags', expect.objectContaining({ messageId: 'm5' }));
+    expect(h.queue).toHaveBeenCalledWith('addFlags', expect.objectContaining({ messageId: 'm5' }), {
+      account: 'me@example.com',
+    });
 
     h.queue.mockClear();
     h.request.mockRejectedValueOnce(new TypeError('Failed to fetch'));

@@ -9,7 +9,7 @@ import {
   connectSyncSearchPort,
 } from './sync-worker-client.js';
 import { warn } from './logger.ts';
-import { getPendingDeleteIds, mailboxStore } from '../stores/mailboxStore';
+import { getPendingDeleteIds, getPendingFlagMutations, mailboxStore } from '../stores/mailboxStore';
 import { Local } from './storage.js';
 import { nextBackfillDecision } from '../workers/sync-pure.ts';
 
@@ -121,13 +121,12 @@ function updateProgress(folder, payload) {
 const FOLDER_COUNT_REFRESH_MS = 2000;
 let folderCountRefreshTimer = null;
 
-// Sync wrote to a folder's cache. What it wrote the server had already counted
-// when the folder list was fetched (older history), or will count in the next
-// one (new mail, mail read elsewhere), so the badge stays put for now. When the
-// newest messages changed, fetch the counts again shortly.
+// Sync wrote to a folder's cache. Badges come from the server's counts (see
+// folder-unread.ts), so older history filling in changes nothing. When the
+// newest messages changed (new mail, mail read elsewhere), fetch the counts
+// again shortly.
 function noteFolderSynced(account, folder, result, { newest = false } = {}) {
   if (!account || !folder || !(result?.inserted || result?.updated)) return;
-  Promise.resolve(mailboxStore.actions.rebaseFolderUnread?.(account, folder)).catch(() => {});
   if (!newest) return;
   if (folderCountRefreshTimer) clearTimeout(folderCountRefreshTimer);
   folderCountRefreshTimer = setTimeout(() => {
@@ -148,6 +147,7 @@ async function runTask(task) {
         pageSize: task.pageSize || settings.pageSize || 50,
         maxMessages: task.maxMessages || settings.maxHeaders,
         pendingDeleteIds: getPendingDeleteIds(),
+        pendingFlagMutations: getPendingFlagMutations?.() || {},
       },
       { timeout: 120_000 },
     );
@@ -179,6 +179,7 @@ async function runTask(task) {
           account: currentAccount,
           pageSize: task.pageSize || settings.pageSize || 50,
           pendingDeleteIds: getPendingDeleteIds(),
+          pendingFlagMutations: getPendingFlagMutations?.() || {},
         },
         { timeout: 120_000 },
       );
@@ -190,6 +191,17 @@ async function runTask(task) {
       return;
     }
     noteFolderSynced(account, task.folder, result);
+    // Messages the backfill found gone from the server are already out of the
+    // cache and search; take them off the list on screen too.
+    if (result?.prunedIds?.length) {
+      Promise.resolve(
+        mailboxStore.actions.removeRemoteMessages?.({
+          account,
+          folder: task.folder,
+          ids: result.prunedIds,
+        }),
+      ).catch(() => {});
+    }
     // Re-queue the next batch only while the worker reports !done AND batches
     // keep making progress. nextBackfillDecision caps consecutive zero-page
     // batches so a misbehaving worker can't spin the queue forever. The append
@@ -279,9 +291,12 @@ async function pump() {
   } finally {
     inFlight = false;
   }
-  // If account changed while the task was in-flight, stop processing the stale queue
+  // The account changed while the task ran. The old queue was dropped by the
+  // switch, and whatever is queued now belongs to the new account; its pump
+  // returned early because this task was still running, so start it here.
   if (currentAccount !== taskAccount) {
-    setStatus({ running: false, current: null, queue: [] });
+    setStatus({ running: false, current: null, queue: [...queue] });
+    if (queue.length) setTimeout(pump, 30);
     return;
   }
   setStatus(silent ? { queue: [...queue] } : { running: false, current: null, queue: [...queue] });

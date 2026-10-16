@@ -1,6 +1,7 @@
 import { db } from './db';
 import { Local } from './storage';
 import { Remote } from './remote';
+import { getAuthHeaderForAccount } from './auth';
 import { warn } from './logger.ts';
 import { isOnline } from './network-status';
 
@@ -159,13 +160,25 @@ function getContactsList(response) {
  * Fetch contacts from the API and update the cache.
  */
 async function fetchAndCache(account) {
+  // Authenticate every page as the account the cache entry is for. Reading the
+  // active credentials per request let a refresh that outlived an account
+  // switch file the new account's contacts under the old one.
+  const authHeader = getAuthHeaderForAccount(account);
+  if (!authHeader) {
+    throw new Error('No credentials available for this account');
+  }
+
   const allContacts = [];
 
   for (let page = 1; page < 10_000; page += 1) {
-    const res = await Remote.request('Contacts', {
-      page,
-      limit: CONTACTS_PAGE_SIZE,
-    });
+    const res = await Remote.request(
+      'Contacts',
+      {
+        page,
+        limit: CONTACTS_PAGE_SIZE,
+      },
+      { authHeader },
+    );
     const list = getContactsList(res);
     allContacts.push(...list);
 

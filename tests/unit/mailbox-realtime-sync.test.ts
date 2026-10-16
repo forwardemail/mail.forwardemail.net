@@ -25,6 +25,10 @@ const h = vi.hoisted(() => ({
   search: vi.fn(),
   pageSize: 3,
   syncComplete: [] as Array<(data: Record<string, unknown>) => void>,
+  // message id -> request; ids in failWrites get a 500
+  writes: [] as Array<{ action: string; id: string; body: Record<string, unknown> }>,
+  failWrites: new Set<string>(),
+  onWrite: null as null | ((id: string) => Promise<void> | void),
 }));
 
 vi.mock('../../src/utils/db', async () => {
@@ -90,11 +94,32 @@ vi.mock('../../src/utils/remote', () => ({
           .slice((page - 1) * limit, page * limit)
           .map((m) => serverMessage(String(params.folder), m));
       }
+      if (action === 'MessageUpdate' || action === 'MessageDelete') {
+        const id = decodeURIComponent(
+          String(options.pathOverride || '')
+            .split('/')
+            .pop()
+            ?.split('?')[0] || '',
+        );
+        h.writes.push({ action, id, body: params });
+        if (h.onWrite) await h.onWrite(id);
+        if (h.failWrites.has(id)) throw Object.assign(new Error('Server error'), { status: 500 });
+        const added = (params.flags_add as string[] | undefined) || [];
+        for (const list of h.server.values()) {
+          for (const m of list) {
+            if (m.id === id && added.length) {
+              m.flags = [...new Set([...((m.flags as string[]) || []), ...added])];
+            }
+          }
+        }
+        return {};
+      }
       return null;
     },
   },
 }));
 vi.mock('../../src/utils/mutation-queue', () => ({
+  mutationQueueCount: { subscribe: () => () => {} },
   queueMutation: vi.fn().mockResolvedValue(undefined),
   getQueuedMessageIds: vi.fn().mockResolvedValue(new Set()),
 }));
@@ -166,6 +191,9 @@ const { db } = (await import('../../src/utils/db')) as unknown as {
 };
 const { mailboxStore, __resetUnreadTrackingForTests } =
   await import('../../src/stores/mailboxStore');
+const { queueMutation } = (await import('../../src/utils/mutation-queue')) as unknown as {
+  queueMutation: ReturnType<typeof vi.fn>;
+};
 const { messages, selectedMessage, searchResults, searchActive, page, filteredMessages } =
   await import('../../src/stores/messageStore');
 const { folders, selectedFolder } = await import('../../src/stores/folderStore');
@@ -237,6 +265,10 @@ beforeEach(async () => {
   h.folderRequests = 0;
   h.holdNextList = null;
   h.pageSize = 3;
+  h.writes = [];
+  h.failWrites.clear();
+  h.onWrite = null;
+  queueMutation.mockClear();
   h.removeFromIndex.mockReset();
   h.search.mockReset();
   await db.messages.clear();
@@ -820,21 +852,51 @@ describe('unread counts and read state from another device', () => {
     );
     h.folderTotals.set('INBOX', 3);
     h.folderUnseen.set('INBOX', 3);
-    await db.messages.bulkPut([cached(3, ME, 'INBOX', unread)]);
+    const row = cached(3, ME, 'INBOX', unread);
+    await db.messages.bulkPut([row]);
+    messages.setImmediate([row] as never);
 
     await mailboxStore.actions.loadFolders({ force: true });
     await vi.waitFor(() => expect(inboxCount()).toBe(3));
 
     // Reading it here takes the badge down at once.
-    await mailboxStore.actions.applyRemoteFlags({
-      account: ME,
-      folder: 'INBOX',
-      ids: ['m3'],
-      action: 'add',
+    mailboxStore.actions.addPendingFlagMutation('m3', {
+      is_unread: false,
+      is_unread_index: 0,
       flags: ['\\Seen'],
     });
     await mailboxStore.actions.updateFolderUnreadCounts();
     expect(inboxCount()).toBe(2);
+
+    // The request returns, and the next folder list counts the read. It is
+    // not taken off a second time.
+    mailboxStore.actions.settleUnreadChange('m3');
+    h.folderUnseen.set('INBOX', 2);
+    await new Promise((r) => setTimeout(r, 2));
+    await mailboxStore.actions.loadFolders({ force: true });
+    await vi.waitFor(() => expect(h.folderRequests).toBeGreaterThan(1));
+    await mailboxStore.actions.updateFolderUnreadCounts();
+    expect(inboxCount()).toBe(2);
+  });
+
+  it('keeps a read made here while its request is still out', async () => {
+    h.folderTotals.set('INBOX', 5);
+    h.folderUnseen.set('INBOX', 5);
+    const row = cached(5, ME, 'INBOX', unread);
+    await db.messages.bulkPut([row]);
+    messages.setImmediate([row] as never);
+    await mailboxStore.actions.loadFolders({ force: true });
+    await vi.waitFor(() => expect(inboxCount()).toBe(5));
+
+    mailboxStore.actions.addPendingFlagMutation('m5', {
+      is_unread: false,
+      is_unread_index: 0,
+      flags: ['\\Seen'],
+    });
+    // A folder list fetched before the server has the read still says 5.
+    await mailboxStore.actions.loadFolders({ force: true });
+    await mailboxStore.actions.updateFolderUnreadCounts();
+    expect(inboxCount()).toBe(4);
   });
 
   it('keeps the badge when sync caches older unread mail the server already counted', async () => {
@@ -844,14 +906,60 @@ describe('unread counts and read state from another device', () => {
     await mailboxStore.actions.loadFolders({ force: true });
     await vi.waitFor(() => expect(inboxCount()).toBe(30));
 
-    // Backfill writes ten older unread messages, then reports it.
+    // Backfill writes ten older unread messages.
     await db.messages.bulkPut(
       [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => cached(n, ME, 'INBOX', unread)),
     );
-    await mailboxStore.actions.rebaseFolderUnread(ME, 'INBOX');
     await mailboxStore.actions.updateFolderUnreadCounts();
 
     expect(inboxCount()).toBe(30);
+  });
+
+  it('takes a moved unread message off one badge and onto the other', async () => {
+    h.folderTotals.set('INBOX', 4);
+    h.folderTotals.set('Archive', 10);
+    h.folderUnseen.set('INBOX', 4);
+    h.folderUnseen.set('Archive', 1);
+    const row = cached(4, ME, 'INBOX', unread);
+    await db.messages.bulkPut([row]);
+    messages.setImmediate([row] as never);
+    await mailboxStore.actions.loadFolders({ force: true });
+    await vi.waitFor(() => expect(inboxCount()).toBe(4));
+
+    await mailboxStore.actions.moveMessage(row, 'Archive');
+    await mailboxStore.actions.updateFolderUnreadCounts();
+    expect(inboxCount()).toBe(3);
+    expect(get(folders).find((f) => f.path === 'Archive')?.count).toBe(2);
+  });
+
+  it('does not act on an unread listing that comes back without a list', async () => {
+    h.server.set('INBOX', [msg(2, { flags: [] }), msg(1, { flags: [] })]);
+    h.folderTotals.set('INBOX', 2);
+    h.folderUnseen.set('INBOX', 1);
+    h.noContent = true;
+    await db.messages.bulkPut([cached(1, ME, 'INBOX', unread), cached(2, ME, 'INBOX', unread)]);
+
+    await mailboxStore.actions.loadFolders({ force: true });
+    await vi.waitFor(() => expect(h.listRequests.some((p) => p.is_unread)).toBe(true));
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(await cachedUnread()).toEqual(['m1', 'm2']);
+  });
+
+  it('does not act on an unread listing shorter than the count', async () => {
+    // The server says three unread but the pages only held two: one moved
+    // between pages while they were read. Neither m1 nor m4 may be marked
+    // read, since either could be the one that was skipped.
+    h.server.set('INBOX', [msg(3, { flags: [] }), msg(2, { flags: [] })]);
+    h.folderTotals.set('INBOX', 4);
+    h.folderUnseen.set('INBOX', 3);
+    await db.messages.bulkPut([1, 2, 3, 4].map((n) => cached(n, ME, 'INBOX', unread)));
+
+    await mailboxStore.actions.loadFolders({ force: true });
+    await vi.waitFor(() => expect(h.listRequests.some((p) => p.is_unread)).toBe(true));
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(await cachedUnread()).toEqual(['m1', 'm2', 'm3', 'm4']);
   });
 
   it('leaves alone a message marked unread here while the server list was loading', async () => {
@@ -892,5 +1000,123 @@ describe('unread counts and read state from another device', () => {
     h.folderTotals.set('INBOX', 0);
     await mailboxStore.actions.loadFolders({ force: true });
     expect(h.folderAuth).toEqual([`auth:${ME}`]);
+  });
+});
+
+describe('mark a folder read', () => {
+  const unread = { flags: [], is_unread: true, is_unread_index: 1 };
+
+  it('marks read on the server the unread mail this device never cached', async () => {
+    h.server.set(
+      'INBOX',
+      [3, 2, 1].map((n) => msg(n, { flags: [] })),
+    );
+    h.folderTotals.set('INBOX', 3);
+    h.folderUnseen.set('INBOX', 3);
+    await db.messages.bulkPut([cached(3, ME, 'INBOX', unread)]);
+    await mailboxStore.actions.loadFolders({ force: true });
+
+    const result = await mailboxStore.actions.markFolderAsRead('INBOX');
+
+    expect(h.writes.map((w) => w.id).sort()).toEqual(['m1', 'm2', 'm3']);
+    expect(result).toMatchObject({ success: true, count: 3 });
+    expect(get(folders).find((f) => f.path === 'INBOX')?.count).toBe(0);
+  });
+
+  it('queues a message the server would not mark, instead of dropping it', async () => {
+    h.server.set('INBOX', [msg(2, { flags: [] }), msg(1, { flags: [] })]);
+    h.folderTotals.set('INBOX', 2);
+    h.folderUnseen.set('INBOX', 2);
+    await db.messages.bulkPut([cached(2, ME, 'INBOX', unread), cached(1, ME, 'INBOX', unread)]);
+    h.failWrites.add('m1');
+
+    await mailboxStore.actions.markFolderAsRead('INBOX');
+
+    expect(queueMutation).toHaveBeenCalledWith(
+      'toggleRead',
+      expect.objectContaining({ internalId: 'm1', isUnread: true }),
+      { account: ME },
+    );
+  });
+
+  it('keeps a move made while it ran', async () => {
+    h.server.set('INBOX', [msg(2, { flags: [] }), msg(1, { flags: [] })]);
+    h.folderTotals.set('INBOX', 2);
+    h.folderUnseen.set('INBOX', 2);
+    await db.messages.bulkPut([cached(2, ME, 'INBOX', unread), cached(1, ME, 'INBOX', unread)]);
+    // m2 is moved to Work while the folder is being marked.
+    h.onWrite = async (id) => {
+      if (id !== 'm1') return;
+      const row = await db.messages.get([ME, 'm2']);
+      await db.messages.bulkPut([{ ...row, folder: 'Work' }]);
+      const inbox = h.server.get('INBOX') || [];
+      h.server.set(
+        'INBOX',
+        inbox.filter((m) => m.id !== 'm2'),
+      );
+      h.server.set('Work', [...inbox.filter((m) => m.id === 'm2')]);
+    };
+
+    await mailboxStore.actions.markFolderAsRead('INBOX');
+
+    expect((await db.messages.get([ME, 'm2']))?.folder).toBe('Work');
+    expect((await db.messages.get([ME, 'm1']))?.is_unread).toBe(false);
+  });
+});
+
+describe('a change that failed for good', () => {
+  it('puts back only the read state, keeping a star added after it', async () => {
+    const row = cached(1, ME, 'INBOX', {
+      flags: ['\\Seen', '\\Flagged'],
+      is_unread: false,
+      is_unread_index: 0,
+      is_starred: true,
+    });
+    await db.messages.bulkPut([row]);
+    messages.setImmediate([row] as never);
+
+    await mailboxStore.actions.revertFailedMutation({
+      type: 'toggleRead',
+      payload: { internalId: 'm1', messageId: 'm1', isUnread: true, flags: [] },
+    });
+
+    const after = await db.messages.get([ME, 'm1']);
+    expect(after).toMatchObject({ is_unread: true, is_starred: true, flags: ['\\Flagged'] });
+    expect(get(messages)[0]).toMatchObject({ is_unread: true, flags: ['\\Flagged'] });
+  });
+});
+
+describe('moves and deletes the server did not take', () => {
+  it('moves the cached rows of a bulk move that was queued', async () => {
+    const rows = [cached(1), cached(2)];
+    await db.messages.bulkPut(rows);
+    messages.setImmediate(rows as never);
+    h.failWrites.add('m1');
+    h.failWrites.add('m2');
+
+    await mailboxStore.actions.bulkMoveMessages(rows, 'Work');
+
+    expect((await db.messages.get([ME, 'm1']))?.folder).toBe('Work');
+    expect((await db.messages.get([ME, 'm2']))?.folder).toBe('Work');
+    expect(queueMutation).toHaveBeenCalledTimes(2);
+  });
+
+  it('removes the cached rows of a permanent bulk delete, keeping a snapshot to restore', async () => {
+    const rows = [cached(1, ME, 'Trash'), cached(2, ME, 'Trash')];
+    await db.messages.bulkPut(rows);
+    h.failWrites.add('m2');
+
+    await mailboxStore.actions.bulkDeleteMessages(rows, { permanent: true });
+
+    expect(await db.messages.get([ME, 'm1'])).toBeUndefined();
+    expect(await db.messages.get([ME, 'm2'])).toBeUndefined();
+    expect(queueMutation).toHaveBeenCalledWith(
+      'delete',
+      expect.objectContaining({
+        internalId: 'm2',
+        snapshot: expect.objectContaining({ id: 'm2' }),
+      }),
+      { account: ME },
+    );
   });
 });

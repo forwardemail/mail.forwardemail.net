@@ -623,20 +623,118 @@
     });
   };
 
+  // ── Rules shared with src/utils/sync-core.js ──
+  // The tab (src/utils/mutation-queue.js), this worker and the desktop shim
+  // drain the same queue record. This file cannot import sync-core.js, so the
+  // rules are repeated here; keep the two in step.
+  //
+  // MUTATION_RUN_LOCK is held for a whole run so only one of them sends queued
+  // changes at a time; the tab's online handler used to drain the queue at the
+  // same moment as this worker and send every change twice.
+  // MUTATION_WRITE_LOCK is held for each read-modify-write of a queue record.
+  const MUTATION_RUN_LOCK = 'mutation-queue';
+  const MUTATION_WRITE_LOCK = 'mutation-queue-write';
+
+  const withNamedLock = (name, fn) => {
+    const locks = self.navigator?.locks;
+    if (locks && typeof locks.request === 'function') {
+      return locks.request(name, () => fn());
+    }
+    return Promise.resolve().then(fn);
+  };
+
+  const isExhaustedMutation = (m) =>
+    m?.status === 'failed' && (m.retryCount || 0) >= MUTATION_MAX_RETRIES;
+
+  // The message is gone from the server: a delete, move, flag or label change
+  // on it has nothing left to do. Counting it as a failure ended with the
+  // change reverted, which put a deleted message back in the list.
+  const isGoneStatus = (status) => status === 404 || status === 410;
+
+  // An entry is sent as the account whose queue holds it. One whose account
+  // cannot be told apart is dropped rather than sent with unknown credentials.
+  const resolveMutationAccount = (mutation, queueAccount) => {
+    const own = mutation?.payload?.account;
+    const keyed = queueAccount && queueAccount !== 'default' ? queueAccount : '';
+    if (typeof own === 'string' && own && own !== 'default') {
+      if (keyed && keyed !== own) return null;
+      return own;
+    }
+    return keyed || null;
+  };
+
+  const mutationTarget = (m) => {
+    const id = m?.payload?.messageId;
+    return id === undefined || id === null || id === '' ? null : String(id);
+  };
+
+  const settleMutation = (mutation, outcome, now) => {
+    const result = outcome?.result;
+    if (result === 'done' || result === 'drop') return { id: mutation.id, remove: true };
+    if (result === 'skip') return { id: mutation.id, remove: false, entry: mutation };
+    const retryCount = (mutation.retryCount || 0) + 1;
+    const entry = { ...mutation, retryCount };
+    if (retryCount >= MUTATION_MAX_RETRIES) {
+      // Kept, not pruned: this worker has no Dexie/store access to revert the
+      // optimistic local change. A tab notices and reverts it (see
+      // reconcilePermanentlyFailedMutations in src/utils/mutation-queue.js).
+      entry.status = 'failed';
+      entry.lastError = outcome?.status ? `HTTP ${outcome.status}` : 'Failed';
+    } else {
+      entry.status = 'pending';
+      entry.nextRetryAt = now + mutationBackoff(retryCount);
+    }
+    return { id: mutation.id, remove: false, entry };
+  };
+
+  const applySettled = (queue, settled) => {
+    const list = Array.isArray(queue) ? queue : [];
+    if (!list.some((m) => m?.id === settled.id)) return null;
+    if (settled.remove) return list.filter((m) => m?.id !== settled.id);
+    return list.map((m) => (m?.id === settled.id ? settled.entry : m));
+  };
+
   /**
-   * Write a mutation queue back to the meta store.
+   * Write one processed entry back to its queue record, in one transaction on
+   * a fresh read. Writing the whole snapshot back dropped changes queued while
+   * this ran and brought back entries the tab had already removed.
    */
-  const writeMutationQueue = async (key, queue) => {
+  const writeSettledMutation = async (key, settled) => {
     const db = await openDb();
     if (!db.objectStoreNames.contains(META_STORE)) return;
 
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction(META_STORE, 'readwrite');
-      const store = tx.objectStore(META_STORE);
-      store.put({ key, value: queue, updatedAt: Date.now() });
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
-    });
+    return withNamedLock(
+      MUTATION_WRITE_LOCK,
+      () =>
+        new Promise((resolve, reject) => {
+          const tx = db.transaction(META_STORE, 'readwrite');
+          const store = tx.objectStore(META_STORE);
+          const req = store.get(key);
+          req.onsuccess = () => {
+            const next = applySettled(req.result?.value, settled);
+            if (next) store.put({ key, value: next, updatedAt: Date.now() });
+          };
+          tx.oncomplete = () => resolve();
+          tx.onerror = () => reject(tx.error);
+        }),
+    );
+  };
+
+  const isStillQueued = async (key, mutation) => {
+    try {
+      const db = await openDb();
+      const record = await new Promise((resolve, reject) => {
+        const req = db.transaction(META_STORE, 'readonly').objectStore(META_STORE).get(key);
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+      const current = (Array.isArray(record?.value) ? record.value : []).find(
+        (m) => m?.id === mutation.id,
+      );
+      return Boolean(current) && current.status !== 'completed' && !isExhaustedMutation(current);
+    } catch {
+      return false;
+    }
   };
 
   /**
@@ -696,9 +794,21 @@
   /**
    * Execute a single mutation via fetch from the SW context.
    */
-  const executeMutationSW = async (mutation) => {
+  const outcomeOfResponse = (res) => {
+    if (res?.ok) return { result: 'done' };
+    if (isGoneStatus(res?.status)) return { result: 'done' };
+    return { result: 'error', status: res?.status };
+  };
+
+  const executeMutationSW = async (mutation, queueAccount) => {
     const { type, payload, apiBase, authHeader } = mutation;
-    if (!apiBase || !authHeader) return false;
+    if (!resolveMutationAccount(mutation, queueAccount)) {
+      LOG && console.warn('[SW sync] Dropping a queued change with no account', mutation.id);
+      return { result: 'drop' };
+    }
+    // The header was stored with the entry for its own account. Without one,
+    // leave the entry for a tab, which reads that account's credentials.
+    if (!apiBase || !authHeader) return { result: 'skip' };
 
     const base = apiBase.endsWith('/') ? apiBase.slice(0, -1) : apiBase;
     const headers = {
@@ -718,7 +828,7 @@
           headers,
           body: JSON.stringify(queuedToggleBody(type, payload)),
         });
-        return res.ok;
+        return outcomeOfResponse(res);
       }
       case 'addFlags': {
         const res = await fetchWithTimeout(`${base}${msgPath}`, {
@@ -726,7 +836,7 @@
           headers,
           body: JSON.stringify(addFlagsBody(payload.flags, payload.add)),
         });
-        return res.ok;
+        return outcomeOfResponse(res);
       }
       case 'move': {
         const res = await fetchWithTimeout(`${base}${msgPath}`, {
@@ -734,7 +844,7 @@
           headers,
           body: JSON.stringify({ folder: payload.targetFolder }),
         });
-        return res.ok;
+        return outcomeOfResponse(res);
       }
       case 'delete': {
         const path = payload.permanent ? `${msgPath}?permanent=1` : msgPath;
@@ -742,7 +852,7 @@
           method: 'DELETE',
           headers,
         });
-        return res.ok;
+        return outcomeOfResponse(res);
       }
       case 'label': {
         const res = await fetchWithTimeout(`${base}${msgPath}`, {
@@ -750,83 +860,63 @@
           headers,
           body: JSON.stringify(labelChangeBody(payload.labels, payload.previousLabels)),
         });
-        return res.ok;
+        return outcomeOfResponse(res);
       }
       default:
-        return false;
+        return { result: 'drop' };
     }
   };
 
   /**
    * Process all mutation queues from IndexedDB.
    * Called by the Background Sync event when connectivity returns.
+   *
+   * Changes to one message go out in the order they were made: while an
+   * earlier change to it waits out a backoff or fails, later ones wait too.
    */
-  const processMutationsSW = async () => {
-    let queues;
-    try {
-      queues = await readAllMutationQueues();
-    } catch (err) {
-      LOG && console.warn('[SW sync] Failed to read mutation queues', err);
-      return;
-    }
+  const processMutationsSW = () =>
+    withNamedLock(MUTATION_RUN_LOCK, async () => {
+      let queues;
+      try {
+        queues = await readAllMutationQueues();
+      } catch (err) {
+        LOG && console.warn('[SW sync] Failed to read mutation queues', err);
+        return;
+      }
 
-    for (const { key, queue } of queues) {
-      let modified = false;
-      for (const mutation of queue) {
-        if (mutation.status === 'completed') continue;
-        if (mutation.status === 'failed' && mutation.retryCount >= MUTATION_MAX_RETRIES) continue;
-        if (mutation.nextRetryAt && Date.now() < mutation.nextRetryAt) continue;
-
-        mutation.status = 'processing';
-        modified = true;
-
-        try {
-          const ok = await executeMutationSW(mutation);
-          if (ok) {
-            mutation.status = 'completed';
-          } else {
-            // A non-OK HTTP response, not a thrown/network exception — same
-            // retry budget as the catch branch below so a single 4xx/5xx
-            // doesn't skip straight to 'failed' before MUTATION_MAX_RETRIES
-            // (and, downstream, before the main thread treats it as
-            // permanently failed and reverts the optimistic local change).
-            mutation.retryCount = (mutation.retryCount || 0) + 1;
-            if (mutation.retryCount >= MUTATION_MAX_RETRIES) {
-              mutation.status = 'failed';
-            } else {
-              mutation.status = 'pending';
-              mutation.nextRetryAt = Date.now() + mutationBackoff(mutation.retryCount);
-            }
+      for (const { key, queue } of queues) {
+        const queueAccount = key.slice(MUTATION_QUEUE_PREFIX.length);
+        const waiting = new Set();
+        for (const mutation of queue) {
+          if (!mutation || mutation.status === 'completed' || isExhaustedMutation(mutation))
+            continue;
+          const target = mutationTarget(mutation);
+          if (target && waiting.has(target)) continue;
+          if (mutation.nextRetryAt && Date.now() < mutation.nextRetryAt) {
+            if (target) waiting.add(target);
+            continue;
           }
-        } catch {
-          mutation.retryCount = (mutation.retryCount || 0) + 1;
-          if (mutation.retryCount >= MUTATION_MAX_RETRIES) {
-            mutation.status = 'failed';
-          } else {
-            mutation.status = 'pending';
-            mutation.nextRetryAt = Date.now() + mutationBackoff(mutation.retryCount);
+          if (!(await isStillQueued(key, mutation))) continue;
+
+          let outcome;
+          try {
+            outcome = await executeMutationSW(mutation, queueAccount);
+          } catch {
+            outcome = { result: 'error' };
+          }
+          const settled = settleMutation(mutation, outcome, Date.now());
+          if (!settled.remove && target) waiting.add(target);
+          try {
+            await writeSettledMutation(key, settled);
+          } catch (err) {
+            LOG && console.warn('[SW sync] Failed to write mutation queue', err);
           }
         }
       }
 
-      if (modified) {
-        // 'failed' entries (retries exhausted) are kept, not pruned here —
-        // this worker has no Dexie/store access to revert the optimistic
-        // local change they correspond to. They stay in the shared queue
-        // record until a tab is open to notice and revert them (see
-        // reconcilePermanentlyFailedMutations in src/utils/mutation-queue.js).
-        const remaining = queue.filter((m) => m.status !== 'completed');
-        try {
-          await writeMutationQueue(key, remaining);
-        } catch (err) {
-          LOG && console.warn('[SW sync] Failed to write mutation queue', err);
-        }
-      }
-    }
-
-    // Notify open tabs to refresh their queue count
-    await postToClients({ type: 'mutationQueueProcessed' });
-  };
+      // Notify open tabs to refresh their queue count
+      await postToClients({ type: 'mutationQueueProcessed' });
+    });
 
   // Runtime image/font caches once matched every origin, so they filled up
   // with remote email images and tracking pixels (stored unencrypted, and as
