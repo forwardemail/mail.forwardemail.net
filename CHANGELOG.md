@@ -6,6 +6,13 @@ release notes are taken from here. To change what a commit says, add a
 `Release-note: <text>` line to its message (or `Release-note: none` to leave
 it out).
 
+## 0.15.1 (2026-10-16)
+
+### Fixes
+
+- Fixed the macOS app quitting unexpectedly
+- Fixed the app crashing repeatedly a few seconds after
+
 ## 0.15.0 (2026-10-16)
 
 ### New

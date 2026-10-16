@@ -36,6 +36,15 @@
   </screenshots>
   <!-- scripts/sync-version.cjs prepends a release entry on every version bump. -->
   <releases>
+    <release version="0.15.1" date="2026-10-16">
+      <description>
+        <p>Fixes</p>
+        <ul>
+          <li>Fixed the macOS app quitting unexpectedly</li>
+          <li>Fixed the app crashing repeatedly a few seconds after</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.15.0" date="2026-10-16">
       <description>
         <p>New</p>
