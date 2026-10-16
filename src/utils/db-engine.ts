@@ -16,6 +16,7 @@
 
 import Dexie, { type IndexableType, type Table, type TransactionMode } from 'dexie';
 import { DB_NAME, DEXIE_VERSION } from './db-constants.ts';
+import { capIndexedBody, indexableBodyText } from './search-body-text.js';
 import {
   armCryptoGate,
   configureDbCrypto,
@@ -396,7 +397,90 @@ function tbl(name: string): Table {
 async function tableGet(table: string, key: unknown): Promise<unknown> {
   await ensureReady();
   const record = await (db as unknown as Record<string, Table>)[table].get(key);
-  return openRecord(table, record);
+  const opened = await openRecord(table, record);
+  if (table === 'searchIndex' && opened) return fitSearchIndex(opened);
+  return opened;
+}
+
+// A result is posted to the asking worker as one structured clone, and
+// WebKit kills the whole web process when one gets too big. Older builds
+// saved every message's full body text in the search index, which made the
+// saved index several gigabytes for a large mailbox: reading it back at
+// startup crashed the app on every launch (seen 2026-10-14, a crash every
+// thirty seconds as the watchdog reloaded it).
+const MAX_SEARCH_INDEX_CHARS = 200_000_000;
+
+type SearchIndexRecord = { data?: Array<Record<string, unknown>> } & Record<string, unknown>;
+
+function searchIndexChars(data: Array<Record<string, unknown>>): number {
+  let total = 0;
+  for (const entry of data) {
+    if (!entry) continue;
+    for (const value of Object.values(entry)) {
+      if (typeof value === 'string') total += value.length;
+    }
+  }
+  return total;
+}
+
+/**
+ * Bring a saved search index down to a size that can be sent to a worker:
+ * bodies are cut to the length new entries get, and dropped altogether if
+ * that is still too much. A changed index is saved back so the work is done
+ * once. The search worker fills dropped bodies in again as mail syncs.
+ */
+async function fitSearchIndex(record: unknown): Promise<unknown> {
+  const index = record as SearchIndexRecord;
+  if (!Array.isArray(index.data)) return record;
+  let changed = false;
+  let data = index.data.map((entry) => {
+    if (typeof entry?.body !== 'string') return entry;
+    const body = capIndexedBody(entry.body);
+    if (body === entry.body) return entry;
+    changed = true;
+    return { ...entry, body };
+  });
+  if (searchIndexChars(data) > MAX_SEARCH_INDEX_CHARS) {
+    changed = true;
+    data = data.map((entry) => (entry && 'body' in entry ? { ...entry, body: '' } : entry));
+  }
+  if (!changed) return record;
+  const fitted = { ...index, data };
+  try {
+    await tablePut('searchIndex', fitted);
+  } catch (error) {
+    console.warn('[db-engine] could not save the trimmed search index', error);
+  }
+  return fitted;
+}
+
+// Body records hold the raw message and attachment content as well as the
+// text. Read them a few at a time so a large mailbox never has gigabytes of
+// them in memory at once.
+const BODY_TEXT_READ_CHUNK = 50;
+
+/**
+ * The searchable text of the given message bodies, without the rest of the
+ * record. Missing bodies are left out.
+ */
+async function bodyTexts(
+  table: string,
+  keys: unknown[],
+): Promise<Array<{ id: string; text: string }>> {
+  await ensureReady();
+  const store = (db as unknown as Record<string, Table>)[table];
+  const out: Array<{ id: string; text: string }> = [];
+  for (let i = 0; i < keys.length; i += BODY_TEXT_READ_CHUNK) {
+    const stored = await store.bulkGet(keys.slice(i, i + BODY_TEXT_READ_CHUNK) as IndexableType[]);
+    const records = (await openRecords(table, stored)) as Array<
+      Record<string, unknown> | undefined
+    >;
+    for (const record of records) {
+      if (!record?.id) continue;
+      out.push({ id: String(record.id), text: indexableBodyText(record) });
+    }
+  }
+  return out;
 }
 
 async function tablePut(table: string, record: unknown): Promise<unknown> {
@@ -1388,6 +1472,8 @@ export async function executeOperation(op: DbOperation): Promise<unknown> {
       return tableCount(table!);
     case 'bulkGet':
       return tableBulkGet(table!, payload.keys!);
+    case 'bodyTexts':
+      return bodyTexts(table!, payload.keys || []);
     case 'bulkPut':
       return tableBulkPut(table!, payload.records!);
     case 'bulkDelete':

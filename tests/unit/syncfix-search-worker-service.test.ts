@@ -15,16 +15,31 @@ const store = vi.hoisted(() => ({
   messageBodies: new Map<string, Row>(),
   // When set, reads of the messages table wait on it (a slow database).
   hold: null as Promise<void> | null,
+  // Keys asked for per body-text request, and full body record reads.
+  bodyTextRequests: [] as number[],
+  fullBodyReads: 0,
 }));
 
-vi.mock('../../src/utils/db-worker-client.js', () => {
+vi.mock('../../src/utils/db-worker-client.js', async () => {
+  const { indexableBodyText } = await import('../../src/utils/search-body-text.js');
   const k = (key: unknown) => JSON.stringify(key);
   const table = (name: 'searchIndex' | 'indexMeta' | 'messages' | 'messageBodies') => ({
     get: async (key: unknown) => store[name].get(k(key)),
     put: async (rec: Row) => {
       store[name].set(k([rec.account, rec.key ?? rec.id]), rec);
     },
-    bulkGet: async (keys: unknown[]) => keys.map((key) => store[name].get(k(key))),
+    bulkGet: async (keys: unknown[]) => {
+      if (name === 'messageBodies') store.fullBodyReads += 1;
+      return keys.map((key) => store[name].get(k(key)));
+    },
+    // Same contract as db-engine's bodyTexts: text only, missing rows left out.
+    bodyTexts: async (keys: unknown[]) => {
+      store.bodyTextRequests.push(keys.length);
+      return keys
+        .map((key) => store[name].get(k(key)))
+        .filter((row): row is Row => Boolean(row?.id))
+        .map((row) => ({ id: String(row.id), text: indexableBodyText(row) }));
+    },
     where: (index: string) => ({
       equals: (value: unknown) => ({
         toArray: async () => {
@@ -98,6 +113,8 @@ beforeEach(() => {
   store.messages.clear();
   store.messageBodies.clear();
   store.hold = null;
+  store.bodyTextRequests = [];
+  store.fullBodyReads = 0;
 });
 
 describe('search worker service per account', () => {
@@ -208,5 +225,35 @@ describe('search worker service per account', () => {
     await rebuild;
     const res = await call('search', { account, query: 'ticket', crossFolder: true });
     expect((res.result.results as Row[]).map((h) => h.id)).toEqual(['r2']);
+  });
+});
+
+describe('search worker body reads on a large mailbox', () => {
+  // The startup rebuild asked the db worker for every cached body in one
+  // request, raw source and attachments included. For a large mailbox the
+  // answer was too big to post and took the whole app down on each launch.
+  it('a rebuild reads body text in batches and never whole body records', async () => {
+    const account = 'big@x.test';
+    const count = 1_201;
+    for (let i = 0; i < count; i++) {
+      const id = `m${i}`;
+      store.messages.set(JSON.stringify([account, id]), { ...msg(id, `Update ${i}`), account });
+      store.messageBodies.set(JSON.stringify([account, id]), {
+        id,
+        account,
+        rawBody: `Subject: Update ${i}\r\n\r\n${'x'.repeat(2_000)}`,
+        body: `<p>Shipment ${i} left the warehouse</p>`,
+        textContent: i === 700 ? 'gooseberry crumble' : `Shipment ${i} left the warehouse`,
+        attachments: [{ filename: 'label.pdf', content: 'J'.repeat(2_000) }],
+      });
+    }
+
+    const res = await call('rebuildFromCache', { account, includeBody: true });
+    expect(res.ok).toBe(true);
+    expect(store.fullBodyReads).toBe(0);
+    expect(store.bodyTextRequests).toEqual([500, 500, 201]);
+
+    const hits = await call('search', { account, query: 'gooseberry', crossFolder: true });
+    expect((hits.result.results as Row[]).map((h) => h.id)).toEqual(['m700']);
   });
 });

@@ -1,5 +1,6 @@
 import FlexSearch from 'flexsearch';
 import { warn } from './logger.ts';
+import { capIndexedBody } from './search-body-text.js';
 
 export const SEARCH_INDEX_KEY = 'messages_v1';
 
@@ -143,7 +144,7 @@ export class SearchService {
       labels: labelsArray,
       // FlexSearch needs a string for proper tokenization - join labels with spaces
       labelsText: labelsArray.join(' '),
-      body: this.includeBody ? entry.body || entry.textContent || '' : undefined,
+      body: this.includeBody ? capIndexedBody(entry.body || entry.textContent || '') : undefined,
     };
     this._entries.set(safeEntry.id, safeEntry);
     this.sizeBytes += entrySize(safeEntry);

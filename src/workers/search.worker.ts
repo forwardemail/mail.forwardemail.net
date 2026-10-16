@@ -208,6 +208,24 @@ async function applyIncludeBody(account: string, includeBody: boolean): Promise<
   return service;
 }
 
+// Keys per request for body text. Each answer is one structured clone between
+// workers; a request for every body in a large mailbox at once was enough to
+// crash the web process on startup.
+const BODY_TEXT_BATCH = 500;
+
+async function loadBodyTexts(keys: unknown[][]): Promise<Map<string, string>> {
+  const bodyMap = new Map<string, string>();
+  for (let i = 0; i < keys.length; i += BODY_TEXT_BATCH) {
+    const texts: Array<{ id: string; text: string }> = await dbClient.messageBodies.bodyTexts(
+      keys.slice(i, i + BODY_TEXT_BATCH),
+    );
+    texts?.forEach((rec) => {
+      if (rec?.id) bodyMap.set(rec.id, rec.text || '');
+    });
+  }
+  return bodyMap;
+}
+
 async function indexMessages(
   payload: IndexPayload = {},
 ): Promise<{ count: number; stats?: SearchStats }> {
@@ -223,11 +241,7 @@ async function indexMessages(
   if (service.includeBody && dbConnected) {
     const keys = messages.map((msg) => [accountKey(account), msg.id]);
     try {
-      const bodies = await dbClient.messageBodies.bulkGet(keys);
-      bodyMap = new Map();
-      bodies?.forEach((rec: { id?: string; textContent?: string; body?: string }) => {
-        if (rec?.id) bodyMap!.set(rec.id, rec.textContent || rec.body || '');
-      });
+      bodyMap = await loadBodyTexts(keys);
     } catch (err) {
       console.warn('[search.worker] body lookup failed', err);
     }
@@ -294,11 +308,7 @@ async function rebuildFromCache(
   if (includeBody) {
     const keys = messages.map((msg: Message) => [key, msg.id]);
     try {
-      const bodies = await dbClient.messageBodies.bulkGet(keys);
-      bodyMap = new Map();
-      bodies?.forEach((rec: { id?: string; textContent?: string; body?: string }) => {
-        if (rec?.id) bodyMap!.set(rec.id, rec.textContent || rec.body || '');
-      });
+      bodyMap = await loadBodyTexts(keys);
     } catch (err) {
       console.warn('[search.worker] rebuildFromCache body lookup failed', err);
     }
@@ -383,11 +393,7 @@ async function syncMissingMessages(
   if (includeBody) {
     const keys = missing.map((msg) => [key, msg.id]);
     try {
-      const bodies = await dbClient.messageBodies.bulkGet(keys);
-      bodyMap = new Map();
-      bodies?.forEach((rec: { id?: string; textContent?: string; body?: string }) => {
-        if (rec?.id) bodyMap!.set(rec.id, rec.textContent || rec.body || '');
-      });
+      bodyMap = await loadBodyTexts(keys);
     } catch (err) {
       console.warn('[search.worker] syncMissing body lookup failed', err);
     }

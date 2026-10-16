@@ -1,3 +1,5 @@
+import { capIndexedBody, indexableBodyText } from './search-body-text.js';
+
 export const mapMessageToDoc = (msg = {}, bodyText = '') => ({
   id: msg.id,
   folder: msg.folder || '',
@@ -7,6 +9,6 @@ export const mapMessageToDoc = (msg = {}, bodyText = '') => ({
   cc: msg.cc || '',
   snippet: msg.snippet || '',
   date: msg.date || msg.dateMs || '',
-  body: bodyText || msg.body || msg.textContent || '',
+  body: bodyText ? capIndexedBody(bodyText) : indexableBodyText(msg),
   labels: msg.labels || msg.label_ids || msg.labelIds || [],
 });

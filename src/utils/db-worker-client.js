@@ -863,6 +863,11 @@ class TableProxy {
     return send('bulkGet', this._table, { keys });
   }
 
+  // Searchable text only, for body records (see bodyTexts in db-engine).
+  bodyTexts(keys) {
+    return send('bodyTexts', this._table, { keys });
+  }
+
   bulkPut(records) {
     return (
       captureWrite(this._table, 'bulkPut', { records }) || send('bulkPut', this._table, { records })

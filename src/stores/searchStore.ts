@@ -330,6 +330,22 @@ const syncMissingMessages = async (): Promise<{ stats?: SearchStats } | null> =>
   }
 };
 
+// Body text for the main-thread fallback, a batch per request: one answer
+// holding every body in a large mailbox is enough to crash the web process.
+const BODY_TEXT_BATCH = 500;
+const loadBodyTexts = async (keys: unknown[][]): Promise<Map<string, string>> => {
+  const bodyMap = new Map<string, string>();
+  for (let i = 0; i < keys.length; i += BODY_TEXT_BATCH) {
+    const texts = (await db.messageBodies.bodyTexts(keys.slice(i, i + BODY_TEXT_BATCH))) as
+      | Array<{ id: string; text: string }>
+      | undefined;
+    texts?.forEach((rec) => {
+      if (rec?.id) bodyMap.set(rec.id, rec.text || '');
+    });
+  }
+  return bodyMap;
+};
+
 const indexMessages = async (messages: Message[] = []): Promise<void> => {
   if (!messages?.length) return;
   // Locked: the records are sealed and index writes would fail. The health
@@ -357,11 +373,7 @@ const indexMessages = async (messages: Message[] = []): Promise<void> => {
   if (get(includeBody)) {
     const keys = messages.map((msg) => [accountId, msg.id]);
     try {
-      const bodies = await db.messageBodies.bulkGet(keys);
-      bodyMap = new Map();
-      bodies?.forEach((rec: { id?: string; textContent?: string; body?: string }) => {
-        if (rec?.id) bodyMap!.set(rec.id, rec.textContent || rec.body || '');
-      });
+      bodyMap = await loadBodyTexts(keys);
     } catch (err) {
       warn('search body lookup failed', err);
     }
@@ -671,11 +683,7 @@ const rebuildFromCache = async (options: RebuildOptions = {}): Promise<{ count: 
     if (get(includeBody)) {
       const keys = messages.map((msg) => [accountId, msg.id]);
       try {
-        const bodies = await db.messageBodies.bulkGet(keys);
-        bodyMap = new Map();
-        bodies?.forEach((rec: { id?: string; textContent?: string; body?: string }) => {
-          if (rec?.id) bodyMap!.set(rec.id, rec.textContent || rec.body || '');
-        });
+        bodyMap = await loadBodyTexts(keys);
       } catch (err) {
         warn('search body lookup failed during rebuild', err);
       }
