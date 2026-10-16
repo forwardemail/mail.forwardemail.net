@@ -177,3 +177,45 @@ export async function showNativeContextMenu(options: ContextMenuOptions): Promis
     return false;
   }
 }
+
+interface ContactMenuActions {
+  // Left out when the contact has no email address; the item shows disabled.
+  onEmail?: () => void;
+  onViewEmails?: () => void;
+  onAddEvent: () => void;
+  onExport: () => void;
+  onDelete: () => void;
+}
+
+/**
+ * Native menu for a contact in the contact list, with the same actions as the
+ * contact's "more" menu. Returns false when it could not be shown, so the
+ * caller can show the HTML menu instead.
+ */
+export async function showNativeContactMenu(actions: ContactMenuActions): Promise<boolean> {
+  try {
+    const { Menu, MenuItem, PredefinedMenuItem } = await import('@tauri-apps/api/menu');
+    const items = [
+      await MenuItem.new({
+        text: 'Email',
+        enabled: Boolean(actions.onEmail),
+        action: () => actions.onEmail?.(),
+      }),
+      await MenuItem.new({ text: 'Add Event', action: actions.onAddEvent }),
+      await MenuItem.new({
+        text: 'View Emails',
+        enabled: Boolean(actions.onViewEmails),
+        action: () => actions.onViewEmails?.(),
+      }),
+      await MenuItem.new({ text: 'Export vCard', action: actions.onExport }),
+      await PredefinedMenuItem.new({ item: 'Separator' }),
+      await MenuItem.new({ text: 'Delete', action: actions.onDelete }),
+    ];
+    const menu = await Menu.new({ items });
+    await menu.popup();
+    return true;
+  } catch (err) {
+    console.warn('[native-context-menu] Contact menu failed, falling back to HTML menu:', err);
+    return false;
+  }
+}

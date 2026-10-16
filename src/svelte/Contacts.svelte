@@ -4,6 +4,8 @@
   import { downloadFile } from '../utils/download';
   import { pickFiles } from '../utils/file-picker';
   import { isTauriDesktop } from '../utils/platform.js';
+  import { showNativeContactMenu } from '../utils/native-context-menu';
+  import { adjacentContact, listArrowStep, opensContactMenu } from '../utils/contact-list-nav';
   import { Remote } from '../utils/remote';
   import { isDemoBlockedError } from '../utils/demo-mode';
   import { Local } from '../utils/storage';
@@ -1309,10 +1311,85 @@
     };
   });
 
+  // Right-click (or Command-click) on a contact in the list: the same actions
+  // as the contact's "more" menu. A native menu on desktop, otherwise one
+  // drawn here at the pointer.
+  let contactMenu = $state<{ contact: Contact; x: number; y: number } | null>(null);
+  let contactListEl = $state<HTMLUListElement | null>(null);
+
+  const closeContactMenu = () => {
+    contactMenu = null;
+  };
+
+  const runContactMenuAction = (action: (contact: Contact) => void) => {
+    const contact = contactMenu?.contact;
+    closeContactMenu();
+    if (contact) action(contact);
+  };
+
+  const openContactMenu = async (event: MouseEvent, contact: Contact) => {
+    event.preventDefault();
+    // A long press on a phone also fires contextmenu; phones use the contact
+    // page's own menu.
+    if (isMobileViewport()) return;
+    if (isTauriDesktop) {
+      const hasEmail = Boolean(contact.email);
+      const shown = await showNativeContactMenu({
+        onEmail: hasEmail ? () => startMail(contact) : undefined,
+        onViewEmails: hasEmail ? () => viewEmails(contact) : undefined,
+        onAddEvent: () => addEvent(contact),
+        onExport: () => exportVCard(contact),
+        onDelete: () => openDeleteConfirm(contact),
+      });
+      if (shown) return;
+    }
+    const padding = 8;
+    const menuW = 200;
+    const menuH = 220;
+    const vw = window.innerWidth || 0;
+    const vh = window.innerHeight || 0;
+    const x = event.clientX + menuW > vw ? Math.max(padding, event.clientX - menuW) : event.clientX;
+    const y = event.clientY + menuH > vh ? Math.max(padding, event.clientY - menuH) : event.clientY;
+    contactMenu = { contact, x, y };
+  };
+
+  const onContactClick = (event: MouseEvent, contact: Contact) => {
+    if (opensContactMenu(event)) {
+      void openContactMenu(event, contact);
+      return;
+    }
+    selectContact(contact);
+  };
+
+  // Up and down move the selection through the list on screen, as in the
+  // message list. Contacts stays mounted while other pages show, so this only
+  // acts while the list is visible, and never while typing or in a dialog.
+  const onWindowKeydown = (event: KeyboardEvent) => {
+    if (contactMenu) {
+      if (event.key === 'Escape') closeContactMenu();
+      return;
+    }
+    const step = listArrowStep(event);
+    if (!step || !contactListEl || !contactListEl.getClientRects().length) return;
+    if (modalVisible || confirmVisible || isMobileViewport()) return;
+    if (document.querySelector('[role="dialog"], [role="menu"]')) return;
+    const next = adjacentContact(filtered, selectedContact?.id, step);
+    event.preventDefault();
+    if (!next || next.id === selectedContact?.id) return;
+    selectContact(next);
+    const row = contactListEl.querySelector<HTMLElement>(
+      `[data-contact-id="${CSS.escape(String(next.id))}"]`,
+    );
+    row?.scrollIntoView({ block: 'nearest' });
+    if (contactListEl.contains(document.activeElement)) row?.focus();
+  };
+
   onDestroy(() => {
     accountUnsub?.();
   });
 </script>
+
+<svelte:window onkeydown={onWindowKeydown} />
 
 <div class="flex flex-col h-full" style="min-height: 0; overflow: hidden;">
   <div
@@ -1415,6 +1492,7 @@
         </div>
       </div>
       <ul
+        bind:this={contactListEl}
         class="fe-mobile-page-scroll fe-above-footer relative flex-1 min-h-0 overflow-y-auto"
         data-testid="contact-list"
         data-loading={loading ? 'true' : 'false'}
@@ -1437,7 +1515,8 @@
                 contact.id
                   ? 'border-l-primary bg-primary/10'
                   : 'border-l-transparent'}"
-                onclick={() => selectContact(contact)}
+                onclick={(event) => onContactClick(event, contact)}
+                oncontextmenu={(event) => openContactMenu(event, contact)}
               >
                 <Avatar.Root
                   class="h-8 w-8 shrink-0"
@@ -1473,6 +1552,75 @@
           {/each}
         {/if}
       </ul>
+      {#if contactMenu}
+        {@const menuContact = contactMenu.contact}
+        <!-- Catches the click outside that closes the menu. -->
+        <div
+          class="fixed inset-0 z-[99]"
+          onpointerdown={closeContactMenu}
+          oncontextmenu={(event) => {
+            event.preventDefault();
+            closeContactMenu();
+          }}
+          role="presentation"
+        ></div>
+        <div
+          class="fixed z-[100] min-w-[190px] border border-border bg-popover p-1 shadow-lg"
+          style="top:{contactMenu.y}px; left:{contactMenu.x}px;"
+          role="menu"
+          tabindex="-1"
+          data-testid="contact-context-menu"
+        >
+          <button
+            type="button"
+            role="menuitem"
+            class="flex w-full items-center px-2 py-1.5 text-sm hover:bg-accent disabled:pointer-events-none disabled:opacity-50"
+            disabled={!menuContact.email}
+            onclick={() => runContactMenuAction(startMail)}
+          >
+            <Mail class="mr-2 h-4 w-4" />
+            Email
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            class="flex w-full items-center px-2 py-1.5 text-sm hover:bg-accent"
+            onclick={() => runContactMenuAction(addEvent)}
+          >
+            <CalendarPlus class="mr-2 h-4 w-4" />
+            Add event
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            class="flex w-full items-center px-2 py-1.5 text-sm hover:bg-accent disabled:pointer-events-none disabled:opacity-50"
+            disabled={!menuContact.email}
+            onclick={() => runContactMenuAction(viewEmails)}
+          >
+            <Search class="mr-2 h-4 w-4" />
+            View emails
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            class="flex w-full items-center px-2 py-1.5 text-sm hover:bg-accent"
+            onclick={() => runContactMenuAction(exportVCard)}
+          >
+            <Download class="mr-2 h-4 w-4" />
+            Export vCard
+          </button>
+          <div class="my-1 h-px bg-border"></div>
+          <button
+            type="button"
+            role="menuitem"
+            class="flex w-full items-center px-2 py-1.5 text-sm text-destructive hover:bg-accent"
+            onclick={() => runContactMenuAction(openDeleteConfirm)}
+          >
+            <Trash2 class="mr-2 h-4 w-4" />
+            Delete
+          </button>
+        </div>
+      {/if}
     </div>
 
     <!-- Contact Detail -->
