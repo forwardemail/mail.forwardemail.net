@@ -49,7 +49,10 @@ const dbPendingRequests = new Map();
 // never replies, and without a deadline every sync waiting on it hangs.
 const DB_REQUEST_TIMEOUT_MS = 60_000;
 // How long opening a message waits for its cached body before downloading it.
-const CACHE_LOOKUP_WAIT_MS = 3_000;
+const CACHE_LOOKUP_WAIT_MS = 1_500;
+// Set when a database request went unanswered, cleared by the next answer or
+// a new port. While set, opening a message does not wait on the cache at all.
+let dbStalled = false;
 
 function dbSend(action, table = null, payload = {}) {
   return new Promise((resolve, reject) => {
@@ -62,6 +65,12 @@ function dbSend(action, table = null, payload = {}) {
     const timer = setTimeout(() => {
       if (!dbPendingRequests.has(id)) return;
       dbPendingRequests.delete(id);
+      // The port may be dead (the database moved and this side was not told);
+      // the main thread opens a new one.
+      if (!dbStalled) {
+        dbStalled = true;
+        self.postMessage({ type: 'dbStalled', action });
+      }
       reject(new Error(`Database request "${action}" timed out after ${DB_REQUEST_TIMEOUT_MS}ms`));
     }, DB_REQUEST_TIMEOUT_MS);
     dbPendingRequests.set(id, { resolve, reject, timer });
@@ -86,6 +95,7 @@ function handleDbResponse(event) {
 
   dbPendingRequests.delete(id);
   clearTimeout(pending.timer);
+  dbStalled = false;
   if (ok) {
     pending.resolve(result);
   } else {
@@ -1492,7 +1502,7 @@ async function fetchAndCacheBodyWithOptions(account, folder, msg, options = {}) 
   };
   // A PGP body cached still encrypted that the current keys may open.
   let lockedCopy = null;
-  if (dbPort) {
+  if (dbPort && !(returnPayload && dbStalled)) {
     try {
       // The reader would rather download again than wait on a busy database.
       const lookup = db.messageBodies.get([account, apiId]);
@@ -2582,6 +2592,7 @@ self.onmessage = (event) => {
     dbPort = event.ports[0];
     dbPort.onmessage = handleDbResponse;
     dbPort.start();
+    dbStalled = false;
     return;
   }
 

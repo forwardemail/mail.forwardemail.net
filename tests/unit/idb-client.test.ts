@@ -76,6 +76,7 @@ import {
   onDbWorkerChange,
   isDbUsingMainThread,
   getDbWorker,
+  openDbPortForWorker,
 } from '../../src/utils/db-worker-client.js';
 
 const A = 'alice@example.com';
@@ -263,5 +264,41 @@ describe('db-worker-client with the real engine', () => {
     expect(live).toHaveLength(1);
     await dbClient.meta.put({ key: 'after-recovery', updatedAt: 1 });
     expect(live[0].received.some((m) => (m as { action?: string }).action === 'put')).toBe(true);
+  });
+
+  it('answers the sync worker on the main thread after falling back, so its cache keeps working', async () => {
+    terminateDbWorker();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    fake.silentNext = true;
+    try {
+      const init = initDbClient();
+      await vi.advanceTimersByTimeAsync(31_000);
+      await init;
+    } finally {
+      fake.silentNext = false;
+      vi.useRealTimers();
+    }
+    expect(isDbUsingMainThread()).toBe(true);
+
+    // The end the sync worker would get. It speaks the db worker's protocol.
+    const port = openDbPortForWorker('sync') as MessagePort;
+    expect(port).toBeTruthy();
+    const ask = (id: number, action: string, table: string, payload: Row) =>
+      new Promise<Row>((resolve) => {
+        port.onmessage = (event) => {
+          if ((event.data as Row).id === id) resolve(event.data as Row);
+        };
+        port.postMessage({ id, action, table, payload });
+      });
+    const put = await ask(1, 'put', 'messageBodies', {
+      record: { account: A, id: 'pgp-1', folder: 'INBOX', body: '<p>hi</p>' },
+    });
+    expect(put.ok).toBe(true);
+    const got = await ask(2, 'get', 'messageBodies', { key: [A, 'pgp-1'] });
+    expect(got).toMatchObject({ ok: true, result: { id: 'pgp-1', body: '<p>hi</p>' } });
+    port.close();
+
+    terminateDbWorker();
+    await initDbClient();
   });
 });

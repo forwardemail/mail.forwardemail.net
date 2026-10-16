@@ -1,5 +1,5 @@
-import { getDbWorker, initializeDatabase, isDbUsingMainThread } from './db.js';
-import { onDbWorkerChange } from './db-worker-client.js';
+import { initializeDatabase } from './db.js';
+import { onDbWorkerChange, openDbPortForWorker } from './db-worker-client.js';
 import SearchWorker from '../workers/search.worker.ts?worker&inline';
 import { createPendingRequests } from './pending-requests.js';
 
@@ -12,8 +12,9 @@ export class SearchWorkerClient {
     this.counter = 0;
     this.dbConnected = false;
     this.dbConnectionPromise = null;
-    // The db worker this client last opened a port to.
-    this.connectedDbWorker = null;
+    // Bumped each time the database moves, so a connection started before the
+    // move does not mark the new one as made.
+    this.dbGeneration = 0;
 
     this.worker.onmessage = (event) => {
       const { id, ok, result, error } = event.data || {};
@@ -28,14 +29,14 @@ export class SearchWorkerClient {
       this.requests.clear(new Error(errorMsg));
     };
 
-    // When the db worker is replaced, the port to the old one is dead. Mark the
-    // connection stale and open a new port to the replacement.
+    // The engine moved: a new db worker, or the main-thread fallback. The port
+    // to the old one is dead, so open a new one.
     this.stopWatchingDbWorker = onDbWorkerChange(({ worker, useMainThread }) => {
       this.dbConnected = false;
-      this.connectedDbWorker = null;
-      if (useMainThread || !worker) return;
-      this.dbConnectionPromise = this.connectToDbWorker(worker).catch((err) => {
-        console.error('[SearchWorkerClient] Reconnecting to db.worker failed:', err);
+      this.dbGeneration += 1;
+      if (!useMainThread && !worker) return;
+      this.dbConnectionPromise = this.connectToDbWorker().catch((err) => {
+        console.error('[SearchWorkerClient] Reconnecting to the database failed:', err);
       });
     });
 
@@ -44,43 +45,28 @@ export class SearchWorkerClient {
   }
 
   /**
-   * Connect this worker to db.worker via MessageChannel
-   * @throws {Error} If connection fails after initialization attempt
+   * Give the search worker a channel to the database: to the db worker, or to
+   * the main thread when the engine runs there.
+   * @throws {Error} If the database cannot be started
    */
-  async connectToDbWorker(knownDbWorker = null) {
-    // When the DB runs on the main thread (WebKitGTK worker-IndexedDB fallback)
-    // there is no db worker to connect a MessageChannel to. Skip rather than
-    // throwing; search degrades gracefully on this platform.
-    if (isDbUsingMainThread()) return;
-
-    let dbWorker = knownDbWorker || getDbWorker();
-    if (!dbWorker) {
-      try {
-        await initializeDatabase();
-        dbWorker = getDbWorker();
-      } catch (err) {
-        throw new Error(
-          `[SearchWorkerClient] Failed to initialize db.worker: ${err.message || 'Unknown error'}`,
-        );
-      }
+  async connectToDbWorker() {
+    // Wait for the database to be up, so the channel never goes to a worker
+    // that is still starting and may be replaced by the main-thread fallback.
+    try {
+      await initializeDatabase();
+    } catch (err) {
+      throw new Error(
+        `[SearchWorkerClient] Failed to initialize the database: ${err.message || 'Unknown error'}`,
+      );
     }
-    if (!dbWorker) {
-      throw new Error('[SearchWorkerClient] db.worker not available after initialization');
-    }
-    // Starting the database announces the new db worker, and the change
-    // listener may already have opened a port to it while we waited.
-    if (this.connectedDbWorker === dbWorker) return;
-    this.connectedDbWorker = dbWorker;
-
-    // Create a MessageChannel
-    const channel = new MessageChannel();
-
-    // Send one port to db.worker
-    dbWorker.postMessage({ type: 'connectPort', workerId: 'search' }, [channel.port1]);
-
-    // Send the other port to search.worker
-    await this.send('connectDbPort', {}, [channel.port2]);
-    this.dbConnected = true;
+    // Starting the database announces it, and the change listener may already
+    // have opened a port while we waited.
+    if (this.dbConnected) return;
+    const generation = this.dbGeneration;
+    const port = openDbPortForWorker('search');
+    if (!port) throw new Error('[SearchWorkerClient] Database not available');
+    await this.send('connectDbPort', {}, [port]);
+    if (generation === this.dbGeneration) this.dbConnected = true;
   }
 
   /**

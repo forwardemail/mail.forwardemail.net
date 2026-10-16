@@ -26,6 +26,8 @@ const env = vi.hoisted(() => ({
   useMainThread: false,
   listeners: [] as Array<(info: { worker: unknown; useMainThread: boolean }) => void>,
   workers: [] as unknown[],
+  // Channels the main thread answers on, opened while the engine runs here.
+  mainThreadPorts: 0,
 }));
 
 vi.mock('../../src/workers/sync.worker.ts?worker&inline', () => ({
@@ -52,6 +54,18 @@ vi.mock('../../src/utils/db.js', () => ({
   isDbUsingMainThread: () => env.useMainThread,
 }));
 vi.mock('../../src/utils/db-worker-client.js', () => ({
+  // Mirrors the real one: a channel to the db worker, or one this thread
+  // answers on when the engine runs here.
+  openDbPortForWorker: (workerId: string) => {
+    const channel = new MessageChannel();
+    if (env.useMainThread) {
+      env.mainThreadPorts += 1;
+      return channel.port2;
+    }
+    if (!env.dbWorker) return null;
+    (env.dbWorker as FakeWorker).postMessage({ type: 'connectPort', workerId }, [channel.port1]);
+    return channel.port2;
+  },
   onDbWorkerChange: (listener: (info: { worker: unknown; useMainThread: boolean }) => void) => {
     env.listeners.push(listener);
     return () => {
@@ -103,16 +117,40 @@ describe('sync worker client', () => {
     expect(handed[1].transfer[0]).not.toBe(handed[0].transfer[0]);
   });
 
-  it('does not open a port when the database moved to the main thread', async () => {
+  it('gives the sync worker a channel the main thread answers when the database falls back', async () => {
     const { getSyncWorker } = await import('../../src/utils/sync-worker-client.js');
     const syncWorker = getSyncWorker() as unknown as FakeWorker;
     const before = portsHandedTo(syncWorker, 'connectDbPort').length;
 
+    // Its old port went to a db worker that is gone; without a new one every
+    // database request it makes waits out its timeout.
     env.useMainThread = true;
+    env.dbWorker = null;
     announce(null, true);
-    await Promise.resolve();
+    await vi.waitFor(() =>
+      expect(portsHandedTo(syncWorker, 'connectDbPort')).toHaveLength(before + 1),
+    );
+    expect(env.mainThreadPorts).toBe(1);
+  });
 
-    expect(portsHandedTo(syncWorker, 'connectDbPort')).toHaveLength(before);
+  it('opens a fresh channel when the sync worker reports stalled requests', async () => {
+    env.useMainThread = false;
+    const db = new FakeWorker();
+    env.dbWorker = db;
+    const { getSyncWorker } = await import('../../src/utils/sync-worker-client.js');
+    const syncWorker = getSyncWorker() as unknown as FakeWorker;
+    const before = portsHandedTo(syncWorker, 'connectDbPort').length;
+
+    syncWorker.onmessage?.({ data: { type: 'dbStalled', action: 'put' } });
+    await vi.waitFor(() =>
+      expect(portsHandedTo(syncWorker, 'connectDbPort')).toHaveLength(before + 1),
+    );
+    expect(connectPortsTo(db, 'sync')).toHaveLength(1);
+
+    // A second report right after does not churn channels.
+    syncWorker.onmessage?.({ data: { type: 'dbStalled', action: 'get' } });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(portsHandedTo(syncWorker, 'connectDbPort')).toHaveLength(before + 1);
   });
 });
 

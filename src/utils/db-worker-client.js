@@ -520,6 +520,43 @@ export async function restoreRawRows(table, records) {
 }
 
 /**
+ * Open a database channel for another worker (sync, search) and return the
+ * end to hand to it. With the db worker running, the channel goes to it. With
+ * the engine on the main thread (the fallback when the worker's IndexedDB
+ * stalls), this thread answers on it, so the other workers keep a working
+ * database instead of a port to a worker that is gone.
+ * @param {string} workerId - 'sync' or 'search'
+ * @returns {MessagePort | null}
+ */
+export function openDbPortForWorker(workerId) {
+  if (isWorkerContext || typeof MessageChannel === 'undefined') return null;
+  const channel = new MessageChannel();
+  if (useMainThread) {
+    channel.port1.onmessage = async (event) => {
+      const { id, action, table, payload } = event.data || {};
+      if (id == null || !action) return;
+      try {
+        const result = await executeOperation({ action, table, payload: payload || {} });
+        channel.port1.postMessage({ id, ok: true, result });
+      } catch (error) {
+        channel.port1.postMessage({
+          id,
+          ok: false,
+          error: error?.message || String(error),
+          errorName: error?.name,
+          errorCode: error?.code,
+        });
+      }
+    };
+    channel.port1.start();
+    return channel.port2;
+  }
+  if (!worker) return null;
+  worker.postMessage({ type: 'connectPort', workerId }, [channel.port1]);
+  return channel.port2;
+}
+
+/**
  * Connect to db worker via MessageChannel (for other workers)
  * @param {MessagePort} port - The MessagePort connected to db.worker
  */

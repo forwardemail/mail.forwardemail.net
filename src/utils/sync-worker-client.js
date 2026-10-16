@@ -1,8 +1,8 @@
 import { config } from '../config.js';
 import SyncWorker from '../workers/sync.worker.ts?worker&inline';
 import { Local } from './storage.js';
-import { getDbWorker, initializeDatabase, isDbUsingMainThread } from './db.js';
-import { onDbWorkerChange } from './db-worker-client.js';
+import { initializeDatabase } from './db.js';
+import { onDbWorkerChange, openDbPortForWorker } from './db-worker-client.js';
 import { getAuthHeader } from './auth.ts';
 import { createPendingRequests } from './pending-requests.js';
 import { warn } from './logger.ts';
@@ -69,6 +69,10 @@ function handleMessage(event) {
     perfHandlers.forEach((handler) => handler(data));
     return;
   }
+  if (data.type === 'dbStalled') {
+    handleDbStalled();
+    return;
+  }
   if (data.type === 'progress' || data.stage) {
     progressHandlers.forEach((handler) => handler(data));
   }
@@ -90,56 +94,65 @@ function handleWorkerError(event) {
 }
 
 /**
- * Connect sync worker to db.worker via MessageChannel
- * @throws {Error} If connection fails after initialization attempt
+ * Give the sync worker a channel to the database: to the db worker, or to this
+ * thread when the engine runs here (the fallback when the worker's IndexedDB
+ * stalls).
+ * @throws {Error} If the database cannot be started
  */
-async function connectToDbWorker(knownDbWorker = null) {
+async function connectToDbWorker() {
   if (dbConnected || !worker) return;
-
-  // When the DB runs on the main thread (WebKitGTK worker-IndexedDB fallback),
-  // there is no db worker to open a MessageChannel to. Skip the connection
-  // rather than throwing — the sync worker simply can't reach the DB here.
-  if (isDbUsingMainThread()) return;
-
-  let dbWorker = knownDbWorker || getDbWorker();
-  if (!dbWorker) {
-    try {
-      await initializeDatabase();
-      dbWorker = getDbWorker();
-    } catch (err) {
-      throw new Error(`Failed to initialize database worker: ${err.message || 'Unknown error'}`);
-    }
-    // Starting the database announces the new db worker, and the listener
-    // below may have connected to it while we waited.
-    if (dbConnected || !worker) return;
+  // Wait for the database to be up first. A channel opened to a worker still
+  // starting goes dead if the start falls back to the main thread, and every
+  // request the sync worker sends down it then waits out its timeout.
+  try {
+    await initializeDatabase();
+  } catch (err) {
+    throw new Error(`Failed to initialize database: ${err.message || 'Unknown error'}`);
   }
-  if (!dbWorker) {
-    throw new Error('Database worker not available after initialization');
-  }
-
-  // Create a MessageChannel
-  const channel = new MessageChannel();
-
-  // Send one port to db.worker
-  dbWorker.postMessage({ type: 'connectPort', workerId: 'sync' }, [channel.port1]);
-
-  // Send the other port to sync.worker
-  worker.postMessage({ type: 'connectDbPort' }, [channel.port2]);
+  // Starting the database announces it, and the listener below may have
+  // connected while we waited.
+  if (dbConnected || !worker) return;
+  const port = openDbPortForWorker('sync');
+  if (!port) throw new Error('Database not available for the sync worker');
+  worker.postMessage({ type: 'connectDbPort' }, [port]);
   dbConnected = true;
 }
 
-// The db worker can be replaced (a crash, a wake from suspend, or a fallback to
-// the main thread). The sync worker's port to the old one is dead, so drop it
-// and open a new one to the replacement.
-onDbWorkerChange(({ worker: dbWorker, useMainThread }) => {
+const reconnectToDb = (reason) => {
   dbConnected = false;
-  if (useMainThread || !dbWorker || !worker) return;
-  connectToDbWorker(dbWorker).catch((err) => {
+  if (!worker) return;
+  connectToDbWorker().catch((err) => {
     // Make the next ensureSyncWorkerReady() try the connection again.
     workerReady = false;
-    warn('[sync-worker-client] Reconnecting to the database worker failed', err);
+    warn(
+      `[sync-worker-client] Reconnecting the sync worker to the database failed (${reason})`,
+      err,
+    );
   });
+};
+
+// The engine moved: a new db worker, or the main-thread fallback. The sync
+// worker's channel to the old one is dead, so it gets a new one.
+onDbWorkerChange(({ worker: dbWorker, useMainThread }) => {
+  if (!useMainThread && !dbWorker) {
+    // Torn down; the next start announces itself again.
+    dbConnected = false;
+    return;
+  }
+  reconnectToDb('database moved');
 });
+
+// The sync worker saw a database request go unanswered. Its channel may be
+// dead for a reason this side missed; open a fresh one, at most this often.
+const DB_STALL_RECONNECT_MS = 30_000;
+let lastStallReconnect = 0;
+function handleDbStalled() {
+  const now = Date.now();
+  if (now - lastStallReconnect < DB_STALL_RECONNECT_MS) return;
+  lastStallReconnect = now;
+  warn('[sync-worker-client] Sync worker database requests are stalling; reconnecting');
+  reconnectToDb('requests stalled');
+}
 
 export async function ensureSyncWorkerReady() {
   if (isDemoMode()) return; // Don't spawn worker in demo mode
