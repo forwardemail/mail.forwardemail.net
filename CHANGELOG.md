@@ -6,6 +6,12 @@ release notes are taken from here. To change what a commit says, add a
 `Release-note: <text>` line to its message (or `Release-note: none` to leave
 it out).
 
+## 0.15.2 (2026-10-16)
+
+### New
+
+- New Power User density shows one message per
+
 ## 0.15.1 (2026-10-16)
 
 ### Fixes
