@@ -315,7 +315,7 @@
 /* ============================================
    DENSITY MODES
    Every list, table and form component reads these. Mobile is always
-   comfortable and ignores the compact setting.
+   comfortable and ignores the compact and power settings.
    ============================================ */
 [data-density='comfortable'] {
   --row-height: 64px;
@@ -328,6 +328,16 @@
 }
 
 /**
+ * Power density matches a Thunderbird table row: one line of 12px text in a
+ * 22px row. It is a pointer-only mode, which is why the mobile rule below
+ * overrides it like the others.
+ */
+[data-density='power'] {
+  --row-height: 22px;
+  --row-pad-y: 2px;
+}
+
+/**
  * Mobile is always comfortable and ignores the compact setting. Enforced here
  * rather than in JS so it survives a viewport resize or orientation change
  * without a round trip, and so it cannot be defeated by the stored preference.
@@ -336,7 +346,8 @@
 @media (max-width: 640px) {
   :root,
   [data-density='compact'],
-  [data-density='comfortable'] {
+  [data-density='comfortable'],
+  [data-density='power'] {
     --row-height: 64px;
     --row-pad-y: var(--fe-space-3);
   }

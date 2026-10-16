@@ -139,6 +139,8 @@ import {
   query,
   unreadOnly,
   hasAttachmentsOnly,
+  listDensity,
+  resolveListDensity,
 } from './stores/viewStore';
 import {
   selectedConversationIds,
@@ -1996,13 +1998,14 @@ function applyTheme(pref) {
  *
  * Sets data-density on <html>. Only components that read --row-height and
  * --row-pad-y respond, so this changes list rhythm without touching forms or
- * buttons. Mobile is always comfortable, enforced in fe-tokens.css rather than
+ * buttons. Power density also shrinks the folder tree and makes the list
+ * single-line, which needs the listDensity store as well as the attribute. Mobile is always comfortable, enforced in fe-tokens.css rather than
  * here so it holds on viewport resize without a JS round trip.
  */
 function applyDensity(pref) {
-  const density = pref || getEffectiveSettingValue('list_density') || 'compact';
-  const resolved = density === 'comfortable' ? 'comfortable' : 'compact';
+  const resolved = resolveListDensity(pref || getEffectiveSettingValue('list_density'));
   document.documentElement.dataset.density = resolved;
+  listDensity.set(resolved);
 }
 
 /**

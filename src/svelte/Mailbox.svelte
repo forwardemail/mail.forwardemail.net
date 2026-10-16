@@ -140,6 +140,7 @@
     unreadOnly as unreadOnlyStore,
     hasAttachmentsOnly as hasAttachmentsOnlyStore,
     filterByLabel as filterByLabelStore,
+    listDensity as listDensityStore,
   } from '../stores/viewStore';
   import {
     selectedConversationIds as selectedConversationIdsStore,
@@ -570,6 +571,11 @@
     cardView = !cardView;
     localStorage.setItem('fe:card-view', String(cardView));
   }
+  // Power density is one line per message, so card rows render as classic
+  // rows while it is on. The stored card-view choice is left alone and comes
+  // back when the density changes.
+  const powerDensity = $derived($listDensityStore === 'power' && !isMobile);
+  const rowCardView = $derived(cardView && !powerDensity);
   let searchActiveStore = storeToStore(source.state?.searchActive, false);
   // Set when a load gives up with nothing to show (e.g. folders timed out on a
   // slow link). Without surfacing it the list just read as empty.
@@ -6656,7 +6662,7 @@
                   >
                     <RefreshCw class={`h-5 w-5 ${refreshAnimating ? 'animate-spin' : ''}`} />
                   </button>
-                  {#if !isMobile}
+                  {#if !isMobile && !powerDensity}
                     <button
                       class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground hidden sm:inline-flex"
                       type="button"
@@ -7416,7 +7422,7 @@
                                    mobile avatar above). -->
                               <button
                                 class={`relative w-8 h-8 rounded flex items-center justify-center shrink-0 transition-colors ${isChecked ? 'text-fg-link' : 'text-muted-foreground hover:text-foreground'}`}
-                                class:hidden={cardView && !selectionMode}
+                                class:hidden={rowCardView && !selectionMode}
                                 type="button"
                                 aria-label={isChecked ? 'Deselect' : 'Select'}
                                 data-slot="checkbox"
@@ -7427,7 +7433,7 @@
                                 <CheckSquare class={isChecked ? 'h-5 w-5' : 'hidden h-5 w-5'} />
                                 <Square class={isChecked ? 'hidden h-5 w-5' : 'h-5 w-5'} />
                               </button>
-                              {#if cardView}
+                              {#if rowCardView}
                                 <div class="flex-1 min-w-0 flex flex-col gap-0.5">
                                   <!-- Line 1: Sender (bold, slightly bigger) + icons + Date (right, muted) -->
                                   <div class="flex items-center justify-between gap-2">
@@ -7550,9 +7556,11 @@
                                 </div>
                               {:else}
                                 <!-- Classic single-row layout -->
-                                <div class="flex-1 min-w-0 flex flex-col gap-0.5 text-[13px]">
+                                <div
+                                  class="fe-row-classic flex-1 min-w-0 flex flex-col gap-0.5 text-[13px]"
+                                >
                                   <!-- Row 1: From | Subject | Date -->
-                                  <div class="flex items-center gap-3">
+                                  <div class="fe-row-line flex items-center gap-3">
                                     <div
                                       class="w-[30%] min-w-[140px] max-w-[280px] shrink-0 flex items-center gap-1"
                                     >
@@ -7593,7 +7601,7 @@
                                       {/if}
                                     </div>
                                     <div
-                                      class="flex items-center gap-1.5 shrink-0 text-muted-foreground"
+                                      class="fe-row-meta flex items-center gap-1.5 shrink-0 text-muted-foreground"
                                     >
                                       {#if hasUserReplied(conv)}
                                         <svg viewBox="0 0 24 24" class="h-3 w-3" aria-hidden="true">
@@ -7655,7 +7663,7 @@
                                   </div>
                                   {#if Array.isArray(conv.labels) && conv.labels.length > 0}
                                     <!-- Labels row -->
-                                    <div class="flex items-center gap-1">
+                                    <div class="fe-row-labels flex items-center gap-1">
                                       {#each conv.labels.slice(0, 3) as lbl}
                                         {#if typeof lbl === 'string' && lbl && lbl !== '[]'}
                                           {@const def = labelMap.get(canonicalizeLabelKeyword(lbl))}
@@ -7737,7 +7745,7 @@
                                  otherwise (see the conversation list). -->
                             <button
                               class={`relative w-8 h-8 rounded flex items-center justify-center shrink-0 transition-colors ${isChecked ? 'text-fg-link' : 'text-muted-foreground hover:text-foreground'}`}
-                              class:hidden={cardView && !selectionMode}
+                              class:hidden={rowCardView && !selectionMode}
                               type="button"
                               aria-label={isChecked ? 'Deselect' : 'Select'}
                               onmousedown={preventShiftTextSelection}
@@ -7747,7 +7755,7 @@
                               <CheckSquare class={isChecked ? 'h-5 w-5' : 'hidden h-5 w-5'} />
                               <Square class={isChecked ? 'hidden h-5 w-5' : 'h-5 w-5'} />
                             </button>
-                            {#if cardView}
+                            {#if rowCardView}
                               <div class="flex-1 min-w-0 flex flex-col gap-0.5">
                                 <!-- Line 1: Sender (bold, slightly bigger) + icons + Date (right, muted) -->
                                 <div class="flex items-center justify-between gap-2">
@@ -7850,9 +7858,11 @@
                               </div>
                             {:else}
                               <!-- Classic single-row layout -->
-                              <div class="flex-1 min-w-0 flex flex-col gap-0.5 text-[13px]">
+                              <div
+                                class="fe-row-classic flex-1 min-w-0 flex flex-col gap-0.5 text-[13px]"
+                              >
                                 <!-- Row 1: From | Subject - Preview | Date -->
-                                <div class="flex items-center gap-3">
+                                <div class="fe-row-line flex items-center gap-3">
                                   <div
                                     class="w-[30%] min-w-[140px] max-w-[280px] shrink-0 flex items-center gap-1"
                                   >
@@ -7881,7 +7891,7 @@
                                     {/if}
                                   </div>
                                   <div
-                                    class="flex items-center gap-1.5 shrink-0 text-muted-foreground"
+                                    class="fe-row-meta flex items-center gap-1.5 shrink-0 text-muted-foreground"
                                   >
                                     {#if hasAnsweredFlag(msg)}
                                       <svg viewBox="0 0 24 24" class="h-3 w-3" aria-hidden="true">
@@ -7939,7 +7949,7 @@
                                 </div>
                                 {#if Array.isArray(msg.labels) && msg.labels.length}
                                   <!-- Row 2: Labels -->
-                                  <div class="flex items-center gap-1">
+                                  <div class="fe-row-labels flex items-center gap-1">
                                     {#each msg.labels.slice(0, 4) as lbl}
                                       {#if typeof lbl === 'string' && lbl && lbl !== '[]'}
                                         <LabelChip
@@ -10053,6 +10063,12 @@
     /* Even if inner nowrap/ellipsis truncation fails, never let row content
        bleed outside the card. */
     overflow: hidden;
+  }
+
+  /* A power density row is 22px plus the 1px divider, so the 48px estimate
+     would make the scrollbar overshoot for rows never yet on screen. */
+  :global([data-density='power']) .fe-msg-row {
+    contain-intrinsic-size: auto 23px;
   }
 
   /* WebView2 mis-renders nowrap/ellipsis truncation inside content-visibility

@@ -435,6 +435,102 @@ body.light-mode .fe-reader {
   padding-block: var(--row-pad-y);
 }
 
+/* ============================================
+   POWER DENSITY
+   One 22px line per message and a 22px folder row, in parity with
+   Thunderbird's table view. Desktop only: the mobile rule in fe-tokens.css
+   puts the row height back, and these rules sit behind the same breakpoint.
+   ============================================ */
+@media (min-width: 641px) {
+  [data-density='power'] [data-conversation-row] {
+    gap: var(--fe-space-2);
+    padding-inline: var(--fe-space-2);
+    font-size: 12px;
+    line-height: 16px;
+  }
+
+  [data-density='power'] .fe-row-classic {
+    font-size: 12px;
+  }
+
+  [data-density='power'] [data-conversation-row] .text-\[11px\],
+  [data-density='power'] [data-conversation-row] .text-xs {
+    font-size: 11px;
+    line-height: 16px;
+  }
+
+  /* The select checkbox is a 32px button in the other densities. */
+  [data-density='power'] [data-conversation-row] > button:first-child {
+    width: 16px;
+    height: 16px;
+  }
+
+  [data-density='power'] [data-conversation-row] > button:first-child svg {
+    width: 14px;
+    height: 14px;
+  }
+
+  /* Labels move up into the line, between the subject and the date, instead
+   * of wrapping onto a second row. display: contents lifts the line's three
+   * columns into the outer flex row so the labels can be ordered among them. */
+  [data-density='power'] .fe-row-classic {
+    flex-direction: row;
+    align-items: center;
+    gap: var(--fe-space-3);
+  }
+
+  [data-density='power'] .fe-row-line {
+    display: contents;
+  }
+
+  [data-density='power'] .fe-row-labels {
+    order: 1;
+    flex-shrink: 0;
+  }
+
+  [data-density='power'] .fe-row-classic .fe-row-meta {
+    order: 2;
+  }
+
+  [data-density='power'] [data-testid='folder-list'] {
+    padding: var(--fe-space-1);
+  }
+
+  /* .fe-folders ul is a flex column with a 6px gap. */
+  [data-density='power'] [data-testid='folder-list'] {
+    gap: 1px;
+  }
+
+  [data-density='power'] [data-testid='folder-list'] > li > button {
+    min-height: 22px;
+    padding-block: 2px;
+    padding-inline: var(--fe-space-2);
+    font-size: 12px;
+    line-height: 16px;
+  }
+
+  [data-density='power'] [data-testid='folder-list'] > li > button .text-sm {
+    font-size: 12px;
+    line-height: 16px;
+  }
+
+  [data-density='power'] [data-testid='folder-list'] > li > button svg {
+    width: 14px;
+    height: 14px;
+  }
+
+  [data-density='power']
+    [data-testid='folder-list']
+    > li
+    > button
+    > span:last-child:not(:first-child) {
+    padding-block: 0;
+    padding-inline: 6px;
+    font-size: 11px;
+    line-height: 16px;
+  }
+}
+
 [data-conversation-row]::before {
   content: '';
   position: absolute;

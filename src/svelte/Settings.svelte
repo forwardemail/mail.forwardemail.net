@@ -2288,10 +2288,22 @@
                 />
                 <span>Comfortable</span>
               </label>
+              <label class="flex items-center gap-2">
+                <input
+                  type="radio"
+                  name="density"
+                  value="power"
+                  bind:group={listDensity}
+                  onchange={saveDensity}
+                  class="accent-primary"
+                />
+                <span>Power User</span>
+              </label>
             </div>
             <p class="text-sm text-muted-foreground">
-              Controls how tall message list rows are. Phones always use Comfortable so rows stay
-              large enough to tap.
+              Controls how tall message list rows are. Power User shows one line per message and
+              tightens the folder list, like Thunderbird's table view. Phones always use Comfortable
+              so rows stay large enough to tap.
             </p>
           </Card.Content>
         </Card.Root>
