@@ -36,6 +36,20 @@
   </screenshots>
   <!-- scripts/sync-version.cjs prepends a release entry on every version bump. -->
   <releases>
+    <release version="0.15.0" date="2026-10-16">
+      <description>
+        <p>New</p>
+        <ul>
+          <li>Right-click a contact (or Command-click on a Mac) to email,</li>
+        </ul>
+        <p>Fixes</p>
+        <ul>
+          <li>Folder unread counts now match across devices, and emails read on another device show as read</li>
+          <li>Fixed unread counts that differed between devices,</li>
+          <li>Fixed new encrypted messages showing a loading</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.14.32" date="2026-10-14">
       <description>
         <p>Fixes</p>

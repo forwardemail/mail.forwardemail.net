@@ -6,6 +6,18 @@ release notes are taken from here. To change what a commit says, add a
 `Release-note: <text>` line to its message (or `Release-note: none` to leave
 it out).
 
+## 0.15.0 (2026-10-16)
+
+### New
+
+- Right-click a contact (or Command-click on a Mac) to email,
+
+### Fixes
+
+- Folder unread counts now match across devices, and emails read on another device show as read
+- Fixed unread counts that differed between devices,
+- Fixed new encrypted messages showing a loading
+
 ## 0.14.32 (2026-10-14)
 
 ### Fixes
