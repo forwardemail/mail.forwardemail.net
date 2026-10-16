@@ -174,12 +174,39 @@ pub fn renderer_watchdog_status(state: State<'_, WatchdogState>) -> WatchdogStat
 /// Send the main window to the troubleshooting page. It loads none of the
 /// app, so it works while the app itself cannot start. `reason` tells the
 /// page why it is showing.
+///
+/// The URL is built from the config and never read back from the webview.
+/// Once the content process is gone, WKWebView's URL is nil and wry unwraps
+/// it, which aborts the whole app on the main thread. Seen on 2026-10-16:
+/// the renderer died after a wake, the watchdog went to open this page and
+/// took the app down instead.
 pub fn open_safe_mode(window: &tauri::WebviewWindow, reason: &str) -> tauri::Result<()> {
-    let mut url = window.url()?;
+    let dev_url = window.config().build.dev_url.as_ref();
+    let url = safe_mode_url(tauri::is_dev(), dev_url, reason);
+    window.navigate(url)
+}
+
+/// The origin the app is served from: the dev server in development, the
+/// custom protocol otherwise. Matches what Tauri resolves for
+/// `WebviewUrl::App`. This app never sets `useHttpsScheme`.
+fn app_origin(is_dev: bool, dev_url: Option<&tauri::Url>) -> tauri::Url {
+    if let Some(url) = dev_url.filter(|_| is_dev) {
+        return url.clone();
+    }
+    let origin = if cfg!(any(windows, target_os = "android")) {
+        "http://tauri.localhost"
+    } else {
+        "tauri://localhost"
+    };
+    tauri::Url::parse(origin).expect("static origin parses")
+}
+
+fn safe_mode_url(is_dev: bool, dev_url: Option<&tauri::Url>, reason: &str) -> tauri::Url {
+    let mut url = app_origin(is_dev, dev_url);
     url.set_path(SAFE_MODE_PATH);
     url.set_query(Some(&format!("reason={reason}")));
     url.set_fragment(None);
-    window.navigate(url)
+    url
 }
 
 /// Start the ping loop for the "main" window. Call once from setup.
@@ -232,6 +259,29 @@ pub fn start(app: AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn safe_mode_url_uses_the_dev_server_in_development() {
+        let dev = tauri::Url::parse("http://localhost:5174").unwrap();
+        let url = safe_mode_url(true, Some(&dev), "watchdog");
+        assert_eq!(
+            url.as_str(),
+            "http://localhost:5174/safe-mode.html?reason=watchdog"
+        );
+    }
+
+    #[test]
+    fn safe_mode_url_uses_the_app_protocol_in_a_release_build() {
+        // A release build still has devUrl in its config; it must not be used.
+        let dev = tauri::Url::parse("http://localhost:5174").unwrap();
+        let url = safe_mode_url(false, Some(&dev), "menu");
+        let expected = if cfg!(windows) {
+            "http://tauri.localhost/safe-mode.html?reason=menu"
+        } else {
+            "tauri://localhost/safe-mode.html?reason=menu"
+        };
+        assert_eq!(url.as_str(), expected);
+    }
 
     const NOW: u64 = 1_000_000_000;
     const WINDOW_MS: u64 = SAFE_MODE_WINDOW.as_millis() as u64;
