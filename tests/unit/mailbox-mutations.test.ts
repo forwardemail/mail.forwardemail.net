@@ -70,6 +70,7 @@ vi.mock('../../src/utils/storage', () => ({
 vi.mock('../../src/utils/sync-worker-client.js', () => ({
   sendSyncRequest: vi.fn().mockRejectedValue(new Error('no worker')),
   onSyncTaskComplete: vi.fn(),
+  postOptimisticOverlay: vi.fn(),
 }));
 vi.mock('../../src/utils/cache-manager', () => ({ cacheManager: { get: vi.fn(), set: vi.fn() } }));
 vi.mock('../../src/utils/sync-settings', () => ({ getSyncSettings: vi.fn(() => ({})) }));
@@ -182,6 +183,60 @@ describe('deleteMessage (permanent / already in Trash)', () => {
       expect.objectContaining({ snapshot: existingRow, internalId: 'm1' }),
       { account: 'me@test.com' },
     );
+  });
+});
+
+describe('moveMessage keeps the list steady', () => {
+  const inbox = (id: string, extra = {}) => ({
+    id,
+    account: 'me@test.com',
+    folder: 'INBOX',
+    is_unread: false,
+    ...extra,
+  });
+
+  beforeEach(() => {
+    selectedFolder.set('INBOX');
+    messages.set([inbox('a'), inbox('b'), inbox('c')] as never);
+    selectedMessage.set(inbox('b') as never);
+  });
+
+  it('opens the neighbour of the moved message, not the top row', async () => {
+    await mailboxStore.actions.moveMessage(inbox('b'), 'Archive', { stayInFolder: true });
+    expect((get(selectedMessage) as { id: string } | null)?.id).toBe('c');
+  });
+
+  it('sends the move as the account the message belongs to', async () => {
+    await mailboxStore.actions.moveMessage(inbox('b'), 'Archive', { stayInFolder: true });
+    expect(h.remoteRequest).toHaveBeenCalledWith(
+      'MessageUpdate',
+      { folder: 'Archive' },
+      expect.objectContaining({ authHeader: 'auth' }),
+    );
+  });
+
+  it('hides the moved row in its old folder but not in the folder it went to', async () => {
+    await mailboxStore.actions.moveMessage(inbox('b'), 'Archive', { stayInFolder: true });
+    const project = mailboxStore.actions.projectRows as (
+      rows: Array<Record<string, unknown>>,
+      folder?: string,
+    ) => Array<{ id: string }>;
+    // A stale server row still listing it in INBOX stays hidden
+    expect(project([inbox('a'), inbox('b')], 'INBOX').map((m) => m.id)).toEqual(['a']);
+    // The Archive list shows it
+    expect(project([{ ...inbox('b'), folder: 'Archive' }], 'Archive').map((m) => m.id)).toEqual([
+      'b',
+    ]);
+  });
+});
+
+describe('deleteMessage removes the row before any await', () => {
+  it('takes the row off screen while the snapshot read is still pending', async () => {
+    messages.set([trashMsg(), { id: 'm2', account: 'me@test.com', folder: 'TRASH' }] as never);
+    (db.messages.get as ReturnType<typeof vi.fn>).mockReturnValueOnce(new Promise(() => {}));
+    void mailboxStore.actions.deleteMessage(trashMsg(), { permanent: true });
+    await flushRaf();
+    expect((get(messages) as Array<{ id: string }>).map((m) => m.id)).toEqual(['m2']);
   });
 });
 

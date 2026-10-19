@@ -72,3 +72,25 @@ describe('conversation grouper reply indicator', () => {
     expect(conv.hasReply).toBe(true);
   });
 });
+
+describe('conversation grouper object reuse', () => {
+  it('returns the same conversation object when its messages did not change', () => {
+    const group = createConversationGrouper();
+    const a = msg({ id: 'a', date: 2 });
+    const b = msg({ id: 'b', date: 1, subject: 'Other' });
+    const first = group([a, b], 'date_desc', new Set(), new Map());
+    const second = group([a, b], 'date_desc', new Set(), new Map());
+    const byId = (list, id) => list.find((c) => c.messages.some((m) => m.id === id));
+    expect(byId(second, 'a')).toBe(byId(first, 'a'));
+    expect(byId(second, 'b')).toBe(byId(first, 'b'));
+  });
+
+  it('builds a new object when a message in it changed', () => {
+    const group = createConversationGrouper();
+    const a = msg({ id: 'a' });
+    const [first] = group([a], 'date_desc', new Set(), new Map());
+    const [second] = group([{ ...a, is_unread: true }], 'date_desc', new Set(), new Map());
+    expect(second).not.toBe(first);
+    expect(second.messages[0].is_unread).toBe(true);
+  });
+});

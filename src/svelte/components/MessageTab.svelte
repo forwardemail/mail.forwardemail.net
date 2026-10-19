@@ -33,7 +33,7 @@
 
   // Services
   import { mailService } from '../../stores/mailService';
-  import { isDemoBlockedError } from '../../utils/demo-mode';
+  import { isDemoBlockedError, isDemoMode } from '../../utils/demo-mode';
   import { Local } from '../../utils/storage';
   import { processQuotedContent } from '../../utils/quote-collapse.js';
   import { formatFriendlyDate } from '../../utils/date';
@@ -321,6 +321,16 @@
   async function handleArchive() {
     if (!message) return;
     const target = { ...message, folder: message.folder || folder };
+    // Outside the demo, close at once as delete does. archiveMessage is
+    // optimistic and queues a retry on failure, so waiting for the network
+    // only kept the tab up for a round trip after the user archived it.
+    if (!isDemoMode()) {
+      closeTab(tabId);
+      archiveMessage(target).catch((err) => {
+        console.warn('Failed to archive message from tab', err);
+      });
+      return;
+    }
     try {
       const result = await archiveMessage(target);
       if (result && result.success === false) {
@@ -417,7 +427,9 @@
 
   <!-- Message Content -->
   <div class="flex-1 overflow-y-auto">
-    {#if loading && !body}
+    <!-- The header renders from the row the tab was opened with straight
+         away; only a tab with nothing to show yet gets the spinner. -->
+    {#if loading && !body && !message}
       <div class="flex items-center justify-center h-32">
         <Loader2 class="h-6 w-6 animate-spin text-muted-foreground" />
       </div>
@@ -497,8 +509,10 @@
           </div>
         {/if}
 
-        <!-- Email Body -->
-        {#if body}
+        <!-- Email Body. Mounted while it loads too: EmailIframe keeps its
+             frame hidden, at the height last measured for this message, until
+             the body is ready. -->
+        {#if body || loading}
           <div class="mb-6">
             <!-- The iframe runtime prevents default on every link and relays
                  the click here; without a handler, links in a tab were dead. -->

@@ -40,6 +40,15 @@
               window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches
             );
           document.documentElement.style.backgroundColor = dark ? '#182238' : '#f5f7fb';
+          // Theme class and row density too, so the first frame the bundle
+          // paints already has the right tokens. main.ts applies both again
+          // from settings once it runs.
+          document.documentElement.classList.toggle('dark', dark);
+          var density = localStorage.getItem('webmail_list_density');
+          document.documentElement.setAttribute(
+            'data-density',
+            density === 'comfortable' || density === 'power' ? density : 'compact',
+          );
 
           // App Lock cold start: decide "locked" here, before any bundle
           // loads, and paint the lock cover immediately. The real lock screen

@@ -2218,6 +2218,16 @@ async function bootstrap() {
     /* the native side repairs the viewport as well */
   }
 
+  // Theme and density come from localStorage synchronously. Applying them
+  // here, rather than after i18n and database init below, means the first
+  // visible frame is not drawn in the light theme or at the wrong row height.
+  try {
+    applyTheme(getEffectiveSettingValue('theme'));
+    applyDensity(getEffectiveSettingValue('list_density'));
+  } catch (error) {
+    console.warn('[bootstrap] Early theme/density apply failed:', error);
+  }
+
   // Show the app before anything async. Until this class lands the whole
   // body is visibility:hidden, so an await before it is a blank screen,
   // on every launch and every iOS renderer reload.

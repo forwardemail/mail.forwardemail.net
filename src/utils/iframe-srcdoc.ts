@@ -31,10 +31,17 @@ function linkifyEscapedText(escapedText: string): string {
   );
 }
 
+/**
+ * `token` names this document. The runtime echoes it with every message it
+ * posts, so the parent can ignore a late `ready` or `height` from the document
+ * it already replaced (the previous email) instead of revealing the frame or
+ * caching that height for the new one.
+ */
 export function buildIframeSrcdoc(
   emailHtml: string,
   isDarkMode: boolean = false,
   plainText: boolean = false,
+  token: string = '',
 ): string {
   const bodyClass = isDarkMode ? 'fe-iframe-dark' : 'fe-iframe-light';
   const origin = parentOrigin();
@@ -49,10 +56,16 @@ export function buildIframeSrcdoc(
     ? `<pre class="fe-email-plaintext">${linkifyEscapedText(escapeForPreText(emailHtml))}</pre>`
     : emailHtml;
 
+  const safeToken = String(token).replace(/[^\w:-]/g, '');
+
+  // color-scheme matches the app theme. Without it the engine paints the
+  // frame's default light canvas for a moment before the styles apply, which
+  // flashed white in dark mode.
   return `<!DOCTYPE html>
-<html class="${bodyClass}">
+<html class="${bodyClass}" data-fe-token="${safeToken}">
 <head>
   <meta charset="utf-8">
+  <meta name="color-scheme" content="${isDarkMode ? 'dark' : 'light'}">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src ${imgSrc}; font-src ${fontSrc}; script-src ${origin}; form-action 'none'; base-uri 'none';">
   <style>

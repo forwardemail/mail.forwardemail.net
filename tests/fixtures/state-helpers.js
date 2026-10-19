@@ -86,6 +86,9 @@ const json = (route, payload, { status = 200, headers = {} } = {}) =>
  *   listDelay     (params) => milliseconds to wait before answering a list
  *                 request, to give the server some latency
  *   detailBody    (msg) => extra fields for the message detail response
+ *   indexLag      milliseconds a moved message keeps showing in the list of
+ *                 the folder it left, as the real API does while its indexer
+ *                 catches up (10-30 seconds in production)
  */
 export async function installMailServer(page, options = {}) {
   const server = createMailServer(options);
@@ -142,8 +145,15 @@ function createMailServer({
   holdListPages = null,
   listDelay = null,
   detailBody = null,
+  indexLag = 0,
 } = {}) {
   const state = new Map(messages.map((m) => [m.id, structuredClone(m)]));
+  // id -> { folder, until }: the folder lists still report until `until`
+  const lagging = new Map();
+  const listedFolder = (m) => {
+    const lag = lagging.get(m.id);
+    return lag && Date.now() < lag.until ? lag.folder : m.folder_path;
+  };
   const log = [];
   let releaseHeld;
   const held = new Promise((resolve) => {
@@ -230,10 +240,13 @@ function createMailServer({
       const delay = listDelay ? listDelay(entry.params) : 0;
       if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
       let list = [...state.values()];
-      if (folder) list = list.filter((m) => m.folder_path === folder);
+      if (folder) list = list.filter((m) => listedFolder(m) === folder);
       if (unreadOnly) list = list.filter(isUnread);
       sorted(list);
-      const slice = list.slice((pageNo - 1) * limit, pageNo * limit).map(listItem);
+      // A lagging row is reported as the stale copy, still in its old folder
+      const slice = list
+        .slice((pageNo - 1) * limit, pageNo * limit)
+        .map((m) => listItem({ ...m, folder_path: listedFolder(m) }));
       return json(route, slice, { headers: { 'X-Item-Count': String(list.length) } });
     }
 
@@ -265,7 +278,12 @@ function createMailServer({
           flags = [...change.flags];
         }
         msg.flags = flags;
-        if (typeof change.folder === 'string' && change.folder) msg.folder_path = change.folder;
+        if (typeof change.folder === 'string' && change.folder) {
+          if (indexLag && change.folder !== msg.folder_path) {
+            lagging.set(id, { folder: msg.folder_path, until: Date.now() + indexLag });
+          }
+          msg.folder_path = change.folder;
+        }
         if (Array.isArray(change.labels)) msg.labels = [...change.labels];
         return json(route, listItem(msg));
       }

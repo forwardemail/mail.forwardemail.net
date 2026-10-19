@@ -741,3 +741,87 @@ export const revertFlagChange = <T extends Record<string, unknown>>(
 
   return row;
 };
+
+// Fields a row's rendering, threading or realtime handling reads. Two copies
+// of a message that agree on all of them are interchangeable on screen.
+const ROW_FIELDS = [
+  'id',
+  'uid',
+  'folder',
+  'is_unread',
+  'is_starred',
+  'is_answered',
+  'is_flagged',
+  'flags',
+  'labels',
+  'subject',
+  'snippet',
+  'from',
+  'to',
+  'cc',
+  'date',
+  'dateMs',
+  'has_attachment',
+  'thread_id',
+  'in_reply_to',
+  'references',
+  'message_id',
+  'header_message_id',
+] as const;
+
+const sameValue = (a: unknown, b: unknown): boolean => {
+  if (a === b) return true;
+  if (Array.isArray(a) && Array.isArray(b)) {
+    return a.length === b.length && a.every((v, i) => sameValue(v, b[i]));
+  }
+  if (a && b && typeof a === 'object' && typeof b === 'object') {
+    return JSON.stringify(a) === JSON.stringify(b);
+  }
+  return false;
+};
+
+/**
+ * Keeps the previous object for every row whose fields above did not change,
+ * and the previous array when nothing changed at all. A refresh builds new
+ * row objects from the cache or the network even when the mail is the same,
+ * and new objects re-render every row (and regroup every conversation) on
+ * each WebSocket event and sync.
+ */
+export const reuseUnchangedRows = <M extends object>(prev: M[], next: M[]): M[] => {
+  if (!Array.isArray(prev) || !prev.length || !Array.isArray(next)) return next;
+  const byId = new Map<unknown, M>();
+  for (const row of prev) byId.set((row as { id?: unknown }).id, row);
+  let allSame = prev.length === next.length;
+  const out = next.map((row, idx) => {
+    const old = byId.get((row as { id?: unknown }).id);
+    const keep =
+      old &&
+      (old === row ||
+        ROW_FIELDS.every((f) =>
+          sameValue((old as Record<string, unknown>)[f], (row as Record<string, unknown>)[f]),
+        ));
+    const chosen = keep ? old : row;
+    if (chosen !== prev[idx]) allSame = false;
+    return chosen;
+  });
+  return allSame ? prev : out;
+};
+
+/** True when a rebuilt reply index has the same targets and reply ids. */
+export const sameReplyIndex = (
+  prevTargets: Set<unknown>,
+  prevIndex: Map<unknown, unknown>,
+  targets: Set<unknown>,
+  index: Map<unknown, unknown>,
+) => {
+  if (prevTargets.size !== targets.size || prevIndex.size !== index.size) return false;
+  for (const t of targets) if (!prevTargets.has(t)) return false;
+  const ids = (list: unknown) =>
+    (Array.isArray(list) ? list : [])
+      .map((m) => String((m as { id?: unknown })?.id ?? ''))
+      .join(',');
+  for (const [key, list] of index) {
+    if (!prevIndex.has(key) || ids(prevIndex.get(key)) !== ids(list)) return false;
+  }
+  return true;
+};

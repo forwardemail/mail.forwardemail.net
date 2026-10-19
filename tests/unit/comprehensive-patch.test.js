@@ -1056,7 +1056,9 @@ describe('Large mailbox bootstrap timeout regressions', () => {
       path.resolve(__dirname, '../../src/stores/mailboxStore.ts'),
       'utf8',
     );
-    expect(storeSrc).toContain('const nextList = originalList.filter((m) => m.id !== msg.id)');
+    // The next message is picked from the list before the removal (see the
+    // moveMessage behaviour tests in mailbox-mutations.test.ts).
+    expect(storeSrc).toContain('list: originalList,');
     expect(storeSrc).toContain('selectedConversationIds.set([])');
     expect(storeSrc).toContain('selectedMessage.set(nextSelected)');
   });

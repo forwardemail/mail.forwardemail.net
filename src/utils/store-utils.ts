@@ -56,6 +56,47 @@ export function debouncedDerived<T>(
 }
 
 /**
+ * Like debouncedDerived, but the first change after a quiet period is applied
+ * at once and only the changes that follow within `delay` are coalesced into
+ * one trailing run.
+ *
+ * A trailing debounce delays every update, including the one that matters
+ * most: the list for a folder just opened, or the row just archived. That put
+ * a blank list, or the previous folder's rows, on screen for one debounce
+ * window. This keeps the coalescing for bursts of ticks without that delay.
+ */
+export function throttledDerived<S extends Readable<unknown>[], T>(
+  stores: S,
+  fn: (values: StoreValues<S>) => T,
+  initialValue: T,
+  delay: number = 16,
+): Readable<T> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let lastRun = -Infinity;
+  let latest: unknown;
+
+  return derived(
+    stores as unknown as Readable<unknown>,
+    ($values: unknown, set: (value: T) => void) => {
+      latest = $values;
+      const run = () => {
+        timer = null;
+        lastRun = Date.now();
+        set(fn(latest as StoreValues<S>));
+      };
+      if (timer === null && Date.now() - lastRun >= delay) {
+        run();
+        return;
+      }
+      if (timer === null) {
+        timer = setTimeout(run, Math.max(0, lastRun + delay - Date.now()));
+      }
+    },
+    initialValue,
+  );
+}
+
+/**
  * Creates a derived store that uses requestIdleCallback for non-urgent computations
  * Computations run when the browser is idle, improving responsiveness
  */

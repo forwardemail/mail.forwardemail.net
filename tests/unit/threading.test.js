@@ -153,6 +153,36 @@ describe('groupIntoConversations with server threads', () => {
   });
 });
 
+describe('groupIntoConversations conversation ids', () => {
+  it('keeps the id when a new reply arrives at the top of the thread', () => {
+    const before = groupIntoConversations([
+      lightweightRow('b', 'thread-1', 'Re: Plans', 2000),
+      lightweightRow('a', 'thread-1', 'Plans', 1000),
+    ]);
+    const after = groupIntoConversations([
+      lightweightRow('c', 'thread-1', 'Re: Plans', 3000),
+      lightweightRow('b', 'thread-1', 'Re: Plans', 2000),
+      lightweightRow('a', 'thread-1', 'Plans', 1000),
+    ]);
+    expect(after).toHaveLength(1);
+    expect(after[0].id).toBe(before[0].id);
+  });
+
+  it('keeps the id when the newest row has headers but no thread_id', () => {
+    // A just-sent reply inserted before the server indexed it: it links by
+    // In-Reply-To only, and it sorts first.
+    const before = groupIntoConversations([
+      { ...lightweightRow('b', 'thread-1', 'Plans', 2000), message_id: '<b@example.com>' },
+    ]);
+    const after = groupIntoConversations([
+      { id: 'x', message_id: '<x@example.com>', in_reply_to: '<b@example.com>', dateMs: 3000 },
+      { ...lightweightRow('b', 'thread-1', 'Plans', 2000), message_id: '<b@example.com>' },
+    ]);
+    expect(after).toHaveLength(1);
+    expect(after[0].id).toBe(before[0].id);
+  });
+});
+
 describe('hasAnsweredFlag', () => {
   it('reads the IMAP flag case-insensitively and the derived fields', () => {
     expect(hasAnsweredFlag({ flags: ['\\Seen', '\\Answered'] })).toBe(true);

@@ -94,7 +94,8 @@ describe('sync worker detail metadata contract', () => {
         'const persistBody = async (body, textContent, attachments = [], meta = null) => {',
       ),
       cachesMeta: /attachments,\s+meta,\s+updatedAt: Date\.now\(\)/.test(workerSource),
-      returnsMeta: /attachments,\s+meta,\s+};/.test(workerSource),
+      // Optionally followed by the decrypt info (pgp) the reader shows
+      returnsMeta: /attachments,\s+meta,\s+(\.\.\.\(pgpInfo[^\n]*\),\s+)?};/.test(workerSource),
       cachedHitReturnsMeta:
         /attachments: cached\.attachments \|\| \[\],\s+meta: [^\n]*cached[^\n]*\.meta \|\| null,/.test(
           workerSource,

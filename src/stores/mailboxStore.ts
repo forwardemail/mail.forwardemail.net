@@ -20,7 +20,11 @@ import { formatFriendlyDate } from '../utils/date';
 import { normalizeMessageForCache, getMessageApiId } from '../utils/sync-helpers';
 import { assertAccountScoped } from '../utils/account-scope';
 import { getSyncSettings } from '../utils/sync-settings';
-import { sendSyncRequest, onSyncTaskComplete } from '../utils/sync-worker-client.js';
+import {
+  sendSyncRequest,
+  onSyncTaskComplete,
+  postOptimisticOverlay,
+} from '../utils/sync-worker-client.js';
 import { createPerfTracer } from '../utils/perf-logger.ts';
 import { memoize } from '../utils/store-utils.ts';
 import { getEffectiveSettingValue } from './settingsStore';
@@ -103,11 +107,15 @@ import {
   applyRemoteLabelChange,
   sameFolderPath,
   revertFlagChange,
+  reuseUnchangedRows,
+  sameReplyIndex,
 } from './mailbox-store-helpers';
 import {
   createPendingDeleteTracker,
   createPendingFlagTracker,
   createPendingInsertTracker,
+  PENDING_DELETE_SETTLE_GRACE,
+  PENDING_DELETE_TTL,
 } from './optimistic-trackers';
 import {
   createUnreadDeltas,
@@ -189,13 +197,51 @@ const OBJECT_ID_PATTERN = /^[a-f\d]{24}$/i;
 // Instantiated once here, then rebound to the original function names so every
 // call site and the actions API stay unchanged.
 const pendingDeleteTracker = createPendingDeleteTracker();
-const addPendingDeletes = pendingDeleteTracker.add;
+const pendingFlagTracker = createPendingFlagTracker();
+
+// Pushes the trackers to the sync worker once per tick, after any change.
+let overlayPushQueued = false;
+const pushOptimisticOverlay = () => {
+  if (overlayPushQueued) return;
+  overlayPushQueued = true;
+  queueMicrotask(() => {
+    overlayPushQueued = false;
+    try {
+      postOptimisticOverlay({
+        deleteIds: pendingDeleteTracker.getIds(),
+        flags: pendingFlagTracker.snapshot(),
+      });
+    } catch {
+      // The worker also gets a snapshot with each task
+    }
+  });
+};
+
+// Entries expire on a clock, not on an event, so the worker's copy is
+// refreshed again once they can have expired.
+const pushOptimisticOverlayAfter = (ms: number) => {
+  setTimeout(pushOptimisticOverlay, ms + 1000);
+};
+
+const addPendingDeletes: typeof pendingDeleteTracker.add = (ids, options) => {
+  pendingDeleteTracker.add(ids, options);
+  pushOptimisticOverlay();
+  pushOptimisticOverlayAfter(PENDING_DELETE_TTL);
+};
 const filterPendingDeletes = pendingDeleteTracker.filter;
 export const getPendingDeleteIds = pendingDeleteTracker.getIds;
-const confirmDeletes = pendingDeleteTracker.confirm;
-const cancelPendingDelete = pendingDeleteTracker.cancel;
+// The server accepted these moves or deletes; their rows stay hidden for the
+// indexing grace window from now, then the tracker lets them go.
+const settlePendingDeletes = (ids: string[]) => {
+  if (!ids.length) return;
+  pendingDeleteTracker.settle(ids);
+  pushOptimisticOverlayAfter(PENDING_DELETE_SETTLE_GRACE);
+};
+const cancelPendingDelete = (id: string) => {
+  pendingDeleteTracker.cancel(id);
+  pushOptimisticOverlay();
+};
 
-const pendingFlagTracker = createPendingFlagTracker();
 // Ids whose read state changed while a reconcile was listing the server's
 // unread messages. That list can predate the change, so those ids are skipped.
 const flagChangeWatchers = new Set<Set<string>>();
@@ -212,8 +258,49 @@ const addPendingFlagMutation: typeof pendingFlagTracker.add = (id, mutation) => 
     if (folder) unreadDeltas.read(activeAccountName(), String(id), folder, mutation.is_unread);
   }
   pendingFlagTracker.add(id, mutation);
+  pushOptimisticOverlay();
+  reprojectSearchResults();
 };
 const applyPendingFlagMutations = pendingFlagTracker.apply;
+/**
+ * Lays every optimistic change over rows from any source (memory cache, IDB,
+ * network, search): moved or deleted rows out, pending read/star/label
+ * changes on. Every list that reaches the screen or the cache goes through
+ * this, so a stale copy from one source cannot undo a change another path
+ * already hid.
+ */
+const projectRows = <M extends object>(rows: M[], folder?: string): M[] =>
+  applyPendingFlagMutations(
+    pendingDeleteTracker.withMovedIn(
+      filterPendingDeletes(rows as unknown as Record<string, unknown>[], folder),
+      folder,
+    ),
+  ) as unknown as M[];
+
+// Search results are their own list, so an optimistic change made to
+// `messages` never reached them: archiving or starring a search result looked
+// like it did nothing until the next search refresh. Rows carry their own
+// folder, so no list folder is passed.
+const reprojectSearchResults = () => {
+  if (!get(searchActive)) return;
+  searchResults.update((list) => {
+    if (!list?.length) return list;
+    const next = projectRows(list) as unknown as Record<string, unknown>[];
+    const changed =
+      next.length !== list.length ||
+      next.some((row, idx) => {
+        const prev = list[idx] as unknown as Record<string, unknown>;
+        return (
+          row.id !== prev.id ||
+          row.is_unread !== prev.is_unread ||
+          row.is_starred !== prev.is_starred ||
+          row.labels !== prev.labels ||
+          row.flags !== prev.flags
+        );
+      });
+    return changed ? (next as unknown as typeof list) : list;
+  });
+};
 export const getPendingFlagMutations = () => pendingFlagTracker.snapshot();
 // The server now reports the state we set, so it has the change.
 const confirmFlagMutations: typeof pendingFlagTracker.confirm = (serverMsgs) => {
@@ -226,11 +313,13 @@ const confirmFlagMutations: typeof pendingFlagTracker.confirm = (serverMsgs) => 
 // A newer state arrived from the server for this message.
 const supersedePendingFlag = (account: string, id: string) => {
   pendingFlagTracker.cancel(id);
+  pushOptimisticOverlay();
   unreadDeltas.settle(account, id);
 };
 // The change failed for good and was rolled back here.
 const cancelPendingFlag = (id: string, account = activeAccountName()) => {
   pendingFlagTracker.cancel(id);
+  pushOptimisticOverlay();
   unreadDeltas.drop(account, String(id));
 };
 
@@ -431,8 +520,13 @@ const createMailboxStore = () => {
           index.get(ref).push(msg);
         });
       });
-      replyTargets.set(targets);
-      replyMessageIndex.set(index);
+      // Published only when it changed. These are new objects every time, and
+      // each set regrouped the whole conversation list, so the TTL refresh
+      // re-rendered every row once a minute for nothing.
+      if (!sameReplyIndex(get(replyTargets), get(replyMessageIndex), targets, index)) {
+        replyTargets.set(targets);
+        replyMessageIndex.set(index);
+      }
     } catch (err) {
       warn('[replies] Failed to build reply target index', err);
     }
@@ -470,7 +564,7 @@ const createMailboxStore = () => {
 
       if (generation !== searchMessagesGeneration) return;
 
-      searchResults.set(results);
+      searchResults.set(projectRows(results));
       searchActive.set(true);
       hasNextPage.set(false);
 
@@ -1134,6 +1228,34 @@ const createMailboxStore = () => {
   // been answered before the change: it runs again once that one settles. With
   // several pages on screen it reloads the first page and merges it in place
   // instead of reloading only the last page.
+  // A launch URL that names a message (#INBOX/<id>, a reload or a deep link)
+  // opens that message. Auto-selecting the first row in the meantime showed
+  // it, loaded it and marked it read, and then the link restore switched the
+  // reader to the linked message. Held until something is selected, or for 10
+  // seconds if the link never resolves.
+  let holdAutoSelectForLink = (() => {
+    try {
+      const hash = String(globalThis.location?.hash || '').slice(1);
+      return hash.split('?')[0].indexOf('/') > 0;
+    } catch {
+      return false;
+    }
+  })();
+  if (holdAutoSelectForLink) {
+    let released = false;
+    const release = () => {
+      released = true;
+      holdAutoSelectForLink = false;
+    };
+    const stop = selectedMessage.subscribe((m) => {
+      if (m && !released) release();
+    });
+    setTimeout(() => {
+      release();
+      stop();
+    }, 10_000);
+  }
+
   const loadMessages = async (options: { refresh?: boolean } = {}) => {
     const refresh = options?.refresh === true;
     if (refresh && inFlightMessageListRequest) {
@@ -1153,7 +1275,8 @@ const createMailboxStore = () => {
     // In full/productivity mode, don't auto-select to avoid putting message ID in URL
     const autoSelectDisabled = Local.get('auto_select_first') === 'false';
     const isClassicLayout = normalizeLayoutMode(get(effectiveLayoutMode)) === 'classic';
-    const allowAutoSelect = !isMobileViewport() && !autoSelectDisabled && isClassicLayout;
+    const allowAutoSelect =
+      !isMobileViewport() && !autoSelectDisabled && isClassicLayout && !holdAutoSelectForLink;
     // Append on every page after the first. Infinite scroll is the pagination
     // mechanism on all viewports now (the numbered pager was removed), so
     // desktop must accumulate pages too. Previously this was gated to mobile,
@@ -1181,6 +1304,19 @@ const createMailboxStore = () => {
 
     let cachedPage = [];
 
+    // A background refresh (WebSocket event, sync, return to the tab) of the
+    // folder already on screen leaves the list as it is until the network
+    // answers. Drawing the cached copy first replaced the list twice per event
+    // and could briefly show a message another client had just deleted, which
+    // the network list then removed again. The cache is still read below,
+    // because the prune after the network load needs it.
+    const keepListOnScreen =
+      refresh &&
+      !shouldAppend &&
+      (get(messages) || []).some(
+        (m) => String(m?.folder || '').toLowerCase() === String(folder || '').toLowerCase(),
+      );
+
     // Synchronous in-memory cache check — runs in same microtask as selectedFolder.set()
     // so Svelte batches both updates into one render (no skeleton flash)
     const memKey = `${account}:${folder}:${currentPage}`;
@@ -1189,16 +1325,18 @@ const createMailboxStore = () => {
     const memCached = headRefresh ? null : folderMessageCache.get(memKey);
     if (memCached?.messages?.length) {
       cachedPage = memCached.messages;
+    }
+    if (memCached?.messages?.length && !keepListOnScreen) {
       let nextMessages = shouldAppend
         ? mergeMessagePages(get(messages), cachedPage, MAX_LIVE_MESSAGES)
         : cachedPage;
       // Keep a just-sent message visible in Sent until the indexer reports it.
       if (folder === getSentFolderPath()) nextMessages = pendingInsertTracker.apply(nextMessages);
-      messages.set(applyPendingFlagMutations(filterPendingDeletes(nextMessages)));
+      messages.set(reuseUnchangedRows(get(messages), projectRows(nextMessages, folder)));
       hasNextPage.set(memCached.hasNextPage);
       loading.set(false);
       if (allowAutoSelect && (!get(selectedMessage) || get(selectedMessage)?.folder !== folder)) {
-        selectedMessage.set(findFirstMessage(nextMessages, currentSort));
+        selectedMessage.set(findFirstMessage(projectRows(nextMessages, folder), currentSort));
       }
     }
 
@@ -1252,17 +1390,17 @@ const createMailboxStore = () => {
           }
           // Only update the store if LRU didn't already provide data — avoids
           // a redundant messages.set() that causes visible flicker during sync.
-          if (!memCached?.messages?.length) {
+          if (!memCached?.messages?.length && !keepListOnScreen) {
             const nextCached = shouldAppend
               ? mergeMessagePages(get(messages), cachedPage, MAX_LIVE_MESSAGES)
               : cachedPage;
-            messages.set(applyPendingFlagMutations(filterPendingDeletes(nextCached)));
+            messages.set(reuseUnchangedRows(get(messages), projectRows(nextCached, folder)));
             loading.set(false);
             if (
               allowAutoSelect &&
               (!get(selectedMessage) || get(selectedMessage)?.folder !== folder)
             ) {
-              selectedMessage.set(findFirstMessage(nextCached, currentSort));
+              selectedMessage.set(findFirstMessage(projectRows(nextCached, folder), currentSort));
             }
           }
           folderMessageCache.set(memKey, {
@@ -1422,7 +1560,7 @@ const createMailboxStore = () => {
 
     // Only show skeleton when cache is completely empty — if we have cached data
     // already displayed, keep it visible while the network refreshes in the background
-    const hasVisibleList = cachedPage.length > 0 || headRefresh;
+    const hasVisibleList = cachedPage.length > 0 || headRefresh || keepListOnScreen;
     if (!hasVisibleList) {
       loading.set(true);
     }
@@ -1446,13 +1584,13 @@ const createMailboxStore = () => {
           const nextPreview = shouldAppend
             ? mergeMessagePages(get(messages), mapped, MAX_LIVE_MESSAGES)
             : mapped;
-          messages.set(applyPendingFlagMutations(filterPendingDeletes(nextPreview)));
+          messages.set(reuseUnchangedRows(get(messages), projectRows(nextPreview, folder)));
           loading.set(false);
           if (
             allowAutoSelect &&
             (!get(selectedMessage) || get(selectedMessage)?.folder !== folder)
           ) {
-            selectedMessage.set(findFirstMessage(nextPreview, currentSort));
+            selectedMessage.set(findFirstMessage(projectRows(nextPreview, folder), currentSort));
           }
         })
         .catch(() => {
@@ -1667,13 +1805,13 @@ const createMailboxStore = () => {
         }
         // Keep a just-sent message visible in Sent until the indexer reports it.
         if (folder === getSentFolderPath()) nextMessages = pendingInsertTracker.apply(nextMessages);
-        messages.set(applyPendingFlagMutations(filterPendingDeletes(nextMessages)));
+        messages.set(reuseUnchangedRows(get(messages), projectRows(nextMessages, folder)));
         if (
           allowAutoSelect &&
           merged.length &&
           (!get(selectedMessage) || get(selectedMessage)?.folder !== folder)
         ) {
-          selectedMessage.set(findFirstMessage(filterPendingDeletes(nextMessages), currentSort));
+          selectedMessage.set(findFirstMessage(projectRows(nextMessages, folder), currentSort));
         } else if (
           !merged.length &&
           get(selectedMessage)?.folder === folder &&
@@ -1689,7 +1827,6 @@ const createMailboxStore = () => {
         }
       }
 
-      confirmDeletes(new Set(merged.map((m) => m.id)));
       confirmFlagMutations(merged);
       if (folder === getSentFolderPath()) {
         pendingInsertTracker.confirm(new Set(merged.map((m) => m.id)));
@@ -1728,9 +1865,13 @@ const createMailboxStore = () => {
         // "Database is locked: ..." as the mailbox error.
         try {
           await db.transaction('rw', db.messages, db.messageBodies, async () => {
-            if (merged.length) {
+            // Projected first: a server row for a message just moved away
+            // still names the old folder (the indexer lags), and writing it
+            // would put the cached row back in that folder over the moved one.
+            const cacheRows = projectRows(merged, folder);
+            if (cacheRows.length) {
               await db.messages.bulkPut(
-                merged.map((msg) => ({
+                cacheRows.map((msg) => ({
                   ...msg,
                   account,
                   updatedAt: Date.now(),
@@ -1890,8 +2031,10 @@ const createMailboxStore = () => {
 
   const resetForAccount = () => {
     inFlightMessageListRequest = null;
-    pendingDeleteTracker.clear();
-    pendingFlagTracker.clear();
+    // The delete and flag trackers are kept. They are keyed by message id,
+    // which is unique across accounts, so they cannot touch another account's
+    // rows, and clearing them meant a message archived in one account came
+    // back if you switched away and back inside the backend's indexing lag.
     // The insert tracker holds a fully-formed envelope, not just an id, and
     // apply() re-injects it into any Sent load for the next 60 seconds. Left
     // uncleared, a message just sent from one account reappears inside a
@@ -1949,7 +2092,7 @@ const createMailboxStore = () => {
           candidates: [],
         })) || [];
       if (generation !== searchMessagesGeneration || !get(searchActive)) return;
-      searchResults.set(results as never);
+      searchResults.set(projectRows(results) as never);
     } catch (err) {
       warn('[mailboxStore] search refresh failed', err);
     }
@@ -2659,18 +2802,18 @@ const createMailboxStore = () => {
 
     const originalSelected = get(selectedMessage);
 
-    // Snapshot the row before the destructive write below, so a permanently
-    // failed delete can restore it exactly (see revertFailedMutation).
-    const snapshot = recordId != null ? await db.messages.get([account, recordId]) : null;
-
-    // Optimistic remove from store
-    const list = get(messages).filter((m) => m.id !== msg.id);
-    messages.set(list);
+    // Optimistic remove from store, before any await so the row goes at once
+    messages.update((list) => list.filter((m) => m.id !== msg.id));
     addPendingDeletes([msg.id]);
+    reprojectSearchResults();
     noteUnreadMove(account, msg, null);
     if (originalSelected?.id === msg.id) {
       selectedMessage.set(null);
     }
+
+    // Snapshot the row before the destructive write below, so a permanently
+    // failed delete can restore it exactly (see revertFailedMutation).
+    const snapshot = recordId != null ? await db.messages.get([account, recordId]) : null;
 
     // Invalidate in-memory folder cache so stale entries don't reappear on refresh
     invalidateFolderInMemCache(account, msg.folder);
@@ -2710,12 +2853,24 @@ const createMailboxStore = () => {
     try {
       let path = `/v1/messages/${encodeURIComponent(apiId)}`;
       if (permanent) path += '?permanent=1';
-      await Remote.request('MessageDelete', {}, { method: 'DELETE', pathOverride: path });
+      await Remote.request(
+        'MessageDelete',
+        {},
+        {
+          method: 'DELETE',
+          pathOverride: path,
+          authHeader: getAuthHeaderForAccount(account) || undefined,
+        },
+      );
       settleUnreadChange(recordId, account);
+      settlePendingDeletes([msg.id]);
     } catch (err) {
       // 404 means the message is already gone server-side — treat as success
       const is404 = err?.status === 404 || /not (found|exist)/i.test(err?.message || '');
-      if (is404) settleUnreadChange(recordId, account);
+      if (is404) {
+        settleUnreadChange(recordId, account);
+        settlePendingDeletes([msg.id]);
+      }
       if (!is404) {
         warn('deleteMessage failed, queuing for retry', err);
         await queueMutation('delete', mutationPayload, { account });
@@ -2789,8 +2944,18 @@ const createMailboxStore = () => {
       }
     }
 
+    // Optimistic UI update - remove all messages at once, before any await,
+    // so the rows go the moment the user acts.
+    const idsToRemove = new Set(validMessages.map((m) => m.id));
+    messages.update((list) => list.filter((m) => !idsToRemove.has(m.id)));
+    addPendingDeletes([...idsToRemove]);
+    reprojectSearchResults();
+    clearRemovedSelection(new Set([...idsToRemove].map(String)));
+    for (const msg of validMessages) noteUnreadMove(account, msg, null);
+
     // Rows as they are before the delete, so a delete that fails for good can
-    // put them back (see revertFailedMutation).
+    // put them back (see revertFailedMutation). The IDB rows are only deleted
+    // further down, so reading them after the optimistic removal is safe.
     const snapshots = new Map<unknown, unknown>();
     try {
       const rows = await db.messages.bulkGet(validMessages.map((m) => [account, m.id]));
@@ -2800,13 +2965,6 @@ const createMailboxStore = () => {
     } catch {
       // No snapshots: a failed delete then converges on the next sync.
     }
-
-    // Optimistic UI update - remove all messages at once
-    const originalList = get(messages);
-    const idsToRemove = new Set(validMessages.map((m) => m.id));
-    messages.set(originalList.filter((m) => !idsToRemove.has(m.id)));
-    addPendingDeletes([...idsToRemove]);
-    for (const msg of validMessages) noteUnreadMove(account, msg, null);
 
     // Invalidate in-memory folder cache so stale entries don't reappear on refresh
     const affectedFolders = new Set(validMessages.map((m) => m.folder).filter(Boolean));
@@ -2823,6 +2981,10 @@ const createMailboxStore = () => {
       }
     }
 
+    // Sent as the account the messages belong to, even if the user switches
+    // accounts while a long bulk delete is still running.
+    const accountAuth = getAuthHeaderForAccount(account) || undefined;
+
     // Process API calls in parallel
     const CONCURRENCY = 8;
     const results = [];
@@ -2836,7 +2998,11 @@ const createMailboxStore = () => {
           const apiId = getMessageApiId(msg);
           let path = `/v1/messages/${encodeURIComponent(apiId)}`;
           if (permanent) path += '?permanent=1';
-          await Remote.request('MessageDelete', {}, { method: 'DELETE', pathOverride: path });
+          await Remote.request(
+            'MessageDelete',
+            {},
+            { method: 'DELETE', pathOverride: path, authHeader: accountAuth },
+          );
           return msg;
         }),
       );
@@ -2881,6 +3047,7 @@ const createMailboxStore = () => {
     }
 
     for (const msg of successfulDeletes) settleUnreadChange(msg.id, account);
+    settlePendingDeletes(successfulDeletes.map((m) => m.id));
 
     // Batch DB cleanup for deleted and queued messages
     const removed = [...successfulDeletes, ...queuedDeletes];
@@ -2955,9 +3122,13 @@ const createMailboxStore = () => {
 
     // Optimistic update
     if (stayInFolder) {
-      const nextList = originalList.filter((m) => m.id !== msg.id);
-      messages.set(nextList);
-      addPendingDeletes([msg.id]);
+      messages.update((list) => list.filter((m) => m.id !== msg.id));
+      addPendingDeletes([msg.id], {
+        sourceFolder: msg.folder,
+        targetFolder: target,
+        row: { ...msg, folder: target, uid: null },
+      });
+      reprojectSearchResults();
       if (originalSelected?.id === msg.id) {
         // Apple Mail-style smart direction: if the message below is read
         // and the one above is unread, advance UP instead of down. Without
@@ -2967,8 +3138,11 @@ const createMailboxStore = () => {
         // and the header subject (selectedMessage) stay consistent —
         // previously only selectedMessage was updated, which is why the
         // subject moved but the highlight stayed on the moved row.
+        // Picked from the list before the removal: in the list after it the
+        // moved message is gone, so nextCandidate could not find it and fell
+        // back to the top row, and the reader jumped there first.
         const nextSelected = nextCandidate({
-          list: nextList,
+          list: originalList,
           threadingEnabled: false,
           selectedMessage: originalSelected,
           selectedConversation: get(selectedConversation),
@@ -3042,9 +3216,14 @@ const createMailboxStore = () => {
       await Remote.request(
         'MessageUpdate',
         { folder: target },
-        { method: 'PUT', pathOverride: `/v1/messages/${encodeURIComponent(apiId)}` },
+        {
+          method: 'PUT',
+          pathOverride: `/v1/messages/${encodeURIComponent(apiId)}`,
+          authHeader: getAuthHeaderForAccount(account) || undefined,
+        },
       );
       settleUnreadChange(recordId, account);
+      settlePendingDeletes([msg.id]);
       result.success = true;
     } catch (err) {
       warn('moveMessage failed, queuing for retry', err);
@@ -3120,10 +3299,19 @@ const createMailboxStore = () => {
     }
 
     // Optimistic UI update - remove all messages at once
-    const originalList = get(messages);
     const idsToRemove = new Set(validMessages.map((m) => m.id));
-    messages.set(originalList.filter((m) => !idsToRemove.has(m.id)));
-    addPendingDeletes([...idsToRemove]);
+    messages.update((list) => list.filter((m) => !idsToRemove.has(m.id)));
+    // Per message: a selection can span folders (search results), and each
+    // row is hidden only in the folder it left.
+    for (const msg of validMessages) {
+      addPendingDeletes([msg.id], {
+        sourceFolder: msg.folder,
+        targetFolder: target,
+        row: { ...msg, folder: target, uid: null },
+      });
+    }
+    reprojectSearchResults();
+    clearRemovedSelection(new Set([...idsToRemove].map(String)));
     for (const msg of validMessages) noteUnreadMove(account, msg, target);
 
     // Invalidate in-memory folder cache so stale entries don't reappear on refresh
@@ -3145,6 +3333,10 @@ const createMailboxStore = () => {
       }
     }
 
+    // Sent as the account the messages belong to, even if the user switches
+    // accounts while a long bulk move is still running.
+    const accountAuth = getAuthHeaderForAccount(account) || undefined;
+
     // Process API calls in parallel with concurrency limit
     const CONCURRENCY = 8;
     const results = [];
@@ -3159,7 +3351,11 @@ const createMailboxStore = () => {
           await Remote.request(
             'MessageUpdate',
             { folder: target },
-            { method: 'PUT', pathOverride: `/v1/messages/${encodeURIComponent(apiId)}` },
+            {
+              method: 'PUT',
+              pathOverride: `/v1/messages/${encodeURIComponent(apiId)}`,
+              authHeader: accountAuth,
+            },
           );
           return msg;
         }),
@@ -3196,6 +3392,7 @@ const createMailboxStore = () => {
     }
 
     for (const msg of successfulMoves) settleUnreadChange(msg.id, account);
+    settlePendingDeletes(successfulMoves.map((m) => m.id));
 
     // Batch DB updates for moved and queued messages
     const moved = [...successfulMoves, ...queuedMoves];
@@ -4136,6 +4333,7 @@ const createMailboxStore = () => {
       refreshSearch,
       addPendingFlagMutation,
       addPendingDeletes,
+      projectRows,
       revertFailedMutation,
     },
   };

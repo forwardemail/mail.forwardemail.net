@@ -516,7 +516,15 @@
         }
 
         const mapped = list.map((raw) => normalizeMessage(raw, accountId, folderId));
-        await writeMessages(mapped);
+        // A message with a change still in the offline queue keeps its local
+        // row. The server's copy predates the change, and writing it put a
+        // moved message back in its old folder, or a read one back to unread.
+        const queuedIds = await readQueuedMessageIds(accountId);
+        await writeMessages(
+          queuedIds.size
+            ? mapped.filter((m) => !queuedIds.has(String(m.id)) && !queuedIds.has(String(m.uid)))
+            : mapped,
+        );
         if (fetchBodies) {
           await fetchBodiesForMessages(mapped, {
             apiBase: cleanedApiBase,
@@ -621,6 +629,24 @@
       };
       req.onerror = () => reject(req.error);
     });
+  };
+
+  // Ids (API and local) with a change waiting in this account's queue
+  const readQueuedMessageIds = async (accountId) => {
+    const ids = new Set();
+    try {
+      const queues = await readAllMutationQueues();
+      for (const { key, queue } of queues) {
+        if (key !== `${MUTATION_QUEUE_PREFIX}${accountId}`) continue;
+        for (const m of queue) {
+          if (m?.payload?.messageId != null) ids.add(String(m.payload.messageId));
+          if (m?.payload?.internalId != null) ids.add(String(m.payload.internalId));
+        }
+      }
+    } catch (err) {
+      LOG && console.warn('[SW sync] queue read failed', err);
+    }
+    return ids;
   };
 
   // ── Rules shared with src/utils/sync-core.js ──

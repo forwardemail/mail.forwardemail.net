@@ -402,43 +402,11 @@ const missingKeyModalShownByAccount = new Set<string>();
 // Track in-flight message detail requests to prevent duplicate concurrent fetches
 const inFlightRequests = new Map<string, Promise<unknown>>();
 
-// Track recent cache hits to prevent rapid repeated onBody calls for the same message
-const recentCacheHits = new Map<string, number>();
-const CACHE_HIT_DEBOUNCE_MS = 500;
-const MAX_CACHE_HIT_ENTRIES = 200;
-
-// Key (`${account}:${messageId}`) of the message whose body was most recently
-// delivered to onBody. Updated in lockstep with every recentCacheHits.set so
-// the debounce can distinguish "this message's body is already on screen"
-// (safe to skip the re-render) from "a DIFFERENT message has been shown since
-// this one was last hit" (must re-deliver, else the header/body desync — see
-// shouldDebounceBodyRender).
-let lastDeliveredBodyKey: string | null = null;
-
-/**
- * Decide whether to SKIP re-delivering a cached message body (the onBody
- * callback) on a cache hit.
- *
- * Skip only when the re-render is genuinely redundant: the same message was
- * delivered very recently AND its body is still the one displayed
- * (`lastDeliveredKey` still points at it). Debouncing on recency ALONE was the
- * bug that desynced the reader header from the body — rapidly selecting
- * A → B → A within the window skipped A's re-render, leaving B's body (or a
- * cleared/blank one) under A's freshly-set header until the window elapsed.
- * Requiring the displayed-body key to match closes that hole while preserving
- * the no-double-render optimization for genuine repeat loads of one message.
- */
-export function shouldDebounceBodyRender(
-  cacheKey: string,
-  nowMs: number,
-  hits: Map<string, number>,
-  lastDeliveredKey: string | null,
-  windowMs: number = CACHE_HIT_DEBOUNCE_MS,
-): boolean {
-  const lastHitTime = hits.get(cacheKey) || 0;
-  const isRecentHit = nowMs - lastHitTime < windowMs;
-  return isRecentHit && lastDeliveredKey === cacheKey;
-}
+// There is deliberately no "same message, skip the body" debounce here. Every
+// reader (the main reader, desktop tabs, the threaded view) clears its body
+// before loading, so a skipped delivery left a blank body under the header.
+// EmailIframe keeps one frame mounted and swaps its document in place, so
+// delivering a body again only costs a re-parse.
 
 // Account-level AbortController — aborted on account switch to cancel stale fetches
 let accountAbortController: AbortController | null = null;
@@ -448,16 +416,6 @@ function getAccountSignal(): AbortSignal {
     accountAbortController = new AbortController();
   }
   return accountAbortController.signal;
-}
-
-function pruneRecentCacheHits(): void {
-  if (recentCacheHits.size <= MAX_CACHE_HIT_ENTRIES) return;
-  // Remove oldest entries to stay within bounds
-  const entries = [...recentCacheHits.entries()].sort((a, b) => a[1] - b[1]);
-  const toRemove = entries.slice(0, entries.length - MAX_CACHE_HIT_ENTRIES);
-  for (const [key] of toRemove) {
-    recentCacheHits.delete(key);
-  }
 }
 
 // Timeout constants for preventing UI freezes
@@ -567,8 +525,6 @@ export const clearPgpKeyCache = (): void => {
   passphraseCache.clear();
   keyNeedsPassphraseCache.clear();
   missingKeyModalShownByAccount.clear();
-  recentCacheHits.clear(); // Allow immediate re-evaluation after key changes
-  lastDeliveredBodyKey = null;
   bumpPgpKeysVersion();
 };
 
@@ -620,8 +576,6 @@ export const clearMailServiceState = (): void => {
     accountAbortController = null;
   }
   inFlightRequests.clear();
-  recentCacheHits.clear();
-  lastDeliveredBodyKey = null;
 };
 
 /**
@@ -674,6 +628,9 @@ async function persistDecryptedEnvelope(
   }
 }
 
+// How long the reader waits on its own cache read before going to the worker
+const READER_CACHE_READ_CAP_MS = 1500;
+
 /**
  * Handles cached PGP encrypted messages by attempting decryption and parsing
  */
@@ -703,30 +660,23 @@ async function handleCachedPgpRaw(
   const now = (): number =>
     typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now();
 
-  // Re-check cache before attempting decryption - background task may have already decrypted
+  // Re-check cache before attempting decryption - background task may have
+  // already decrypted. Not from the cache path itself, which read this row a
+  // moment ago: a second read only cloned a multi-megabyte ciphertext across
+  // from the db worker again.
   const messageId = getMessageApiId(message);
-  if (messageId) {
+  if (messageId && stage !== 'cache') {
     try {
       const freshCache = (await db.messageBodies
         .where('[account+id]')
         .equals([account, messageId])
         .first()) as CachedBody | undefined;
       if (freshCache?.body && !isPgpEncrypted(freshCache.body)) {
-        // Already decrypted by background task - check for debouncing
-        const cacheKey = `${account}:${messageId}`;
-        const nowMs = Date.now();
-
+        // Already decrypted by background task
         // The raw was PGP and the cache holds a decrypted body, so this IS an
         // encrypted message; signed/subject were persisted at decrypt time.
         onPgpStatus?.({ locked: false, encrypted: true });
 
-        if (shouldDebounceBodyRender(cacheKey, nowMs, recentCacheHits, lastDeliveredBodyKey)) {
-          debugLog('[PGP] Cache hit debounced for message', messageId);
-          tracer.end({ status: `${stage}_pgp_debounced` });
-          return true;
-        }
-
-        recentCacheHits.set(cacheKey, nowMs);
         debugLog('[PGP] Message already decrypted by background task');
         const hydrated = applyInlineAttachments(freshCache.body, freshCache.attachments || []);
         onBody?.(`<div class="fe-message-canvas">${hydrated}</div>`);
@@ -788,12 +738,8 @@ async function handleCachedPgpRaw(
       parsed.textContent || '',
       meta,
       account,
+      sanitized,
     );
-
-    // Update debounce timestamp after successful decryption
-    if (messageId) {
-      recentCacheHits.set(`${account}:${messageId}`, Date.now());
-    }
 
     tracer.stage('cache_write', { cached: true });
     tracer.end({ status: `${stage}_pgp_decrypted` });
@@ -855,17 +801,15 @@ export const mailService = {
       return;
     }
 
-    // Wrap onBody so EVERY body delivery — cache hit, re-sanitize, network
-    // fetch, or PGP decrypt — records which message's body is now on screen.
-    // The cache-hit debounce consults lastDeliveredBodyKey to avoid skipping a
-    // re-render when a DIFFERENT message has been displayed since this one was
-    // last loaded (the header/body desync). Routing all deliveries through one
-    // wrapper keeps that key accurate regardless of which path served the body.
-    const deliveryKey = `${account}:${messageId}`;
+    // A delivered body also ends the loading state, on every path (cache hit,
+    // re-sanitize, network fetch, PGP decrypt). Without this the skeleton
+    // stayed up until the cache write after delivery finished, which could
+    // take seconds while the db worker was busy, with the decrypted body ready
+    // underneath it.
     const onBody = rawOnBody
       ? (html: string): void => {
-          lastDeliveredBodyKey = deliveryKey;
           rawOnBody(html);
+          onLoading?.(false);
         }
       : undefined;
     const tracer =
@@ -905,10 +849,14 @@ export const mailService = {
         onMeta,
       };
 
-      const cached = (await db.messageBodies
-        .where('[account+id]')
-        .equals([account, messageId])
-        .first()) as CachedBody | undefined;
+      // Capped like the sync worker's own lookup: when the db worker is busy
+      // (a backfill, another tab) an uncapped read left the reader on a
+      // spinner with no end. Past the cap it is treated as a miss and the
+      // worker or the network serves the body.
+      const cached = (await Promise.race([
+        db.messageBodies.where('[account+id]').equals([account, messageId]).first(),
+        new Promise((resolve) => setTimeout(() => resolve(undefined), READER_CACHE_READ_CAP_MS)),
+      ]).catch(() => undefined)) as CachedBody | undefined;
       // Check if cached message needs re-sanitization (missing tracking pixel data from worker cache)
       const needsResanitize = cached?.body && cached.trackingPixelCount === undefined;
       // Detect stale cache: raw PGP/MIME content was incorrectly stored as body
@@ -929,6 +877,7 @@ export const mailService = {
             '',
             cached.meta || null,
             account,
+            sanitized,
           ).catch(() => {});
           const hydrated = applyInlineAttachments(sanitized.html, cached.attachments || []);
           onBody?.(`<div class="fe-message-canvas">${hydrated}</div>`);
@@ -946,34 +895,9 @@ export const mailService = {
           return;
         }
 
-        // Skip re-delivering the body only when it is genuinely redundant — the
-        // same message was hit recently AND its body is still on screen.
-        // Debouncing on recency alone desynced the header from the body during
-        // rapid A → B → A navigation (see shouldDebounceBodyRender).
-        const cacheKey = `${account}:${messageId}`;
-        const now = Date.now();
-        const skipBodyRender = shouldDebounceBodyRender(
-          cacheKey,
-          now,
-          recentCacheHits,
-          lastDeliveredBodyKey,
-        );
-
         onPgpStatus?.({ locked: false });
         onMeta?.(cached.meta);
-        tracer.stage('cache_hit', { fresh: true, cacheAge: 0, debounced: skipBodyRender });
-
-        if (skipBodyRender) {
-          // Skip calling onBody again - we just called it recently
-          debugLog(`[mailService] Cache hit debounced for message ${messageId}`);
-          onLoading?.(false);
-          tracer.end({ status: 'cache_debounced' });
-          return;
-        }
-
-        // Update recent hit timestamp
-        recentCacheHits.set(cacheKey, now);
-        pruneRecentCacheHits();
+        tracer.stage('cache_hit', { fresh: true, cacheAge: 0 });
 
         const hydrated = applyInlineAttachments(cached.body, cached.attachments || []);
         onBody?.(`<div class="fe-message-canvas">${hydrated}</div>`);
@@ -1124,6 +1048,7 @@ export const mailService = {
         meta?: Record<string, unknown>;
         pgpLocked?: boolean;
         raw?: string;
+        pgp?: { encrypted?: boolean; subject?: string };
       } | null = null;
       let source = 'main';
       try {
@@ -1138,7 +1063,11 @@ export const mailService = {
         inFlightRequests.delete(requestKey);
       }
       if (source === 'worker' && workerResult?.body) {
-        onPgpStatus?.({ locked: false });
+        onPgpStatus?.(
+          workerResult.pgp?.encrypted
+            ? { locked: false, encrypted: true, subject: workerResult.pgp.subject }
+            : { locked: false },
+        );
         const workerMeta = workerResult.meta || null;
         onMeta?.(workerMeta);
         const workerAttachments = sanitizeAttachments(workerResult.attachments || []);
@@ -1304,7 +1233,9 @@ export const mailService = {
             blockedRemoteImageCount: sanitized.blockedRemoteImageCount,
           });
           onAttachments?.(parsedAttachments);
-          await cacheMessageContent(
+          // Not awaited: the body is on screen, and the reader should not wait
+          // on a cache write to finish loading.
+          void cacheMessageContent(
             message,
             parsed.body || '',
             parsedAttachments,
@@ -1312,7 +1243,8 @@ export const mailService = {
             parsed.textContent || '',
             result,
             account,
-          );
+            sanitized,
+          ).catch((err) => console.warn('[mailService] Body cache write failed', err));
           tracer.stage('cache_write', { cached: true });
         } else {
           debugLog('[PGP] Unable to decrypt with current keys');
@@ -1362,7 +1294,7 @@ export const mailService = {
             blockedRemoteImageCount: sanitized.blockedRemoteImageCount,
           });
           onAttachments?.(parsedAttachments);
-          await cacheMessageContent(
+          void cacheMessageContent(
             message,
             parsed.body || '',
             parsedAttachments,
@@ -1370,7 +1302,8 @@ export const mailService = {
             parsed.textContent || '',
             result,
             account,
-          );
+            sanitized,
+          ).catch((err) => console.warn('[mailService] Body cache write failed', err));
           tracer.stage('cache_write', { cached: true });
         } else {
           const inlinedBody = applyInlineAttachments(rawBody as string, attachments);
@@ -1391,7 +1324,7 @@ export const mailService = {
             blockedRemoteImageCount: sanitized.blockedRemoteImageCount,
           });
           onAttachments?.(attachments);
-          await cacheMessageContent(
+          void cacheMessageContent(
             message,
             inlinedBody,
             attachments,
@@ -1399,7 +1332,8 @@ export const mailService = {
             (serverText as string) || extractTextContent(inlinedBody || (rawBody as string)),
             result,
             account,
-          );
+            sanitized,
+          ).catch((err) => console.warn('[mailService] Body cache write failed', err));
           tracer.stage('cache_write', { cached: true });
         }
       }
@@ -1746,6 +1680,8 @@ function findAttachmentMatch(
   return { match: sameName[rank], rank };
 }
 
+type SanitizeResult = ReturnType<typeof sanitizeHtml>;
+
 async function cacheMessageContent(
   message: Message,
   renderedBody: string,
@@ -1754,6 +1690,10 @@ async function cacheMessageContent(
   textContent = '',
   meta: unknown = null,
   account?: string,
+  // The sanitizeHtml result for renderedBody, when the caller already has it.
+  // DOMPurify on a large email is a long main-thread task, and every path that
+  // shows a body had just run it on the same HTML.
+  presanitized?: SanitizeResult,
 ): Promise<void> {
   const messageId = getMessageApiId(message);
   if (!messageId || !renderedBody) return;
@@ -1767,7 +1707,7 @@ async function cacheMessageContent(
     contentType: att.contentType,
   }));
 
-  const sanitized = sanitizeHtml(renderedBody);
+  const sanitized = presanitized || sanitizeHtml(renderedBody);
 
   const rawOriginal = rawBodyForCache || renderedBody;
   const normalizedText = textContent || extractTextContent(renderedBody);
@@ -1926,6 +1866,12 @@ async function tryDecrypt(
     return { success: false };
   }
 
+  // The worker usually holds unlocked keys already (from launch, or the
+  // first message this session). Asking it first skips the per-key unlock
+  // round trips, and the key derivation each of those ran, on every open.
+  const first = await decryptInWorker(armored, options);
+  if (first.success) return first;
+
   let lastUnlockError: string | undefined;
 
   for (const key of keys) {
@@ -2080,6 +2026,14 @@ async function tryDecrypt(
     }
   }
 
+  return decryptInWorker(armored, options, lastUnlockError);
+}
+
+async function decryptInWorker(
+  armored: string,
+  options: { messageId?: string; account?: string },
+  lastUnlockError?: string,
+): Promise<DecryptResult> {
   try {
     debugLog('[PGP] [WORKER] Requesting decryption from worker...');
     const result = await requestPgpDecryption({

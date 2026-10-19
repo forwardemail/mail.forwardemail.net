@@ -353,13 +353,27 @@ function fetchWithTimeout(url, options = {}, timeoutMs = FETCH_TIMEOUT_MS) {
 
 type PendingFlagMap = Record<string, PendingFlagChange>;
 
+// The main thread's live optimistic changes (postOptimisticOverlay). A task's
+// own snapshot is taken when it starts; a change made while a long task runs
+// only reaches its later pages through this.
+let liveOverlay: { deleteIds: Set<string>; flags: PendingFlagMap } = {
+  deleteIds: new Set(),
+  flags: {},
+};
+
 async function writeMessages(
   account,
   folder,
   normalized,
-  pendingDeleteIds: string[] = [],
-  pendingFlags: PendingFlagMap | null = null,
+  taskPendingDeleteIds: string[] = [],
+  taskPendingFlags: PendingFlagMap | null = null,
 ) {
+  const pendingDeleteIds = liveOverlay.deleteIds.size
+    ? [...new Set([...taskPendingDeleteIds, ...liveOverlay.deleteIds])]
+    : taskPendingDeleteIds;
+  const pendingFlags: PendingFlagMap | null = Object.keys(liveOverlay.flags).length
+    ? { ...(taskPendingFlags || {}), ...liveOverlay.flags }
+    : taskPendingFlags;
   if (!dbPort) {
     console.warn('[sync.worker] No db connection for writeMessages');
     return { inserted: 0, updated: 0 };
@@ -1453,6 +1467,9 @@ async function fetchAndCacheBodyWithOptions(account, folder, msg, options = {}) 
       .catch((err) => console.warn(`[sync.worker] ${label} failed`, err));
     if (!returnPayload) await done;
   };
+  // Set when this worker decrypted the body, so the reader can show the PGP
+  // badge and a protected-headers subject straight away.
+  let pgpInfo: { encrypted: true; subject?: string } | null = null;
   const persistBody = async (body, textContent, attachments = [], meta = null) => {
     if (dbPort) {
       await cacheWrite(
@@ -1498,6 +1515,7 @@ async function fetchAndCacheBodyWithOptions(account, folder, msg, options = {}) 
       textContent,
       attachments,
       meta,
+      ...(pgpInfo ? { pgp: pgpInfo } : {}),
     };
   };
   // A PGP body cached still encrypted that the current keys may open.
@@ -1634,8 +1652,10 @@ async function fetchAndCacheBodyWithOptions(account, folder, msg, options = {}) 
           // real subject (the cached outer subject is a placeholder).
           try {
             const changes = { pgpEncrypted: true, pgpSigned: lastDecryptSigned };
+            pgpInfo = { encrypted: true };
             if (typeof parsed.subject === 'string' && parsed.subject.trim()) {
               changes.subject = parsed.subject;
+              pgpInfo.subject = parsed.subject;
             }
             // Only these fields are written; the rest of the row is left as
             // it is in the database now.
@@ -1736,6 +1756,7 @@ let lastDecryptSigned = false;
 async function decryptPgp(armored) {
   lastDecryptError = '';
   lastDecryptSigned = false;
+  await pgpKeysReady.catch(() => {});
   if (!armored || !unlockedPgpKeys.length) return '';
 
   const hasInlineArmor = armored.includes('-----BEGIN PGP MESSAGE-----');
@@ -2410,8 +2431,15 @@ async function handleRequest(requestId, action, payload) {
 // PGP Key Management
 // ============================================================================
 
+// Settles once the latest key set is in place. updatePgpKeys runs from the
+// message handler without being awaited, so a messageDetail arriving right
+// after launch used to find no keys, cache the message as locked and send the
+// reader down the slow main-thread unlock. decryptPgp waits on this instead.
+let pgpKeysReady: Promise<void> = Promise.resolve();
+
 async function updatePgpKeys(keys = [], passphrases = {}) {
   pgpPassphrases = passphrases || {};
+  const previous: Array<{ getFingerprint: () => string }> = unlockedPgpKeys;
   const unlocked = [];
   for (const key of keys) {
     if (!key?.value) continue;
@@ -2440,6 +2468,13 @@ async function updatePgpKeys(keys = [], passphrases = {}) {
           console.warn('[sync.worker] Failed to auto-unlock PGP key', key.name, err?.message);
           delete pgpPassphrases[key.name];
         }
+      } else {
+        // Unlocked for this session only (passphrase not remembered). A key
+        // refresh carries no passphrase for it, and replacing the set dropped
+        // it, so the next encrypted message asked for the passphrase again.
+        const fingerprint = privateKey.getFingerprint();
+        const kept = previous.find((k) => k.getFingerprint() === fingerprint);
+        if (kept) unlocked.push(kept);
       }
     } else {
       unlocked.push(privateKey);
@@ -2477,6 +2512,10 @@ async function unlockPgpKeyWithPassphrase({
     };
   }
 
+  // A key refresh in progress replaces the whole set when it finishes, which
+  // would drop a key unlocked here in the meantime.
+  await pgpKeysReady.catch(() => {});
+
   let privateKey;
   try {
     privateKey = await openpgp.readPrivateKey({ armoredKey: keyValue });
@@ -2509,6 +2548,20 @@ async function unlockPgpKeyWithPassphrase({
     if (checkOnly) {
       // Just checking status, don't try to decrypt
       return { success: false, needsPassphrase: true, retryable: true, invalidKey: false };
+    }
+
+    // Already unlocked in this worker: decryptKey runs the key's S2K
+    // derivation, which costs a hundred milliseconds or more per call (far
+    // more for an argon2 key), and the reader asked for it on every open.
+    const fingerprint = privateKey.getFingerprint();
+    if (unlockedPgpKeys.some((k) => k.getFingerprint() === fingerprint)) {
+      if (remember && keyName && passphrase) pgpPassphrases[keyName] = passphrase;
+      return {
+        success: true,
+        alreadyUnlocked: true,
+        keyCount: unlockedPgpKeys.length,
+        needsPassphrase: false,
+      };
     }
 
     if (!passphrase) {
@@ -2623,7 +2676,16 @@ self.onmessage = (event) => {
     return;
   }
   if (data.type === 'pgpKeys') {
-    updatePgpKeys(data.keys || [], data.passphrases || {});
+    pgpKeysReady = updatePgpKeys(data.keys || [], data.passphrases || {}).catch((err) => {
+      console.warn('[sync.worker] PGP key update failed', err?.message);
+    });
+    return;
+  }
+  if (data.type === 'optimisticOverlay') {
+    liveOverlay = {
+      deleteIds: new Set(Array.isArray(data.deleteIds) ? data.deleteIds.map(String) : []),
+      flags: data.flags && typeof data.flags === 'object' ? data.flags : {},
+    };
     return;
   }
   if (data.type === 'connectSearchPort' && event.ports?.[0]) {

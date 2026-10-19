@@ -38,44 +38,155 @@ export interface PendingFlagMutation {
   flags?: string[];
   is_starred?: boolean;
   is_answered?: boolean;
+  labels?: string[];
 }
 
+/**
+ * How long a settled move or delete keeps its row hidden after the server
+ * accepted it. The backend's list queries lag its writes by 10-30 seconds
+ * (the indexer), so a list fetched in that window still reports the row in
+ * its old folder.
+ */
+export const PENDING_DELETE_SETTLE_GRACE = 90_000;
+
+interface DeleteTrackerOptions extends TrackerOptions {
+  settleGrace?: number;
+}
+
+interface PendingDelete {
+  ts: number;
+  /** Folder the message left. Unset for a permanent delete: hidden everywhere. */
+  sourceFolder?: string;
+  /** Folder a move took it to, and the row as it now is there. */
+  targetFolder?: string;
+  row?: Record<string, unknown>;
+  /** When the server accepted the change; the grace window counts from here. */
+  settledAt?: number;
+}
+
+const rowTime = (row: Record<string, unknown>) =>
+  Number(row.dateMs ?? (typeof row.date === 'number' ? row.date : Date.parse(String(row.date))));
+
+const sameFolder = (a: unknown, b: unknown) =>
+  typeof a === 'string' && typeof b === 'string' && a.toLowerCase() === b.toLowerCase();
+
+/**
+ * Ids optimistically moved out of a folder or deleted.
+ *
+ * An entry is not dropped when some list stops reporting the id. Absence from
+ * one response proves nothing: a page 2 load, a stale response, a filtered
+ * query or another folder's list all lack the id while the server still lists
+ * it in the source folder, and dropping protection on those let the row come
+ * back on the next refresh. Instead an entry lives until a grace window after
+ * the server accepted the change (settle), or for the full TTL while the change
+ * is still queued.
+ */
 export function createPendingDeleteTracker({
   now = () => Date.now(),
   ttl = PENDING_DELETE_TTL,
-}: TrackerOptions = {}) {
-  const pending: Map<string, number> = new Map(); // id -> timestamp
+  settleGrace = PENDING_DELETE_SETTLE_GRACE,
+}: DeleteTrackerOptions = {}) {
+  const pending: Map<string, PendingDelete> = new Map();
 
   const prune = () => {
     const t = now();
-    for (const [id, ts] of pending) {
-      if (t - ts > ttl) pending.delete(id);
+    for (const [id, entry] of pending) {
+      const expired =
+        entry.settledAt !== undefined ? t - entry.settledAt > settleGrace : t - entry.ts > ttl;
+      if (expired) pending.delete(id);
     }
   };
 
+  // A row is hidden when it is the stale copy in the folder the message left.
+  // The moved copy in the target folder (the same id, as moves keep it) shows.
+  const hides = (entry: PendingDelete, row: Record<string, unknown>, listFolder?: string) => {
+    if (!entry.sourceFolder) return true;
+    const rowFolder = (row.folder as string) || listFolder;
+    if (!rowFolder) return true;
+    return sameFolder(rowFolder, entry.sourceFolder);
+  };
+
   return {
-    add(ids: string[]) {
+    add(
+      ids: string[],
+      {
+        sourceFolder,
+        targetFolder,
+        row,
+      }: { sourceFolder?: string; targetFolder?: string; row?: Record<string, unknown> } = {},
+    ) {
       const t = now();
       for (const id of ids) {
-        if (id) pending.set(id, t);
+        if (!id) continue;
+        pending.set(id, {
+          ts: t,
+          ...(sourceFolder ? { sourceFolder } : {}),
+          ...(targetFolder && row ? { targetFolder, row } : {}),
+        });
       }
     },
-    filter(msgs: Record<string, unknown>[]) {
+    /**
+     * Adds rows moved into `folder` that the list does not report yet. The
+     * server's list for the target folder lags the move like the source's does,
+     * so without this a moved message showed in the target folder from the
+     * cache and then vanished when the network list arrived. A row older than
+     * everything in the list belongs on a later page and is left out.
+     */
+    withMovedIn<M extends Record<string, unknown>>(msgs: M[], folder?: string): M[] {
+      if (!folder || !pending.size) return msgs;
+      prune();
+      const present = new Set(msgs.map((m) => m.id));
+      const incoming: Record<string, unknown>[] = [];
+      for (const [id, entry] of pending) {
+        if (!entry.row || !sameFolder(entry.targetFolder, folder) || present.has(id)) continue;
+        incoming.push(entry.row);
+      }
+      if (!incoming.length) return msgs;
+      const times = msgs.map(rowTime).filter((n) => Number.isFinite(n));
+      const descending = times.length < 2 || times[0] >= times[times.length - 1];
+      const oldest = times.length ? Math.min(...times) : -Infinity;
+      const next = [...msgs] as Record<string, unknown>[];
+      for (const row of incoming) {
+        const t = rowTime(row);
+        if (msgs.length && Number.isFinite(t) && t < oldest) continue;
+        const at = next.findIndex((m) => {
+          const mt = rowTime(m);
+          return descending ? mt < t : mt > t;
+        });
+        if (at === -1) next.push(row);
+        else next.splice(at, 0, row);
+      }
+      return next as M[];
+    },
+    /** The server accepted the change for these ids; start their grace window. */
+    settle(ids: string[]) {
+      const t = now();
+      for (const id of ids) {
+        const entry = pending.get(id);
+        if (entry) entry.settledAt = t;
+      }
+    },
+    /**
+     * Drops pending rows from a list. `listFolder` is the folder the list was
+     * loaded for, used for rows that do not carry their own folder.
+     */
+    filter<M extends Record<string, unknown>>(msgs: M[], listFolder?: string): M[] {
       if (!pending.size) return msgs;
       prune();
       if (!pending.size) return msgs;
-      return msgs.filter((m) => !pending.has(m.id as string));
+      const next = msgs.filter((m) => {
+        const entry = pending.get(m.id as string);
+        return !entry || !hides(entry, m, listFolder);
+      });
+      return next.length === msgs.length ? msgs : next;
+    },
+    has(id: string) {
+      prune();
+      return pending.has(id);
     },
     getIds(): string[] {
       prune();
       return [...pending.keys()];
-    },
-    confirm(serverIds: Set<string>) {
-      // If a pending-delete ID is absent from the server response, the server
-      // has processed it — safe to stop filtering.
-      for (const id of pending.keys()) {
-        if (!serverIds.has(id)) pending.delete(id);
-      }
     },
     // Stop suppressing a single id without waiting out its TTL — used when a
     // queued mutation for it has been confirmed permanently failed and the
@@ -88,6 +199,12 @@ export function createPendingDeleteTracker({
     },
   };
 }
+
+const sameLabels = (a: unknown, b: string[]) => {
+  if (!Array.isArray(a) || a.length !== b.length) return false;
+  const want = new Set(b.map((l) => String(l).toLowerCase()));
+  return a.every((l) => want.has(String(l).toLowerCase()));
+};
 
 export function createPendingFlagTracker({
   now = () => Date.now(),
@@ -105,7 +222,9 @@ export function createPendingFlagTracker({
   return {
     add(id: string, mutation: Omit<PendingFlagMutation, 'ts'>) {
       if (!id) return;
-      pending.set(id, { ...mutation, ts: now() });
+      // Merged, so a label change and a read change on the same message both
+      // stay applied until each is confirmed.
+      pending.set(id, { ...pending.get(id), ...mutation, ts: now() });
     },
     apply(msgs: Record<string, unknown>[]) {
       if (!pending.size) return msgs;
@@ -119,19 +238,18 @@ export function createPendingFlagTracker({
       });
     },
     confirm(serverMsgs: Record<string, unknown>[]) {
-      // If the server response matches the optimistic state, the mutation
-      // has been processed — safe to stop overriding.
+      // Once the server reports every field this change set, it has been
+      // processed and the override can stop.
       for (const msg of serverMsgs) {
         const id = msg.id as string;
         const p = pending.get(id);
         if (!p) continue;
-        if (p.is_unread !== undefined && msg.is_unread === p.is_unread) {
-          pending.delete(id);
-        } else if (p.is_starred !== undefined && msg.is_starred === p.is_starred) {
-          pending.delete(id);
-        } else if (p.is_answered !== undefined && msg.is_answered === p.is_answered) {
-          pending.delete(id);
-        }
+        const checks: boolean[] = [];
+        if (p.is_unread !== undefined) checks.push(msg.is_unread === p.is_unread);
+        if (p.is_starred !== undefined) checks.push(msg.is_starred === p.is_starred);
+        if (p.is_answered !== undefined) checks.push(msg.is_answered === p.is_answered);
+        if (p.labels !== undefined) checks.push(sameLabels(msg.labels, p.labels));
+        if (checks.length && checks.every(Boolean)) pending.delete(id);
       }
     },
     getIds(): string[] {

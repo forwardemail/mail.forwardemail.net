@@ -98,6 +98,7 @@
     shouldDeleteReportedSpam,
     toggleStar,
     openServerDraft,
+    initialSyncStarted,
   } from '../stores/mailboxActions';
   import {
     profileName,
@@ -291,11 +292,10 @@
       mailboxStore as { actions: { addPendingDeletes?: (ids: string[]) => void } }
     )?.actions?.addPendingDeletes?.([messageId]);
     // Remove the message from the current message list in the store
-    const currentMessages = get(messagesStore);
-    const filtered = currentMessages.filter((m) => m.id !== messageId);
-    if (filtered.length !== currentMessages.length) {
-      messagesStore.set(filtered);
-    }
+    messagesStore.update((list: Message[]) => {
+      const filtered = list.filter((m) => m.id !== messageId);
+      return filtered.length !== list.length ? filtered : list;
+    });
     // Clear selection if the deleted message was selected
     const currentSelected = get(selectedMessageStore);
     if (currentSelected?.id === messageId) {
@@ -622,25 +622,41 @@
   let attachments = chooseStore(source.state?.attachments, mailboxView?.attachments, []);
   let parsedInvite = $state<ParsedInvite | null>(null);
   let inviteToken = 0;
-  $effect(() => {
+  // Parsed invites by message and attachment, so returning to a message
+  // shows its card with the body instead of popping it in afterwards.
+  const parsedInviteCache = new Map<string, ParsedInvite | null>();
+  // Keyed by value: the effect below re-ran, re-fetched and re-parsed on every
+  // new selectedMessage object for the same message (mark read, flag and WS
+  // patches), and the card flickered with each new invite object.
+  const inviteSource = $derived.by(() => {
     const msgId = $selectedMessage?.id ?? null;
     const atts = ($attachments as Array<Record<string, unknown>>) || [];
     const ics = atts.find((a) => isCalendarAttachment(a));
+    const href = (ics?.href as string) || '';
+    return msgId && href ? `${msgId}\n${href}` : '';
+  });
+  $effect(() => {
+    const key = inviteSource;
     inviteToken += 1;
     const token = inviteToken;
-    if (!ics || !msgId) {
-      parsedInvite = null;
+    if (!key) {
+      // While the next body loads the card keeps its place, hidden, so the
+      // body does not shift up and back down. It goes once that body is in.
+      if ($messageBody) parsedInvite = null;
       return;
     }
-    const href = (ics.href as string) || '';
-    if (!href) {
-      parsedInvite = null;
+    if (parsedInviteCache.has(key)) {
+      parsedInvite = parsedInviteCache.get(key) ?? null;
       return;
     }
+    const href = key.slice(key.indexOf('\n') + 1);
     fetchAttachmentText(href)
       .then((text) => {
+        const invite = text ? parseIcs(text) : null;
+        if (parsedInviteCache.size > 50) parsedInviteCache.clear();
+        parsedInviteCache.set(key, invite);
         if (token !== inviteToken) return;
-        parsedInvite = text ? parseIcs(text) : null;
+        parsedInvite = invite;
       })
       .catch(() => {
         if (token === inviteToken) parsedInvite = null;
@@ -1075,6 +1091,32 @@
       }
     }
     return next;
+  };
+
+  // In the threaded view the message being left may stay expanded. Its body
+  // moves to the thread cache so its article keeps showing it, rather than
+  // falling back to the snippet and loading it again. Runs before anything
+  // clears the reader body.
+  const stashLeavingThreadBody = (nextId: string | undefined) => {
+    const leavingId = (get(selectedMessage) as Message | null)?.id;
+    const leavingBody = get(messageBody);
+    if (
+      !leavingId ||
+      leavingId === nextId ||
+      !leavingBody ||
+      !get(expandedThreadMessages).has(leavingId) ||
+      get(threadMessageBodies).get(leavingId)?.body
+    ) {
+      return;
+    }
+    const leavingAttachments = get(attachments) || [];
+    threadMessageBodies.update((map) =>
+      withThreadBody(map, leavingId, {
+        body: leavingBody,
+        attachments: leavingAttachments,
+        loading: false,
+      }),
+    );
   };
 
   // Check if a thread message has its body cached
@@ -1861,6 +1903,7 @@
 
     // Clear body/attachments BEFORE updating selectedMessage to prevent stale content
     // from the previous message flashing with the new message's subject/sender.
+    stashLeavingThreadBody(lastMessage?.id);
     source.state?.messageBody?.set?.('');
     source.state?.attachments?.set?.([]);
     updateSelectedConversation(conv);
@@ -1873,6 +1916,12 @@
     if (isProductivityLayout || isClassicMobileViewport()) {
       openReaderFullscreen();
     }
+
+    // The newest message opens expanded, as in Gmail. Without this the
+    // thread opened with every message collapsed, its body loaded but not
+    // shown until clicked, and expanding then built a fresh frame. Set here,
+    // in the click handler, not in an effect (the old auto-expand looped).
+    if (lastMessage?.id) expandedThreadMessages.set(new Set([lastMessage.id]));
 
     // Reset loading state before loading new message to prevent skeleton flicker
     source.state?.messageLoading?.set?.(false);
@@ -1937,6 +1986,7 @@
     // Clear body/attachments BEFORE updating selectedMessage to prevent stale content
     // from the previous message flashing with the new message's subject/sender.
     // loadMessage() will populate the body from cache or network.
+    stashLeavingThreadBody(msg?.id);
     source.state?.messageBody?.set?.('');
     source.state?.attachments?.set?.([]);
     source.state?.selectedMessage?.set?.(msg);
@@ -2127,6 +2177,37 @@
       selectedMessage: $selectedMessage,
     });
   };
+  // Before removing several messages at once: if the open message is among
+  // them, open the nearest row that stays (below first, then above), or clear
+  // the reader when none does. Without this the reader kept showing a message
+  // that had left the list.
+  const advancePastRemoved = (removedIds: Set<string>) => {
+    if (!removedIds?.size) return;
+    const openId = $selectedMessage?.id;
+    const openConv = $selectedConversation;
+    const isOpenRemoved =
+      (openId && removedIds.has(openId)) ||
+      (openConv?.messages?.length && openConv.messages.every((m) => removedIds.has(m.id)));
+    if (!isOpenRemoved) return;
+    const list = ($threadingEnabled ? $filteredConversations : $filteredMessages) || [];
+    const stays = (item) =>
+      item?.messages?.length
+        ? item.messages.some((m) => !removedIds.has(m.id))
+        : !removedIds.has(item?.id);
+    const currentId = $threadingEnabled ? openConv?.id : openId;
+    const idx = list.findIndex((item) => item.id === currentId);
+    let next = null;
+    for (let i = idx + 1; i < list.length && !next; i++) if (stays(list[i])) next = list[i];
+    for (let i = idx - 1; i >= 0 && !next; i--) if (stays(list[i])) next = list[i];
+    if (!next) {
+      mailboxStore?.state?.selectedMessage?.set?.(null);
+      mailboxStore?.state?.selectedConversation?.set?.(null);
+      return;
+    }
+    if ($threadingEnabled) selectConversation(next);
+    else selectMessage(next);
+  };
+
   const selectNextWithinConversation = () => {
     // Navigate to next message within an expanded conversation
     if (!$threadingEnabled || !$selectedConversation) return false;
@@ -3506,23 +3587,18 @@
     }
 
     try {
-      let totalMessageCount = 0;
-      for (const itemToMove of filteredItems) {
-        const isConversation = itemToMove.messages && itemToMove.messages.length > 0;
-        if (isConversation) {
-          for (const msg of itemToMove.messages) {
-            if (mailboxStore?.actions?.moveMessage) {
-              await mailboxStore.actions.moveMessage(msg, targetFolder, { stayInFolder: true });
-            }
-          }
-          totalMessageCount += itemToMove.messages.length;
-        } else {
-          if (mailboxStore?.actions?.moveMessage) {
-            await mailboxStore.actions.moveMessage(itemToMove, targetFolder, {
-              stayInFolder: true,
-            });
-          }
-          totalMessageCount += 1;
+      const messagesToMove = filteredItems.flatMap((item) =>
+        item.messages && item.messages.length > 0 ? item.messages : [item],
+      );
+      const totalMessageCount = messagesToMove.length;
+      if (mailboxStore?.actions?.bulkMoveMessages) {
+        // One optimistic removal for the whole drop. Moving one message at a
+        // time waited a round trip each, so a dragged thread shrank row by row.
+        const result = await mailboxStore.actions.bulkMoveMessages(messagesToMove, targetFolder);
+        if (result?.blocked) return;
+      } else if (mailboxStore?.actions?.moveMessage) {
+        for (const msg of messagesToMove) {
+          await mailboxStore.actions.moveMessage(msg, targetFolder, { stayInFolder: true });
         }
       }
 
@@ -3695,14 +3771,25 @@
     const targets = dedupeMessagesHelper(messages);
     if (!targets.length) return;
     try {
-      for (const target of targets) {
-        let result;
-        if (mailboxStore?.actions?.archiveMessage) {
-          result = await mailboxStore.actions.archiveMessage(target);
-        } else if (mailboxView?.archiveMessage) {
-          result = await mailboxView.archiveMessage(target);
-        }
+      const archivePath = mailboxStore?.actions?.getArchiveFolderPath?.();
+      if (targets.length > 1 && archivePath && mailboxStore?.actions?.bulkMoveMessages) {
+        // A thread or a selection goes in one optimistic step. Archiving its
+        // messages one by one waited a round trip for each, so the row lingered
+        // with its count going down.
+        const result = await mailboxStore.actions.bulkMoveMessages(targets, archivePath, {
+          demoAction: 'Archive',
+        });
         if (result?.blocked) return result;
+      } else {
+        for (const target of targets) {
+          let result;
+          if (mailboxStore?.actions?.archiveMessage) {
+            result = await mailboxStore.actions.archiveMessage(target);
+          } else if (mailboxView?.archiveMessage) {
+            result = await mailboxView.archiveMessage(target);
+          }
+          if (result?.blocked) return result;
+        }
       }
       if (reload) {
         await reloadMessages();
@@ -4063,13 +4150,16 @@
     try {
       // Use optimized bulk move if available
       if (mailboxStore?.actions?.bulkMoveMessages) {
+        if (!isDemoMode()) advancePastRemoved(new Set(messages.map((m) => m.id)));
         const result = await mailboxStore.actions.bulkMoveMessages(messages, archivePath, {
           demoAction: 'Archive',
         });
         if (result?.blocked) return;
         const { success, failed } = result;
         clearSelection();
-        await reloadMessages();
+        // In the background, as deleteMessages does; the pending-delete
+        // tracker keeps the reload from bringing the rows back.
+        void reloadMessages();
 
         if (success > 0) {
           showToast(`Archived ${success} conversation${success === 1 ? '' : 's'}`, 'success');
@@ -4140,9 +4230,9 @@
       // The messages store uses deferredWritable which automatically defers
       // .set() calls that shrink the array through requestAnimationFrame,
       // preventing the macOS 26+ WebKit use-after-free crash. See deferred-store.ts.
-      const idsToRemove = new Set(targets.map((m) => m.id));
-      const currentMessages = get(messagesStore);
-      messagesStore.set(currentMessages.filter((m) => !idsToRemove.has(m.id)));
+      const idsToRemove = new Set<string>(targets.map((m) => m.id));
+      advancePastRemoved(idsToRemove);
+      messagesStore.update((list: Message[]) => list.filter((m) => !idsToRemove.has(m.id)));
       clearSelection();
     }
 
@@ -4213,9 +4303,10 @@
     try {
       // Use optimized bulk move if available
       if (mailboxStore?.actions?.bulkMoveMessages) {
+        if (!isDemoMode()) advancePastRemoved(new Set(messages.map((m) => m.id)));
         const { success, failed } = await mailboxStore.actions.bulkMoveMessages(messages, path);
         clearSelection();
-        await reloadMessages();
+        void reloadMessages();
 
         if (success > 0) {
           showToast(`Moved ${success} conversation${success === 1 ? '' : 's'}`, 'success');
@@ -4264,6 +4355,14 @@
     const releaseReaderHold = isProductivityLayout && fallback ? holdReaderTransition() : null;
     readerMoveOpen = false;
     readerToolbarMoveOpen = false;
+    // Advance before the move, as archive and delete do. Selecting the next
+    // message only after the round trip let the store's own pick show first,
+    // so the reader switched twice.
+    const advanceFirst = fallback && !isDemoMode();
+    if (advanceFirst) {
+      if ($threadingEnabled) selectConversation(fallback);
+      else selectMessage(fallback);
+    }
     try {
       let moveResult;
       if (mailboxStore?.actions?.moveMessage) {
@@ -4277,12 +4376,13 @@
       }
       if (moveResult?.success !== false) {
         showToast(successToast, 'success');
-        if (fallback) {
+        if (fallback && !advanceFirst) {
           if ($threadingEnabled) selectConversation(fallback);
           else selectMessage(fallback);
         }
       }
-      await reloadMessages();
+      // moveMessage reconciles with the server itself; a second full reload
+      // here only replaced the list again.
     } catch (err) {
       showMutationError(err, 'Failed to move message');
     } finally {
@@ -4392,7 +4492,10 @@
     return { ok: true };
   };
 
-  const markMessageUnread = async (msg) => {
+  const markMessageUnread = async (
+    msg,
+    { schedule = null }: { schedule?: Schedule | null } = {},
+  ) => {
     if (!msg) return;
     // The account the change is made in, read before anything is awaited
     const account = Local.get('email') || 'default';
@@ -4407,20 +4510,26 @@
       is_unread_index: 1,
       flags: newFlags,
     };
-    if (source.state?.messages?.set) {
-      mailboxStore.state.messages.set(list.map((m) => (m.id === updated.id ? updated : m)));
+    if (source.state?.messages?.update) {
+      mailboxStore.state.messages.update((items: typeof list) =>
+        items.map((m) => (m.id === updated.id ? updated : m)),
+      );
     }
     mailboxStore?.actions?.addPendingFlagMutation?.(updated.id, {
       is_unread: true,
       is_unread_index: 1,
       flags: updated.flags,
     });
-    const { missingId } = await sendReadChange({
-      previous: current,
-      updated,
-      account,
-      label: 'markMessageUnread',
-    });
+    const send = () =>
+      sendReadChange({
+        previous: current,
+        updated,
+        account,
+        label: 'markMessageUnread',
+      });
+    const { missingId } = (await (schedule ? schedule(send) : send())) as Awaited<
+      ReturnType<typeof send>
+    >;
     if (missingId) {
       showMissingMessageIdToast('mark as unread');
       reloadMessages();
@@ -4428,51 +4537,61 @@
   };
 
   // ── Bulk action wrappers ────────────────────────────────────────────
-  // Process messages sequentially so each iteration re-reads the store
-  // for fresh flags (avoids the race condition where parallel API calls
-  // trigger WS-driven refreshes that overwrite IDB with stale data).
+  // Every row changes on screen at once; the requests go out a few at a time.
+  // The pending flag tracker keeps WS-driven refreshes from undoing the rows
+  // while the requests are still on their way.
 
-  const bulkMarkAsRead = async () => {
+  // Runs a request when a slot is free
+  type Schedule = (run: () => Promise<unknown>) => Promise<unknown>;
+
+  const createRequestLimiter = (max: number): Schedule => {
+    let active = 0;
+    const waiting: Array<{
+      run: () => Promise<unknown>;
+      resolve: (value: unknown) => void;
+      reject: (reason?: unknown) => void;
+    }> = [];
+    const next = () => {
+      if (active >= max || !waiting.length) return;
+      active++;
+      const { run, resolve, reject } = waiting.shift()!;
+      run()
+        .then(resolve, reject)
+        .finally(() => {
+          active--;
+          next();
+        });
+    };
+    return (run: () => Promise<unknown>) =>
+      new Promise((resolve, reject) => {
+        waiting.push({ run, resolve, reject });
+        next();
+      });
+  };
+
+  const bulkMarkAs = async (unread: boolean) => {
     const messages = getSelectedMessagesFromConversations();
     if (!messages.length) return;
-    let updatedCount = 0;
-    for (const msg of messages) {
-      const current =
-        (source.state?.messages ? get(messagesStore) || [] : []).find((m) => m.id === msg.id) ||
-        msg;
-      if (!current.is_unread) continue;
-      await markMessageRead(current);
-      updatedCount++;
-    }
+    const list = source.state?.messages ? get(messagesStore) || [] : [];
+    const targets = messages
+      .map((msg: Message) => list.find((m: Message) => m.id === msg.id) || msg)
+      .filter((current: Message) => Boolean(current.is_unread) !== unread);
+    const schedule = createRequestLimiter(8);
+    const mark = unread ? markMessageUnread : markMessageRead;
+    const pending = targets.map((current: Message) => mark(current, { schedule }));
     clearSelection();
-    if (updatedCount > 0) {
+    if (targets.length > 0) {
       showToast(
-        `Marked as read ${updatedCount} message${updatedCount === 1 ? '' : 's'}`,
+        `Marked as ${unread ? 'unread' : 'read'} ${targets.length} message${targets.length === 1 ? '' : 's'}`,
         'success',
       );
     }
+    await Promise.allSettled(pending);
   };
 
-  const bulkMarkAsUnread = async () => {
-    const messages = getSelectedMessagesFromConversations();
-    if (!messages.length) return;
-    let updatedCount = 0;
-    for (const msg of messages) {
-      const current =
-        (source.state?.messages ? get(messagesStore) || [] : []).find((m) => m.id === msg.id) ||
-        msg;
-      if (current.is_unread) continue;
-      await markMessageUnread(current);
-      updatedCount++;
-    }
-    clearSelection();
-    if (updatedCount > 0) {
-      showToast(
-        `Marked as unread ${updatedCount} message${updatedCount === 1 ? '' : 's'}`,
-        'success',
-      );
-    }
-  };
+  const bulkMarkAsRead = () => bulkMarkAs(false);
+
+  const bulkMarkAsUnread = () => bulkMarkAs(true);
 
   const bulkSpam = async () => {
     const path = spamFolderPath;
@@ -4686,64 +4805,75 @@
     }
   };
 
-  const contextDelete = async () => {
-    if (!contextMenuMessage) return;
-    const messageToDelete = contextMenuMessage;
-    closeContextMenu();
-    try {
-      let result;
-      if (mailboxStore?.actions?.deleteMessage)
-        result = await mailboxStore.actions.deleteMessage(messageToDelete);
-      else result = await mailboxView?.deleteMessage?.(messageToDelete);
-      if (result?.blocked) return;
-      showToast('Deleted', 'success');
-      await reloadMessages();
-    } catch (err) {
-      showMutationError(err, 'Failed to delete');
+  // The context menu on a conversation acts on the whole conversation, as the
+  // archive action already did. Delete, move and spam acted on its last
+  // message only and left the rest of the thread in the list.
+  const contextTargets = () =>
+    contextMenuConversation?.messages?.length
+      ? contextMenuConversation.messages
+      : contextMenuMessage
+        ? [contextMenuMessage]
+        : [];
+
+  // Move a set of messages in one optimistic step, advancing the reader first
+  const moveTargets = async (targets: Message[], path: string) => {
+    if (targets.length > 1 && mailboxStore?.actions?.bulkMoveMessages) {
+      if (!isDemoMode()) advancePastRemoved(new Set(targets.map((m) => m.id)));
+      return mailboxStore.actions.bulkMoveMessages(targets, path);
     }
+    if (mailboxStore?.actions?.moveMessage) {
+      return mailboxStore.actions.moveMessage(targets[0], path, { stayInFolder: true });
+    }
+    return mailboxView?.moveMessage?.(targets[0], path, { stayInFolder: true });
+  };
+
+  const contextDelete = async () => {
+    const targets = contextTargets();
+    if (!targets.length) return;
+    closeContextMenu();
+    // deleteMessages removes the rows, advances the reader and reconciles
+    // with the server in the background.
+    const result = await deleteMessages(targets);
+    if (result?.blocked) return;
+    if (result) showToast('Deleted', 'success');
   };
 
   const contextReportSpam = async () => {
     if (!contextMenuMessage) return;
     const messageToReport = contextMenuMessage;
+    const targets = contextTargets();
     closeContextMenu();
     try {
       const result = await reportSpamMessage(messageToReport);
       if (!result) return;
       if (spamFolderPath && !shouldDeleteReportedSpam()) {
-        if (mailboxStore?.actions?.moveMessage)
-          await mailboxStore.actions.moveMessage(messageToReport, spamFolderPath, {
-            stayInFolder: true,
-          });
-        else
-          await mailboxView?.moveMessage?.(messageToReport, spamFolderPath, { stayInFolder: true });
+        const moved = await moveTargets(targets, spamFolderPath);
+        if (moved?.blocked) return;
         showToast(`Reported to ${result.address} and moved to ${spamFolderName}`, 'success');
-        await reloadMessages();
         return;
       }
-      let delRes;
-      if (mailboxStore?.actions?.deleteMessage)
-        delRes = await mailboxStore.actions.deleteMessage(messageToReport);
-      else delRes = await mailboxView?.deleteMessage?.(messageToReport);
+      const delRes = await deleteMessages(targets);
       if (delRes?.blocked) return;
       showToast(`Reported to ${result.address} and deleted`, 'success');
-      await reloadMessages();
     } catch (err) {
       showMutationError(err, 'Failed to report spam');
     }
   };
 
   const contextMoveTo = async (path) => {
-    if (!path || !contextMenuMessage) return;
-    const messageToMove = contextMenuMessage;
+    const targets = contextTargets();
+    if (!path || !targets.length) return;
     closeContextMenu();
     try {
-      if (mailboxStore?.actions?.moveMessage)
-        await mailboxStore.actions.moveMessage(messageToMove, path, { stayInFolder: true });
-      else if (mailboxView?.contextMoveTo) await mailboxView.contextMoveTo(path);
+      if (mailboxStore?.actions?.moveMessage || mailboxStore?.actions?.bulkMoveMessages) {
+        const moved = await moveTargets(targets, path);
+        if (moved?.blocked) return;
+      } else if (mailboxView?.contextMoveTo) await mailboxView.contextMoveTo(path);
       else if (mailboxView?.bulkMoveTo) await mailboxView.bulkMoveTo(path);
-      showToast('Message moved', 'success');
-      await reloadMessages();
+      showToast(
+        targets.length > 1 ? `Moved ${targets.length} messages` : 'Message moved',
+        'success',
+      );
     } catch (err) {
       showMutationError(err, 'Failed to move message');
     }
@@ -5074,15 +5204,22 @@
       is_unread_index: newIsUnread ? 1 : 0,
       flags: Array.from(newFlags),
     };
-    if (source.state?.messages?.set) {
-      mailboxStore.state.messages.set(list.map((m) => (m.id === updated.id ? updated : m)));
+    if (source.state?.messages?.update) {
+      mailboxStore.state.messages.update((items: typeof list) =>
+        items.map((m) => (m.id === updated.id ? updated : m)),
+      );
     }
     mailboxStore?.actions?.addPendingFlagMutation?.(updated.id, {
       is_unread: newIsUnread,
       is_unread_index: newIsUnread ? 1 : 0,
       flags: updated.flags,
     });
-    source.state?.selectedMessage?.set?.(updated);
+    // As in markMessageRead: a message toggled from the context menu is not
+    // necessarily the open one. Selecting it opened it in the reader, and
+    // opening marks it read, which undid a Mark Unread straight away.
+    if (get(selectedMessageStore)?.id === updated.id) {
+      source.state?.selectedMessage?.set?.(updated);
+    }
     if (typeof mailboxView?.messages === 'function') {
       try {
         const existing = mailboxView.messages?.() || [];
@@ -5091,7 +5228,6 @@
         // ignore
       }
     }
-    mailboxView?.selectedMessage?.set?.({ ...updated });
     actionMenuOpen = false;
     // Do NOT call refresh() after this: the optimistic update above already
     // set the correct is_unread in the messages store. Calling refresh() would
@@ -5108,7 +5244,9 @@
     }
   };
 
-  const markMessageRead = async (msg) => {
+  // `schedule` lets a bulk caller apply every change on screen at once while
+  // it limits how many requests go out together.
+  const markMessageRead = async (msg, { schedule = null }: { schedule?: Schedule | null } = {}) => {
     if (!msg?.is_unread) return;
     const account = Local.get('email') || 'default';
     const list = source.state?.messages ? get(messagesStore) || [] : [];
@@ -5123,15 +5261,24 @@
       is_unread_index: 0,
       flags: Array.from(newFlags),
     };
-    if (source.state?.messages?.set) {
-      mailboxStore.state.messages.set(list.map((m) => (m.id === updated.id ? updated : m)));
+    if (source.state?.messages?.update) {
+      // update() builds on a removal still waiting for its frame; a set() of
+      // the list read above would bring the removed row back.
+      mailboxStore.state.messages.update((items: typeof list) =>
+        items.map((m) => (m.id === updated.id ? updated : m)),
+      );
     }
     mailboxStore?.actions?.addPendingFlagMutation?.(updated.id, {
       is_unread: false,
       is_unread_index: 0,
       flags: updated.flags,
     });
-    source.state?.selectedMessage?.set?.(updated);
+    // Only refresh the reader when this is the message it shows. Opening a
+    // thread marks every unread message in it, and setting the selection to
+    // each one made the reader load them in turn and end on an older message.
+    if (get(selectedMessageStore)?.id === updated.id) {
+      source.state?.selectedMessage?.set?.(updated);
+    }
     if (typeof mailboxView?.messages === 'function') {
       try {
         const existing = mailboxView.messages?.() || [];
@@ -5140,13 +5287,16 @@
         // ignore
       }
     }
-    mailboxView?.selectedMessage?.set?.({ ...updated });
-    const { missingId } = await sendReadChange({
-      previous: current,
-      updated,
-      account,
-      label: 'markMessageRead',
-    });
+    const send = () =>
+      sendReadChange({
+        previous: current,
+        updated,
+        account,
+        label: 'markMessageRead',
+      });
+    const { missingId } = (await (schedule ? schedule(send) : send())) as Awaited<
+      ReturnType<typeof send>
+    >;
     if (missingId) {
       showMissingMessageIdToast('mark as read');
       reloadMessages();
@@ -5158,13 +5308,16 @@
     const msgs = Array.isArray(conv.messages) ? conv.messages : [];
     // Get the latest message list from the store for fresh is_unread state
     const currentList = source.state?.messages ? get(messagesStore) || [] : [];
+    const targets = [];
     for (const message of msgs) {
       // Use the store's version of the message to get the latest is_unread state
-      const storeMsg = currentList.find((m) => m.id === message.id);
-      const target = storeMsg || message;
-      if (!target.is_unread) continue;
-      await markMessageRead(target);
+      const target = currentList.find((m) => m.id === message.id) || message;
+      if (target.is_unread) targets.push(target);
     }
+    // markMessageRead makes its optimistic change before its first await, so
+    // starting them together flips every row at once instead of one per
+    // network round trip.
+    await Promise.all(targets.map((target) => markMessageRead(target)));
   };
 
   const toggleStarMessage = (msg) => toggleStar(msg);
@@ -5201,14 +5354,17 @@
     // load's onLoading(false) callback is ignored (due to isActiveLoad() check).
     source.state?.messageLoading?.set?.(false);
 
+    stashLeavingThreadBody(msg.id);
+
     // Clear previous message state immediately when switching messages.
     // This prevents showing stale content from the previous message.
     source.state?.messageBody?.set?.('');
     source.state?.attachments?.set?.([]);
     pgpLocked.set(false);
-    hasBlockedImages.set(false);
-    trackingPixelCount.set(0);
-    blockedImageCount.set(0);
+    // The blocked-images banner is not reset here: it stays in place, hidden
+    // while the body is empty, and is set again when the next body lands.
+    // Resetting it collapsed the banner and pushed the body up, then pushed it
+    // back down a moment later, on every switch between two such emails.
 
     // Track the active load so stale completions don't clobber UI
     messageLoadInProgress = true;
@@ -5281,6 +5437,13 @@
           }
           // Process quoted content for collapsible display
           const processedBody = processQuotedContent(body, { collapseByDefault: true });
+          // Image status belongs to this body. Cleared here, in the same tick
+          // as the body, and set again by onImageStatus right after it for
+          // bodies that have blocked images, so the banner only moves when it
+          // actually changes.
+          hasBlockedImages.set(false);
+          trackingPixelCount.set(0);
+          blockedImageCount.set(0);
           source.state?.messageBody?.set?.(processedBody);
           // Quote toggles are now handled inside EmailIframe via postMessage
         },
@@ -5298,6 +5461,15 @@
           if (!isActiveLoad()) return;
           pgpLocked.set(status.locked || false);
           pgpHasKeys.set(status.hasKeys || false);
+          // Protected headers: the real subject is inside the encrypted part,
+          // and the outer one is a placeholder such as "...". The list row got
+          // the real subject from the decrypt; the reader header kept the
+          // placeholder until the next list reload.
+          const subject = typeof status.subject === 'string' ? status.subject.trim() : '';
+          const shown = get(selectedMessage) as Message | null;
+          if (subject && shown && shown.id === msg.id && shown.subject !== subject) {
+            source.state?.selectedMessage?.set?.({ ...shown, subject });
+          }
         },
         onMeta: (meta) => {
           if (!isActiveLoad()) return;
@@ -5355,16 +5527,19 @@
             fromDisplay || (typeof fallbackFrom === 'string' ? fallbackFrom : '') || msg.from || '';
           // Preserve current is_unread/flags from the store — markMessageRead may
           // have already flipped them before onMeta fires.
-          const currentSel = source.state?.selectedMessage
-            ? get(source.state.selectedMessage)
-            : null;
+          const currentSel = (
+            source.state?.selectedMessage ? get(source.state.selectedMessage) : null
+          ) as (Message & Record<string, unknown>) | null;
           const enriched = {
             ...msg,
             // Keep the authoritative read-state from the store/optimistic update
-            is_unread: currentSel?.id === msg.id ? currentSel.is_unread : msg.is_unread,
+            is_unread:
+              currentSel && currentSel.id === msg.id ? currentSel.is_unread : msg.is_unread,
             is_unread_index:
-              currentSel?.id === msg.id ? currentSel.is_unread_index : msg.is_unread_index,
-            flags: currentSel?.id === msg.id ? currentSel.flags : msg.flags,
+              currentSel && currentSel.id === msg.id
+                ? currentSel.is_unread_index
+                : msg.is_unread_index,
+            flags: currentSel && currentSel.id === msg.id ? currentSel.flags : msg.flags,
             nodemailer: meta.nodemailer || meta.nodemailer === false ? meta.nodemailer : meta,
             to: pickValueArray('to') || meta.to?.text || msg.to,
             cc: pickValueArray('cc') || meta.cc?.text || msg.cc,
@@ -5378,14 +5553,24 @@
                 msg.reply_to,
             from: resolvedFrom,
           };
-          source.state?.selectedMessage?.set?.(enriched);
+          // Only when something the reader shows changed. A new object with
+          // the same addresses re-rendered the header, and everything that
+          // tracks the selection, for nothing.
+          const sameText = (a: unknown, b: unknown) =>
+            JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+          const changed =
+            !currentSel ||
+            currentSel.id !== msg.id ||
+            !currentSel.nodemailer ||
+            !sameText(currentSel.from, enriched.from) ||
+            !sameText(currentSel.to, enriched.to) ||
+            !sameText(currentSel.cc, enriched.cc) ||
+            !sameText(currentSel.replyTo, enriched.replyTo);
+          if (changed) source.state?.selectedMessage?.set?.(enriched);
           if (resolvedFrom && resolvedFrom !== msg.from) {
-            const currentMessages = source.state?.messages ? get(messagesStore) || [] : [];
-            if (currentMessages.length && source.state?.messages?.set) {
-              mailboxStore.state.messages.set(
-                currentMessages.map((item) =>
-                  item.id === msg.id ? { ...item, from: resolvedFrom } : item,
-                ),
+            if (source.state?.messages?.update) {
+              mailboxStore.state.messages.update((items: Message[]) =>
+                items.map((item) => (item.id === msg.id ? { ...item, from: resolvedFrom } : item)),
               );
             }
             const account = Local.get('email') || 'default';
@@ -5440,11 +5625,12 @@
     }
   });
 
-  const pruneMessages = (ids = []) => {
+  const pruneMessages = (ids: string[] = []) => {
     if (!Array.isArray(ids) || !ids.length) return;
-    const currentMessages = source.state?.messages ? get(messagesStore) || [] : [];
-    if (source.state?.messages?.set) {
-      mailboxStore.state.messages.set(currentMessages.filter((m) => !ids.includes(m.id)));
+    if (source.state?.messages?.update) {
+      mailboxStore.state.messages.update((items: Message[]) =>
+        items.filter((m) => !ids.includes(m.id)),
+      );
     }
     if (typeof mailboxView?.messages === 'function') {
       try {
@@ -5623,6 +5809,11 @@
       if (!isActive) {
         return;
       }
+
+      // Bootstrap (or the route change) has already started the mailbox load
+      // for this account. A second loadFolders + loadMessages here fetched and
+      // replaced the list again on every launch.
+      if (get(initialSyncStarted)) return;
 
       if (mailboxStore?.actions?.loadFolders) {
         mailboxStore.actions
@@ -6136,9 +6327,13 @@
               </div>
             {/if}
           </div>
-          {#if showHeaderShortcuts && ($syncProgress.active || $indexProgress.active)}
+          <!-- A fixed slot, kept while idle: shown and hidden, and with its
+               percentage changing width, the pill pushed the search box
+               around. -->
+          {#if showHeaderShortcuts}
             <div
-              class="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs text-muted-foreground rounded-full shrink-0"
+              class="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs text-muted-foreground rounded-full shrink-0 w-[160px] tabular-nums"
+              class:invisible={!($syncProgress.active || $indexProgress.active)}
               role="status"
               aria-live="polite"
             >
@@ -6624,7 +6819,12 @@
                 class="flex items-center gap-3 px-4 py-2 border-b border-border bg-muted/30 relative z-40 overflow-visible"
               >
                 <div class="flex items-center gap-1 overflow-visible">
-                  {#if !outboxSelected && ($filteredConversations.length || $filteredMessages.length)}
+                  <!-- Rendered while the list is still empty, disabled, so
+                       the buttons after it do not shift right when rows
+                       arrive. -->
+                  {#if !outboxSelected}
+                    {@const listHasRows =
+                      $filteredConversations.length > 0 || $filteredMessages.length > 0}
                     {@const allSelected =
                       ($threadingEnabled ? $filteredConversations : $filteredMessages).length > 0 &&
                       selectedIdSet.size >=
@@ -6633,8 +6833,9 @@
                         (item) => selectedIdSet.has(item.id),
                       )}
                     <button
-                      class={`inline-flex items-center justify-center h-11 w-11 transition-colors ${allSelected ? 'bg-accent text-fg-link' : selectionMode ? 'bg-accent/50 text-accent-foreground' : 'hover:bg-accent hover:text-accent-foreground'}`}
+                      class={`inline-flex items-center justify-center h-11 w-11 transition-colors disabled:opacity-40 disabled:pointer-events-none ${allSelected ? 'bg-accent text-fg-link' : selectionMode ? 'bg-accent/50 text-accent-foreground' : 'hover:bg-accent hover:text-accent-foreground'}`}
                       type="button"
+                      disabled={!listHasRows}
                       data-tooltip={selectionMode
                         ? allSelected
                           ? 'Deselect all'
@@ -9342,122 +9543,133 @@
                           {/if}
                         </div>
                         {#if isExpanded && isSelected}
-                          {#if showSkeleton}
-                            <div class="min-h-[120px] flex items-center justify-center p-6">
-                              <div class="w-full space-y-4 animate-pulse">
-                                <div class="space-y-2">
-                                  <div class="h-5 w-3/4 bg-muted"></div>
-                                  <div class="h-4 w-1/2 bg-muted"></div>
-                                  <div class="h-3 w-24 bg-muted"></div>
-                                </div>
-                                <div class="space-y-2 pt-4">
-                                  <div class="h-3 bg-muted" style="width: 90%"></div>
-                                  <div class="h-3 bg-muted" style="width: 85%"></div>
-                                  <div class="h-3 bg-muted" style="width: 92%"></div>
-                                  <div class="h-3 bg-muted" style="width: 78%"></div>
-                                  <div class="h-3 bg-muted" style="width: 88%"></div>
-                                  <div class="h-3 bg-muted" style="width: 80%"></div>
-                                  <div class="h-3 bg-muted" style="width: 70%"></div>
-                                </div>
-                              </div>
-                            </div>
-                          {:else}
-                            {#if $pgpLocked}
+                          <!-- The skeleton covers the body instead of replacing it, so the email
+                               frame below stays mounted through a load. -->
+                          <div class="fe-reader-body" class:fe-reader-body-loading={showSkeleton}>
+                            {#if showSkeleton}
                               <div
-                                class="flex items-center gap-3 p-3 mb-4 bg-state-encrypted/10 border border-state-encrypted/30 text-sm"
-                                role="status"
+                                class="fe-reader-skeleton min-h-[120px] flex items-center justify-center p-6 bg-background"
                               >
-                                <Lock
-                                  class="h-4.5 w-4.5 text-state-encrypted"
-                                  aria-label="Encrypted message"
-                                />
-                                <span class="flex-1">
-                                  {$pgpHasKeys
-                                    ? 'This message is PGP encrypted. Enter your passphrase to decrypt.'
-                                    : 'This message is PGP encrypted and could not be decrypted.'}
-                                </span>
-                                {#if $pgpHasKeys}
-                                  <button
-                                    type="button"
-                                    class="inline-flex items-center justify-center px-3 py-1.5 text-sm bg-state-encrypted/20 hover:bg-state-encrypted/30 text-state-encrypted"
-                                    onclick={() => {
-                                      const msg = source.state?.selectedMessage
-                                        ? get(selectedMessage)
-                                        : null;
-                                      if (msg) {
-                                        messageLoadInProgress = false;
-                                        activeMessageId = null;
-                                        loadMessage(msg);
-                                      }
-                                    }}
-                                  >
-                                    Retry Decryption
-                                  </button>
-                                {:else}
-                                  <button
-                                    type="button"
-                                    class="inline-flex items-center justify-center px-3 py-1.5 text-sm bg-state-encrypted/20 hover:bg-state-encrypted/30 text-state-encrypted"
-                                    onclick={() => navigate('/mailbox/settings#accounts')}
-                                  >
-                                    Add PGP Key
-                                  </button>
-                                {/if}
+                                <div class="w-full space-y-4 animate-pulse">
+                                  <div class="space-y-2">
+                                    <div class="h-5 w-3/4 bg-muted"></div>
+                                    <div class="h-4 w-1/2 bg-muted"></div>
+                                    <div class="h-3 w-24 bg-muted"></div>
+                                  </div>
+                                  <div class="space-y-2 pt-4">
+                                    <div class="h-3 bg-muted" style="width: 90%"></div>
+                                    <div class="h-3 bg-muted" style="width: 85%"></div>
+                                    <div class="h-3 bg-muted" style="width: 92%"></div>
+                                    <div class="h-3 bg-muted" style="width: 78%"></div>
+                                    <div class="h-3 bg-muted" style="width: 88%"></div>
+                                    <div class="h-3 bg-muted" style="width: 80%"></div>
+                                    <div class="h-3 bg-muted" style="width: 70%"></div>
+                                  </div>
+                                </div>
                               </div>
                             {/if}
-                            {#if $hasBlockedImages}
-                              <div
-                                class="flex items-center gap-3 p-3 mb-4 bg-state-caution/10 border border-state-caution/20 text-sm"
-                              >
-                                <ImageIcon class="h-4.5 w-4.5" />
-                                <span>
-                                  {#if $trackingPixelCount > 0 && $blockedImageCount > 0}
-                                    {$trackingPixelCount} tracking pixel{$trackingPixelCount !== 1
-                                      ? 's'
-                                      : ''} and {$blockedImageCount} image{$blockedImageCount !== 1
-                                      ? 's'
-                                      : ''} blocked
-                                  {:else if $trackingPixelCount > 0}
-                                    {$trackingPixelCount} tracking pixel{$trackingPixelCount !== 1
-                                      ? 's'
-                                      : ''} blocked
-                                  {:else if $blockedImageCount > 0}
-                                    {$blockedImageCount} image{$blockedImageCount !== 1 ? 's' : ''} blocked
+                            <div class="fe-reader-content">
+                              {#if $pgpLocked}
+                                <div
+                                  class="flex items-center gap-3 p-3 mb-4 bg-state-encrypted/10 border border-state-encrypted/30 text-sm"
+                                  role="status"
+                                >
+                                  <Lock
+                                    class="h-4.5 w-4.5 text-state-encrypted"
+                                    aria-label="Encrypted message"
+                                  />
+                                  <span class="flex-1">
+                                    {$pgpHasKeys
+                                      ? 'This message is PGP encrypted. Enter your passphrase to decrypt.'
+                                      : 'This message is PGP encrypted and could not be decrypted.'}
+                                  </span>
+                                  {#if $pgpHasKeys}
+                                    <button
+                                      type="button"
+                                      class="inline-flex items-center justify-center px-3 py-1.5 text-sm bg-state-encrypted/20 hover:bg-state-encrypted/30 text-state-encrypted"
+                                      onclick={() => {
+                                        const msg = source.state?.selectedMessage
+                                          ? get(selectedMessage)
+                                          : null;
+                                        if (msg) {
+                                          messageLoadInProgress = false;
+                                          activeMessageId = null;
+                                          loadMessage(msg);
+                                        }
+                                      }}
+                                    >
+                                      Retry Decryption
+                                    </button>
                                   {:else}
-                                    Images blocked for your privacy
-                                  {/if}
-                                </span>
-                                <div style="display: flex; gap: 8px;">
-                                  {#if $blockedImageCount > 0}
                                     <button
-                                      class="inline-flex items-center justify-center px-3 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground"
                                       type="button"
-                                      onclick={loadRemoteImages}
+                                      class="inline-flex items-center justify-center px-3 py-1.5 text-sm bg-state-encrypted/20 hover:bg-state-encrypted/30 text-state-encrypted"
+                                      onclick={() => navigate('/mailbox/settings#accounts')}
                                     >
-                                      Load Images
-                                    </button>
-                                  {/if}
-                                  {#if $trackingPixelCount > 0}
-                                    <button
-                                      class="inline-flex items-center justify-center px-3 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground"
-                                      type="button"
-                                      onclick={loadAllIncludingPixels}
-                                      title="Not recommended: allows senders to track that you opened this email"
-                                    >
-                                      Load All
+                                      Add PGP Key
                                     </button>
                                   {/if}
                                 </div>
-                              </div>
-                            {/if}
-                            <EmailIframe
-                              html={$messageBody}
-                              messageId={$selectedMessage?.id || $selectedMessage?.uid || ''}
-                              plainText={viewPlainText}
-                              onLinkClick={handleIframeLinkClick}
-                              onFormSubmit={handleIframeFormSubmit}
-                              onSwipe={handleIframeSwipe}
-                            />
-                          {/if}
+                              {/if}
+                              {#if $hasBlockedImages}
+                                <div
+                                  class="flex items-center gap-3 p-3 mb-4 bg-state-caution/10 border border-state-caution/20 text-sm"
+                                  class:invisible={!$messageBody}
+                                >
+                                  <ImageIcon class="h-4.5 w-4.5" />
+                                  <span>
+                                    {#if $trackingPixelCount > 0 && $blockedImageCount > 0}
+                                      {$trackingPixelCount} tracking pixel{$trackingPixelCount !== 1
+                                        ? 's'
+                                        : ''} and {$blockedImageCount} image{$blockedImageCount !==
+                                      1
+                                        ? 's'
+                                        : ''} blocked
+                                    {:else if $trackingPixelCount > 0}
+                                      {$trackingPixelCount} tracking pixel{$trackingPixelCount !== 1
+                                        ? 's'
+                                        : ''} blocked
+                                    {:else if $blockedImageCount > 0}
+                                      {$blockedImageCount} image{$blockedImageCount !== 1
+                                        ? 's'
+                                        : ''} blocked
+                                    {:else}
+                                      Images blocked for your privacy
+                                    {/if}
+                                  </span>
+                                  <div style="display: flex; gap: 8px;">
+                                    {#if $blockedImageCount > 0}
+                                      <button
+                                        class="inline-flex items-center justify-center px-3 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground"
+                                        type="button"
+                                        onclick={loadRemoteImages}
+                                      >
+                                        Load Images
+                                      </button>
+                                    {/if}
+                                    {#if $trackingPixelCount > 0}
+                                      <button
+                                        class="inline-flex items-center justify-center px-3 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground"
+                                        type="button"
+                                        onclick={loadAllIncludingPixels}
+                                        title="Not recommended: allows senders to track that you opened this email"
+                                      >
+                                        Load All
+                                      </button>
+                                    {/if}
+                                  </div>
+                                </div>
+                              {/if}
+                              <EmailIframe
+                                html={$messageBody}
+                                messageId={$selectedMessage?.id || $selectedMessage?.uid || ''}
+                                plainText={viewPlainText}
+                                onLinkClick={handleIframeLinkClick}
+                                onFormSubmit={handleIframeFormSubmit}
+                                onSwipe={handleIframeSwipe}
+                              />
+                            </div>
+                          </div>
                         {:else if isExpanded && !isSelected}
                           <!-- Expanded but not selected: show cached body if available -->
                           {#if cachedBody?.loading}
@@ -9605,186 +9817,195 @@
                     </div>
                   {/if}
                 {:else if $selectedMessage}
-                  {#if showSkeleton}
-                    <div class="min-h-[120px] flex items-center justify-center p-6">
-                      <div class="w-full space-y-4 animate-pulse">
-                        <div class="space-y-2">
-                          <div class="h-5 w-3/4 bg-muted"></div>
-                          <div class="h-4 w-1/2 bg-muted"></div>
-                          <div class="h-3 w-24 bg-muted"></div>
-                        </div>
-                        <div class="space-y-2 pt-4">
-                          <div class="h-3 bg-muted" style="width: 90%"></div>
-                          <div class="h-3 bg-muted" style="width: 85%"></div>
-                          <div class="h-3 bg-muted" style="width: 92%"></div>
-                          <div class="h-3 bg-muted" style="width: 78%"></div>
-                          <div class="h-3 bg-muted" style="width: 88%"></div>
-                          <div class="h-3 bg-muted" style="width: 80%"></div>
-                          <div class="h-3 bg-muted" style="width: 70%"></div>
-                        </div>
-                      </div>
-                    </div>
-                  {:else}
-                    {#if $pgpLocked}
+                  <!-- The skeleton covers the body instead of replacing it, so the email
+                       frame below stays mounted through a load. -->
+                  <div class="fe-reader-body" class:fe-reader-body-loading={showSkeleton}>
+                    {#if showSkeleton}
                       <div
-                        class="flex items-center gap-3 p-3 mb-4 bg-state-encrypted/10 border border-state-encrypted/30 text-sm"
-                        role="status"
+                        class="fe-reader-skeleton min-h-[120px] flex items-center justify-center p-6 bg-background"
                       >
-                        <Lock
-                          class="h-4.5 w-4.5 text-state-encrypted"
-                          aria-label="Encrypted message"
-                        />
-                        <span class="flex-1">
-                          {$pgpHasKeys
-                            ? 'This message is PGP encrypted. Enter your passphrase to decrypt.'
-                            : 'This message is PGP encrypted and could not be decrypted.'}
-                        </span>
-                        {#if $pgpHasKeys}
-                          <button
-                            type="button"
-                            class="inline-flex items-center justify-center px-3 py-1.5 text-sm bg-state-encrypted/20 hover:bg-state-encrypted/30 text-state-encrypted"
-                            onclick={() => {
-                              const msg = source.state?.selectedMessage
-                                ? get(selectedMessage)
-                                : null;
-                              if (msg) {
-                                messageLoadInProgress = false;
-                                activeMessageId = null;
-                                loadMessage(msg);
-                              }
-                            }}
-                          >
-                            Retry Decryption
-                          </button>
-                        {:else}
-                          <button
-                            type="button"
-                            class="inline-flex items-center justify-center px-3 py-1.5 text-sm bg-state-encrypted/20 hover:bg-state-encrypted/30 text-state-encrypted"
-                            onclick={() => navigate('/mailbox/settings#accounts')}
-                          >
-                            Add PGP Key
-                          </button>
-                        {/if}
+                        <div class="w-full space-y-4 animate-pulse">
+                          <div class="space-y-2">
+                            <div class="h-5 w-3/4 bg-muted"></div>
+                            <div class="h-4 w-1/2 bg-muted"></div>
+                            <div class="h-3 w-24 bg-muted"></div>
+                          </div>
+                          <div class="space-y-2 pt-4">
+                            <div class="h-3 bg-muted" style="width: 90%"></div>
+                            <div class="h-3 bg-muted" style="width: 85%"></div>
+                            <div class="h-3 bg-muted" style="width: 92%"></div>
+                            <div class="h-3 bg-muted" style="width: 78%"></div>
+                            <div class="h-3 bg-muted" style="width: 88%"></div>
+                            <div class="h-3 bg-muted" style="width: 80%"></div>
+                            <div class="h-3 bg-muted" style="width: 70%"></div>
+                          </div>
+                        </div>
                       </div>
                     {/if}
-                    {#if $hasBlockedImages}
-                      <div
-                        class="flex items-center gap-3 p-3 mb-4 bg-state-caution/10 border border-state-caution/20 text-sm"
-                      >
-                        <ImageIcon class="h-4.5 w-4.5" />
-                        <span>
-                          {#if $trackingPixelCount > 0 && $blockedImageCount > 0}
-                            {$trackingPixelCount} tracking pixel{$trackingPixelCount !== 1
-                              ? 's'
-                              : ''} and
-                            {$blockedImageCount} image{$blockedImageCount !== 1 ? 's' : ''} blocked
-                          {:else if $trackingPixelCount > 0}
-                            {$trackingPixelCount} tracking pixel{$trackingPixelCount !== 1
-                              ? 's'
-                              : ''} blocked
-                          {:else if $blockedImageCount > 0}
-                            {$blockedImageCount} image{$blockedImageCount !== 1 ? 's' : ''} blocked
+                    <div class="fe-reader-content">
+                      {#if $pgpLocked}
+                        <div
+                          class="flex items-center gap-3 p-3 mb-4 bg-state-encrypted/10 border border-state-encrypted/30 text-sm"
+                          role="status"
+                        >
+                          <Lock
+                            class="h-4.5 w-4.5 text-state-encrypted"
+                            aria-label="Encrypted message"
+                          />
+                          <span class="flex-1">
+                            {$pgpHasKeys
+                              ? 'This message is PGP encrypted. Enter your passphrase to decrypt.'
+                              : 'This message is PGP encrypted and could not be decrypted.'}
+                          </span>
+                          {#if $pgpHasKeys}
+                            <button
+                              type="button"
+                              class="inline-flex items-center justify-center px-3 py-1.5 text-sm bg-state-encrypted/20 hover:bg-state-encrypted/30 text-state-encrypted"
+                              onclick={() => {
+                                const msg = source.state?.selectedMessage
+                                  ? get(selectedMessage)
+                                  : null;
+                                if (msg) {
+                                  messageLoadInProgress = false;
+                                  activeMessageId = null;
+                                  loadMessage(msg);
+                                }
+                              }}
+                            >
+                              Retry Decryption
+                            </button>
                           {:else}
-                            Images blocked for your privacy
-                          {/if}
-                        </span>
-                        <div style="display: flex; gap: 8px;">
-                          {#if $blockedImageCount > 0}
                             <button
-                              class="inline-flex items-center justify-center px-3 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground"
                               type="button"
-                              onclick={loadRemoteImages}
+                              class="inline-flex items-center justify-center px-3 py-1.5 text-sm bg-state-encrypted/20 hover:bg-state-encrypted/30 text-state-encrypted"
+                              onclick={() => navigate('/mailbox/settings#accounts')}
                             >
-                              Load Images
-                            </button>
-                          {/if}
-                          {#if $trackingPixelCount > 0}
-                            <button
-                              class="inline-flex items-center justify-center px-3 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground"
-                              type="button"
-                              onclick={loadAllIncludingPixels}
-                              title="Not recommended: allows senders to track that you opened this email"
-                            >
-                              Load All
+                              Add PGP Key
                             </button>
                           {/if}
                         </div>
-                      </div>
-                    {/if}
-                    {#if parsedInvite}
-                      <div class="mb-4">
-                        <CalendarInviteCard
-                          invite={parsedInvite}
-                          sender={normalizeEmail(
-                            extractAddressList($selectedMessage, 'from')[0] || '',
-                          )}
-                        />
-                      </div>
-                    {/if}
-                    <EmailIframe
-                      html={$messageBody}
-                      messageId={$selectedMessage?.id || $selectedMessage?.uid || ''}
-                      plainText={viewPlainText}
-                      onLinkClick={handleIframeLinkClick}
-                      onFormSubmit={handleIframeFormSubmit}
-                      onSwipe={handleIframeSwipe}
-                    />
-                    {#if filterDownloadableAttachments($attachments).length}
-                      <div
-                        class="sticky bottom-0 z-10 mt-4 flex shrink-0 flex-nowrap items-start gap-2 overflow-x-auto overflow-y-hidden border-t border-border bg-[var(--color-panel)]/95 px-4 pt-4 pb-3 backdrop-blur supports-[backdrop-filter]:bg-[var(--color-panel)]/85"
-                      >
-                        {#each filterDownloadableAttachments($attachments) as att}
-                          <div class="flex h-24 w-[104px] shrink-0 flex-col gap-1">
-                            {#if isPreviewableImage(att) && att.href}
-                              <button
-                                type="button"
-                                class="min-h-0 flex-1 cursor-pointer rounded border border-border bg-muted/30 overflow-hidden hover:opacity-90 transition-opacity flex items-center justify-center"
-                                onclick={() =>
-                                  openImagePreview(
-                                    filterDownloadableAttachments($attachments),
-                                    att,
-                                    $selectedMessage,
-                                  )}
-                                title="Preview {att.name || att.filename}"
-                              >
-                                <img
-                                  src={att.href}
-                                  alt={att.name || att.filename}
-                                  class="max-h-full max-w-full object-contain"
-                                />
-                              </button>
+                      {/if}
+                      {#if $hasBlockedImages}
+                        <div
+                          class="flex items-center gap-3 p-3 mb-4 bg-state-caution/10 border border-state-caution/20 text-sm"
+                          class:invisible={!$messageBody}
+                        >
+                          <ImageIcon class="h-4.5 w-4.5" />
+                          <span>
+                            {#if $trackingPixelCount > 0 && $blockedImageCount > 0}
+                              {$trackingPixelCount} tracking pixel{$trackingPixelCount !== 1
+                                ? 's'
+                                : ''} and
+                              {$blockedImageCount} image{$blockedImageCount !== 1 ? 's' : ''} blocked
+                            {:else if $trackingPixelCount > 0}
+                              {$trackingPixelCount} tracking pixel{$trackingPixelCount !== 1
+                                ? 's'
+                                : ''} blocked
+                            {:else if $blockedImageCount > 0}
+                              {$blockedImageCount} image{$blockedImageCount !== 1 ? 's' : ''} blocked
                             {:else}
+                              Images blocked for your privacy
+                            {/if}
+                          </span>
+                          <div style="display: flex; gap: 8px;">
+                            {#if $blockedImageCount > 0}
                               <button
+                                class="inline-flex items-center justify-center px-3 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground"
                                 type="button"
-                                class="min-h-0 flex-1 cursor-pointer rounded border border-border bg-muted/30 overflow-hidden hover:opacity-90 transition-opacity flex items-center justify-center"
-                                onclick={() =>
-                                  mailService.downloadAttachment(att, $selectedMessage)}
-                                title="Download {att.name || att.filename}"
-                                data-testid="attachment-row"
+                                onclick={loadRemoteImages}
                               >
-                                <File class="h-7 w-7 text-muted-foreground" />
+                                Load Images
                               </button>
                             {/if}
-                            <div
-                              class="flex items-center gap-1 text-xs text-muted-foreground px-0.5 shrink-0"
-                            >
-                              <span class="truncate min-w-0 flex-1">{att.name || att.filename}</span
-                              >
+                            {#if $trackingPixelCount > 0}
                               <button
+                                class="inline-flex items-center justify-center px-3 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground"
                                 type="button"
-                                class="shrink-0 hover:text-foreground transition-colors cursor-pointer"
-                                onclick={() =>
-                                  mailService.downloadAttachment(att, $selectedMessage)}
-                                title="Download"
+                                onclick={loadAllIncludingPixels}
+                                title="Not recommended: allows senders to track that you opened this email"
                               >
-                                <Download class="h-3.5 w-3.5" />
+                                Load All
                               </button>
-                            </div>
+                            {/if}
                           </div>
-                        {/each}
-                      </div>
-                    {/if}
-                  {/if}
+                        </div>
+                      {/if}
+                      {#if parsedInvite}
+                        <div class="mb-4" class:invisible={!$messageBody}>
+                          <CalendarInviteCard
+                            invite={parsedInvite}
+                            sender={normalizeEmail(
+                              extractAddressList($selectedMessage, 'from')[0] || '',
+                            )}
+                          />
+                        </div>
+                      {/if}
+                      <EmailIframe
+                        html={$messageBody}
+                        messageId={$selectedMessage?.id || $selectedMessage?.uid || ''}
+                        plainText={viewPlainText}
+                        onLinkClick={handleIframeLinkClick}
+                        onFormSubmit={handleIframeFormSubmit}
+                        onSwipe={handleIframeSwipe}
+                      />
+                      {#if filterDownloadableAttachments($attachments).length}
+                        <div
+                          class="sticky bottom-0 z-10 mt-4 flex shrink-0 flex-nowrap items-start gap-2 overflow-x-auto overflow-y-hidden border-t border-border bg-[var(--color-panel)]/95 px-4 pt-4 pb-3 backdrop-blur supports-[backdrop-filter]:bg-[var(--color-panel)]/85"
+                        >
+                          {#each filterDownloadableAttachments($attachments) as att}
+                            <div class="flex h-24 w-[104px] shrink-0 flex-col gap-1">
+                              {#if isPreviewableImage(att) && att.href}
+                                <button
+                                  type="button"
+                                  class="min-h-0 flex-1 cursor-pointer rounded border border-border bg-muted/30 overflow-hidden hover:opacity-90 transition-opacity flex items-center justify-center"
+                                  onclick={() =>
+                                    openImagePreview(
+                                      filterDownloadableAttachments($attachments),
+                                      att,
+                                      $selectedMessage,
+                                    )}
+                                  title="Preview {att.name || att.filename}"
+                                >
+                                  <img
+                                    src={att.href}
+                                    alt={att.name || att.filename}
+                                    class="max-h-full max-w-full object-contain"
+                                  />
+                                </button>
+                              {:else}
+                                <button
+                                  type="button"
+                                  class="min-h-0 flex-1 cursor-pointer rounded border border-border bg-muted/30 overflow-hidden hover:opacity-90 transition-opacity flex items-center justify-center"
+                                  onclick={() =>
+                                    mailService.downloadAttachment(att, $selectedMessage)}
+                                  title="Download {att.name || att.filename}"
+                                  data-testid="attachment-row"
+                                >
+                                  <File class="h-7 w-7 text-muted-foreground" />
+                                </button>
+                              {/if}
+                              <div
+                                class="flex items-center gap-1 text-xs text-muted-foreground px-0.5 shrink-0"
+                              >
+                                <span class="truncate min-w-0 flex-1"
+                                  >{att.name || att.filename}</span
+                                >
+                                <button
+                                  type="button"
+                                  class="shrink-0 hover:text-foreground transition-colors cursor-pointer"
+                                  onclick={() =>
+                                    mailService.downloadAttachment(att, $selectedMessage)}
+                                  title="Download"
+                                >
+                                  <Download class="h-3.5 w-3.5" />
+                                </button>
+                              </div>
+                            </div>
+                          {/each}
+                        </div>
+                      {/if}
+                    </div>
+                  </div>
                 {/if}
               {:else if outboxSelected}
                 <div class="px-3 py-2 text-sm text-muted-foreground"></div>
@@ -10041,6 +10262,27 @@
 {/if}
 
 <style>
+  /* Reader body while a message loads: the skeleton sits on top and the
+     content underneath keeps its layout, so the email frame is not torn down
+     and rebuilt at a default height. */
+  .fe-reader-body {
+    position: relative;
+  }
+
+  .fe-reader-body-loading {
+    min-height: 120px;
+  }
+
+  .fe-reader-skeleton {
+    position: absolute;
+    inset: 0 0 auto 0;
+    z-index: 1;
+  }
+
+  .fe-reader-body-loading > .fe-reader-content {
+    visibility: hidden;
+  }
+
   /*
    * Off-screen message rows skip rendering and layout via content-visibility.
    * The list can hold up to ~1000 rows (MAX_LIVE_MESSAGES); this keeps the

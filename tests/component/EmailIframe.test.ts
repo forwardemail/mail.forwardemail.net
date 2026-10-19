@@ -107,3 +107,53 @@ describe('<EmailIframe /> link preview status bar', () => {
     expect(onLinkClick).toHaveBeenCalledWith('https://example.org/', false);
   });
 });
+
+// The token the component gave the document now in the iframe
+function currentToken() {
+  const iframe = document.querySelector('iframe.fe-email-iframe') as HTMLIFrameElement;
+  const match = /data-fe-token="([^"]*)"/.exec(iframe.getAttribute('srcdoc') || '');
+  return match ? match[1] : '';
+}
+
+const frame = () => document.querySelector('iframe.fe-email-iframe') as HTMLIFrameElement;
+
+describe('<EmailIframe /> keeps one frame across messages', () => {
+  it('keeps the same iframe element when the message changes', async () => {
+    const view = render(EmailIframe, { props: { html: '<p>first</p>', messageId: 'a' } });
+    const first = frame();
+    await view.rerender({ html: '', messageId: 'b' });
+    await view.rerender({ html: '<p>second</p>', messageId: 'b' });
+    expect(frame()).toBe(first);
+    expect(first.getAttribute('srcdoc')).toContain('second');
+  });
+
+  it('stays hidden until the current document says it is ready', async () => {
+    render(EmailIframe, { props: { html: '<p>body</p>', messageId: 'c' } });
+    expect(frame().classList.contains('fe-email-iframe-hidden')).toBe(true);
+    postFromIframe({ type: 'ready', payload: { token: currentToken() } });
+    await waitFor(() => expect(frame().classList.contains('fe-email-iframe-hidden')).toBe(false));
+  });
+
+  it('ignores a height from the document it replaced', async () => {
+    const view = render(EmailIframe, { props: { html: '<p>old</p>', messageId: 'd' } });
+    const oldToken = currentToken();
+    await view.rerender({ html: '<p>new</p>', messageId: 'e' });
+    // The previous email's runtime answers late; its height is not the new
+    // email's and must not be applied or cached for it.
+    postFromIframe({ type: 'height', payload: { height: 1234, token: oldToken } });
+    await Promise.resolve();
+    expect(frame().style.height).not.toBe('1234px');
+    postFromIframe({ type: 'height', payload: { height: 321, token: currentToken() } });
+    await waitFor(() => expect(frame().style.height).toBe('321px'));
+  });
+
+  it('reserves the measured height when a message is shown again', async () => {
+    const view = render(EmailIframe, { props: { html: '<p>tall</p>', messageId: 'f' } });
+    postFromIframe({ type: 'height', payload: { height: 950, token: currentToken() } });
+    await waitFor(() => expect(frame().style.height).toBe('950px'));
+    view.unmount();
+    // A fresh instance, as after the reader skeleton or a tab switch
+    render(EmailIframe, { props: { html: '<p>tall</p>', messageId: 'f' } });
+    expect(frame().style.height).toBe('950px');
+  });
+});

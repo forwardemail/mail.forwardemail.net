@@ -313,6 +313,18 @@ export function onSyncTaskComplete(handler) {
   };
 }
 
+/**
+ * Send the live optimistic changes (ids moved or deleted, pending read, star
+ * and label changes) to the worker. Sync tasks also carry a snapshot taken
+ * when they start, but a long metadata or backfill task can run for a minute,
+ * and a change made in that time would be written back over by its later
+ * pages without this.
+ */
+export function postOptimisticOverlay(overlay) {
+  if (!worker) return;
+  worker.postMessage({ type: 'optimisticOverlay', ...overlay });
+}
+
 export function refreshSyncWorkerPgpKeys() {
   if (!worker) return;
   const pgpPayload = getPgpPayload();

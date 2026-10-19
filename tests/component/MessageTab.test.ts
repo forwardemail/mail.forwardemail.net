@@ -14,6 +14,12 @@ const mocks = vi.hoisted(() => ({
   deleteMessage: vi.fn(async () => ({ success: true })),
   closeTab: vi.fn(),
   loadMessageDetail: vi.fn(async () => undefined),
+  demo: false,
+}));
+
+vi.mock('../../src/utils/demo-mode', () => ({
+  isDemoMode: () => mocks.demo,
+  isDemoBlockedError: (err: { demoBlocked?: boolean } | null) => Boolean(err?.demoBlocked),
 }));
 
 vi.mock('../../src/stores/mailboxActions', () => ({
@@ -80,6 +86,7 @@ function findIconButton(container: HTMLElement, iconClass: string): HTMLButtonEl
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.demo = false;
   mocks.archiveMessage.mockResolvedValue({ success: true });
 });
 
@@ -119,7 +126,18 @@ describe('MessageTab store integration', () => {
     expect((mocks.archiveMessage.mock.calls[0][0] as { id: string }).id).toBe('msg-1');
   });
 
-  it('keeps the tab open when the archive is blocked', async () => {
+  it('closes the tab before the archive request has answered', async () => {
+    // archiveMessage is optimistic and queues a retry itself, so the tab does
+    // not wait a round trip.
+    mocks.archiveMessage.mockReturnValue(new Promise(() => {}));
+    const { container } = renderTab(makeMessage({ is_unread: false }));
+    await fireEvent.click(findIconButton(container, 'lucide-archive'));
+    expect(mocks.closeTab).toHaveBeenCalledWith('tab-1');
+  });
+
+  it('keeps the tab open when the demo blocks the archive', async () => {
+    // Only the demo blocks an action, so only there does the tab wait for it.
+    mocks.demo = true;
     mocks.archiveMessage.mockResolvedValue({ success: false, blocked: true });
     const { container } = renderTab(makeMessage({ is_unread: false }));
     await fireEvent.click(findIconButton(container, 'lucide-archive'));

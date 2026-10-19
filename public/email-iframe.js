@@ -24,11 +24,18 @@
   'use strict';
 
   var TARGET_ORIGIN = '*';
+  // Names this document (see buildIframeSrcdoc). Sent with every message so
+  // the parent can drop ones from a document it has already replaced.
+  var TOKEN = document.documentElement.getAttribute('data-fe-token') || '';
 
-  try {
-    parent.postMessage({ type: 'ready', payload: {} }, TARGET_ORIGIN);
-  } catch {
-    // Parent may not be accessible — continue; later messages will retry.
+  // Measure first, then say ready: the parent reveals the frame on ready, and
+  // a wide email should already be scaled and its height known by then.
+  function postReady() {
+    try {
+      parent.postMessage({ type: 'ready', payload: { token: TOKEN } }, TARGET_ORIGIN);
+    } catch {
+      // Parent may not be accessible — continue; later messages will retry.
+    }
   }
 
   var STYLE_PROPS_TO_STRIP = ['color', 'background-color', 'background'];
@@ -151,17 +158,23 @@
     var box =
       document.querySelector('.fe-email-viewport') || document.querySelector('.fe-email-content');
     var boxHeight = box ? box.getBoundingClientRect().height : 0;
-    var height = Math.max(
-      boxHeight,
-      document.body.scrollHeight,
-      document.body.offsetHeight,
-      document.documentElement.scrollHeight,
-      document.documentElement.offsetHeight,
-    );
+    // Not the root element's scrollHeight: inside an iframe that is at least
+    // the frame's own height, so the reported height could grow but never
+    // shrink (a short email kept a tall frame, a collapsed quote kept its
+    // space).
+    var height = Math.max(boxHeight, document.body.scrollHeight, document.body.offsetHeight);
     height = Math.max(Math.ceil(height), 50);
-    parent.postMessage({ type: 'height', payload: { height: height } }, TARGET_ORIGIN);
+    parent.postMessage(
+      { type: 'height', payload: { height: height, token: TOKEN } },
+      TARGET_ORIGIN,
+    );
   }
 
+  // The script sits at the end of the body, so the content is parsed: fit and
+  // measure now, before the first paint, then keep re-measuring as images and
+  // fonts land.
+  reportHeight();
+  postReady();
   HEIGHT_REPORT_DELAYS.forEach(function (delay) {
     setTimeout(reportHeight, delay);
   });

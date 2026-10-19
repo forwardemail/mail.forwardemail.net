@@ -42,8 +42,8 @@ describe('theme-aware scrollbar contract', () => {
     const light = buildIframeSrcdoc('<div>Light</div>', false);
     const dark = buildIframeSrcdoc('<div>Dark</div>', true);
 
-    expect(light).toContain('<html class="fe-iframe-light">');
-    expect(dark).toContain('<html class="fe-iframe-dark">');
+    expect(light).toContain('<html class="fe-iframe-light"');
+    expect(dark).toContain('<html class="fe-iframe-dark"');
     for (const document of [light, dark]) {
       expect(document).toContain('scrollbar-color: var(--fe-scrollbar-thumb) transparent');
       expect(document).toContain('*::-webkit-scrollbar-thumb:hover');

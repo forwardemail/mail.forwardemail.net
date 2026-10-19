@@ -1,6 +1,6 @@
 import { writable, derived } from 'svelte/store';
 import type { Writable, Readable } from 'svelte/store';
-import { debouncedDerived } from '../utils/store-utils.ts';
+import { throttledDerived } from '../utils/store-utils.ts';
 import { createConversationGrouper } from '../utils/conversation-grouper.js';
 import { filteredMessages } from './messageStore';
 import { sortOrder } from './viewStore';
@@ -16,14 +16,17 @@ export const replyMessageIndex: Writable<Map<string, number>> = writable(new Map
 
 const groupConversations = createConversationGrouper();
 
-export const filteredConversations: Readable<Conversation[]> = debouncedDerived(
+export const filteredConversations: Readable<Conversation[]> = throttledDerived(
   [filteredMessages, sortOrder, replyTargets, replyMessageIndex],
-  ([$msgs, $sortOrder, $replyTargets, $replyMessageIndex]: [
-    Message[],
-    string,
-    Set<string>,
-    Map<string, number>,
-  ]) => groupConversations($msgs, $sortOrder, $replyTargets, $replyMessageIndex),
+  (values) => {
+    const [$msgs, $sortOrder, $replyTargets, $replyMessageIndex] = values as [
+      Message[],
+      string,
+      Set<string>,
+      Map<string, number>,
+    ];
+    return groupConversations($msgs, $sortOrder, $replyTargets, $replyMessageIndex);
+  },
   [] as Conversation[],
   32,
 );

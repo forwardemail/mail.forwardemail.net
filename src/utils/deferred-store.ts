@@ -54,6 +54,12 @@ export function deferredWritable<T>(initial: T): DeferredWritable<T> {
   // The value a pending frame will set; update() builds on it, so an update
   // made within the frame does not bring back what the removal took out.
   let pendingValue: T = initial;
+  // Ids the pending frame removes. get() and $store still return the old list
+  // until the frame runs, so a caller that does get() then set() within the
+  // frame (markMessageRead after an archive, for one) hands back a list that
+  // still holds the removed rows. Those ids are stripped from any set() made
+  // while the frame is pending, so the removal is not undone.
+  let pendingRemovedIds: Set<unknown> | null = null;
 
   /**
    * Returns true when `next` is a shorter array than the current value,
@@ -73,9 +79,33 @@ export function deferredWritable<T>(initial: T): DeferredWritable<T> {
       }
       pendingFrame = null;
     }
+    pendingRemovedIds = null;
   }
 
-  const deferredSet = (value: T): void => {
+  const idOf = (item: unknown): unknown =>
+    item && typeof item === 'object' ? (item as { id?: unknown }).id : undefined;
+
+  /** Ids present in `current` and missing from `next`, or null if none. */
+  function removedIds(current: unknown[], next: unknown[]): Set<unknown> | null {
+    const kept = new Set(next.map(idOf));
+    const removed = new Set<unknown>();
+    for (const item of current) {
+      const id = idOf(item);
+      if (id !== undefined && id !== null && !kept.has(id)) removed.add(id);
+    }
+    return removed.size ? removed : null;
+  }
+
+  /** Drops rows a pending removal took out from a value built on the old list. */
+  function withoutPendingRemovals(value: T): T {
+    if (pendingFrame === null || !pendingRemovedIds || !Array.isArray(value)) return value;
+    const ids = pendingRemovedIds;
+    const next = value.filter((item) => !ids.has(idOf(item)));
+    return (next.length === value.length ? value : next) as T;
+  }
+
+  const deferredSet = (incoming: T): void => {
+    const value = withoutPendingRemovals(incoming);
     // Always cancel a pending frame so the latest value wins
     cancelPending();
 
@@ -83,8 +113,10 @@ export function deferredWritable<T>(initial: T): DeferredWritable<T> {
       // Defer removals to next animation frame
       if (typeof requestAnimationFrame === 'function') {
         pendingValue = value;
+        pendingRemovedIds = removedIds(get(inner) as unknown[], value as unknown[]);
         pendingFrame = requestAnimationFrame(() => {
           pendingFrame = null;
+          pendingRemovedIds = null;
           inner.set(value);
         });
       } else {

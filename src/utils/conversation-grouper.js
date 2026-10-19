@@ -40,6 +40,12 @@ const buildConversationPreviewMessages = (conv, replyIndex) => {
 
 const normalizeMessages = (messages) => (Array.isArray(messages) ? messages : []);
 
+const sameItems = (a, b) =>
+  Array.isArray(a) &&
+  Array.isArray(b) &&
+  a.length === b.length &&
+  a.every((item, idx) => item === b[idx]);
+
 export const createConversationGrouper = () => {
   let conversationCache = new Map();
 
@@ -77,6 +83,19 @@ export const createConversationGrouper = () => {
       conv.messageCount = previewMessages.length || conv.messages.length;
 
       const existing = prevCache.get(conv.id);
+      // Unchanged since the last run (the same message objects, the same
+      // reply state): hand back the same conversation object, so its row is
+      // not re-rendered. A new object every time re-ran every row on every
+      // background refresh.
+      if (
+        existing &&
+        sameItems(existing.messages, conv.messages) &&
+        sameItems(existing.previewMessages, conv.previewMessages) &&
+        existing.hasReply === conv.hasReply
+      ) {
+        nextCache.set(conv.id, existing);
+        return existing;
+      }
       const merged = existing ? { ...existing, ...conv } : conv;
       nextCache.set(conv.id, merged);
       return merged;

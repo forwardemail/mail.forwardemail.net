@@ -219,6 +219,8 @@ function getThreadId(message: MessageLike | null | undefined): string | null {
 /**
  * Simple string hash function for generating conversation IDs
  */
+const THREAD_ROOT_PREFIX = 'thr-';
+
 function simpleHash(str: string | null | undefined): string {
   if (!str) return '0';
 
@@ -347,11 +349,20 @@ export function groupIntoConversations(messages: MessageLike[]): ConversationRes
       order.set(id, order.size);
     }
   };
+  // A conversation whose messages carry a server thread_id is named after that
+  // thread, whichever message comes first. Named after the first message seen,
+  // the id changed whenever a new reply arrived at the top of the list (list
+  // rows have no References to point back at the root), so the open
+  // conversation lost its highlight and its row was rebuilt.
+  const isThreadRoot = (id: string) => id.startsWith(THREAD_ROOT_PREFIX);
   const union = (a: string, b: string) => {
     const rootA = find(a);
     const rootB = find(b);
     if (rootA === rootB) return;
-    if (order.get(rootA)! <= order.get(rootB)!) parent.set(rootB, rootA);
+    const threadA = isThreadRoot(rootA);
+    const threadB = isThreadRoot(rootB);
+    const keepA = threadA !== threadB ? threadA : order.get(rootA)! <= order.get(rootB)!;
+    if (keepA) parent.set(rootB, rootA);
     else parent.set(rootA, rootB);
   };
 
@@ -362,6 +373,7 @@ export function groupIntoConversations(messages: MessageLike[]): ConversationRes
     const references = getReferences(message);
     const inReplyTo = getInReplyTo(message);
     const threadId = getThreadId(message);
+    const threadRoot = threadId ? `${THREAD_ROOT_PREFIX}${simpleHash(threadId)}` : null;
 
     const known = [
       threadId ? threadIdToConvId.get(threadId) : undefined,
@@ -375,6 +387,8 @@ export function groupIntoConversations(messages: MessageLike[]): ConversationRes
       // to (or a reference of) a message already grouped.
       convId = known[0];
       for (const other of known.slice(1)) union(convId, other);
+    } else if (threadRoot) {
+      convId = threadRoot;
     } else if (references.length > 0) {
       convId = simpleHash(references[0]);
     } else if (inReplyTo) {
@@ -397,10 +411,10 @@ export function groupIntoConversations(messages: MessageLike[]): ConversationRes
       if (previous) union(previous, convId);
       else messageIdToConvId.set(messageId, convId);
     }
-    if (threadId) {
-      const previous = threadIdToConvId.get(threadId);
-      if (previous) union(previous, convId);
-      else threadIdToConvId.set(threadId, convId);
+    if (threadId && threadRoot) {
+      track(threadRoot);
+      union(threadRoot, convId);
+      if (!threadIdToConvId.has(threadId)) threadIdToConvId.set(threadId, threadRoot);
     }
     assigned.push([message, convId]);
   }

@@ -485,8 +485,10 @@ export const toggleRead = async (msg) => {
   // Optimistic update
   const messages = get(mailboxStore.state.messages);
   const nextUnread = !isUnread;
-  mailboxStore.state.messages.set(
-    messages.map((m) =>
+  // update(), not set() of the list read above: it builds on a removal still
+  // waiting for its frame, which that list predates.
+  mailboxStore.state.messages.update((list) =>
+    list.map((m) =>
       m.id === msg.id
         ? { ...m, is_unread: nextUnread, is_unread_index: nextUnread ? 1 : 0, flags: newFlags }
         : m,
@@ -574,11 +576,9 @@ export const toggleStar = async (msg) => {
 
   // Optimistic update in message list and selected message
   const messages = get(mailboxStore.state.messages);
-  const newFlagsArr = Array.from(newFlags);
-  mailboxStore.state.messages.set(
-    messages.map((m) =>
-      m.id === msg.id ? { ...m, is_starred: !isStarred, flags: newFlagsArr } : m,
-    ),
+  const newFlagsArr = Array.from(newFlags) as string[];
+  mailboxStore.state.messages.update((list) =>
+    list.map((m) => (m.id === msg.id ? { ...m, is_starred: !isStarred, flags: newFlagsArr } : m)),
   );
   mailboxStore.actions.addPendingFlagMutation(msg.id, {
     is_starred: !isStarred,
@@ -1336,8 +1336,8 @@ export const contextLabel = async (msgOrLabel, labelMaybe, options = {}) => {
 
   // Optimistic update in memory
   const msgs = get(mailboxStore.state.messages);
-  mailboxStore.state.messages.set(
-    msgs.map((m) => (m.id === msgId ? { ...m, labels: nextLabels } : m)),
+  mailboxStore.state.messages.update((list) =>
+    list.map((m) => (m.id === msgId ? { ...m, labels: nextLabels } : m)),
   );
   const selectedMsg = get(mailboxStore.state.selectedMessage);
   if (selectedMsg?.id === msgId) {
@@ -1356,6 +1356,11 @@ export const contextLabel = async (msgOrLabel, labelMaybe, options = {}) => {
     }
     return;
   }
+
+  // Held over list reloads until the server reports these labels. Without it
+  // a refresh inside the backend's indexing lag put the old labels back, so a
+  // chip vanished and then returned with the echo.
+  if (msgId != null) mailboxStore.actions.addPendingFlagMutation(msgId, { labels: nextLabels });
 
   // Update IDB cache immediately (optimistic)
   const candidateIds = new Set();
@@ -1459,6 +1464,10 @@ export const FOLDER_FLAG_FETCH_CONCURRENCY = 6;
 /**
  * Load labels for the current account
  */
+// Accounts whose cached messages were scanned for label keywords this session
+const labelScanDone = new Set<string>();
+const LABEL_SCAN_LIMIT = 5000;
+
 export const loadLabels = async (options = {}) => {
   const { includeFolderFlags = false } = options;
   const account = Local.get('email') || 'default';
@@ -1515,6 +1524,14 @@ export const loadLabels = async (options = {}) => {
       const existing = labelMap.get(id);
       labelMap.set(id, { ...l, ...existing, id });
     });
+    // Show the cached labels now. The list was left empty until the registry
+    // request below returned, so every labelled row drew grey keyword chips
+    // that then changed name, width and colour.
+    if (labelMap.size && !(get(availableLabels) || []).length) {
+      availableLabels.set(
+        Array.from(labelMap.values()).filter((l) => l.id && l.name && !isHiddenLabel(l.id)),
+      );
+    }
   } catch (err) {
     warn('loadLabels cache failed', err);
   }
@@ -1554,12 +1571,24 @@ export const loadLabels = async (options = {}) => {
   // The second case is self-limiting. Once the reconcile below drops the
   // entries no message carries, later loads have no unverified ids left and
   // skip the scan, so the full-table read happens once and not on every load.
+  //
+  // An account with no labels at all used to rescan on every load: the scan
+  // found nothing, so the map stayed empty and the next load scanned again,
+  // reading the whole account's cache on the main thread each time. Once per
+  // session is enough, and the read is capped.
   const unverifiedIds = [...labelMap.keys()].filter((id) => !registeredIds.has(id));
-  if (labelMap.size === 0 || (registryAuthoritative && unverifiedIds.length > 0)) {
+  const firstScanThisSession = labelMap.size === 0 && !labelScanDone.has(account);
+  if (firstScanThisSession || (registryAuthoritative && unverifiedIds.length > 0)) {
+    labelScanDone.add(account);
     try {
-      const allMessages = await db.messages
-        .where('account')
-        .equals(account)
+      // The reconcile pass reads everything: it decides which unregistered
+      // labels are still on a message, and a capped read would drop real ones.
+      const accountRows = db.messages.where('account').equals(account);
+      const allMessages = await (
+        firstScanThisSession && !unverifiedIds.length
+          ? accountRows.limit(LABEL_SCAN_LIMIT)
+          : accountRows
+      )
         .toArray()
         .catch(() => []);
       for (const msg of allMessages || []) {
@@ -2535,7 +2564,13 @@ const performAccountSwitch = async (requestedEmail) => {
     mailboxStore.state.loading.set(true);
   }
   if (cached.messages.length) {
-    mailboxStore.state.messages.set(cached.messages);
+    // Same overlay as every other list: a message archived in this account
+    // before switching away still has its old cached row, or one a
+    // background sync wrote while the server was still indexing the move.
+    const project = mailboxStore.actions.projectRows;
+    mailboxStore.state.messages.set(
+      project ? project(cached.messages, cached.defaultFolder) : cached.messages,
+    );
   } else {
     mailboxStore.state.messages.set([]);
   }

@@ -1,5 +1,25 @@
+<script lang="ts" module>
+  // Measured heights by message, shared by every instance and kept across
+  // remounts (the reader skeleton, a desktop tab switch, the threaded view),
+  // so reopening a message reserves its real height instead of starting at
+  // the default and snapping.
+  const heightCache = new Map<string, number>();
+  const HEIGHT_CACHE_MAX = 500;
+
+  function rememberHeight(key: string, height: number) {
+    heightCache.delete(key);
+    heightCache.set(key, height);
+    if (heightCache.size > HEIGHT_CACHE_MAX) {
+      const oldest = heightCache.keys().next().value;
+      if (oldest !== undefined) heightCache.delete(oldest);
+    }
+  }
+
+  let documentCounter = 0;
+</script>
+
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount, onDestroy, untrack } from 'svelte';
   import { buildIframeSrcdoc } from '../../utils/iframe-srcdoc';
   import { htmlToPlainText } from '../../utils/sanitize.js';
   import { isTauri, isTauriDesktop } from '../../utils/platform.js';
@@ -48,36 +68,50 @@
   const recoveryAttempted = new Set<string>();
   let recoveryTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
-  // Cache measured heights by messageId to avoid flicker when revisiting
-  const heightCache = new Map<string, number>();
-
   // Detect app's dark mode by checking if body has 'light-mode' class
   function detectDarkMode(): boolean {
     if (typeof document === 'undefined') return false;
     return !document.body.classList.contains('light-mode');
   }
 
-  // Content signature determines when iframe is recreated. Content presence
-  // is deliberately NOT part of it: the iframe must survive the body-load
-  // clear->refill cycle so a cached revisit updates srcdoc in place instead
-  // of tearing down the iframe (which re-fetches every remote image).
-  // - messageId: recreate for new messages
-  // - themeVersion: recreate on theme change
+  // Content signature determines when iframe is recreated. Neither the
+  // message nor content presence is part of it: one iframe lives across
+  // messages and across the body-load clear->refill cycle, and srcdoc is
+  // updated in place. Recreating it per message showed a spinner, then a
+  // blank frame, then the email at a default height that snapped.
+  // - themeVersion: recreate on theme change (and as the recovery of last resort)
   // - plainText: recreate to re-measure height for the new rendering mode
-  const contentSignature = $derived(`${messageId}:${themeVersion}:${plainText}`);
+  const contentSignature = $derived(`${themeVersion}:${plainText}`);
+
+  const heightKey = $derived(`${messageId}:${plainText ? 'text' : 'html'}`);
 
   // Build srcdoc — reactively updates when html, dark mode, or plain-text
   // mode changes. The runtime script is loaded from /email-iframe.js (parent
   // origin) and uses `*` as postMessage target; we validate event.source on
-  // receive.
-  const srcdoc = $derived.by(() => {
+  // receive. Each document gets a token the runtime echoes back.
+  const frameDoc = $derived.by(() => {
     const darkMode = mounted ? isDarkMode : detectDarkMode();
     const source = html || '';
-    if (plainText) {
-      return buildIframeSrcdoc(htmlToPlainText(source), darkMode, true);
-    }
-    return buildIframeSrcdoc(source, darkMode, false);
+    const token = `${++documentCounter}`;
+    const doc = plainText
+      ? buildIframeSrcdoc(htmlToPlainText(source), darkMode, true, token)
+      : buildIframeSrcdoc(source, darkMode, false, token);
+    return { doc, token, hasContent: source.length > 0 };
   });
+  const srcdoc = $derived(frameDoc.doc);
+
+  // The token of the document that has finished loading. The frame stays
+  // hidden (laid out, not unmounted) until the current document is ready, so
+  // the reader never shows the previous email under the new header, nor a
+  // blank frame mid-load.
+  let readyToken = $state('');
+  // The token of the document that last reported a height
+  let heightToken = '';
+  const revealed = $derived(frameDoc.hasContent && readyToken === frameDoc.token);
+
+  function markReady(token: string) {
+    if (token === frameDoc.token) readyToken = token;
+  }
 
   // Measure iframe content height directly via contentDocument.
   // Returns 0 if cross-origin restrictions prevent access.
@@ -92,12 +126,12 @@
       if (!doc) return 0;
       const box = doc.querySelector('.fe-email-viewport') || doc.querySelector('.fe-email-content');
       const boxHeight = box ? box.getBoundingClientRect().height : 0;
+      // Not the root element's scrollHeight, which is at least the frame's own
+      // height and so never lets the frame shrink (see email-iframe.js).
       return Math.max(
         Math.ceil(boxHeight),
         doc.body?.scrollHeight || 0,
         doc.body?.offsetHeight || 0,
-        doc.documentElement?.scrollHeight || 0,
-        doc.documentElement?.offsetHeight || 0,
       );
     } catch {
       return 0;
@@ -108,8 +142,8 @@
   function checkIframeRendered(): boolean {
     if (!iframeRef) return false;
 
-    // If we've received a real height update (not the default), content rendered
-    if (iframeHeight !== 600 && iframeHeight > 50) return true;
+    // The current document said it is ready or reported its height
+    if (readyToken === frameDoc.token || heightToken === frameDoc.token) return true;
 
     // Try to measure content directly
     return measureIframeHeight() > 10;
@@ -195,18 +229,22 @@
 
   // Effect to handle message changes
   $effect(() => {
-    // Track messageId for reactivity
-    const currentMsgId = messageId;
-
-    // Use cached height if available (revisiting a message), otherwise
-    // use a tall default to avoid visible clipping before measurement
-    iframeHeight = heightCache.get(currentMsgId) || 600;
+    // Revisiting a message reserves its measured height. A new one keeps
+    // the current height, clamped, so the reader does not collapse and
+    // regrow while the body loads.
+    const cached = heightCache.get(heightKey);
+    const current = untrack(() => iframeHeight);
+    iframeHeight = cached ?? Math.min(Math.max(current, 200), 800);
     stopHeightPolling();
+  });
 
-    // Schedule recovery check (will be cleared if messageId changes again)
-    if (mounted) {
-      scheduleRecoveryCheck();
-    }
+  // The recovery check runs from when a document with content is set, not
+  // from when the message changed: a cached body that lands a few hundred ms
+  // into the load used to get almost no time before the check tore it down.
+  $effect(() => {
+    if (!frameDoc.hasContent) return;
+    void frameDoc.token;
+    if (untrack(() => mounted)) scheduleRecoveryCheck();
   });
 
   // Handle postMessage events from iframe
@@ -239,8 +277,15 @@
     }
 
     // Process the message based on type
+    // A message from a document already replaced (the previous email) is
+    // stale: it must not reveal the frame or set the new email's height.
+    // Runtimes that predate tokens send none; those are taken as current.
+    const token = typeof data.payload?.token === 'string' ? data.payload.token : null;
+    if (token !== null && token !== '' && token !== frameDoc.token) return;
+
     switch (data.type) {
       case 'ready':
+        markReady(frameDoc.token);
         // Iframe has initialized - cancel recovery since it's working
         if (recoveryTimeoutId) {
           clearTimeout(recoveryTimeoutId);
@@ -251,10 +296,11 @@
       case 'height':
         if (typeof data.payload?.height === 'number' && data.payload.height > 0) {
           const newHeight = Math.max(data.payload.height, 50);
+          heightToken = frameDoc.token;
+          if (frameDoc.hasContent) rememberHeight(heightKey, newHeight);
           // Only update if height actually changed to avoid unnecessary re-renders
           if (newHeight !== iframeHeight) {
             iframeHeight = newHeight;
-            heightCache.set(messageId, newHeight);
             onHeightChange?.(iframeHeight);
 
             // Cancel recovery check - we got a height, content is rendering
@@ -379,9 +425,6 @@
     // Set initial dark mode state
     isDarkMode = detectDarkMode();
 
-    // Schedule initial recovery check
-    scheduleRecoveryCheck();
-
     // Observe body class changes to detect theme switches
     themeObserver = new MutationObserver(() => {
       const newDarkMode = detectDarkMode();
@@ -423,26 +466,33 @@
 </script>
 
 {#key contentSignature}
-  <div class="fe-email-iframe-container">
-    {#if html && html.length > 0}
-      <!-- On Tauri/WRY, sandboxed srcdoc iframes without allow-same-origin
-           cannot postMessage to the parent (WebKit limitation). We add
-           allow-same-origin on desktop — this is safe because the srcdoc CSP
-           blocks all network access (default-src 'none', no connect-src),
-           preventing data exfiltration even if email HTML contains scripts.
-           Tauri's isolation pattern + WRY provide the real security boundary. -->
-      <iframe
-        bind:this={iframeRef}
-        {srcdoc}
-        sandbox={isTauri ? 'allow-scripts allow-same-origin' : 'allow-scripts'}
-        title="Email content"
-        class="fe-email-iframe"
-        style="height: {iframeHeight}px;"
-        onload={attachIframeTouchListeners}
-      ></iframe>
-    {:else}
-      <!-- Show a minimal placeholder when no content yet -->
-      <div class="fe-email-loading" style="min-height: {iframeHeight}px;">
+  <div class="fe-email-iframe-container" style="height: {iframeHeight}px;">
+    <!-- On Tauri/WRY, sandboxed srcdoc iframes without allow-same-origin
+         cannot postMessage to the parent (WebKit limitation). We add
+         allow-same-origin on desktop — this is safe because the srcdoc CSP
+         blocks all network access (default-src 'none', no connect-src),
+         preventing data exfiltration even if email HTML contains scripts.
+         Tauri's isolation pattern + WRY provide the real security boundary.
+
+         Always mounted; hidden until the current document is ready. The
+         load event reveals it too, for engines where the runtime's
+         postMessage does not arrive. -->
+    <iframe
+      bind:this={iframeRef}
+      {srcdoc}
+      sandbox={isTauri ? 'allow-scripts allow-same-origin' : 'allow-scripts'}
+      title="Email content"
+      class="fe-email-iframe"
+      class:fe-email-iframe-hidden={!revealed}
+      aria-hidden={!revealed}
+      style="height: {iframeHeight}px; color-scheme: {isDarkMode ? 'dark' : 'light'};"
+      onload={() => {
+        attachIframeTouchListeners();
+        markReady(frameDoc.token);
+      }}
+    ></iframe>
+    {#if !revealed}
+      <div class="fe-email-loading" aria-hidden="true">
         <div class="fe-email-loading-indicator"></div>
       </div>
     {/if}
@@ -478,9 +528,15 @@
 
 <style>
   .fe-email-iframe-container {
+    position: relative;
     width: 100%;
     min-height: 100px;
     flex-shrink: 0;
+  }
+
+  /* Hidden but laid out, so the runtime can measure while it loads */
+  .fe-email-iframe-hidden {
+    visibility: hidden;
   }
 
   .fe-email-iframe {
@@ -492,10 +548,24 @@
   }
 
   .fe-email-loading {
+    position: absolute;
+    inset: 0;
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     justify-content: center;
+    padding-top: 48px;
     background: transparent;
+    pointer-events: none;
+    /* Most bodies come from the cache in well under this; the spinner only
+       shows for a load slow enough to be worth showing. */
+    opacity: 0;
+    animation: fe-email-loading-in 0.15s ease-out 0.25s forwards;
+  }
+
+  @keyframes fe-email-loading-in {
+    to {
+      opacity: 1;
+    }
   }
 
   .fe-email-loading-indicator {

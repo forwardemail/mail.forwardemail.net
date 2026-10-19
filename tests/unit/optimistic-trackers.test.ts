@@ -45,11 +45,107 @@ describe('createPendingDeleteTracker', () => {
     expect(t.filter([{ id: 'a' }])).toEqual([{ id: 'a' }]);
   });
 
-  it('confirm() drops ids the server no longer reports (processed), keeps the rest', () => {
+  it('hides a moved row only in the folder it left', () => {
     const t = createPendingDeleteTracker();
-    t.add(['a', 'b']);
-    t.confirm(new Set(['a'])); // server still shows 'a' -> keep; 'b' gone -> processed -> drop
+    t.add(['a'], { sourceFolder: 'INBOX' });
+    // The stale copy in INBOX (server indexer lag) stays hidden
+    expect(
+      t.filter([
+        { id: 'a', folder: 'INBOX' },
+        { id: 'b', folder: 'INBOX' },
+      ]),
+    ).toEqual([{ id: 'b', folder: 'INBOX' }]);
+    // Case differences in the folder path do not matter
+    expect(t.filter([{ id: 'a', folder: 'inbox' }])).toEqual([]);
+    // The copy in the folder it moved to shows
+    expect(t.filter([{ id: 'a', folder: 'Archive' }])).toEqual([{ id: 'a', folder: 'Archive' }]);
+  });
+
+  it('uses the list folder for rows that do not name one', () => {
+    const t = createPendingDeleteTracker();
+    t.add(['a'], { sourceFolder: 'INBOX' });
+    expect(t.filter([{ id: 'a' }], 'INBOX')).toEqual([]);
+    expect(t.filter([{ id: 'a' }], 'Archive')).toEqual([{ id: 'a' }]);
+  });
+
+  it('hides a deleted row (no source folder) everywhere', () => {
+    const t = createPendingDeleteTracker();
+    t.add(['a']);
+    expect(t.filter([{ id: 'a', folder: 'Trash' }])).toEqual([]);
+  });
+
+  it('is not dropped because a list lacks the id', () => {
+    // A page 2 load, a filtered query or another folder all lack the id while
+    // the server still lists it in the source folder. Only time ends an entry.
+    const clock = makeClock(0);
+    const t = createPendingDeleteTracker({ now: clock.now, ttl: 10_000, settleGrace: 1000 });
+    t.add(['a'], { sourceFolder: 'INBOX' });
+    t.filter([{ id: 'other', folder: 'INBOX' }], 'INBOX');
     expect(t.getIds()).toEqual(['a']);
+  });
+
+  it('expires a settled entry after the grace window, counted from settle', () => {
+    const clock = makeClock(0);
+    const t = createPendingDeleteTracker({ now: clock.now, ttl: 10_000, settleGrace: 1000 });
+    t.add(['a'], { sourceFolder: 'INBOX' });
+    clock.advance(5000); // a slow request: the grace starts when the server answers
+    t.settle(['a']);
+    clock.advance(1000);
+    expect(t.getIds()).toEqual(['a']);
+    clock.advance(1);
+    expect(t.getIds()).toEqual([]);
+  });
+
+  it('keeps an unsettled (queued) entry for the full TTL', () => {
+    const clock = makeClock(0);
+    const t = createPendingDeleteTracker({ now: clock.now, ttl: 10_000, settleGrace: 1000 });
+    t.add(['a'], { sourceFolder: 'INBOX' });
+    clock.advance(5000);
+    expect(t.getIds()).toEqual(['a']);
+    clock.advance(5001);
+    expect(t.getIds()).toEqual([]);
+  });
+
+  it('shows a moved row in the target folder until the server lists it there', () => {
+    const t = createPendingDeleteTracker();
+    const row = { id: 'a', folder: 'Archive', dateMs: 200 };
+    t.add(['a'], { sourceFolder: 'INBOX', targetFolder: 'Archive', row });
+    const archive = [
+      { id: 'x', folder: 'Archive', dateMs: 300 },
+      { id: 'y', folder: 'Archive', dateMs: 100 },
+    ];
+    // In date order, newest first
+    expect(t.withMovedIn(archive, 'Archive').map((m) => m.id)).toEqual(['x', 'a', 'y']);
+    // Once the server reports it, the server's copy is used
+    const indexed = [{ id: 'a', folder: 'Archive', dateMs: 200, uid: 9 }];
+    expect(t.withMovedIn(indexed, 'Archive')).toBe(indexed);
+    // Not added to other folders
+    expect(t.withMovedIn([{ id: 'z', folder: 'INBOX', dateMs: 150 }], 'INBOX')).toHaveLength(1);
+  });
+
+  it('leaves a moved row out of a page it is older than', () => {
+    const t = createPendingDeleteTracker();
+    t.add(['a'], {
+      sourceFolder: 'INBOX',
+      targetFolder: 'Archive',
+      row: { id: 'a', folder: 'Archive', dateMs: 50 },
+    });
+    const page1 = [
+      { id: 'x', folder: 'Archive', dateMs: 300 },
+      { id: 'y', folder: 'Archive', dateMs: 100 },
+    ];
+    expect(t.withMovedIn(page1, 'Archive')).toEqual(page1);
+    // An empty folder shows it
+    expect(t.withMovedIn([], 'Archive').map((m) => m.id)).toEqual(['a']);
+  });
+
+  it('a later move of the same message replaces its entry', () => {
+    const t = createPendingDeleteTracker();
+    t.add(['a'], { sourceFolder: 'INBOX' });
+    // Moved back out of Archive: now the Archive copy is the stale one
+    t.add(['a'], { sourceFolder: 'Archive' });
+    expect(t.filter([{ id: 'a', folder: 'INBOX' }])).toEqual([{ id: 'a', folder: 'INBOX' }]);
+    expect(t.filter([{ id: 'a', folder: 'Archive' }])).toEqual([]);
   });
 
   it('clear() removes everything', () => {
@@ -117,6 +213,25 @@ describe('createPendingFlagTracker', () => {
     clock.advance(1001);
     // expired -> not applied
     expect(t.apply([{ id: 'm1', is_unread: true }])).toEqual([{ id: 'm1', is_unread: true }]);
+  });
+
+  it('keeps a label change and a read change on the same message together', () => {
+    const t = createPendingFlagTracker();
+    t.add('m1', { labels: ['work'] });
+    t.add('m1', { is_unread: false });
+    const [out] = t.apply([{ id: 'm1', is_unread: true, labels: [] }]);
+    expect(out).toMatchObject({ is_unread: false, labels: ['work'] });
+  });
+
+  it('confirm() keeps a merged change until the server reports every field', () => {
+    const t = createPendingFlagTracker();
+    t.add('m1', { labels: ['work'], is_unread: false });
+    // Read state caught up, labels not yet
+    t.confirm([{ id: 'm1', is_unread: false, labels: [] }]);
+    expect(t.getIds()).toEqual(['m1']);
+    // Labels compare as a set, case-insensitively, as the backend lowercases
+    t.confirm([{ id: 'm1', is_unread: false, labels: ['Work'] }]);
+    expect(t.getIds()).toEqual([]);
   });
 
   it('confirm() drops a mutation once the server matches the optimistic is_unread', () => {
