@@ -111,6 +111,7 @@
     settingsActions,
   } from '../stores/settingsStore';
   import { mailboxStore } from '../stores/mailboxStore';
+  import { detectJunkFolder } from '../utils/junk-folder';
   const { folders: foldersStore } = mailboxStore.state;
   const { loadFolders } = mailboxStore.actions;
   import { validateLabelName } from '../utils/label-validation.ts';
@@ -211,6 +212,9 @@
   let draftsFolder = $state('');
   let trashFolder = $state('');
   let junkFolder = $state('');
+  // The folder Auto-detect resolves to, so the picker and copy can name it.
+  let detectedJunkFolder = $state<string | null>(null);
+  const junkFolderLabel = $derived(junkFolder || detectedJunkFolder || 'Junk');
   let availableFolders = $state<string[]>([]);
   let deletableFolders = $state<Array<{ path: string; label: string; count: number | null }>>([]);
   let folderDeleting = $state('');
@@ -680,6 +684,7 @@
           totalCount?: number;
         }>;
         availableFolders = buildAvailableFolders(folderList);
+        detectedJunkFolder = detectJunkFolder(folderList);
         // Custom (deletable) folders: everything the store knows about that
         // isn't a protected system/special folder. Gives mobile a way to
         // delete folders, which is otherwise right-click-only (desktop).
@@ -1257,7 +1262,9 @@
     try {
       setSettingValue('spam_report_delete', spamReportDelete, { account: getAccountId() });
       toasts?.show?.(
-        spamReportDelete ? 'Reported spam will be deleted' : 'Reported spam will be moved to Junk',
+        spamReportDelete
+          ? 'Reported spam will be deleted'
+          : `Reported spam will be moved to ${junkFolderLabel}`,
         'success',
       );
     } catch (err) {
@@ -2643,12 +2650,12 @@
             <p class="text-sm text-muted-foreground">
               Choosing <strong>Report spam</strong> on a message forwards the original email
               (including full headers) as an attachment to this address, then moves the message to
-              your Junk folder. Reports go to {DEFAULT_SPAM_REPORT_ADDRESS} by default, which helps Forward
-              Email improve spam detection for everyone. No copy is kept in your Sent folder.
+              your {junkFolderLabel} folder. Reports go to {DEFAULT_SPAM_REPORT_ADDRESS} by default, which
+              helps Forward Email improve spam detection for everyone. No copy is kept in your Sent folder.
             </p>
             <label class="flex items-center gap-3">
               <Checkbox bind:checked={spamReportDelete} onCheckedChange={toggleSpamReportDelete} />
-              <span>Delete reported messages instead of moving them to Junk</span>
+              <span>Delete reported messages instead of moving them to {junkFolderLabel}</span>
             </label>
           </Card.Content>
         </Card.Root>
@@ -2757,10 +2764,10 @@
                 onValueChange={() => saveJunkFolder()}
               >
                 <Select.Trigger class="w-full">
-                  {junkFolder || 'Auto-detect (Junk)'}
+                  {junkFolder || `Auto-detect (${detectedJunkFolder || 'Junk'})`}
                 </Select.Trigger>
                 <Select.Content>
-                  <Select.Item value="">Auto-detect (Junk)</Select.Item>
+                  <Select.Item value="">Auto-detect ({detectedJunkFolder || 'Junk'})</Select.Item>
                   {#each availableFolders as folder}
                     <Select.Item value={folder}>{folder}</Select.Item>
                   {/each}

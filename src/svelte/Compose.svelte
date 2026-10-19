@@ -4855,8 +4855,9 @@
     margin: 0;
   }
 
+  /* --primary is the button blue, too dark to read on the dark theme. */
   :global(.rich-editor .ProseMirror a) {
-    color: var(--primary);
+    color: var(--fg-link);
     text-decoration: underline;
     cursor: pointer;
   }

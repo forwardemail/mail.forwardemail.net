@@ -209,7 +209,6 @@
   import Filter from '@lucide/svelte/icons/filter';
   import MailboxIcon from '@lucide/svelte/icons/mailbox';
   import ShieldAlert from '@lucide/svelte/icons/shield-alert';
-  import AlertOctagon from '@lucide/svelte/icons/alert-octagon';
   import Lock from '@lucide/svelte/icons/lock';
   import Sun from '@lucide/svelte/icons/sun';
   import Moon from '@lucide/svelte/icons/moon';
@@ -3978,7 +3977,9 @@
       deleted: Trash2,
       archive: Archive,
       all: Archive,
-      junk: AlertOctagon,
+      // Same icon for both: they are the same kind of folder, and Forward
+      // Email accounts start with one of each.
+      junk: ShieldAlert,
       spam: ShieldAlert,
       folder: FolderIcon,
     };

@@ -256,7 +256,7 @@
     outline: none;
   }
   .signature-editor :global(.ProseMirror a) {
-    color: hsl(var(--primary));
+    color: var(--fg-link);
     text-decoration: underline;
   }
 </style>

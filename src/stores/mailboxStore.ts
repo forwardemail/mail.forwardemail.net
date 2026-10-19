@@ -31,6 +31,7 @@ import { getEffectiveSettingValue } from './settingsStore';
 import { sortMessages, normalizeSortDate, getMessageUidValue } from '../utils/message-sort.ts';
 import { decodeMimeHeader } from '../utils/mime-utils.js';
 import { validateFolderName } from '../utils/folder-validation.ts';
+import { detectJunkFolder } from '../utils/junk-folder';
 import { queueMutation, getQueuedMessageIds, mutationQueueCount } from '../utils/mutation-queue';
 import { flagChangeBody } from '../utils/message-changes';
 import { hasServerLabels } from '../workers/sync-pure';
@@ -4077,21 +4078,7 @@ const createMailboxStore = () => {
       return customFolder;
     }
 
-    const list = get(folders) || [];
-
-    // Strongest signal: IMAP specialUse flag
-    const specialUseMatch = list.find((f) => f.specialUse === '\\Junk');
-    if (specialUseMatch) return specialUseMatch.path;
-
-    // Fall back to name-based detection
-    const match = list.find(
-      (f) =>
-        (f.path || '').toUpperCase() === 'SPAM' ||
-        (f.name || '').toUpperCase() === 'SPAM' ||
-        (f.path || '').toUpperCase() === 'JUNK' ||
-        (f.name || '').toUpperCase() === 'JUNK',
-    );
-    return match?.path || null;
+    return detectJunkFolder(get(folders) || []);
   };
 
   /**
