@@ -6,6 +6,16 @@ release notes are taken from here. To change what a commit says, add a
 `Release-note: <text>` line to its message (or `Release-note: none` to leave
 it out).
 
+## 0.15.3 (2026-10-19)
+
+### Fixes
+
+- Archiving, deleting and moving mail no longer makes messages
+- Long message lists stay responsive when starring,
+- Reported spam now goes to your Spam folder when you
+- Links in the compose window are easier to read in dark mode
+- Fixed emails sometimes opening blank or cut off at the top
+
 ## 0.15.2 (2026-10-16)
 
 ### New

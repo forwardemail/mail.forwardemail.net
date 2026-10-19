@@ -36,6 +36,18 @@
   </screenshots>
   <!-- scripts/sync-version.cjs prepends a release entry on every version bump. -->
   <releases>
+    <release version="0.15.3" date="2026-10-19">
+      <description>
+        <p>Fixes</p>
+        <ul>
+          <li>Archiving, deleting and moving mail no longer makes messages</li>
+          <li>Long message lists stay responsive when starring,</li>
+          <li>Reported spam now goes to your Spam folder when you</li>
+          <li>Links in the compose window are easier to read in dark mode</li>
+          <li>Fixed emails sometimes opening blank or cut off at the top</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.15.2" date="2026-10-16">
       <description>
         <p>New</p>
