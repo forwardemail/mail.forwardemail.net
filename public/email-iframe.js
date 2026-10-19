@@ -39,7 +39,10 @@
   }
 
   var STYLE_PROPS_TO_STRIP = ['color', 'background-color', 'background'];
-  var HEIGHT_REPORT_DELAYS = [0, 50, 100, 200, 500, 1000];
+  // The later passes catch a document that measured before it had a layout
+  // (it reports the 50px floor) and whose size never changed afterwards, so
+  // nothing else would make it measure again.
+  var HEIGHT_REPORT_DELAYS = [0, 50, 100, 200, 500, 1000, 2000, 4000];
 
   function stripElementStyles(el) {
     if (!el || !el.style) return;

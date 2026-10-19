@@ -74,25 +74,32 @@
     return !document.body.classList.contains('light-mode');
   }
 
-  // Content signature determines when iframe is recreated. Neither the
-  // message nor content presence is part of it: one iframe lives across
-  // messages and across the body-load clear->refill cycle, and srcdoc is
-  // updated in place. Recreating it per message showed a spinner, then a
-  // blank frame, then the email at a default height that snapped.
-  // - themeVersion: recreate on theme change (and as the recovery of last resort)
+  // Content signature determines when iframe is recreated. Content presence
+  // is deliberately NOT part of it: the iframe must survive the body-load
+  // clear->refill cycle so a cached revisit updates srcdoc in place instead
+  // of tearing down the iframe (which re-fetches every remote image).
+  // - messageId: a new frame per message. Swapping one message's document
+  //   into the frame of another could leave the frame running the earlier
+  //   document while the reader waited on the new one.
+  // - themeVersion: recreate on theme change
   // - plainText: recreate to re-measure height for the new rendering mode
-  const contentSignature = $derived(`${themeVersion}:${plainText}`);
+  const contentSignature = $derived(`${messageId}:${themeVersion}:${plainText}`);
 
   const heightKey = $derived(`${messageId}:${plainText ? 'text' : 'html'}`);
 
   // Build srcdoc — reactively updates when html, dark mode, or plain-text
   // mode changes. The runtime script is loaded from /email-iframe.js (parent
   // origin) and uses `*` as postMessage target; we validate event.source on
-  // receive. Each document gets a token the runtime echoes back.
+  // receive. Each document gets a token the runtime echoes back, so a late
+  // height from a document already replaced is not applied. A document that
+  // would come out the same keeps its token, so the frame does not reload.
+  let lastDoc: { key: string; token: string } | null = null;
   const frameDoc = $derived.by(() => {
     const darkMode = mounted ? isDarkMode : detectDarkMode();
     const source = html || '';
-    const token = `${++documentCounter}`;
+    const key = `${plainText ? 'text' : 'html'}:${darkMode ? 'dark' : 'light'}:${source}`;
+    const token = lastDoc?.key === key ? lastDoc.token : `${++documentCounter}`;
+    lastDoc = { key, token };
     const doc = plainText
       ? buildIframeSrcdoc(htmlToPlainText(source), darkMode, true, token)
       : buildIframeSrcdoc(source, darkMode, false, token);
@@ -100,18 +107,9 @@
   });
   const srcdoc = $derived(frameDoc.doc);
 
-  // The token of the document that has finished loading. The frame stays
-  // hidden (laid out, not unmounted) until the current document is ready, so
-  // the reader never shows the previous email under the new header, nor a
-  // blank frame mid-load.
-  let readyToken = $state('');
-  // The token of the document that last reported a height
+  // The token of the document that last said it is ready or reported a height
+  let readyToken = '';
   let heightToken = '';
-  const revealed = $derived(frameDoc.hasContent && readyToken === frameDoc.token);
-
-  function markReady(token: string) {
-    if (token === frameDoc.token) readyToken = token;
-  }
 
   // Measure iframe content height directly via contentDocument.
   // Returns 0 if cross-origin restrictions prevent access.
@@ -285,7 +283,7 @@
 
     switch (data.type) {
       case 'ready':
-        markReady(frameDoc.token);
+        readyToken = frameDoc.token;
         // Iframe has initialized - cancel recovery since it's working
         if (recoveryTimeoutId) {
           clearTimeout(recoveryTimeoutId);
@@ -472,26 +470,18 @@
          allow-same-origin on desktop — this is safe because the srcdoc CSP
          blocks all network access (default-src 'none', no connect-src),
          preventing data exfiltration even if email HTML contains scripts.
-         Tauri's isolation pattern + WRY provide the real security boundary.
-
-         Always mounted; hidden until the current document is ready. The
-         load event reveals it too, for engines where the runtime's
-         postMessage does not arrive. -->
-    <iframe
-      bind:this={iframeRef}
-      {srcdoc}
-      sandbox={isTauri ? 'allow-scripts allow-same-origin' : 'allow-scripts'}
-      title="Email content"
-      class="fe-email-iframe"
-      class:fe-email-iframe-hidden={!revealed}
-      aria-hidden={!revealed}
-      style="height: {iframeHeight}px; color-scheme: {isDarkMode ? 'dark' : 'light'};"
-      onload={() => {
-        attachIframeTouchListeners();
-        markReady(frameDoc.token);
-      }}
-    ></iframe>
-    {#if !revealed}
+         Tauri's isolation pattern + WRY provide the real security boundary. -->
+    {#if frameDoc.hasContent}
+      <iframe
+        bind:this={iframeRef}
+        {srcdoc}
+        sandbox={isTauri ? 'allow-scripts allow-same-origin' : 'allow-scripts'}
+        title="Email content"
+        class="fe-email-iframe"
+        style="height: {iframeHeight}px; color-scheme: {isDarkMode ? 'dark' : 'light'};"
+        onload={attachIframeTouchListeners}
+      ></iframe>
+    {:else}
       <div class="fe-email-loading" aria-hidden="true">
         <div class="fe-email-loading-indicator"></div>
       </div>
@@ -532,11 +522,6 @@
     width: 100%;
     min-height: 100px;
     flex-shrink: 0;
-  }
-
-  /* Hidden but laid out, so the runtime can measure while it loads */
-  .fe-email-iframe-hidden {
-    visibility: hidden;
   }
 
   .fe-email-iframe {
