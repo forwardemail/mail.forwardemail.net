@@ -779,6 +779,14 @@ class QueryBuilder {
     return this._query('summaries', { fields });
   }
 
+  /**
+   * Not a Dexie method: matching rows, decrypted, with only these fields.
+   * @param {string[]} fields
+   */
+  async pickFields(fields = []) {
+    return this._query('fields', { fields });
+  }
+
   async delete() {
     const captured = captureWrite(this._table, 'query', {
       index: this._index,
@@ -866,6 +874,12 @@ class TableProxy {
   // Searchable text only, for body records (see bodyTexts in db-engine).
   bodyTexts(keys) {
     return send('bodyTexts', this._table, { keys });
+  }
+
+  // One page of an index match in a sort order with no index (subject,
+  // sender), sorted in the worker (see sortedPage in db-engine).
+  sortedPage(index, value, { order, offset = 0, limit = 50 } = {}) {
+    return send('sortedPage', this._table, { index, value, order, offset, limit });
   }
 
   bulkPut(records) {

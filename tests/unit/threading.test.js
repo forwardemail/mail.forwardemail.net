@@ -194,3 +194,19 @@ describe('hasAnsweredFlag', () => {
     expect(hasAnsweredFlag(null)).toBe(false);
   });
 });
+
+describe('normalizeSubject', () => {
+  it('strips stacked reply and forward prefixes in any case, and leading tags', () => {
+    expect(normalizeSubject('Re: RE: fwd: Plans')).toBe('Plans');
+    expect(normalizeSubject('[External] AW: Sv: Quarterly   report')).toBe('Quarterly report');
+    expect(normalizeSubject('Fwd: [SPAM] Re: Hello')).toBe('Hello');
+    expect(normalizeSubject('Antw:Meeting')).toBe('Meeting');
+  });
+
+  it('leaves a subject without prefixes alone and gives the same answer twice', () => {
+    expect(normalizeSubject('Release notes')).toBe('Release notes');
+    expect(normalizeSubject('Release notes')).toBe('Release notes');
+    expect(normalizeSubject('Reply all')).toBe('Reply all');
+    expect(normalizeSubject('')).toBe('');
+  });
+});

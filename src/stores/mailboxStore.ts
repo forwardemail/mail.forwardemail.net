@@ -455,6 +455,33 @@ const createMailboxStore = () => {
     return parts.join(' ').trim();
   };
 
+  const REPLY_INDEX_FIELDS = [
+    'id',
+    'account',
+    'folder',
+    'uid',
+    'subject',
+    'normalizedSubject',
+    'from',
+    'to',
+    'cc',
+    'date',
+    'dateMs',
+    'snippet',
+    'flags',
+    'labels',
+    'is_unread',
+    'is_starred',
+    'is_answered',
+    'has_attachment',
+    'header_message_id',
+    'message_id',
+    'in_reply_to',
+    'inReplyTo',
+    'references',
+    'thread_id',
+  ];
+
   const refreshReplyTargets = async ({ account: overrideAccount, force = false } = {}) => {
     const account = overrideAccount || Local.get('email') || 'default';
     const sentFolder = getSentFolderPath();
@@ -468,10 +495,16 @@ const createMailboxStore = () => {
 
     try {
       const since = now - REPLY_INDEX_LOOKBACK_DAYS * 24 * 60 * 60 * 1000;
-      let sentMessages = await db.messages
+      // Only the fields the index and a reply's row in a thread use. A full
+      // read cloned 30 days of Sent rows, with whatever large fields they
+      // carry, onto the main thread on every refresh.
+      const sentRange = db.messages
         .where('[account+folder+date]')
-        .between([account, sentFolder, since], [account, sentFolder, Dexie.maxKey], true, true)
-        .toArray();
+        .between([account, sentFolder, since], [account, sentFolder, Dexie.maxKey], true, true);
+      let sentMessages =
+        typeof sentRange.pickFields === 'function'
+          ? await sentRange.pickFields(REPLY_INDEX_FIELDS)
+          : await sentRange.toArray();
 
       // If no sent messages in IDB, bootstrap from API so the reply index
       // works even if the user has never opened the Sent folder.
@@ -1355,11 +1388,23 @@ const createMailboxStore = () => {
             .where('[account+folder+date]')
             .between([account, folder, Dexie.minKey], [account, folder, Dexie.maxKey], true, true);
           const ordered = currentSort === 'newest' ? range.reverse() : range;
-          pageSlice = await withDeadline(
+          pageSlice = (await withDeadline(
             ordered.offset(startIdx).limit(limit).toArray(),
             CACHE_READ_DEADLINE_MS,
             'message cache read',
-          );
+          )) as typeof pageSlice;
+        } else if (typeof db.messages.sortedPage === 'function') {
+          // No index for this order: the db worker sorts the folder and sends
+          // only the page, instead of the whole folder to sort here.
+          pageSlice = (await withDeadline(
+            db.messages.sortedPage('[account+folder]', [account, folder], {
+              order: currentSort,
+              offset: startIdx,
+              limit,
+            }),
+            CACHE_READ_DEADLINE_MS,
+            'message cache read',
+          )) as typeof pageSlice;
         } else {
           const cached = await withDeadline(
             db.messages.where('[account+folder]').equals([account, folder]).toArray(),
@@ -2173,8 +2218,14 @@ const createMailboxStore = () => {
     const key = `${account}\u0000${folder}`;
     const inFlight = folderRowReads.get(key);
     if (inFlight) return inFlight;
+    // Only what the UID match reads: the rows themselves are read again by
+    // id afterwards. A full read cloned the whole folder to the main thread
+    // for each realtime event naming a UID that is not on screen.
+    const query = db.messages.where('[account+folder]').equals([account, folder]);
     const rows = Promise.resolve(
-      db.messages.where('[account+folder]').equals([account, folder]).toArray(),
+      typeof query.pickFields === 'function'
+        ? query.pickFields(['id', 'folder', 'uid', 'Uid'])
+        : query.toArray(),
     )
       .then((list) => (list || []) as RealtimeRow[])
       .finally(() => folderRowReads.delete(key));

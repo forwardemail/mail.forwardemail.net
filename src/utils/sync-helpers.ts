@@ -436,6 +436,7 @@ export interface PendingFlagChange {
   is_starred?: boolean;
   is_answered?: boolean;
   flags?: string[];
+  labels?: string[];
 }
 
 const withFlag = (flags: string[], flag: string, on: boolean): string[] => {
@@ -474,6 +475,9 @@ export function applyPendingFlagChange(
     if (flags) flags = withFlag(flags, '\\Answered', pending.is_answered);
   }
   if (flags) next.flags = flags;
+  // A label change still on its way: the server's copy predates it, and
+  // writing that one let a sync put the old labels back in the cache.
+  if (Array.isArray(pending.labels)) next.labels = [...pending.labels];
   return next;
 }
 

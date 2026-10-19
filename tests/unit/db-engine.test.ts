@@ -52,6 +52,51 @@ describe('db-engine executeOperation', () => {
     expect(await run('count', 'messages')).toBe(3);
   });
 
+  it('sortedPage sorts a folder in the engine and returns only the page', async () => {
+    await run('bulkPut', 'messages', {
+      records: [
+        { account: 'a', id: 'm1', folder: 'INBOX', subject: 'Charlie', dateMs: 3 },
+        { account: 'a', id: 'm2', folder: 'INBOX', subject: 'alpha', dateMs: 1 },
+        { account: 'a', id: 'm3', folder: 'INBOX', subject: 'Bravo', dateMs: 2 },
+        { account: 'a', id: 'm4', folder: 'INBOX', subject: 'Alpha', dateMs: 5 },
+        { account: 'a', id: 'm5', folder: 'Sent', subject: 'Aardvark', dateMs: 4 },
+      ],
+    });
+    const page = (await run('sortedPage', 'messages', {
+      index: '[account+folder]',
+      value: ['a', 'INBOX'],
+      order: 'subject',
+      offset: 0,
+      limit: 3,
+    })) as Row[];
+    // Case-insensitive by subject, newest first on a tie; other folders excluded
+    expect(page.map((m) => m.id)).toEqual(['m4', 'm2', 'm3']);
+    const next = (await run('sortedPage', 'messages', {
+      index: '[account+folder]',
+      value: ['a', 'INBOX'],
+      order: 'subject',
+      offset: 3,
+      limit: 3,
+    })) as Row[];
+    expect(next.map((m) => m.id)).toEqual(['m1']);
+  });
+
+  it('query in fields mode returns only the requested fields of the matches', async () => {
+    await run('bulkPut', 'messages', {
+      records: [
+        { account: 'a', id: 's1', folder: 'Sent', date: 10, in_reply_to: '<x>', raw: 'big' },
+        { account: 'a', id: 's2', folder: 'Sent', date: 1, in_reply_to: '<y>', raw: 'big' },
+      ],
+    });
+    const rows = (await run('query', 'messages', {
+      index: '[account+folder+date]',
+      where: { op: 'between', lower: ['a', 'Sent', 5], upper: ['a', 'Sent', Infinity] },
+      queryMode: 'fields',
+      fields: ['id', 'in_reply_to'],
+    })) as Row[];
+    expect(rows).toEqual([{ id: 's1', in_reply_to: '<x>' }]);
+  });
+
   it('queryEquals resolves the [account+folder] compound index', async () => {
     await run('bulkPut', 'messages', {
       records: [

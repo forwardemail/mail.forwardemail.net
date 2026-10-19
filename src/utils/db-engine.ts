@@ -257,6 +257,10 @@ export interface DbOperationPayload {
   fields?: string[];
   where?: WhereSpec;
   queryMode?: QueryMode;
+  // sortedPage
+  order?: string;
+  offset?: number;
+  limit?: number;
   includeLocalOnly?: boolean;
 }
 
@@ -279,7 +283,8 @@ export type QueryMode =
   | 'delete'
   | 'modify'
   | 'primaryKeys'
-  | 'summaries';
+  | 'summaries'
+  | 'fields';
 
 export interface DbOperation {
   action: string;
@@ -481,6 +486,68 @@ async function bodyTexts(
     }
   }
   return out;
+}
+
+/**
+ * One page of an index match, sorted here by the list's sort order. A
+ * subject or sender sort has no index, so the folder is read and sorted in
+ * this worker and only the page crosses to the main thread. Sending the
+ * whole folder to sort there meant cloning and sorting thousands of rows on
+ * the main thread on every list load.
+ */
+async function sortedPage(
+  table: string,
+  index: string,
+  value: unknown,
+  order: string,
+  offset = 0,
+  limit = 50,
+): Promise<unknown[]> {
+  await ensureReady();
+  const stored = await tbl(table)
+    .where(index)
+    .equals(value as IndexableType)
+    .toArray();
+  const rows = (await openRecords(table, stored)) as Array<Record<string, unknown>>;
+  rows.sort(rowComparator(order));
+  return rows.slice(Math.max(0, offset), Math.max(0, offset) + Math.max(0, limit));
+}
+
+/**
+ * The same orders as sortMessages in message-sort.ts. That module cannot be
+ * loaded here: it reaches localStorage through date.ts and i18n. The list
+ * re-sorts the page with sortMessages anyway, so this only has to agree on
+ * which rows make up a page.
+ */
+function rowComparator(order: string) {
+  const time = (row: Record<string, unknown>) => {
+    const value = row.dateMs ?? row.date;
+    const ms = typeof value === 'number' ? value : Date.parse(String(value ?? ''));
+    return Number.isFinite(ms) ? ms : 0;
+  };
+  const text = (row: Record<string, unknown>, ...fields: string[]) => {
+    for (const field of fields) {
+      const value = row[field];
+      if (typeof value === 'string' && value) return value;
+    }
+    return '';
+  };
+  const newestFirst = (a: Record<string, unknown>, b: Record<string, unknown>) => time(b) - time(a);
+  const byText =
+    (...fields: string[]) =>
+    (a: Record<string, unknown>, b: Record<string, unknown>) =>
+      text(a, ...fields).localeCompare(text(b, ...fields), undefined, { sensitivity: 'base' }) ||
+      newestFirst(a, b);
+  switch (order) {
+    case 'oldest':
+      return (a: Record<string, unknown>, b: Record<string, unknown>) => time(a) - time(b);
+    case 'subject':
+      return byText('normalizedSubject', 'subject');
+    case 'sender':
+      return byText('from', 'From');
+    default:
+      return newestFirst;
+  }
 }
 
 async function tablePut(table: string, record: unknown): Promise<unknown> {
@@ -753,6 +820,21 @@ async function queryWhere(
         for (const field of fields) summary[field] = row[field];
         summary.approxBytes = approxStoredBytes(row);
         return summary;
+      });
+    }
+    case 'fields': {
+      // Decrypted rows cut down to the requested fields, so a scan that needs
+      // a few fields of many rows (the reply index) does not clone whole
+      // records to the main thread. Unlike summaries, these are opened.
+      if (options.offset) collection = collection.offset(options.offset);
+      if (options.limit) collection = collection.limit(options.limit);
+      const opened = (await openRecords(table, await collection.toArray())) as Array<
+        Record<string, unknown>
+      >;
+      return opened.map((row) => {
+        const picked: Record<string, unknown> = {};
+        for (const field of fields) if (row[field] !== undefined) picked[field] = row[field];
+        return picked;
       });
     }
     case 'toArray':
@@ -1474,6 +1556,15 @@ export async function executeOperation(op: DbOperation): Promise<unknown> {
       return tableBulkGet(table!, payload.keys!);
     case 'bodyTexts':
       return bodyTexts(table!, payload.keys || []);
+    case 'sortedPage':
+      return sortedPage(
+        table!,
+        payload.index!,
+        payload.value,
+        String(payload.order || 'newest'),
+        Number(payload.offset || 0),
+        Number(payload.limit || 50),
+      );
     case 'bulkPut':
       return tableBulkPut(table!, payload.records!);
     case 'bulkDelete':

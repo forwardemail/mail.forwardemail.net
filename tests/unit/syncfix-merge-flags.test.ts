@@ -85,3 +85,19 @@ describe('mergeServerRow', () => {
     expect(merged.subject).toBe('New');
   });
 });
+
+describe('pending label changes', () => {
+  it('keeps a pending label change over an older server copy', () => {
+    const existing = { ...cached, labels: ['work'] };
+    const server = { ...cached, labels: [] };
+    const { record, changed } = mergeFlagsAndMetadata(existing, server, { labels: ['work'] });
+    expect(record.labels).toEqual(['work']);
+    expect(changed).toBe(false);
+  });
+
+  it('takes the server labels when nothing is pending', () => {
+    const existing = { ...cached, labels: ['work'] };
+    const server = { ...cached, labels: ['home'] };
+    expect(mergeFlagsAndMetadata(existing, server, null).record.labels).toEqual(['home']);
+  });
+});

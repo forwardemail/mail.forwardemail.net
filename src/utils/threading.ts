@@ -69,59 +69,55 @@ export interface FlattenedMessage extends MessageLike {
  * Normalize a subject line for comparison
  * Removes Re:, Fwd:, etc. prefixes and extra whitespace
  */
+// Reply/forward prefixes, localized, matched case-insensitively.
+const SUBJECT_PREFIXES = [
+  'Re:',
+  'Fwd:',
+  'FW:',
+  'Forward:',
+  'AW:', // German
+  'SV:', // Swedish
+  'VS:', // Norwegian
+  'R:',
+  'RIF:', // Italian
+  'Enc:', // Spanish
+  'Antw:', // Dutch
+  'TR:', // Turkish
+  'Ref:', // Reference
+];
+// Compiled once. Building a RegExp per prefix per subject on every call was
+// the single largest cost of regrouping the conversation list: every star or
+// read toggle re-normalized every subject on screen.
+const SUBJECT_PREFIX_PATTERNS = SUBJECT_PREFIXES.map(
+  (prefix) => new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*`, 'i'),
+);
+const SUBJECT_BRACKET = /^\[[^\]]*\]\s*/;
+
+// Results by raw subject. Grouping runs on every list change and the same
+// subjects come back each time.
+const normalizedSubjects = new Map<string, string>();
+const NORMALIZED_SUBJECT_CACHE_MAX = 5000;
+
 export function normalizeSubject(subject: string | null | undefined): string {
   if (!subject || typeof subject !== 'string') return '';
 
-  let normalized = subject.trim();
+  const cached = normalizedSubjects.get(subject);
+  if (cached !== undefined) return cached;
 
-  // Remove common reply/forward prefixes (case insensitive, localized)
-  const prefixes = [
-    'Re:',
-    'RE:',
-    're:',
-    'Fwd:',
-    'FW:',
-    'Fw:',
-    'Forward:',
-    'FWD:',
-    'fwd:',
-    'AW:',
-    'Aw:',
-    'aw:', // German
-    'SV:',
-    'Sv:',
-    'sv:', // Swedish
-    'VS:',
-    'Vs:',
-    'vs:', // Norwegian
-    'R:',
-    'RIF:',
-    'Rif:', // Italian
-    'Enc:',
-    'ENC:', // Spanish
-    'Antw:',
-    'ANTW:', // Dutch
-    'TR:',
-    'Tr:',
-    'tr:', // Turkish
-    'Ref:',
-    'REF:',
-    'ref:', // Reference
-  ];
+  let normalized = subject.trim();
 
   let changed = true;
   while (changed) {
     changed = false;
     const before = normalized;
 
-    for (const prefix of prefixes) {
-      // Handle multiple prefixes like "Re: Re: Fwd:"
-      const regex = new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*`, 'i');
-      normalized = normalized.replace(regex, '');
+    // Handle multiple prefixes like "Re: Re: Fwd:"
+    for (const pattern of SUBJECT_PREFIX_PATTERNS) {
+      normalized = normalized.replace(pattern, '');
     }
 
     // Remove brackets like [External], [SPAM], etc.
-    normalized = normalized.replace(/^\[[^\]]*\]\s*/g, '');
+    normalized = normalized.replace(SUBJECT_BRACKET, '');
 
     // Trim whitespace
     normalized = normalized.trim();
@@ -134,6 +130,8 @@ export function normalizeSubject(subject: string | null | undefined): string {
   // Normalize whitespace
   normalized = normalized.replace(/\s+/g, ' ').trim();
 
+  if (normalizedSubjects.size >= NORMALIZED_SUBJECT_CACHE_MAX) normalizedSubjects.clear();
+  normalizedSubjects.set(subject, normalized);
   return normalized;
 }
 
