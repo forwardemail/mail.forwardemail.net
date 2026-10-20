@@ -403,3 +403,13 @@ input[type='range'] {
     bottom: calc(56px + env(safe-area-inset-bottom, 0px) + 0.75rem);
   }
 }
+
+/* On a phone the calendar and clock icons get squeezed into narrow date and
+ * time fields. Fields marked data-native-picker open the picker from a tap
+ * anywhere, so the icon is not needed there (see utils/native-picker.ts). */
+@media (max-width: 767.98px) {
+  input[type='date'][data-native-picker]::-webkit-calendar-picker-indicator,
+  input[type='time'][data-native-picker]::-webkit-calendar-picker-indicator {
+    display: none;
+  }
+}

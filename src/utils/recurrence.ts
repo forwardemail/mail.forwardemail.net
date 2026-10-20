@@ -59,6 +59,9 @@ export interface ExpandedInstance {
   start: Date;
   end: Date;
   isOverride: boolean;
+  // What an edited occurrence says about itself. An override is a whole
+  // event of its own, so a property it leaves out is empty, not inherited.
+  overrideFields?: { title?: string; description: string; location: string; url: string };
 }
 
 // ── ICS parsing ────────────────────────────────────────────────────────────
@@ -132,6 +135,23 @@ function getPropValue(line: string | undefined): string {
   if (!line) return '';
   const colon = line.indexOf(':');
   return colon === -1 ? '' : line.slice(colon + 1);
+}
+
+function unescapeIcsText(val: string): string {
+  return (val || '').replace(/\\([\\;,nN])/g, (_, c) => (c === 'n' || c === 'N' ? '\n' : c));
+}
+
+// Properties of one component only, not of an alarm nested inside it
+function ownProps(lines: string[]): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  for (const line of lines) {
+    const upper = line.toUpperCase();
+    if (upper.startsWith('BEGIN:')) depth++;
+    else if (upper.startsWith('END:')) depth--;
+    else if (depth === 0) out.push(line);
+  }
+  return out;
 }
 
 // Parse a CalDAV date or datetime value (local floating, UTC, or
@@ -304,6 +324,8 @@ export function expandRecurringMaster(
         parseIcalDate(findProp(override.lines, 'DTEND')) ||
         parseIcalDate(findProp(override.lines, 'DUE')) ||
         new Date(ovStart.getTime() + durationMs);
+      const own = ownProps(override.lines);
+      const text = (name: string) => unescapeIcsText(getPropValue(findProp(own, name)));
       out.push({
         id: `${masterUid}::${occurrence.toISOString()}`,
         masterUid,
@@ -311,6 +333,12 @@ export function expandRecurringMaster(
         start: ovStart,
         end: ovEnd,
         isOverride: true,
+        overrideFields: {
+          title: text('SUMMARY') || undefined,
+          description: text('DESCRIPTION'),
+          location: text('LOCATION'),
+          url: getPropValue(findProp(own, 'URL')),
+        },
       });
       continue;
     }
@@ -375,8 +403,15 @@ export function expandRecurringEvents<T extends Record<string, unknown>>(
     for (const inst of instances) {
       const occISO = inst.occurrence.toISOString();
       const instId = apiId ? `${apiId}::${occISO}` : inst.id;
+      const fields = inst.overrideFields;
       out.push({
         ...ev,
+        ...(fields && {
+          title: fields.title ?? ev.title,
+          description: fields.description,
+          location: fields.location,
+          url: fields.url,
+        }),
         id: instId,
         start: inst.start.toISOString(),
         end: inst.end.toISOString(),
@@ -677,8 +712,9 @@ export function describeRecurrenceSpec(spec: RecurrenceSpec, dtstart: Date | nul
 // (edit one occurrence). They preserve everything else byte-for-byte so
 // non-touched lines, VTIMEZONE blocks, and existing overrides round-trip.
 //
-// "This and following" (truncate master + spawn a new series) is not
-// implemented here.
+// "This and following" for deletes ends the series before the occurrence
+// (endMasterBefore). Saving "this and following" (truncate the master and
+// start a new series) is not implemented.
 
 interface IcsDateFormat {
   zone: 'utc' | 'floating' | 'tzid' | 'date-only';
@@ -818,6 +854,74 @@ export function addExdateToMaster(masterIcal: string, occurrence: Date): string 
 
   const out = [...loc.lines];
   out.splice(loc.masterEnd, 0, exdateLine);
+  return out.join('\r\n') + '\r\n';
+}
+
+/**
+ * End a series just before the given occurrence, for "Delete this and
+ * following events". The RRULE gets an UNTIL (replacing any COUNT or UNTIL
+ * it had) and edited occurrences from that date on are dropped. Every other
+ * line, the rest of the rule included, is kept as it was.
+ *
+ * Returns null when the occurrence is the first of the series or the rule
+ * cannot be found, since nothing of the series would be left. The caller
+ * deletes the whole series instead.
+ */
+export function endMasterBefore(masterIcal: string, occurrence: Date): string | null {
+  const loc = locateMaster(masterIcal);
+  if (!loc) return null;
+  const dtstart = parseIcalDate(loc.dtstartLine);
+  if (!dtstart || occurrence.getTime() <= dtstart.getTime()) return null;
+  const rruleIdx = loc.lines.findIndex(
+    (l, i) => i > loc.masterStart && i < loc.masterEnd && /^RRULE:/i.test(l),
+  );
+  if (rruleIdx === -1) return null;
+
+  // UNTIL is inclusive, so it stops one second (or for all-day series one
+  // day) before the occurrence. It must be UTC when DTSTART has a zone
+  // (RFC 5545 3.3.10), and floating or a plain date when DTSTART is.
+  const fmt = detectIcsDateFormat(loc.dtstartLine);
+  let until: string;
+  if (fmt.zone === 'date-only') {
+    until = formatIcsDateOnly(new Date(occurrence.getTime() - 24 * 60 * 60 * 1000));
+  } else if (fmt.zone === 'floating') {
+    until = formatIcsDateFloating(new Date(occurrence.getTime() - 1000));
+  } else {
+    until = formatIcsDateUtc(new Date(occurrence.getTime() - 1000));
+  }
+  const parts = loc.lines[rruleIdx]
+    .slice('RRULE:'.length)
+    .split(';')
+    .filter((p) => p && !/^(UNTIL|COUNT)=/i.test(p));
+  const lines = [...loc.lines];
+  lines[rruleIdx] = `RRULE:${[...parts, `UNTIL=${until}`].join(';')}`;
+
+  // Drop overrides for occurrences the series no longer has
+  const out: string[] = [];
+  let buf: string[] | null = null;
+  let dropBuf = false;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const upper = line.toUpperCase();
+    if (upper === 'BEGIN:VEVENT' && i !== loc.masterStart) {
+      buf = [line];
+      dropBuf = false;
+      continue;
+    }
+    if (buf) {
+      buf.push(line);
+      if (/^RECURRENCE-ID[;:]/i.test(line)) {
+        const rid = parseIcalDate(line);
+        if (rid && rid.getTime() >= occurrence.getTime()) dropBuf = true;
+      }
+      if (upper === 'END:VEVENT') {
+        if (!dropBuf) out.push(...buf);
+        buf = null;
+      }
+      continue;
+    }
+    out.push(line);
+  }
   return out.join('\r\n') + '\r\n';
 }
 

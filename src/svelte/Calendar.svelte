@@ -3,6 +3,7 @@
   import { get, type Readable, type Unsubscriber } from 'svelte/store';
   import { downloadFile } from '../utils/download';
   import { pickFiles } from '../utils/file-picker';
+  import { openNativePicker } from '../utils/native-picker';
   import { ScheduleXCalendar } from '@schedule-x/svelte';
   import {
     createCalendar,
@@ -43,6 +44,7 @@
     parseRrule,
     describeRecurrenceSpec,
     addExdateToMaster,
+    endMasterBefore,
     addOverrideToMaster,
     DEFAULT_RECURRENCE,
     type RecurrenceSpec,
@@ -351,10 +353,6 @@
   let newEventModal = $state(false);
   let editEventModal = $state(false);
   let showDeleteConfirm = $state(false);
-  let showNewStartPicker = $state(false);
-  let showNewEndPicker = $state(false);
-  let showEditStartPicker = $state(false);
-  let showEditEndPicker = $state(false);
   let optionalFieldsExpanded = $state(false);
   let filterMenuOpen = $state(false);
   let calendarsModalOpen = $state(false);
@@ -516,14 +514,6 @@
       .filter((e) => e !== email)
       .join(', ');
   };
-
-  const timeOptions = Array.from({ length: 12 * 4 }, (_, idx) => {
-    const hour12 = Math.floor(idx / 4) + 1;
-    const minute = (idx % 4) * 15;
-    const m = String(minute).padStart(2, '0');
-    const h = String(hour12).padStart(2, '0');
-    return { display: `${hour12}:${m}`, value: `${h}:${m}` };
-  });
 
   const formatDateTimeLocal = (date: Date) => {
     if (!(date instanceof Date) || Number.isNaN(date.getTime())) return '';
@@ -1568,10 +1558,6 @@
     newEventModal = false;
     editEventModal = false;
     showDeleteConfirm = false;
-    showNewStartPicker = false;
-    showNewEndPicker = false;
-    showEditStartPicker = false;
-    showEditEndPicker = false;
     optionalFieldsExpanded = false;
     filterMenuOpen = false;
     modalDirty = false;
@@ -1757,13 +1743,38 @@
   // range change) is a future improvement.
   const RECURRENCE_WINDOW_DAYS_BEFORE = 90;
   const RECURRENCE_WINDOW_DAYS_AFTER = 365;
+  // The dates the calendar shows, from Schedule-X's onRangeUpdate. Series
+  // are expanded around today, and around these when the user goes further
+  // back or ahead, so a series shows for as long as it runs.
+  let viewedRange: { start: Date; end: Date } | null = null;
+  let expandedWindowKey = '';
+
   const getRecurrenceWindow = () => {
     const now = new Date();
+    now.setHours(0, 0, 0, 0);
     const start = new Date(now);
     start.setDate(start.getDate() - RECURRENCE_WINDOW_DAYS_BEFORE);
     const end = new Date(now);
     end.setDate(end.getDate() + RECURRENCE_WINDOW_DAYS_AFTER);
+    if (viewedRange && (viewedRange.start < start || viewedRange.end > end)) {
+      const viewStart = new Date(viewedRange.start);
+      viewStart.setDate(viewStart.getDate() - RECURRENCE_WINDOW_DAYS_BEFORE);
+      const viewEnd = new Date(viewedRange.end);
+      viewEnd.setDate(viewEnd.getDate() + RECURRENCE_WINDOW_DAYS_BEFORE);
+      return { start: viewStart, end: viewEnd };
+    }
     return { start, end };
+  };
+
+  // Schedule-X ranges look like "2026-10-01 00:00"
+  const handleRangeUpdate = (range: { start: string; end: string }) => {
+    const start = new Date(String(range?.start || '').replace(' ', 'T'));
+    const end = new Date(String(range?.end || '').replace(' ', 'T'));
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return;
+    viewedRange = { start, end };
+    const next = getRecurrenceWindow();
+    if (`${next.start.getTime()}:${next.end.getTime()}` === expandedWindowKey) return;
+    applySelectedEvents();
   };
 
   const applySelectedEvents = () => {
@@ -1783,6 +1794,7 @@
     // Expand recurring masters into concrete instances before handing
     // them to Schedule-X. Non-recurring events pass through.
     const { start: winStart, end: winEnd } = getRecurrenceWindow();
+    expandedWindowKey = `${winStart.getTime()}:${winEnd.getTime()}`;
     events = expandRecurringEvents(filtered as Record<string, unknown>[], winStart, winEnd);
   };
 
@@ -2553,6 +2565,7 @@
                 openNewEvent(dateTime);
               },
               onEventClick: (ev: unknown) => openEditEvent(ev),
+              onRangeUpdate: handleRangeUpdate,
             },
           });
           calendarCreated = true;
@@ -2667,8 +2680,6 @@
     modalDirty = false;
     savingEvent = false;
     newEventModal = true;
-    showNewStartPicker = false;
-    showNewEndPicker = false;
     optionalFieldsExpanded = false;
     modalDirty = false;
     lastDurationMinutes = 60;
@@ -2740,8 +2751,10 @@
       Boolean((editEvent as Record<string, unknown>).recurrenceMasterId),
   );
   // "Custom" rules from other clients (BYSETPOS, ordinal weekdays, etc.)
-  // are read-only — the chip composer can't represent them, so we keep
-  // them disabled to avoid clobbering on save.
+  // can't be saved for the whole series. The chip composer can't represent
+  // them, so that save would rewrite the rule. Anything that leaves the
+  // rule alone still works: editing one occurrence (an override), deleting
+  // one (an EXDATE), deleting it and the rest (an UNTIL), or the series.
   const isCustomRecurrence = $derived(editEvent.recurrence?.mode === 'custom');
   const editRecurrenceText = $derived.by(() => {
     if (!editEventModal || !isEditingRecurringEvent) return '';
@@ -2798,9 +2811,8 @@
   }>({ open: false, action: null });
 
   const promptRecurrenceEdit = (action: 'save' | 'delete') => {
-    if (!isEditingRecurringEvent || isCustomRecurrence) {
-      // Non-recurring or custom rule — go straight through the normal
-      // direct save/delete path (custom rules are read-only via gating elsewhere).
+    if (!isEditingRecurringEvent) {
+      if (action === 'save' && isCustomRecurrence) return;
       if (action === 'save') updateEvent();
       else showDeleteConfirm = true;
       return;
@@ -2910,8 +2922,6 @@
       _editingRawDescription: false,
     };
     newEventModal = true;
-    showNewStartPicker = false;
-    showNewEndPicker = false;
     lastDurationMinutes = 60;
     titleError = '';
     announceModal('New event dialog opened');
@@ -3371,8 +3381,6 @@
     );
     editEventModal = true;
     showDeleteConfirm = false;
-    showEditStartPicker = false;
-    showEditEndPicker = false;
   };
 
   const updateEvent = async () => {
@@ -3797,10 +3805,34 @@
       setError((err as Error)?.message || 'Unable to delete occurrence.');
       return;
     }
+    await rewriteMaster(ctx, newIcal, 'Occurrence deleted', 'Unable to delete occurrence.');
+  };
 
-    // Replace the master in allEvents with the updated ICS so re-expansion
-    // sees the new EXDATE, and close the modal right away. The server
-    // write runs below and rolls back if it fails.
+  // "Delete this and following events" ends the series before this
+  // occurrence. From the first occurrence that is the whole series.
+  const deleteOccurrenceAndFollowing = async () => {
+    const ctx = resolveRecurrenceContext();
+    if (!ctx) {
+      setError('Could not resolve recurring event context.');
+      return;
+    }
+    const newIcal = endMasterBefore(ctx.masterIcal, ctx.occurrence);
+    if (!newIcal) {
+      recurrenceEditPrompt = { open: false, action: null };
+      return deleteEvent();
+    }
+    await rewriteMaster(ctx, newIcal, 'Events deleted', 'Unable to delete events.');
+  };
+
+  // Replace the master in allEvents with the updated ICS so re-expansion
+  // sees the change, and close the dialogs right away. The server write
+  // uses the same PUT as updateEvent and rolls back if it fails.
+  const rewriteMaster = async (
+    ctx: NonNullable<ReturnType<typeof resolveRecurrenceContext>>,
+    newIcal: string,
+    successMessage: string,
+    errorMessage: string,
+  ) => {
     const previousRaw = (ctx.master.raw as Record<string, unknown> | undefined) || {};
     const patchedRaw = { ...previousRaw, ical: newIcal };
     const token = ++pendingMutationToken;
@@ -3812,7 +3844,7 @@
     });
     applySelectedEvents();
     setError('');
-    setSuccess('Occurrence deleted');
+    setSuccess(successMessage);
     editEventModal = false;
     showDeleteConfirm = false;
     recurrenceEditPrompt = { open: false, action: null };
@@ -3842,7 +3874,7 @@
         persistEventsCache(ctx.calendarId);
       }
       if (!isDemoBlockedError(err)) {
-        setError((err as Error)?.message || 'Unable to delete occurrence.');
+        setError((err as Error)?.message || errorMessage);
       }
     }
   };
@@ -3932,12 +3964,14 @@
   const applyRecurrenceChoice = (choice: 'this' | 'following' | 'all') => {
     const action = recurrenceEditPrompt.action;
     if (choice === 'following') {
-      // "This and following" not yet implemented.
+      // Saving "this and following" is not implemented yet.
+      if (action === 'delete') return deleteOccurrenceAndFollowing();
       return;
     }
     if (action === 'save') {
       if (choice === 'this') return saveOccurrenceOverride();
       if (choice === 'all') {
+        if (isCustomRecurrence) return;
         recurrenceEditPrompt = { open: false, action: null };
         return updateEvent();
       }
@@ -3961,10 +3995,6 @@
     newEventModal = false;
     editEventModal = false;
     showDeleteConfirm = false;
-    showNewStartPicker = false;
-    showNewEndPicker = false;
-    showEditStartPicker = false;
-    showEditEndPicker = false;
     modalDirty = false;
   };
 
@@ -3993,22 +4023,6 @@
     if (!textarea) return;
     textarea.style.height = 'auto';
     textarea.style.height = textarea.scrollHeight + 'px';
-  };
-
-  const closeTimePickers = (event: FocusEvent) => {
-    if ((event?.target as HTMLElement)?.closest?.('.time-dropdown')) return;
-    showNewStartPicker = false;
-    showNewEndPicker = false;
-    showEditStartPicker = false;
-    showEditEndPicker = false;
-  };
-
-  const setNewEventTime = (field: string, value: string) => {
-    newEvent = { ...newEvent, [field]: value };
-  };
-
-  const setEditEventTime = (field: string, value: string) => {
-    editEvent = { ...editEvent, [field]: value };
   };
 
   const getCurrentScheduleXView = (): string => {
@@ -4475,7 +4489,7 @@
       <Dialog.Header>
         <Dialog.Title>{newEvent.componentType === 'VTODO' ? 'New task' : 'New event'}</Dialog.Title>
       </Dialog.Header>
-      <div class="space-y-4 py-4" bind:this={newEventModalRef} onfocusin={closeTimePickers}>
+      <div class="space-y-4 py-4" bind:this={newEventModalRef}>
         {#if calendars.length > 1}
           <div class="space-y-2">
             <Label>Calendar</Label>
@@ -4542,6 +4556,8 @@
                 <Input
                   id="event-date"
                   type="date"
+                  data-native-picker
+                  onclick={openNativePicker}
                   class="flex-1"
                   bind:value={newEvent.date}
                   onchange={(e) => {
@@ -4591,6 +4607,8 @@
               <Input
                 id="event-date"
                 type="date"
+                data-native-picker
+                onclick={openNativePicker}
                 bind:value={newEvent.date}
                 onchange={(e) => applyStartDateChange(newEvent, e.currentTarget.value)}
               />
@@ -4604,6 +4622,8 @@
               <Input
                 id="event-end-date"
                 type="date"
+                data-native-picker
+                onclick={openNativePicker}
                 min={newEvent.date}
                 bind:value={newEvent.endDate}
                 onchange={(e) => {
@@ -4632,69 +4652,19 @@
           <div class="space-y-2">
             <Label>Time</Label>
             <div class="flex items-center gap-2">
-              {#if isMobile}
-                <Input
-                  type="time"
-                  class="flex-1"
-                  value={to24Hour(newEvent.startTime, newEvent.startMeridiem)}
-                  oninput={(e) => {
-                    const v = (e.target as HTMLInputElement).value;
-                    const { time, meridiem } = to12Hour(v);
-                    newEvent = { ...newEvent, startTime: time, startMeridiem: meridiem };
-                    modalDirty = true;
-                  }}
-                />
-              {:else}
-                <div class="relative flex-1">
-                  <Input
-                    type="text"
-                    placeholder="12:00"
-                    value={newEvent.startTime}
-                    onfocus={() => {
-                      showNewStartPicker = true;
-                      showNewEndPicker = false;
-                    }}
-                    oninput={(e) => {
-                      const val = (e.target as HTMLInputElement).value;
-                      setNewEventTime('startTime', val);
-                      modalDirty = true;
-                    }}
-                    onblur={() => {
-                      setTimeout(() => {
-                        showNewStartPicker = false;
-                      }, 150);
-                    }}
-                  />
-                  {#if showNewStartPicker}
-                    <div
-                      class="time-dropdown absolute top-full left-0 right-0 mt-1 max-h-[220px] overflow-y-auto border border-border bg-popover shadow-lg z-20"
-                    >
-                      {#each timeOptions as opt}
-                        <button
-                          type="button"
-                          class="w-full px-3 py-2 text-left text-sm hover:bg-accent"
-                          onmousedown={(e) => {
-                            e.preventDefault();
-                            setNewEventTime('startTime', opt.value);
-                            showNewStartPicker = false;
-                          }}
-                        >
-                          {opt.display}
-                        </button>
-                      {/each}
-                    </div>
-                  {/if}
-                </div>
-                <Select.Root type="single" bind:value={newEvent.startMeridiem}>
-                  <Select.Trigger size="default" class="h-9 w-[70px]">
-                    {newEvent.startMeridiem || 'AM'}
-                  </Select.Trigger>
-                  <Select.Content>
-                    <Select.Item value="AM">AM</Select.Item>
-                    <Select.Item value="PM">PM</Select.Item>
-                  </Select.Content>
-                </Select.Root>
-              {/if}
+              <Input
+                type="time"
+                data-native-picker
+                onclick={openNativePicker}
+                class="flex-1"
+                value={to24Hour(newEvent.startTime, newEvent.startMeridiem)}
+                oninput={(e) => {
+                  const v = (e.target as HTMLInputElement).value;
+                  const { time, meridiem } = to12Hour(v);
+                  newEvent = { ...newEvent, startTime: time, startMeridiem: meridiem };
+                  modalDirty = true;
+                }}
+              />
               <button
                 type="button"
                 class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
@@ -4736,151 +4706,35 @@
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div class="space-y-2">
               <Label>Start time</Label>
-              {#if isMobile}
-                <Input
-                  type="time"
-                  value={to24Hour(newEvent.startTime, newEvent.startMeridiem)}
-                  oninput={(e) => {
-                    const v = (e.target as HTMLInputElement).value;
-                    const { time, meridiem } = to12Hour(v);
-                    newEvent = { ...newEvent, startTime: time, startMeridiem: meridiem };
-                    modalDirty = true;
-                    handleStartTimeChange();
-                  }}
-                />
-              {:else}
-                <div class="flex gap-2">
-                  <div class="relative flex-1">
-                    <Input
-                      type="text"
-                      placeholder="12:00"
-                      value={newEvent.startTime}
-                      onfocus={() => {
-                        showNewStartPicker = true;
-                        showNewEndPicker = false;
-                      }}
-                      oninput={(e) => {
-                        const val = (e.target as HTMLInputElement).value;
-                        setNewEventTime('startTime', val);
-                        modalDirty = true;
-                      }}
-                      onblur={() => {
-                        setTimeout(() => {
-                          showNewStartPicker = false;
-                        }, 150);
-                        handleStartTimeChange();
-                      }}
-                    />
-                    {#if showNewStartPicker}
-                      <div
-                        class="time-dropdown absolute top-full left-0 right-0 mt-1 max-h-[220px] overflow-y-auto border border-border bg-popover shadow-lg z-20"
-                      >
-                        {#each timeOptions as opt}
-                          <button
-                            type="button"
-                            class="w-full px-3 py-2 text-left text-sm hover:bg-accent"
-                            onmousedown={(e) => {
-                              e.preventDefault();
-                              setNewEventTime('startTime', opt.value);
-                              handleStartTimeChange();
-                              showNewStartPicker = false;
-                            }}
-                          >
-                            {opt.display}
-                          </button>
-                        {/each}
-                      </div>
-                    {/if}
-                  </div>
-                  <Select.Root
-                    type="single"
-                    bind:value={newEvent.startMeridiem}
-                    onValueChange={() => handleStartTimeChange()}
-                  >
-                    <Select.Trigger size="default" class="h-9 w-[70px]">
-                      {newEvent.startMeridiem || 'AM'}
-                    </Select.Trigger>
-                    <Select.Content>
-                      <Select.Item value="AM">AM</Select.Item>
-                      <Select.Item value="PM">PM</Select.Item>
-                    </Select.Content>
-                  </Select.Root>
-                </div>
-              {/if}
+              <Input
+                type="time"
+                data-native-picker
+                onclick={openNativePicker}
+                value={to24Hour(newEvent.startTime, newEvent.startMeridiem)}
+                oninput={(e) => {
+                  const v = (e.target as HTMLInputElement).value;
+                  const { time, meridiem } = to12Hour(v);
+                  newEvent = { ...newEvent, startTime: time, startMeridiem: meridiem };
+                  modalDirty = true;
+                  handleStartTimeChange();
+                }}
+              />
             </div>
             <div class="space-y-2">
               <Label>End time</Label>
-              {#if isMobile}
-                <Input
-                  type="time"
-                  value={to24Hour(newEvent.endTime, newEvent.endMeridiem)}
-                  oninput={(e) => {
-                    const v = (e.target as HTMLInputElement).value;
-                    const { time, meridiem } = to12Hour(v);
-                    newEvent = { ...newEvent, endTime: time, endMeridiem: meridiem };
-                    modalDirty = true;
-                    handleEndTimeChange();
-                  }}
-                />
-              {:else}
-                <div class="flex gap-2">
-                  <div class="relative flex-1">
-                    <Input
-                      type="text"
-                      placeholder="1:00"
-                      value={newEvent.endTime}
-                      onfocus={() => {
-                        showNewEndPicker = true;
-                        showNewStartPicker = false;
-                      }}
-                      oninput={(e) => {
-                        const val = (e.target as HTMLInputElement).value;
-                        setNewEventTime('endTime', val);
-                        modalDirty = true;
-                      }}
-                      onblur={() => {
-                        setTimeout(() => {
-                          showNewEndPicker = false;
-                        }, 150);
-                        handleEndTimeChange();
-                      }}
-                    />
-                    {#if showNewEndPicker}
-                      <div
-                        class="time-dropdown absolute top-full left-0 right-0 mt-1 max-h-[220px] overflow-y-auto border border-border bg-popover shadow-lg z-20"
-                      >
-                        {#each timeOptions as opt}
-                          <button
-                            type="button"
-                            class="w-full px-3 py-2 text-left text-sm hover:bg-accent"
-                            onmousedown={(e) => {
-                              e.preventDefault();
-                              setNewEventTime('endTime', opt.value);
-                              showNewEndPicker = false;
-                              handleEndTimeChange();
-                            }}
-                          >
-                            {opt.display}
-                          </button>
-                        {/each}
-                      </div>
-                    {/if}
-                  </div>
-                  <Select.Root
-                    type="single"
-                    bind:value={newEvent.endMeridiem}
-                    onValueChange={() => handleEndTimeChange()}
-                  >
-                    <Select.Trigger size="default" class="h-9 w-[70px]">
-                      {newEvent.endMeridiem || 'AM'}
-                    </Select.Trigger>
-                    <Select.Content>
-                      <Select.Item value="AM">AM</Select.Item>
-                      <Select.Item value="PM">PM</Select.Item>
-                    </Select.Content>
-                  </Select.Root>
-                </div>
-              {/if}
+              <Input
+                type="time"
+                data-native-picker
+                onclick={openNativePicker}
+                value={to24Hour(newEvent.endTime, newEvent.endMeridiem)}
+                oninput={(e) => {
+                  const v = (e.target as HTMLInputElement).value;
+                  const { time, meridiem } = to12Hour(v);
+                  newEvent = { ...newEvent, endTime: time, endMeridiem: meridiem };
+                  modalDirty = true;
+                  handleEndTimeChange();
+                }}
+              />
             </div>
           </div>
         {/if}
@@ -5070,10 +4924,7 @@
   </Dialog.Root>
 
   <Dialog.Root bind:open={editEventModal}>
-    <Dialog.Content
-      class="sm:max-w-[520px] overflow-x-hidden [&>*]:min-w-0"
-      onfocusin={closeTimePickers}
-    >
+    <Dialog.Content class="sm:max-w-[520px] overflow-x-hidden [&>*]:min-w-0">
       <Dialog.Header>
         <Dialog.Title
           >{editEvent.componentType === 'VTODO' ? 'Edit task' : 'Edit event'}</Dialog.Title
@@ -5091,7 +4942,8 @@
             </div>
             <div class="mt-1">
               {#if isCustomRecurrence}
-                Custom recurrence (read-only). Saving from this view isn't supported yet.
+                This repeat rule can't be changed here yet. You can still edit or delete this event,
+                or delete it and the events after it.
               {:else}
                 Saving asks whether to change only this occurrence or every event in the series.
               {/if}
@@ -5148,6 +5000,8 @@
               <div class="flex items-center gap-2">
                 <Input
                   type="date"
+                  data-native-picker
+                  onclick={openNativePicker}
                   class="flex-1"
                   bind:value={editEvent.date}
                   onchange={(e) => {
@@ -5184,73 +5038,23 @@
               <div class="space-y-2">
                 <Label>Time</Label>
                 <div class="flex items-center gap-2">
-                  {#if isMobile}
-                    <Input
-                      type="time"
-                      class="flex-1"
-                      value={to24Hour(editEvent.startTime, editEvent.startMeridiem)}
-                      oninput={(e) => {
-                        const v = (e.target as HTMLInputElement).value;
-                        const { time, meridiem } = to12Hour(v);
-                        editEvent = {
-                          ...editEvent,
-                          startTime: time,
-                          startMeridiem: meridiem,
-                        };
-                        modalDirty = true;
-                      }}
-                    />
-                  {:else}
-                    <div class="relative flex-1">
-                      <Input
-                        type="text"
-                        placeholder="12:00"
-                        value={editEvent.startTime}
-                        onfocus={() => {
-                          showEditStartPicker = true;
-                          showEditEndPicker = false;
-                        }}
-                        oninput={(e) => {
-                          const val = (e.target as HTMLInputElement).value;
-                          setEditEventTime('startTime', val);
-                          modalDirty = true;
-                        }}
-                        onblur={() => {
-                          setTimeout(() => {
-                            showEditStartPicker = false;
-                          }, 150);
-                        }}
-                      />
-                      {#if showEditStartPicker}
-                        <div
-                          class="time-dropdown absolute top-full left-0 right-0 mt-1 max-h-[220px] overflow-y-auto border border-border bg-popover shadow-lg z-20"
-                        >
-                          {#each timeOptions as opt}
-                            <button
-                              type="button"
-                              class="w-full px-3 py-2 text-left text-sm hover:bg-accent"
-                              onmousedown={(e) => {
-                                e.preventDefault();
-                                setEditEventTime('startTime', opt.value);
-                                showEditStartPicker = false;
-                              }}
-                            >
-                              {opt.display}
-                            </button>
-                          {/each}
-                        </div>
-                      {/if}
-                    </div>
-                    <Select.Root type="single" bind:value={editEvent.startMeridiem}>
-                      <Select.Trigger size="default" class="h-9 w-[70px]">
-                        {editEvent.startMeridiem || 'AM'}
-                      </Select.Trigger>
-                      <Select.Content>
-                        <Select.Item value="AM">AM</Select.Item>
-                        <Select.Item value="PM">PM</Select.Item>
-                      </Select.Content>
-                    </Select.Root>
-                  {/if}
+                  <Input
+                    type="time"
+                    data-native-picker
+                    onclick={openNativePicker}
+                    class="flex-1"
+                    value={to24Hour(editEvent.startTime, editEvent.startMeridiem)}
+                    oninput={(e) => {
+                      const v = (e.target as HTMLInputElement).value;
+                      const { time, meridiem } = to12Hour(v);
+                      editEvent = {
+                        ...editEvent,
+                        startTime: time,
+                        startMeridiem: meridiem,
+                      };
+                      modalDirty = true;
+                    }}
+                  />
                   <button
                     type="button"
                     class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
@@ -5303,6 +5107,8 @@
               <Label>Start date</Label>
               <Input
                 type="date"
+                data-native-picker
+                onclick={openNativePicker}
                 bind:value={editEvent.date}
                 onchange={(e) => applyStartDateChange(editEvent, e.currentTarget.value)}
               />
@@ -5315,6 +5121,8 @@
               </Label>
               <Input
                 type="date"
+                data-native-picker
+                onclick={openNativePicker}
                 min={editEvent.date}
                 bind:value={editEvent.endDate}
                 onchange={(e) => {
@@ -5339,137 +5147,33 @@
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div class="space-y-2">
                 <Label>Start time</Label>
-                {#if isMobile}
-                  <Input
-                    type="time"
-                    value={to24Hour(editEvent.startTime, editEvent.startMeridiem)}
-                    oninput={(e) => {
-                      const v = (e.target as HTMLInputElement).value;
-                      const { time, meridiem } = to12Hour(v);
-                      editEvent = { ...editEvent, startTime: time, startMeridiem: meridiem };
-                      modalDirty = true;
-                    }}
-                  />
-                {:else}
-                  <div class="flex gap-2">
-                    <div class="relative flex-1">
-                      <Input
-                        type="text"
-                        placeholder="12:00"
-                        value={editEvent.startTime}
-                        onfocus={() => {
-                          showEditStartPicker = true;
-                          showEditEndPicker = false;
-                        }}
-                        oninput={(e) => {
-                          const val = (e.target as HTMLInputElement).value;
-                          setEditEventTime('startTime', val);
-                          modalDirty = true;
-                        }}
-                        onblur={() => {
-                          setTimeout(() => {
-                            showEditStartPicker = false;
-                          }, 150);
-                        }}
-                      />
-                      {#if showEditStartPicker}
-                        <div
-                          class="time-dropdown absolute top-full left-0 right-0 mt-1 max-h-[220px] overflow-y-auto border border-border bg-popover shadow-lg z-20"
-                        >
-                          {#each timeOptions as opt}
-                            <button
-                              type="button"
-                              class="w-full px-3 py-2 text-left text-sm hover:bg-accent"
-                              onmousedown={(e) => {
-                                e.preventDefault();
-                                setEditEventTime('startTime', opt.value);
-                                showEditStartPicker = false;
-                              }}
-                            >
-                              {opt.display}
-                            </button>
-                          {/each}
-                        </div>
-                      {/if}
-                    </div>
-                    <Select.Root type="single" bind:value={editEvent.startMeridiem}>
-                      <Select.Trigger size="default" class="h-9 w-[70px]">
-                        {editEvent.startMeridiem || 'AM'}
-                      </Select.Trigger>
-                      <Select.Content>
-                        <Select.Item value="AM">AM</Select.Item>
-                        <Select.Item value="PM">PM</Select.Item>
-                      </Select.Content>
-                    </Select.Root>
-                  </div>
-                {/if}
+                <Input
+                  type="time"
+                  data-native-picker
+                  onclick={openNativePicker}
+                  value={to24Hour(editEvent.startTime, editEvent.startMeridiem)}
+                  oninput={(e) => {
+                    const v = (e.target as HTMLInputElement).value;
+                    const { time, meridiem } = to12Hour(v);
+                    editEvent = { ...editEvent, startTime: time, startMeridiem: meridiem };
+                    modalDirty = true;
+                  }}
+                />
               </div>
               <div class="space-y-2">
                 <Label>End time</Label>
-                {#if isMobile}
-                  <Input
-                    type="time"
-                    value={to24Hour(editEvent.endTime, editEvent.endMeridiem)}
-                    oninput={(e) => {
-                      const v = (e.target as HTMLInputElement).value;
-                      const { time, meridiem } = to12Hour(v);
-                      editEvent = { ...editEvent, endTime: time, endMeridiem: meridiem };
-                      modalDirty = true;
-                    }}
-                  />
-                {:else}
-                  <div class="flex gap-2">
-                    <div class="relative flex-1">
-                      <Input
-                        type="text"
-                        placeholder="1:00"
-                        value={editEvent.endTime}
-                        onfocus={() => {
-                          showEditEndPicker = true;
-                          showEditStartPicker = false;
-                        }}
-                        oninput={(e) => {
-                          const val = (e.target as HTMLInputElement).value;
-                          setEditEventTime('endTime', val);
-                          modalDirty = true;
-                        }}
-                        onblur={() => {
-                          setTimeout(() => {
-                            showEditEndPicker = false;
-                          }, 150);
-                        }}
-                      />
-                      {#if showEditEndPicker}
-                        <div
-                          class="time-dropdown absolute top-full left-0 right-0 mt-1 max-h-[220px] overflow-y-auto border border-border bg-popover shadow-lg z-20"
-                        >
-                          {#each timeOptions as opt}
-                            <button
-                              type="button"
-                              class="w-full px-3 py-2 text-left text-sm hover:bg-accent"
-                              onmousedown={(e) => {
-                                e.preventDefault();
-                                setEditEventTime('endTime', opt.value);
-                                showEditEndPicker = false;
-                              }}
-                            >
-                              {opt.display}
-                            </button>
-                          {/each}
-                        </div>
-                      {/if}
-                    </div>
-                    <Select.Root type="single" bind:value={editEvent.endMeridiem}>
-                      <Select.Trigger size="default" class="h-9 w-[70px]">
-                        {editEvent.endMeridiem || 'AM'}
-                      </Select.Trigger>
-                      <Select.Content>
-                        <Select.Item value="AM">AM</Select.Item>
-                        <Select.Item value="PM">PM</Select.Item>
-                      </Select.Content>
-                    </Select.Root>
-                  </div>
-                {/if}
+                <Input
+                  type="time"
+                  data-native-picker
+                  onclick={openNativePicker}
+                  value={to24Hour(editEvent.endTime, editEvent.endMeridiem)}
+                  oninput={(e) => {
+                    const v = (e.target as HTMLInputElement).value;
+                    const { time, meridiem } = to12Hour(v);
+                    editEvent = { ...editEvent, endTime: time, endMeridiem: meridiem };
+                    modalDirty = true;
+                  }}
+                />
               </div>
             </div>
           {/if}
@@ -5631,10 +5335,15 @@
         {/if}
       </div>
       <Dialog.Footer class="flex-col sm:flex-row gap-2">
-        <div class="hidden sm:flex gap-2 mr-auto">
+        <div class="flex gap-2 sm:mr-auto">
           <Tooltip.Root>
             <Tooltip.Trigger>
-              <Button variant="outline" size="icon" onclick={() => duplicateEvent()}>
+              <Button
+                variant="outline"
+                size="icon"
+                aria-label="Duplicate"
+                onclick={() => duplicateEvent()}
+              >
                 <Copy class="h-4 w-4" />
               </Button>
             </Tooltip.Trigger>
@@ -5648,6 +5357,7 @@
                 <Button
                   variant="outline"
                   size="icon"
+                  aria-label="Export as .ics"
                   onclick={() =>
                     exportEventAsICS(
                       events.find((e) => (e as Record).id === editEvent.id) as Record,
@@ -5667,7 +5377,7 @@
                 variant="outline"
                 size="icon"
                 class="text-destructive hover:text-destructive"
-                disabled={isCustomRecurrence}
+                aria-label="Delete"
                 onclick={() => promptRecurrenceEdit('delete')}
               >
                 <Trash2 class="h-4 w-4" />
@@ -5675,11 +5385,7 @@
             </Tooltip.Trigger>
             <Tooltip.Content>
               <p>
-                {isCustomRecurrence
-                  ? 'Custom recurrence: delete from another client'
-                  : isEditingRecurringEvent
-                    ? 'Delete (choose this / all)'
-                    : 'Delete'}
+                {isEditingRecurringEvent ? 'Delete (choose this / all)' : 'Delete'}
               </p>
             </Tooltip.Content>
           </Tooltip.Root>
@@ -5692,12 +5398,14 @@
             {:else}
               <Button variant="outline" onclick={() => completeTask()}>Complete</Button>
             {/if}
-            <Button onclick={() => promptRecurrenceEdit('save')} disabled={isCustomRecurrence}
-              >Update</Button
+            <Button
+              onclick={() => promptRecurrenceEdit('save')}
+              disabled={isCustomRecurrence && !isEditingRecurringEvent}>Update</Button
             >
           {:else}
-            <Button onclick={() => promptRecurrenceEdit('save')} disabled={isCustomRecurrence}
-              >Update</Button
+            <Button
+              onclick={() => promptRecurrenceEdit('save')}
+              disabled={isCustomRecurrence && !isEditingRecurringEvent}>Update</Button
             >
           {/if}
         </div>
@@ -5745,20 +5453,37 @@
         <Button variant="outline" onclick={() => applyRecurrenceChoice('this')}>
           {recurrenceEditPrompt.action === 'delete' ? 'Only this event' : 'This event'}
         </Button>
-        <Tooltip.Root>
-          <Tooltip.Trigger class="w-full">
-            <Button variant="outline" disabled class="w-full">This and following events</Button>
-          </Tooltip.Trigger>
-          <Tooltip.Content>
-            <p>Coming soon: splits the series at this occurrence.</p>
-          </Tooltip.Content>
-        </Tooltip.Root>
-        <Button
-          variant={recurrenceEditPrompt.action === 'delete' ? 'destructive' : 'default'}
-          onclick={() => applyRecurrenceChoice('all')}
-        >
-          All events in the series
-        </Button>
+        {#if recurrenceEditPrompt.action === 'delete'}
+          <Button variant="outline" onclick={() => applyRecurrenceChoice('following')}>
+            This and following events
+          </Button>
+        {:else}
+          <Tooltip.Root>
+            <Tooltip.Trigger class="w-full">
+              <Button variant="outline" disabled class="w-full">This and following events</Button>
+            </Tooltip.Trigger>
+            <Tooltip.Content>
+              <p>Coming soon: splits the series at this occurrence.</p>
+            </Tooltip.Content>
+          </Tooltip.Root>
+        {/if}
+        {#if recurrenceEditPrompt.action === 'save' && isCustomRecurrence}
+          <Tooltip.Root>
+            <Tooltip.Trigger class="w-full">
+              <Button disabled class="w-full">All events in the series</Button>
+            </Tooltip.Trigger>
+            <Tooltip.Content>
+              <p>This repeat rule can only be changed in the app that created it.</p>
+            </Tooltip.Content>
+          </Tooltip.Root>
+        {:else}
+          <Button
+            variant={recurrenceEditPrompt.action === 'delete' ? 'destructive' : 'default'}
+            onclick={() => applyRecurrenceChoice('all')}
+          >
+            All events in the series
+          </Button>
+        {/if}
       </div>
       <Dialog.Footer>
         <Button
