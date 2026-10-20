@@ -6,6 +6,12 @@ release notes are taken from here. To change what a commit says, add a
 `Release-note: <text>` line to its message (or `Release-note: none` to leave
 it out).
 
+## 0.15.4 (2026-10-20)
+
+### New
+
+- Add mark as read setting and stop search marking results read
+
 ## 0.15.3 (2026-10-19)
 
 ### Fixes

@@ -36,6 +36,14 @@
   </screenshots>
   <!-- scripts/sync-version.cjs prepends a release entry on every version bump. -->
   <releases>
+    <release version="0.15.4" date="2026-10-20">
+      <description>
+        <p>New</p>
+        <ul>
+          <li>Add mark as read setting and stop search marking results read</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.15.3" date="2026-10-19">
       <description>
         <p>Fixes</p>
