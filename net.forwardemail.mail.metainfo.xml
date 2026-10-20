@@ -36,6 +36,14 @@
   </screenshots>
   <!-- scripts/sync-version.cjs prepends a release entry on every version bump. -->
   <releases>
+    <release version="0.15.5" date="2026-10-20">
+      <description>
+        <p>Fixes</p>
+        <ul>
+          <li>Manage each event of a series, delete on mobile, native date and time fields</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.15.4" date="2026-10-20">
       <description>
         <p>New</p>
