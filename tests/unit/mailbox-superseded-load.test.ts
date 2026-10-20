@@ -8,7 +8,7 @@
  * slow link nobody had yet: load() was still waiting on the network folder list,
  * so the inbox showed "Inbox Zero" over cached mail until that request returned.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { get, writable } from 'svelte/store';
 
 const h = vi.hoisted(() => ({
@@ -157,6 +157,13 @@ beforeEach(() => {
   loading.set(true);
   mailboxStore.actions.resetForAccount?.();
   mailboxStore.actions.clearFolderMessageCache?.();
+});
+
+afterEach(async () => {
+  // loadMessages schedules a quota check with setTimeout(0). Let it run
+  // before the test ends: once this file is done, Vitest resets its mocks and
+  // a late check would throw on the undefined it gets back.
+  await new Promise((resolve) => setTimeout(resolve, 0));
 });
 
 describe('list load superseded by an account change', () => {

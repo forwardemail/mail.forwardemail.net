@@ -1886,12 +1886,16 @@
     actionMenuOpen = false;
 
     const lastMessage = conv?.previewMessages?.slice?.(-1)?.[0] || conv?.messages?.slice?.(-1)?.[0];
+    const markThreadRead = () => markConversationRead(conv);
 
     // Performance: Prevent reload if same message already selected
     if (lastSelectedMessageId === lastMessage?.id && $selectedMessage?.id === lastMessage?.id) {
       // Already selected - skip reload but still handle UI state
       if (isProductivityLayout || isClassicMobileViewport()) {
+        // Selected behind the closed reader (a search) and only now shown
+        const wasOpen = isOpenInReader(lastMessage?.id);
         openReaderFullscreen();
+        if (!wasOpen) markReadOnOpen(lastMessage, markThreadRead);
       }
       return;
     }
@@ -1927,8 +1931,9 @@
     loadMessage(lastMessage);
 
     // Mark all messages in the thread as read when opening a conversation
+    // (this replaces the read of the last message that loadMessage set up)
     if (conv?.messages?.length > 1) {
-      markConversationRead(conv);
+      markReadOnOpen(lastMessage, markThreadRead);
     }
 
     // Prefetch adjacent conversations in the background
@@ -1959,7 +1964,10 @@
     if (lastSelectedMessageId === msg?.id && $selectedMessage?.id === msg?.id) {
       // Already selected - skip reload but still handle UI state
       if (isProductivityLayout || isClassicMobileViewport()) {
+        // Selected behind the closed reader (a search) and only now shown
+        const wasOpen = isOpenInReader(msg?.id);
         openReaderFullscreen();
+        if (!wasOpen) markReadOnOpen(msg);
       }
       return;
     }
@@ -2892,6 +2900,9 @@
         const conv = get(selectedConversation);
         return markConversationRead(conv);
       },
+      // The M shortcut, so it acts like the toolbar toggle: on the current
+      // read state, and cancelling a delayed read of the open message.
+      toggleReadSelected: () => toggleReadMessage(get(selectedMessageStore)),
       markJunkSelected,
       markNotJunkSelected: markNotSpam,
       showShortcutsHelp: () => {
@@ -5175,6 +5186,8 @@
 
   const toggleReadMessage = async (msg) => {
     if (!msg) return;
+    // Marked by hand: a delayed read must not undo a Mark unread
+    if (get(selectedMessageStore)?.id === msg.id) cancelMarkRead();
     const account = Local.get('email') || 'default';
     const list = source.state?.messages ? get(messagesStore) || [] : [];
     const current = list.find((m) => m.id === msg.id) || msg;
@@ -5321,6 +5334,39 @@
     await Promise.all(targets.map((target) => markMessageRead(target)));
   };
 
+  // Opening a message marks it read when the "Mark as read" setting says so:
+  // at once (0), after it has stayed open for that many ms, or never (-1).
+  // Only a message the reader shows counts as open. A search or a folder load
+  // can select one behind a closed reader, and that must not read it.
+  let markReadTimer: ReturnType<typeof setTimeout> | null = null;
+  const cancelMarkRead = () => {
+    if (markReadTimer) clearTimeout(markReadTimer);
+    markReadTimer = null;
+  };
+  const isOpenInReader = (id: unknown) =>
+    get(selectedMessageStore)?.id === id &&
+    (!(isProductivityLayout || isClassicMobileViewport()) || Boolean(get(mobileReader)));
+  // `mark` defaults to the message itself; a thread passes one that reads
+  // all of it. A newer call replaces a pending one.
+  const markReadOnOpen = (
+    msg: { id?: unknown } | null | undefined,
+    mark: () => unknown = () => markMessageRead(msg),
+  ) => {
+    cancelMarkRead();
+    if (!msg?.id || !isOpenInReader(msg.id)) return;
+    const delay = Number(getEffectiveSettingValue('mark_read_delay')) || 0;
+    if (delay < 0) return;
+    if (delay === 0) {
+      void mark();
+      return;
+    }
+    markReadTimer = setTimeout(() => {
+      markReadTimer = null;
+      if (isOpenInReader(msg.id)) void mark();
+    }, delay);
+  };
+  onDestroy(cancelMarkRead);
+
   const toggleStarMessage = (msg) => toggleStar(msg);
 
   const toggleStarConversation = async (conv) => {
@@ -5411,7 +5457,7 @@
       });
       tracer.stage('select_start');
       source.state?.selectedMessage?.set?.(msg);
-      markMessageRead(msg);
+      markReadOnOpen(msg);
       tracer.stage('load_detail_start');
       await mailService.loadMessageDetail(msg, {
         onLoading: (val) => {

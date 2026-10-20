@@ -1796,6 +1796,10 @@ function initKeyboardShortcuts() {
 
   // Managing / marking / tags
   keyboardShortcuts.on('toggle-read', () => {
+    if (currentRoute() === 'mailbox' && mailboxApi?.toggleReadSelected) {
+      mailboxApi.toggleReadSelected();
+      return;
+    }
     const message = get(viewModel.mailboxView.selectedMessage);
     if (message) {
       viewModel.mailboxView.toggleRead(message);

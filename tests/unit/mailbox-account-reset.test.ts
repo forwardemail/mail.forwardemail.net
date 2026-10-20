@@ -9,7 +9,7 @@
  * uncleared, a message just sent from account A appears inside account B's Sent
  * folder.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { get, writable } from 'svelte/store';
 
 const h = vi.hoisted(() => ({
@@ -165,6 +165,13 @@ beforeEach(() => {
   messages.set([] as never);
   mailboxStore.actions.resetForAccount?.();
   mailboxStore.actions.clearFolderMessageCache?.();
+});
+
+afterEach(async () => {
+  // loadMessages schedules a quota check with setTimeout(0). Let it run
+  // before the test ends: once this file is done, Vitest resets its mocks and
+  // a late check would throw on the undefined it gets back.
+  await new Promise((resolve) => setTimeout(resolve, 0));
 });
 
 describe('optimistic Sent insert across an account change', () => {

@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   closeTab: vi.fn(),
   loadMessageDetail: vi.fn(async () => undefined),
   demo: false,
+  settings: {} as Record<string, unknown>,
 }));
 
 vi.mock('../../src/utils/demo-mode', () => ({
@@ -38,7 +39,7 @@ vi.mock('../../src/stores/mailService', () => ({
 }));
 vi.mock('../../src/stores/tabStore', () => ({ closeTab: mocks.closeTab }));
 vi.mock('../../src/stores/settingsStore', () => ({
-  getEffectiveSettingValue: vi.fn(() => null),
+  getEffectiveSettingValue: vi.fn((id: string) => mocks.settings[id] ?? null),
   localSettingsVersion: writable(0),
 }));
 vi.mock('../../src/utils/compose-window', () => ({ openComposeWindow: vi.fn() }));
@@ -87,10 +88,14 @@ function findIconButton(container: HTMLElement, iconClass: string): HTMLButtonEl
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.demo = false;
+  mocks.settings = {};
   mocks.archiveMessage.mockResolvedValue({ success: true });
 });
 
-afterEach(() => cleanup());
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
 
 describe('MessageTab store integration', () => {
   it('marks an unread message read through toggleRead on open', async () => {
@@ -109,6 +114,33 @@ describe('MessageTab store integration', () => {
   it('does not call toggleRead for a message that is already read', async () => {
     renderTab(makeMessage({ is_unread: false }));
     await waitFor(() => expect(mocks.loadMessageDetail).toHaveBeenCalled());
+    expect(mocks.toggleRead).not.toHaveBeenCalled();
+  });
+
+  it('leaves the message unread when Mark as read is set to never', async () => {
+    mocks.settings.mark_read_delay = -1;
+    renderTab(makeMessage());
+    await waitFor(() => expect(mocks.loadMessageDetail).toHaveBeenCalled());
+    expect(mocks.toggleRead).not.toHaveBeenCalled();
+  });
+
+  it('marks the message read only once the tab has been open for the delay', async () => {
+    vi.useFakeTimers();
+    mocks.settings.mark_read_delay = 5000;
+    renderTab(makeMessage());
+    await vi.advanceTimersByTimeAsync(4900);
+    expect(mocks.toggleRead).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(mocks.toggleRead).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not mark the message read when the tab closes before the delay', async () => {
+    vi.useFakeTimers();
+    mocks.settings.mark_read_delay = 5000;
+    const { unmount } = renderTab(makeMessage());
+    await vi.advanceTimersByTimeAsync(1000);
+    unmount();
+    await vi.advanceTimersByTimeAsync(10_000);
     expect(mocks.toggleRead).not.toHaveBeenCalled();
   });
 

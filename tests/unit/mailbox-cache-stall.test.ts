@@ -149,8 +149,12 @@ beforeEach(() => {
   mailboxStore.actions.clearFolderMessageCache?.();
 });
 
-afterEach(() => {
+afterEach(async () => {
   vi.useRealTimers();
+  // loadMessages schedules a quota check with setTimeout(0). Let it run
+  // before the test ends: once this file is done, Vitest resets its mocks and
+  // a late check would throw on the undefined it gets back.
+  await new Promise((resolve) => setTimeout(resolve, 0));
 });
 
 describe('message list when the local cache stops answering', () => {

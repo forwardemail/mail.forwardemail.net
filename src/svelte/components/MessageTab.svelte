@@ -232,6 +232,16 @@
     });
   }
 
+  // The "Mark as read" setting: at once (0), once the tab has been open that
+  // many ms, or never (-1).
+  let markReadTimer: ReturnType<typeof setTimeout> | null = null;
+  function markAsReadOnOpen() {
+    const delay = Number(getEffectiveSettingValue('mark_read_delay')) || 0;
+    if (delay < 0) return;
+    if (delay === 0) markAsRead();
+    else markReadTimer = setTimeout(markAsRead, delay);
+  }
+
   // ─── Actions ────────────────────────────────────────────────────────
 
   function getDeliveredToAddress(): string {
@@ -353,11 +363,12 @@
   // ─── Lifecycle ──────────────────────────────────────────────────────
 
   onMount(() => {
-    markAsRead();
+    markAsReadOnOpen();
     loadMessageBody();
   });
 
   onDestroy(() => {
+    if (markReadTimer) clearTimeout(markReadTimer);
     abortController?.abort();
   });
 </script>

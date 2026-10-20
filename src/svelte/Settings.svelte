@@ -207,6 +207,7 @@
   let signatureHtmlValue = $state('');
   let signatureSaveTimer: ReturnType<typeof setTimeout> | null = null;
   let undoSendDelay = $state('0');
+  let markReadDelay = $state('0');
   let archiveFolder = $state('');
   let sentFolder = $state('');
   let draftsFolder = $state('');
@@ -750,6 +751,9 @@
     signatureHtmlValue = sig.html;
     undoSendDelay = String(
       getEffectiveSettingValue('undo_send_delay', { account: currentAcct }) || 0,
+    );
+    markReadDelay = String(
+      getEffectiveSettingValue('mark_read_delay', { account: currentAcct }) || 0,
     );
     archiveFolder = getEffectiveSettingValue('archive_folder', { account: currentAcct }) || '';
     sentFolder = getEffectiveSettingValue('sent_folder', { account: currentAcct }) || '';
@@ -1319,6 +1323,24 @@
       toasts?.show?.('Undo send updated', 'success');
     } catch (err) {
       showMutationError(err, 'Failed to save undo send');
+    }
+  };
+
+  const markReadOptions = [
+    { value: '0', label: 'Immediately' },
+    { value: '2000', label: 'After 2 seconds' },
+    { value: '5000', label: 'After 5 seconds' },
+    { value: '-1', label: 'Never' },
+  ];
+
+  const saveMarkReadDelay = async () => {
+    try {
+      await setSettingValue('mark_read_delay', Number(markReadDelay) || 0, {
+        account: getAccountId(),
+      });
+      toasts?.show?.('Mark as read updated', 'success');
+    } catch (err) {
+      showMutationError(err, 'Failed to save mark as read');
     }
   };
 
@@ -2311,6 +2333,30 @@
               Controls how tall message list rows are. Power User shows one line per message and
               tightens the folder list, like Thunderbird's table view. Phones always use Comfortable
               so rows stay large enough to tap.
+            </p>
+          </Card.Content>
+        </Card.Root>
+
+        <Card.Root>
+          <Card.Header>
+            <Card.Title>Reading</Card.Title>
+          </Card.Header>
+          <Card.Content class="space-y-2">
+            <Label for="mark-read-select">Mark as read</Label>
+            <Select.Root type="single" bind:value={markReadDelay} onValueChange={saveMarkReadDelay}>
+              <Select.Trigger id="mark-read-select" class="w-full">
+                {markReadOptions.find((option) => option.value === markReadDelay)?.label ||
+                  'Immediately'}
+              </Select.Trigger>
+              <Select.Content>
+                {#each markReadOptions as option (option.value)}
+                  <Select.Item value={option.value}>{option.label}</Select.Item>
+                {/each}
+              </Select.Content>
+            </Select.Root>
+            <p class="text-sm text-muted-foreground">
+              Choose when a message you open is marked as read. With Never, it stays unread until
+              you mark it read.
             </p>
           </Card.Content>
         </Card.Root>

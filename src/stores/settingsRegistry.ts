@@ -251,6 +251,19 @@ export const SETTINGS_REGISTRY: Record<string, SettingDefinition> = {
     localParse: (raw) => parseNumber(raw, 0),
     localSerialize: (value) => String(Number(value) || 0),
   },
+  // How long (ms) an opened message stays open before it is marked read.
+  // 0 = at once, -1 = never (only Mark read marks it).
+  mark_read_delay: {
+    id: 'mark_read_delay',
+    portable: true,
+    label: 'Mark as Read',
+    scope: SETTING_SCOPES.DEVICE,
+    localKey: 'mark_read_delay',
+    valueType: 'number',
+    defaultValue: 0,
+    localParse: (raw) => parseNumber(raw, 0),
+    localSerialize: (value) => String(Number(value) || 0),
+  },
   archive_folder: {
     id: 'archive_folder',
     label: 'Archive Folder',
