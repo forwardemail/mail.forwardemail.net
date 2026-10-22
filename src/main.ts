@@ -117,6 +117,7 @@ import { installRuntimeErrorNotifier } from './utils/runtime-error-notifier';
 import { initPerfObservers } from './utils/perf-logger.ts';
 import { attemptRecovery } from './utils/db-recovery';
 import { parseMailto, mailtoToPrefill } from './utils/mailto';
+import { recordBoot, trackPageVisibility } from './utils/boot-history';
 import { selectedFolder, folders } from './stores/folderStore';
 import {
   messageBody,
@@ -593,7 +594,23 @@ const diagnosticsRoot = document.querySelector('#diagnostics-root') as HTMLEleme
 let _diagnosticsApp: ReturnType<typeof mount> | null = null;
 function mountDiagnostics() {
   if (_diagnosticsApp || !diagnosticsRoot) return;
-  _diagnosticsApp = mount(Diagnostics, { target: diagnosticsRoot });
+  _diagnosticsApp = mount(Diagnostics, {
+    target: diagnosticsRoot,
+    props: {
+      // Signed in with readable credentials: send through our own composer.
+      // Signed out or locked, the page falls back to the share sheet.
+      openComposer(prefill: Record<string, unknown>) {
+        if (!hasReadableCredentials()) return false;
+        if (!isTauriDesktop && !composeMounted) return false;
+        const { composeModal } = viewModel.mailboxView as {
+          composeModal?: { open?: (prefill: Record<string, unknown>) => void };
+        };
+        if (!composeModal?.open) return false;
+        composeModal.open(prefill);
+        return true;
+      },
+    },
+  });
 }
 
 let _profileApp = null;
@@ -768,6 +785,8 @@ export function cleanupCustomEventListeners() {
 
 const composeRoot = document.querySelector('#compose-root');
 let _composeApp = null;
+// Set once Compose mounts; the diagnostics page sends through it when it can
+let composeMounted = false;
 let composeApi = {
   open() {},
   close() {},
@@ -1047,6 +1066,7 @@ if (composeRoot) {
         },
       },
     });
+    composeMounted = true;
   } catch (err) {
     console.error('Failed to mount compose component', err);
   }
@@ -2207,6 +2227,11 @@ async function bootstrap() {
 
   // Follow the OS text size before the first paint of real content, so text
   // does not visibly resize a moment after the app appears. No-op off iOS.
+  // Note this load for the diagnostics report, which counts reloads that
+  // followed a page dying on screen (iOS renderer kills, watchdog reloads).
+  recordBoot();
+  trackPageVisibility();
+
   try {
     initOsTextScale();
   } catch {

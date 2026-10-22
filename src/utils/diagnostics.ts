@@ -20,6 +20,7 @@
 
 import { isTauri, isTauriDesktop, isTauriMacOS, isTauriMobile, getPlatform } from './platform.js';
 import { DB_NAME } from './db-constants';
+import { readBootHistory, summarizeBootHistory } from './boot-history';
 
 export type DiagnosticStatus = 'pass' | 'fail' | 'warn' | 'skip';
 
@@ -521,6 +522,178 @@ export const checkRendererWatchdog = (): Promise<DiagnosticResult> =>
     return { status: 'pass', message: 'Renderer answering; no reloads this session', detail };
   });
 
+const MB = 1024 * 1024;
+const formatBytes = (bytes: number) =>
+  bytes >= 1024 * MB ? `${(bytes / (1024 * MB)).toFixed(1)} GB` : `${Math.round(bytes / MB)} MB`;
+
+/**
+ * How much the browser storage for the app holds and may hold. A cache in
+ * the gigabytes is the usual reason a phone runs out of memory at launch.
+ */
+export const checkStorageUsage = (): Promise<DiagnosticResult> =>
+  runCheck('storage-usage', 'Storage use', async () => {
+    let localStorageKeys = 0;
+    let localStorageChars = 0;
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i) || '';
+        localStorageKeys++;
+        localStorageChars += key.length + (localStorage.getItem(key) || '').length;
+      }
+    } catch {
+      /* blocked; reported as zero */
+    }
+    const local = { localStorageKeys, localStorageKB: Math.round((localStorageChars * 2) / 1024) };
+    const storage = typeof navigator === 'undefined' ? undefined : navigator.storage;
+    if (!storage?.estimate) {
+      return { status: 'skip', message: 'Storage estimate not available', detail: local };
+    }
+    const estimate = (await storage.estimate()) as {
+      usage?: number;
+      quota?: number;
+      usageDetails?: Record<string, number>;
+    };
+    const persisted = storage.persisted ? await storage.persisted().catch(() => null) : null;
+    const usage = estimate.usage ?? 0;
+    const quota = estimate.quota ?? 0;
+    const detail = {
+      usageBytes: usage,
+      quotaBytes: quota,
+      usageDetails: estimate.usageDetails,
+      persisted,
+      ...local,
+    };
+    const message = `${formatBytes(usage)} used${quota ? ` of ${formatBytes(quota)}` : ''}${
+      persisted === false ? ', not persistent' : ''
+    }`;
+    const heavy = usage > 2 * 1024 * MB || (quota > 0 && usage / quota > 0.8);
+    return { status: heavy ? 'warn' : 'pass', message, detail };
+  });
+
+/**
+ * Row counts for each table of the local mail cache. Counts only: reading
+ * the rows themselves can be what runs a phone out of memory.
+ */
+export const checkCacheContents = (): Promise<DiagnosticResult> =>
+  runCheck('cache-contents', 'Cache contents', async () => {
+    if (typeof indexedDB === 'undefined') {
+      return { status: 'skip', message: 'IndexedDB not available in this runtime' };
+    }
+    const counts = await new Promise<Record<string, number> | null>((resolve, reject) => {
+      const req = indexedDB.open(DB_NAME);
+      req.onerror = () => reject(req.error ?? new Error('open failed'));
+      req.onupgradeneeded = () => {
+        req.transaction?.abort();
+        resolve(null);
+      };
+      req.onsuccess = () => {
+        const db = req.result;
+        const names = Array.from(db.objectStoreNames);
+        const out: Record<string, number> = {};
+        if (!names.length) {
+          db.close();
+          resolve(out);
+          return;
+        }
+        const tx = db.transaction(names, 'readonly');
+        for (const name of names) {
+          const countReq = tx.objectStore(name).count();
+          countReq.onsuccess = () => (out[name] = countReq.result);
+        }
+        tx.oncomplete = () => {
+          db.close();
+          resolve(out);
+        };
+        tx.onerror = () => {
+          db.close();
+          reject(tx.error ?? new Error('count failed'));
+        };
+      };
+    });
+    if (!counts) return { status: 'skip', message: 'No cache yet' };
+    let accounts = 0;
+    try {
+      const { Accounts } = await import('./storage.js');
+      accounts = Accounts.getPersistent().length;
+    } catch {
+      /* count unknown */
+    }
+    const n = (key: string) => (counts[key] ?? 0).toLocaleString('en-US');
+    return {
+      status: 'pass',
+      message: `${n('messages')} messages, ${n('messageBodies')} bodies, ${n('searchIndex')} search index records, ${accounts} account${accounts === 1 ? '' : 's'}`,
+      detail: { tables: counts, accounts },
+    };
+  });
+
+/**
+ * Memory the device has and the page is using, as far as the engine says.
+ * WebKit reports no heap size, so on Apple devices this is the device RAM
+ * and model from the app, which tells a 3 GB phone from a 6 GB one.
+ */
+export const checkMemory = (): Promise<DiagnosticResult> =>
+  runCheck('memory', 'Memory', async () => {
+    const perf = (globalThis.performance ?? {}) as Performance & {
+      memory?: { usedJSHeapSize: number; totalJSHeapSize: number; jsHeapSizeLimit: number };
+    };
+    const detail: Record<string, unknown> = {};
+    const parts: string[] = [];
+    if (perf.memory) {
+      detail.jsHeapUsedBytes = perf.memory.usedJSHeapSize;
+      detail.jsHeapLimitBytes = perf.memory.jsHeapSizeLimit;
+      parts.push(
+        `page heap ${formatBytes(perf.memory.usedJSHeapSize)} of ${formatBytes(perf.memory.jsHeapSizeLimit)}`,
+      );
+    }
+    const deviceMemoryGB = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
+    if (deviceMemoryGB) detail.deviceMemoryGB = deviceMemoryGB;
+    if (isTauri) {
+      const { getBuildInfo } = await import('./tauri-bridge.js');
+      const info = (await getBuildInfo().catch(() => null)) as Record<string, string> | null;
+      const ram = Number(info?.memoryBytes || 0);
+      if (ram) {
+        detail.deviceMemoryBytes = ram;
+        parts.unshift(`device ${formatBytes(ram)}`);
+      }
+      if (info?.deviceModel) {
+        detail.deviceModel = info.deviceModel;
+        parts.unshift(info.deviceModel);
+      }
+      if (info?.osVersion) detail.osVersion = info.osVersion;
+    } else if (deviceMemoryGB) {
+      parts.unshift(`device about ${deviceMemoryGB} GB`);
+    }
+    if (!parts.length) {
+      return { status: 'skip', message: 'Not reported by this engine', detail };
+    }
+    const nearLimit = perf.memory && perf.memory.usedJSHeapSize / perf.memory.jsHeapSizeLimit > 0.8;
+    return { status: nearLimit ? 'warn' : 'pass', message: parts.join(', '), detail };
+  });
+
+/**
+ * Page loads in the last hour, and how many came right after the page died
+ * while on screen. Several of those in a row is the "screen keeps flashing"
+ * report: the system kills the page and the app reloads it.
+ */
+export const checkPageReloads = (): Promise<DiagnosticResult> =>
+  runCheck('page-reloads', 'Page reloads', async () => {
+    const history = readBootHistory();
+    if (!history.length) return { status: 'skip', message: 'No load history yet' };
+    const now = Date.now();
+    const hour = summarizeBootHistory(history, now);
+    const day = summarizeBootHistory(history, now, 24 * 60 * 60_000);
+    const detail = {
+      lastHour: hour,
+      lastDay: day,
+      recent: history.slice(-10).map((e) => ({
+        at: new Date(e.at).toISOString(),
+        previousEndedOnScreen: e.previousEndedOnScreen,
+      })),
+    };
+    const message = `${hour.loads} load${hour.loads === 1 ? '' : 's'} in the last hour, ${hour.endedOnScreen} after the page died on screen (${day.endedOnScreen} today)`;
+    return { status: hour.endedOnScreen >= 2 ? 'warn' : 'pass', message, detail };
+  });
+
 // ── Composer ────────────────────────────────────────────────────────────────
 
 export const collectPlatform = (): DiagnosticsReport['platform'] => ({
@@ -547,6 +720,10 @@ export const runDiagnostics = async (): Promise<DiagnosticsReport> => {
     checkPushRegistration(),
     checkAppLock(),
     checkRendererWatchdog(),
+    checkStorageUsage(),
+    checkCacheContents(),
+    checkMemory(),
+    checkPageReloads(),
   ]);
   return { generatedAt: new Date().toISOString(), platform: collectPlatform(), results };
 };

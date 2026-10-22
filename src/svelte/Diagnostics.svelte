@@ -14,10 +14,27 @@
     summarizeReport,
     type DiagnosticsReport,
   } from '../utils/diagnostics';
+  import {
+    buildReportAttachments,
+    sendSupportReport,
+    SUPPORT_ADDRESS,
+    type SendDeps,
+  } from '../utils/support-report';
+  import { openExternalUrl } from '../utils/external-links.js';
+  import { isTauri } from '../utils/platform.js';
+
+  interface Props {
+    /** Opens the in-app composer with this prefill; false when it cannot */
+    openComposer?: SendDeps['openComposer'];
+  }
+
+  let { openComposer }: Props = $props();
 
   let report = $state<DiagnosticsReport | null>(null);
   let running = $state(false);
   let copied = $state(false);
+  let sending = $state(false);
+  let sendNote = $state('');
 
   const summary = $derived(report ? summarizeReport(report) : null);
   const reportText = $derived(report ? formatReportText(report) : '');
@@ -58,16 +75,41 @@
     }
   };
 
-  /**
-   * "Email this report" — opens the user's mail client with the report
-   * pre-filled. On Tauri desktop with mailto: registered to us, this is also
-   * a dogfood test: it round-trips through our own deep-link handler.
-   */
-  const emailReport = () => {
-    if (!reportText) return;
-    const subject = encodeURIComponent('Forward Email diagnostics report');
-    const body = encodeURIComponent(reportText);
-    window.location.href = `mailto:support@forwardemail.net?subject=${subject}&body=${body}`;
+  // The app's own log (redacted when written) helps with crashes the page
+  // itself never sees. Not available on the web.
+  const readAppLog = async () => {
+    if (!isTauri) return '';
+    try {
+      const { readRecentLogs } = await import('../utils/tauri-bridge.js');
+      return await readRecentLogs(65536);
+    } catch {
+      return '';
+    }
+  };
+
+  const emailReport = async () => {
+    if (!reportText || sending) return;
+    sending = true;
+    sendNote = '';
+    try {
+      const attachments = buildReportAttachments(reportJson, await readAppLog());
+      const route = await sendSupportReport(reportText, attachments, {
+        openComposer,
+        share: navigator.share ? (data) => navigator.share(data) : undefined,
+        canShare: navigator.canShare ? (data) => navigator.canShare(data) : undefined,
+        openMailto: async (url) => {
+          if (isTauri) await openExternalUrl(url);
+          else globalThis.location.href = url;
+        },
+      });
+      if (route === 'mailto') {
+        sendNote = `Opened your mail app. If nothing appeared, copy the report and send it to ${SUPPORT_ADDRESS}.`;
+      }
+    } catch {
+      sendNote = `Could not open a way to send it. Copy the report and send it to ${SUPPORT_ADDRESS}.`;
+    } finally {
+      sending = false;
+    }
   };
 
   /** Diagnostics statuses map onto the StatusLog glyph vocabulary (§3.3). */
@@ -107,8 +149,8 @@
       </Button>
       <h1 class="text-2xl font-semibold">Diagnostics</h1>
       <p class="mt-1 text-sm text-muted-foreground">
-        Probes the network, storage, and OS-integration surfaces. Paste the report into a support
-        email so we can triage faster.
+        Probes the network, storage, memory, and OS-integration surfaces. Email it to support with
+        the button below, or copy the report into a message of your own.
       </p>
     </div>
     <Button variant="outline" size="sm" onclick={run} disabled={running}>
@@ -159,11 +201,14 @@
           <ClipboardCopy class="mr-1 h-3.5 w-3.5" />
           {copied ? 'Copied' : 'Copy report'}
         </Button>
-        <Button variant="outline" size="sm" onclick={emailReport}>
+        <Button variant="outline" size="sm" onclick={emailReport} disabled={sending}>
           <Mail class="mr-1 h-3.5 w-3.5" />
-          Email to support
+          {sending ? 'Preparing…' : 'Email to support'}
         </Button>
       </div>
+      {#if sendNote}
+        <p class="mb-2 text-sm text-muted-foreground" role="status">{sendNote}</p>
+      {/if}
       <details class="rounded-md border bg-muted/30">
         <summary class="cursor-pointer px-3 py-2 text-sm font-medium">Report (text)</summary>
         <pre

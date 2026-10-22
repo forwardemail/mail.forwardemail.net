@@ -72,7 +72,8 @@ fn get_platform() -> String {
     format!("{}-{}", os, arch)
 }
 
-/// Returns build metadata for the About dialog (all compile-time constants).
+/// Returns build metadata for the About dialog, plus the device facts the
+/// diagnostics report uses: model, RAM and OS version where the OS gives them.
 #[tauri::command]
 fn get_build_info() -> std::collections::HashMap<String, String> {
     let mut info = std::collections::HashMap::new();
@@ -81,7 +82,139 @@ fn get_build_info() -> std::collections::HashMap<String, String> {
     info.insert("os".into(), std::env::consts::OS.to_string());
     info.insert("arch".into(), std::env::consts::ARCH.to_string());
     info.insert("license".into(), env!("CARGO_PKG_LICENSE").to_string());
+    for (key, value) in device_info() {
+        info.insert(key.into(), value);
+    }
     info
+}
+
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+fn device_info() -> Vec<(&'static str, String)> {
+    use std::ffi::{c_char, c_int, c_void, CString};
+    extern "C" {
+        fn sysctlbyname(
+            name: *const c_char,
+            oldp: *mut c_void,
+            oldlenp: *mut usize,
+            newp: *mut c_void,
+            newlen: usize,
+        ) -> c_int;
+    }
+    fn sysctl_bytes(name: &str) -> Option<Vec<u8>> {
+        let name = CString::new(name).ok()?;
+        let mut len = 0usize;
+        // SAFETY: a null buffer asks sysctl for the size only
+        if unsafe {
+            sysctlbyname(
+                name.as_ptr(),
+                std::ptr::null_mut(),
+                &mut len,
+                std::ptr::null_mut(),
+                0,
+            )
+        } != 0
+            || len == 0
+        {
+            return None;
+        }
+        let mut buf = vec![0u8; len];
+        // SAFETY: buf holds len bytes, the size sysctl just reported
+        if unsafe {
+            sysctlbyname(
+                name.as_ptr(),
+                buf.as_mut_ptr().cast(),
+                &mut len,
+                std::ptr::null_mut(),
+                0,
+            )
+        } != 0
+        {
+            return None;
+        }
+        buf.truncate(len);
+        Some(buf)
+    }
+    let text = |name: &str| {
+        sysctl_bytes(name).map(|b| {
+            String::from_utf8_lossy(&b)
+                .trim_end_matches('\0')
+                .to_string()
+        })
+    };
+    let mut out = Vec::new();
+    // hw.machine is the model identifier on iOS ("iPhone14,6"); on a Mac it
+    // is only the CPU type, and hw.model names the machine
+    let model_key = if cfg!(target_os = "ios") {
+        "hw.machine"
+    } else {
+        "hw.model"
+    };
+    if let Some(model) = text(model_key) {
+        out.push(("deviceModel", model));
+    }
+    if let Some(bytes) = sysctl_bytes("hw.memsize") {
+        if bytes.len() == 8 {
+            let mut raw = [0u8; 8];
+            raw.copy_from_slice(&bytes);
+            out.push(("memoryBytes", u64::from_ne_bytes(raw).to_string()));
+        }
+    }
+    if let Some(version) = text("kern.osproductversion") {
+        out.push(("osVersion", version));
+    }
+    out
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn device_info() -> Vec<(&'static str, String)> {
+    let mut out = Vec::new();
+    if let Ok(meminfo) = std::fs::read_to_string("/proc/meminfo") {
+        let total_kb = meminfo
+            .lines()
+            .find(|l| l.starts_with("MemTotal:"))
+            .and_then(|l| l.split_whitespace().nth(1))
+            .and_then(|v| v.parse::<u64>().ok());
+        if let Some(kb) = total_kb {
+            out.push(("memoryBytes", (kb * 1024).to_string()));
+        }
+    }
+    out
+}
+
+#[cfg(not(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "linux",
+    target_os = "android"
+)))]
+fn device_info() -> Vec<(&'static str, String)> {
+    Vec::new()
+}
+
+#[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
+mod device_info_tests {
+    #[test]
+    fn reports_the_ram_of_this_machine() {
+        let info = super::device_info();
+        let ram: u64 = info
+            .iter()
+            .find(|(k, _)| *k == "memoryBytes")
+            .and_then(|(_, v)| v.parse().ok())
+            .expect("memoryBytes");
+        // Any machine that builds this has between 1 GB and 64 TB
+        assert!(ram > 1 << 30 && ram < 1 << 46, "{ram}");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn names_the_mac_model_and_os_version() {
+        let info = super::device_info();
+        let get = |key: &str| info.iter().find(|(k, _)| *k == key).map(|(_, v)| v.clone());
+        assert!(get("deviceModel").is_some_and(|m| !m.is_empty() && !m.contains('\0')));
+        assert!(
+            get("osVersion").is_some_and(|v| v.chars().next().is_some_and(|c| c.is_ascii_digit()))
+        );
+    }
 }
 
 /// Sets the dock/taskbar badge count.
