@@ -2,6 +2,7 @@ import { initializeDatabase } from './db.js';
 import { onDbWorkerChange, openDbPortForWorker } from './db-worker-client.js';
 import SearchWorker from '../workers/search.worker.ts?worker&inline';
 import { createPendingRequests } from './pending-requests.js';
+import { isMemoryConstrained } from './memory-profile';
 
 const createWorker = () => new SearchWorker();
 
@@ -88,7 +89,7 @@ export class SearchWorkerClient {
 
   async init(account, includeBody) {
     await this.ensureDbConnected();
-    return this.send('init', { account, includeBody });
+    return this.send('init', { account, includeBody, lite: isMemoryConstrained });
   }
 
   index(payload) {
@@ -109,6 +110,11 @@ export class SearchWorkerClient {
 
   getStats(payload) {
     return this.send('getStats', payload);
+  }
+
+  // Write any index changes still waiting on the debounce.
+  flush() {
+    return this.send('flush', {});
   }
 
   getHealth(payload) {

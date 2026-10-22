@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { isEdgeSwipeStart } from '../utils/mobile-edge-swipe';
   import { onMount, onDestroy } from 'svelte';
   import { get, type Readable, type Unsubscriber } from 'svelte/store';
   import { downloadFile } from '../utils/download';
@@ -4089,10 +4090,16 @@
     newEventModal || editEventModal || showDeleteConfirm || newCalendarModal || deleteCalendarModal;
 
   const onCalendarTouchStart = (e: TouchEvent) => {
+    // (a touch that returns early below must not reuse the last one's start)
+    swipeStartX = 0;
+    swipeActive = false;
     if (isCalendarModalOpen()) return;
     if (!e.touches || e.touches.length !== 1) return;
     const target = e.target as HTMLElement | null;
     if (target?.closest?.(SWIPE_HORIZONTAL_DEADZONE)) return;
+    // A swipe from the left edge is the app's back gesture, not a move to the
+    // previous period.
+    if (isEdgeSwipeStart(e.touches[0].clientX)) return;
     swipeStartX = e.touches[0].clientX;
     swipeStartY = e.touches[0].clientY;
     swipeActive = false;

@@ -23,6 +23,7 @@ import {
   matchesRemoteMessage,
   applyRemoteFlagChange,
   applyRemoteLabelChange,
+  keepScrolledPages,
 } from '../../src/stores/mailbox-store-helpers';
 
 // Mock bulkGet: returns the cached record for each [account, key] tuple in the
@@ -910,6 +911,49 @@ describe('collectFolderMessages', () => {
     });
 
     expect(out.messages.map((m) => m.id)).toEqual(['a']);
+  });
+});
+
+describe('keepScrolledPages', () => {
+  const at = (id: string, day: number) => ({ id, date: `2026-01-${String(day).padStart(2, '0')}` });
+
+  it('keeps the scrolled pages that sort after the fresh first page (newest first)', () => {
+    // The fresh page's last row (f) was removed from the list on screen, so
+    // mergeHeadPage cannot place the old rows; they share e and d.
+    const existing = [at('e', 20), at('d', 19), at('c', 10), at('b', 9), at('a', 8)];
+    const incoming = [at('n', 30), at('e', 20), at('d', 19), at('f', 15)];
+    expect(keepScrolledPages(existing, incoming, 'newest')?.map((m) => m.id)).toEqual([
+      'n',
+      'e',
+      'd',
+      'f',
+      'c',
+      'b',
+      'a',
+    ]);
+  });
+
+  it('declines when the fresh page shares no row with the list (a gap between them)', () => {
+    const existing = [at('c', 10), at('b', 9), at('a', 8)];
+    const incoming = [at('n', 30), at('m', 29), at('l', 28)];
+    expect(keepScrolledPages(existing, incoming, 'newest')).toBeNull();
+  });
+
+  it('places rows the other way for oldest first', () => {
+    const existing = [at('a', 1), at('b', 2), at('c', 9)];
+    const incoming = [at('a', 1), at('x', 3)];
+    // (b, removed on the server, is dropped with the rows the page covers)
+    expect(keepScrolledPages(existing, incoming, 'oldest')?.map((m) => m.id)).toEqual([
+      'a',
+      'x',
+      'c',
+    ]);
+  });
+
+  it('declines orders it cannot place and pages without a date', () => {
+    expect(keepScrolledPages([at('a', 1)], [at('b', 2)], 'subject')).toBeNull();
+    expect(keepScrolledPages([at('a', 1)], [{ id: 'b' }], 'newest')).toBeNull();
+    expect(keepScrolledPages([at('a', 1)], [], 'newest')).toBeNull();
   });
 });
 

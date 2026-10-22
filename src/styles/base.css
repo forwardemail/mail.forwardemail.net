@@ -32,6 +32,11 @@ html {
   height: 100%;
   margin: 0;
   padding: 0;
+  /* The app scrolls its own panes; the page itself never rubber-bands (which
+     moved the header and tab bar with it) or chains a pane's overscroll up
+     to the page. No gray flash on every tapped row and button either. */
+  overscroll-behavior-y: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 body {
@@ -46,6 +51,7 @@ body {
   color: var(--fg-primary);
   overflow-x: hidden;
   overflow-y: hidden;
+  overscroll-behavior-y: none;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }

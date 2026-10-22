@@ -72,6 +72,7 @@ export default defineConfig({
         /mailbox\.spec/,
         /notification-tap\.spec/,
         /mobile-stability\.spec/,
+        /mobile-list-position\.spec/,
         /adapters\/web\//,
       ],
     },

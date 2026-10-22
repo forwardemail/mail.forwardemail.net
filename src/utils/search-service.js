@@ -33,7 +33,18 @@ function accountKey(account) {
   return account || 'default';
 }
 
-function createDocument(includeBody = false, fields = null) {
+// On a phone the index is built without FlexSearch's context index: it
+// stores every word pair within three words of each other, in both orders,
+// for every indexed field, and is by far the largest part of the index. The
+// search worker sets the default from its init message, before it creates an
+// index; a service can also be given `lite`. The entries saved to disk do not
+// depend on it.
+let liteIndexDefault = false;
+export function setSearchMemoryProfile(lite) {
+  liteIndexDefault = Boolean(lite);
+}
+
+function createDocument(includeBody = false, fields = null, liteIndex = liteIndexDefault) {
   const indexFields =
     fields || (includeBody ? SEARCH_PRESETS.FULL.fields : SEARCH_PRESETS.MINIMAL.fields);
 
@@ -45,11 +56,15 @@ function createDocument(includeBody = false, fields = null) {
       store: ['id', 'folder', 'subject', 'from', 'to', 'cc', 'snippet', 'labels', 'date'],
     },
     tokenize: 'forward',
-    context: {
-      resolution: 9,
-      depth: 3,
-      bidirectional: true,
-    },
+    ...(liteIndex
+      ? {}
+      : {
+          context: {
+            resolution: 9,
+            depth: 3,
+            bidirectional: true,
+          },
+        }),
     encoder: FlexSearch.Charset.LatinBalance,
     resolution: 9,
   });
@@ -66,11 +81,16 @@ const entrySize = (e) =>
   (e.body?.length || 0);
 
 export class SearchService {
-  constructor({ includeBody = false, account, preset = null } = {}) {
+  constructor({ includeBody = false, account, preset = null, lite = liteIndexDefault } = {}) {
     this.includeBody = includeBody;
     this.account = accountKey(account);
     this.preset = preset || (includeBody ? 'FULL' : 'MINIMAL');
-    this.index = createDocument(includeBody, preset ? SEARCH_PRESETS[preset]?.fields : null);
+    this.lite = Boolean(lite);
+    this.index = createDocument(
+      includeBody,
+      preset ? SEARCH_PRESETS[preset]?.fields : null,
+      this.lite,
+    );
     // Keyed by id so an update replaces in place. This used to be an array
     // that removeEntry() filtered in full for every upsert, which made a
     // sync batch against a big index O(batch x index) and showed up as the
@@ -99,7 +119,7 @@ export class SearchService {
 
     if (cached?.data?.length) {
       this._entries = new Map();
-      this.index = createDocument(this.includeBody);
+      this.index = createDocument(this.includeBody, null, this.lite);
       for (const raw of cached.data) {
         if (!raw?.id) continue;
         // Normalize entries - ensure labelsText exists for proper FlexSearch indexing
@@ -117,11 +137,25 @@ export class SearchService {
   }
 
   async reset(entries = []) {
-    this.index = createDocument(this.includeBody);
-    this._entries = new Map();
-    this.sizeBytes = 0;
+    this.clearEntries();
     entries.forEach((entry) => this.addEntry(entry));
     await this.persist();
+  }
+
+  /**
+   * Empty the in-memory index without writing it. A write already scheduled
+   * is dropped, so it cannot save the index half rebuilt; whoever clears it
+   * writes it when done.
+   */
+  clearEntries() {
+    if (this._persistTimer) {
+      clearTimeout(this._persistTimer);
+      this._persistTimer = null;
+    }
+    this._persistPending = false;
+    this.index = createDocument(this.includeBody, null, this.lite);
+    this._entries = new Map();
+    this.sizeBytes = 0;
   }
 
   addEntry(entry) {
@@ -178,6 +212,10 @@ export class SearchService {
     return this._entries.size;
   }
 
+  hasEntry(id) {
+    return this._entries.has(id);
+  }
+
   updateEntry(entry) {
     if (!entry?.id) return;
     // A metadata update (flags, labels, folder) arrives without the body. A
@@ -205,7 +243,7 @@ export class SearchService {
     const entries = this.entries;
     this.includeBody = next;
     this.preset = next ? 'FULL' : 'MINIMAL';
-    this.index = createDocument(next);
+    this.index = createDocument(next, null, this.lite);
     this._entries = new Map();
     this.sizeBytes = 0;
     entries.forEach((entry) => this.addEntry(entry));
@@ -260,16 +298,31 @@ export class SearchService {
     });
   }
 
-  // Debounce window for coalesced writes. Long enough to swallow a burst of
-  // 100-message sync batches (which arrive ~100ms apart), short enough that a
-  // single interactive change (star, label, delete) lands quickly.
+  // Debounce window for coalesced writes. Every write copies the whole index
+  // (structured clone to the db worker, and with App Lock a JSON string, its
+  // bytes, the ciphertext and its base64 on top), so a burst must end in one
+  // write, not one per sync batch. Background sync on a phone sends batches
+  // for minutes; at 800ms each lull between them rewrote the growing blob,
+  // and those copies are what took the iOS web content process over its
+  // memory limit (the page went blank and reloaded). The in-memory index
+  // serves queries meanwhile; flush() writes at once when the app is hidden,
+  // and a write lost to a killed worker is repaired by the startup check.
   static PERSIST_DEBOUNCE_MS = 800;
+  // On a phone or tablet (a lite index): a sync burst there runs for minutes,
+  // with lulls longer than 800ms between its batches.
+  static CONSTRAINED_PERSIST_DEBOUNCE_MS = 15_000;
 
   /**
    * Request a persist without writing immediately. Repeated calls during a
    * burst collapse into a single trailing write. Never rejects; write errors
    * are logged inside persist(). Safe to call fire-and-forget.
    */
+  persistDebounceMs() {
+    return this.lite
+      ? SearchService.CONSTRAINED_PERSIST_DEBOUNCE_MS
+      : SearchService.PERSIST_DEBOUNCE_MS;
+  }
+
   schedulePersist() {
     this._persistPending = true;
     if (this._persistTimer) return;
@@ -281,7 +334,7 @@ export class SearchService {
       this.flush().catch((error) => {
         warn('[SearchService] Deferred index write failed', error);
       });
-    }, SearchService.PERSIST_DEBOUNCE_MS);
+    }, this.persistDebounceMs());
   }
 
   /**

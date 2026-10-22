@@ -392,6 +392,16 @@
     swipeState.direction = null;
   };
 
+  // A touch the system took over (a scroll the browser claimed, Control
+  // Center, the home bar) ends the swipe without acting on it.
+  const onIframeTouchCancel = () => {
+    onSwipe?.('end', { active: false, direction: null, cancelled: true });
+    swipeState.startX = 0;
+    swipeState.startY = 0;
+    swipeState.active = false;
+    swipeState.direction = null;
+  };
+
   let attachedDoc: Document | null = null;
 
   const attachIframeTouchListeners = () => {
@@ -401,15 +411,15 @@
       if (!doc || doc === attachedDoc) return;
       // Clean up previous listeners
       if (attachedDoc) {
-        attachedDoc.removeEventListener('touchstart', onIframeTouchStart);
-        attachedDoc.removeEventListener('touchmove', onIframeTouchMove);
-        attachedDoc.removeEventListener('touchend', onIframeTouchEnd);
-        attachedDoc.removeEventListener('touchcancel', onIframeTouchEnd);
+        attachedDoc.removeEventListener('touchstart', onIframeTouchStart, true);
+        attachedDoc.removeEventListener('touchmove', onIframeTouchMove, true);
+        attachedDoc.removeEventListener('touchend', onIframeTouchEnd, true);
+        attachedDoc.removeEventListener('touchcancel', onIframeTouchCancel, true);
       }
       doc.addEventListener('touchstart', onIframeTouchStart, { passive: true, capture: true });
       doc.addEventListener('touchmove', onIframeTouchMove, { passive: true, capture: true });
       doc.addEventListener('touchend', onIframeTouchEnd, { passive: true, capture: true });
-      doc.addEventListener('touchcancel', onIframeTouchEnd, { passive: true, capture: true });
+      doc.addEventListener('touchcancel', onIframeTouchCancel, { passive: true, capture: true });
       attachedDoc = doc;
     } catch {
       // Cross-origin iframe — fall back to postMessage from the srcdoc
@@ -448,10 +458,10 @@
 
     // Detach iframe touch listeners
     if (attachedDoc) {
-      attachedDoc.removeEventListener('touchstart', onIframeTouchStart);
-      attachedDoc.removeEventListener('touchmove', onIframeTouchMove);
-      attachedDoc.removeEventListener('touchend', onIframeTouchEnd);
-      attachedDoc.removeEventListener('touchcancel', onIframeTouchEnd);
+      attachedDoc.removeEventListener('touchstart', onIframeTouchStart, true);
+      attachedDoc.removeEventListener('touchmove', onIframeTouchMove, true);
+      attachedDoc.removeEventListener('touchend', onIframeTouchEnd, true);
+      attachedDoc.removeEventListener('touchcancel', onIframeTouchCancel, true);
       attachedDoc = null;
     }
 

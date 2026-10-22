@@ -2,7 +2,7 @@
   import { readable, get, writable } from 'svelte/store';
   import type { Readable, Unsubscriber } from 'svelte/store';
   import type { Message } from '../types/message';
-  import { tick, onMount, onDestroy } from 'svelte';
+  import { tick, onMount, onDestroy, untrack } from 'svelte';
 
   // Store subscriptions managed in onMount/onDestroy to avoid $effect loops
   let mailboxSubscriptions: Unsubscriber[] = [];
@@ -99,6 +99,7 @@
     toggleStar,
     openServerDraft,
     initialSyncStarted,
+    DRAWER_MAX_WIDTH,
   } from '../stores/mailboxActions';
   import {
     profileName,
@@ -867,6 +868,9 @@
   let pullDistance = $state(0);
   let pullStartY = 0;
   let isPulling = $state(false);
+  // True while a released pull animates back to rest (see handlePullEnd).
+  let pullSettling = $state(false);
+  let pullSettleTimer: ReturnType<typeof setTimeout> | null = null;
   let isRefreshing = $state(false);
   let refreshAnimating = $state(false);
   let refreshAnimationTimer: ReturnType<typeof setTimeout> | null = null;
@@ -981,6 +985,7 @@
   }
 
   function selectOutbox() {
+    closeDrawer();
     outboxSelected = true;
     selectedOutboxItem = null;
     loadOutboxItems();
@@ -1198,6 +1203,11 @@
   const isTabletViewport = () =>
     viewportWidth > BREAKPOINT_MOBILE && viewportWidth <= BREAKPOINT_TABLET;
   const isMobile = $derived(viewportWidth <= BREAKPOINT_MOBILE);
+  // Where the sidebar is a drawer over the list (mailbox.css max-width: 820px).
+  const isDrawerViewport = () => viewportWidth <= DRAWER_MAX_WIDTH;
+  const closeDrawer = () => {
+    if (isDrawerViewport() && get(sidebarOpen)) sidebarOpen.set(false);
+  };
   // Check both messages and conversations to avoid flicker from debounced conversations
   const listIsEmpty = $derived(
     $threadingEnabled
@@ -1852,8 +1862,15 @@
       if (updateUrl) {
         const folder = get(selectedFolder);
         if (folder) {
-          const hash = buildHashUrl(folder, null);
-          history.pushState({ folder }, '', hash);
+          // Back to the list's entry when the message's was pushed here, else
+          // replace it: a new entry made back (the iOS edge swipe, the
+          // browser) open the message that was just closed.
+          if (messageHistoryPushed && history.state?.messageId) {
+            messageHistoryPushed = false;
+            history.back();
+          } else {
+            history.replaceState({ folder }, '', buildHashUrl(folder, null));
+          }
         }
       }
     };
@@ -1881,6 +1898,19 @@
     }
   });
 
+  // One history entry for the full-screen reader, however many messages are
+  // swiped through in it: back returns to the list, not to each message.
+  // True while the entry on top of history is one this view pushed for an
+  // open message, so closing the message can go back to the list's entry.
+  let messageHistoryPushed = false;
+  const writeMessageHistory = (state: { messageId: unknown; folder: unknown }, hash: string) => {
+    if (get(mobileReader) && history.state?.messageId) {
+      history.replaceState(state, '', hash);
+    } else {
+      history.pushState(state, '', hash);
+      messageHistoryPushed = true;
+    }
+  };
   const selectConversation = (conv, { updateUrl = true } = {}) => {
     // Close action menu when selecting a new conversation
     actionMenuOpen = false;
@@ -1943,7 +1973,7 @@
     const folder = get(selectedFolder);
     if (updateUrl && lastMessage?.id && folder) {
       const hash = buildHashUrl(folder, lastMessage.id);
-      history.pushState({ messageId: lastMessage.id, folder }, '', hash);
+      writeMessageHistory({ messageId: lastMessage.id, folder }, hash);
     }
   };
   // Auto-select conversation removed (was causing loops) - user must click to select
@@ -2011,7 +2041,7 @@
     const folder = get(selectedFolder);
     if (updateUrl && msg?.id && folder) {
       const hash = buildHashUrl(folder, msg.id);
-      history.pushState({ messageId: msg.id, folder }, '', hash);
+      writeMessageHistory({ messageId: msg.id, folder }, hash);
     }
   };
   const toggleThreadMessage = (msg) => {
@@ -2617,6 +2647,11 @@
 
     // Handle browser back/forward navigation
     const handleLocationChange = () => {
+      messageHistoryPushed = false;
+      // Back (the iOS edge swipe, Android, the browser) leaves the drawer and
+      // the search screen, which belong to the view being left.
+      closeDrawer();
+      mobileSearchOpen = false;
       const parsed = parseHashUrl();
       // Prevent URL update during popstate handling
       skipFolderUrlUpdate = true;
@@ -2624,9 +2659,12 @@
         if (parsed) {
           navigateToMessage(parsed.folder, parsed.messageId, parsed.filterState);
         } else {
-          // No hash - go to default folder (INBOX)
+          // No hash - go to default folder (INBOX). Selecting the folder on
+          // screen again starts its list over at the first page.
           const defaultFolder = 'INBOX';
-          mailboxStore?.actions?.selectFolder?.(defaultFolder);
+          if (String(get(selectedFolder) || '').toUpperCase() !== defaultFolder) {
+            mailboxStore?.actions?.selectFolder?.(defaultFolder);
+          }
           source.state?.selectedMessage?.set?.(null);
           closeReaderFullscreen({ updateUrl: false }); // popstate already has correct URL
         }
@@ -2692,8 +2730,12 @@
       target.style.setProperty('--tooltip-top', `${top}px`);
     };
 
+    // Hover tooltips only where there is hover: on a touch screen the mouse
+    // events WebKit fakes for a tap opened one, and it then repositioned
+    // itself (forcing layout) on every scroll of the list until the next tap.
+    const canHover = typeof matchMedia === 'function' ? matchMedia('(hover: hover)').matches : true;
     const showTooltip = (target) => {
-      if (!target) return;
+      if (!target || !canHover) return;
       currentTooltipTarget = target;
       updateTooltipPosition(target);
     };
@@ -2747,16 +2789,22 @@
       }
     };
 
+    // Close the sidebar when the window becomes small (and on the first
+    // check), not on every resize while it is: the iOS toolbar and keyboard
+    // and the Android keyboard resize the page, which shut a drawer the user
+    // had just opened.
+    let wasSmall: boolean | null = null;
     const handleResize = () => {
       if (typeof window === 'undefined') return;
       // Update reactive viewport width for layout calculations
       viewportWidth = getLayoutWidth();
       const small = viewportWidth <= 900;
       showHeaderShortcuts = !small;
-      if (small) {
+      if (small && wasSmall !== true) {
         source.state?.sidebarOpen?.set?.(false);
         mailboxView?.sidebarOpen?.set?.(false);
       }
+      wasSmall = small;
     };
     const handleClickOutside = (e) => {
       if ($bulkMoveOpen && !e.target?.closest?.('[data-bulk-move]')) {
@@ -3186,7 +3234,28 @@
   };
 
   // Pull-to-refresh handlers
+  const PULL_DEAD_ZONE = 10;
+  const settlePull = () => {
+    isPulling = false;
+    if (pullDistance > 0) {
+      pullSettling = true;
+      if (pullSettleTimer) clearTimeout(pullSettleTimer);
+      pullSettleTimer = setTimeout(() => {
+        pullSettling = false;
+        pullSettleTimer = null;
+      }, 300);
+    }
+    pullDistance = 0;
+  };
+  // iOS ends a touch taken by the system (text selection, Control Center,
+  // the home bar) with touchcancel, not touchend: without this the pull stayed
+  // armed with an old start point, and a later small drag refreshed.
+  const handlePullCancel = () => {
+    pullToRefreshActive = false;
+    settlePull();
+  };
   const handlePullStart = (e) => {
+    pullToRefreshActive = false;
     // Only activate on mobile screens
     if (window.innerWidth > 640) return;
 
@@ -3195,7 +3264,8 @@
     // The global router owns drags that begin in the native back-swipe zone.
     if (isEdgeSwipeStart(e.touches[0].clientX)) return;
 
-    if (container.scrollTop === 0) {
+    // (momentum can leave a fractional scrollTop at the top on iOS)
+    if (container.scrollTop <= 1) {
       const containerTop = container.getBoundingClientRect().top;
       const touchOffset = e.touches[0].clientY - containerTop;
       if (touchOffset > pullStartMaxOffset) return;
@@ -3217,9 +3287,11 @@
     const currentY = e.touches[0].clientY;
     const distance = currentY - pullStartY;
 
-    if (distance > 0) {
+    // A dead zone, so a tap or the start of a scroll on the first rows does not
+    // move the list.
+    if (distance > PULL_DEAD_ZONE) {
       isPulling = true;
-      pullDistance = Math.min(distance * 0.5, 100); // Max 100px pull
+      pullDistance = Math.min((distance - PULL_DEAD_ZONE) * 0.5, 100); // Max 100px pull
 
       // Let native scrolling handle the gesture; keep pull state in sync.
     }
@@ -3233,10 +3305,9 @@
     if (pullDistance > 60 && !isRefreshing) {
       triggerHaptic('light');
       isRefreshing = true;
-      isPulling = false;
 
       // Reset pull distance immediately for faster feedback
-      pullDistance = 0;
+      settlePull();
 
       try {
         await reloadMessages();
@@ -3249,8 +3320,7 @@
       }
     } else {
       // Snap back
-      isPulling = false;
-      pullDistance = 0;
+      settlePull();
     }
   };
 
@@ -3346,7 +3416,7 @@
 
     // Trigger action if threshold met OR quick swipe with enough velocity
     const shouldTrigger =
-      distance > SWIPE_THRESHOLD || (velocity > VELOCITY_THRESHOLD && distance > 40);
+      distance > SWIPE_THRESHOLD || (velocity > VELOCITY_THRESHOLD && distance > 60);
 
     if (shouldTrigger && swiping) {
       triggerHaptic('medium');
@@ -3355,23 +3425,32 @@
       const screenWidth = window.innerWidth;
       swipeDistance = direction === 'right' ? screenWidth : -screenWidth;
 
-      // Execute action after animation
+      // Execute action after animation. The row leaves the list at once
+      // (optimistic removal, drawn on the next frame); the swipe state is
+      // cleared after that frame, so the row neither slides back into view
+      // before it goes nor stays off screen for the length of the request.
+      const resetAfterRemoval = () =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resetSwipe()));
       setTimeout(async () => {
         if (direction === 'right') {
+          const archiving = archiveMessage(item);
+          resetAfterRemoval();
           try {
-            const result = await archiveMessage(item);
+            const result = await archiving;
             if (!result?.blocked) showToast('Archived', 'success');
           } catch (err) {
             showMutationError(err, 'Failed to archive');
           }
         } else {
           try {
-            deleteMessages([item]);
+            void Promise.resolve(deleteMessages([item])).catch((err) =>
+              showMutationError(err, 'Failed to delete'),
+            );
           } catch (err) {
             showMutationError(err, 'Failed to delete');
           }
+          resetAfterRemoval();
         }
-        resetSwipe();
       }, 180);
     } else {
       // Snap back with spring animation
@@ -3631,7 +3710,13 @@
     if (!$mobileReader) return;
 
     const touch = e.touches[0];
-    if (isEdgeSwipeStart(touch.clientX)) {
+    // A strip that scrolls sideways (the attachments) keeps its own swipe:
+    // reading it as a reader swipe opened another message instead.
+    const target = e.target as Element | null;
+    if (
+      isEdgeSwipeStart(touch.clientX) ||
+      target?.closest?.('.overflow-x-auto, [data-no-reader-swipe]')
+    ) {
       // Document-level edge navigation owns this gesture.
       readerSwipeStartX = 0;
       readerSwipeStartY = 0;
@@ -3668,8 +3753,6 @@
 
     if (readerSwiping) {
       readerSwipeDistance = deltaX;
-      // Prevent default to stop browser back/forward gesture
-      e.preventDefault();
     }
   };
 
@@ -3699,10 +3782,12 @@
     readerSwipeDirection = null;
   };
 
-  // Attach touchmove listener with { passive: false } to allow preventDefault
+  // Passive: .fe-reader is touch-action: pan-y, so the browser has no
+  // horizontal gesture to cancel, and a non-passive listener made every
+  // scroll of the reader wait for the main thread.
   $effect(() => {
     if (!readerPaneEl) return;
-    readerPaneEl.addEventListener('touchmove', handleReaderSwipeMove, { passive: false });
+    readerPaneEl.addEventListener('touchmove', handleReaderSwipeMove, { passive: true });
     return () => {
       readerPaneEl?.removeEventListener('touchmove', handleReaderSwipeMove);
     };
@@ -3724,7 +3809,8 @@
       readerSwiping = false;
       readerSwipeDirection = null;
     } else if (phase === 'move') {
-      if (!readerSwipeStartX) return;
+      // (a touch from x = 0 is still a start: only a reset one is not)
+      if (!readerSwipeStartX && !iframeEdgeBackGesture && !readerSwipeStartY) return;
       const dx = typeof detail?.dx === 'number' ? detail.dx : 0;
       const dy = typeof detail?.dy === 'number' ? detail.dy : 0;
       if (iframeEdgeBackGesture) {
@@ -3746,14 +3832,18 @@
         }
       }
     } else if (phase === 'end') {
-      if (iframeEdgeBackGesture) {
+      if (detail?.cancelled) {
+        // the system took the touch: nothing happens
+      } else if (iframeEdgeBackGesture) {
         const edgeSwipe = evaluateEdgeSwipe({
           startX: readerSwipeStartX,
           startY: readerSwipeStartY,
           currentX: readerSwipeStartX + readerSwipeDistance,
           currentY: readerSwipeStartY,
         });
-        if (edgeSwipe.shouldNavigate && history.length > 1) history.back();
+        // Back from the reader is closing it. history.back() did nothing in
+        // an app webview with a single history entry.
+        if (edgeSwipe.shouldNavigate) closeReaderFullscreen({ clearSelection: true });
       } else {
         const distance = Math.abs(readerSwipeDistance);
         const direction = readerSwipeDistance > 0 ? 'right' : 'left';
@@ -5838,6 +5928,54 @@
     }
   });
 
+  // The list keeps its place under the reader. Closing a message returned to
+  // the top of the inbox wherever the list had been hidden (display: none
+  // drops a scroller's position in WebKit) or re-laid out while it was open.
+  let listScrollBeforeReader: { top: number; folder: string; account: string } | null = null;
+  onMount(() =>
+    mobileReader.subscribe((open: boolean) => {
+      const wrapper = messageListWrapper;
+      if (open) {
+        if (wrapper && !listScrollBeforeReader) {
+          listScrollBeforeReader = {
+            top: wrapper.scrollTop,
+            folder: String(get(selectedFolder) || ''),
+            account: String(Local.get('email') || ''),
+          };
+        }
+        return;
+      }
+      const saved = listScrollBeforeReader;
+      listScrollBeforeReader = null;
+      if (!saved || saved.top <= 0) return;
+      tick().then(() =>
+        requestAnimationFrame(() => {
+          const list = messageListWrapper;
+          if (!list || (get(selectedFolder) || '') !== saved.folder) return;
+          if ((Local.get('email') || '') !== saved.account) return;
+          if (Math.abs(list.scrollTop - saved.top) > 1) list.scrollTop = saved.top;
+        }),
+      );
+    }),
+  );
+
+  // A new account lands on its inbox (performAccountSwitch navigates there):
+  // the drawer it was picked from, the search screen, the outbox and the
+  // selection belong to the account left, and its list starts at the top.
+  onMount(() => {
+    const onAccountSwitched = () => {
+      mobileSearchOpen = false;
+      outboxSelected = false;
+      selectedOutboxItem = null;
+      selectionMode = false;
+      lastSelectedMessageId = null;
+      collapseSidebarForMobile();
+      tick().then(scrollMessageListToTop);
+    };
+    window.addEventListener('fe:account-switched', onAccountSwitched);
+    return () => window.removeEventListener('fe:account-switched', onAccountSwitched);
+  });
+
   onMount(() => {
     // Initialize toasts for error handling in mailboxStore
     if (mailboxStore?.actions?.setToasts && mailboxView?.toasts) {
@@ -5933,14 +6071,14 @@
           closeMobileSearch();
           return;
         }
-        // 1. Close reader if open
-        if (get(mobileReader)) {
-          closeReaderFullscreen({ clearSelection: true });
+        // 1. Close the sidebar if open (it is drawn above the reader)
+        if (get(sidebarOpen) && isDrawerViewport()) {
+          sidebarOpen.set(false);
           return;
         }
-        // 3. Close sidebar if open
-        if (get(sidebarOpen)) {
-          sidebarOpen.set(false);
+        // 2. Close reader if open
+        if (get(mobileReader)) {
+          closeReaderFullscreen({ clearSelection: true });
           return;
         }
         // 3. Clear search if active
@@ -6103,6 +6241,62 @@
     };
   });
 
+  // Scroll anchoring for the message list. WebKit (iOS, Safari) does not do
+  // it: rows added or removed above the ones on screen (new mail at the top
+  // while scrolled down, a message archived elsewhere, the oldest pages let go
+  // past MAX_LIVE_MESSAGES) moved everything on screen by their height, so the
+  // list jumped while the user read it. Before the rows change, note the first
+  // row on screen and where it sits; after, put it back there. Engines that
+  // anchor on their own have already kept it in place, so nothing moves twice.
+  let listAnchor: { id: string; offset: number } | null = null;
+  // The first row whose bottom is below the top of the list, by position (a
+  // hit test would miss it under the reader, the drawer or a menu).
+  const listRowAt = (root: HTMLElement): HTMLElement | null => {
+    const rect = root.getBoundingClientRect();
+    if (!rect.width || !rect.height) return null;
+    const rows = root.querySelectorAll<HTMLElement>('[data-message-id]');
+    let low = 0;
+    let high = rows.length - 1;
+    let found: HTMLElement | null = null;
+    while (low <= high) {
+      const mid = (low + high) >> 1;
+      if (rows[mid].getBoundingClientRect().bottom > rect.top + 1) {
+        found = rows[mid];
+        high = mid - 1;
+      } else {
+        low = mid + 1;
+      }
+    }
+    return found;
+  };
+  $effect.pre(() => {
+    void ($threadingEnabled ? $filteredConversations : $filteredMessages);
+    listAnchor = null;
+    const root = messageListWrapper;
+    if (!root || root.scrollTop <= 0 || untrack(() => pullDistance) > 0) return;
+    const row = listRowAt(root);
+    const id = row?.dataset?.messageId;
+    if (!row || !id) return;
+    listAnchor = {
+      id,
+      offset: row.getBoundingClientRect().top - root.getBoundingClientRect().top,
+    };
+  });
+  $effect(() => {
+    void ($threadingEnabled ? $filteredConversations : $filteredMessages);
+    const anchor = listAnchor;
+    listAnchor = null;
+    const root = messageListWrapper;
+    if (!anchor || !root) return;
+    const row = root.querySelector(
+      `[data-message-id="${CSS.escape(anchor.id)}"]`,
+    ) as HTMLElement | null;
+    if (!row) return;
+    const offset = row.getBoundingClientRect().top - root.getBoundingClientRect().top;
+    const shift = offset - anchor.offset;
+    if (Math.abs(shift) > 1) root.scrollTop += shift;
+  });
+
   // Infinite scroll observer (all clients). Watches a 1px sentinel at the bottom
   // of the message-list scroll container and loads the next page as it nears
   // view. As a reactive $effect keyed on the actual elements, it re-creates the
@@ -6183,9 +6377,12 @@
   };
 
   const collapseSidebarForMobile = () => {
+    // The drawer covers the list up to the drawer width, not only on phones.
+    if (isDrawerViewport()) {
+      source.state?.sidebarOpen?.set?.(false);
+      mailboxView?.sidebarOpen?.set?.(false);
+    }
     if (!isMobileViewport()) return;
-    source.state?.sidebarOpen?.set?.(false);
-    mailboxView?.sidebarOpen?.set?.(false);
     if (mailboxView?.mobileReader?.set) mailboxView.mobileReader.set(false);
     else if (typeof mailboxView?.mobileReader === 'function') mailboxView.mobileReader(false);
     mobileReader.set?.(false);
@@ -6527,7 +6724,8 @@
       {:else}
         {#if $sidebarOpen}
           <div
-            class="fixed inset-0 z-40 bg-black/50 md:hidden"
+            class="fixed inset-0 z-40 bg-black/50 min-[821px]:hidden"
+            data-edge-swipe-block="true"
             role="presentation"
             tabindex="-1"
             onclick={toggleSidebar}
@@ -6768,7 +6966,10 @@
                   <button
                     type="button"
                     class="flex items-center gap-2 px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-                    onclick={() => navigate('/contacts')}
+                    onclick={() => {
+                      closeDrawer();
+                      navigate('/contacts');
+                    }}
                   >
                     <BookUser class="h-4 w-4" />
                     <span>Contacts</span>
@@ -6776,7 +6977,10 @@
                   <button
                     type="button"
                     class="flex items-center gap-2 px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-                    onclick={() => navigate('/calendar')}
+                    onclick={() => {
+                      closeDrawer();
+                      navigate('/calendar');
+                    }}
                   >
                     <CalendarIcon class="h-4 w-4" />
                     <span>Calendar</span>
@@ -6784,7 +6988,10 @@
                   <button
                     type="button"
                     class="flex items-center gap-2 px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-                    onclick={() => navigate('/calendar#tasks')}
+                    onclick={() => {
+                      closeDrawer();
+                      navigate('/calendar#tasks');
+                    }}
                   >
                     <ListTodo class="h-4 w-4" />
                     <span>Tasks</span>
@@ -6792,7 +6999,10 @@
                   <button
                     type="button"
                     class="flex items-center gap-2 px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-                    onclick={() => navigate('/mailbox/settings')}
+                    onclick={() => {
+                      closeDrawer();
+                      navigate('/mailbox/settings');
+                    }}
                   >
                     <SettingsIcon class="h-4 w-4" />
                     <span>Settings</span>
@@ -6855,6 +7065,7 @@
             class="fe-messages"
             class:mobile-reader-active={$mobileReader}
             bind:this={messagesPaneEl}
+            inert={$mobileReader && viewportWidth <= DRAWER_MAX_WIDTH}
             data-testid="message-list-pane"
           >
             <!-- The toolbar goes away only once the list has settled as empty
@@ -7371,10 +7582,15 @@
                   ontouchstart={handlePullStart}
                   ontouchmove={handlePullMove}
                   ontouchend={handlePullEnd}
-                  style="transform: translateY({pullDistance}px); transition: {isPulling
-                    ? 'none'
-                    : 'transform 0.3s ease-out'};"
+                  ontouchcancel={handlePullCancel}
+                  style={pullDistance > 0 || pullSettling
+                    ? `transform: translateY(${pullDistance}px); transition: ${isPulling ? 'none' : 'transform 0.3s ease-out'};`
+                    : undefined}
                 >
+                  <!-- The transform is set only while pulling: on a list of
+                       hundreds of rows a constant one made the whole list one
+                       compositing layer in WebKit, its memory held for as long
+                       as the list was on screen. -->
                   {#if pullDistance > 0 || isRefreshing}
                     <div
                       class={`flex items-center justify-center gap-2 py-3 text-muted-foreground ${pullDistance > 60 ? 'text-fg-link' : ''} ${isRefreshing ? 'text-fg-link' : ''}`}
@@ -7383,9 +7599,7 @@
                       aria-atomic="true"
                       style="opacity: {isRefreshing
                         ? 1
-                        : Math.min(pullDistance / 60, 1)}; margin-top: {isRefreshing
-                        ? 0
-                        : -60 + pullDistance}px"
+                        : Math.min(pullDistance / 60, 1)}; margin-top: {isRefreshing ? 0 : -44}px"
                     >
                       <div
                         class={`h-5 w-5 ${isRefreshing ? 'animate-spin' : ''}`}
@@ -7542,6 +7756,9 @@
                             ontouchstart={(e) => handleSwipeStart(e, conv)}
                             ontouchmove={(e) => handleSwipeMove(e, conv)}
                             ontouchend={() => handleSwipeEnd(conv)}
+                            ontouchcancel={() => {
+                              if (!swipeAnimating) resetSwipe();
+                            }}
                             ondragstart={(e) => handleDragStart(e, conv)}
                             ondragend={handleDragEnd}
                             style={rowSwipeStyle}
@@ -10381,6 +10598,10 @@
   @media (pointer: coarse) {
     .fe-msg-row {
       content-visibility: visible;
+      /* A long press on a row started text selection, which iOS ends with
+         touchcancel and which took over the swipe and the list's scroll. */
+      -webkit-user-select: none;
+      user-select: none;
     }
   }
 
@@ -10442,6 +10663,13 @@
     min-height: 0;
   }
 
+  /* Rows added above the ones on screen are kept in place by the list itself
+     (see listAnchor); the engine's own scroll anchoring, where it has one,
+     would move them a second time. */
+  :global(.fe-message-list-wrapper) {
+    overflow-anchor: none;
+  }
+
   /* Reserve space for the fixed mobile bottom tab bar (56px + iOS home-indicator
      inset) so the last list rows aren't hidden behind it. */
   @media (max-width: 640px) {
@@ -10459,9 +10687,14 @@
     flex-shrink: 0;
   }
 
-  /* Hide messages when reader is open */
-  :global(.fe-mailbox-shell.fe-layout-productivity.mobile-reader .fe-messages) {
-    display: none;
+  /* Hide messages when reader is open. Not where the reader is a fixed
+     full-screen layer over the list (mailbox.css, max-width: 820px): there the
+     list stays rendered underneath, so it keeps its scroll position and is not
+     laid out again, row by row, when the message is closed. */
+  @media (min-width: 821px) {
+    :global(.fe-mailbox-shell.fe-layout-productivity.mobile-reader .fe-messages) {
+      display: none;
+    }
   }
 
   /* Reader hidden by default in compact mode */
@@ -10739,12 +10972,16 @@
 
   /* Mobile sidebar when open */
   @media (max-width: 820px) {
+    /* Sized by the drawer's top and bottom (mailbox.css): a 100dvh height
+       below a top offset ran past the bottom of the screen, so the last
+       folders and the storage figures could not be reached. */
     aside.fe-folders.fe-folders-open {
       display: flex;
       flex-direction: column;
-      height: 100dvh;
-      max-height: 100dvh;
-      padding: 12px 12px 10px;
+      height: auto;
+      max-height: none;
+      padding: 12px 12px calc(10px + var(--sai-bottom, env(safe-area-inset-bottom, 0px)));
+      overscroll-behavior: contain;
     }
   }
 

@@ -6,7 +6,12 @@
  */
 
 import { parseSearchQuery, applySearchFilters } from '../utils/search-query.js';
-import { SearchService, setSearchDbClient, SEARCH_INDEX_KEY } from '../utils/search-service.js';
+import {
+  SearchService,
+  setSearchDbClient,
+  setSearchMemoryProfile,
+  SEARCH_INDEX_KEY,
+} from '../utils/search-service.js';
 import { mapMessageToDoc } from '../utils/search-mapping.js';
 import { dbClient, connectToDbWorker } from '../utils/db-worker-client.js';
 
@@ -276,6 +281,32 @@ async function removeFromIndex(
   return { count: service.getStats().count, stats: service.getStats() };
 }
 
+// The account's cached messages, a chunk at a time. Reading them all with one
+// toArray() held every message of the mailbox in this worker at once (and as
+// one structured clone from the db worker), at startup, on top of the index:
+// on iOS, where every worker shares the web content process's memory limit,
+// that ended the page.
+const MESSAGE_READ_CHUNK = 2000;
+async function forEachMessageChunk(
+  key: string,
+  fn: (messages: Message[]) => Promise<void> | void,
+): Promise<number> {
+  let total = 0;
+  for (let offset = 0; ; offset += MESSAGE_READ_CHUNK) {
+    const chunk: Message[] = await dbClient.messages
+      .where('account')
+      .equals(key)
+      .offset(offset)
+      .limit(MESSAGE_READ_CHUNK)
+      .toArray();
+    if (!chunk?.length) break;
+    total += chunk.length;
+    await fn(chunk);
+    if (chunk.length < MESSAGE_READ_CHUNK) break;
+  }
+  return total;
+}
+
 // Rebuild the entire search index from messages in database
 async function rebuildFromCache(
   payload: RebuildPayload = {},
@@ -295,30 +326,25 @@ async function rebuildFromCache(
     return { count: 0, stats: service.getStats() };
   }
 
-  // Load all messages from database
-  const messages: Message[] = await dbClient.messages.where('account').equals(key).toArray();
-
-  if (!messages?.length) {
-    await service.reset([]);
-    return { count: 0, stats: service.getStats() };
-  }
-
-  // Optionally load body text
-  let bodyMap: Map<string, string> | null = null;
-  if (includeBody) {
-    const keys = messages.map((msg: Message) => [key, msg.id]);
-    try {
-      bodyMap = await loadBodyTexts(keys);
-    } catch (err) {
-      console.warn('[search.worker] rebuildFromCache body lookup failed', err);
+  // Index every cached message, a chunk at a time, leaving out any removed
+  // while it was read, then write the index once.
+  service.clearEntries();
+  await forEachMessageChunk(key, async (messages) => {
+    let bodyMap: Map<string, string> | null = null;
+    if (includeBody) {
+      try {
+        bodyMap = await loadBodyTexts(messages.map((msg: Message) => [key, msg.id]));
+      } catch (err) {
+        console.warn('[search.worker] rebuildFromCache body lookup failed', err);
+      }
     }
-  }
-
-  // Index all messages, leaving out any removed while the snapshot was read
-  const docs = messages
-    .filter((msg: Message) => !removedSince(key, msg.id, startSeq))
-    .map((msg: Message) => mapMessageToDoc(msg, bodyMap?.get(msg.id) || ''));
-  await service.reset(docs);
+    service.upsertEntries(
+      messages
+        .filter((msg: Message) => !removedSince(key, msg.id, startSeq))
+        .map((msg: Message) => mapMessageToDoc(msg, bodyMap?.get(msg.id) || '')),
+    );
+  });
+  await service.persist();
 
   return { count: service.getStats().count, stats: service.getStats() };
 }
@@ -373,38 +399,25 @@ async function syncMissingMessages(
     return { synced: 0, stats: service.getStats() };
   }
 
-  // Get all message IDs from database
-  const allMessages: Message[] = await dbClient.messages.where('account').equals(key).toArray();
-  if (!allMessages?.length) {
-    return { synced: 0, stats: service.getStats() };
-  }
-
-  // Get indexed IDs from the service
-  const indexedIds = new Set(service.entries.map((e: { id: string }) => e.id));
-
-  // Find messages not in index
-  const missing = allMessages.filter((msg) => !indexedIds.has(msg.id));
-  if (!missing.length) {
-    return { synced: 0, stats: service.getStats() };
-  }
-
-  // Optionally load body text for missing messages
-  let bodyMap: Map<string, string> | null = null;
-  if (includeBody) {
-    const keys = missing.map((msg) => [key, msg.id]);
-    try {
-      bodyMap = await loadBodyTexts(keys);
-    } catch (err) {
-      console.warn('[search.worker] syncMissing body lookup failed', err);
+  // Index the cached messages the index does not have, a chunk at a time.
+  let synced = 0;
+  await forEachMessageChunk(key, async (messages) => {
+    const missing = messages.filter((msg) => !service.hasEntry(msg.id));
+    if (!missing.length) return;
+    let bodyMap: Map<string, string> | null = null;
+    if (includeBody) {
+      try {
+        bodyMap = await loadBodyTexts(missing.map((msg) => [key, msg.id]));
+      } catch (err) {
+        console.warn('[search.worker] syncMissing body lookup failed', err);
+      }
     }
-  }
+    service.upsertEntries(missing.map((msg) => mapMessageToDoc(msg, bodyMap?.get(msg.id) || '')));
+    synced += missing.length;
+  });
+  if (synced) service.schedulePersist();
 
-  // Index missing messages
-  const docs = missing.map((msg) => mapMessageToDoc(msg, bodyMap?.get(msg.id) || ''));
-  service.upsertEntries(docs);
-  await service.persist();
-
-  return { synced: missing.length, stats: service.getStats() };
+  return { synced, stats: service.getStats() };
 }
 
 // Queue messages for batched indexing (used by sync worker channel)
@@ -456,14 +469,11 @@ async function processIndexQueue(account: string): Promise<void> {
   if (queue.messages.length > 0) {
     queue.timer = setTimeout(() => processIndexQueue(account), INDEX_BATCH_DELAY);
   } else {
-    // Queue drained: force the coalesced write so the burst ends with the
-    // index durably persisted rather than waiting on the debounce timer
-    // (which a worker teardown could skip). Fire-and-forget; the in-memory
-    // index is already up to date for queries.
-    const service = services.get(account);
-    service?.flush?.()?.catch((err: unknown) => {
-      console.warn('[search.worker] index write failed', err);
-    });
+    // Queue drained: schedule the coalesced write. Flushing here wrote the
+    // whole index after every batch of a sync burst, since the queue empties
+    // between batches; the main thread asks for a flush when the app is
+    // hidden. The in-memory index is already up to date for queries.
+    services.get(account)?.schedulePersist?.();
   }
 }
 
@@ -641,6 +651,9 @@ self.onmessage = async (event: MessageEvent<SearchWorkerMessage>) => {
 
   try {
     if (action === 'init') {
+      if (typeof payload?.lite === 'boolean' && !services.size && !loadingServices.size) {
+        setSearchMemoryProfile(payload.lite);
+      }
       await applyIncludeBody(
         (payload?.account as string) || 'default',
         Boolean(payload?.includeBody),
@@ -666,6 +679,17 @@ self.onmessage = async (event: MessageEvent<SearchWorkerMessage>) => {
     if (action === 'rebuildFromCache') {
       const res = await rebuildFromCache(payload as RebuildPayload);
       respond(id, true, res);
+      return;
+    }
+    if (action === 'flush') {
+      await Promise.all(
+        [...services.values()].map((service) =>
+          service?.flush?.()?.catch((err: unknown) => {
+            console.warn('[search.worker] index write failed', err);
+          }),
+        ),
+      );
+      respond(id, true, { ok: true });
       return;
     }
     if (action === 'getStats') {

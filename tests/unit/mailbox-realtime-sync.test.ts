@@ -459,6 +459,49 @@ describe('refresh after a change elsewhere', () => {
     expect(await cachedIds()).not.toContain('m5');
   });
 
+  it('keeps the pages scrolled through when the fresh page cannot be placed', async () => {
+    // Pages of three, two on screen. m4 is not on screen (removed here a
+    // moment ago) but the server still lists it, so the fresh first page
+    // (m7, m6, m4) ends on a row the list does not have. The list used to drop
+    // back to that one page, under the user, at the top.
+    h.server.set(
+      'INBOX',
+      [7, 6, 4, 3, 2, 1].map((n) => msg(n)),
+    );
+    h.folderTotals.set('INBOX', 6);
+    const rows = [6, 5, 3, 2, 1].map((n) => cached(n));
+    await db.messages.bulkPut(rows);
+    messages.setImmediate(rows as never);
+    page.set(2);
+
+    await mailboxStore.actions.loadMessages({ refresh: true });
+    await settle();
+
+    expect(h.listRequests.at(-1)).toMatchObject({ folder: 'INBOX', page: 1 });
+    expect(shownIds()).toEqual(['m7', 'm6', 'm4', 'm3', 'm2', 'm1']);
+    expect(get(page)).toBe(2);
+  });
+
+  it('starts over at the first page when more mail arrived than a page holds', async () => {
+    // The fresh page shares no row with the list: the mail between them was
+    // never fetched, so the list is not joined across the gap.
+    h.server.set(
+      'INBOX',
+      [10, 9, 8, 7, 6, 5, 4, 3, 2, 1].map((n) => msg(n)),
+    );
+    h.folderTotals.set('INBOX', 10);
+    const rows = [6, 5, 4, 3, 2, 1].map((n) => cached(n));
+    await db.messages.bulkPut(rows);
+    messages.setImmediate(rows as never);
+    page.set(2);
+
+    await mailboxStore.actions.loadMessages({ refresh: true });
+    await settle();
+
+    expect(shownIds()).toEqual(['m10', 'm9', 'm8']);
+    expect(get(page)).toBe(1);
+  });
+
   it('clears the folder when its last message was deleted elsewhere', async () => {
     // The folder list still says one message; the server now lists none.
     setFolders([{ path: 'INBOX', total: 1 }]);

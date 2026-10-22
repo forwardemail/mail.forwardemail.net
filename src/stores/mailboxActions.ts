@@ -76,6 +76,8 @@ import { sanitizeHtml } from '../utils/sanitize.js';
 import { resetTabs } from './tabStore';
 import { parseReferences } from '../utils/threading';
 import { isOnline } from '../utils/network-status';
+import { getLayoutWidth } from '../utils/viewport-guard';
+import { sidebarOpen, filterByLabel } from './viewStore';
 
 /**
  * Additional mailbox actions that were in MailboxView
@@ -123,9 +125,26 @@ export const starredOnly = mailboxStore.state.starredOnly;
 export const layoutMode = derived(effectiveLayoutMode, ($mode) => normalizeLayoutMode($mode));
 
 // Navigation reference (set by main.js)
-let navigateRef = null;
+let navigateRef: ((path: string, options?: { replace?: boolean }) => void) | null = null;
 export const setNavigate = (fn) => {
   navigateRef = fn;
+};
+
+// Widest viewport where the sidebar is a drawer over the list (the
+// max-width: 820px rules in styles/pages/mailbox.css).
+export const DRAWER_MAX_WIDTH = 820;
+
+// The mailbox chrome that belongs to the account being left: its menus, the
+// open reader, its label filter (label ids are per account) and, where the
+// sidebar covers the list, the drawer the switch was picked from.
+const resetMailboxChromeForAccountChange = () => {
+  accountMenuOpen.set(false);
+  bulkMoveOpen.set(false);
+  mobileReader.set(false);
+  filterByLabel.set([]);
+  if (typeof window !== 'undefined' && getLayoutWidth() <= DRAWER_MAX_WIDTH) {
+    sidebarOpen.set(false);
+  }
 };
 
 // Toast reference (set by main.js)
@@ -2159,6 +2178,7 @@ export const addAccount = () => {
 };
 
 export const resetSessionState = () => {
+  resetMailboxChromeForAccountChange();
   resetMailboxStateForAccount();
   mailboxStore.actions.resetForAccount?.();
   searchStore.actions.resetSearchConnection();
@@ -2264,9 +2284,8 @@ export const signOut = async () => {
       toastsRef.show(`Signed out of ${currentEmail}. Switched to ${nextAccount.email}`, 'success');
     }
 
-    if (navigateRef) navigateRef('/mailbox');
-    else window.location.href = '/mailbox';
-
+    // performAccountSwitch lands on the next account's inbox. Navigating
+    // first loaded the mailbox under no account at all.
     await performAccountSwitch(nextAccount.email);
   } else {
     // Show toast before clearing storage/navigation
@@ -2472,13 +2491,16 @@ const performAccountSwitch = async (requestedEmail) => {
   // Use Accounts.setActive to properly switch account credentials
   const switched = Accounts.setActive(email);
 
+  // The menu the switch was picked from closes either way.
+  accountMenuOpen.set(false);
+
   if (!switched) {
     toastsRef?.show?.(`Failed to switch to ${email}`, 'error');
     return;
   }
 
   currentAccount.set(email);
-  accountMenuOpen.set(false);
+  resetMailboxChromeForAccountChange();
 
   // PHASE 1: Pre-read Account B's cached data from IndexedDB BEFORE blanking the UI.
   // This allows an atomic swap from Account A → Account B with no blank state.
@@ -2560,7 +2582,7 @@ const performAccountSwitch = async (requestedEmail) => {
     mailboxStore.state.loading.set(!cached.messages.length);
   } else {
     mailboxStore.state.folders.set([]);
-    mailboxStore.state.selectedFolder.set('');
+    mailboxStore.state.selectedFolder.set('INBOX');
     mailboxStore.state.loading.set(true);
   }
   if (cached.messages.length) {
@@ -2595,6 +2617,17 @@ const performAccountSwitch = async (requestedEmail) => {
   }
 
   toastsRef?.show?.(`Switched to ${email}`, 'info');
+
+  // Land on the new account's inbox, from the mailbox, Profile or Settings,
+  // without a history entry back into the previous account's mail. The hash
+  // change closes the reader and drops any message from the URL. Mailbox
+  // resets its own view state (drawer, search, outbox, scroll) on the event.
+  navigateRef?.(`/mailbox#${encodeURIComponent(cached.defaultFolder || 'INBOX')}`, {
+    replace: true,
+  });
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('fe:account-switched', { detail: { email } }));
+  }
 
   // PHASE 4: Deferred non-blocking work
   // Reset search: drop the previous account's search worker and its index

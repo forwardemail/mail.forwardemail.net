@@ -11,6 +11,7 @@
 
 import { hasDeletedFlag, normalizeMessageForCache } from '../utils/sync-helpers';
 import { lightweightListSupported } from '../utils/api-capabilities';
+import { normalizeSortDate } from '../utils/message-sort';
 
 // Validate a value the way Dexie validates a primary key, used as a fallback
 // guard before writing to IndexedDB. Strings, finite numbers, Dates, and
@@ -117,6 +118,45 @@ export const mergeMessagePages = <T>(existing: T[] = [], incoming: T[] = [], max
  * replaces the list (`replaced`) and the caller resets paging; in the second
  * case nothing counts as removed.
  */
+/**
+ * After a head refresh that could not place the old rows (mergeHeadPage
+ * returned replaced: the fresh page's last row is not on screen, for example
+ * removed locally), keep the pages already scrolled through that sort after
+ * the fresh first page, instead of dropping back to page one. Dropping them
+ * shrank a long list to fifty rows under the user and threw them back to the
+ * top. Only when the fresh page and the list share a row: with none in
+ * common (more new mail than a page holds) the rows between them were never
+ * fetched, and joining the two would leave that gap in the list for good.
+ * Only date orders can place a row; otherwise, too, it returns null.
+ */
+export const keepScrolledPages = <T extends object>(
+  existing: T[] = [],
+  incoming: T[] = [],
+  sort = 'newest',
+): T[] | null => {
+  if (sort !== 'newest' && sort !== 'oldest') return null;
+  if (!incoming.length) return null;
+  const dateOf = (msg: T) =>
+    normalizeSortDate(
+      (msg as { dateMs?: unknown; date?: unknown; Date?: unknown })?.dateMs ??
+        (msg as { date?: unknown })?.date ??
+        (msg as { Date?: unknown })?.Date,
+    );
+  const last = dateOf(incoming[incoming.length - 1]);
+  // (normalizeSortDate gives 0 for a missing or unreadable date)
+  if (!last) return null;
+  const incomingKeys = new Set(incoming.map(getMessageKey).filter((key) => key != null));
+  if (!existing.some((msg) => incomingKeys.has(getMessageKey(msg)))) return null;
+  const after = existing.filter((msg) => {
+    const key = getMessageKey(msg);
+    if (key != null && incomingKeys.has(key)) return false;
+    const date = dateOf(msg);
+    if (!date) return false;
+    return sort === 'newest' ? date <= last : date >= last;
+  });
+  return [...incoming, ...after];
+};
+
 export const mergeHeadPage = <T extends object>(
   existing: T[] = [],
   incoming: T[] = [],

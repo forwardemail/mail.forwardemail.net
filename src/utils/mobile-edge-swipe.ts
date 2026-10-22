@@ -78,9 +78,21 @@ export function bindEdgeSwipeBack({
   onBack,
 }: BindEdgeSwipeBackOptions): () => void {
   let state = initialState();
+  let moveBound = false;
 
+  // The non-passive touchmove listener (it must be, to stop the page moving
+  // during a back swipe) is on the document only while a touch that began
+  // at the edge is down. Bound for good, it made every scroll of every pane
+  // wait for the main thread, since WebKit cannot scroll ahead of a listener
+  // that may cancel the touch.
+  const unbindMove = () => {
+    if (!moveBound) return;
+    moveBound = false;
+    document.removeEventListener('touchmove', handleTouchMove, true);
+  };
   const reset = () => {
     state = initialState();
+    unbindMove();
   };
 
   const handleTouchStart = (event: TouchEvent) => {
@@ -105,9 +117,13 @@ export function bindEdgeSwipeBack({
       possible: true,
       tracking: false,
     };
+    if (!moveBound) {
+      moveBound = true;
+      document.addEventListener('touchmove', handleTouchMove, { passive: false, capture: true });
+    }
   };
 
-  const handleTouchMove = (event: TouchEvent) => {
+  function handleTouchMove(event: TouchEvent) {
     if (!state.possible || event.touches.length !== 1) return;
 
     const touch = event.touches[0];
@@ -124,7 +140,7 @@ export function bindEdgeSwipeBack({
       state.tracking = true;
       event.preventDefault();
     }
-  };
+  }
 
   const handleTouchEnd = () => {
     if (!state.possible) return;
@@ -134,13 +150,12 @@ export function bindEdgeSwipeBack({
   };
 
   document.addEventListener('touchstart', handleTouchStart, { passive: true, capture: true });
-  document.addEventListener('touchmove', handleTouchMove, { passive: false, capture: true });
   document.addEventListener('touchend', handleTouchEnd, { passive: true, capture: true });
   document.addEventListener('touchcancel', reset, { passive: true, capture: true });
 
   return () => {
     document.removeEventListener('touchstart', handleTouchStart, true);
-    document.removeEventListener('touchmove', handleTouchMove, true);
+    unbindMove();
     document.removeEventListener('touchend', handleTouchEnd, true);
     document.removeEventListener('touchcancel', reset, true);
   };

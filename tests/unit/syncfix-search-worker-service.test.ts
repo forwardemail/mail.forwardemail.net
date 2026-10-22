@@ -18,6 +18,8 @@ const store = vi.hoisted(() => ({
   // Keys asked for per body-text request, and full body record reads.
   bodyTextRequests: [] as number[],
   fullBodyReads: 0,
+  // The limit of each read of the messages table (Infinity: unbounded).
+  messageReads: [] as number[],
 }));
 
 vi.mock('../../src/utils/db-worker-client.js', async () => {
@@ -41,17 +43,32 @@ vi.mock('../../src/utils/db-worker-client.js', async () => {
         .map((row) => ({ id: String(row.id), text: indexableBodyText(row) }));
     },
     where: (index: string) => ({
-      equals: (value: unknown) => ({
-        toArray: async () => {
-          if (name === 'messages' && store.hold) await store.hold;
-          return [...store[name].values()].filter(
-            (row) => index === 'account' && row.account === value,
-          );
-        },
-        count: async () =>
-          [...store[name].values()].filter((row) => index === 'account' && row.account === value)
-            .length,
-      }),
+      equals: (value: unknown) => {
+        // Same chain as the db worker client: offset() and limit() narrow
+        // what toArray() returns.
+        const query = { offset: 0, limit: Infinity };
+        const collection = {
+          offset: (n: number) => {
+            query.offset = n;
+            return collection;
+          },
+          limit: (n: number) => {
+            query.limit = n;
+            return collection;
+          },
+          toArray: async () => {
+            if (name === 'messages' && store.hold) await store.hold;
+            if (name === 'messages') store.messageReads.push(query.limit);
+            return [...store[name].values()]
+              .filter((row) => index === 'account' && row.account === value)
+              .slice(query.offset, query.offset + query.limit);
+          },
+          count: async () =>
+            [...store[name].values()].filter((row) => index === 'account' && row.account === value)
+              .length,
+        };
+        return collection;
+      },
     }),
   });
   return {
@@ -115,6 +132,7 @@ beforeEach(() => {
   store.hold = null;
   store.bodyTextRequests = [];
   store.fullBodyReads = 0;
+  store.messageReads = [];
 });
 
 describe('search worker service per account', () => {
@@ -182,6 +200,27 @@ describe('search worker service per account', () => {
       timeout: 2000,
     });
     expect(await searchIds('kumquat', true)).toEqual(['b1']);
+  });
+
+  // Each write copies the whole index, so a sync burst must not write it once
+  // per drained batch; a flush (the app being hidden) writes it at once.
+  it('a drained sync batch is not written until the debounce or a flush', async () => {
+    const account = 'burst@x.test';
+    await call('init', { account, includeBody: false });
+    const saved = () => store.searchIndex.get(JSON.stringify([account, 'messages_v1']));
+    const before = saved();
+    syncPort.postMessage({
+      action: 'index',
+      payload: { account, includeBody: false, messages: [msg('s1', 'Rhubarb crumble')] },
+    });
+    await vi.waitFor(async () => {
+      const res = await call('search', { account, query: 'rhubarb', crossFolder: true });
+      expect((res.result.results as Row[]).map((h) => h.id)).toEqual(['s1']);
+    });
+    expect(saved()).toBe(before);
+
+    await call('flush', {});
+    expect(((saved()?.data as Row[]) || []).map((e) => e.id)).toContain('s1');
   });
 
   it('turning body indexing off through init drops body text without reloading', async () => {
@@ -255,5 +294,41 @@ describe('search worker body reads on a large mailbox', () => {
 
     const hits = await call('search', { account, query: 'gooseberry', crossFolder: true });
     expect((hits.result.results as Row[]).map((h) => h.id)).toEqual(['m700']);
+  });
+
+  // On iOS every worker shares the web content process's memory limit, and
+  // reading the whole mailbox at once at startup ended the page.
+  it('a rebuild and the missing-message check read the mailbox a chunk at a time', async () => {
+    const account = 'many@x.test';
+    const count = 4_500;
+    for (let i = 0; i < count; i++) {
+      const id = `n${i}`;
+      store.messages.set(JSON.stringify([account, id]), {
+        ...msg(id, i === 4_321 ? 'Quince delivery' : `Note ${i}`),
+        account,
+      });
+    }
+
+    const rebuilt = await call('rebuildFromCache', { account, includeBody: false });
+    expect(rebuilt.ok).toBe(true);
+    expect(store.messageReads.length).toBeGreaterThan(1);
+    expect(store.messageReads.every((limit) => Number.isFinite(limit) && limit <= 2_000)).toBe(
+      true,
+    );
+    const hits = await call('search', { account, query: 'quince', crossFolder: true });
+    expect((hits.result.results as Row[]).map((h) => h.id)).toEqual(['n4321']);
+
+    store.messageReads = [];
+    store.messages.set(JSON.stringify([account, 'late']), {
+      ...msg('late', 'Persimmon arrival'),
+      account,
+    });
+    const synced = await call('syncMissingMessages', { account, includeBody: false });
+    expect(synced.result.synced).toBe(1);
+    expect(store.messageReads.every((limit) => Number.isFinite(limit) && limit <= 2_000)).toBe(
+      true,
+    );
+    const late = await call('search', { account, query: 'persimmon', crossFolder: true });
+    expect((late.result.results as Row[]).map((h) => h.id)).toEqual(['late']);
   });
 });

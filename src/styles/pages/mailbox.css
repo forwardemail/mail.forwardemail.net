@@ -308,6 +308,7 @@ body.light-mode .fe-reader {
     display: flex;
     flex-direction: column;
     gap: 12px;
+    overscroll-behavior: contain;
     position: fixed;
     inset: 0; /* Full screen on mobile */
     background: var(--color-panel);

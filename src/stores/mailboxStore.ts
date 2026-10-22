@@ -103,6 +103,7 @@ import {
   computePrunedIds,
   isStaleListRequest,
   mergeHeadPage,
+  keepScrolledPages,
   matchesRemoteMessage,
   applyRemoteFlagChange,
   applyRemoteLabelChange,
@@ -1845,7 +1846,19 @@ const createMailboxStore = () => {
             : shouldAppend
               ? mergeMessagePages(get(messages), merged, MAX_LIVE_MESSAGES)
               : merged;
-        if (headRefresh && headMerge?.replaced) {
+        // The pages already scrolled through stay when they can be placed
+        // after the fresh first one; only otherwise does the list start over.
+        const kept =
+          headRefresh && headMerge?.replaced && hasMore
+            ? keepScrolledPages(
+                (get(messages) || []).filter((m) => sameFolderPath(m?.folder, folder)),
+                merged,
+                currentSort,
+              )
+            : null;
+        if (kept) {
+          nextMessages = kept;
+        } else if (headRefresh && headMerge?.replaced) {
           page.set(1);
           hasNextPage.set(Boolean(hasMore));
         }

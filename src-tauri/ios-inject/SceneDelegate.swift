@@ -175,6 +175,12 @@ class TaoSceneDelegate: UIResponder, UIWindowSceneDelegate {
         }
 
         installRendererRecovery(on: webView)
+        // The page scrolls its own panes. The webview's root scroll view
+        // bouncing moved the whole app (header and tab bar included) on a drag
+        // or an overscroll, even with body overflow hidden.
+        webView.scrollView.bounces = false
+        webView.scrollView.alwaysBounceVertical = false
+        webView.scrollView.alwaysBounceHorizontal = false
         TaoSceneDelegate.cycleViewport(webView, attempt: 1, cycles: 1, allowReload: true)
     }
 
@@ -468,6 +474,13 @@ class TaoSceneDelegate: UIResponder, UIWindowSceneDelegate {
                 return
             }
             ensureViewport(webView)
+            // Tell the page it is a recovery reload, so it can say so and
+            // record it in diagnostics: without this a killed content process
+            // looked like the app flashing and starting over for no reason.
+            webView.evaluateJavaScript(
+                "try{sessionStorage.setItem('fe_renderer_recovered',String(Date.now()))}catch(e){};"
+                    + "window.dispatchEvent(new CustomEvent('fe:renderer-recovered'))"
+            ) { _, _ in }
         }
     }
 

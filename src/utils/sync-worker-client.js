@@ -8,6 +8,7 @@ import { createPendingRequests } from './pending-requests.js';
 import { warn } from './logger.ts';
 import { isDemoMode } from './demo-mode';
 import { withDeadline } from './with-deadline';
+import { isMemoryConstrained } from './memory-profile';
 
 let worker = null;
 let workerReady = false;
@@ -177,6 +178,7 @@ export async function ensureSyncWorkerReady() {
       apiBase: config.apiBase,
       account: activeAccount,
       authHeader,
+      memoryConstrained: isMemoryConstrained,
     },
   });
   initializedAccount = activeAccount;

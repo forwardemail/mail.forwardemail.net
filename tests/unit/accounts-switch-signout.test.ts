@@ -211,7 +211,11 @@ import {
   switchAccount,
   currentAccount,
   setToasts,
+  setNavigate,
+  mobileReader,
+  accountMenuOpen,
 } from '../../src/stores/mailboxActions.ts';
+import { sidebarOpen, filterByLabel } from '../../src/stores/viewStore';
 
 const flushCooldown = () => new Promise((resolve) => setTimeout(resolve, 320));
 
@@ -254,6 +258,70 @@ describe('signing out of one session-only account', () => {
 });
 
 describe('switchAccount', () => {
+  it('lands on the new account inbox with the drawer and reader of the last one closed', async () => {
+    localStorage.setItem(
+      'webmail_accounts',
+      JSON.stringify([
+        { email: 'home@example.com', aliasAuth: 'home@example.com:pw1' },
+        { email: 'work@example.com', aliasAuth: 'work@example.com:pw2' },
+      ]),
+    );
+    Accounts.setActive('home@example.com');
+    currentAccount.set('home@example.com');
+    // A phone: the account was picked in the open drawer, over an open message
+    // and a label filter of the account being left.
+    const width = window.innerWidth;
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 390 });
+    sidebarOpen.set(true);
+    mobileReader.set(true);
+    accountMenuOpen.set(true);
+    filterByLabel.set(['$label1']);
+    const navigate = vi.fn();
+    setNavigate(navigate);
+    const switched = vi.fn();
+    window.addEventListener('fe:account-switched', switched);
+
+    try {
+      await switchAccount('work@example.com');
+      await vi.waitFor(() => expect(switched).toHaveBeenCalled());
+    } finally {
+      window.removeEventListener('fe:account-switched', switched);
+      Object.defineProperty(window, 'innerWidth', { configurable: true, value: width });
+      setNavigate(null);
+    }
+
+    expect(get(sidebarOpen)).toBe(false);
+    expect(get(mobileReader)).toBe(false);
+    expect(get(accountMenuOpen)).toBe(false);
+    expect(get(filterByLabel)).toEqual([]);
+    expect(navigate).toHaveBeenCalledWith('/mailbox#INBOX', { replace: true });
+    expect((switched.mock.calls[0][0] as CustomEvent).detail).toEqual({
+      email: 'work@example.com',
+    });
+  });
+
+  it('leaves the sidebar alone where it is not a drawer', async () => {
+    localStorage.setItem(
+      'webmail_accounts',
+      JSON.stringify([
+        { email: 'home@example.com', aliasAuth: 'home@example.com:pw1' },
+        { email: 'work@example.com', aliasAuth: 'work@example.com:pw2' },
+      ]),
+    );
+    Accounts.setActive('home@example.com');
+    currentAccount.set('home@example.com');
+    const width = window.innerWidth;
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1440 });
+    sidebarOpen.set(true);
+    try {
+      await switchAccount('work@example.com');
+      await vi.waitFor(() => expect(Local.get('email')).toBe('work@example.com'));
+    } finally {
+      Object.defineProperty(window, 'innerWidth', { configurable: true, value: width });
+    }
+    expect(get(sidebarOpen)).toBe(true);
+  });
+
   it('switches to an account stored with capitals when asked in lowercase', async () => {
     localStorage.setItem(
       'webmail_accounts',

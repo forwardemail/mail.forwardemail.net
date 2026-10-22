@@ -117,7 +117,15 @@ export function sanitizeEmailCss(css, { blockRemoteUrls = false } = {}) {
     .replace(/position\s*:\s*fixed/gi, 'position: static')
     // Anchored to a declaration start so border-color and background-image,
     // which merely contain these names, are left alone.
-    .replace(/(^|[;{])\s*(color|background-color|background)\s*:[^;}]*/gi, '$1');
+    .replace(/(^|[;{])\s*(color|background-color|background)\s*:[^;}]*/gi, '$1')
+    // After the rewrites above, before the blocked-url markers: the sheet
+    // goes back into a <style> element, whose text is not escaped when
+    // serialized, so a "<" left in it can close the element and open markup
+    // on the next parse. Stripping "</" first was not enough: removing
+    // "@import;" from "<@import;/style>" made a new one. The CSS escape keeps
+    // a "<" in a string or an inline SVG url() meaning the same, and cannot
+    // be combined into a comment that forges a marker.
+    .replace(/</g, '\\3c ');
 
   let blockedCount = 0;
   if (blockRemoteUrls) {

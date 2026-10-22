@@ -1,6 +1,7 @@
 import { writable, get } from 'svelte/store';
 import type { Writable } from 'svelte/store';
 import { SearchService, SavedSearchService, setSearchDbClient } from '../utils/search-service';
+import { isMemoryConstrained } from '../utils/memory-profile';
 import { mapMessageToDoc } from '../utils/search-mapping';
 import { Local } from '../utils/storage';
 import { db } from '../utils/db';
@@ -85,6 +86,53 @@ let workerClient: SearchWorkerClient | null = null;
 let syncWorkerConnected = false;
 let startupCheckDone = false;
 
+// Let a worker write the index changes it has not written yet (they are
+// debounced), then end it; a worker that does not answer in time is ended
+// anyway. Not where a replacement starts at once on a phone: two indexes in
+// memory together is what ended the iOS web content process.
+const retireWorker = (client: SearchWorkerClient, { flush = true } = {}): void => {
+  const end = () => {
+    try {
+      client.terminate();
+    } catch {
+      // Ignore termination errors
+    }
+  };
+  let ended = false;
+  const finish = () => {
+    if (ended) return;
+    ended = true;
+    end();
+  };
+  if (!flush) {
+    finish();
+    return;
+  }
+  const timer = setTimeout(finish, 1500);
+  Promise.resolve()
+    .then(() => client.flush?.())
+    .catch(() => {})
+    .finally(() => {
+      clearTimeout(timer);
+      finish();
+    });
+};
+
+// Index writes are debounced (SearchService.PERSIST_DEBOUNCE_MS); write them
+// out when the app is hidden or sent to the background, where iOS may end the
+// web content process without another chance.
+const flushSearchIndex = (): void => {
+  workerClient?.flush?.().catch(() => {});
+  searchService?.flush?.().catch?.(() => {});
+};
+if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') flushSearchIndex();
+  });
+  window.addEventListener('pagehide', flushSearchIndex);
+  window.addEventListener('fe:app-background', flushSearchIndex);
+}
+
 // While App Lock holds the vault shut the local cache is unreadable: sealed
 // messages come back without subject or sender, the persisted index cannot be
 // loaded, and every index write fails with DbLockedError. Building or checking
@@ -129,6 +177,7 @@ const ensureMainThreadService = async (): Promise<void> => {
   searchService = new SearchService({
     includeBody: get(includeBody),
     account: accountId,
+    lite: isMemoryConstrained,
   });
   await searchService.loadFromCache();
   refreshStats();
@@ -168,11 +217,7 @@ const ensureInitialized = async (
 const initializeFor = async (normalizedAccount: string): Promise<void> => {
   // Terminate old worker before creating new one to prevent parallel execution
   if (workerClient) {
-    try {
-      workerClient.terminate();
-    } catch {
-      // Ignore termination errors
-    }
+    retireWorker(workerClient, { flush: !isMemoryConstrained });
     workerClient = null;
     syncWorkerConnected = false; // Reset port flag so new connection is established
     // The startup health check belongs to the account it ran for. A new
@@ -789,11 +834,7 @@ const resetSearchConnection = (): void => {
  */
 const terminateWorker = (): void => {
   if (workerClient) {
-    try {
-      workerClient.terminate();
-    } catch {
-      // Ignore termination errors
-    }
+    retireWorker(workerClient);
     workerClient = null;
   }
   syncWorkerConnected = false;

@@ -129,6 +129,32 @@ describe('global mobile edge-swipe binding', () => {
     expect(onBack).not.toHaveBeenCalled();
   });
 
+  // A non-passive touchmove listener on the document makes every scroll in
+  // WebKit wait for the main thread, so it is there only during a swipe that
+  // began at the edge.
+  it('holds a cancelable touchmove listener only while an edge touch is down', () => {
+    setViewportWidth(390);
+    const added = vi.spyOn(document, 'addEventListener');
+    const removed = vi.spyOn(document, 'removeEventListener');
+    const blocking = () =>
+      added.mock.calls.filter(
+        ([type, , options]) =>
+          type === 'touchmove' && (options as { passive?: boolean } | undefined)?.passive === false,
+      ).length;
+    cleanups.push(bindEdgeSwipeBack({ onBack: vi.fn() }));
+    expect(blocking()).toBe(0);
+
+    // A touch away from the edge (scrolling the list) binds nothing.
+    dispatchTouch('touchstart', [{ clientX: 200, clientY: 100 }]);
+    dispatchTouch('touchend');
+    expect(blocking()).toBe(0);
+
+    dispatchTouch('touchstart', [{ clientX: 8, clientY: 100 }]);
+    expect(blocking()).toBe(1);
+    dispatchTouch('touchend');
+    expect(removed.mock.calls.some(([type]) => type === 'touchmove')).toBe(true);
+  });
+
   it('removes all gesture listeners during cleanup', () => {
     setViewportWidth(390);
     const onBack = vi.fn();

@@ -498,6 +498,33 @@ if (isTauriDesktop) {
   };
 }
 
+// The iOS app reloads the page when iOS ends its web content process (usually
+// for memory; see SceneDelegate.swift), then reports it here: say why the page
+// blinked, and leave a line in the diagnostics log.
+// The native side also leaves a mark in sessionStorage, read here in case its
+// event came before this listener (a page slow to load).
+const RENDERER_RECOVERED_KEY = 'fe_renderer_recovered';
+const reportRendererRecovery = () => {
+  try {
+    sessionStorage.removeItem(RENDERER_RECOVERED_KEY);
+  } catch {
+    // storage unavailable
+  }
+  console.warn('[renderer] the web content process was ended; the page was reloaded');
+  try {
+    toasts.show('The app was reloaded after the system closed it.', 'info');
+  } catch {
+    // the toast host is not up yet
+  }
+};
+globalThis.addEventListener('fe:renderer-recovered', reportRendererRecovery);
+try {
+  const recoveredAt = Number(sessionStorage.getItem(RENDERER_RECOVERED_KEY));
+  if (recoveredAt && Date.now() - recoveredAt < 60_000) reportRendererRecovery();
+} catch {
+  // storage unavailable
+}
+
 // Reconcile push registrations for ALL signed-in accounts.
 // Despite the name kept for call-site compatibility, syncPushNotifications()
 // now registers the device token for every account, not just the active one.

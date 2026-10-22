@@ -620,6 +620,14 @@ const PRUNE_VERIFY_PER_BATCH = 25;
 // Per-folder safety cap. Folders with truly enormous history won't backfill
 // forever; users who want more can raise this via a settings extension later.
 const BACKFILL_SAFETY_CAP = 20_000;
+// On a phone or tablet (the init message says so) the history kept offline
+// per folder is smaller: every cached message is also an entry in the search
+// index and its writes, and on iOS all workers share the web content
+// process's memory limit. Older mail still opens from the server on scroll.
+const MOBILE_BACKFILL_SAFETY_CAP = 2_000;
+let memoryConstrained = false;
+const backfillSafetyCap = () =>
+  memoryConstrained ? MOBILE_BACKFILL_SAFETY_CAP : BACKFILL_SAFETY_CAP;
 
 interface BackfillWalk {
   // Every id the server listed during this walk, when it started at page 1.
@@ -727,7 +735,7 @@ async function runBackfillTask(task, postProgress) {
       backfillPrevTotal: total,
     });
   }
-  if ((manifest.backfillTotalInserted || 0) >= BACKFILL_SAFETY_CAP) {
+  if ((manifest.backfillTotalInserted || 0) >= backfillSafetyCap()) {
     await updateManifest(account, folder, {
       backfillComplete: true,
       backfillTotal: total,
@@ -877,7 +885,7 @@ async function runBackfillTask(task, postProgress) {
       break;
     }
 
-    if (totalInsertedThisRun + (manifest.backfillTotalInserted || 0) >= BACKFILL_SAFETY_CAP) {
+    if (totalInsertedThisRun + (manifest.backfillTotalInserted || 0) >= backfillSafetyCap()) {
       reachedEnd = true;
       capped = true;
       break;
@@ -2651,6 +2659,9 @@ self.onmessage = (event) => {
 
   if (data.type === 'init') {
     apiBase = data.config?.apiBase || '';
+    if (typeof data.config?.memoryConstrained === 'boolean') {
+      memoryConstrained = data.config.memoryConstrained;
+    }
     const account = accountKey(data.config?.account);
     const header = data.config?.authHeader || '';
     // Register (don't replace) so work still running for a previously active

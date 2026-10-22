@@ -1,3 +1,4 @@
+import { isMemoryConstrained } from '../utils/memory-profile';
 export const SETTING_SCOPES = {
   ACCOUNT: 'account',
   DEVICE: 'device',
@@ -475,8 +476,12 @@ export const SETTINGS_REGISTRY: Record<string, SettingDefinition> = {
     scope: SETTING_SCOPES.DEVICE,
     localKey: 'search_body_indexing',
     valueType: 'boolean',
-    defaultValue: true,
-    localParse: (raw) => parseBoolean(raw, true),
+    // Off by default on phones and tablets, as resolveSearchBodyIndexing()
+    // does: body text is most of the search index, and its memory took the
+    // iOS web content process over its limit (the app went blank and
+    // reloaded). The mailbox load copies this value into the search store.
+    defaultValue: !isMemoryConstrained,
+    localParse: (raw) => parseBoolean(raw, !isMemoryConstrained),
     localSerialize: (value) => serializeBoolean(Boolean(value)),
   },
   labels: {
