@@ -6,6 +6,12 @@ release notes are taken from here. To change what a commit says, add a
 `Release-note: <text>` line to its message (or `Release-note: none` to leave
 it out).
 
+## 0.15.7 (2026-10-22)
+
+### Fixes
+
+- Stop iOS page reloads, keep list position, land on inbox after account switch _(Android, iOS)_
+
 ## 0.15.6 (2026-10-22)
 
 ### New
