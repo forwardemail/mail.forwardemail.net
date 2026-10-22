@@ -6,6 +6,12 @@ release notes are taken from here. To change what a commit says, add a
 `Release-note: <text>` line to its message (or `Release-note: none` to leave
 it out).
 
+## 0.15.6 (2026-10-22)
+
+### New
+
+- Send reports to support from the apps, and report memory, storage and reloads
+
 ## 0.15.5 (2026-10-20)
 
 ### Fixes
