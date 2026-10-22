@@ -6,6 +6,12 @@ release notes are taken from here. To change what a commit says, add a
 `Release-note: <text>` line to its message (or `Release-note: none` to leave
 it out).
 
+## 0.15.8 (2026-10-22)
+
+### Fixes
+
+- Fixed a signed-out account's search data being
+
 ## 0.15.7 (2026-10-22)
 
 ### Fixes
