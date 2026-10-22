@@ -1,3 +1,5 @@
+import { DRAWER_MAX_WIDTH, getLayoutWidth } from './viewport-guard';
+
 export const EDGE_SWIPE_START_PX = 24;
 export const EDGE_SWIPE_TRIGGER_PX = 72;
 export const EDGE_SWIPE_INTENT_PX = 12;
@@ -101,7 +103,8 @@ export function bindEdgeSwipeBack({
       event.touches.length !== 1 ||
       !isEnabled() ||
       hasBlockingOverlay() ||
-      window.innerWidth > 768
+      // Wherever the reader covers the list, the same width as the drawer
+      getLayoutWidth() > DRAWER_MAX_WIDTH
     ) {
       return;
     }

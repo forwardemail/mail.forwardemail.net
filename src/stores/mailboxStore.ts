@@ -104,6 +104,7 @@ import {
   isStaleListRequest,
   mergeHeadPage,
   keepScrolledPages,
+  getMessageKey,
   matchesRemoteMessage,
   applyRemoteFlagChange,
   applyRemoteLabelChange,
@@ -156,10 +157,18 @@ const UNREAD_RECONCILE_INTERVAL_MS = 15 * 60_000;
 const UNREAD_SETTLED_REFRESH_MS = 600;
 const unreadReconciledAt = new Map<string, number>();
 const unreadReconciling = new Set<string>();
+// Badge follow-up for changes made here (see unreadDeltaHooks)
+let unreadRecountTimer: ReturnType<typeof setTimeout> | null = null;
+let unreadRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 export const __resetUnreadTrackingForTests = () => {
   unreadDeltas.clear();
   unreadReconciledAt.clear();
   unreadReconciling.clear();
+  // A refresh left from an earlier test fetched folders in a later one
+  if (unreadRecountTimer) clearTimeout(unreadRecountTimer);
+  if (unreadRefreshTimer) clearTimeout(unreadRefreshTimer);
+  unreadRecountTimer = null;
+  unreadRefreshTimer = null;
 };
 
 const activeAccountName = () => Local.get('email') || 'default';
@@ -1823,9 +1832,26 @@ const createMailboxStore = () => {
         ...pendingInsertTracker.getIds(),
         ...pendingFlagTracker.getIds(),
       ]);
+      // The pages already scrolled through stay when they can be placed
+      // after the fresh first one; only otherwise does the list start over.
+      const folderRowsOnScreen = (get(messages) || []).filter((m) =>
+        sameFolderPath(m?.folder, folder),
+      );
+      const kept =
+        !isStaleRequest && headRefresh && headMerge?.replaced && hasMore
+          ? keepScrolledPages(folderRowsOnScreen, merged, currentSort)
+          : null;
+      // Rows on screen inside the fresh first page's window that it no longer
+      // lists, and that keepScrolledPages therefore left out, were removed
+      // like any other: prune them and drop them from the selection too.
+      let keptOut: typeof folderRowsOnScreen = [];
+      if (kept) {
+        const keptKeys = new Set(kept.map(getMessageKey));
+        keptOut = folderRowsOnScreen.filter((m) => !keptKeys.has(getMessageKey(m)));
+      }
       const removedRows =
         headMerge && isBasicQuery
-          ? headMerge.removed.filter((m) => !pendingLocalIds.has(m.id))
+          ? [...headMerge.removed, ...keptOut].filter((m) => !pendingLocalIds.has(m.id))
           : [];
 
       // Prune stale cache entries on any non-append replace-load so messages
@@ -1846,16 +1872,6 @@ const createMailboxStore = () => {
             : shouldAppend
               ? mergeMessagePages(get(messages), merged, MAX_LIVE_MESSAGES)
               : merged;
-        // The pages already scrolled through stay when they can be placed
-        // after the fresh first one; only otherwise does the list start over.
-        const kept =
-          headRefresh && headMerge?.replaced && hasMore
-            ? keepScrolledPages(
-                (get(messages) || []).filter((m) => sameFolderPath(m?.folder, folder)),
-                merged,
-                currentSort,
-              )
-            : null;
         if (kept) {
           nextMessages = kept;
         } else if (headRefresh && headMerge?.replaced) {
@@ -4263,8 +4279,6 @@ const createMailboxStore = () => {
   // Badge follow-up for changes made here (see unreadDeltaHooks). A read shows
   // in the badge at once, not when its request returns; once changes reach
   // the server, one fresh folder list replaces the guesswork.
-  let unreadRecountTimer: ReturnType<typeof setTimeout> | null = null;
-  let unreadRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   unreadDeltaHooks.noted = (account) => {
     if (!isActiveAccountName(account) || unreadRecountTimer) return;
     unreadRecountTimer = setTimeout(() => {

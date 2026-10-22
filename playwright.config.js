@@ -73,6 +73,7 @@ export default defineConfig({
         /notification-tap\.spec/,
         /mobile-stability\.spec/,
         /mobile-list-position\.spec/,
+        /mobile-reader-history\.spec/,
         /adapters\/web\//,
       ],
     },

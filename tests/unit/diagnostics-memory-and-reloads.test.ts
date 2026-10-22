@@ -53,7 +53,11 @@ describe('page load history', () => {
       { at: now - 10 * 60_000, previousEndedOnScreen: true },
       { at: now - 60_000, previousEndedOnScreen: false },
     ];
-    expect(summarizeBootHistory(history, now)).toEqual({ loads: 3, endedOnScreen: 2 });
+    expect(summarizeBootHistory(history, now)).toEqual({
+      loads: 3,
+      endedOnScreen: 2,
+      recovered: 0,
+    });
   });
 
   it('keeps the last 30 loads', () => {
@@ -69,6 +73,43 @@ describe('page load history', () => {
     store.setItem('fe_boot_history', '{not json');
     expect(readBootHistory(store)).toEqual([]);
     expect(recordBoot(store, 5)?.at).toBe(5);
+  });
+});
+
+describe('recovery reloads', () => {
+  // A fresh copy of the module per test: it remembers this page's own load
+  const fresh = async () => {
+    vi.resetModules();
+    return import('../../src/utils/boot-history');
+  };
+
+  it('marks this load when the native side reports before the load is recorded', async () => {
+    const store = memoryStore();
+    const history = await fresh();
+    history.recordBoot(store, 1_000);
+    const next = await fresh();
+    // Crash loop: the previous load is seconds old and must stay unmarked
+    next.markRendererRecovered(store);
+    next.recordBoot(store, 4_000);
+    expect(next.readBootHistory(store).map((e) => e.rendererRecovered === true)).toEqual([
+      false,
+      true,
+    ]);
+  });
+
+  it('marks this load when the report comes after it was recorded', async () => {
+    const store = memoryStore();
+    const history = await fresh();
+    history.recordBoot(store, 1_000);
+    const next = await fresh();
+    next.recordBoot(store, 4_000);
+    next.markRendererRecovered(store);
+    next.markRendererRecovered(store);
+    expect(next.readBootHistory(store).map((e) => e.rendererRecovered === true)).toEqual([
+      false,
+      true,
+    ]);
+    expect(next.summarizeBootHistory(next.readBootHistory(store), 5_000).recovered).toBe(1);
   });
 });
 

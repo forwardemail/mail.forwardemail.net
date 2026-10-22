@@ -86,36 +86,42 @@ let workerClient: SearchWorkerClient | null = null;
 let syncWorkerConnected = false;
 let startupCheckDone = false;
 
+// Workers being retired, which may still write an index while they flush.
+const retiringClients = new Set<SearchWorkerClient>();
+const RETIRE_TIMEOUT_MS = 1500;
+
 // Let a worker write the index changes it has not written yet (they are
 // debounced), then end it; a worker that does not answer in time is ended
-// anyway. Not where a replacement starts at once on a phone: two indexes in
-// memory together is what ended the iOS web content process.
-const retireWorker = (client: SearchWorkerClient, { flush = true } = {}): void => {
+// anyway. Resolves once it has ended.
+const retireWorker = (client: SearchWorkerClient, { flush = true } = {}): Promise<void> => {
+  retiringClients.add(client);
   const end = () => {
+    retiringClients.delete(client);
     try {
       client.terminate();
     } catch {
       // Ignore termination errors
     }
   };
-  let ended = false;
-  const finish = () => {
-    if (ended) return;
-    ended = true;
-    end();
-  };
   if (!flush) {
-    finish();
-    return;
+    end();
+    return Promise.resolve();
   }
-  const timer = setTimeout(finish, 1500);
-  Promise.resolve()
-    .then(() => client.flush?.())
-    .catch(() => {})
-    .finally(() => {
+  return new Promise<void>((resolve) => {
+    let ended = false;
+    const finish = () => {
+      if (ended) return;
+      ended = true;
       clearTimeout(timer);
-      finish();
-    });
+      end();
+      resolve();
+    };
+    const timer = setTimeout(finish, RETIRE_TIMEOUT_MS);
+    Promise.resolve()
+      .then(() => client.flush?.())
+      .catch(() => {})
+      .finally(finish);
+  });
 };
 
 // Index writes are debounced (SearchService.PERSIST_DEBOUNCE_MS); write them
@@ -217,12 +223,16 @@ const ensureInitialized = async (
 const initializeFor = async (normalizedAccount: string): Promise<void> => {
   // Terminate old worker before creating new one to prevent parallel execution
   if (workerClient) {
-    retireWorker(workerClient, { flush: !isMemoryConstrained });
+    const retiring = retireWorker(workerClient);
     workerClient = null;
     syncWorkerConnected = false; // Reset port flag so new connection is established
     // The startup health check belongs to the account it ran for. A new
     // account needs its own, or its index is never rebuilt.
     startupCheckDone = false;
+    // On a phone the old worker's last write (a copy of its whole index) must
+    // be done before the new worker loads another index: two at once is what
+    // ended the iOS web content process.
+    if (isMemoryConstrained) await retiring;
   }
 
   accountId = normalizedAccount;
@@ -830,11 +840,17 @@ const resetSearchConnection = (): void => {
 };
 
 /**
- * Terminate search worker and cleanup - call during shutdown or HMR
+ * Terminate search worker and cleanup - call during shutdown, HMR or an
+ * account switch. The worker writes its pending index changes first. On a
+ * phone the returned promise waits for that write (bounded by the retire
+ * timeout), so a caller that awaits it does not load the next account while
+ * the old index is being copied out; elsewhere it resolves at once and the
+ * write runs alongside.
  */
-const terminateWorker = (): void => {
+const terminateWorker = (): Promise<void> => {
+  let retiring: Promise<void> = Promise.resolve();
   if (workerClient) {
-    retireWorker(workerClient);
+    retiring = retireWorker(workerClient);
     workerClient = null;
   }
   syncWorkerConnected = false;
@@ -843,6 +859,50 @@ const terminateWorker = (): void => {
   // forget the account too, so nothing restarts search for it implicitly
   // (the next ensureInitialized names the account it wants)
   accountId = '';
+  return isMemoryConstrained ? retiring : Promise.resolve();
+};
+
+/**
+ * The account is being signed out and its cache deleted: make every search
+ * worker (the live one and any still retiring) forget its index, and wait for
+ * that before the delete, so no flush or debounced write puts it back
+ * afterwards. A worker that does not answer in time is ended without a flush.
+ */
+const dropAccount = async (account: string): Promise<void> => {
+  const key = account || 'default';
+  if (searchService?.account === key) {
+    const service = searchService;
+    searchService = null;
+    await service.discard?.();
+  }
+  if (accountId === key) accountId = '';
+  const clients = [workerClient, ...retiringClients].filter(
+    (client): client is SearchWorkerClient => Boolean(client),
+  );
+  await Promise.all(
+    clients.map(async (client) => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const answered = await Promise.race([
+        Promise.resolve()
+          .then(() => client.dropAccount(key))
+          .then(
+            () => true,
+            () => false,
+          ),
+        new Promise<boolean>((resolve) => {
+          timer = setTimeout(() => resolve(false), RETIRE_TIMEOUT_MS);
+        }),
+      ]);
+      clearTimeout(timer);
+      if (answered) return;
+      if (client === workerClient) {
+        workerClient = null;
+        syncWorkerConnected = false;
+        startupCheckDone = false;
+      }
+      retireWorker(client, { flush: false });
+    }),
+  );
 };
 
 export const searchStore = {
@@ -872,6 +932,7 @@ export const searchStore = {
     getWorkerClient,
     resetSearchConnection,
     terminateWorker,
+    dropAccount,
     resumeAfterUnlock,
   },
 };

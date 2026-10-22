@@ -155,6 +155,18 @@ function removedSince(key: string, id: string, seq: number): boolean {
   return at !== undefined && at > seq;
 }
 
+// Accounts signed out while this worker runs. Their saved index is deleted
+// with the rest of their cache, so nothing may create a service for them or
+// write one back: not a flush, not a debounced write, not a late sync batch.
+// An explicit init (signing in again) clears the mark.
+const droppedAccounts = new Set<string>();
+const ACCOUNT_DROPPED = 'Search index account was signed out';
+
+// Ids indexed while a rebuild of the account runs, so the rebuilt index keeps
+// them even when its read of the database came before they were cached.
+const rebuildTouched = new Map<string, Map<string, ReturnType<typeof mapMessageToDoc>>>();
+const rebuildChains = new Map<string, Promise<unknown>>();
+
 // Batch queue for incremental indexing from sync worker
 const indexQueue = new Map<string, QueueEntry>(); // key: account -> { messages: [], ids, timer }
 const INDEX_BATCH_DELAY = 100; // ms to wait before processing batch
@@ -188,6 +200,7 @@ async function ensureService(
   includeBody?: boolean,
 ): Promise<SearchService> {
   const key = accountKey(account);
+  if (droppedAccounts.has(key)) throw new Error(ACCOUNT_DROPPED);
   const existing = services.get(key);
   if (existing) return existing;
   const loading = loadingServices.get(key);
@@ -197,6 +210,11 @@ async function ensureService(
     const mode = typeof includeBody === 'boolean' ? includeBody : await persistedIncludeBody(key);
     const service = new SearchService({ includeBody: mode, account: key });
     await service.loadFromCache();
+    // Signed out while the saved index was loading.
+    if (droppedAccounts.has(key)) {
+      await service.discard();
+      throw new Error(ACCOUNT_DROPPED);
+    }
     services.set(key, service);
     return service;
   })().finally(() => {
@@ -253,7 +271,10 @@ async function indexMessages(
   }
 
   const live = messages.filter((msg) => !removedSince(key, msg.id, startSeq));
-  service.upsertEntries(live.map((msg) => mapMessageToDoc(msg, bodyMap?.get(msg.id) || '')));
+  const docs = live.map((msg) => mapMessageToDoc(msg, bodyMap?.get(msg.id) || ''));
+  service.upsertEntries(docs);
+  const touched = rebuildTouched.get(key);
+  if (touched) docs.forEach((doc) => touched.set(doc.id, doc));
   // Debounced: a sync burst of many batches collapses into a few writes.
   // processIndexQueue flushes when the queue drains; stats come from the
   // in-memory index, so the returned count is correct without awaiting a write.
@@ -275,6 +296,8 @@ async function removeFromIndex(
     queue.messages = queue.messages.filter((msg) => !gone.has(msg.id));
     gone.forEach((id) => queue.ids.delete(id));
   }
+  const touched = rebuildTouched.get(key);
+  if (touched) ids.forEach((id) => touched.delete(id));
   const service = await ensureService(key);
   service.removeEntriesByIds(ids);
   service.schedulePersist();
@@ -287,37 +310,66 @@ async function removeFromIndex(
 // on iOS, where every worker shares the web content process's memory limit,
 // that ended the page.
 const MESSAGE_READ_CHUNK = 2000;
+// Pages follow the primary key, [account+id], each one starting after the
+// last key of the one before. Paging by offset skipped rows whenever messages
+// were deleted between two reads (the rest shift down past the offset), and
+// every offset read walked all the rows before it again. The bounds cover
+// every id of the account: -Infinity sorts before any string or number key,
+// and an array after them.
+const ACCOUNT_KEY_INDEX = '[account+id]';
 async function forEachMessageChunk(
   key: string,
   fn: (messages: Message[]) => Promise<void> | void,
 ): Promise<number> {
   let total = 0;
-  for (let offset = 0; ; offset += MESSAGE_READ_CHUNK) {
+  let lower: unknown[] = [key, -Infinity];
+  let includeLower = true;
+  for (;;) {
     const chunk: Message[] = await dbClient.messages
-      .where('account')
-      .equals(key)
-      .offset(offset)
+      .where(ACCOUNT_KEY_INDEX)
+      .between(lower, [key, []], includeLower, false)
       .limit(MESSAGE_READ_CHUNK)
       .toArray();
     if (!chunk?.length) break;
     total += chunk.length;
     await fn(chunk);
     if (chunk.length < MESSAGE_READ_CHUNK) break;
+    lower = [key, chunk[chunk.length - 1].id];
+    includeLower = false;
   }
   return total;
 }
 
-// Rebuild the entire search index from messages in database
-async function rebuildFromCache(
+// Rebuild the entire search index from messages in database. Rebuilds of one
+// account run one after another.
+function rebuildFromCache(
   payload: RebuildPayload = {},
+): Promise<{ count: number; stats: SearchStats }> {
+  const key = accountKey(payload.account);
+  const previous = rebuildChains.get(key) || Promise.resolve();
+  // Removals from the time of the request on are left out, even when this
+  // rebuild waits for another one first.
+  const startSeq = removalSeq;
+  const run = previous.catch(() => {}).then(() => runRebuild(payload, startSeq));
+  rebuildChains.set(key, run);
+  run
+    .catch(() => {})
+    .finally(() => {
+      if (rebuildChains.get(key) === run) rebuildChains.delete(key);
+    });
+  return run;
+}
+
+// The database snapshot read below can predate a removal that lands while it
+// is being read, so anything removed after `startSeq` is left out.
+async function runRebuild(
+  payload: RebuildPayload,
+  startSeq: number,
 ): Promise<{ count: number; stats: SearchStats }> {
   const { account = 'default', includeBody = false } = payload;
   const key = accountKey(account);
-  // The database snapshot read below can predate a removal that lands while
-  // it is being read, so anything removed after this point is left out.
-  const startSeq = removalSeq;
-  // Rebuild the live service in place rather than replacing it, so nothing
-  // else holds on to a service that is no longer the account's.
+  // The live service stays the account's service throughout, so nothing else
+  // holds on to one that is no longer the account's.
   const service = await applyIncludeBody(key, includeBody);
 
   if (!dbConnected) {
@@ -326,27 +378,91 @@ async function rebuildFromCache(
     return { count: 0, stats: service.getStats() };
   }
 
-  // Index every cached message, a chunk at a time, leaving out any removed
-  // while it was read, then write the index once.
-  service.clearEntries();
-  await forEachMessageChunk(key, async (messages) => {
-    let bodyMap: Map<string, string> | null = null;
-    if (includeBody) {
-      try {
-        bodyMap = await loadBodyTexts(messages.map((msg: Message) => [key, msg.id]));
-      } catch (err) {
-        console.warn('[search.worker] rebuildFromCache body lookup failed', err);
+  // A rebuild must never be saved half done, and a failed one must leave the
+  // index it started from. Where memory allows, the new index is built on the
+  // side while searches keep using the old one, and replaces it only once
+  // complete. A phone (lite index) cannot hold two indexes at once (that is
+  // what ended the iOS web content process), so there the index is emptied
+  // and rebuilt in place with every write held until it is done: searches see
+  // a partial index meanwhile, and on failure the previous entries go back in.
+  const inPlace = service.lite;
+  const target = inPlace
+    ? service
+    : new SearchService({ includeBody: service.includeBody, account: key, lite: service.lite });
+  const previousEntries = inPlace ? service.beginRebuild() : null;
+  const touched = new Map<string, ReturnType<typeof mapMessageToDoc>>();
+  rebuildTouched.set(key, touched);
+  try {
+    await forEachMessageChunk(key, async (messages) => {
+      if (droppedAccounts.has(key)) throw new Error(ACCOUNT_DROPPED);
+      let bodyMap: Map<string, string> | null = null;
+      if (includeBody) {
+        try {
+          bodyMap = await loadBodyTexts(messages.map((msg: Message) => [key, msg.id]));
+        } catch (err) {
+          console.warn('[search.worker] rebuildFromCache body lookup failed', err);
+        }
       }
+      target.upsertEntries(
+        messages
+          .filter((msg: Message) => !removedSince(key, msg.id, startSeq))
+          .map((msg: Message) => mapMessageToDoc(msg, bodyMap?.get(msg.id) || '')),
+      );
+    });
+  } catch (err) {
+    if (previousEntries) {
+      service.abortRebuild(previousEntries);
+      // Changes made while the rebuild ran went into the partial index.
+      applyChangesSince(service, key, startSeq, touched);
     }
-    service.upsertEntries(
-      messages
-        .filter((msg: Message) => !removedSince(key, msg.id, startSeq))
-        .map((msg: Message) => mapMessageToDoc(msg, bodyMap?.get(msg.id) || '')),
-    );
-  });
+    throw err;
+  } finally {
+    if (rebuildTouched.get(key) === touched) rebuildTouched.delete(key);
+  }
+
+  if (inPlace) {
+    service.endRebuild();
+  } else {
+    // Messages indexed or removed while the side index was being read.
+    applyChangesSince(target, key, startSeq, touched);
+    service.adoptIndex(target);
+  }
   await service.persist();
 
   return { count: service.getStats().count, stats: service.getStats() };
+}
+
+// Replay on `service` what changed in the account's index since `startSeq`:
+// removals logged after it, then messages indexed while a rebuild ran.
+function applyChangesSince(
+  service: SearchService,
+  key: string,
+  startSeq: number,
+  touched: Map<string, ReturnType<typeof mapMessageToDoc>>,
+): void {
+  const removed: string[] = [];
+  lastRemovedAt.get(key)?.forEach((seq, id) => {
+    if (seq > startSeq) removed.push(id);
+  });
+  service.removeEntriesByIds(removed);
+  service.upsertEntries([...touched.values()]);
+}
+
+// The account was signed out: forget its service and anything queued for it,
+// and let a write already under way finish before its cache is deleted.
+async function dropAccount(payload: { account?: string } = {}): Promise<void> {
+  const key = accountKey(payload.account);
+  droppedAccounts.add(key);
+  const queue = indexQueue.get(key);
+  if (queue?.timer) clearTimeout(queue.timer);
+  indexQueue.delete(key);
+  rebuildTouched.delete(key);
+  lastRemovedAt.delete(key);
+  const loading = loadingServices.get(key);
+  if (loading) await loading.catch(() => null);
+  const service = services.get(key);
+  services.delete(key);
+  if (service) await service.discard();
 }
 
 // Get stats and health check info
@@ -426,6 +542,7 @@ function queueForIndexing(payload: IndexPayload = {}): void {
   if (!messages.length) return;
 
   const key = accountKey(account);
+  if (droppedAccounts.has(key)) return;
   let queue = indexQueue.get(key);
   if (!queue) {
     queue = { messages: [], ids: new Set(), timer: null };
@@ -654,6 +771,7 @@ self.onmessage = async (event: MessageEvent<SearchWorkerMessage>) => {
       if (typeof payload?.lite === 'boolean' && !services.size && !loadingServices.size) {
         setSearchMemoryProfile(payload.lite);
       }
+      droppedAccounts.delete(accountKey(payload?.account as string));
       await applyIncludeBody(
         (payload?.account as string) || 'default',
         Boolean(payload?.includeBody),
@@ -681,13 +799,22 @@ self.onmessage = async (event: MessageEvent<SearchWorkerMessage>) => {
       respond(id, true, res);
       return;
     }
+    if (action === 'dropAccount') {
+      await dropAccount(payload as { account?: string });
+      respond(id, true, { ok: true });
+      return;
+    }
     if (action === 'flush') {
+      // A signed-out account's service is gone from `services` (dropAccount),
+      // so its deleted index is not written back here.
       await Promise.all(
-        [...services.values()].map((service) =>
-          service?.flush?.()?.catch((err: unknown) => {
-            console.warn('[search.worker] index write failed', err);
-          }),
-        ),
+        [...services.entries()]
+          .filter(([key]) => !droppedAccounts.has(key))
+          .map(([, service]) =>
+            service?.flush?.()?.catch((err: unknown) => {
+              console.warn('[search.worker] index write failed', err);
+            }),
+          ),
       );
       respond(id, true, { ok: true });
       return;

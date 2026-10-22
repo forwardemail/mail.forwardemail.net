@@ -9,6 +9,8 @@ import { get, writable } from 'svelte/store';
 const hoisted = vi.hoisted(() => ({
   tables: new Map<string, Array<Record<string, unknown>>>(),
   toastShow: vi.fn(),
+  // The account's saved search index rows at the time search was told to drop it.
+  indexRowsAtDrop: null as null | Array<Record<string, unknown>>,
 }));
 
 vi.mock('../../src/utils/remote', () => ({
@@ -124,6 +126,11 @@ vi.mock('../../src/stores/searchStore', () => ({
       setIncludeBody: vi.fn().mockResolvedValue(undefined),
       resetSearchConnection: vi.fn(),
       terminateWorker: vi.fn(),
+      dropAccount: vi.fn(async (account: string) => {
+        hoisted.indexRowsAtDrop = (hoisted.tables.get('searchIndex') || []).filter(
+          (r) => r.account === account,
+        );
+      }),
       ensureInitialized: vi.fn().mockResolvedValue(undefined),
     },
   },
@@ -254,6 +261,23 @@ describe('signing out of one session-only account', () => {
     expect(hoisted.tables.get('folders')).toEqual([
       { account: 'front-desk@example.com', path: 'INBOX' },
     ]);
+  });
+
+  // A search worker writes its index on a debounce and when flushed (the
+  // account switch retires it with a flush). Told only after the cache was
+  // deleted, it wrote the signed-out account's index back.
+  it('has search drop the account before its cached index is deleted', async () => {
+    signInSessionOnly('front-desk@example.com');
+    signInSessionOnly('night-shift@example.com');
+    hoisted.indexRowsAtDrop = null;
+    hoisted.tables.set('searchIndex', [
+      { account: 'night-shift@example.com', key: 'messages_v1', data: [] },
+    ]);
+
+    await signOut();
+
+    expect(hoisted.indexRowsAtDrop).toHaveLength(1);
+    expect(hoisted.tables.get('searchIndex')).toEqual([]);
   });
 });
 

@@ -688,10 +688,15 @@ export const checkPageReloads = (): Promise<DiagnosticResult> =>
       recent: history.slice(-10).map((e) => ({
         at: new Date(e.at).toISOString(),
         previousEndedOnScreen: e.previousEndedOnScreen,
+        rendererRecovered: e.rendererRecovered === true,
       })),
     };
-    const message = `${hour.loads} load${hour.loads === 1 ? '' : 's'} in the last hour, ${hour.endedOnScreen} after the page died on screen (${day.endedOnScreen} today)`;
-    return { status: hour.endedOnScreen >= 2 ? 'warn' : 'pass', message, detail };
+    const recovered = hour.recovered
+      ? `, ${hour.recovered} reloaded by the app after the system ended the page`
+      : '';
+    const message = `${hour.loads} load${hour.loads === 1 ? '' : 's'} in the last hour, ${hour.endedOnScreen} after the page died on screen (${day.endedOnScreen} today)${recovered}`;
+    const status = hour.endedOnScreen >= 2 || hour.recovered >= 2 ? 'warn' : 'pass';
+    return { status, message, detail };
   });
 
 // ── Composer ────────────────────────────────────────────────────────────────

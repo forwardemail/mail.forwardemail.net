@@ -117,6 +117,12 @@ export class SearchWorkerClient {
     return this.send('flush', {});
   }
 
+  // Forget a signed-out account's index; resolves once a write of it already
+  // under way has landed, so the caller can delete its cache after.
+  dropAccount(account) {
+    return this.send('dropAccount', { account });
+  }
+
   getHealth(payload) {
     return this.send('getHealth', payload);
   }

@@ -106,6 +106,11 @@ export class SearchService {
     this._persistTimer = null;
     this._persistPending = false;
     this._persistInFlight = null;
+    // Set while a rebuild has the index half built (beginRebuild), so no
+    // write saves it in that state, and once the account is signed out
+    // (discard), so nothing writes its index back after it was deleted.
+    this._persistHeld = false;
+    this._discarded = false;
   }
 
   async loadFromCache() {
@@ -156,6 +161,55 @@ export class SearchService {
     this.index = createDocument(this.includeBody, null, this.lite);
     this._entries = new Map();
     this.sizeBytes = 0;
+  }
+
+  /**
+   * Empty the index for a rebuild in place and hold every write until
+   * endRebuild() or abortRebuild(). Returns the entries it held before, for
+   * abortRebuild() to put back.
+   */
+  beginRebuild() {
+    const previous = this._entries;
+    this._persistHeld = true;
+    this.index = createDocument(this.includeBody, null, this.lite);
+    this._entries = new Map();
+    this.sizeBytes = 0;
+    return previous;
+  }
+
+  endRebuild() {
+    this._persistHeld = false;
+  }
+
+  /** Put back the entries held before beginRebuild(), dropping the partial index. */
+  abortRebuild(previous) {
+    this.index = createDocument(this.includeBody, null, this.lite);
+    this._entries = new Map();
+    this.sizeBytes = 0;
+    for (const entry of previous?.values?.() || []) this.addEntry(entry);
+    this._persistHeld = false;
+  }
+
+  /** Take over the index another service built (a rebuild into a fresh index). */
+  adoptIndex(other) {
+    this.index = other.index;
+    this._entries = other._entries;
+    this.sizeBytes = other.sizeBytes;
+  }
+
+  /**
+   * Stop writing this account's index for good: the account is being signed
+   * out and its saved index deleted. Drops a scheduled write and waits for
+   * one already under way, so it lands before the delete and not after.
+   */
+  async discard() {
+    this._discarded = true;
+    if (this._persistTimer) {
+      clearTimeout(this._persistTimer);
+      this._persistTimer = null;
+    }
+    this._persistPending = false;
+    if (this._persistInFlight) await this._persistInFlight.catch(() => {});
   }
 
   addEntry(entry) {
@@ -260,6 +314,12 @@ export class SearchService {
   }
 
   async persist() {
+    if (this._discarded) return;
+    if (this._persistHeld) {
+      // Written once the rebuild ends.
+      this._persistPending = true;
+      return;
+    }
     // Any direct persist() satisfies a pending scheduled write: it captures
     // the full current in-memory state, so a queued flush would be redundant.
     this._persistPending = false;
@@ -324,6 +384,7 @@ export class SearchService {
   }
 
   schedulePersist() {
+    if (this._discarded) return;
     this._persistPending = true;
     if (this._persistTimer) return;
     this._persistTimer = setTimeout(() => {
@@ -347,12 +408,13 @@ export class SearchService {
       clearTimeout(this._persistTimer);
       this._persistTimer = null;
     }
+    if (this._discarded || this._persistHeld) return;
     if (!this._persistPending && !this._persistInFlight) return;
     // Coalesce concurrent flushes onto one chain; mark pending consumed.
     if (this._persistInFlight) {
       await this._persistInFlight.catch(() => {});
     }
-    if (!this._persistPending) return;
+    if (!this._persistPending || this._discarded || this._persistHeld) return;
     this._persistPending = false;
     this._persistInFlight = this.persist()
       .catch((error) => {

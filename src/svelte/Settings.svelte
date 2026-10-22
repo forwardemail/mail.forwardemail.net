@@ -3,6 +3,7 @@
   import { readable, type Readable, type Unsubscriber } from 'svelte/store';
   import { Local, clearAccountPgpData } from '../utils/storage';
   import { keyboardShortcuts } from '../utils/keyboard-shortcuts';
+  import { isMemoryConstrained } from '../utils/memory-profile';
   import { getDatabaseInfo, CURRENT_SCHEMA_VERSION, db } from '../utils/db';
   import { cacheManager } from '../utils/cache-manager';
   import { unregisterServiceWorker } from '../utils/sw-cache.js';
@@ -3037,6 +3038,10 @@
             </label>
             <p class="text-sm text-muted-foreground">
               When enabled, message content is indexed for full-text search.
+              {#if isMemoryConstrained}
+                On phones and tablets it is off unless you turn it on: message text makes up most of
+                the index, and the memory it takes can make the app reload.
+              {/if}
             </p>
             <div class="bg-muted p-3 text-sm">
               <div>Indexed messages: {indexCountValue || 0}</div>

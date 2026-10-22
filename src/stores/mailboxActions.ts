@@ -76,7 +76,7 @@ import { sanitizeHtml } from '../utils/sanitize.js';
 import { resetTabs } from './tabStore';
 import { parseReferences } from '../utils/threading';
 import { isOnline } from '../utils/network-status';
-import { getLayoutWidth } from '../utils/viewport-guard';
+import { DRAWER_MAX_WIDTH, getLayoutWidth } from '../utils/viewport-guard';
 import { sidebarOpen, filterByLabel } from './viewStore';
 
 /**
@@ -130,9 +130,7 @@ export const setNavigate = (fn) => {
   navigateRef = fn;
 };
 
-// Widest viewport where the sidebar is a drawer over the list (the
-// max-width: 820px rules in styles/pages/mailbox.css).
-export const DRAWER_MAX_WIDTH = 820;
+export { DRAWER_MAX_WIDTH };
 
 // The mailbox chrome that belongs to the account being left: its menus, the
 // open reader, its label filter (label ids are per account) and, where the
@@ -2266,6 +2264,14 @@ export const signOut = async () => {
     // finish under their own identity; a signed-out account's header must be
     // dropped explicitly or it stays usable for the worker's lifetime.
     revokeSyncWorkerAuth(currentEmail);
+    // Search workers write their index on a debounce and on flush. Make them
+    // forget this account first, or a later write puts back the index that
+    // Accounts.remove() deletes.
+    try {
+      await searchStore.actions.dropAccount?.(currentEmail);
+    } catch (err) {
+      warn('Failed to drop the search index during sign out', err);
+    }
     try {
       await Accounts.remove(currentEmail, true);
     } catch (err) {
@@ -2636,7 +2642,9 @@ const performAccountSwitch = async (requestedEmail) => {
   // iOS is when the web content process was killed (the app flashing blank,
   // then coming back to an inbox that never loaded).
   searchStore.actions.resetSearchConnection();
-  searchStore.actions.terminateWorker?.();
+  // On a phone this waits for the old worker's last index write, so it is not
+  // copying out its index while load() fills the new account's list.
+  await searchStore.actions.terminateWorker?.();
 
   // PHASE 5: Full load with network refresh (non-blocking for cached accounts)
   // Note: we don't clearSettings() here because cached settings were already applied

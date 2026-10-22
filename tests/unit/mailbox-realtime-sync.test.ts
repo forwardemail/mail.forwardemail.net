@@ -482,6 +482,29 @@ describe('refresh after a change elsewhere', () => {
     expect(get(page)).toBe(2);
   });
 
+  it('forgets a message the kept pages leave out, in the cache and the reader', async () => {
+    // As above, and m5 (on screen, inside the fresh page's window) is gone
+    // from the server. Leaving it in the cache brought it back on the next
+    // cached load, and the reader kept showing it.
+    h.server.set(
+      'INBOX',
+      [7, 6, 4, 3, 2, 1].map((n) => msg(n)),
+    );
+    h.folderTotals.set('INBOX', 6);
+    const rows = [6, 5, 3, 2, 1].map((n) => cached(n));
+    await db.messages.bulkPut(rows);
+    messages.setImmediate(rows as never);
+    selectedMessage.set(rows[1] as never);
+    page.set(2);
+
+    await mailboxStore.actions.loadMessages({ refresh: true });
+    await settle();
+
+    expect(shownIds()).toEqual(['m7', 'm6', 'm4', 'm3', 'm2', 'm1']);
+    expect(await cachedIds()).not.toContain('m5');
+    expect(get(selectedMessage)).toBeNull();
+  });
+
   it('starts over at the first page when more mail arrived than a page holds', async () => {
     // The fresh page shares no row with the list: the mail between them was
     // never fetched, so the list is not joined across the gap.

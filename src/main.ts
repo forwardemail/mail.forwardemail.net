@@ -117,7 +117,7 @@ import { installRuntimeErrorNotifier } from './utils/runtime-error-notifier';
 import { initPerfObservers } from './utils/perf-logger.ts';
 import { attemptRecovery } from './utils/db-recovery';
 import { parseMailto, mailtoToPrefill } from './utils/mailto';
-import { recordBoot, trackPageVisibility } from './utils/boot-history';
+import { markRendererRecovered, recordBoot, trackPageVisibility } from './utils/boot-history';
 import { selectedFolder, folders } from './stores/folderStore';
 import {
   messageBody,
@@ -511,6 +511,8 @@ const reportRendererRecovery = () => {
     // storage unavailable
   }
   console.warn('[renderer] the web content process was ended; the page was reloaded');
+  // The page reload history in diagnostics counts these
+  markRendererRecovered();
   try {
     toasts.show('The app was reloaded after the system closed it.', 'info');
   } catch {

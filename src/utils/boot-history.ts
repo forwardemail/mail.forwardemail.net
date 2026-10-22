@@ -11,6 +11,10 @@
 
 const HISTORY_KEY = 'fe_boot_history';
 const VISIBLE_KEY = 'fe_page_visible';
+const RECOVERED_PENDING_KEY = 'fe_boot_recovered_pending';
+
+// When this page's own load was recorded, so a later mark finds its entry
+let thisLoad: number | null = null;
 const MAX_ENTRIES = 30;
 
 export interface BootEntry {
@@ -18,6 +22,8 @@ export interface BootEntry {
   at: number;
   /** The page before this one ended while on screen. Null for the first load. */
   previousEndedOnScreen: boolean | null;
+  /** The iOS app reloaded this page after the system ended the one before */
+  rendererRecovered?: boolean;
 }
 
 type KeyValueStore = Pick<Storage, 'getItem' | 'setItem'>;
@@ -51,12 +57,40 @@ export function recordBoot(storage = defaultStorage(), now = Date.now()): BootEn
       at: now,
       previousEndedOnScreen: marker === null ? null : marker === '1',
     };
+    if (storage.getItem(RECOVERED_PENDING_KEY)) {
+      entry.rendererRecovered = true;
+      storage.setItem(RECOVERED_PENDING_KEY, '');
+    }
+    thisLoad = now;
     const history = [...readBootHistory(storage), entry].slice(-MAX_ENTRIES);
     storage.setItem(HISTORY_KEY, JSON.stringify(history));
     storage.setItem(VISIBLE_KEY, '1');
     return entry;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Mark this load as a recovery reload. The native side says so as soon as the
+ * page has loaded, which can be before or after recordBoot runs.
+ */
+export function markRendererRecovered(storage = defaultStorage()) {
+  if (!storage) return;
+  try {
+    if (thisLoad === null) {
+      // recordBoot has not run yet; it picks this up
+      storage.setItem(RECOVERED_PENDING_KEY, '1');
+      return;
+    }
+    const history = readBootHistory(storage);
+    const entry = history.find((e) => e.at === thisLoad);
+    if (entry && !entry.rendererRecovered) {
+      entry.rendererRecovered = true;
+      storage.setItem(HISTORY_KEY, JSON.stringify(history));
+    }
+  } catch {
+    /* the report is just less precise */
   }
 }
 
@@ -87,5 +121,6 @@ export function summarizeBootHistory(
   return {
     loads: recent.length,
     endedOnScreen: recent.filter((e) => e.previousEndedOnScreen === true).length,
+    recovered: recent.filter((e) => e.rendererRecovered === true).length,
   };
 }

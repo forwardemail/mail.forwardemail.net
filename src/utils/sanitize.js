@@ -117,28 +117,36 @@ export function sanitizeEmailCss(css, { blockRemoteUrls = false } = {}) {
     .replace(/position\s*:\s*fixed/gi, 'position: static')
     // Anchored to a declaration start so border-color and background-image,
     // which merely contain these names, are left alone.
-    .replace(/(^|[;{])\s*(color|background-color|background)\s*:[^;}]*/gi, '$1')
-    // After the rewrites above, before the blocked-url markers: the sheet
-    // goes back into a <style> element, whose text is not escaped when
-    // serialized, so a "<" left in it can close the element and open markup
-    // on the next parse. Stripping "</" first was not enough: removing
-    // "@import;" from "<@import;/style>" made a new one. The CSS escape keeps
-    // a "<" in a string or an inline SVG url() meaning the same, and cannot
-    // be combined into a comment that forges a marker.
-    .replace(/</g, '\\3c ');
+    .replace(/(^|[;{])\s*(color|background-color|background)\s*:[^;}]*/gi, '$1');
 
   let blockedCount = 0;
   if (blockRemoteUrls) {
     // Comments are already gone, so the marker inserted here is the only one
-    // in the sheet and cannot be forged by the email.
-    out = out.replace(/url\(\s*(['"]?)(https?:\/\/[^'")\s]+)\1\s*\)/gi, (match, _quote, url) => {
-      // A url() that could close the marker comment early would let the rest
-      // of the declaration escape; leave those blocked outright.
-      if (url.includes('*/') || url.includes('<')) return 'none';
-      blockedCount++;
-      return `/*${CSS_BLOCKED_URL_MARKER}${url}*/none`;
-    });
+    // in the sheet and cannot be forged by the email. This runs before the
+    // "<" escape below: the escape adds a space, which ended the url match
+    // early and let a url holding "<" through unblocked.
+    out = out.replace(
+      /url\(\s*(?:"([^"]*)"|'([^']*)'|([^'"()\s]*))\s*\)/gi,
+      (match, doubleQuoted, singleQuoted, bare) => {
+        const url = (doubleQuoted ?? singleQuoted ?? bare ?? '').trim();
+        // A CSS escape can spell a scheme the test below would miss
+        // ("htt\70s://"), and a url that could end the marker comment early
+        // would let the rest of the declaration escape. Block both outright.
+        if (url.includes('\\') || url.includes('*/') || url.includes('<')) return 'none';
+        if (!/^(?:https?:)?\/\//i.test(url)) return match;
+        blockedCount++;
+        return `/*${CSS_BLOCKED_URL_MARKER}${url}*/none`;
+      },
+    );
   }
+
+  // The sheet goes back into a <style> element, whose text is not escaped
+  // when serialized, so a "<" left in it can close the element and open
+  // markup on the next parse. Stripping "</" first was not enough: removing
+  // "@import;" from "<@import;/style>" made a new one. The CSS escape keeps a
+  // "<" in a string or an inline SVG url() meaning the same, and the markers
+  // above cannot hold one.
+  out = out.replace(/</g, '\\3c ');
 
   return { css: out, blockedCount };
 }

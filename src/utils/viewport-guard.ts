@@ -76,6 +76,10 @@ export function isViewportBroken(): boolean {
   return window.innerWidth > shortSide * 1.15;
 }
 
+// Widest viewport where the sidebar is a drawer over the list and the reader
+// covers it (the max-width: 820px rules in styles/pages/mailbox.css).
+export const DRAWER_MAX_WIDTH = 820;
+
 /**
  * The width layout code should use. Equal to window.innerWidth except on a
  * portrait phone whose layout viewport is broken, where the screen width is

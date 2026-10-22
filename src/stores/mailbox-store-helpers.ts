@@ -151,7 +151,9 @@ export const keepScrolledPages = <T extends object>(
     const key = getMessageKey(msg);
     if (key != null && incomingKeys.has(key)) return false;
     const date = dateOf(msg);
-    if (!date) return false;
+    // A row with no readable date cannot be placed, and dropping it would
+    // hide mail that is still there. It stays.
+    if (!date) return true;
     return sort === 'newest' ? date <= last : date >= last;
   });
   return [...incoming, ...after];

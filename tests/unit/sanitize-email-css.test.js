@@ -113,6 +113,50 @@ describe('sanitizeEmailCss', () => {
     expect(css).toContain('none');
     expect(blockedCount).toBe(0);
   });
+
+  // Every way of writing a remote url must come out without one when images
+  // are blocked. The reader's image CSP is a second line, not the only one.
+  const remoteLeft = (css) => /url\(\s*['"]?\s*(?:[a-z\\0-9]+:)?\/\//i.test(css);
+
+  it.each([
+    ['a "<" in the url', '.a{background-image:url("https://evil.test/x<y.png")}'],
+    [
+      'a scheme spelled with a CSS escape',
+      '.a{background-image:url("htt\\70s://evil.test/x.png")}',
+    ],
+    ['a quoted url holding ")"', ".a{background-image:url('https://evil.test/x).png')}"],
+    ['a protocol-relative url', '.a{background-image:url(//evil.test/x.png)}'],
+    ['spaces inside the parentheses', '.a{background-image:url(  https://evil.test/x.png  )}'],
+  ])('leaves no remote url for %s', (_name, sheet) => {
+    const { css } = sanitizeEmailCss(sheet, { blockRemoteUrls: true });
+    expect(remoteLeft(css)).toBe(false);
+    expect(css).not.toContain('evil.test/x.png)');
+  });
+
+  it('marks a protocol-relative url so it counts as blocked', () => {
+    const { blockedCount } = sanitizeEmailCss('.a{background-image:url(//cdn.test/a.png)}', {
+      blockRemoteUrls: true,
+    });
+    expect(blockedCount).toBe(1);
+  });
+
+  it('keeps data: and relative urls, which load nothing remote', () => {
+    const sheet =
+      '.a{background-image:url("data:image/png;base64,AAAA")}.b{background-image:url(#grad)}';
+    const { css, blockedCount } = sanitizeEmailCss(sheet, { blockRemoteUrls: true });
+    expect(css).toContain('url("data:image/png;base64,AAAA")');
+    expect(css).toContain('url(#grad)');
+    expect(blockedCount).toBe(0);
+  });
+
+  it('still restores a blocked url once images are allowed', () => {
+    const { html } = sanitizeHtml(
+      '<style>.hero{background-image:url("https://cdn.test/hero.png")}</style><p class="hero">x</p>',
+      { blockRemoteImages: true },
+    );
+    expect(html).not.toContain('url("https://cdn.test/hero.png")');
+    expect(restoreBlockedImages(html)).toContain('url("https://cdn.test/hero.png")');
+  });
 });
 
 describe('sanitizeHtml with <style>', () => {

@@ -20,6 +20,9 @@ const store = vi.hoisted(() => ({
   fullBodyReads: 0,
   // The limit of each read of the messages table (Infinity: unbounded).
   messageReads: [] as number[],
+  // Called after each read of the messages table, with the read's index (a
+  // way to change the table between two chunks).
+  afterMessageRead: null as null | ((read: number) => void | Promise<void>),
 }));
 
 vi.mock('../../src/utils/db-worker-client.js', async () => {
@@ -59,13 +62,44 @@ vi.mock('../../src/utils/db-worker-client.js', async () => {
           toArray: async () => {
             if (name === 'messages' && store.hold) await store.hold;
             if (name === 'messages') store.messageReads.push(query.limit);
-            return [...store[name].values()]
+            const rows = [...store[name].values()]
               .filter((row) => index === 'account' && row.account === value)
               .slice(query.offset, query.offset + query.limit);
+            if (name === 'messages') await store.afterMessageRead?.(store.messageReads.length);
+            return rows;
           },
           count: async () =>
             [...store[name].values()].filter((row) => index === 'account' && row.account === value)
               .length,
+        };
+        return collection;
+      },
+      // The primary key, [account+id], in key order. Bounds are [account, id]
+      // pairs; -Infinity and [] stand for below and above every id.
+      between: (lower: unknown[], upper: unknown[], includeLower = true, includeUpper = false) => {
+        const query = { limit: Infinity };
+        const below = (a: unknown, b: unknown) =>
+          a === -Infinity || Array.isArray(b)
+            ? a !== b
+            : !Array.isArray(a) && String(a) < String(b);
+        const collection = {
+          limit: (n: number) => {
+            query.limit = n;
+            return collection;
+          },
+          toArray: async () => {
+            if (index !== '[account+id]') throw new Error(`no between on ${index}`);
+            if (name === 'messages' && store.hold) await store.hold;
+            if (name === 'messages') store.messageReads.push(query.limit);
+            const rows = [...store[name].values()]
+              .filter((row) => row.account === lower[0])
+              .sort((a, b) => (String(a.id) < String(b.id) ? -1 : 1))
+              .filter((row) => (includeLower ? !below(row.id, lower[1]) : below(lower[1], row.id)))
+              .filter((row) => (includeUpper ? !below(upper[1], row.id) : below(row.id, upper[1])))
+              .slice(0, query.limit);
+            if (name === 'messages') await store.afterMessageRead?.(store.messageReads.length);
+            return rows;
+          },
         };
         return collection;
       },
@@ -133,6 +167,7 @@ beforeEach(() => {
   store.bodyTextRequests = [];
   store.fullBodyReads = 0;
   store.messageReads = [];
+  store.afterMessageRead = null;
 });
 
 describe('search worker service per account', () => {
@@ -330,5 +365,173 @@ describe('search worker body reads on a large mailbox', () => {
     );
     const late = await call('search', { account, query: 'persimmon', crossFolder: true });
     expect((late.result.results as Row[]).map((h) => h.id)).toEqual(['late']);
+  });
+});
+
+const savedIds = (account: string) =>
+  (
+    (store.searchIndex.get(JSON.stringify([account, 'messages_v1']))?.data as Row[] | undefined) ||
+    []
+  )
+    .map((e) => e.id)
+    .sort();
+
+const hitIds = async (account: string, query: string) =>
+  (
+    ((await call('search', { account, query, crossFolder: true })).result?.results as Row[]) || []
+  ).map((h) => h.id);
+
+describe('search worker paging through the mailbox', () => {
+  // Messages deleted from the cache between two chunk reads shifted the rest
+  // down, so reading by offset skipped as many rows as were deleted.
+  it('a rebuild indexes every remaining message when rows are deleted between chunks', async () => {
+    const account = 'paging@x.test';
+    const id = (i: number) => `p${String(i).padStart(5, '0')}`;
+    for (let i = 0; i < 4_500; i++) {
+      store.messages.set(JSON.stringify([account, id(i)]), {
+        ...msg(id(i), i === 2_050 ? 'Tamarind invoice' : `Note ${i}`),
+        account,
+      });
+    }
+    store.afterMessageRead = (read) => {
+      // The first chunk has been read; the user deletes 100 of its messages.
+      if (read !== 1) return;
+      for (let i = 0; i < 100; i++) store.messages.delete(JSON.stringify([account, id(i)]));
+    };
+
+    const res = await call('rebuildFromCache', { account, includeBody: false });
+    expect(res.ok).toBe(true);
+    // Every message still cached is indexed (the 100 deleted ones were read
+    // before their deletion, so 4,500 in all).
+    expect(res.result.count).toBe(4_500);
+    expect(await hitIds(account, 'tamarind')).toEqual([id(2_050)]);
+    expect(store.messageReads.every((limit) => limit <= 2_000)).toBe(true);
+  });
+});
+
+describe('search worker rebuild', () => {
+  const seed = async (account: string) => {
+    await call('init', { account, includeBody: false });
+    await call('index', {
+      account,
+      messages: [msg('old1', 'Saffron order'), msg('old2', 'Saffron receipt')],
+    });
+    await call('flush', {});
+    expect(savedIds(account)).toEqual(['old1', 'old2']);
+    for (let i = 0; i < 2_500; i++) {
+      const id = `c${String(i).padStart(5, '0')}`;
+      store.messages.set(JSON.stringify([account, id]), { ...msg(id, `Cardamom ${i}`), account });
+    }
+  };
+
+  it('keeps serving and saving the old index until the new one is complete', async () => {
+    const account = 'swap@x.test';
+    await seed(account);
+    let release = () => {};
+    store.afterMessageRead = (read) =>
+      read === 1
+        ? new Promise<void>((resolve) => {
+            release = resolve;
+          })
+        : undefined;
+
+    const rebuild = call('rebuildFromCache', { account, includeBody: false });
+    await vi.waitFor(() => expect(store.messageReads.length).toBe(1));
+    // Mid-rebuild: searches see the old index, and a flush (the app going to
+    // the background) does not save a half-built one.
+    expect((await hitIds(account, 'saffron')).sort()).toEqual(['old1', 'old2']);
+    await call('flush', {});
+    expect(savedIds(account)).toEqual(['old1', 'old2']);
+
+    release();
+    const res = await rebuild;
+    expect(res.result.count).toBe(2_500);
+    expect(await hitIds(account, 'saffron')).toEqual([]);
+    expect(savedIds(account)).toHaveLength(2_500);
+  });
+
+  it('a failed rebuild leaves the old index in memory and on disk', async () => {
+    const account = 'broken@x.test';
+    await seed(account);
+    store.afterMessageRead = (read) => {
+      if (read === 2) throw new Error('database went away');
+    };
+
+    const res = await call('rebuildFromCache', { account, includeBody: false });
+    expect(res.ok).toBe(false);
+    await call('flush', {});
+    expect(savedIds(account)).toEqual(['old1', 'old2']);
+    expect((await hitIds(account, 'saffron')).sort()).toEqual(['old1', 'old2']);
+    expect(await hitIds(account, 'cardamom')).toEqual([]);
+  });
+
+  it('on a phone a failed rebuild in place puts the old index back and never saves the partial one', async () => {
+    const { setSearchMemoryProfile } = await import('../../src/utils/search-service.js');
+    setSearchMemoryProfile(true);
+    try {
+      const account = 'lite@x.test';
+      await seed(account);
+      store.afterMessageRead = async (read) => {
+        if (read !== 2) return;
+        // The first chunk is in the index; a flush now must not save it.
+        await call('flush', {});
+        throw new Error('database went away');
+      };
+
+      const res = await call('rebuildFromCache', { account, includeBody: false });
+      expect(res.ok).toBe(false);
+      expect(savedIds(account)).toEqual(['old1', 'old2']);
+      await call('flush', {});
+      expect(savedIds(account)).toEqual(['old1', 'old2']);
+      expect((await hitIds(account, 'saffron')).sort()).toEqual(['old1', 'old2']);
+      expect(await hitIds(account, 'cardamom')).toEqual([]);
+    } finally {
+      setSearchMemoryProfile(false);
+    }
+  });
+});
+
+describe('search worker after an account is signed out', () => {
+  const signOut = async (account: string) => {
+    await call('dropAccount', { account });
+    // Accounts.remove() then deletes the account's cache.
+    store.searchIndex.delete(JSON.stringify([account, 'messages_v1']));
+    store.indexMeta.delete(JSON.stringify([account, 'messages_v1']));
+  };
+
+  it('a flush does not write the deleted index back', async () => {
+    const account = 'gone@x.test';
+    await call('init', { account, includeBody: false });
+    await call('index', { account, messages: [msg('g1', 'Lychee basket')] });
+    await signOut(account);
+
+    // Retiring the worker on the account switch, or the app being hidden.
+    await call('flush', {});
+    expect(store.searchIndex.has(JSON.stringify([account, 'messages_v1']))).toBe(false);
+  });
+
+  it('the debounced write and a late sync batch do not write it back either', async () => {
+    const account = 'late@x.test';
+    await call('init', { account, includeBody: false });
+    await call('index', { account, messages: [msg('l1', 'Loquat jam')] });
+    await signOut(account);
+    syncPort.postMessage({
+      action: 'index',
+      payload: { account, includeBody: false, messages: [msg('l2', 'Loquat tart')] },
+    });
+    // Past the 800ms debounce and the 100ms batch delay.
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    await call('flush', {});
+    expect(store.searchIndex.has(JSON.stringify([account, 'messages_v1']))).toBe(false);
+  });
+
+  it('signing in again indexes and saves the account as before', async () => {
+    const account = 'again@x.test';
+    await call('init', { account, includeBody: false });
+    await signOut(account);
+    await call('init', { account, includeBody: false });
+    await call('index', { account, messages: [msg('a1', 'Medlar pie')] });
+    await call('flush', {});
+    expect(savedIds(account)).toEqual(['a1']);
   });
 });

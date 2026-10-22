@@ -444,14 +444,23 @@
     return hash;
   };
 
+  // Mailbox history entries name the account they were made under. After a
+  // switch, back can reach entries of the account left, whose folders and
+  // message ids mean nothing (or something else) to the new one.
+  const historyAccount = () =>
+    String(get(currentAccount) || Local.get('email') || '').toLowerCase();
+  const hashState = <T extends Record<string, unknown>>(state: T) => ({
+    ...state,
+    account: historyAccount(),
+  });
+
   const updateUrlWithFilters = () => {
     if (skipFilterUrlUpdate || skipFolderUrlUpdate || !urlStateInitialized || !isActive) return;
     const folder = get(selectedFolder);
     if (!folder) return;
     const currentMessage = get(source.state?.selectedMessage);
     const hash = buildHashUrl(folder, currentMessage?.id);
-    const state = { folder, messageId: currentMessage?.id };
-    history.replaceState(state, '', hash);
+    history.replaceState(hashState({ folder, messageId: currentMessage?.id }), '', hash);
   };
 
   const restoreFilterState = (filterState: UrlFilterState) => {
@@ -1865,11 +1874,13 @@
           // Back to the list's entry when the message's was pushed here, else
           // replace it: a new entry made back (the iOS edge swipe, the
           // browser) open the message that was just closed.
-          if (messageHistoryPushed && history.state?.messageId) {
+          // Phones only: on a desktop each message opened has its own entry,
+          // and going back from there would reopen the one before.
+          if (isDrawerViewport() && messageHistoryPushed && history.state?.messageId) {
             messageHistoryPushed = false;
             history.back();
           } else {
-            history.replaceState({ folder }, '', buildHashUrl(folder, null));
+            history.replaceState(hashState({ folder }), '', buildHashUrl(folder, null));
           }
         }
       }
@@ -1903,11 +1914,21 @@
   // True while the entry on top of history is one this view pushed for an
   // open message, so closing the message can go back to the list's entry.
   let messageHistoryPushed = false;
+  // Whether the address shows a message (#FOLDER/ID). A message opened from a
+  // notification or a link gets no entry of its own and carries no messageId
+  // in its state, so the state alone cannot answer this.
+  const urlShowsMessage = () => {
+    const hash = (window.location.hash || '').slice(1);
+    const query = hash.indexOf('?');
+    return (query > 0 ? hash.slice(0, query) : hash).indexOf('/') > 0;
+  };
   const writeMessageHistory = (state: { messageId: unknown; folder: unknown }, hash: string) => {
-    if (get(mobileReader) && history.state?.messageId) {
-      history.replaceState(state, '', hash);
+    // On a desktop the full-screen reader is a layout choice, and each message
+    // opened keeps its history entry as before.
+    if (get(mobileReader) && isDrawerViewport() && urlShowsMessage()) {
+      history.replaceState(hashState(state), '', hash);
     } else {
-      history.pushState(state, '', hash);
+      history.pushState(hashState(state), '', hash);
       messageHistoryPushed = true;
     }
   };
@@ -2652,6 +2673,10 @@
       // the search screen, which belong to the view being left.
       closeDrawer();
       mobileSearchOpen = false;
+      const entryAccount = String(history.state?.account || '').toLowerCase();
+      if (entryAccount && entryAccount !== historyAccount()) {
+        history.replaceState(hashState({ folder: 'INBOX' }), '', buildHashUrl('INBOX', null));
+      }
       const parsed = parseHashUrl();
       // Prevent URL update during popstate handling
       skipFolderUrlUpdate = true;
@@ -2695,12 +2720,12 @@
         if (!isActive) return;
         const folder = get(selectedFolder);
         if (folder) {
-          history.replaceState({ folder }, '', buildHashUrl(folder, null));
+          history.replaceState(hashState({ folder }), '', buildHashUrl(folder, null));
         } else {
           // Suppress the subscribe's URL update — we'll replaceState ourselves
           skipFolderUrlUpdate = true;
           mailboxStore?.actions?.selectFolder?.('INBOX');
-          history.replaceState({ folder: 'INBOX' }, '', buildHashUrl('INBOX', null));
+          history.replaceState(hashState({ folder: 'INBOX' }), '', buildHashUrl('INBOX', null));
           skipFolderUrlUpdate = false;
         }
       }, 100);
@@ -5936,6 +5961,11 @@
     mobileReader.subscribe((open: boolean) => {
       const wrapper = messageListWrapper;
       if (open) {
+        // Where the list stays rendered under the reader (phones), it keeps
+        // its own place and the scroll anchoring corrects it for mail that
+        // arrives meanwhile. Putting back the old offset there moved every
+        // row by the height of whatever was added or removed above.
+        if (isDrawerViewport()) return;
         if (wrapper && !listScrollBeforeReader) {
           listScrollBeforeReader = {
             top: wrapper.scrollTop,
@@ -6169,16 +6199,16 @@
             const hash = buildHashUrl(folder, null);
             // Tab switches use replaceState to avoid polluting browser history
             if (tabSwitchInProgress) {
-              history.replaceState({ folder }, '', hash);
+              history.replaceState(hashState({ folder }), '', hash);
               tabSwitchInProgress = false;
               // Use replaceState when the current URL has no hash (bare /mailbox)
               // to avoid creating a phantom history entry.  This only happens
               // transiently right after login navigation before the initial
               // folder hash is set.
             } else if (!window.location.hash || window.location.hash === '#') {
-              history.replaceState({ folder }, '', hash);
+              history.replaceState(hashState({ folder }), '', hash);
             } else {
-              history.pushState({ folder }, '', hash);
+              history.pushState(hashState({ folder }), '', hash);
             }
           }
         }

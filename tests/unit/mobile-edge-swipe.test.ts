@@ -155,6 +155,25 @@ describe('global mobile edge-swipe binding', () => {
     expect(removed.mock.calls.some(([type]) => type === 'touchmove')).toBe(true);
   });
 
+  it('works up to the width where the reader stops covering the list', () => {
+    const onBack = vi.fn();
+    cleanups.push(bindEdgeSwipeBack({ onBack }));
+    const swipe = () => {
+      dispatchTouch('touchstart', [{ clientX: 8, clientY: 100 }]);
+      dispatchTouch('touchmove', [{ clientX: 90, clientY: 104 }]);
+      dispatchTouch('touchend');
+    };
+
+    // A portrait tablet: the reader still covers the list here
+    setViewportWidth(800);
+    swipe();
+    expect(onBack).toHaveBeenCalledTimes(1);
+
+    setViewportWidth(821);
+    swipe();
+    expect(onBack).toHaveBeenCalledTimes(1);
+  });
+
   it('removes all gesture listeners during cleanup', () => {
     setViewportWidth(390);
     const onBack = vi.fn();

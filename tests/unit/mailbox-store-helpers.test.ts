@@ -950,6 +950,17 @@ describe('keepScrolledPages', () => {
     ]);
   });
 
+  it('keeps a scrolled row whose date cannot be read rather than hiding it', () => {
+    const existing = [at('e', 20), { id: 'undated' }, at('c', 10)];
+    const incoming = [at('n', 30), at('e', 20)];
+    expect(keepScrolledPages(existing, incoming, 'newest')?.map((m) => m.id)).toEqual([
+      'n',
+      'e',
+      'undated',
+      'c',
+    ]);
+  });
+
   it('declines orders it cannot place and pages without a date', () => {
     expect(keepScrolledPages([at('a', 1)], [at('b', 2)], 'subject')).toBeNull();
     expect(keepScrolledPages([at('a', 1)], [{ id: 'b' }], 'newest')).toBeNull();

@@ -66,6 +66,21 @@ function answer(action: string, name: string, payload: Row) {
     }
     case 'queryEquals':
       return [...t.values()].filter((row) => matches(row, payload.index as string, payload.value));
+    case 'query': {
+      // count on [account+folder], primary keys oldest first on
+      // [account+folder+date]: what the phone history trim asks for
+      const where = payload.where as Row;
+      const [account, folder] = (where.value || where.lower) as unknown[];
+      const rows = [...t.values()].filter((r) => r.account === account && r.folder === folder);
+      if (payload.queryMode === 'count') return rows.length;
+      if (payload.queryMode === 'primaryKeys') {
+        return rows
+          .filter((r) => r.date != null)
+          .sort((a, b) => String(a.date).localeCompare(String(b.date)))
+          .map((r) => [r.account, r.id]);
+      }
+      return undefined;
+    }
     case 'queryEqualsModify': {
       let n = 0;
       for (const [k, row] of t) {
@@ -228,6 +243,76 @@ async function backfillUntilDone(folder: string, maxBatches = 30) {
   }
   return results;
 }
+
+describe('offline history on a phone', () => {
+  const setMemoryConstrained = (memoryConstrained: boolean) =>
+    onmessage()({
+      data: {
+        type: 'init',
+        config: {
+          apiBase: 'https://api.example.com',
+          account: ACCOUNT,
+          authHeader: 'Basic x',
+          memoryConstrained,
+        },
+      },
+    });
+
+  it('trims a folder cached before the cap to its newest 2000', async () => {
+    const folder = 'Trim';
+    // A phone that cached 2,300 messages here before the cap existed
+    for (let n = 1; n <= 2300; n += 1) {
+      const msg = serverMsg(n, folder);
+      table('messages').set(keyOf([ACCOUNT, msg.id]), {
+        account: ACCOUNT,
+        id: msg.id,
+        folder,
+        date: msg.date,
+      });
+      table('messageBodies').set(keyOf([ACCOUNT, msg.id]), { account: ACCOUNT, id: msg.id });
+    }
+    table('messages').set(keyOf([ACCOUNT, 'undated']), { account: ACCOUNT, id: 'undated', folder });
+    serverFolders.set(folder, []);
+    searchPortMessages.length = 0;
+    setMemoryConstrained(true);
+    try {
+      await runTask({ type: 'backfill', folder, pageSize: 50 });
+
+      const left = cachedIds(folder);
+      // 2,301 rows, the undated one included, down to 2,000: the 301 oldest
+      // dated rows go and the undated one stays, as it cannot be placed
+      expect(left).toHaveLength(2000);
+      expect(left).not.toContain(oid(301));
+      expect(left).toContain(oid(302));
+      expect(left).toContain(oid(2300));
+      expect(left).toContain('undated');
+      expect(table('messageBodies').has(keyOf([ACCOUNT, oid(1)]))).toBe(false);
+      const removed = searchPortMessages
+        .filter((m) => m.action === 'remove')
+        .flatMap((m) => (m.payload as { ids: string[] }).ids);
+      expect(removed).toHaveLength(301);
+    } finally {
+      setMemoryConstrained(false);
+      searchPortMessages.length = 0;
+    }
+  });
+
+  it('leaves a desktop history alone', async () => {
+    const folder = 'NoTrim';
+    for (let n = 1; n <= 2100; n += 1) {
+      const msg = serverMsg(n, folder);
+      table('messages').set(keyOf([ACCOUNT, msg.id]), {
+        account: ACCOUNT,
+        id: msg.id,
+        folder,
+        date: msg.date,
+      });
+    }
+    serverFolders.set(folder, []);
+    await runTask({ type: 'backfill', folder, pageSize: 50 });
+    expect(cachedIds(folder)).toHaveLength(2100);
+  });
+});
 
 describe('backfill paging', () => {
   it('does not skip messages that shift onto pages already read', async () => {

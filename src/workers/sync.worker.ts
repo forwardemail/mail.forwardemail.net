@@ -54,7 +54,7 @@ const CACHE_LOOKUP_WAIT_MS = 1_500;
 // a new port. While set, opening a message does not wait on the cache at all.
 let dbStalled = false;
 
-function dbSend(action, table = null, payload = {}) {
+function dbSend(action, table: string | null = null, payload: Record<string, unknown> = {}) {
   return new Promise((resolve, reject) => {
     if (!dbPort) {
       reject(new Error('Database worker not connected'));
@@ -638,6 +638,51 @@ interface BackfillWalk {
   shifted?: boolean;
 }
 
+// The cap only stops a backfill from fetching more. A phone that cached a
+// longer history before the cap existed still holds it, and every one of
+// those rows is also in the search index. Trim each folder once per worker
+// to the newest MOBILE_BACKFILL_SAFETY_CAP: older mail is still on the server
+// and opens from there on scroll. Keys only, oldest first, from the
+// [account+folder+date] index ("date" stays plaintext under App Lock), so
+// nothing is decrypted or cloned whole. Rows without a date are left alone.
+const TRIM_DELETE_BATCH = 500;
+const trimmedFolders = new Set<string>();
+async function trimFolderToMobileCap(account: string, folder: string): Promise<number> {
+  const key = toKey(account, folder);
+  if (!memoryConstrained || trimmedFolders.has(key)) return 0;
+  trimmedFolders.add(key);
+  const count = (await dbSend('query', 'messages', {
+    index: '[account+folder]',
+    where: { op: 'equals', value: [account, folder] },
+    queryMode: 'count',
+  })) as number;
+  const excess = (Number(count) || 0) - MOBILE_BACKFILL_SAFETY_CAP;
+  if (excess <= 0) return 0;
+  const oldestFirst = ((await dbSend('query', 'messages', {
+    index: '[account+folder+date]',
+    where: {
+      op: 'between',
+      lower: [account, folder, -Infinity],
+      upper: [account, folder, [[]]],
+      includeLower: true,
+      includeUpper: true,
+    },
+    queryMode: 'primaryKeys',
+  })) || []) as Array<[string, string]>;
+  const doomed = oldestFirst.slice(0, Math.min(excess, oldestFirst.length));
+  for (let i = 0; i < doomed.length; i += TRIM_DELETE_BATCH) {
+    const keys = doomed.slice(i, i + TRIM_DELETE_BATCH);
+    await db.messages.bulkDelete(keys);
+    try {
+      await db.messageBodies.bulkDelete(keys);
+    } catch {
+      // A body left behind is harmless; it is never shown without its row.
+    }
+    postToSearch('remove', { account, ids: keys.map((k) => k[1]) });
+  }
+  return doomed.length;
+}
+
 // In memory only. A walk resumed by a fresh worker has no listing and so
 // never prunes; it still pages and verifies totals as usual.
 const backfillWalks = new Map<string, BackfillWalk>();
@@ -704,6 +749,13 @@ async function runBackfillTask(task, postProgress) {
 
   const key = toKey(account, folder);
   const limit = BACKFILL_LIMIT;
+
+  try {
+    await trimFolderToMobileCap(account, folder);
+  } catch (err) {
+    // Trimming only saves memory; the backfill goes on without it.
+    console.warn('[sync.worker] trimming the offline history failed', err);
+  }
 
   // Finish checking unlisted rows from a completed walk before anything else.
   if (pruneQueues.get(key)?.ids.length) {
