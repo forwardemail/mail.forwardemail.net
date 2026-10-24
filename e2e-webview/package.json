@@ -13,6 +13,6 @@
     "typescript": "^5.7.2",
     "undici": "^6.21.3",
     "vitest": "^3.2.4",
-    "webdriverio": "^9.5.5"
+    "webdriverio": "^9.30.1"
   }
 }
