@@ -6,6 +6,12 @@ release notes are taken from here. To change what a commit says, add a
 `Release-note: <text>` line to its message (or `Release-note: none` to leave
 it out).
 
+## 0.15.9 (2026-10-24)
+
+### Fixes
+
+- Stop the page dying at launch, and cut memory use while reading _(iOS)_
+
 ## 0.15.8 (2026-10-22)
 
 ### Fixes
