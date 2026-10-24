@@ -82,6 +82,7 @@
   import { isTauriMobile } from '../utils/platform.js';
   import { getLayoutWidth, onLayoutWidthChange } from '../utils/viewport-guard';
   import { openExternalUrl } from '../utils/external-links.js';
+  import { thumbnailSrc } from '../utils/attachment-thumbnail';
   import { onBackButton, triggerHaptic } from '../utils/tauri-bridge.js';
   import {
     outboxCount,
@@ -10069,7 +10070,7 @@
                                       title="Preview {att.name || att.filename}"
                                     >
                                       <img
-                                        src={att.href}
+                                        use:thumbnailSrc={att}
                                         alt={att.name || att.filename}
                                         class="max-h-full max-w-full object-contain"
                                       />
@@ -10261,7 +10262,7 @@
                                   title="Preview {att.name || att.filename}"
                                 >
                                   <img
-                                    src={att.href}
+                                    use:thumbnailSrc={att}
                                     alt={att.name || att.filename}
                                     class="max-h-full max-w-full object-contain"
                                   />

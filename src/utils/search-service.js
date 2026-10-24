@@ -33,13 +33,17 @@ function accountKey(account) {
   return account || 'default';
 }
 
-// On a phone the index is built without FlexSearch's context index: it
-// stores every word pair within three words of each other, in both orders,
-// for every indexed field, and is by far the largest part of the index. The
-// search worker sets the default from its init message, before it creates an
-// index; a service can also be given `lite`. The entries saved to disk do not
-// depend on it.
+// On a phone the index is a lighter one (lite). The "forward" tokenizer
+// indexes every prefix of every word, so a message's preview text alone came to
+// most of the index: about 100 MB for 10,000 messages, resident in the web
+// process iOS ends at its memory limit. A lite index matches whole words in the
+// preview and body and keeps prefix matching for subject, sender, recipients
+// and labels (about a third smaller and twice as fast to build). The search
+// worker sets the default from its init message, before it creates an index; a
+// service can also be given `lite`. The entries saved to disk do not depend on
+// it.
 let liteIndexDefault = false;
+const WHOLE_WORD_FIELDS = new Set(['snippet', 'body']);
 export function setSearchMemoryProfile(lite) {
   liteIndexDefault = Boolean(lite);
 }
@@ -51,7 +55,11 @@ function createDocument(includeBody = false, fields = null, liteIndex = liteInde
   return new FlexSearch.Document({
     document: {
       id: 'id',
-      index: indexFields,
+      index: liteIndex
+        ? indexFields.map((field) =>
+            WHOLE_WORD_FIELDS.has(field) ? { field, tokenize: 'strict' } : field,
+          )
+        : indexFields,
       // IMPORTANT: Include 'id' in store so it's available in enriched results
       store: ['id', 'folder', 'subject', 'from', 'to', 'cc', 'snippet', 'labels', 'date'],
     },
@@ -69,6 +77,16 @@ function createDocument(includeBody = false, fields = null, liteIndex = liteInde
     resolution: 9,
   });
 }
+
+// Removals in one call from which the index is built again rather than
+// removed from one by one (see removeEntriesByIds): about where the two cost
+// the same, whatever the size of the index
+const BULK_REMOVE_REBUILD_MIN = 200;
+
+// Every field any index preset searches
+const INDEXED_TEXT_FIELDS = ['subject', 'from', 'to', 'cc', 'snippet', 'labelsText', 'body'];
+const sameIndexedText = (a, b) =>
+  INDEXED_TEXT_FIELDS.every((field) => (a?.[field] ?? '') === (b?.[field] ?? ''));
 
 /** Rough byte weight of one entry, used for the size the stats report. */
 const entrySize = (e) =>
@@ -125,17 +143,29 @@ export class SearchService {
     if (cached?.data?.length) {
       this._entries = new Map();
       this.index = createDocument(this.includeBody, null, this.lite);
+      let droppedBodies = false;
+      let sizeBytes = 0;
       for (const raw of cached.data) {
         if (!raw?.id) continue;
         // Normalize entries - ensure labelsText exists for proper FlexSearch indexing
-        const entry =
+        let entry =
           raw.labelsText !== undefined
             ? raw
             : { ...raw, labelsText: (Array.isArray(raw.labels) ? raw.labels : []).join(' ') };
+        // Body text saved while body search was on (it was on by default, and
+        // every launch wrote it on) stayed in the saved index after it was
+        // turned off, read and written again in full at every launch.
+        if (!this.includeBody && entry.body !== undefined) {
+          entry = { ...entry };
+          delete entry.body;
+          droppedBodies = true;
+        }
         this._entries.set(entry.id, entry);
+        sizeBytes += entrySize(entry);
         this.index.add(entry);
       }
-      this.sizeBytes = cached.sizeBytes || 0;
+      this.sizeBytes = droppedBodies ? sizeBytes : cached.sizeBytes || sizeBytes;
+      if (droppedBodies) this.schedulePersist();
       return this._entries.size;
     }
     return 0;
@@ -213,13 +243,26 @@ export class SearchService {
   }
 
   addEntry(entry) {
+    const safeEntry = this.toIndexedEntry(entry);
+    if (!safeEntry) return;
+    this._entries.set(safeEntry.id, safeEntry);
+    this.sizeBytes += entrySize(safeEntry);
+    try {
+      this.index.add(safeEntry);
+    } catch {
+      // ignore add failures
+    }
+  }
+
+  /** The entry as it is kept and indexed */
+  toIndexedEntry(entry) {
     if (!entry?.id) {
-      return;
+      return null;
     }
     const labelsArray = Array.isArray(entry.labels)
       ? entry.labels.map((l) => (typeof l === 'string' ? l : String(l || ''))).filter(Boolean)
       : [];
-    const safeEntry = {
+    return {
       id: entry.id,
       folder: entry.folder || '',
       subject: entry.subject || '',
@@ -234,13 +277,6 @@ export class SearchService {
       labelsText: labelsArray.join(' '),
       body: this.includeBody ? capIndexedBody(entry.body || entry.textContent || '') : undefined,
     };
-    this._entries.set(safeEntry.id, safeEntry);
-    this.sizeBytes += entrySize(safeEntry);
-    try {
-      this.index.add(safeEntry);
-    } catch {
-      // ignore add failures
-    }
   }
 
   removeEntry(entryId) {
@@ -280,6 +316,16 @@ export class SearchService {
       this.includeBody && previous?.body && !(entry.body || entry.textContent)
         ? { ...entry, body: previous.body }
         : entry;
+    // Sync sends every row of each page it fetches, changed or not, and most
+    // changes are flags. Removing a document walks every term of the index
+    // (about 50 ms per message at 10,000 messages), so an update that leaves
+    // the indexed text as it was only replaces the kept entry.
+    const safe = this.toIndexedEntry(next);
+    if (previous && safe && sameIndexedText(previous, safe)) {
+      this._entries.set(safe.id, safe);
+      this.sizeBytes = Math.max(0, this.sizeBytes - entrySize(previous)) + entrySize(safe);
+      return;
+    }
     this.removeEntry(entry.id);
     this.addEntry(next);
   }
@@ -310,7 +356,29 @@ export class SearchService {
   }
 
   removeEntriesByIds(ids = []) {
-    ids.forEach((id) => this.removeEntry(id));
+    // FlexSearch removes a document by walking every term of the index (about
+    // 50 ms a message at 10,000), so a large removal (a phone trimming its
+    // offline history, 500 at a time) took the search worker half a minute.
+    // Past a couple of hundred, building the index again from what is left is
+    // faster.
+    const present = [...new Set(ids)].filter((id) => id && this._entries.has(id));
+    if (present.length < BULK_REMOVE_REBUILD_MIN) {
+      ids.forEach((id) => this.removeEntry(id));
+      return;
+    }
+    for (const id of present) {
+      const existing = this._entries.get(id);
+      this._entries.delete(id);
+      this.sizeBytes = Math.max(0, this.sizeBytes - entrySize(existing));
+    }
+    this.index = createDocument(this.includeBody, null, this.lite);
+    for (const entry of this._entries.values()) {
+      try {
+        this.index.add(entry);
+      } catch {
+        // ignore add failures
+      }
+    }
   }
 
   async persist() {
@@ -478,7 +546,10 @@ export class SearchService {
       const arr = res?.result || res || [];
       arr.forEach((result) => {
         if (typeof result === 'object' && result.doc) {
-          const doc = result.doc;
+          // The kept entry, when there is one: an update that left the
+          // indexed text alone (a move, a date) did not touch FlexSearch's
+          // stored copy of the document.
+          const doc = this._entries.get(result.doc.id) || result.doc;
           if (!ids.has(doc.id)) {
             ids.add(doc.id);
             hits.push({

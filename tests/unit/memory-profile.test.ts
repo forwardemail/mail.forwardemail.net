@@ -53,8 +53,37 @@ describe('memory profile', () => {
     vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue(IPHONE);
     localStorage.clear();
     const { Local } = await import('../../src/utils/storage.js');
-    Local.set('search_body_indexing', 'true');
     const { resolveSearchBodyIndexing } = await import('../../src/utils/search-body-indexing.js');
+    // The phone default has been applied once; the user then turned it on
+    resolveSearchBodyIndexing();
+    Local.set('search_body_indexing', 'true');
     expect(resolveSearchBodyIndexing()).toBe(true);
+    expect(resolveSearchBodyIndexing()).toBe(true);
+  });
+
+  it('turns off, once, body search an earlier build left on on a phone', async () => {
+    vi.resetModules();
+    vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue(IPHONE);
+    localStorage.clear();
+    const { Local } = await import('../../src/utils/storage.js');
+    // Every mailbox load wrote the setting back, and it was on by default
+    Local.set('search_body_indexing', 'true');
+    Local.set('include_body', 'true');
+    const { resolveSearchBodyIndexing } = await import('../../src/utils/search-body-indexing.js');
+    expect(resolveSearchBodyIndexing()).toBe(false);
+    expect(Local.get('search_body_indexing')).toBe('false');
+    // and the setting is the user's from then on
+    Local.set('search_body_indexing', 'true');
+    expect(resolveSearchBodyIndexing()).toBe(true);
+  });
+
+  it('leaves desktop body search as it was stored', async () => {
+    vi.resetModules();
+    vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue(DESKTOP);
+    localStorage.clear();
+    const { Local } = await import('../../src/utils/storage.js');
+    Local.set('search_body_indexing', 'false');
+    const { resolveSearchBodyIndexing } = await import('../../src/utils/search-body-indexing.js');
+    expect(resolveSearchBodyIndexing()).toBe(false);
   });
 });

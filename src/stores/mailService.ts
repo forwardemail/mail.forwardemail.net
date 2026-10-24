@@ -21,6 +21,8 @@ import {
 } from '../utils/mime-utils.js';
 import { getCachedAttachmentBlob, cacheAttachmentBlob } from '../utils/attachment-cache.js';
 import { isTauri } from '../utils/platform.js';
+import { isMemoryConstrained } from '../utils/memory-profile';
+import { slimBodyMeta, slimCachedAttachments } from '../workers/sync-pure';
 import type { Message, Attachment, PerfTracer, PgpKey } from '../types';
 import { messages } from './messageStore';
 import { writable } from 'svelte/store';
@@ -1303,6 +1305,7 @@ export const mailService = {
             result,
             account,
             sanitized,
+            { leanAttachments: true },
           ).catch((err) => console.warn('[mailService] Body cache write failed', err));
           tracer.stage('cache_write', { cached: true });
         } else {
@@ -1333,6 +1336,7 @@ export const mailService = {
             result,
             account,
             sanitized,
+            { leanAttachments: true },
           ).catch((err) => console.warn('[mailService] Body cache write failed', err));
           tracer.stage('cache_write', { cached: true });
         }
@@ -1420,7 +1424,7 @@ export const mailService = {
           await db.messageBodies
             .where('[account+id]')
             .equals([account, messageId])
-            .modify({ meta: result });
+            .modify({ meta: isMemoryConstrained ? slimBodyMeta(result) : result });
         } catch {
           // ignore meta-only cache update errors
         }
@@ -1493,6 +1497,8 @@ export const mailService = {
         '',
         result,
         account,
+        undefined,
+        { leanAttachments: true },
       );
     } catch (error: unknown) {
       if ((error as { name?: string })?.name === 'AbortError') {
@@ -1694,11 +1700,14 @@ async function cacheMessageContent(
   // DOMPurify on a large email is a long main-thread task, and every path that
   // shows a body had just run it on the same HTML.
   presanitized?: SanitizeResult,
+  // A body downloaded in the clear: on a phone its large attachments are
+  // listed without their content, and opened from the server
+  { leanAttachments = false }: { leanAttachments?: boolean } = {},
 ): Promise<void> {
   const messageId = getMessageApiId(message);
   if (!messageId || !renderedBody) return;
   const resolvedAccount = account || Local.get('email') || 'default';
-  const safeAttachments = (attachments || []).map((att) => ({
+  let safeAttachments = (attachments || []).map((att) => ({
     name: att.name,
     filename: att.filename,
     size: att.size,
@@ -1706,10 +1715,22 @@ async function cacheMessageContent(
     href: att.href,
     contentType: att.contentType,
   }));
+  // A phone keeps a lean copy, as the sync worker does (see slimBodyMeta).
+  // Large attachments are left out only of a body just downloaded in the clear
+  // (leanAttachments): those of a decrypted PGP message exist on the server
+  // only encrypted, and a copy cached before is kept as it is.
+  if (isMemoryConstrained) {
+    meta = slimBodyMeta(meta);
+    if (leanAttachments) safeAttachments = slimCachedAttachments(safeAttachments);
+  }
 
   const sanitized = presanitized || sanitizeHtml(renderedBody);
 
-  const rawOriginal = rawBodyForCache || renderedBody;
+  // (on a phone not the rendered body a second time)
+  const rawOriginal =
+    isMemoryConstrained && (!rawBodyForCache || rawBodyForCache === renderedBody)
+      ? undefined
+      : rawBodyForCache || renderedBody;
   const normalizedText = textContent || extractTextContent(renderedBody);
 
   const record = {
@@ -1721,6 +1742,8 @@ async function cacheMessageContent(
     textContent: normalizedText,
     attachments: safeAttachments,
     meta,
+    // The attachment list is worked out (see the sync worker's persistBody)
+    attachmentsResolved: true,
     updatedAt: Date.now(),
     sanitizedAt: Date.now(),
     trackingPixelCount: sanitized.trackingPixelCount || 0,

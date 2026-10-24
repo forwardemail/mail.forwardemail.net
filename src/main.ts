@@ -117,7 +117,13 @@ import { installRuntimeErrorNotifier } from './utils/runtime-error-notifier';
 import { initPerfObservers } from './utils/perf-logger.ts';
 import { attemptRecovery } from './utils/db-recovery';
 import { parseMailto, mailtoToPrefill } from './utils/mailto';
-import { markRendererRecovered, recordBoot, trackPageVisibility } from './utils/boot-history';
+import {
+  detectRecoveryBoot,
+  markRendererRecovered,
+  recordBoot,
+  trackPageVisibility,
+  withoutLinkedMessage,
+} from './utils/boot-history';
 import { selectedFolder, folders } from './stores/folderStore';
 import {
   messageBody,
@@ -2260,6 +2266,25 @@ async function bootstrap() {
   // followed a page dying on screen (iOS renderer kills, watchdog reloads).
   recordBoot();
   trackPageVisibility();
+  // The page keeps dying soon after it loads (see isCrashLoop). iOS reloads
+  // the same URL, so a launch that opened a heavy message opened it again and
+  // died again: land on its folder instead, and let the launch skip warm-up
+  // work (see isRecoveryBoot).
+  // Only in the mobile apps: elsewhere the on-screen marker is shared between
+  // windows and tabs, and a page ends there only when it is closed.
+  if (isTauriMobile && detectRecoveryBoot()) {
+    try {
+      const hash = /^\/mailbox\/?$/.test(location.pathname)
+        ? withoutLinkedMessage(location.hash)
+        : location.hash;
+      if (hash !== location.hash) {
+        history.replaceState(null, '', `${location.pathname}${location.search}${hash}`);
+      }
+    } catch {
+      // the link opens as usual
+    }
+    console.warn('[boot] the page ended soon after loading more than once; starting lighter');
+  }
 
   try {
     initOsTextScale();

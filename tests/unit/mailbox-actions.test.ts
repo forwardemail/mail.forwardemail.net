@@ -42,6 +42,7 @@ const hoisted = vi.hoisted(() => {
     settingsGet: vi.fn().mockResolvedValue(null),
     settingsLabelsGet: vi.fn().mockResolvedValue(null),
     messagesToArray: vi.fn().mockResolvedValue([]),
+    messagesPickFields: vi.fn(),
     labelsToArray: vi.fn().mockResolvedValue([]),
     labelsBulkPut: vi.fn().mockResolvedValue(undefined),
     fetchLabelsWithSource: vi.fn().mockResolvedValue({
@@ -292,10 +293,29 @@ vi.mock('../../src/utils/db', () => {
     db: {
       messages: {
         where: () => ({
-          equals: () => ({
-            modify: (...a: unknown[]) => hoisted.messagesModify(...a),
-            toArray: () => hoisted.messagesToArray(),
-          }),
+          equals: () => {
+            // offset/limit/pickFields: the label scan reads the labels field
+            // a page at a time (see loadLabels)
+            const page = { offset: 0, limit: Infinity };
+            const query = {
+              modify: (...a: unknown[]) => hoisted.messagesModify(...a),
+              toArray: () => hoisted.messagesToArray(),
+              offset: (n: number) => ((page.offset = n), query),
+              limit: (n: number) => ((page.limit = n), query),
+              pickFields: async (fields: string[]) => {
+                hoisted.messagesPickFields(fields);
+                const rows = ((await hoisted.messagesToArray()) || []) as Array<
+                  Record<string, unknown>
+                >;
+                return rows.slice(page.offset, page.offset + page.limit).map((row) => {
+                  const picked: Record<string, unknown> = {};
+                  for (const f of fields) if (row[f] !== undefined) picked[f] = row[f];
+                  return picked;
+                });
+              },
+            };
+            return query;
+          },
           between: () => ({
             reverse: () => ({
               limit: () => ({
@@ -995,6 +1015,32 @@ describe('loadLabels registry reconciliation (phantom label)', () => {
     // Everything cached is registered, so the expensive whole-table read that
     // verifies unregistered keywords never runs.
     expect(hoisted.messagesToArray).not.toHaveBeenCalled();
+  });
+
+  // With App Lock on, a whole-row read of every cached message of the account
+  // decrypted each row and copied it to the main thread, at every launch.
+  it('reads only the labels of cached messages, a page at a time', async () => {
+    hoisted.labelsToArray.mockResolvedValue([
+      { id: 'work', name: 'Work', account: 'user@example.com' },
+      { id: 'late-keyword', name: 'late-keyword', account: 'user@example.com', discovered: true },
+    ]);
+    const rows = Array.from({ length: 4500 }, (_, i) => ({
+      id: `m${i}`,
+      subject: `subject ${i}`,
+      labels: i === 4400 ? ['late-keyword'] : ['work'],
+    }));
+    hoisted.messagesToArray.mockResolvedValue(rows);
+    hoisted.messagesPickFields.mockClear();
+    registry([{ keyword: 'work', name: 'Work' }]);
+
+    await loadLabels();
+
+    expect(hoisted.messagesPickFields).toHaveBeenCalledTimes(3);
+    for (const [fields] of hoisted.messagesPickFields.mock.calls) {
+      expect(fields).toEqual(['labels']);
+    }
+    // a keyword only on a message past the first page still counts
+    expect(get(availableLabels).map((l) => l.id)).toContain('late-keyword');
   });
 
   it('marks keywords found on messages as discovered so they stay reconcilable', async () => {

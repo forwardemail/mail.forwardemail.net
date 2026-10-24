@@ -318,7 +318,10 @@ body.light-mode .fe-reader {
     overflow-y: auto;
     touch-action: pan-y; /* Allow vertical scroll, enable horizontal swipe gestures */
     z-index: var(--z-modal); /* 60 - above everything except sidebar */
-    animation: fe-reader-slide-in 0.25s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
+    /* No fill: its end state is no transform anyway, and a filled transform
+       kept the whole reader (iframe included) a separate compositing layer,
+       in the web process's memory, for as long as it stayed open. */
+    animation: fe-reader-slide-in 0.25s cubic-bezier(0.25, 0.46, 0.45, 0.94);
   }
 
   .mobile-reader-closing .fe-reader {

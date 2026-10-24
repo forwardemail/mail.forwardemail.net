@@ -64,6 +64,29 @@ export { REMOTE_IMAGES_BLOCKED_MARKER };
 const OTHER_REMOTE_IMAGE_REFS =
   /\s(?:srcset|background|poster)\s*=\s*["']?[^"'>]*https?:|url\(\s*['"]?https?:/i;
 
+// Viewport-height units resolve against the reader's frame, and the frame is
+// sized to its content: an element 100vh tall made the content taller, the
+// frame grew to fit, and 100vh with it, without end. The frame (and the
+// memory behind its layers) grew until iOS ended the page. A phone screen's
+// height stands in for the viewport. vmax is the height on a phone held
+// upright, so it goes too (and the block-axis units, the height in horizontal
+// text). url() references and quoted strings are left as they are, and so is a
+// number that is part of a longer token. No lookbehind: the app still runs on
+// WebKit that does not support it (iOS 16.0 to 16.3, macOS 10.15).
+const VIEWPORT_HEIGHT_REFERENCE_PX = 800;
+const VIEWPORT_HEIGHT_UNIT =
+  /(url\([^)]*\)|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')|(^|[^\w.-])(-?(?:\d+(?:\.\d*)?|\.\d+))(?:[sld]?v(?:h|b)|vmax)\b/gi;
+
+/** CSS text with viewport-height lengths replaced by fixed pixel lengths */
+export function fixViewportHeightUnits(css) {
+  if (!css || typeof css !== 'string') return css;
+  return css.replace(VIEWPORT_HEIGHT_UNIT, (match, kept, before, value) =>
+    kept !== undefined
+      ? kept
+      : `${before}${Math.round((Number(value) * VIEWPORT_HEIGHT_REFERENCE_PX) / 100)}px`,
+  );
+}
+
 /**
  * Sanitize the contents of an email <style> block.
  *
@@ -118,6 +141,7 @@ export function sanitizeEmailCss(css, { blockRemoteUrls = false } = {}) {
     // Anchored to a declaration start so border-color and background-image,
     // which merely contain these names, are left alone.
     .replace(/(^|[;{])\s*(color|background-color|background)\s*:[^;}]*/gi, '$1');
+  out = fixViewportHeightUnits(out);
 
   let blockedCount = 0;
   if (blockRemoteUrls) {
@@ -210,6 +234,12 @@ emailPurify.addHook('afterSanitizeElements', (node) => {
 });
 
 emailPurify.addHook('afterSanitizeAttributes', (node) => {
+  // (see fixViewportHeightUnits)
+  const style = node.getAttribute?.('style');
+  if (style && /v[hb]|vmax/i.test(style)) {
+    const fixed = fixViewportHeightUnits(style);
+    if (fixed !== style) node.setAttribute('style', fixed);
+  }
   // Links are intercepted by the iframe runtime and never navigate in place,
   // but keep the attributes correct for any consumer that renders this HTML
   // outside the iframe.

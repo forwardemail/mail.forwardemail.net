@@ -78,6 +78,8 @@ import { parseReferences } from '../utils/threading';
 import { isOnline } from '../utils/network-status';
 import { DRAWER_MAX_WIDTH, getLayoutWidth } from '../utils/viewport-guard';
 import { sidebarOpen, filterByLabel } from './viewStore';
+import { isMemoryConstrained } from '../utils/memory-profile';
+import { isRecoveryBoot } from '../utils/boot-history';
 
 /**
  * Additional mailbox actions that were in MailboxView
@@ -380,7 +382,14 @@ export const load = async () => {
     // serves no purpose in demo, so skip it entirely.
     if (folders.length && !isDemoMode()) {
       startInitialSync(nextAccount, folders, { wantBodies: false });
-      queueBodiesForFolder('INBOX', nextAccount, { bodyLimit: 100 });
+      // A phone warms fewer bodies at launch: each is downloaded, parsed and
+      // sealed in the same web process the app runs in. None after the page
+      // kept dying at launch (isRecoveryBoot): bodies still load when opened.
+      if (isRecoveryBoot() && !recoveryPrefetchSkipped) {
+        recoveryPrefetchSkipped = true;
+      } else {
+        queueBodiesForFolder('INBOX', nextAccount, { bodyLimit: isMemoryConstrained ? 25 : 100 });
+      }
     }
 
     // Start the multi-account WebSocket updater if not already running.
@@ -1484,6 +1493,11 @@ export const FOLDER_FLAG_FETCH_CONCURRENCY = 6;
 // Accounts whose cached messages were scanned for label keywords this session
 const labelScanDone = new Set<string>();
 const LABEL_SCAN_LIMIT = 5000;
+// Rows read per page of the label scan
+const LABEL_SCAN_PAGE = 2000;
+// The first mailbox load after repeated page deaths skips the launch bodies
+// prefetch (see isRecoveryBoot); later loads (an account switch) do not.
+let recoveryPrefetchSkipped = false;
 
 export const loadLabels = async (options = {}) => {
   const { includeFolderFlags = false } = options;
@@ -1600,15 +1614,27 @@ export const loadLabels = async (options = {}) => {
     try {
       // The reconcile pass reads everything: it decides which unregistered
       // labels are still on a message, and a capped read would drop real ones.
-      const accountRows = db.messages.where('account').equals(account);
-      const allMessages = await (
-        firstScanThisSession && !unverifiedIds.length
-          ? accountRows.limit(LABEL_SCAN_LIMIT)
-          : accountRows
-      )
-        .toArray()
-        .catch(() => []);
-      for (const msg of allMessages || []) {
+      // Only the labels field, a page at a time: it is stored in the clear, so
+      // nothing is decrypted, and whole rows are never copied here. Reading
+      // every row of the account decrypted (twice over with two accounts) at
+      // each launch was one of the spikes that ended the app's page on iOS.
+      const scanLimit =
+        firstScanThisSession && !unverifiedIds.length ? LABEL_SCAN_LIMIT : Number.POSITIVE_INFINITY;
+      const allMessages: Array<{ labels?: unknown[] }> = [];
+      for (let offset = 0; offset < scanLimit; offset += LABEL_SCAN_PAGE) {
+        if ((Local.get('email') || 'default') !== initialAccount) break;
+        const size = Math.min(LABEL_SCAN_PAGE, scanLimit - offset);
+        const page = ((await db.messages
+          .where('account')
+          .equals(account)
+          .offset(offset)
+          .limit(size)
+          .pickFields(['labels'])
+          .catch(() => [])) || []) as Array<{ labels?: unknown[] }>;
+        for (const row of page) if (row?.labels?.length) allMessages.push(row);
+        if (page.length < size) break;
+      }
+      for (const msg of allMessages) {
         if ((Local.get('email') || 'default') !== initialAccount) break;
         for (const lbl of msg.labels || []) {
           const key = canonicalizeLabelKeyword(lbl);
@@ -2850,7 +2876,9 @@ export const downloadOriginal = async (msg) => {
     meta.original ||
     meta.originalMessage ||
     meta.rawMessage ||
-    pickOriginalContent(content);
+    // A phone's cache leaves the raw message out (rawOmitted): the rendered
+    // body is not the original, so download it instead
+    (meta.rawOmitted ? '' : pickOriginalContent(content));
 
   // Prefer server-provided RFC822 if not present or looks rendered HTML.
   if (!emlPayload || looksLikeHtml(emlPayload)) {
@@ -2859,22 +2887,23 @@ export const downloadOriginal = async (msg) => {
       emlPayload = emlRes;
     } else if (emlRes?.eml || emlRes?.raw) {
       emlPayload = emlRes.eml || emlRes.raw;
-      // Cache for reuse
-      try {
-        const account = Local.get('email') || 'default';
-        const cached = await db.messageBodies
-          .where('[account+id]')
-          .equals([account, target.id])
-          .first();
-        if (cached) {
-          await db.messageBodies.put({
-            ...cached,
-            meta: { ...(cached.meta || {}), eml: emlPayload },
-          });
+      // Cache for reuse (not on a phone, whose cache keeps no raw messages)
+      if (!isMemoryConstrained)
+        try {
+          const account = Local.get('email') || 'default';
+          const cached = await db.messageBodies
+            .where('[account+id]')
+            .equals([account, target.id])
+            .first();
+          if (cached) {
+            await db.messageBodies.put({
+              ...cached,
+              meta: { ...(cached.meta || {}), eml: emlPayload },
+            });
+          }
+        } catch (err) {
+          warn('[downloadOriginal] failed to persist eml to cache', err);
         }
-      } catch (err) {
-        warn('[downloadOriginal] failed to persist eml to cache', err);
-      }
     }
   }
 
@@ -2994,7 +3023,8 @@ export const viewOriginal = async (msg) => {
     meta.original ||
     meta.originalMessage ||
     meta.rawMessage ||
-    pickOriginalContent(content);
+    // A phone's cache leaves the raw message out (see downloadOriginal)
+    (meta.rawOmitted ? '' : pickOriginalContent(content));
   let headersText = normalizeHeaders(
     meta.headers || meta.Headers || meta.rawHeaders || meta.RawHeaders || meta.nodemailer?.headers,
     payload,
@@ -3017,26 +3047,28 @@ export const viewOriginal = async (msg) => {
         payload = rawContent;
         headersText = normalizeHeaders(rawHeaders, payload);
 
-        // Persist raw + headers for next time.
-        try {
-          const account = Local.get('email') || 'default';
-          const cached = await db.messageBodies
-            .where('[account+id]')
-            .equals([account, target.id])
-            .first();
-          if (cached) {
-            await db.messageBodies.put({
-              ...cached,
-              meta: {
-                ...(cached.meta || {}),
-                raw: rawContent,
-                headers: rawHeaders,
-              },
-            });
+        // Persist raw + headers for next time (not on a phone, whose cache
+        // keeps no raw messages).
+        if (!isMemoryConstrained)
+          try {
+            const account = Local.get('email') || 'default';
+            const cached = await db.messageBodies
+              .where('[account+id]')
+              .equals([account, target.id])
+              .first();
+            if (cached) {
+              await db.messageBodies.put({
+                ...cached,
+                meta: {
+                  ...(cached.meta || {}),
+                  raw: rawContent,
+                  headers: rawHeaders,
+                },
+              });
+            }
+          } catch (err) {
+            warn('[viewOriginal] failed to persist raw to cache', err);
           }
-        } catch (err) {
-          warn('[viewOriginal] failed to persist raw to cache', err);
-        }
       }
     }
   }

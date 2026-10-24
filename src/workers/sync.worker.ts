@@ -31,8 +31,12 @@ import {
   buildDraftPayload,
   parseResultList,
   isPgpContent,
+  isPgpLockedStatus,
+  slimBodyMeta,
+  slimCachedAttachments,
   worklistFromHeaders,
   backfillBatchDone,
+  type CachedBodyStatus,
 } from './sync-pure.ts';
 import { createCircuitBreaker, parseRetryAfterMs } from '../utils/circuit-breaker.js';
 import { assertAccountScoped } from '../utils/account-scope.ts';
@@ -468,6 +472,16 @@ async function runMetadataTask(task, postProgress) {
   const limit = task.pageSize || DEFAULT_LIMIT;
   const maxMessages = task.maxMessages || Infinity;
 
+  // Trim a phone's offline history here too, at the first sync of the folder:
+  // backfills queue behind every folder's metadata pass and the launch bodies
+  // pass, so trimming only there left the whole untrimmed folder for those to
+  // read first.
+  try {
+    await trimFolderToMobileCap(account, folder);
+  } catch (err) {
+    console.warn('[sync.worker] trimming the offline history failed', err);
+  }
+
   let manifest = await getManifest(account, folder);
   let lastUID = Number.isFinite(manifest?.lastUID) ? manifest.lastUID : 0;
   let lastModSeq = manifest?.lastModSeq || null;
@@ -680,6 +694,40 @@ async function trimFolderToMobileCap(account: string, folder: string): Promise<n
     }
     postToSearch('remove', { account, ids: keys.map((k) => k[1]) });
   }
+  return doomed.length;
+}
+
+// Bodies a phone cached before it kept lean copies (see slimBodyMeta) can be
+// tens of megabytes each, and every read of one opens and copies all of it.
+// Drop those over the limit once per account; they download again, lean,
+// when opened. Sizes come from the stored rows, so nothing is decrypted, and
+// a few rows are read at a time.
+const OVERSIZED_MOBILE_BODY_BYTES = 2_000_000;
+const OVERSIZED_BODY_SCAN_PAGE = 10;
+const oversizedBodiesPruned = new Set<string>();
+async function pruneOversizedMobileBodies(account: string): Promise<number> {
+  if (!memoryConstrained || oversizedBodiesPruned.has(account)) return 0;
+  oversizedBodiesPruned.add(account);
+  const flagKey = `migration:prune-oversized-mobile-bodies:${account}`;
+  if (await dbSend('get', 'meta', { key: flagKey })) return 0;
+  const doomed: Array<[string, string]> = [];
+  for (let offset = 0; ; offset += OVERSIZED_BODY_SCAN_PAGE) {
+    const page = ((await dbSend('query', 'messageBodies', {
+      index: 'account',
+      where: { op: 'equals', value: account },
+      queryMode: 'summaries',
+      fields: ['account', 'id'],
+      options: { offset, limit: OVERSIZED_BODY_SCAN_PAGE },
+    })) || []) as Array<{ account?: string; id?: string; approxBytes?: number }>;
+    for (const row of page) {
+      if (row?.id && Number(row.approxBytes) > OVERSIZED_MOBILE_BODY_BYTES) {
+        doomed.push([row.account || account, row.id]);
+      }
+    }
+    if (page.length < OVERSIZED_BODY_SCAN_PAGE) break;
+  }
+  if (doomed.length) await db.messageBodies.bulkDelete(doomed);
+  await dbSend('put', 'meta', { record: { key: flagKey, updatedAt: Date.now() } });
   return doomed.length;
 }
 
@@ -1205,6 +1253,12 @@ async function runBodiesTask(task, postProgress) {
     return;
   }
 
+  try {
+    await pruneOversizedMobileBodies(account);
+  } catch (err) {
+    console.warn('[sync.worker] dropping oversized cached bodies failed', err);
+  }
+
   // ID-targeted prefetch (adjacent / viewport / hover): warm exactly the
   // messages the user is likely to open next, rather than the folder-wide
   // newest-N pass. This writes only to db.messageBodies and never touches the
@@ -1216,29 +1270,29 @@ async function runBodiesTask(task, postProgress) {
   // The db proxy resolves to `unknown`; cast to the minimal shapes used here so
   // the worklist stays type-clean without leaning on `any`.
   type BodyHeaderRecord = { id: string; date?: number; dateMs?: number; has_attachment?: boolean };
-  type BodyCacheRecord = {
-    body?: string | null;
-    raw?: string | null;
-    pgpLocked?: boolean;
-    attachments?: unknown[];
-  };
   // Leave out messages whose last fetch failed and are still backing off, and
   // PGP messages cached still encrypted that the keys we have cannot open
   // (none unlocked, or these keys were already tried on them). A locked body
   // the current keys have not tried is decrypted from the cached copy, with
   // no second download.
-  const wanted = (headers: BodyHeaderRecord[], bodies: BodyCacheRecord[]) => {
+  const wanted = (headers: BodyHeaderRecord[], statuses: Array<CachedBodyStatus | null>) => {
     const now = Date.now();
     const keptHeaders: BodyHeaderRecord[] = [];
-    const keptBodies: BodyCacheRecord[] = [];
+    const keptStatuses: Array<CachedBodyStatus | null> = [];
     headers.forEach((header, idx) => {
-      if (isPgpLockedBody(bodies[idx]) && !canTryLockedBody(account, header.id)) return;
+      if (isPgpLockedStatus(statuses[idx]) && !canTryLockedBody(account, header.id)) return;
       if (bodyRetryBlocked(account, header.id, now)) return;
       keptHeaders.push(header);
-      keptBodies.push(bodies[idx]);
+      keptStatuses.push(statuses[idx]);
     });
-    return { headers: keptHeaders, bodies: keptBodies };
+    return { headers: keptHeaders, statuses: keptStatuses };
   };
+  // Which bodies are cached, worked out in the db worker without copying the
+  // bodies here (see bodyStatuses in db-engine.ts)
+  const statusesOf = async (headers: BodyHeaderRecord[]) =>
+    ((await dbSend('bodyStatuses', 'messageBodies', {
+      keys: headers.map((m) => [account, m.id]),
+    })) || []) as Array<CachedBodyStatus | null>;
 
   let worklist;
   if (idTargeted) {
@@ -1248,23 +1302,27 @@ async function runBodiesTask(task, postProgress) {
     )) as BodyHeaderRecord[];
     const headers = records.filter(Boolean);
     if (!headers.length) return;
-    const bodies = (await db.messageBodies.bulkGet(
-      headers.map((m) => [account, m.id]),
-    )) as BodyCacheRecord[];
-    const kept = wanted(headers, bodies);
-    worklist = worklistFromHeaders(kept.headers, kept.bodies, kept.headers.length);
+    const kept = wanted(headers, await statusesOf(headers));
+    worklist = worklistFromHeaders(kept.headers, kept.statuses, kept.headers.length);
   } else {
-    const headers = (await db.messages
-      .where('[account+folder]')
-      .equals([account, folder])
-      .toArray()) as BodyHeaderRecord[];
-    headers.sort((a, b) => (b.date || b.dateMs || 0) - (a.date || a.dateMs || 0));
-    const sample = headers.slice(0, Math.min(maxMessages || headers.length, limit * 2));
-    const bodies = (await db.messageBodies.bulkGet(
-      sample.map((m) => [account, m.id]),
-    )) as BodyCacheRecord[];
-    const kept = wanted(sample, bodies);
-    worklist = worklistFromHeaders(kept.headers, kept.bodies, maxMessages).slice(0, limit);
+    // Only the newest rows the pass can use, from the date index ("date" is
+    // stored in the clear under App Lock). Reading the whole folder decrypted
+    // and copied every cached row of it to sort them here.
+    const sampleSize = Math.min(maxMessages || Number.MAX_SAFE_INTEGER, limit * 2);
+    const headers = ((await dbSend('query', 'messages', {
+      index: '[account+folder+date]',
+      where: {
+        op: 'between',
+        lower: [account, folder, -Infinity],
+        upper: [account, folder, [[]]],
+        includeLower: true,
+        includeUpper: true,
+      },
+      queryMode: 'toArray',
+      options: { reverse: true, limit: sampleSize },
+    })) || []) as BodyHeaderRecord[];
+    const kept = wanted(headers, await statusesOf(headers));
+    worklist = worklistFromHeaders(kept.headers, kept.statuses, maxMessages).slice(0, limit);
   }
 
   if (!worklist.length) {
@@ -1531,6 +1589,14 @@ async function fetchAndCacheBodyWithOptions(account, folder, msg, options = {}) 
   // badge and a protected-headers subject straight away.
   let pgpInfo: { encrypted: true; subject?: string } | null = null;
   const persistBody = async (body, textContent, attachments = [], meta = null) => {
+    // A phone keeps a lean copy: no raw message, no large attachment content
+    // (see slimBodyMeta). The reader gets the same lean copy it would read
+    // back from the cache.
+    const keptMeta = memoryConstrained ? slimBodyMeta(meta) : meta;
+    // Attachments decrypted here are kept whole: the server only has them
+    // encrypted, so there is nothing to download them from later.
+    const keptAttachments =
+      memoryConstrained && !pgpInfo ? slimCachedAttachments(attachments) : attachments;
     if (dbPort) {
       await cacheWrite(
         () =>
@@ -1540,8 +1606,11 @@ async function fetchAndCacheBodyWithOptions(account, folder, msg, options = {}) 
             folder,
             body,
             textContent,
-            attachments,
-            meta,
+            attachments: keptAttachments,
+            meta: keptMeta,
+            // The attachment list is worked out: an empty one means there
+            // were none to list, not that they still have to be downloaded.
+            attachmentsResolved: true,
             updatedAt: Date.now(),
           }),
         'caching message body',
@@ -1573,8 +1642,8 @@ async function fetchAndCacheBodyWithOptions(account, folder, msg, options = {}) 
       folder,
       body,
       textContent,
-      attachments,
-      meta,
+      attachments: keptAttachments,
+      meta: keptMeta,
       ...(pgpInfo ? { pgp: pgpInfo } : {}),
     };
   };

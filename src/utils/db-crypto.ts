@@ -180,6 +180,17 @@ function metaKeyIsSensitive(key: unknown): boolean {
   return SENSITIVE_META_KEY_PREFIXES.some((prefix) => key.startsWith(prefix));
 }
 
+/**
+ * True when every one of `fields` is stored in the clear for `table`, so they
+ * can be read from stored rows without decrypting them.
+ */
+export function fieldsArePlaintext(table: string, fields: readonly string[]): boolean {
+  if (!fields.length) return false;
+  if (!isSensitiveTable(table)) return true;
+  const plain = PLAINTEXT_FIELDS[table];
+  return fields.every((field) => plain.has(field));
+}
+
 export function recordIsSensitive(table: string, record: DbRecord): boolean {
   if (!isSensitiveTable(table)) return false;
   if (table === 'meta') return metaKeyIsSensitive(record?.key);
@@ -392,16 +403,51 @@ export async function openRecordStrict(table: string, record: unknown): Promise<
   return { ...plain, ...secret };
 }
 
+// How many records are sealed or opened at once. Each one in flight holds its
+// base64 text, the ciphertext bytes, the plaintext bytes, the JSON text and the
+// parsed object. Starting all of them together (Promise.all over a whole
+// folder or a page of bodies) allocated every copy of every row before the
+// first finished: hundreds of megabytes for a page of bodies, past the limit
+// at which iOS ends the web content process (all workers with it).
+const CRYPTO_CONCURRENCY = 8;
+// Tables whose records can each be megabytes (bodies carry the raw message and
+// attachments; a search index record is a whole account): one at a time.
+const LARGE_RECORD_TABLES = new Set(['messageBodies', 'searchIndex', 'drafts', 'outbox']);
+
+export function cryptoConcurrency(table: string): number {
+  return LARGE_RECORD_TABLES.has(table) ? 1 : CRYPTO_CONCURRENCY;
+}
+
+/** map() over async work, at most `limit` items in flight, results in order */
+export async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R> | R,
+): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  const run = async () => {
+    while (next < items.length) {
+      const index = next++;
+      out[index] = await fn(items[index], index);
+    }
+  };
+  const runners = Array.from({ length: Math.min(Math.max(1, limit), items.length) }, run);
+  await Promise.all(runners);
+  return out;
+}
+
 export async function sealRecords(table: string, records: unknown[]): Promise<unknown[]> {
   if (!isDbCryptoActive() || !isSensitiveTable(table)) return records;
   // Wait once up front so a large batch does not queue a timer per record.
   await waitForCryptoGate();
-  return Promise.all(records.map((r) => sealRecord(table, r)));
+  return mapWithConcurrency(records, cryptoConcurrency(table), (r) => sealRecord(table, r));
 }
 
 export async function openRecords(table: string, records: unknown[]): Promise<unknown[]> {
   if (!isSensitiveTable(table)) return records;
-  return Promise.all(records.map((r) => openRecord(table, r)));
+  if (!records.some((r) => isEnvelope((r as DbRecord | null)?._enc))) return records.slice();
+  return mapWithConcurrency(records, cryptoConcurrency(table), (r) => openRecord(table, r));
 }
 
 export const SENSITIVE_TABLES = Object.keys(PLAINTEXT_FIELDS);

@@ -17,10 +17,14 @@
 import Dexie, { type IndexableType, type Table, type TransactionMode } from 'dexie';
 import { DB_NAME, DEXIE_VERSION } from './db-constants.ts';
 import { capIndexedBody, indexableBodyText } from './search-body-text.js';
+import { cachedBodyStatus, type CachedBodyLike, type CachedBodyStatus } from '../workers/sync-pure';
 import {
   armCryptoGate,
   configureDbCrypto,
   changesTouchSensitiveFields,
+  cryptoConcurrency,
+  fieldsArePlaintext,
+  mapWithConcurrency,
   isDbCryptoActive,
   getDbCryptoState,
   openRecord,
@@ -488,6 +492,34 @@ async function bodyTexts(
   return out;
 }
 
+// A few bodies per read: each can be megabytes once opened.
+const BODY_STATUS_READ_CHUNK = 10;
+
+/**
+ * Whether each body is cached, and the little the body prefetch decides on
+ * (see cachedBodyStatus), in key order with null for a missing body. Bodies are
+ * opened a few at a time and never leave this worker: the prefetch used to
+ * read up to 200 whole bodies (raw message and attachments included) and copy
+ * them to the sync worker just to see which were missing, at every launch.
+ */
+async function bodyStatuses(
+  table: string,
+  keys: unknown[],
+): Promise<Array<CachedBodyStatus | null>> {
+  await ensureReady();
+  const store = tbl(table);
+  const out: Array<CachedBodyStatus | null> = [];
+  for (let i = 0; i < keys.length; i += BODY_STATUS_READ_CHUNK) {
+    const stored = await store.bulkGet(
+      keys.slice(i, i + BODY_STATUS_READ_CHUNK) as IndexableType[],
+    );
+    for (const row of stored) {
+      out.push(cachedBodyStatus((await openRecord(table, row)) as CachedBodyLike | undefined));
+    }
+  }
+  return out;
+}
+
 /**
  * One page of an index match, sorted here by the list's sort order. A
  * subject or sender sort has no index, so the folder is read and sorted in
@@ -687,12 +719,10 @@ async function queryEqualsModify(
       .equals(value as IndexableType)
       .toArray();
     if (!stored.length) return 0;
-    const resealed = await Promise.all(
-      stored.map(async (record) => {
-        const opened = (await openRecord(table, record)) as Record<string, unknown>;
-        return sealRecord(table, { ...opened, ...(changes as Record<string, unknown>) });
-      }),
-    );
+    const resealed = await mapWithConcurrency(stored, cryptoConcurrency(table), async (record) => {
+      const opened = (await openRecord(table, record)) as Record<string, unknown>;
+      return sealRecord(table, { ...opened, ...(changes as Record<string, unknown>) });
+    });
     await tableObj.bulkPut(resealed);
     return stored.length;
   }
@@ -828,9 +858,12 @@ async function queryWhere(
       // records to the main thread. Unlike summaries, these are opened.
       if (options.offset) collection = collection.offset(options.offset);
       if (options.limit) collection = collection.limit(options.limit);
-      const opened = (await openRecords(table, await collection.toArray())) as Array<
-        Record<string, unknown>
-      >;
+      const stored = (await collection.toArray()) as Array<Record<string, unknown>>;
+      // Fields stored in the clear (labels, flags, dates) are read without
+      // decrypting the rest of each row.
+      const opened = fieldsArePlaintext(table, fields)
+        ? stored
+        : ((await openRecords(table, stored)) as Array<Record<string, unknown>>);
       return opened.map((row) => {
         const picked: Record<string, unknown> = {};
         for (const field of fields) if (row[field] !== undefined) picked[field] = row[field];
@@ -870,12 +903,10 @@ async function modifyCollection(
     // any IDB transaction.
     const stored = await collection.toArray();
     if (!stored.length) return 0;
-    const resealed = await Promise.all(
-      stored.map(async (record) => {
-        const opened = (await openRecord(table, record)) as Record<string, unknown>;
-        return sealRecord(table, { ...opened, ...(changes as Record<string, unknown>) });
-      }),
-    );
+    const resealed = await mapWithConcurrency(stored, cryptoConcurrency(table), async (record) => {
+      const opened = (await openRecord(table, record)) as Record<string, unknown>;
+      return sealRecord(table, { ...opened, ...(changes as Record<string, unknown>) });
+    });
     await tbl(table).bulkPut(resealed);
     return stored.length;
   }
@@ -955,11 +986,13 @@ async function prepareTxOp(op: DbOperation): Promise<PreparedOp> {
       if (mode === 'modify') {
         if (sensitiveChange()) {
           const stored = await whereCollection(table, payload.index!, payload.where!).toArray();
-          const records = await Promise.all(
-            stored.map(async (row) => {
+          const records = await mapWithConcurrency(
+            stored,
+            cryptoConcurrency(table),
+            async (row) => {
               const opened = (await openRecord(table, row)) as Record<string, unknown>;
               return sealRecord(table, { ...opened, ...changes });
-            }),
+            },
           );
           return { kind: 'bulkReplace', table, records };
         }
@@ -1177,6 +1210,14 @@ async function tableCollection(table: string, options: QueryOptions = {}): Promi
 // ============================================================================
 
 const REENCRYPT_CHUNK_SIZE = 200;
+// A chunk is read, converted and read again for the compare-and-write, all at
+// once. Two hundred message bodies (each with its raw message and attachments)
+// came to hundreds of megabytes, more than iOS lets the web process hold, and
+// as progress is saved after each chunk a sweep that died there died there
+// again on every launch, right after unlock.
+const REENCRYPT_LARGE_RECORD_CHUNK_SIZE = 4;
+export const sweepChunkSize = (table: string) =>
+  cryptoConcurrency(table) === 1 ? REENCRYPT_LARGE_RECORD_CHUNK_SIZE : REENCRYPT_CHUNK_SIZE;
 // Progress of an interrupted encrypt sweep, so the next boot can finish it.
 // Plaintext on purpose: it holds a table name and a primary key, and it has
 // to be readable before the key is configured.
@@ -1319,7 +1360,7 @@ async function sweepTable(
     const collection =
       cursorKey === null ? tableObj.toCollection() : tableObj.where(':id').above(cursorKey);
     const chunkKeys = (await collection
-      .limit(REENCRYPT_CHUNK_SIZE)
+      .limit(sweepChunkSize(tableName))
       .primaryKeys()) as IndexableType[];
     if (!chunkKeys.length) break;
 
@@ -1556,6 +1597,8 @@ export async function executeOperation(op: DbOperation): Promise<unknown> {
       return tableBulkGet(table!, payload.keys!);
     case 'bodyTexts':
       return bodyTexts(table!, payload.keys || []);
+    case 'bodyStatuses':
+      return bodyStatuses(table!, payload.keys || []);
     case 'sortedPage':
       return sortedPage(
         table!,

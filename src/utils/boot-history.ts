@@ -124,3 +124,59 @@ export function summarizeBootHistory(
     recovered: recent.filter((e) => e.rendererRecovered === true).length,
   };
 }
+
+// A page that died on screen within this long of loading died at launch
+const QUICK_DEATH_MS = 2 * 60_000;
+
+/**
+ * True when this load follows pages that kept dying on screen soon after they
+ * loaded: at least `deaths` loads in a row (this one included) each followed a
+ * page that ended on screen, each within a couple of minutes of the one before.
+ * Something done at every launch is ending the page (on iOS, usually memory),
+ * so this launch should do less of it. iOS reloads the same URL, so a launch
+ * that reopened a heavy message would otherwise open it again and die again.
+ */
+export function isCrashLoop(history: BootEntry[], deaths = 2): boolean {
+  if (history.length < deaths) return false;
+  const tail = history.slice(-deaths);
+  if (!tail.every((e) => e.previousEndedOnScreen === true)) return false;
+  // Each of these deaths is the page before the entry, so its load is the
+  // entry before; the first one needs that earlier entry too.
+  const start = history.length - deaths - 1;
+  if (start < 0) return false;
+  for (let i = start + 1; i < history.length; i += 1) {
+    if (history[i].at - history[i - 1].at > QUICK_DEATH_MS) return false;
+  }
+  return true;
+}
+
+let recoveryBoot: boolean | null = null;
+
+/**
+ * Decide once, at boot, whether this is a launch after repeated deaths (see
+ * isCrashLoop). Call after recordBoot.
+ */
+export function detectRecoveryBoot(storage = defaultStorage()): boolean {
+  recoveryBoot = isCrashLoop(readBootHistory(storage));
+  return recoveryBoot;
+}
+
+/**
+ * A mailbox URL hash without the message it opens: "#INBOX/<id>?q" becomes
+ * "#INBOX?q". Other hashes are returned as they are.
+ */
+export function withoutLinkedMessage(hash: string): string {
+  if (!hash || hash.length < 2) return hash;
+  const content = hash.slice(1);
+  const queryIndex = content.indexOf('?');
+  const path = queryIndex > 0 ? content.slice(0, queryIndex) : content;
+  const query = queryIndex > 0 ? content.slice(queryIndex) : '';
+  const slash = path.indexOf('/');
+  if (slash <= 0) return hash;
+  return `#${path.slice(0, slash)}${query}`;
+}
+
+/** Whether this launch follows repeated deaths (false until detected) */
+export function isRecoveryBoot(): boolean {
+  return recoveryBoot === true;
+}

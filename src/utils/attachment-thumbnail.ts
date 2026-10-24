@@ -75,8 +75,16 @@ async function decode(blob: Blob): Promise<{
   };
 }
 
+// The base64 payload of a data: URL (the reader keeps attachments that way)
+function dataUrlBase64(href: unknown): string {
+  if (typeof href !== 'string' || !href.startsWith('data:')) return '';
+  const comma = href.indexOf(',');
+  if (comma < 0 || !href.slice(0, comma).endsWith(';base64')) return '';
+  return href.slice(comma + 1);
+}
+
 async function render(att: Record<string, unknown>): Promise<string> {
-  const base64 = attachmentToBase64(att);
+  const base64 = attachmentToBase64(att) || dataUrlBase64(att.href);
   if (!base64) return '';
   const image = await decode(base64ToBlob(base64, attachmentType(att)));
   try {
@@ -88,6 +96,9 @@ async function render(att: Record<string, unknown>): Promise<string> {
     canvas.height = height;
     const ctx = canvas.getContext('2d');
     if (!ctx) return '';
+    // JPEG has no transparency: a transparent PNG or GIF came out on black
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, width, height);
     image.draw(ctx, width, height);
     const small = await new Promise<Blob | null>((resolve) =>
       canvas.toBlob(resolve, 'image/jpeg', 0.8),
@@ -124,6 +135,58 @@ export function attachmentThumbnail(att: unknown): Promise<string> {
   );
   entries.set(att, entry);
   return entry.promise;
+}
+
+// How many thumbnailSrc images show each attachment's preview
+const users = new WeakMap<object, number>();
+
+/**
+ * Svelte action for an <img> that shows an image attachment small: the small
+ * preview once it is ready, the attachment itself (att.href) if no preview can
+ * be made. The reader's attachment strip set src to the attachment's data:
+ * URL, which decoded every photo at full size (about 48 MB for 12 megapixels)
+ * for a 104px square, twice over in a thread, for as long as it was open.
+ */
+export function thumbnailSrc(node: HTMLImageElement, att: unknown) {
+  let current: unknown = null;
+  const show = (next: unknown) => {
+    current = next;
+    if (!next || typeof next !== 'object') return;
+    users.set(next, (users.get(next) || 0) + 1);
+    void attachmentThumbnail(next).then((url) => {
+      if (current !== next) return;
+      const fallback = (next as { href?: unknown }).href;
+      const src = url || (typeof fallback === 'string' ? fallback : '');
+      if (src) node.src = src;
+    });
+  };
+  const hide = (prev: unknown) => {
+    if (!prev || typeof prev !== 'object') return;
+    const left = (users.get(prev) || 1) - 1;
+    if (left > 0) {
+      users.set(prev, left);
+      return;
+    }
+    users.delete(prev);
+    releaseAttachmentThumbnail(prev);
+  };
+  show(att);
+  return {
+    update(next: unknown) {
+      if (next === current) return;
+      const prev = current;
+      // (the old preview is freed below; it must not stay the src meanwhile)
+      node.removeAttribute('src');
+      show(next);
+      hide(prev);
+    },
+    destroy() {
+      const prev = current;
+      current = null;
+      node.removeAttribute('src');
+      hide(prev);
+    },
+  };
 }
 
 /** Frees the preview of an attachment that left the draft. */

@@ -4,6 +4,8 @@
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { cachedBodyStatus } from '../../src/workers/sync-pure.ts';
+
 // openpgp does not load under jsdom. These stand-ins decrypt anything once a
 // key is unlocked, which is all the PGP badge test needs.
 vi.mock('openpgp', () => ({
@@ -23,6 +25,7 @@ const table = (name: string) => {
 };
 const keyOf = (key: unknown) => JSON.stringify(key);
 const rowKey = (name: string, row: Row) => {
+  if (name === 'meta') return keyOf(row.key);
   if (name === 'syncManifests') return keyOf([row.account, row.folder]);
   if (name === 'folders') return keyOf([row.account, row.path]);
   return keyOf([row.account, row.id]);
@@ -67,20 +70,45 @@ function answer(action: string, name: string, payload: Row) {
     case 'queryEquals':
       return [...t.values()].filter((row) => matches(row, payload.index as string, payload.value));
     case 'query': {
+      const where = payload.where as Row;
+      if (payload.index === 'account' && payload.queryMode === 'summaries') {
+        // sizes of a page of stored rows (the phone's oversized body prune)
+        const options = (payload.options || {}) as { offset?: number; limit?: number };
+        const rows = [...t.values()].filter((r) => r.account === where.value);
+        const page = rows.slice(
+          options.offset || 0,
+          (options.offset || 0) + (options.limit || 1e9),
+        );
+        return page.map((r) => ({
+          account: r.account,
+          id: r.id,
+          approxBytes: JSON.stringify(r).length,
+        }));
+      }
       // count on [account+folder], primary keys oldest first on
       // [account+folder+date]: what the phone history trim asks for
-      const where = payload.where as Row;
       const [account, folder] = (where.value || where.lower) as unknown[];
       const rows = [...t.values()].filter((r) => r.account === account && r.folder === folder);
       if (payload.queryMode === 'count') return rows.length;
+      const byDate = (a: Row, b: Row) =>
+        Number(new Date(a.date as string | number)) - Number(new Date(b.date as string | number));
       if (payload.queryMode === 'primaryKeys') {
         return rows
           .filter((r) => r.date != null)
-          .sort((a, b) => String(a.date).localeCompare(String(b.date)))
+          .sort(byDate)
           .map((r) => [r.account, r.id]);
+      }
+      if (payload.queryMode === 'toArray') {
+        // newest first from [account+folder+date]: the bodies pass's sample
+        const options = (payload.options || {}) as { reverse?: boolean; limit?: number };
+        const sorted = rows.filter((r) => r.date != null).sort(byDate);
+        if (options.reverse) sorted.reverse();
+        return options.limit ? sorted.slice(0, options.limit) : sorted;
       }
       return undefined;
     }
+    case 'bodyStatuses':
+      return (payload.keys as unknown[]).map((key) => cachedBodyStatus(t.get(keyOf(key))));
     case 'queryEqualsModify': {
       let n = 0;
       for (const [k, row] of t) {
@@ -552,6 +580,192 @@ describe('bodies pass', () => {
     expect((detail.result as Row).raw).toBe(raw);
     expect(((detail.result as Row).meta as Row).raw).toBe(raw);
     expect(requests).toHaveLength(0);
+  });
+
+  // At every launch the pass read the whole folder and up to 200 whole cached
+  // bodies (raw message and attachments included), copied to this worker just
+  // to see which were missing: one of the spikes that ended the iOS page.
+  it('reads only the newest headers and never the cached bodies themselves', async () => {
+    const folder = 'Lean';
+    const ids = Array.from({ length: 30 }, (_, i) => oid(7300 + i));
+    ids.forEach((id, i) => {
+      table('messages').set(keyOf([ACCOUNT, id]), {
+        id,
+        account: ACCOUNT,
+        folder,
+        date: 5000 + i,
+        subject: `Lean ${i}`,
+      });
+      table('messageBodies').set(keyOf([ACCOUNT, id]), {
+        id,
+        account: ACCOUNT,
+        folder,
+        body: `<p>cached ${i}</p>`,
+        attachments: [],
+      });
+    });
+    // the newest one has no body yet
+    table('messageBodies').delete(keyOf([ACCOUNT, ids[29]]));
+    detailHook = (id) =>
+      new Response(JSON.stringify({ id, html: `<p>body of ${id}</p>` }), { status: 200 });
+    const calls: Array<{ action: string; name: string; payload: Row }> = [];
+    onDbAction = (action, name, payload) => calls.push({ action, name, payload });
+
+    await runTask({ type: 'bodies', folder, limit: 5 });
+
+    expect(table('messageBodies').get(keyOf([ACCOUNT, ids[29]]))?.body).toContain('body of');
+    const bodyReads = calls.filter(
+      (c) => c.name === 'messageBodies' && ['bulkGet', 'queryEquals'].includes(c.action),
+    );
+    expect(bodyReads).toHaveLength(0);
+    const statusCalls = calls.filter((c) => c.action === 'bodyStatuses');
+    expect(statusCalls).toHaveLength(1);
+    // the newest the pass can use (its limit), not the whole folder
+    expect((statusCalls[0].payload.keys as unknown[]).length).toBe(5);
+    expect(calls.some((c) => c.name === 'messages' && c.action === 'queryEquals')).toBe(false);
+  });
+
+  it('does not download again a body that had no attachments to list', async () => {
+    const folder = 'NoParts';
+    const id = oid(7401);
+    // The server flags an attachment (a signature part) the body has none of
+    table('messages').set(keyOf([ACCOUNT, id]), {
+      id,
+      account: ACCOUNT,
+      folder,
+      date: 1,
+      has_attachment: true,
+    });
+    detailHook = (reqId) =>
+      reqId === id
+        ? new Response(JSON.stringify({ id, html: '<p>signed</p>' }), { status: 200 })
+        : null;
+    await runTask({ type: 'bodies', folder, limit: 10 });
+    // Later passes leave it alone: they read the whole body record again to
+    // find it cached, at every launch
+    const reads: string[] = [];
+    onDbAction = (action, name) => {
+      if (name === 'messageBodies' && action === 'get') reads.push(action);
+    };
+    await runTask({ type: 'bodies', folder, limit: 10 });
+    await runTask({ type: 'bodies', folder, limit: 10 });
+    expect(requests.filter((u) => u.pathname.endsWith(id))).toHaveLength(1);
+    expect(reads).toHaveLength(0);
+  });
+
+  it('drops, once, bodies a phone cached in full before it kept lean copies', async () => {
+    const folder = 'Old';
+    const big = oid(7601);
+    const small = oid(7602);
+    for (const id of [big, small]) {
+      table('messages').set(keyOf([ACCOUNT, id]), { id, account: ACCOUNT, folder, date: 1 });
+    }
+    table('messageBodies').set(keyOf([ACCOUNT, big]), {
+      id: big,
+      account: ACCOUNT,
+      folder,
+      body: '<p>big</p>',
+      attachments: [],
+      meta: { raw: 'A'.repeat(3_000_000) },
+    });
+    table('messageBodies').set(keyOf([ACCOUNT, small]), {
+      id: small,
+      account: ACCOUNT,
+      folder,
+      body: '<p>small</p>',
+      attachments: [],
+    });
+    detailHook = (id) =>
+      new Response(JSON.stringify({ id, html: `<p>again ${id}</p>` }), { status: 200 });
+    const init = (memoryConstrained: boolean) =>
+      onmessage()({
+        data: {
+          type: 'init',
+          config: {
+            apiBase: 'https://api.example.com',
+            account: ACCOUNT,
+            authHeader: 'Basic x',
+            memoryConstrained,
+          },
+        },
+      });
+    init(true);
+    try {
+      await runTask({ type: 'bodies', folder, limit: 10 });
+    } finally {
+      init(false);
+    }
+    // the big one was dropped and downloaded again, lean; the small one kept
+    expect(table('messageBodies').get(keyOf([ACCOUNT, big]))?.body).toContain('again');
+    expect(table('messageBodies').get(keyOf([ACCOUNT, small]))?.body).toBe('<p>small</p>');
+    expect(table('meta').size).toBeGreaterThan(0);
+  });
+
+  it('keeps a lean body copy on a phone', async () => {
+    const folder = 'Phone';
+    const id = oid(7501);
+    table('messages').set(keyOf([ACCOUNT, id]), { id, account: ACCOUNT, folder, date: 1 });
+    const photo = 'A'.repeat(2_000_000);
+    detailHook = (reqId) =>
+      reqId === id
+        ? new Response(
+            JSON.stringify({
+              id,
+              html: '<p>see attached</p>',
+              nodemailer: {
+                html: '<p>see attached</p>',
+                text: 'see attached',
+                headers: { subject: 'Photo' },
+                attachments: [
+                  {
+                    filename: 'photo.jpg',
+                    contentType: 'image/jpeg',
+                    size: 1_500_000,
+                    content: photo,
+                  },
+                  {
+                    filename: 'logo.png',
+                    contentType: 'image/png',
+                    contentId: 'logo',
+                    disposition: 'inline',
+                    content: 'iVBORw0KGgo=',
+                  },
+                ],
+              },
+            }),
+            { status: 200 },
+          )
+        : null;
+    const init = (memoryConstrained: boolean) =>
+      onmessage()({
+        data: {
+          type: 'init',
+          config: {
+            apiBase: 'https://api.example.com',
+            account: ACCOUNT,
+            authHeader: 'Basic x',
+            memoryConstrained,
+          },
+        },
+      });
+    init(true);
+    try {
+      await runTask({ type: 'bodies', folder, limit: 10 });
+    } finally {
+      init(false);
+    }
+    const cached = table('messageBodies').get(keyOf([ACCOUNT, id])) as Row;
+    expect(cached.body).toContain('see attached');
+    const parsed = (cached.meta as Row).nodemailer as Row;
+    expect(parsed.html).toBeUndefined();
+    expect(parsed.text).toBeUndefined();
+    expect(parsed.headers).toEqual({ subject: 'Photo' });
+    expect((parsed.attachments as Row[]).every((a) => a.content === undefined)).toBe(true);
+    // The photo is listed without its content (downloaded when opened), the
+    // inline logo the body shows is kept
+    const listed = cached.attachments as Row[];
+    expect(listed.find((a) => a.filename === 'photo.jpg')).toMatchObject({ needsDownload: true });
+    expect(JSON.stringify(cached).length).toBeLessThan(100_000);
   });
 });
 

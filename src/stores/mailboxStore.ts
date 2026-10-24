@@ -896,11 +896,15 @@ const createMailboxStore = () => {
       // skip a message. Only a listing that adds up to the count is used.
       if (!isCompleteUnreadListing(serverUnread.size, serverCount)) return;
 
+      // Ids and times only, both stored in the clear: whole rows were decrypted
+      // and copied here for every unread message of the folder.
+      const unreadRows = db.messages
+        .where('[account+folder+is_unread_index]')
+        .equals([account, path, 1]);
       const localRows = (
-        ((await db.messages
-          .where('[account+folder+is_unread_index]')
-          .equals([account, path, 1])
-          .toArray()) || []) as Array<Record<string, unknown>>
+        ((typeof unreadRows.pickFields === 'function'
+          ? await unreadRows.pickFields(['id', 'updatedAt'])
+          : await unreadRows.toArray()) || []) as Array<Record<string, unknown>>
       ).filter((row) => !(Number(row.updatedAt) > startedAt));
 
       const skip = new Set<string>([...(await getLocallyMovingIds(account)), ...touched]);

@@ -93,13 +93,19 @@
   // receive. Each document gets a token the runtime echoes back, so a late
   // height from a document already replaced is not applied. A document that
   // would come out the same keeps its token, so the frame does not reload.
-  let lastDoc: { key: string; token: string } | null = null;
+  // The mode and the source are compared apart: one key string with the source
+  // in it was another full copy of the email (inline images and all) at every
+  // render.
+  let lastDoc: { mode: string; source: string; token: string } | null = null;
   const frameDoc = $derived.by(() => {
     const darkMode = mounted ? isDarkMode : detectDarkMode();
     const source = html || '';
-    const key = `${plainText ? 'text' : 'html'}:${darkMode ? 'dark' : 'light'}:${source}`;
-    const token = lastDoc?.key === key ? lastDoc.token : `${++documentCounter}`;
-    lastDoc = { key, token };
+    const mode = `${plainText ? 'text' : 'html'}:${darkMode ? 'dark' : 'light'}`;
+    const token =
+      lastDoc && lastDoc.mode === mode && lastDoc.source === source
+        ? lastDoc.token
+        : `${++documentCounter}`;
+    lastDoc = { mode, source, token };
     const doc = plainText
       ? buildIframeSrcdoc(htmlToPlainText(source), darkMode, true, token)
       : buildIframeSrcdoc(source, darkMode, false, token);

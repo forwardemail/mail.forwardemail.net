@@ -15,6 +15,77 @@ const hasStorage = typeof sessionStorage !== 'undefined';
 
 const sanitize = (str: string | undefined): string => redact(str);
 
+const MAX_ARG_LENGTH = 2000;
+
+// One property of a logged object, without walking into it
+function describeValue(value: unknown): string {
+  if (typeof value === 'string') {
+    return JSON.stringify(value.length > 200 ? `${value.slice(0, 200)}…` : value);
+  }
+  if (value === null || typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  if (Array.isArray(value)) return `Array(${value.length})`;
+  if (typeof value === 'object') return '{…}';
+  return typeof value;
+}
+
+/**
+ * Text for one console.error argument. String() turns an Error into its
+ * message without the stack, and any other object into "[object Event]" and
+ * the like, which is what support reports showed.
+ */
+export function formatConsoleArg(arg: unknown): string {
+  if (typeof arg === 'string') return arg;
+  if (arg instanceof Error) {
+    const head = `${arg.name}: ${arg.message}`;
+    const stack = typeof arg.stack === 'string' ? arg.stack : '';
+    if (!stack) return head;
+    // V8 stacks start with "Name: message"; WebKit stacks are frames only
+    return stack.startsWith(head) ? stack : `${head}\n${stack}`;
+  }
+  if (typeof Event !== 'undefined' && arg instanceof Event) {
+    const fields: string[] = [`${arg.constructor?.name || 'Event'}(${arg.type})`];
+    const record = arg as unknown as Record<string, unknown>;
+    for (const key of [
+      'message',
+      'filename',
+      'lineno',
+      'violatedDirective',
+      'effectiveDirective',
+      'blockedURI',
+      'sourceFile',
+      'lineNumber',
+    ]) {
+      const value = record[key];
+      if (value !== undefined && value !== null && value !== '' && typeof value !== 'object') {
+        fields.push(`${key}=${String(value)}`);
+      }
+    }
+    return fields.join(' ');
+  }
+  if (Array.isArray(arg)) return `Array(${arg.length})`;
+  if (arg && typeof arg === 'object') {
+    // Shallow and bounded: a logged object can be a whole message list, and
+    // serializing it in full would cost memory on every error.
+    try {
+      const parts: string[] = [];
+      let length = 0;
+      for (const key of Object.keys(arg).slice(0, 20)) {
+        const value = (arg as Record<string, unknown>)[key];
+        parts.push(`${JSON.stringify(key)}:${describeValue(value)}`);
+        length += parts[parts.length - 1].length;
+        if (length > MAX_ARG_LENGTH) break;
+      }
+      const text = `{${parts.join(',')}}`;
+      return text.length > MAX_ARG_LENGTH ? `${text.slice(0, MAX_ARG_LENGTH)}…` : text;
+    } catch {
+      /* a getter that throws: fall back below */
+    }
+  }
+  return String(arg);
+}
+
 // console.error as it was before setupGlobalHandlers() captured it. The
 // logger reports its own failures here: through the captured one, a failure
 // to save (storage full) logged an error, which saved again, which failed
@@ -135,7 +206,7 @@ class ErrorLogger {
     const originalError = console.error;
     console.error = (...args: unknown[]) => {
       this.logError('console_error', {
-        message: sanitize(args.map((arg) => String(arg)).join(' ')),
+        message: sanitize(args.map((arg) => formatConsoleArg(arg)).join(' ')),
       });
       originalError.apply(console, args);
     };

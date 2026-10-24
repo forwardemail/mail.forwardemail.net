@@ -93,9 +93,16 @@ describe('sync worker detail metadata contract', () => {
       acceptsMeta: workerSource.includes(
         'const persistBody = async (body, textContent, attachments = [], meta = null) => {',
       ),
-      cachesMeta: /attachments,\s+meta,\s+updatedAt: Date\.now\(\)/.test(workerSource),
+      // A phone caches and returns the lean copy (keptMeta, see slimBodyMeta)
+      cachesMeta:
+        /attachments: keptAttachments,\s+meta: keptMeta,\s+(\/\/[^\n]*\s+)*attachmentsResolved: true,\s+updatedAt: Date\.now\(\)/.test(
+          workerSource,
+        ),
       // Optionally followed by the decrypt info (pgp) the reader shows
-      returnsMeta: /attachments,\s+meta,\s+(\.\.\.\(pgpInfo[^\n]*\),\s+)?};/.test(workerSource),
+      returnsMeta:
+        /attachments: keptAttachments,\s+meta: keptMeta,\s+(\.\.\.\(pgpInfo[^\n]*\),\s+)?};/.test(
+          workerSource,
+        ),
       cachedHitReturnsMeta:
         /attachments: cached\.attachments \|\| \[\],\s+meta: [^\n]*cached[^\n]*\.meta \|\| null,/.test(
           workerSource,

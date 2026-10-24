@@ -35,6 +35,8 @@ class TaoSceneDelegate: UIResponder, UIWindowSceneDelegate {
     /// a tight loop, and is not left dead either.
     private static var recoveryRetries = 0
     private static let recoveryBackoff: [TimeInterval] = [5, 15, 60]
+    /// A page that dies within this long of its recovery reload died again.
+    private static let quickDeathWindow: TimeInterval = 30
     /// A recovery reload waiting for its backoff.
     private static var pendingRecovery: DispatchWorkItem?
     /// True while a frame cycle is in flight. Foreground activation fires
@@ -384,8 +386,8 @@ class TaoSceneDelegate: UIResponder, UIWindowSceneDelegate {
     }
 
     /// Reload a webview whose content process is gone. A page that dies again
-    /// within seconds of its reload is reloaded after a backoff (5s, 15s,
-    /// 60s) rather than left frozen: dropping that second termination left a
+    /// within 30 seconds of its reload is reloaded after a backoff (5s, 15s,
+    /// then every 60s) rather than left frozen: dropping that second termination left a
     /// dead webview on screen, with no input, until the app was force-quit.
     /// The user bringing the app back reloads at once: they are looking at
     /// the dead page.
@@ -414,15 +416,18 @@ class TaoSceneDelegate: UIResponder, UIWindowSceneDelegate {
             var backoff: TimeInterval = 0
             if let last = lastRecoveryReload {
                 let since = now.timeIntervalSince(last)
-                if since > 60 {
+                // A page that dies while it is still starting up (it was seen
+                // dying 10 to 17 seconds after each reload, at its memory
+                // limit) counts as dying again. With a 5 second window those
+                // were reloaded at once, forever.
+                if since > 120 {
                     recoveryRetries = 0
-                } else if since < 5 {
-                    guard recoveryRetries < recoveryBackoff.count else {
-                        NSLog("[SceneDelegate] Renderer keeps dying (%@); waiting for the next foreground",
-                              reason)
-                        return
-                    }
-                    backoff = recoveryBackoff[recoveryRetries]
+                } else if since < quickDeathWindow {
+                    // Past the last step, keep retrying at the longest wait:
+                    // giving up left a dead page on screen, taking no input,
+                    // until the app was sent to the background and back.
+                    let step = min(recoveryRetries, recoveryBackoff.count - 1)
+                    backoff = recoveryBackoff[step]
                     recoveryRetries += 1
                 }
             }

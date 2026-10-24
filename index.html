@@ -245,7 +245,7 @@
         // many extensions inject code that calls eval(), which our
         // script-src blocks. Surfacing those as a fatal overlay hides
         // the working app behind a scary panel. Ignore them; the
-        // console.error above still records them for support.
+        // handler still records them for support, as a warning.
         function isExtensionViolation(e) {
           if (!e) return false;
           // Match extension / browser-internal schemes ANYWHERE in the source or
@@ -269,9 +269,12 @@
           // The Diagnostics page deliberately fetches this exact URL to prove
           // connect-src enforcement. The browser must block it, but that expected
           // result must not cover the working app with the fatal CSP overlay.
+          // WebKit reports a blocked cross-origin URL as its origin only
+          // ("https://example.invalid"), so match the origin, not the path.
           if (
             e.effectiveDirective === 'connect-src' &&
-            blocked === 'https://example.invalid/csp-probe'
+            (blocked === 'https://example.invalid/csp-probe' ||
+              blocked === 'https://example.invalid')
           )
             return true;
           // Our CSP intentionally blocks eval (only wasm-unsafe-eval is allowed)
@@ -414,11 +417,6 @@
         // event — they fire securitypolicyviolation). A blocked module
         // can manifest indirectly as a readonly-assignment further down.
         document.addEventListener('securitypolicyviolation', function (e) {
-          try {
-            console.error('[fe-fatal][csp]', e);
-          } catch (_) {}
-          if (isIgnorableCspViolation(e)) return;
-          if (appHasBooted()) return;
           var detail = [
             'CSP violation',
             'directive: ' + e.violatedDirective,
@@ -427,6 +425,17 @@
             'sourceFile: ' + e.sourceFile + ':' + e.lineNumber + ':' + e.columnNumber,
             'sample: ' + (e.sample || ''),
           ].join('\n');
+          // Log the fields, not the event: the in-app error logger stringifies
+          // console arguments, and an event object reaches support reports as
+          // "[object SecurityPolicyViolationEvent]". An expected violation (the
+          // Diagnostics probe, extensions) is a warning, not an app error.
+          var ignorable = isIgnorableCspViolation(e);
+          try {
+            if (ignorable) console.warn('[fe-fatal][csp] ignored: ' + detail.replace(/\n/g, '; '));
+            else console.error('[fe-fatal][csp] ' + detail.replace(/\n/g, '; '));
+          } catch (_) {}
+          if (ignorable) return;
+          if (appHasBooted()) return;
           showFatal(detail);
         });
       })();
