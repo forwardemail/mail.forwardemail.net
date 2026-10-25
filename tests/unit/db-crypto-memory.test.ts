@@ -174,6 +174,7 @@ describe('db-engine reads under App Lock', () => {
         attachmentsResolved: false,
         pgpLocked: false,
         rawIsPgp: false,
+        pgpDecrypted: false,
       },
       null,
       expect.objectContaining({ hasBody: true, bodyIsPgp: true }),

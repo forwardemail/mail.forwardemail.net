@@ -876,6 +876,12 @@ class TableProxy {
     return send('bodyTexts', this._table, { keys });
   }
 
+  // What a body record is (cached, PGP, decrypted) without the record itself,
+  // null for a missing one (see bodyStatuses in db-engine).
+  bodyStatuses(keys) {
+    return send('bodyStatuses', this._table, { keys });
+  }
+
   // One page of an index match in a sort order with no index (subject,
   // sender), sorted in the worker (see sortedPage in db-engine).
   sortedPage(index, value, { order, offset = 0, limit = 50 } = {}) {

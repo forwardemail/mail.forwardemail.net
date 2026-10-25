@@ -79,7 +79,7 @@ export function createPgpModal({
     color: textColor,
     lineHeight: '1.5',
   });
-  add(dialog, 'p', 'Go to Settings > Accounts & Security to add a key now?', {
+  add(dialog, 'p', 'Go to Settings > Privacy & Security to add a key now?', {
     margin: '0 0 16px',
     color: textColor,
     lineHeight: '1.5',

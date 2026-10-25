@@ -1154,7 +1154,7 @@ describe('PGP desktop and settings regressions', () => {
   );
 
   it('should keep Add PGP Key navigation inside the desktop app', () => {
-    expect(mailboxSrc).toContain("onclick={() => navigate('/mailbox/settings#accounts')}");
+    expect(mailboxSrc).toContain("onclick={() => navigate('/mailbox/settings#privacy')}");
     expect(mailboxSrc).not.toContain('href="/mailbox/settings#accounts"');
   });
 

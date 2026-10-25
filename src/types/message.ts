@@ -38,6 +38,9 @@ export interface Message {
   pgpEncrypted?: boolean;
   /** Signature packets were present on decrypt but NOT verified. */
   pgpSigned?: boolean;
+  // The subject the server has (a protected-headers placeholder such as "...")
+  // while `subject` holds the one decrypted on this device
+  pgpOuterSubject?: string | null;
 }
 
 export interface MessageBody {

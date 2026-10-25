@@ -41,6 +41,7 @@ import { startInitialSync, queueBodiesForFolder } from '../utils/sync-controller
 import { resetSyncWorkerReady, revokeSyncWorkerAuth } from '../utils/sync-worker-client.js';
 import { isDemoBlockedError, isDemoMode } from '../utils/demo-mode';
 import { clearMailServiceState } from './mailService';
+import { setAppNavigate } from '../utils/app-navigate';
 import { resetFilters } from './filtersStore';
 import {
   normalizeEmail,
@@ -130,6 +131,7 @@ export const layoutMode = derived(effectiveLayoutMode, ($mode) => normalizeLayou
 let navigateRef: ((path: string, options?: { replace?: boolean }) => void) | null = null;
 export const setNavigate = (fn) => {
   navigateRef = fn;
+  setAppNavigate(fn);
 };
 
 export { DRAWER_MAX_WIDTH };

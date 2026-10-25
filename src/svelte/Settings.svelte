@@ -19,7 +19,12 @@
   import { deactivateDemoMode, isDemoBlockedError } from '../utils/demo-mode.js';
   import { refreshSyncWorkerPgpKeys, unlockPgpKey } from '../utils/sync-worker-client.js';
   import { initPerfObservers } from '../utils/perf-logger.ts';
-  import { mailService, clearPgpKeyCache, invalidatePgpCachedBodies } from '../stores/mailService';
+  import {
+    mailService,
+    clearPgpKeyCache,
+    forgetPgpPlaintext,
+    invalidatePgpCachedBodies,
+  } from '../stores/mailService';
   import { searchStore } from '../stores/searchStore';
   const { health: healthStore, stats: searchStatsStore } = searchStore.state;
   const { checkHealth, rebuildFromCache } = searchStore.actions;
@@ -637,6 +642,26 @@
     notificationsAnchor?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
+  // Settings is mounted once and only hidden between visits, so the section
+  // in the link has to be read each time it is shown, not only at mount: an
+  // in-app link to /mailbox/settings#privacy used to open whichever section
+  // was open last (General, at first).
+  const openSectionFromHash = () => {
+    const hash = window.location.hash?.slice(1) || '';
+    if (hash === 'security' || hash === 'accounts') {
+      section = 'privacy';
+    } else if (hash === 'notifications') {
+      void showNotificationSettings();
+    } else if (sectionIds.has(hash) && section !== hash) {
+      section = hash;
+      if (hash === 'folders') loadLabelsList();
+      if (hash === 'advanced') loadCacheStatistics();
+    }
+  };
+  const onSettingsHashChange = () => {
+    if (globalThis.location?.pathname?.startsWith('/mailbox/settings')) openSectionFromHash();
+  };
+
   onMount(() => {
     if (isTauri) {
       import('../utils/tauri-bridge')
@@ -650,16 +675,13 @@
     loadShortcuts();
     loadDatabaseInfo();
 
-    const hash = window.location.hash?.slice(1) || '';
-    if (hash === 'security' || hash === 'accounts') {
-      section = 'privacy';
-    } else if (hash === 'notifications') {
-      void showNotificationSettings();
-    } else if (sectionIds.has(hash)) {
-      section = hash;
-    }
+    window.addEventListener('hashchange', onSettingsHashChange);
 
     subscriptions = [
+      // Opened at a section (#privacy from "Add PGP Key", a Get Started step)
+      active.subscribe((shown: boolean) => {
+        if (shown) openSectionFromHash();
+      }),
       currentAccount.subscribe((v: string) => {
         activeEmail = v || '';
         aliasEmail = activeEmail || getAliasEmail();
@@ -724,6 +746,7 @@
   });
 
   onDestroy(() => {
+    window.removeEventListener('hashchange', onSettingsHashChange);
     flushSignatureSave();
     subscriptions.forEach((fn) => fn?.());
   });
@@ -1589,13 +1612,9 @@
 
     refreshSyncWorkerPgpKeys();
     clearPgpKeyCache();
-    try {
-      await invalidatePgpCachedBodies(currentAcct);
-    } catch (err) {
-      // Same worker-timeout hazard as saveKey. The key is already removed;
-      // stale cached bodies just linger until their next open.
-      console.warn('[Settings] invalidatePgpCachedBodies failed:', err);
-    }
+    // The messages decrypted with it go too; ones the other keys open are
+    // decrypted again when opened.
+    void forgetDecryptedMessages(currentAcct);
     setSuccess('Encryption key removed.');
   };
 
@@ -1700,21 +1719,56 @@
     }
   };
 
-  // Clears this account's saved PGP keys and passphrases. It used to clear all
-  // local storage, which signed out every account and dropped their settings.
-  const clearData = async () => {
+  // Clears this account's saved PGP keys and passphrases, and the messages
+  // decrypted with them. Only that: it used to clear all local storage, which
+  // signed out every account and dropped their settings (builds before 0.15.0).
+  let pgpClearConfirmVisible = $state(false);
+
+  // What this device kept of the messages the removed keys decrypted: their
+  // bodies, the protected subjects written onto their rows, and the text the
+  // search index took from them. It reads every cached body and message of the
+  // account, so it runs after the keys are gone, without holding up the page.
+  let forgetting: Promise<void> | null = null;
+  const forgetDecryptedMessages = (account: string): Promise<void> => {
+    const run = async () => {
+      try {
+        const changed = await forgetPgpPlaintext(account);
+        if (changed.length && account === getAccountId()) {
+          await searchStore.actions.indexMessages(changed);
+        }
+      } catch (err) {
+        console.warn('[Settings] could not remove decrypted messages:', err);
+      }
+    };
+    // One at a time; a second removal waits for the first and runs again
+    forgetting = (forgetting || Promise.resolve()).then(run);
+    return forgetting;
+  };
+
+  const clearData = () => {
+    const hadKeys = pgpKeys.length > 0;
     const currentAcct = getAccountId();
     clearAccountPgpData(currentAcct);
     pgpKeys = [];
     cancelKeyForm();
     refreshSyncWorkerPgpKeys();
     clearPgpKeyCache();
-    try {
-      await invalidatePgpCachedBodies(currentAcct);
-    } catch (err) {
-      console.warn('[Settings] invalidatePgpCachedBodies failed:', err);
+    void forgetDecryptedMessages(currentAcct);
+    pgpClearConfirmVisible = false;
+    setSuccess(
+      hadKeys ? 'Saved encryption keys cleared.' : 'No encryption keys are saved on this device.',
+    );
+  };
+
+  // Removing keys cannot be undone (a key not backed up elsewhere is gone), so
+  // it is confirmed first. With none saved there is nothing to confirm.
+  const requestClearData = () => {
+    clearAlerts();
+    if (pgpKeys.length === 0) {
+      clearData();
+      return;
     }
-    setSuccess('Saved encryption keys cleared.');
+    pgpClearConfirmVisible = true;
   };
 
   const signOut = async () => {
@@ -2609,7 +2663,11 @@
                 </p>
               </div>
             {/if}
-            <Button variant="ghost" onclick={clearData}>Clear saved data</Button>
+            <Button variant="ghost" onclick={requestClearData}>Clear saved data</Button>
+            <p class="text-xs text-muted-foreground">
+              Removes the keys and passphrases saved on this device for this account, and the
+              messages decrypted with them. You stay signed in.
+            </p>
           </Card.Content>
         </Card.Root>
 
@@ -3697,6 +3755,23 @@
   onSave={saveLabelModal}
   onClearError={clearLabelModalError}
 />
+
+<Dialog.Root bind:open={pgpClearConfirmVisible}>
+  <Dialog.Content class="sm:max-w-md">
+    <Dialog.Header>
+      <Dialog.Title>Remove saved PGP keys?</Dialog.Title>
+      <Dialog.Description>
+        Every PGP key and passphrase saved on this device for this account is removed, with the
+        decrypted copies of encrypted messages. Keep a copy of any key you still need. You stay
+        signed in.
+      </Dialog.Description>
+    </Dialog.Header>
+    <Dialog.Footer>
+      <Button variant="ghost" onclick={() => (pgpClearConfirmVisible = false)}>Cancel</Button>
+      <Button variant="destructive" onclick={clearData}>Remove keys</Button>
+    </Dialog.Footer>
+  </Dialog.Content>
+</Dialog.Root>
 
 <Dialog.Root bind:open={rebuildConfirmVisible}>
   <Dialog.Content class="sm:max-w-md">

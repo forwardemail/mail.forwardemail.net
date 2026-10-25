@@ -436,6 +436,19 @@
     };
   };
 
+  // The mailbox stays mounted under Settings, Profile and the other pages,
+  // whose hash (#privacy, #general) names a section, not a folder. Read as one,
+  // opening Settings at Privacy ("Add PGP Key") selected a folder "privacy"
+  // behind it and asked the server for its messages. These are the paths
+  // main.ts routes to the mailbox (`/` signed in, until it becomes /mailbox).
+  const onMailboxRoute = () => {
+    const path = globalThis.location?.pathname || '';
+    if (path === '/' || path === '') return true;
+    return (
+      path.startsWith('/mailbox') && !/^\/mailbox\/(?:settings|profile|diagnostics)/.test(path)
+    );
+  };
+
   const buildHashUrl = (folder: string, messageId?: string | null): string => {
     let hash = `#${encodeURIComponent(folder)}`;
     if (messageId) {
@@ -2669,6 +2682,7 @@
 
     // Handle browser back/forward navigation
     const handleLocationChange = () => {
+      if (!onMailboxRoute()) return;
       messageHistoryPushed = false;
       // Back (the iOS edge swipe, Android, the browser) leaves the drawer and
       // the search screen, which belong to the view being left.
@@ -2702,8 +2716,8 @@
     window.addEventListener('popstate', handleLocationChange);
     window.addEventListener('hashchange', handleLocationChange);
 
-    // Handle initial hash URL on page load
-    const initialHash = parseHashUrl();
+    // Handle initial hash URL on page load (a sibling page's hash is its own)
+    const initialHash = onMailboxRoute() ? parseHashUrl() : null;
     if (initialHash) {
       // Use setTimeout to ensure messages have started loading
       skipFolderUrlUpdate = true;
@@ -2721,12 +2735,16 @@
         if (!isActive) return;
         const folder = get(selectedFolder);
         if (folder) {
-          history.replaceState(hashState({ folder }), '', buildHashUrl(folder, null));
+          if (onMailboxRoute()) {
+            history.replaceState(hashState({ folder }), '', buildHashUrl(folder, null));
+          }
         } else {
           // Suppress the subscribe's URL update — we'll replaceState ourselves
           skipFolderUrlUpdate = true;
           mailboxStore?.actions?.selectFolder?.('INBOX');
-          history.replaceState(hashState({ folder: 'INBOX' }), '', buildHashUrl('INBOX', null));
+          if (onMailboxRoute()) {
+            history.replaceState(hashState({ folder: 'INBOX' }), '', buildHashUrl('INBOX', null));
+          }
           skipFolderUrlUpdate = false;
         }
       }, 100);
@@ -6196,7 +6214,7 @@
           selectionMode = false;
           // Update URL to reflect folder change (only if not triggered by popstate)
           // Always show just the folder - message selection happens separately
-          if (folder && !skipFolderUrlUpdate && isActive) {
+          if (folder && !skipFolderUrlUpdate && isActive && onMailboxRoute()) {
             const hash = buildHashUrl(folder, null);
             // Tab switches use replaceState to avoid polluting browser history
             if (tabSwitchInProgress) {
@@ -9899,7 +9917,7 @@
                                     <button
                                       type="button"
                                       class="inline-flex items-center justify-center px-3 py-1.5 text-sm bg-state-encrypted/20 hover:bg-state-encrypted/30 text-state-encrypted"
-                                      onclick={() => navigate('/mailbox/settings#accounts')}
+                                      onclick={() => navigate('/mailbox/settings#privacy')}
                                     >
                                       Add PGP Key
                                     </button>
@@ -10173,7 +10191,7 @@
                             <button
                               type="button"
                               class="inline-flex items-center justify-center px-3 py-1.5 text-sm bg-state-encrypted/20 hover:bg-state-encrypted/30 text-state-encrypted"
-                              onclick={() => navigate('/mailbox/settings#accounts')}
+                              onclick={() => navigate('/mailbox/settings#privacy')}
                             >
                               Add PGP Key
                             </button>

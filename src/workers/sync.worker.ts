@@ -1588,6 +1588,10 @@ async function fetchAndCacheBodyWithOptions(account, folder, msg, options = {}) 
   // Set when this worker decrypted the body, so the reader can show the PGP
   // badge and a protected-headers subject straight away.
   let pgpInfo: { encrypted: true; subject?: string } | null = null;
+  // pgpKeysVersion when it was decrypted. Keys removed since then took their
+  // plaintext with them (invalidatePgpCachedBodies); it is not cached again.
+  let decryptedWithKeys = -1;
+  const keysChangedSinceDecrypt = () => Boolean(pgpInfo) && decryptedWithKeys !== pgpKeysVersion;
   const persistBody = async (body, textContent, attachments = [], meta = null) => {
     // A phone keeps a lean copy: no raw message, no large attachment content
     // (see slimBodyMeta). The reader gets the same lean copy it would read
@@ -1597,7 +1601,7 @@ async function fetchAndCacheBodyWithOptions(account, folder, msg, options = {}) 
     // encrypted, so there is nothing to download them from later.
     const keptAttachments =
       memoryConstrained && !pgpInfo ? slimCachedAttachments(attachments) : attachments;
-    if (dbPort) {
+    if (dbPort && !keysChangedSinceDecrypt()) {
       await cacheWrite(
         () =>
           db.messageBodies.put({
@@ -1612,6 +1616,9 @@ async function fetchAndCacheBodyWithOptions(account, folder, msg, options = {}) 
             // were none to list, not that they still have to be downloaded.
             attachmentsResolved: true,
             updatedAt: Date.now(),
+            // Decrypted here with a saved key: removing the keys removes this
+            // plaintext copy too (invalidatePgpCachedBodies)
+            ...(pgpInfo ? { pgpDecrypted: true } : {}),
           }),
         'caching message body',
       );
@@ -1692,6 +1699,7 @@ async function fetchAndCacheBodyWithOptions(account, folder, msg, options = {}) 
             textContent: cached.textContent || '',
             attachments: cached.attachments || [],
             meta: (cached as { meta?: Record<string, unknown> }).meta || null,
+            ...((cached as { pgpDecrypted?: boolean }).pgpDecrypted ? { pgpDecrypted: true } : {}),
           };
         }
         return;
@@ -1744,6 +1752,7 @@ async function fetchAndCacheBodyWithOptions(account, folder, msg, options = {}) 
     if (raw) {
       const isPgp = isPgpContent(raw);
       if (isPgp) {
+        decryptedWithKeys = pgpKeysVersion;
         const decrypted = await decryptPgp(raw);
         if (!decrypted) {
           pgpLockedTried.set(`${account}::${apiId}`, pgpKeysVersion);
@@ -1780,18 +1789,28 @@ async function fetchAndCacheBodyWithOptions(account, folder, msg, options = {}) 
           // Record the badge flags and, for protected-headers senders, the
           // real subject (the cached outer subject is a placeholder).
           try {
-            const changes = { pgpEncrypted: true, pgpSigned: lastDecryptSigned };
+            const changes: Record<string, unknown> = {
+              pgpEncrypted: true,
+              pgpSigned: lastDecryptSigned,
+            };
             pgpInfo = { encrypted: true };
             if (typeof parsed.subject === 'string' && parsed.subject.trim()) {
-              changes.subject = parsed.subject;
               pgpInfo.subject = parsed.subject;
+              if (parsed.subject !== msg?.subject) {
+                changes.subject = parsed.subject;
+                // The server's subject (a placeholder), put back when the
+                // keys are removed (forgetPgpPlaintext)
+                if (typeof msg?.subject === 'string') changes.pgpOuterSubject = msg.subject;
+              }
             }
             // Only these fields are written; the rest of the row is left as
             // it is in the database now.
-            await cacheWrite(
-              () => db.messages.update([account, apiId], changes),
-              'recording PGP badge',
-            );
+            if (!keysChangedSinceDecrypt()) {
+              await cacheWrite(
+                () => db.messages.update([account, apiId], changes),
+                'recording PGP badge',
+              );
+            }
           } catch {
             // Best effort; the interactive decrypt path persists the same info.
           }

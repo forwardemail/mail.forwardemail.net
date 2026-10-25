@@ -6,6 +6,7 @@ import { sanitizeHtml } from '../utils/sanitize.js';
 import { formatFriendlyDate } from '../utils/date.ts';
 import { createPerfTracer } from '../utils/perf-logger.ts';
 import { createPgpModal } from '../utils/pgp-key-prompt.ts';
+import { navigateInApp } from '../utils/app-navigate';
 import { abortIfNeeded, getMessageApiId } from '../utils/sync-helpers.ts';
 import {
   sendSyncRequest,
@@ -540,32 +541,143 @@ export const clearPgpKeyCache = (): void => {
 // held up everything else, opening a message included, for many seconds.
 const PGP_INVALIDATE_BATCH = 50;
 
-export const invalidatePgpCachedBodies = async (account: string): Promise<void> => {
+// Message rows read at a time when looking for the PGP ones of an account
+const PGP_MESSAGE_SCAN_BATCH = 500;
+
+type BodyStatus = {
+  bodyIsPgp?: boolean;
+  pgpLocked?: boolean;
+  rawIsPgp?: boolean;
+  pgpDecrypted?: boolean;
+} | null;
+
+type PgpMessageRow = Message & { account?: string; pgpOuterSubject?: string | null };
+
+// The account's messages flagged PGP-encrypted (set when this device decrypted
+// them). Bodies decrypted before they carried pgpDecrypted are found through
+// these, and their rows may hold the decrypted subject. Read by primary key, a
+// batch at a time, so rows sync writes meanwhile do not shift a page.
+const pgpMessageRows = async (account: string): Promise<PgpMessageRow[]> => {
+  const keys = ((await db.messages
+    .where('[account+id]')
+    .between([account, Dexie.minKey], [account, Dexie.maxKey])
+    .primaryKeys()) || []) as Array<[string, string]>;
+  const rows: PgpMessageRow[] = [];
+  for (let i = 0; i < keys.length; i += PGP_MESSAGE_SCAN_BATCH) {
+    const batch = ((await db.messages.bulkGet(keys.slice(i, i + PGP_MESSAGE_SCAN_BATCH))) ||
+      []) as Array<PgpMessageRow | undefined>;
+    for (const row of batch) if (row?.pgpEncrypted === true && row.id != null) rows.push(row);
+  }
+  return rows;
+};
+
+/**
+ * Drop cached bodies that depend on the saved PGP keys: copies still encrypted
+ * (so the next open tries the keys again) and, with `includeDecrypted` (keys
+ * removed), the copies decrypted with them. Those stayed readable on this
+ * device after the keys were gone. Bodies are looked at in the db worker
+ * (bodyStatuses); none is copied here. Returns the ids of the bodies dropped.
+ */
+export const invalidatePgpCachedBodies = async (
+  account: string,
+  {
+    includeDecrypted = false,
+    encryptedIds,
+  }: { includeDecrypted?: boolean; encryptedIds?: Set<string> } = {},
+): Promise<string[]> => {
+  const dropped: string[] = [];
+  if (!account) return dropped;
   try {
     const keys = ((await db.messageBodies
       .where('[account+id]')
       .between([account, Dexie.minKey], [account, Dexie.maxKey])
-      .primaryKeys()) || []) as unknown[];
+      .primaryKeys()) || []) as Array<[string, string]>;
+    if (!keys.length) return dropped;
+    const flagged = includeDecrypted
+      ? encryptedIds || new Set((await pgpMessageRows(account)).map((row) => String(row.id)))
+      : new Set<string>();
     for (let i = 0; i < keys.length; i += PGP_INVALIDATE_BATCH) {
       const batch = keys.slice(i, i + PGP_INVALIDATE_BATCH);
-      const bodies = ((await db.messageBodies.bulkGet(batch)) || []) as Array<
-        | { account?: string; id?: string; raw?: unknown; body?: unknown; pgpLocked?: boolean }
-        | undefined
-      >;
-      const staleKeys = bodies
-        .filter(
-          (b) =>
-            b &&
-            (b.pgpLocked ||
-              (typeof b.raw === 'string' && isPgpEncrypted(b.raw)) ||
-              (typeof b.body === 'string' && isPgpEncrypted(b.body))),
-        )
-        .map((b) => [b!.account, b!.id]);
-      if (staleKeys.length) await db.messageBodies.bulkDelete(staleKeys);
+      const statuses = ((await db.messageBodies.bodyStatuses(batch)) || []) as BodyStatus[];
+      const staleKeys = batch.filter((key, idx) => {
+        const status = statuses[idx];
+        if (!status) return false;
+        if (status.pgpLocked || status.rawIsPgp || status.bodyIsPgp) return true;
+        return includeDecrypted && (status.pgpDecrypted || flagged.has(String(key?.[1])));
+      });
+      if (staleKeys.length) {
+        await db.messageBodies.bulkDelete(staleKeys);
+        for (const key of staleKeys) dropped.push(String(key[1]));
+      }
     }
-  } catch {
-    // Non-critical — worst case user refreshes
+  } catch (err) {
+    // Not fatal: a body left behind is dropped on its next open or clean-up
+    console.warn('[mailService] could not clear PGP cached bodies', err);
   }
+  return dropped;
+};
+
+/**
+ * The saved keys are gone: remove what this device kept of the messages they
+ * decrypted. That is the decrypted bodies, and the subjects of senders that
+ * encrypt them (protected headers), which were written over the placeholder
+ * on the message row. A subject recorded with its placeholder gets it back; an
+ * older one loses its PGP flag, so the next sync takes the server's subject.
+ * Returns the message rows changed or left without a body, for the search
+ * index to drop the text it took from them.
+ */
+export const forgetPgpPlaintext = async (account: string): Promise<Message[]> => {
+  if (!account) return [];
+  let rows: PgpMessageRow[] = [];
+  try {
+    rows = await pgpMessageRows(account);
+  } catch (err) {
+    console.warn('[mailService] could not read PGP messages', err);
+  }
+  const dropped = await invalidatePgpCachedBodies(account, {
+    includeDecrypted: true,
+    encryptedIds: new Set(rows.map((row) => String(row.id))),
+  });
+
+  const restored = new Map<string, Partial<Message>>();
+  for (const row of rows) {
+    const changes: Record<string, unknown> =
+      typeof row.pgpOuterSubject === 'string'
+        ? { subject: row.pgpOuterSubject, pgpOuterSubject: null }
+        : { pgpEncrypted: false };
+    try {
+      await db.messages.update([account, row.id], changes);
+      restored.set(String(row.id), changes as Partial<Message>);
+    } catch (err) {
+      debugWarn('[PGP] Failed to restore message envelope', err);
+    }
+  }
+  if (restored.size) {
+    try {
+      messages.update((list) =>
+        (list || []).map((m) => {
+          const changes = restored.get(String(getMessageApiId(m)));
+          return changes ? { ...m, ...changes } : m;
+        }),
+      );
+    } catch {
+      // The rows in the database are what the list shows next
+    }
+  }
+
+  const changedIds = [...new Set([...restored.keys(), ...dropped])];
+  const changed: Message[] = [];
+  for (let i = 0; i < changedIds.length; i += PGP_MESSAGE_SCAN_BATCH) {
+    try {
+      const batch = ((await db.messages.bulkGet(
+        changedIds.slice(i, i + PGP_MESSAGE_SCAN_BATCH).map((id) => [account, id]),
+      )) || []) as Array<Message | undefined>;
+      for (const row of batch) if (row) changed.push(row);
+    } catch (err) {
+      debugWarn('[PGP] Failed to read changed messages', err);
+    }
+  }
+  return changed;
 };
 
 /**
@@ -592,9 +704,13 @@ async function persistDecryptedEnvelope(
   message: Message,
   account: string,
   decrypted: { subject?: string; signed?: boolean },
+  // getPgpKeysVersion() when the decrypt started: keys removed since then
+  // took what they decrypted with them, so this must not write it back
+  keysVersion?: number,
 ): Promise<void> {
   const messageId = getMessageApiId(message);
   if (!messageId) return;
+  if (keysVersion !== undefined && keysVersion !== getPgpKeysVersion()) return;
 
   const innerSubject =
     typeof decrypted.subject === 'string' &&
@@ -610,7 +726,11 @@ async function persistDecryptedEnvelope(
   }
 
   const changes: Partial<Message> = { pgpEncrypted: true, pgpSigned: signed };
-  if (innerSubject !== undefined) changes.subject = innerSubject;
+  if (innerSubject !== undefined) {
+    changes.subject = innerSubject;
+    // Kept so removing the keys can put the server's subject back
+    if (typeof message.pgpOuterSubject !== 'string') changes.pgpOuterSubject = message.subject;
+  }
 
   try {
     await db.messages
@@ -701,6 +821,7 @@ async function handleCachedPgpRaw(
 
   tracer.stage(`${stage}_pgp_raw`);
   const pgpArmor = extractPgpArmor(raw);
+  const keysVersion = getPgpKeysVersion();
   const result = await tryDecrypt(pgpArmor, { allowPrompt: allowPgpPrompt });
   if (result.success) {
     debugLog('[PGP] Successfully decrypted cached message');
@@ -710,7 +831,7 @@ async function handleCachedPgpRaw(
       signed: result.signed,
       subject: result.subject,
     });
-    persistDecryptedEnvelope(message, account, result).catch(() => {});
+    persistDecryptedEnvelope(message, account, result, keysVersion).catch(() => {});
     abortIfNeeded(signal);
     const parsed = result;
     const parsedAttachments = sanitizeAttachments(parsed.attachments || []);
@@ -741,6 +862,7 @@ async function handleCachedPgpRaw(
       meta,
       account,
       sanitized,
+      { pgpDecrypted: true, keysVersion },
     );
 
     tracer.stage('cache_write', { cached: true });
@@ -802,6 +924,8 @@ export const mailService = {
       onError?.(new Error('Invalid message ID'));
       return;
     }
+    // The keys any plaintext read or decrypted below goes with (cacheMessageContent)
+    const keysVersionAtLoad = getPgpKeysVersion();
 
     // A delivered body also ends the loading state, on every path (cache hit,
     // re-sanitize, network fetch, PGP decrypt). Without this the skeleton
@@ -880,6 +1004,10 @@ export const mailService = {
             cached.meta || null,
             account,
             sanitized,
+            {
+              pgpDecrypted: (cached as { pgpDecrypted?: boolean }).pgpDecrypted === true,
+              keysVersion: keysVersionAtLoad,
+            },
           ).catch(() => {});
           const hydrated = applyInlineAttachments(sanitized.html, cached.attachments || []);
           onBody?.(`<div class="fe-message-canvas">${hydrated}</div>`);
@@ -1100,6 +1228,14 @@ export const mailService = {
           '',
           workerMeta,
           account,
+          undefined,
+          {
+            pgpDecrypted: Boolean(
+              (workerResult as { pgp?: unknown; pgpDecrypted?: boolean }).pgp ||
+              (workerResult as { pgpDecrypted?: boolean }).pgpDecrypted,
+            ),
+            keysVersion: keysVersionAtLoad,
+          },
         ).catch(() => {});
         if (!workerMeta?.nodemailer) {
           mailService.loadMessageDetailNetwork?.({
@@ -1203,6 +1339,7 @@ export const mailService = {
           extractedPgpMessage ||
           (rawIsPgp ? (result.raw as string) : '') ||
           extractPgpArmor((rawBody || serverText || '') as string);
+        const keysVersion = getPgpKeysVersion();
         const decryptResult = await tryDecrypt(pgpInput, {
           allowPrompt: allowPgpPrompt,
         });
@@ -1214,7 +1351,7 @@ export const mailService = {
             signed: decryptResult.signed,
             subject: decryptResult.subject,
           });
-          persistDecryptedEnvelope(message, account, decryptResult).catch(() => {});
+          persistDecryptedEnvelope(message, account, decryptResult, keysVersion).catch(() => {});
           abortIfNeeded(compositeSignal);
           const parsed = decryptResult;
           const parsedAttachments = sanitizeAttachments(parsed.attachments || []);
@@ -1246,6 +1383,7 @@ export const mailService = {
             result,
             account,
             sanitized,
+            { pgpDecrypted: true, keysVersion },
           ).catch((err) => console.warn('[mailService] Body cache write failed', err));
           tracer.stage('cache_write', { cached: true });
         } else {
@@ -1700,12 +1838,27 @@ async function cacheMessageContent(
   // DOMPurify on a large email is a long main-thread task, and every path that
   // shows a body had just run it on the same HTML.
   presanitized?: SanitizeResult,
-  // A body downloaded in the clear: on a phone its large attachments are
-  // listed without their content, and opened from the server
-  { leanAttachments = false }: { leanAttachments?: boolean } = {},
+  // leanAttachments: a body downloaded in the clear, whose large attachments a
+  // phone lists without their content (opened from the server).
+  // pgpDecrypted: the body of a PGP message decrypted on this device, removed
+  // with the saved keys (invalidatePgpCachedBodies). keysVersion: the keys it
+  // was decrypted with (getPgpKeysVersion() then); if they changed since, the
+  // plaintext is not cached, or removing them would leave it behind.
+  {
+    leanAttachments = false,
+    pgpDecrypted = false,
+    keysVersion,
+  }: { leanAttachments?: boolean; pgpDecrypted?: boolean; keysVersion?: number } = {},
 ): Promise<void> {
   const messageId = getMessageApiId(message);
   if (!messageId || !renderedBody) return;
+  if (
+    (pgpDecrypted || message.pgpEncrypted) &&
+    keysVersion !== undefined &&
+    keysVersion !== getPgpKeysVersion()
+  ) {
+    return;
+  }
   const resolvedAccount = account || Local.get('email') || 'default';
   let safeAttachments = (attachments || []).map((att) => ({
     name: att.name,
@@ -1744,6 +1897,7 @@ async function cacheMessageContent(
     meta,
     // The attachment list is worked out (see the sync worker's persistBody)
     attachmentsResolved: true,
+    ...(pgpDecrypted ? { pgpDecrypted: true } : {}),
     updatedAt: Date.now(),
     sanitizedAt: Date.now(),
     trackingPixelCount: sanitized.trackingPixelCount || 0,
@@ -1848,9 +2002,7 @@ async function showMissingKeyNotification(account?: string): Promise<void> {
       if (timeoutId) clearTimeout(timeoutId);
       cleanup();
       setDismissedPgpModal(true, accountKey);
-      setTimeout(() => {
-        window.location.href = '/mailbox/settings#accounts';
-      }, 0);
+      setTimeout(() => navigateInApp('/mailbox/settings#privacy'), 0);
     },
     onClose: () => {
       if (timeoutId) clearTimeout(timeoutId);

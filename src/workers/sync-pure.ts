@@ -196,6 +196,8 @@ export interface CachedBodyLike {
   // signature part, a PGP key): without the mark it was downloaded again on
   // every launch.
   attachmentsResolved?: boolean;
+  // The body of a PGP message, decrypted on this device with a saved key
+  pgpDecrypted?: boolean;
 }
 
 // ── Body records on phones ──────────────────────────────────────────────────
@@ -327,6 +329,7 @@ export interface CachedBodyStatus {
   attachmentsResolved: boolean;
   pgpLocked: boolean;
   rawIsPgp: boolean;
+  pgpDecrypted: boolean;
 }
 
 export function cachedBodyStatus(
@@ -341,6 +344,7 @@ export function cachedBodyStatus(
     attachmentsResolved: record.attachmentsResolved === true,
     pgpLocked: Boolean(record.pgpLocked),
     rawIsPgp: typeof record.raw === 'string' && isPgpContent(record.raw),
+    pgpDecrypted: record.pgpDecrypted === true,
   };
 }
 
