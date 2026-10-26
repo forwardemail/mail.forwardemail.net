@@ -1414,8 +1414,10 @@ if (isTauriDesktop) {
         cleanBody = message?.snippet || message?.textContent || cleanBody || '';
       }
 
+      // prefill.from is the user's own sending address, so the attribution
+      // takes the original sender from quoteFrom instead.
       const quotedHtml = mailboxActions.buildReplyQuotedBody(
-        { from: prefill?.from, date: prefill?.date },
+        { from: prefill?.quoteFrom, date: prefill?.date },
         cleanBody,
       );
       openComposeWindow({

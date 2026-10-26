@@ -1039,13 +1039,25 @@ export const openServerDraft = async (msg) => {
 const formatQuoteAddresses = (msg, field) =>
   displayAddresses(extractAddressList(msg, field)).join(', ');
 
+// The quote header goes into the editor as HTML. Left raw, "Jane <jane@x.com>"
+// lost everything in angle brackets to the parser, and a sender's display name
+// could carry markup into the user's compose.
+const escapeQuoteText = (value) =>
+  String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+
 /**
  * Build quoted body HTML for reply
  */
 export const buildReplyQuotedBody = (msg, originalBody) => {
   const fromName = formatQuoteAddresses(msg, 'from') || 'Unknown';
   const dateStr = formatAttributionDate(msg?.date || msg?.dateMs);
-  const attribution = dateStr ? `On ${dateStr}, ${fromName} wrote:` : `${fromName} wrote:`;
+  const attribution = escapeQuoteText(
+    dateStr ? `On ${dateStr}, ${fromName} wrote:` : `${fromName} wrote:`,
+  );
   const encoded = encodeRawHtml(originalBody);
 
   return `<p><br></p><p><br></p><p class="fe-reply-attribution">${attribution}</p><blockquote data-raw-html="${encoded}" data-raw-variant="reply"></blockquote>`;
@@ -1066,7 +1078,9 @@ export const buildForwardQuotedBody = (msg, originalBody) => {
     `Date: ${dateStr}`,
     `Subject: ${subject}`,
     `To: ${to}`,
-  ].join('<br>');
+  ]
+    .map(escapeQuoteText)
+    .join('<br>');
 
   const encoded = encodeRawHtml(originalBody);
 
@@ -1165,6 +1179,10 @@ export const replyTo = async (msg, options = {}) => {
   composeModalRef.reply?.({
     subject: addReplyPrefix(msg?.subject),
     from: replyFromAddress,
+    // Who wrote the message being answered, for the "On <date>, <sender>
+    // wrote:" line. `from` above is the user's own sending address, and the
+    // desktop compose window used to quote that, crediting the user.
+    quoteFrom: extractAddressList(msg, 'from'),
     to: targets.to,
     cc: targets.cc,
     date: msg?.date || msg?.dateMs,

@@ -365,6 +365,7 @@ import {
   getForwardAttachments,
   forwardMessage,
   openServerDraft,
+  replyTo,
   setComposeModal,
   setToasts,
   stripQuoteCollapseMarkup,
@@ -1173,8 +1174,8 @@ describe('quote headers', () => {
     );
 
     expect(html).not.toContain('[object Object]');
-    expect(html).toContain('From: Alice <alice@example.com>');
-    expect(html).toContain('To: Bob <bob@example.com>, carol@example.com');
+    expect(html).toContain('From: Alice &lt;alice@example.com&gt;');
+    expect(html).toContain('To: Bob &lt;bob@example.com&gt;, carol@example.com');
   });
 
   it('unwraps the {value: [...]} header shape', () => {
@@ -1206,7 +1207,17 @@ describe('quote headers', () => {
     );
 
     expect(html).not.toContain('[object Object]');
-    expect(html).toContain('Alice <alice@example.com> wrote:');
+    expect(html).toContain('Alice &lt;alice@example.com&gt; wrote:');
+  });
+
+  // The header is inserted into the editor as HTML, and the sender picks their
+  // own display name.
+  it('escapes markup in a sender name and subject', () => {
+    const reply = buildReplyQuotedBody({ from: '"<img src=x onerror=alert(1)>" <a@x.com>' }, '');
+    const forward = buildForwardQuotedBody({ from: 'a@x.com', subject: '<b>Hi</b> & bye' }, '');
+
+    expect(reply).not.toContain('<img');
+    expect(forward).toContain('Subject: &lt;b&gt;Hi&lt;/b&gt; &amp; bye');
   });
 });
 
@@ -1276,6 +1287,54 @@ describe('getForwardAttachments', () => {
     hoisted.remoteRequest.mockRejectedValueOnce(new Error('offline'));
 
     expect(await getForwardAttachments(msg)).toEqual([]);
+  });
+});
+
+// The desktop compose window can't take updateReplyBody, so it builds the quote
+// from the prefill alone. It used to quote prefill.from, which is the user's own
+// sending address, and every reply read "On <date>, <me> wrote:".
+describe('replyTo attribution', () => {
+  const composeRef = { forward: vi.fn(), reply: vi.fn(), open: vi.fn(), updateReplyBody: vi.fn() };
+
+  beforeEach(() => {
+    composeRef.reply.mockClear();
+    composeRef.updateReplyBody.mockClear();
+    setComposeModal(composeRef);
+    vi.mocked(db.messageBodies.get).mockReset().mockResolvedValue(null);
+  });
+
+  const incoming = {
+    id: 'm1',
+    apiId: 'srv-1',
+    folder: 'INBOX',
+    subject: 'Guest booking',
+    date: '2026-10-20T09:30:00Z',
+    snippet: 'Can you do Tuesday?',
+    nodemailer: {
+      from: { value: [{ name: 'Jane Guest', address: 'jane@guests.example' }] },
+      to: { value: [{ name: '', address: 'user@example.com' }] },
+    },
+  };
+
+  it('hands the original sender to compose separately from the sending address', async () => {
+    await replyTo(incoming);
+
+    const prefill = composeRef.reply.mock.calls[0][0];
+    expect(prefill.from).toBe('user@example.com');
+    const quoted = buildReplyQuotedBody(
+      { from: prefill.quoteFrom, date: prefill.date },
+      '<p>body</p>',
+    );
+    expect(quoted).toContain('Jane Guest &lt;jane@guests.example&gt; wrote:');
+    expect(quoted).not.toContain('user@example.com');
+  });
+
+  it('credits the original sender in the in-page quote too', async () => {
+    await replyTo(incoming);
+
+    const quoted = composeRef.updateReplyBody.mock.calls[0][0];
+    expect(quoted).toContain('jane@guests.example');
+    expect(quoted).not.toContain('user@example.com wrote:');
   });
 });
 
