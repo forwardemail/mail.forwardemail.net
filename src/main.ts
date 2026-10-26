@@ -116,7 +116,7 @@ import {
 import { installRuntimeErrorNotifier } from './utils/runtime-error-notifier';
 import { initPerfObservers } from './utils/perf-logger.ts';
 import { attemptRecovery } from './utils/db-recovery';
-import { parseMailto, mailtoToPrefill } from './utils/mailto';
+import { parseMailto, mailtoToPrefill, shareToPrefill } from './utils/mailto';
 import {
   detectRecoveryBoot,
   markRendererRecovered,
@@ -2966,11 +2966,7 @@ async function bootstrap() {
         // Handle Android share intents → open Compose with shared content
         onShareReceived((data: { subject: string; text: string }) => {
           if (viewModel?.mailboxView?.composeModal?.open) {
-            viewModel.mailboxView.composeModal.open({
-              subject: data.subject,
-              body: data.text,
-              text: data.text,
-            });
+            viewModel.mailboxView.composeModal.open(shareToPrefill(data));
           }
         });
       });

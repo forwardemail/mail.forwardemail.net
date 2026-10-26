@@ -68,9 +68,14 @@ export function sanitizeDownloadFilename(filename: string): string {
   const withoutControlChars = Array.from(String(filename || 'attachment'))
     .map((char) => {
       const code = char.charCodeAt(0);
-      return (code >= 0 && code <= 31) || code === 127 ? '_' : char;
+      return (code >= 0 && code <= 31) || (code >= 127 && code <= 159) ? '_' : char;
     })
-    .join('');
+    .join('')
+    // Bidi overrides, isolates and marks (and other invisible format
+    // characters) reorder or hide what the save dialog and file manager show:
+    // "invoice_\u202Efdp.exe" displays as "invoice_exe.pdf". ZWJ/ZWNJ stay,
+    // as scripts and emoji sequences need them.
+    .replace(/[\u061C\u200B\u200E\u200F\u202A-\u202E\u2060\u2066-\u2069\uFEFF]/g, '');
 
   const sanitized = withoutControlChars
     .replace(/[\\/:*?"<>|]/g, '_')
@@ -233,4 +238,42 @@ export function sanitizeAttachments(list: unknown[]): Attachment[] {
       } as Attachment;
     })
     .filter((a) => a.name);
+}
+
+export interface CachedBodyDisplay {
+  html: string;
+  hasBlockedImages: boolean;
+  trackingPixelCount: number;
+  blockedRemoteImageCount: number;
+}
+
+/**
+ * The HTML to show for a cached body, and its image status.
+ *
+ * The reader's own cache writes store sanitized HTML with the image counts.
+ * The background writers (sync worker, service worker) store the raw body and
+ * no counts, so a row without trackingPixelCount is sanitized again before it
+ * is shown: the raw HTML still has its remote images and tracking pixels.
+ */
+export function cachedBodyForDisplay(
+  cached: { body?: string; trackingPixelCount?: number; blockedRemoteImageCount?: number },
+  sanitize: (html: string) => CachedBodyDisplay,
+): CachedBodyDisplay {
+  if (cached.trackingPixelCount === undefined) {
+    const sanitized = sanitize(cached.body || '');
+    return {
+      html: sanitized.html,
+      hasBlockedImages: sanitized.hasBlockedImages,
+      trackingPixelCount: sanitized.trackingPixelCount,
+      blockedRemoteImageCount: sanitized.blockedRemoteImageCount,
+    };
+  }
+  const trackingPixelCount = cached.trackingPixelCount || 0;
+  const blockedRemoteImageCount = cached.blockedRemoteImageCount || 0;
+  return {
+    html: cached.body || '',
+    hasBlockedImages: blockedRemoteImageCount > 0 || trackingPixelCount > 0,
+    trackingPixelCount,
+    blockedRemoteImageCount,
+  };
 }

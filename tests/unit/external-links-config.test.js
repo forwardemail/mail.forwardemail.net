@@ -29,18 +29,25 @@ describe('external link override configuration', () => {
       (entry) => entry && typeof entry === 'object' && entry.identifier === identifier,
     );
 
-  it('allows openUrl with a chosen program only on Windows, where the override is offered', () => {
-    // every platform: http and https URLs, opened with the system default
+  it('allows openUrl only with the system default program, on every platform', () => {
+    // http and https URLs, opened with the system default
     const opener = findPermission(readCapability('default'), 'opener:allow-open-url');
     expect(opener.allow).toEqual([{ url: 'https://*' }, { url: 'http://*' }]);
 
-    // Windows only: the External Browser Override setting
-    const windows = readCapability('windows-browser-override');
-    expect(windows.platforms).toEqual(['windows']);
-    expect(findPermission(windows, 'opener:allow-open-url').allow).toEqual([
-      { url: 'https://*', app: true },
-      { url: 'http://*', app: true },
-    ]);
+    // No capability lets the webview name the program (`app`): that ran any
+    // executable with the URL as its command line. The Windows browser
+    // override goes through the open_url_in_browser command instead.
+    const dir = path.join(repoRoot, 'src-tauri/capabilities');
+    for (const file of fs.readdirSync(dir).filter((name) => name.endsWith('.json'))) {
+      const capability = readCapability(file.replace(/\.json$/, ''));
+      for (const entry of capability.permissions) {
+        const identifier = typeof entry === 'string' ? entry : entry?.identifier;
+        expect(identifier, file).not.toMatch(/^opener:(?:default|allow-default-urls)$/);
+        if (identifier === 'opener:allow-open-url') {
+          for (const scope of entry.allow || []) expect(scope.app, file).toBeUndefined();
+        }
+      }
+    }
   });
 
   it('only allows writing the temp files that Open Original can open', () => {

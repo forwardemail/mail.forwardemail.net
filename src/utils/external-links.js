@@ -53,6 +53,25 @@ export function isAllowedExternalUrl(url) {
   }
 }
 
+// The browser override runs through a Rust command that accepts only an
+// http(s) URL and a known browser executable. The opener plugin's own
+// `openUrl(url, app)` took any program from the webview, which on Windows
+// meant any script in it could run mshta, powershell or cmd with the URL as
+// the command line.
+const invokeOpenUrlInBrowser = async (url, browser) => {
+  const { invoke } = await import('./tauri-bridge.js');
+  return invoke('open_url_in_browser', { url, browser });
+};
+
+const isHttpUrl = (url) => {
+  try {
+    const { protocol } = new URL(url);
+    return protocol === 'http:' || protocol === 'https:';
+  } catch {
+    return false;
+  }
+};
+
 export async function openExternalUrl(
   url,
   {
@@ -62,6 +81,7 @@ export async function openExternalUrl(
     tauriDesktop = isTauriDesktop,
     userAgent = typeof navigator === 'undefined' ? '' : navigator.userAgent,
     openUrl,
+    openUrlInBrowser = invokeOpenUrlInBrowser,
     windowOpen = globalThis.window?.open?.bind(globalThis.window),
     log = console.warn,
   } = {},
@@ -83,9 +103,9 @@ export async function openExternalUrl(
       ? getExternalBrowserOverride({ account, tauriDesktop, userAgent })
       : normalizeExternalBrowserOverride(browserOverride);
 
-  if (override && supportsExternalBrowserOverride({ tauriDesktop, userAgent })) {
+  if (override && isHttpUrl(url) && supportsExternalBrowserOverride({ tauriDesktop, userAgent })) {
     try {
-      await openUrlImpl(url, override);
+      await openUrlInBrowser(new URL(url).href, override);
       return { mode: 'tauri-override', app: override };
     } catch (error) {
       log?.('[external-links] preferred browser failed, falling back to system default:', error);

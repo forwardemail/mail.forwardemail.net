@@ -52,6 +52,10 @@ export function buildIframeSrcdoc(
   const imgSrc = remoteBlocked ? 'data: blob:' : 'data: https: http:';
   const fontSrc = remoteBlocked ? 'data:' : 'data: https:';
   const scriptSrc = `${origin}${SCRIPT_URL}`;
+  // The document needs exactly one script. A source with a path matches that
+  // file only, where the bare origin let any script the app serves run in the
+  // email document, which on Tauri is same-origin with the app.
+  const cspScriptSrc = origin === "'self'" ? origin : scriptSrc;
   const content = plainText
     ? `<pre class="fe-email-plaintext">${linkifyEscapedText(escapeForPreText(emailHtml))}</pre>`
     : emailHtml;
@@ -67,7 +71,7 @@ export function buildIframeSrcdoc(
   <meta charset="utf-8">
   <meta name="color-scheme" content="${isDarkMode ? 'dark' : 'light'}">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src ${imgSrc}; font-src ${fontSrc}; script-src ${origin}; form-action 'none'; base-uri 'none';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src ${imgSrc}; font-src ${fontSrc}; script-src ${cspScriptSrc}; form-action 'none'; base-uri 'none';">
   <style>
     ${getResetStyles()}
     ${getAppearanceStyles()}

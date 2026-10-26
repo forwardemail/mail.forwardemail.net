@@ -50,13 +50,37 @@ export function makeBoundary(prefix = 'fe'): string {
 }
 
 /**
+ * Collapse CR, LF and every other C0/C1 control into a single space.
+ *
+ * Header values come from the composer, drafts and mailto: links. A raw CR or
+ * LF would end the current header and let the value add its own (a hidden
+ * Bcc, a second Content-Type, or a blank line that ends the header block).
+ */
+export function stripHeaderControls(value: unknown): string {
+  // eslint-disable-next-line no-control-regex
+  return String(value ?? '').replace(/[\u0000-\u001F\u007F-\u009F]+/g, ' ');
+}
+
+/** The declared type on one line when it starts with a plain type/subtype, else octet-stream. */
+function safeContentType(value: unknown): string {
+  const clean = stripHeaderControls(value).trim();
+  const declared = clean.split(/[;,\s]/)[0];
+  return /^[\w.+-]+\/[\w.+-]+$/.test(declared) ? clean : 'application/octet-stream';
+}
+
+/** A quoted-string parameter value: no controls, quotes or backslashes. */
+function safeParamValue(value: string): string {
+  return stripHeaderControls(value).replace(/["\\]/g, '').trim();
+}
+
+/**
  * Encode a header value per RFC 2047 when it is not plain ASCII.
  *
  * Without this, an accented name or an emoji subject would be emitted as raw
  * UTF-8 bytes in a header, which many receivers render as mojibake.
  */
 export function encodeHeaderValue(value: string): string {
-  const str = String(value ?? '');
+  const str = stripHeaderControls(value);
   if (!str) return '';
   if (/^[\x20-\x7E]*$/.test(str)) return str;
   const bytes = new TextEncoder().encode(str);
@@ -69,8 +93,9 @@ export function encodeHeaderValue(value: string): string {
 export function encodeAddressList(addresses: string[] | undefined): string {
   return (addresses || [])
     .map((entry) => {
-      const match = String(entry).match(/^\s*(.*?)\s*<([^>]+)>\s*$/);
-      if (!match) return String(entry).trim();
+      const clean = stripHeaderControls(entry);
+      const match = clean.match(/^\s*(.*?)\s*<([^>]+)>\s*$/);
+      if (!match) return clean.trim();
       const [, name, addr] = match;
       if (!name) return addr;
       const stripped = name.replace(/^"|"$/g, '').replace(/\\"/g, '"');
@@ -150,15 +175,16 @@ export function buildInnerMime(parts: MessageParts): string {
   chunks.push(bodySection());
 
   for (const att of attachments) {
-    const filename = att.filename || att.name || 'attachment';
-    const type = att.contentType || 'application/octet-stream';
+    const filename = safeParamValue(att.filename || att.name || '') || 'attachment';
+    const type = safeContentType(att.contentType);
+    const cid = stripHeaderControls(att.cid || '').replace(/[<>\s]/g, '');
     chunks.push(`--${mixed}`);
     chunks.push(
       [
-        `Content-Type: ${type}; name="${filename.replace(/"/g, '')}"`,
+        `Content-Type: ${type}; name="${filename}"`,
         'Content-Transfer-Encoding: base64',
-        att.cid ? `Content-ID: <${att.cid}>` : null,
-        `Content-Disposition: ${att.cid ? 'inline' : 'attachment'}; filename="${filename.replace(/"/g, '')}"`,
+        cid ? `Content-ID: <${cid}>` : null,
+        `Content-Disposition: ${cid ? 'inline' : 'attachment'}; filename="${filename}"`,
         '',
         wrapBase64(att.content || ''),
       ]
@@ -191,9 +217,12 @@ export function buildPgpMimeMessage(armored: string, headers: OuterHeaders): str
   if (headers.cc?.length) lines.push(`Cc: ${encodeAddressList(headers.cc)}`);
   if (headers.replyTo) lines.push(`Reply-To: ${encodeAddressList([headers.replyTo])}`);
   lines.push(`Subject: ${encodeHeaderValue(headers.subject || '')}`);
-  if (headers.messageId) lines.push(`Message-ID: ${headers.messageId}`);
-  if (headers.inReplyTo) lines.push(`In-Reply-To: ${headers.inReplyTo}`);
-  if (headers.references) lines.push(`References: ${headers.references}`);
+  const messageId = stripHeaderControls(headers.messageId).trim();
+  const inReplyTo = stripHeaderControls(headers.inReplyTo).trim();
+  const references = stripHeaderControls(headers.references).trim();
+  if (messageId) lines.push(`Message-ID: ${messageId}`);
+  if (inReplyTo) lines.push(`In-Reply-To: ${inReplyTo}`);
+  if (references) lines.push(`References: ${references}`);
 
   lines.push(
     `Content-Type: multipart/encrypted; protocol="application/pgp-encrypted"; boundary="${boundary}"`,

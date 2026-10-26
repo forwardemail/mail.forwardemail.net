@@ -23,7 +23,7 @@
  *     timing and override merging.
  */
 
-import { rrulestr } from 'rrule';
+import { rrulestr, type RRule, type RRuleSet } from 'rrule';
 
 const debug = (...args: unknown[]) => {
   try {
@@ -211,6 +211,107 @@ function parseExdates(lines: string[]): Date[] {
   return out;
 }
 
+// ── Expansion limits ───────────────────────────────────────────────────────
+
+/**
+ * Most instances one series yields for one window. A daily event over the
+ * calendar's 455-day window is 455 and an hourly one 10 920; an attacker
+ * invite with FREQ=SECONDLY was 39 million, built as objects on the main
+ * thread.
+ */
+export const MAX_INSTANCES_PER_SERIES = 12000;
+
+/** Most instances all series together add for one window. */
+export const MAX_TOTAL_INSTANCES = 100000;
+
+/**
+ * Most candidate dates rrule.js may step through for one series. It always
+ * iterates from DTSTART, including the dates before the window, so a dense
+ * rule that started long ago costs that much even when the window holds few.
+ * An hourly rule over ten years is under 90 000.
+ */
+export const MAX_RRULE_CANDIDATES = 200000;
+
+const DAY_MS = 86400000;
+
+interface RuleOptionsLike {
+  freq: number;
+  interval?: number;
+  dtstart?: Date | null;
+  until?: Date | null;
+  count?: number | null;
+  byhour?: number[] | null;
+  byminute?: number[] | null;
+  bysecond?: number[] | null;
+  bymonth?: number[] | null;
+  bymonthday?: number[] | null;
+  bynmonthday?: number[] | null;
+  byyearday?: number[] | null;
+  byweekno?: number[] | null;
+  byweekday?: unknown[] | null;
+  bynweekday?: unknown[] | null;
+  bysetpos?: number[] | null;
+  byeaster?: number | null;
+}
+
+// day filters can make a rule's dates rare, so the walk is not ended by COUNT
+const DAY_FILTERS = [
+  'bymonth',
+  'bymonthday',
+  'bynmonthday',
+  'byyearday',
+  'byweekno',
+  'byweekday',
+  'bynweekday',
+  'bysetpos',
+] as const;
+
+/**
+ * Upper bound on the dates rrule.js steps through for one rule from DTSTART up
+ * to `windowEnd` (or UNTIL). SECONDLY, MINUTELY and HOURLY step one interval at
+ * a time; coarser rules yield at most one date per BYHOUR × BYMINUTE ×
+ * BYSECOND slot per day.
+ */
+export function estimateRuleCandidates(options: RuleOptionsLike, windowEnd: Date): number {
+  const start = options.dtstart?.getTime();
+  if (start === undefined || !Number.isFinite(start)) return Infinity;
+  let end = windowEnd.getTime();
+  const until = options.until?.getTime();
+  if (until !== undefined && Number.isFinite(until)) end = Math.min(end, until);
+  const spanMs = Math.max(0, end - start);
+  const interval = Math.max(1, Number(options.interval) || 1);
+  const len = (list?: number[] | null) => (Array.isArray(list) && list.length) || 1;
+  // An HOURLY or finer rule without day filters gives at least one date at
+  // every step, so COUNT ends the walk (FREQ=MINUTELY;COUNT=5 from years ago).
+  const count = Number(options.count);
+  const countBound =
+    options.freq >= 4 &&
+    count > 0 &&
+    (options.byeaster === null || options.byeaster === undefined) &&
+    DAY_FILTERS.every((key) => {
+      const value = options[key];
+      return !Array.isArray(value) || value.length === 0;
+    })
+      ? count
+      : Infinity;
+  // rrule.js Frequency: YEARLY 0 … DAILY 3, HOURLY 4, MINUTELY 5, SECONDLY 6
+  switch (options.freq) {
+    case 6:
+      return Math.min(countBound, spanMs / 1000 / interval + 1);
+    case 5:
+      return Math.min(countBound, (spanMs / 60000 / interval + 1) * len(options.bysecond));
+    case 4:
+      return Math.min(
+        countBound,
+        (spanMs / 3600000 / interval + 1) * len(options.byminute) * len(options.bysecond),
+      );
+    default:
+      return (
+        (spanMs / DAY_MS + 1) * len(options.byhour) * len(options.byminute) * len(options.bysecond)
+      );
+  }
+}
+
 // ── Public API ─────────────────────────────────────────────────────────────
 
 /**
@@ -290,10 +391,27 @@ export function expandRecurringMaster(
     return [];
   }
 
+  // A rule too dense to step through (FREQ=SECONDLY from an invite, or a
+  // fine rule with a DTSTART decades back) is not expanded: the master is
+  // shown as a single event instead of hanging or crashing the calendar.
+  // (an RRuleSet, as `forceset` is set above)
+  const candidates = (rruleSet as RRuleSet)
+    .rrules()
+    .reduce((sum: number, rule: RRule) => sum + estimateRuleCandidates(rule.options, windowEnd), 0);
+  if (!(candidates <= MAX_RRULE_CANDIDATES)) {
+    debug(`not expanding: rule would step through ~${Math.round(candidates)} dates`);
+    return [];
+  }
+
   // Window expansion — never run the rule unbounded.
   let occurrences: Date[] = [];
   try {
-    occurrences = rruleSet.between(windowStart, windowEnd, true);
+    occurrences = rruleSet.between(
+      windowStart,
+      windowEnd,
+      true,
+      (_date, index) => index < MAX_INSTANCES_PER_SERIES,
+    );
   } catch (err) {
     debug('rrulestr.between failed', err);
     return [];
@@ -383,12 +501,16 @@ export function expandRecurringEvents<T extends Record<string, unknown>>(
       continue;
     }
     const ical = getEventIcal(ev);
-    if (!ical) {
-      // No raw ICS available — pass the master through as a single event.
+    if (!ical || expandedCount >= MAX_TOTAL_INSTANCES) {
+      // No raw ICS available (or the window already holds as many instances
+      // as it can) — pass the master through as a single event.
       out.push(ev);
       continue;
     }
-    const instances = expandRecurringMaster(ical, windowStart, windowEnd);
+    const instances = expandRecurringMaster(ical, windowStart, windowEnd).slice(
+      0,
+      MAX_TOTAL_INSTANCES - expandedCount,
+    );
     if (!instances.length) {
       out.push(ev);
       continue;

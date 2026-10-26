@@ -68,22 +68,23 @@ CSP enforcement is not uniform across the three runtimes. Changes to `script-src
 
 **3. Sandboxed srcdoc iframes inherit the parent's CSP.** They add their own meta CSP on top, and the effective policy is the intersection (most restrictive wins). So point 2 propagates into every email iframe. An inline script that works on web will fail inside the same iframe under Tauri dev.
 
-**4. The email iframe uses an external script, not inline.** `public/email-iframe.js` is loaded via `<script src="${parent-origin}/email-iframe.js">` (see `src/utils/iframe-srcdoc.ts`). The srcdoc CSP is `script-src ${parent-origin}`. This side-steps the nonce-kills-unsafe-inline interaction because origin matches are unaffected by nonce presence. The previous hash-based approach had a race (the async SHA-256 computation wasn't always ready by first render) and would have been defeated by any future change to the script text. Do not revert to inline without also removing Tauri's nonce injection (which is not optional because it's part of the IPC bootstrap).
+**4. The email iframe uses an external script, not inline.** `public/email-iframe.js` is loaded via `<script src="${parent-origin}/email-iframe.js">` (see `src/utils/iframe-srcdoc.ts`). The srcdoc CSP is `script-src ${parent-origin}/email-iframe.js`, which allows that one file and no other script the app serves. This side-steps the nonce-kills-unsafe-inline interaction because source-expression matches are unaffected by nonce presence. The previous hash-based approach had a race (the async SHA-256 computation wasn't always ready by first render) and would have been defeated by any future change to the script text. Do not revert to inline without also removing Tauri's nonce injection (which is not optional because it's part of the IPC bootstrap).
 
 **5. When a link inside the email iframe appears to silently fail,** check the _iframe's_ devtools frame, not the top-level page. Two errors typically appear together: the srcdoc script is blocked (script-src), then the iframe's `<a>` navigates to the link target, which is blocked by the parent's `frame-src` because it's an external origin. Fixing the first also fixes the second: the external script registers the capture-phase click interceptor that postMessages the URL up to `handleIframeLinkClick` in `Mailbox.svelte`, which calls `openUrl()` instead of navigating.
 
 **6. When adding a new external origin (script, frame, connect),** update _both_ `index.html` and `src-tauri/tauri.conf.json`. It's easy to miss one; the web build will silently work while Tauri rejects, or vice versa.
 
-## IPC Isolation Pattern
+## IPC Boundary
 
-The application uses Tauri's **isolation pattern** (`src-tauri/isolation/index.html`), which interposes a sandboxed iframe between the main webview and the Tauri IPC bridge. The isolation script performs the following checks on every IPC message:
+The application runs Tauri's default **brownfield** pattern. The isolation pattern is **not** enabled: `tauri.conf.json` sets no `app.security.pattern`, and the `tauri` crate is built without the `isolation` feature, so `src-tauri/isolation/index.html` is not loaded. (Its hook only checks the payload size and passes every command through; it never enforced a command allowlist.)
 
-1. Validates that the message has a `cmd` field of type string.
-2. Validates that the command name matches a known allowlist of commands.
-3. Rejects messages with `__TAURI_INTERNALS__` or `__TAURI_INVOKE_KEY__` fields that could be used for privilege escalation.
-4. Passes validated messages through to the Tauri core.
+What limits a script running in the webview is therefore:
 
-This prevents malicious or compromised frontend code from invoking arbitrary Tauri commands.
+1. The capabilities in `src-tauri/capabilities/`, which Tauri enforces in Rust for every plugin command.
+2. Input validation in each app command (`src-tauri/src/*.rs`), which treats the webview as untrusted.
+3. The `ALLOWED_COMMANDS` set in `src/utils/tauri-bridge.js`. This only covers calls made through that module; script that reaches `window.__TAURI_INTERNALS__` directly is not filtered by it.
+
+The email iframe is same-origin with the app on Tauri (`allow-scripts allow-same-origin`), so the HTML sanitizer and the srcdoc CSP (which allows only `/email-iframe.js`) are the boundary for email content. There is no second IPC boundary behind them.
 
 ## Capability Least-Privilege
 

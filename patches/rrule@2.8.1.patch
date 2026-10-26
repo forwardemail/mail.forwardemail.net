@@ -1,0 +1,65 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+deleted file mode 100644
+index bfaae2edc85d2ac819c975cc8f72a98678a6ab21..0000000000000000000000000000000000000000
+diff --git a/dist/es5/rrule.js b/dist/es5/rrule.js
+index b671aaad592beda14cd0a778fe25b412a0effd89..8792ddaaae2429215efe2dc25f443903d94a32d3 100644
+--- a/dist/es5/rrule.js
++++ b/dist/es5/rrule.js
+@@ -2983,6 +2983,16 @@ function iter(iterResult, options) {
+         return emitResult(iterResult);
+     }
+     var counterDate = DateTime.fromDate(dtstart);
++    // No date after `until` (or after the end of a between()/before() range)
++    // is kept, but the walk only looked at that when a date was produced: a
++    // rule that never produces one (FREQ=DAILY;BYMONTH=2;BYMONTHDAY=30) was
++    // walked to the year 9999, seconds per event. Stop once the walk is a
++    // whole year past both (the margin covers periods that start before the
++    // counter, as a year or a week does, and time zone offsets).
++    var stopAt = until;
++    if (iterResult.maxDate && (!stopAt || iterResult.maxDate < stopAt))
++        stopAt = iterResult.maxDate;
++    var stopYear = stopAt ? stopAt.getUTCFullYear() + 1 : null;
+     var ii = new iterinfo(options);
+     ii.rebuild(counterDate.year, counterDate.month);
+     var timeset = makeTimeset(ii, counterDate, options);
+@@ -3046,6 +3056,9 @@ function iter(iterResult, options) {
+         if (counterDate.year > MAXYEAR) {
+             return emitResult(iterResult);
+         }
++        if (stopYear !== null && counterDate.year > stopYear) {
++            return emitResult(iterResult);
++        }
+         if (!freqIsDailyOrGreater(freq)) {
+             timeset = ii.gettimeset(freq)(counterDate.hour, counterDate.minute, counterDate.second, 0);
+         }
+diff --git a/dist/esm/iter/index.js b/dist/esm/iter/index.js
+index 2dbadcf4a4810ad5882162ad49815b1dffae61fa..a4617efbe813faffd533bcf11ee9ad32909e56f2 100644
+--- a/dist/esm/iter/index.js
++++ b/dist/esm/iter/index.js
+@@ -14,6 +14,16 @@ export function iter(iterResult, options) {
+         return emitResult(iterResult);
+     }
+     var counterDate = DateTime.fromDate(dtstart);
++    // No date after `until` (or after the end of a between()/before() range)
++    // is kept, but the walk only looked at that when a date was produced: a
++    // rule that never produces one (FREQ=DAILY;BYMONTH=2;BYMONTHDAY=30) was
++    // walked to the year 9999, seconds per event. Stop once the walk is a
++    // whole year past both (the margin covers periods that start before the
++    // counter, as a year or a week does, and time zone offsets).
++    var stopAt = until;
++    if (iterResult.maxDate && (!stopAt || iterResult.maxDate < stopAt))
++        stopAt = iterResult.maxDate;
++    var stopYear = stopAt ? stopAt.getUTCFullYear() + 1 : null;
+     var ii = new Iterinfo(options);
+     ii.rebuild(counterDate.year, counterDate.month);
+     var timeset = makeTimeset(ii, counterDate, options);
+@@ -77,6 +87,9 @@ export function iter(iterResult, options) {
+         if (counterDate.year > MAXYEAR) {
+             return emitResult(iterResult);
+         }
++        if (stopYear !== null && counterDate.year > stopYear) {
++            return emitResult(iterResult);
++        }
+         if (!freqIsDailyOrGreater(freq)) {
+             timeset = ii.gettimeset(freq)(counterDate.hour, counterDate.minute, counterDate.second, 0);
+         }

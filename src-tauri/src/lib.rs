@@ -2,6 +2,8 @@ use serde::Serialize;
 use std::sync::Mutex;
 use tauri::{Emitter, Listener, Manager};
 
+#[cfg(desktop)]
+mod browser_override;
 mod diagnostics;
 mod redaction;
 mod renderer_watchdog;
@@ -355,6 +357,28 @@ fn toggle_window_visibility(app: tauri::AppHandle) -> Result<(), String> {
             .map_err(|e: tauri::Error| e.to_string())?;
     }
     Ok(())
+}
+
+/// Opens an http(s) URL in the browser chosen under Settings > External
+/// Browser Override (Windows only). See browser_override.rs: the URL and the
+/// program are both validated here, as the webview is not trusted to choose
+/// what runs.
+#[cfg(desktop)]
+#[tauri::command]
+fn open_url_in_browser(app: tauri::AppHandle, url: String, browser: String) -> Result<(), String> {
+    let url = browser_override::validate_url(&url)?;
+    let browser = browser_override::validate_browser(&browser)?;
+    #[cfg(target_os = "windows")]
+    {
+        app.opener()
+            .open_url(browser_override::browser_argument(&url), Some(browser))
+            .map_err(|e| e.to_string())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (app, url, browser);
+        Err("A browser override is only supported on Windows".to_string())
+    }
 }
 
 /// Disables the native genie close/miniaturize animation on the named window.
@@ -1257,6 +1281,8 @@ pub fn run() {
             diagnostics::clear_logs,
             #[cfg(desktop)]
             toggle_window_visibility,
+            #[cfg(desktop)]
+            open_url_in_browser,
             #[cfg(target_os = "macos")]
             macos_disable_close_animation,
             #[cfg(desktop)]
@@ -1345,6 +1371,15 @@ pub fn run() {
 
                 // Reload the main webview if its content process stops
                 // answering. See renderer_watchdog.rs for the why.
+                //
+                // Not in e2e builds: a reload in the middle of a WebDriver
+                // session leaves every later command of that session timing
+                // out. On the software-GL Linux runner a page that was only
+                // slow for twenty seconds (a cold start, the demo seed) was
+                // reloaded under a test, and the spec, its retry and every
+                // hook after it then failed for minutes. The tests have their
+                // own timeouts for a page that truly stops.
+                #[cfg(not(feature = "webdriver"))]
                 renderer_watchdog::start(app.handle().clone());
 
                 // Register global shortcut: Cmd+Shift+M (macOS) / Ctrl+Shift+M (others)

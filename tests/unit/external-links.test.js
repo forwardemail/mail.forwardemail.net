@@ -106,37 +106,63 @@ describe('external-links', () => {
     mockIsTauriDesktop = true;
     getEffectiveSettingValueMock.mockReturnValue('firefox');
     const openUrl = vi.fn().mockResolvedValue(undefined);
+    const openUrlInBrowser = vi.fn().mockResolvedValue(undefined);
 
     const result = await openExternalUrl('https://forwardemail.net/docs', {
       account: 'demo@example.com',
       openUrl,
+      openUrlInBrowser,
       userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
     });
 
-    expect(openUrl).toHaveBeenCalledTimes(1);
-    expect(openUrl).toHaveBeenCalledWith('https://forwardemail.net/docs', 'firefox');
+    // (the validated Rust command, never the opener's openUrl(url, app))
+    expect(openUrl).not.toHaveBeenCalled();
+    expect(openUrlInBrowser).toHaveBeenCalledTimes(1);
+    expect(openUrlInBrowser).toHaveBeenCalledWith('https://forwardemail.net/docs', 'firefox');
     expect(result).toEqual({ mode: 'tauri-override', app: 'firefox' });
+  });
+
+  it('passes the browser override the canonical URL and never a non-http one', async () => {
+    mockIsTauri = true;
+    mockIsTauriDesktop = true;
+    getEffectiveSettingValueMock.mockReturnValue('firefox');
+    const openUrl = vi.fn().mockResolvedValue(undefined);
+    const openUrlInBrowser = vi.fn().mockResolvedValue(undefined);
+    const options = {
+      account: 'demo@example.com',
+      openUrl,
+      openUrlInBrowser,
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+    };
+
+    await openExternalUrl('https://Example.com/a b"c', options);
+    expect(openUrlInBrowser).toHaveBeenCalledWith('https://example.com/a%20b%22c', 'firefox');
+
+    const mail = await openExternalUrl('mailto:a@example.com', options);
+    expect(openUrlInBrowser).toHaveBeenCalledTimes(1);
+    expect(openUrl).toHaveBeenCalledWith('mailto:a@example.com');
+    expect(mail).toEqual({ mode: 'tauri-default' });
   });
 
   it('falls back to the system default browser if the configured override fails', async () => {
     mockIsTauri = true;
     mockIsTauriDesktop = true;
     getEffectiveSettingValueMock.mockReturnValue('firefox');
-    const openUrl = vi
-      .fn()
-      .mockRejectedValueOnce(new Error('browser missing'))
-      .mockResolvedValueOnce(undefined);
+    const openUrl = vi.fn().mockResolvedValue(undefined);
+    const openUrlInBrowser = vi.fn().mockRejectedValueOnce(new Error('browser missing'));
     const log = vi.fn();
 
     const result = await openExternalUrl('https://forwardemail.net/docs', {
       account: 'demo@example.com',
       openUrl,
+      openUrlInBrowser,
       log,
       userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
     });
 
-    expect(openUrl).toHaveBeenNthCalledWith(1, 'https://forwardemail.net/docs', 'firefox');
-    expect(openUrl).toHaveBeenNthCalledWith(2, 'https://forwardemail.net/docs');
+    expect(openUrlInBrowser).toHaveBeenCalledWith('https://forwardemail.net/docs', 'firefox');
+    expect(openUrl).toHaveBeenCalledTimes(1);
+    expect(openUrl).toHaveBeenCalledWith('https://forwardemail.net/docs');
     expect(log).toHaveBeenCalledTimes(1);
     expect(result).toEqual({ mode: 'tauri-default' });
   });

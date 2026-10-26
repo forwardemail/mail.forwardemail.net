@@ -1,0 +1,60 @@
+diff --git a/dist/index.cjs b/dist/index.cjs
+index 6a7edc70205b79298aede196940be73562ee25f2..58ace2b5e4301b242fc105304d6cb16d1dc95ac4 100644
+--- a/dist/index.cjs
++++ b/dist/index.cjs
+@@ -316,6 +316,10 @@ function mergeAttributes(...objects) {
+         .reduce((items, item) => {
+         const mergedAttributes = { ...items };
+         Object.entries(item).forEach(([key, value]) => {
++            // an own "__proto__" key (e.g. from JSON) would replace the prototype
++            if (key === '__proto__') {
++                return;
++            }
+             const exists = mergedAttributes[key];
+             if (!exists) {
+                 mergedAttributes[key] = value;
+diff --git a/dist/index.js b/dist/index.js
+index 8efbf7f4d2a2fe1693b148e7b1ccc6ca228496f2..f6c9d42329eb9e9ed3866fe0c6b7cb1506445b85 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -314,6 +314,10 @@ function mergeAttributes(...objects) {
+         .reduce((items, item) => {
+         const mergedAttributes = { ...items };
+         Object.entries(item).forEach(([key, value]) => {
++            // an own "__proto__" key (e.g. from JSON) would replace the prototype
++            if (key === '__proto__') {
++                return;
++            }
+             const exists = mergedAttributes[key];
+             if (!exists) {
+                 mergedAttributes[key] = value;
+diff --git a/dist/index.umd.js b/dist/index.umd.js
+index 404ccfcd0e75f2b786d6de3c968f104e31f602bb..9bee757c794df0828a1195f23560c080521ace77 100644
+--- a/dist/index.umd.js
++++ b/dist/index.umd.js
+@@ -312,6 +312,10 @@
+           .reduce((items, item) => {
+           const mergedAttributes = { ...items };
+           Object.entries(item).forEach(([key, value]) => {
++              // an own "__proto__" key (e.g. from JSON) would replace the prototype
++              if (key === '__proto__') {
++                  return;
++              }
+               const exists = mergedAttributes[key];
+               if (!exists) {
+                   mergedAttributes[key] = value;
+diff --git a/src/utilities/mergeAttributes.ts b/src/utilities/mergeAttributes.ts
+index b98dc510391199e8c06c25ae945f2b350913e41a..31040637a2270a2e4e39634408878f2277b64c9d 100644
+--- a/src/utilities/mergeAttributes.ts
++++ b/src/utilities/mergeAttributes.ts
+@@ -5,6 +5,10 @@ export function mergeAttributes(...objects: Record<string, any>[]): Record<strin
+       const mergedAttributes = { ...items }
+ 
+       Object.entries(item).forEach(([key, value]) => {
++        // an own "__proto__" key (e.g. from JSON) would replace the prototype
++        if (key === '__proto__') {
++            return;
++        }
+         const exists = mergedAttributes[key]
+ 
+         if (!exists) {

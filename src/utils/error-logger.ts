@@ -30,6 +30,33 @@ function describeValue(value: unknown): string {
   return typeof value;
 }
 
+// Keys of a logged object whose values are left out, matched by their words
+// (camelCase, snake_case or kebab-case), so keyCode or author stay
+const SECRET_WORDS = new Set([
+  'auth',
+  'authorization',
+  'cookie',
+  'cookies',
+  'credential',
+  'credentials',
+  'pass',
+  'passphrase',
+  'passwd',
+  'password',
+  'pwd',
+  'secret',
+  'token',
+]);
+
+function isSecretKey(key: string): boolean {
+  const words = key
+    .replace(/([a-z\d])([A-Z])/g, '$1 $2')
+    .toLowerCase()
+    .split(/[^a-z\d]+/);
+  if (words.some((word) => SECRET_WORDS.has(word))) return true;
+  return /apikey|privatekey|accesskey|secretkey/.test(words.join(''));
+}
+
 /**
  * Text for one console.error argument. String() turns an Error into its
  * message without the stack, and any other object into "[object Event]" and
@@ -72,7 +99,9 @@ export function formatConsoleArg(arg: unknown): string {
       const parts: string[] = [];
       let length = 0;
       for (const key of Object.keys(arg).slice(0, 20)) {
-        const value = (arg as Record<string, unknown>)[key];
+        // (redact() looks for "password=" and the like, which JSON never
+        // has: "password":"…" passed it as it was)
+        const value = isSecretKey(key) ? '[REDACTED]' : (arg as Record<string, unknown>)[key];
         parts.push(`${JSON.stringify(key)}:${describeValue(value)}`);
         length += parts[parts.length - 1].length;
         if (length > MAX_ARG_LENGTH) break;

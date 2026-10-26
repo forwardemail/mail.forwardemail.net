@@ -38,6 +38,7 @@ import {
   getPgpDismissKey,
   composeAbortSignals,
   sanitizeAttachments,
+  cachedBodyForDisplay,
 } from './mail-service-helpers';
 
 export interface MessageDetailCallbacks {
@@ -129,7 +130,8 @@ function triggerDownload(href: string, filename: string): void {
   }
   const a = document.createElement('a');
   a.href = href;
-  a.download = filename;
+  // (the name comes from the email: see sanitizeDownloadFilename)
+  a.download = sanitizeDownloadFilename(filename);
   a.style.display = 'none';
   document.body.appendChild(a);
   a.click();
@@ -167,7 +169,7 @@ function triggerDownloadBytes(bytes: Uint8Array, filename: string, _contentType:
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = filename;
+    a.download = sanitizeDownloadFilename(filename);
     a.style.display = 'none';
     document.body.appendChild(a);
     a.click();
@@ -800,14 +802,14 @@ async function handleCachedPgpRaw(
         onPgpStatus?.({ locked: false, encrypted: true });
 
         debugLog('[PGP] Message already decrypted by background task');
-        const hydrated = applyInlineAttachments(freshCache.body, freshCache.attachments || []);
+        // (a row the sync worker wrote holds the body as it came)
+        const display = cachedBodyForDisplay(freshCache, sanitizeHtml);
+        const hydrated = applyInlineAttachments(display.html, freshCache.attachments || []);
         onBody?.(`<div class="fe-message-canvas">${hydrated}</div>`);
         onImageStatus?.({
-          hasBlockedImages:
-            (freshCache.blockedRemoteImageCount || 0) > 0 ||
-            (freshCache.trackingPixelCount || 0) > 0,
-          trackingPixelCount: freshCache.trackingPixelCount || 0,
-          blockedRemoteImageCount: freshCache.blockedRemoteImageCount || 0,
+          hasBlockedImages: display.hasBlockedImages,
+          trackingPixelCount: display.trackingPixelCount,
+          blockedRemoteImageCount: display.blockedRemoteImageCount,
         });
         onAttachments?.(sanitizeAttachments(freshCache.attachments || []));
         onMeta?.(freshCache.meta || meta);
@@ -1077,18 +1079,14 @@ export const mailService = {
             .equals([account, messageId])
             .first()) as CachedBody | undefined;
           if (freshCached?.body && !isPgpEncrypted(freshCached.body)) {
-            const hydrated = applyInlineAttachments(
-              freshCached.body,
-              freshCached.attachments || [],
-            );
+            const display = cachedBodyForDisplay(freshCached, sanitizeHtml);
+            const hydrated = applyInlineAttachments(display.html, freshCached.attachments || []);
 
             onBody?.(`<div class="fe-message-canvas">${hydrated}</div>`);
             onImageStatus?.({
-              hasBlockedImages:
-                (freshCached.blockedRemoteImageCount || 0) > 0 ||
-                (freshCached.trackingPixelCount || 0) > 0,
-              trackingPixelCount: freshCached.trackingPixelCount || 0,
-              blockedRemoteImageCount: freshCached.blockedRemoteImageCount || 0,
+              hasBlockedImages: display.hasBlockedImages,
+              trackingPixelCount: display.trackingPixelCount,
+              blockedRemoteImageCount: display.blockedRemoteImageCount,
             });
             onAttachments?.(sanitizeAttachments(freshCached.attachments || []));
             onMeta?.(freshCached.meta);
@@ -1494,14 +1492,14 @@ export const mailService = {
           .equals([account, messageId])
           .first()) as CachedBody | undefined;
         if (cached?.body && !isPgpEncrypted(cached.body)) {
-          const hydrated = applyInlineAttachments(cached.body, cached.attachments || []);
+          const display = cachedBodyForDisplay(cached, sanitizeHtml);
+          const hydrated = applyInlineAttachments(display.html, cached.attachments || []);
 
           onBody?.(`<div class="fe-message-canvas">${hydrated}</div>`);
           onImageStatus?.({
-            hasBlockedImages:
-              (cached.blockedRemoteImageCount || 0) > 0 || (cached.trackingPixelCount || 0) > 0,
-            trackingPixelCount: cached.trackingPixelCount || 0,
-            blockedRemoteImageCount: cached.blockedRemoteImageCount || 0,
+            hasBlockedImages: display.hasBlockedImages,
+            trackingPixelCount: display.trackingPixelCount,
+            blockedRemoteImageCount: display.blockedRemoteImageCount,
           });
           onAttachments?.(sanitizeAttachments(cached.attachments || []));
           tracer.stage('cache_fallback');

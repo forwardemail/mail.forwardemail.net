@@ -417,13 +417,41 @@ function randomNotificationId() {
   return 1 + Math.floor(Math.random() * 0x7ffffffe);
 }
 
+/**
+ * Escape text for a freedesktop notification body.
+ *
+ * Linux notification servers that advertise "body-markup" (GNOME, KDE, dunst,
+ * mako, …) parse the body as markup, so a subject such as
+ * `<a href="https://phish.example">…</a>` became a clickable link and a stray
+ * "&" broke the text. The summary is plain text in the spec (the servers
+ * escape it themselves), so only the body is escaped.
+ */
+export function escapeNotificationMarkup(text) {
+  return String(text ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+// (read at call time from the global the OS plugin injects, like
+// platform.js does)
+function isLinuxDesktop() {
+  return (
+    typeof window !== 'undefined' && window.__TAURI_OS_PLUGIN_INTERNALS__?.platform === 'linux'
+  );
+}
+
 async function _notifyTauri({ title, body, channelId, data, number, tag }) {
   const mod = await ensureTauriNotification();
   if (!mod) return false;
   try {
     const granted = await mod.isPermissionGranted();
     if (!granted) return false;
-    const payload = { title, body: body || '', actionTypeId: 'default-mail' };
+    const payload = {
+      title,
+      body: isLinuxDesktop() ? escapeNotificationMarkup(body || '') : body || '',
+      actionTypeId: 'default-mail',
+    };
     // Every notification gets an id the app chose, so a tap that reports only
     // the id (iOS) can be traced back to its target.
     payload.id =

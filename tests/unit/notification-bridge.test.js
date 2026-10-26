@@ -264,3 +264,32 @@ describe('notification-bridge click routing', () => {
     expect(switched).toEqual(['bob@example.com']);
   });
 });
+
+// Linux notification servers parse the body as markup, so a subject such as
+// `<a href="…">` would show as a link.
+describe('notification-bridge body markup', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('escapes the body on Linux and leaves it as is elsewhere', async () => {
+    const { notify } = await import('../../src/utils/notification-bridge.js');
+    const { sendNotification } = await import('@tauri-apps/plugin-notification');
+    const body = '<a href="https://phish.example">Invoice</a> & more';
+
+    for (const [platform, expected] of [
+      ['linux', '&lt;a href="https://phish.example"&gt;Invoice&lt;/a&gt; &amp; more'],
+      ['macos', body],
+    ]) {
+      window.__TAURI_OS_PLUGIN_INTERNALS__ = { platform };
+      sendNotification.mockClear();
+      await notify({ title: 'Carol <c@example.com>', body, channelId: 'new-mail' });
+      expect(sendNotification).toHaveBeenCalledTimes(1);
+      expect(sendNotification.mock.calls[0][0].body).toBe(expected);
+      // (the summary is plain text in the spec)
+      expect(sendNotification.mock.calls[0][0].title).toBe('Carol <c@example.com>');
+    }
+
+    delete window.__TAURI_OS_PLUGIN_INTERNALS__;
+  });
+});

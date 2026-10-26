@@ -18,12 +18,27 @@ const decodeRfc6068 = (value = '') => {
 };
 
 /**
+ * Header-bound values (addresses, subject, reply-to) must stay on one line: a
+ * percent-encoded CR/LF (`%0D%0A`) would otherwise reach the raw PGP/MIME
+ * headers and add a hidden Bcc or any other header. The body keeps its lines.
+ */
+// eslint-disable-next-line no-control-regex
+const stripControls = (value = '') => String(value).replace(/[\u0000-\u001F\u007F-\u009F]+/g, ' ');
+
+/** A single RFC 5322 msg-id such as `<abc@example.com>`, or ''. */
+const toMsgId = (value = '') => {
+  const trimmed = String(value).trim();
+  // eslint-disable-next-line no-control-regex
+  return /^<[^<>\s\u0000-\u001F\u007F-\u009F]+>$/.test(trimmed) ? trimmed : '';
+};
+
+/**
  * Split a comma- or semicolon-separated address list and percent-decode
  * each entry.  Per RFC 6068 §2, multiple addresses in the `to` header
  * (or the path portion) are separated by commas.
  */
 const splitAddressList = (value = '') =>
-  decodeRfc6068(value)
+  stripControls(decodeRfc6068(value))
     .split(/[;,]/)
     .map((part) => part.trim())
     .filter(Boolean);
@@ -85,13 +100,13 @@ export const parseMailto = (input = '') => {
     } else if (key === 'bcc') {
       result.bcc.push(...splitAddressList(value));
     } else if (key === 'subject') {
-      result.subject = result.subject || value;
+      result.subject = result.subject || stripControls(value).trim();
     } else if (key === 'body') {
       result.body = result.body ? `${result.body}\n${value}` : value;
     } else if (key === 'reply-to' || key === 'replyto') {
-      result.replyTo = result.replyTo || value;
+      result.replyTo = result.replyTo || stripControls(value).trim();
     } else if (key === 'in-reply-to' || key === 'inreplyto') {
-      result.inReplyTo = result.inReplyTo || value;
+      result.inReplyTo = result.inReplyTo || toMsgId(value);
     } else {
       if (!result.other[key]) result.other[key] = [];
       result.other[key].push(value);
@@ -140,4 +155,15 @@ export const mailtoToPrefill = (parsed = {}) => {
     inReplyTo: parsed.inReplyTo || '',
     mailto: parsed,
   };
+};
+
+/**
+ * Compose prefill for text shared from another app (Android ACTION_SEND).
+ * Any app can send it, and the text is plain text like a mailto body, so it is
+ * escaped the same way instead of being parsed as editor HTML.
+ */
+export const shareToPrefill = (data = {}) => {
+  const text = typeof data?.text === 'string' ? data.text : '';
+  const subject = typeof data?.subject === 'string' ? stripControls(data.subject).trim() : '';
+  return { subject, text, body: mailtoBodyToHtml(text) };
 };

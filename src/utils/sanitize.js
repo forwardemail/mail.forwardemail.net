@@ -1,6 +1,7 @@
 import DOMPurify from 'dompurify';
 import { Local } from './storage';
 import { REMOTE_IMAGES_BLOCKED_MARKER } from './remote-images-marker.ts';
+import { replaceUpToLast } from './linear-replace.js';
 
 /**
  * Detect if an image is likely a tracking pixel
@@ -74,17 +75,172 @@ const OTHER_REMOTE_IMAGE_REFS =
 // number that is part of a longer token. No lookbehind: the app still runs on
 // WebKit that does not support it (iOS 16.0 to 16.3, macOS 10.15).
 const VIEWPORT_HEIGHT_REFERENCE_PX = 800;
-const VIEWPORT_HEIGHT_UNIT =
-  /(url\([^)]*\)|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')|(^|[^\w.-])(-?(?:\d+(?:\.\d*)?|\.\d+))(?:[sld]?v(?:h|b)|vmax)\b/gi;
+//
+// (scanned once from left to right: the regex this replaces,
+// /(url\([^)]*\)|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')|(^|[^\w.-])(-?(?:\d+(?:\.\d*)?|\.\d+))(?:[sld]?v(?:h|b)|vmax)\b/gi,
+// gives the same result but scanned to the end of the sheet again for every
+// "url(" without a ")" and every quote without its closing quote, which is
+// quadratic on an email that repeats them)
+//
+const URL_START = /url\(/iy;
+const LENGTH = /-?(?:\d+(?:\.\d*)?|\.\d+)(?=(?:[sld]?v(?:h|b)|vmax)\b)/iy;
+const UNIT = /(?:[sld]?v(?:h|b)|vmax)\b/iy;
+const WORD = /[\w.-]/;
+const LINE_TERMINATOR = /[\n\r\u2028\u2029]/;
 
 /** CSS text with viewport-height lengths replaced by fixed pixel lengths */
 export function fixViewportHeightUnits(css) {
   if (!css || typeof css !== 'string') return css;
-  return css.replace(VIEWPORT_HEIGHT_UNIT, (match, kept, before, value) =>
-    kept !== undefined
-      ? kept
-      : `${before}${Math.round((Number(value) * VIEWPORT_HEIGHT_REFERENCE_PX) / 100)}px`,
-  );
+  const n = css.length;
+  // index of the next ")" (-1 for none), found once per stretch of the sheet
+  let paren = -2;
+  const nextParen = (from) => {
+    if (paren === -2 || (paren !== -1 && paren < from)) paren = css.indexOf(')', from);
+    return paren;
+  };
+
+  // end of the string body from each position (1 + index of the closing
+  // quote, -1 when it does not close, 0 when not yet known), per quote
+  const memos = {};
+  const closingQuote = (start, quote) => {
+    const memo = (memos[quote] ||= new Int32Array(n + 1));
+    const path = [];
+    let p = start;
+    let result = -1;
+    while (p < n) {
+      if (memo[p] !== 0) {
+        result = memo[p] > 0 ? memo[p] - 1 : -1;
+        break;
+      }
+      path.push(p);
+      const ch = css[p];
+      if (ch === quote) {
+        result = p;
+        break;
+      }
+      if (ch === '\\') {
+        if (p + 1 >= n || LINE_TERMINATOR.test(css[p + 1])) break;
+        p += 2;
+      } else {
+        p++;
+      }
+    }
+    for (const q of path) memo[q] = result === -1 ? -1 : result + 1;
+    return result;
+  };
+
+  // a length in viewport-height units at `p`, as [end, replacement]
+  const lengthAt = (p) => {
+    LENGTH.lastIndex = p;
+    const m = LENGTH.exec(css);
+    if (!m) return null;
+    UNIT.lastIndex = LENGTH.lastIndex;
+    UNIT.exec(css);
+    return [UNIT.lastIndex, `${Math.round((Number(m[0]) * VIEWPORT_HEIGHT_REFERENCE_PX) / 100)}px`];
+  };
+
+  let out = '';
+  let copied = 0;
+  let i = 0;
+  while (i < n) {
+    const ch = css[i];
+    // kept as is: a url() and a quoted string
+    let keptEnd = -1;
+    if (ch === 'u' || ch === 'U') {
+      URL_START.lastIndex = i;
+      if (URL_START.test(css)) {
+        const close = nextParen(i + 4);
+        if (close !== -1) keptEnd = close + 1;
+      }
+    } else if (ch === '"' || ch === "'") {
+      const close = closingQuote(i + 1, ch);
+      if (close !== -1) keptEnd = close + 1;
+    }
+
+    if (keptEnd !== -1) {
+      i = keptEnd;
+      continue;
+    }
+
+    // a length at the very start, or after a character that ends a token
+    let found = i === 0 ? lengthAt(0) : null;
+    let start = i;
+    if (!found && !WORD.test(ch)) {
+      found = lengthAt(i + 1);
+      start = i + 1;
+    }
+
+    if (found) {
+      out += css.slice(copied, start) + found[1];
+      copied = found[0];
+      i = found[0];
+      continue;
+    }
+
+    i++;
+  }
+
+  return copied ? out + css.slice(copied) : css;
+}
+
+/** Remove CSS comments in linear time. */
+const stripCssComments = (css) => replaceUpToLast(css, '*/', /\/\*[\s\S]*?\*\//g, '');
+
+/**
+ * Replace each `@font-face { … }` rule, matched exactly as
+ * /@font-face\s*\{(?:[^}"']|"[^"]*"|'[^']*')*\}/gi would match it, but in
+ * linear time. The regex rescans the rest of the sheet for every unterminated
+ * `@font-face{`; here the outcome from each unquoted position is computed once
+ * and shared by every rule start that reaches it (the walk from a position is
+ * the same whichever rule start it began at).
+ *
+ * @param {string} css
+ * @param {(rule: string) => string} replacer
+ * @returns {string}
+ */
+function replaceFontFaceRules(css, replacer) {
+  const start = /@font-face\s*\{/gi;
+  // memo[i]: index of the closing "}" reached from unquoted position i, -1 for
+  // no match, 0 for not yet known (a "}" is never at index 0 of a body)
+  let memo = null;
+  let out = '';
+  let copied = 0;
+  let m;
+  while ((m = start.exec(css))) {
+    if (!memo) memo = new Int32Array(css.length + 1);
+    const path = [];
+    let i = m.index + m[0].length;
+    let close = -1;
+    for (;;) {
+      if (i >= css.length) break;
+      if (memo[i] !== 0) {
+        close = memo[i];
+        break;
+      }
+      path.push(i);
+      const ch = css[i];
+      if (ch === '}') {
+        close = i;
+        break;
+      }
+      if (ch === '"' || ch === "'") {
+        const end = css.indexOf(ch, i + 1);
+        if (end === -1) break;
+        i = end + 1;
+      } else {
+        i++;
+      }
+    }
+    for (const p of path) memo[p] = close;
+    if (close === -1) {
+      start.lastIndex = m.index + 1;
+      continue;
+    }
+    out += css.slice(copied, m.index) + replacer(css.slice(m.index, close + 1));
+    copied = close + 1;
+    start.lastIndex = copied;
+  }
+  return copied ? out + css.slice(copied) : css;
 }
 
 /**
@@ -122,19 +278,18 @@ export function fixViewportHeightUnits(css) {
 export function sanitizeEmailCss(css, { blockRemoteUrls = false } = {}) {
   if (!css || typeof css !== 'string') return { css: '', blockedCount: 0 };
 
-  let out = css
-    .replace(/\/\*[\s\S]*?\*\//g, '')
+  let out = stripCssComments(css)
     .replace(/<\//g, '')
-    .replace(/@import\b[^;}]*;?/gi, '')
-    // A remote web font only fails with a console error per file (see
-    // above). A rule that also embeds the font as a data: URL is kept: the
-    // browser uses that source and never asks for the remote one.
-    .replace(/@font-face\s*\{(?:[^}"']|"[^"]*"|'[^']*')*\}/gi, (rule) =>
-      /url\(\s*['"]?\s*(?:[a-z][a-z\d+.-]*:)?\/\//i.test(rule) &&
-      !/url\(\s*['"]?\s*data:/i.test(rule)
-        ? ''
-        : rule,
-    )
+    .replace(/@import\b[^;}]*;?/gi, '');
+  // A remote web font only fails with a console error per file (see
+  // above). A rule that also embeds the font as a data: URL is kept: the
+  // browser uses that source and never asks for the remote one.
+  out = replaceFontFaceRules(out, (rule) =>
+    /url\(\s*(?:['"]\s*)?(?:[a-z][a-z\d+.-]*:)?\/\//i.test(rule) &&
+    !/url\(\s*(?:['"]\s*)?data:/i.test(rule)
+      ? ''
+      : rule,
+  )
     .replace(/expression\s*\(/gi, '(')
     .replace(/behavior\s*:[^;}]*/gi, '')
     .replace(/position\s*:\s*fixed/gi, 'position: static')
@@ -150,7 +305,9 @@ export function sanitizeEmailCss(css, { blockRemoteUrls = false } = {}) {
     // "<" escape below: the escape adds a space, which ended the url match
     // early and let a url holding "<" through unblocked.
     out = out.replace(
-      /url\(\s*(?:"([^"]*)"|'([^']*)'|([^'"()\s]*))\s*\)/gi,
+      // (the optional group keeps the two \s* from splitting one run of
+      // spaces in every possible way when the url() does not close)
+      /url\(\s*(?:(?:"([^"]*)"|'([^']*)'|([^'"()\s]+))\s*)?\)/gi,
       (match, doubleQuoted, singleQuoted, bare) => {
         const url = (doubleQuoted ?? singleQuoted ?? bare ?? '').trim();
         // A CSS escape can spell a scheme the test below would miss
@@ -337,7 +494,7 @@ export function sanitizeHtml(html, { blockRemoteImages, blockTrackingPixels } = 
 
     // Process images to detect and block tracking pixels or remote images
     if (blockRemoteImages || blockTrackingPixels) {
-      processedHtml = processedHtml.replace(/<img([^>]*)>/gi, (match, attributes) => {
+      processedHtml = replaceUpToLast(processedHtml, '>', /<img([^>]*)>/gi, (match, attributes) => {
         // Extract src attribute (handles both single and double quotes, and no quotes)
         const { src } = takeAttributes(attributes, ['src']).removed;
         if (!src) return match; // No src, keep as-is
@@ -654,8 +811,7 @@ const QUOTE_FORBID_ATTR = ['popover', 'popovertarget', 'popovertargetaction'];
  * way the browser does before it looks for `url(`.
  */
 function decodeCss(value) {
-  return String(value)
-    .replace(/\/\*[\s\S]*?\*\//g, '')
+  return stripCssComments(String(value))
     .replace(/\\([0-9a-f]{1,6})\s?/gi, (_m, hex) => {
       const code = Number.parseInt(hex, 16);
       return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : '';
@@ -706,8 +862,10 @@ function declarationFetches(declaration) {
   const decoded = decodeCss(declaration);
   if (!CSS_FETCH_FN.test(decoded)) return false;
   // every fetch in it must be a data: URL for it to stay
-  const withoutData = decoded.replace(
-    /(?:url|image-set|-webkit-image-set|image|cross-fade|-webkit-cross-fade|element|src)\s*\(\s*(['"]?)\s*data:[^)]*\)/gi,
+  const withoutData = replaceUpToLast(
+    decoded,
+    ')',
+    /(?:url|image-set|-webkit-image-set|image|cross-fade|-webkit-cross-fade|element|src)\s*\(\s*(?:['"]\s*)?data:[^)]*\)/gi,
     '',
   );
   return CSS_FETCH_FN.test(withoutData);
@@ -736,7 +894,7 @@ function declarationLeavesFlow(declaration) {
 function stripFetchingDeclarations(style) {
   // (comments go first: a quote inside one would otherwise hide the
   // semicolons after it from the split)
-  const kept = splitDeclarations(String(style).replace(/\/\*[\s\S]*?\*\//g, '')).filter(
+  const kept = splitDeclarations(stripCssComments(String(style))).filter(
     (d) => !declarationFetches(d) && !declarationLeavesFlow(d),
   );
   const out = kept

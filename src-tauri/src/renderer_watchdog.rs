@@ -210,6 +210,8 @@ fn safe_mode_url(is_dev: bool, dev_url: Option<&tauri::Url>, reason: &str) -> ta
 }
 
 /// Start the ping loop for the "main" window. Call once from setup.
+/// (not in e2e builds, see lib.rs)
+#[cfg_attr(feature = "webdriver", allow(dead_code))]
 pub fn start(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         loop {

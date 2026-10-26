@@ -1,3 +1,5 @@
+import { replaceUpToLast } from './linear-replace.js';
+
 export function arrayBufferToBase64(uint8Array) {
   const view = uint8Array instanceof Uint8Array ? uint8Array : new Uint8Array(uint8Array || []);
   const chunkSize = 8192;
@@ -102,7 +104,9 @@ export function applyInlineAttachments(html, attachments) {
   };
 
   updated = updated.replace(
-    /\b(src|background|href|poster|xlink:href)\s*=\s*(["']?)\s*cid:([^"'\s>]+)(\s*)\2/gi,
+    // (the optional quote group keeps the two \s* around it from splitting a
+    // long run of spaces every possible way when no cid: follows)
+    /\b(src|background|href|poster|xlink:href)\s*=\s*(?:(["'])\s*)?cid:([^"'\s>]+)(\s*)\2/gi,
     (match, attr, quote, cid, space) => {
       const url = resolveCid(cid);
       if (!url) return match;
@@ -113,13 +117,17 @@ export function applyInlineAttachments(html, attachments) {
     },
   );
 
-  updated = updated.replace(/url\(\s*cid:([^\s)]+)\s*\)/gi, (match, cid) => {
+  // (the closing paren is optional in the pattern and checked here: a start
+  // that does not close then consumes its value once, instead of every
+  // "url(cid:" repeated inside that value rescanning it)
+  updated = updated.replace(/url\(\s*cid:([^\s)]+)(\s*\))?/gi, (match, cid, close) => {
+    if (!close) return match;
     const url = resolveCid(cid);
     // (unquoted, as this is often inside a style="..." attribute)
     return url ? `url(${url})` : match;
   });
 
-  updated = updated.replace(/<img([^>]*?)>/gi, (match, attrs) => {
+  updated = replaceUpToLast(updated, '>', /<img([^>]*?)>/gi, (match, attrs) => {
     const hasSrc = /src\s*=/.test(attrs);
     if (hasSrc) return match;
     const altMatch = attrs.match(/(?:^|\s)alt=["']([^"']+)["']/i);
@@ -137,8 +145,7 @@ export function applyInlineAttachments(html, attachments) {
 
 export function extractTextContent(html = '') {
   if (!html || typeof html !== 'string') return '';
-  return html
-    .replace(/<[^>]+>/g, ' ')
+  return replaceUpToLast(html, '>', /<[^>]+>/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }

@@ -75,6 +75,7 @@ const ALLOWED_COMMANDS = new Set([
   'set_badge_count',
   'set_shell_background',
   'toggle_window_visibility',
+  'open_url_in_browser',
   'is_default_mailto_handler',
   'set_default_mailto_handler',
   'get_pending_deep_links',
