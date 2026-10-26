@@ -11,9 +11,12 @@ afterEach(async (ctx) => {
   const browser = currentBrowser();
   if (!browser) return;
   const safe = ctx.task.name.replace(/[^a-z0-9]+/gi, '_').slice(0, 80);
-  try {
-    await browser.saveScreenshot(path.join(SCREENSHOT_DIR, `${safe}-${Date.now()}.png`));
-  } catch {
-    // Session may already be closed; don't mask the original failure.
-  }
+  // Bounded: a wedged page (see relaunchIfWedged) never answers, and the
+  // driver's retries of the screenshot used up the whole hook timeout.
+  const shot = browser
+    .saveScreenshot(path.join(SCREENSHOT_DIR, `${safe}-${Date.now()}.png`))
+    .catch(() => {
+      // Session may already be closed; don't mask the original failure.
+    });
+  await Promise.race([shot, new Promise((resolve) => setTimeout(resolve, 10_000))]);
 });

@@ -13,7 +13,48 @@ export function appUrl(): string {
 // Keep asking until the frontend answers, up to this long.
 const OPEN_APP_TIMEOUT_MS = 45_000;
 
+// On the software-GL Linux runner a WebKitGTK page can stop answering for
+// good, mid-spec as well as at a cold start: every script then times out,
+// browser.url() included, so no reload reaches it. A failed test's retry ran
+// its beforeEach against that page and timed out again, failing the spec twice
+// over (linux-24, folders-and-messages, after opening a message tab). Only a
+// new app instance gets a working page back, and a new session starts one.
+//
+// A healthy page answers a trivial script in milliseconds, even mid-boot (an
+// unready one fails fast with "unsupported type"). The driver gives up on a
+// script only after 30s and webdriverio retries it, so waiting for that error
+// took minutes; a page silent for this long is taken as wedged.
+const WEDGE_PROBE_MS = 20_000;
+
+export async function relaunchIfWedged(browser: WebdriverIO.Browser): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const answered = browser
+    .execute(() => true)
+    .then(
+      () => true,
+      (error: unknown) =>
+        !/script execution timed out/i.test(
+          String((error as { message?: string })?.message || error),
+        ),
+    );
+  const silent = new Promise<boolean>((resolve) => {
+    timer = setTimeout(() => resolve(false), WEDGE_PROBE_MS);
+  });
+  const responsive = await Promise.race([answered, silent]);
+  clearTimeout(timer);
+  if (responsive) return false;
+  console.warn('[openApp] the page stopped answering scripts; relaunching the app');
+  await browser.reloadSession();
+  return true;
+}
+
+// Sessions that have loaded the app. Only those are probed: a session that
+// has not opened it yet has no page that could have wedged, and relaunching
+// it would only restart a slow cold boot (Windows Defender scan).
+const sessionsWithApp = new Set<string>();
+
 export async function openApp(browser: WebdriverIO.Browser): Promise<void> {
+  if (sessionsWithApp.has(browser.sessionId)) await relaunchIfWedged(browser);
   const deadline = Date.now() + OPEN_APP_TIMEOUT_MS;
   let lastError: unknown;
   while (Date.now() < deadline) {
@@ -21,6 +62,7 @@ export async function openApp(browser: WebdriverIO.Browser): Promise<void> {
       await browser.url(appUrl());
       await waitForFrontendReady(browser, Math.max(1_000, deadline - Date.now()));
       await ensureUsableViewport(browser);
+      sessionsWithApp.add(browser.sessionId);
       return;
     } catch (error) {
       if (!isScriptUnavailable(error)) throw error;

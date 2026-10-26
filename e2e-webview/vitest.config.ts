@@ -17,8 +17,10 @@ export default defineConfig({
     testTimeout: 60_000,
     // beforeEach runs activateDemo, which waits for the demo seed to paint.
     // On slow Linux Xvfb runners that seed+paint takes ~30-40s, overrunning a
-    // 30s hook ceiling before the readiness gate can clear. Give the hook room.
-    hookTimeout: 90_000,
+    // 30s hook ceiling before the readiness gate can clear. Give the hook room,
+    // and room for openApp to relaunch an app whose page stopped answering
+    // (support/app.ts relaunchIfWedged: a 20s probe plus a cold start).
+    hookTimeout: 150_000,
     reporters: ['default', ['junit', { outputFile: './reports/junit.xml' }]],
   },
 });

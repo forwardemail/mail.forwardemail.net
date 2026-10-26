@@ -15,7 +15,7 @@ export async function activateDemo(browser: WebdriverIO.Browser): Promise<void> 
     // cold start that even WebDriver's findElements script times out (the
     // "Script execution timed out" warnings) - no selector timeout can see a
     // button on a page whose event loop is stuck. One relaunch un-wedges that
-    // case. A genuinely missing button fails the second wait on a healthy
+    // case (openApp starts a new app instance when the page does not answer). A genuinely missing button fails the second wait on a healthy
     // page, so the gate keeps its teeth. The diagnostics say which case it
     // was: a wedged page reports nothing, a healthy page missing the button
     // reports its actual path and paint state.
