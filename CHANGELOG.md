@@ -6,6 +6,13 @@ release notes are taken from here. To change what a commit says, add a
 `Release-note: <text>` line to its message (or `Release-note: none` to leave
 it out).
 
+## 0.15.12 (2026-10-26)
+
+### Fixes
+
+- Relaunch the app when its WebView stops answering
+- Credit the original sender in desktop reply quotes
+
 ## 0.15.11 (2026-10-26)
 
 ### Fixes

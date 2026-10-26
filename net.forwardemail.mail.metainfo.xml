@@ -36,6 +36,15 @@
   </screenshots>
   <!-- scripts/sync-version.cjs prepends a release entry on every version bump. -->
   <releases>
+    <release version="0.15.12" date="2026-10-26">
+      <description>
+        <p>Fixes</p>
+        <ul>
+          <li>Relaunch the app when its WebView stops answering</li>
+          <li>Credit the original sender in desktop reply quotes</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.15.11" date="2026-10-26">
       <description>
         <p>Fixes</p>
