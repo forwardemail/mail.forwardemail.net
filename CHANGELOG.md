@@ -6,6 +6,12 @@ release notes are taken from here. To change what a commit says, add a
 `Release-note: <text>` line to its message (or `Release-note: none` to leave
 it out).
 
+## 0.15.11 (2026-10-26)
+
+### Fixes
+
+- Harden compose, sanitizer, calendar and desktop links
+
 ## 0.15.10 (2026-10-25)
 
 ### Fixes

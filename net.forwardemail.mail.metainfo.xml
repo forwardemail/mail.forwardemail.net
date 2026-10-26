@@ -36,6 +36,14 @@
   </screenshots>
   <!-- scripts/sync-version.cjs prepends a release entry on every version bump. -->
   <releases>
+    <release version="0.15.11" date="2026-10-26">
+      <description>
+        <p>Fixes</p>
+        <ul>
+          <li>Harden compose, sanitizer, calendar and desktop links</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.15.10" date="2026-10-25">
       <description>
         <p>Fixes</p>
