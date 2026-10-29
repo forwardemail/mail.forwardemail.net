@@ -168,3 +168,64 @@ describe('sync worker signature checking', () => {
     expect(result.signature).toMatchObject({ status: 'invalid', signers: ['alice@example.com'] });
   });
 });
+
+describe('sync worker: signed-only messages (multipart/signed)', () => {
+  async function signed(
+    signer: string,
+    { textMode = false, lineEnding = '\r\n', tamper = false } = {},
+  ) {
+    const { buildInnerMime, buildPgpSignedMessage } = await import('../../src/utils/pgp-mime');
+    const entity = buildInnerMime({ text: 'Meet at 10.\nBring the keys.' });
+    const signingKeys = await openpgp.readPrivateKey({ armoredKey: signer });
+    const message = textMode
+      ? await openpgp.createMessage({ text: entity })
+      : await openpgp.createMessage({ binary: new TextEncoder().encode(entity) });
+    const signature = (await openpgp.sign({
+      message,
+      signingKeys,
+      detached: true,
+      format: 'armored',
+    })) as string;
+    let raw = buildPgpSignedMessage(entity, signature, 'pgp-sha512', {
+      from: 'alice@example.com',
+      to: ['me@x.test'],
+      subject: 'Plan',
+    });
+    if (tamper)
+      raw = raw.replace(btoa('Meet at 10.\nBring the keys.'), btoa('Meet at 11.\nBring the keys.'));
+    return raw.replace(/\r\n/g, lineEnding);
+  }
+
+  it('verifies a signed-only message from a pinned contact', async () => {
+    const result = await runTask({ type: 'verifySigned', raw: await signed(alice.privateKey) });
+    expect(result).toMatchObject({
+      success: true,
+      signature: { status: 'verified', signers: ['alice@example.com'] },
+    });
+  });
+
+  it('verifies a text-mode signature carried with bare LF line endings', async () => {
+    const raw = await signed(alice.privateKey, { textMode: true, lineEnding: '\n' });
+    const result = await runTask({ type: 'verifySigned', raw });
+    expect(result.signature).toEqual({ status: 'verified', signers: ['alice@example.com'] });
+  });
+
+  it('calls a changed body invalid', async () => {
+    const raw = await signed(alice.privateKey, { tamper: true });
+    const result = await runTask({ type: 'verifySigned', raw });
+    expect(result.signature).toMatchObject({ status: 'invalid' });
+  });
+
+  it('reports a signer the user holds no key for as unverified', async () => {
+    const result = await runTask({ type: 'verifySigned', raw: await signed(mallory.privateKey) });
+    expect(result.signature).toEqual({ status: 'unverified', signers: [] });
+  });
+
+  it('declines a message that is not multipart/signed', async () => {
+    const result = await runTask({
+      type: 'verifySigned',
+      raw: 'Content-Type: text/plain\r\n\r\nhello',
+    });
+    expect(result).toMatchObject({ success: false, reason: 'not_signed' });
+  });
+});

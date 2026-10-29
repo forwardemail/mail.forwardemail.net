@@ -28,6 +28,7 @@ vi.mock('../../src/stores/mailboxActions', () => ({
   archiveMessage: mocks.archiveMessage,
   deleteMessage: mocks.deleteMessage,
   getForwardAttachments: vi.fn(async () => []),
+  verifySignedMessage: vi.fn(async () => null),
   buildReplyQuotedBody: vi.fn(() => ''),
   buildForwardQuotedBody: vi.fn(() => ''),
   addReplyPrefix: vi.fn((s: string) => s),

@@ -16,6 +16,7 @@ import {
   type PendingFlagChange,
 } from '../utils/sync-helpers.ts';
 import { normalizeSubject } from '../utils/threading.ts';
+import { splitSignedMime } from '../utils/pgp-signed-parts';
 import {
   bufferToDataUrl,
   applyInlineAttachments,
@@ -2262,6 +2263,37 @@ async function handleSignMessageTask(task) {
   }
 }
 
+/**
+ * Check the signature on a received multipart/signed message (no encryption),
+ * against the same keys a signature inside an encrypted message is checked
+ * against. `raw` is the full RFC 822 source; see pgp-signed-parts.ts for why
+ * the signed part has to come from it byte for byte.
+ */
+async function handleVerifySignedTask(task: { raw?: string }) {
+  const parts = splitSignedMime(task?.raw ?? '');
+  if (!parts) return { success: false, reason: 'not_signed' };
+  await pgpKeysReady.catch(() => {});
+  try {
+    const signature = await openpgp.readSignature({ armoredSignature: parts.signature });
+    // A text signature is made over the canonical text and a binary one over
+    // the bytes; both are the CRLF form here, but openpgp wants the matching kind.
+    const isText = signature.packets?.[0]?.signatureType === openpgp.enums.signature.text;
+    const message = isText
+      ? await openpgp.createMessage({ text: parts.signed })
+      : await openpgp.createMessage({ binary: new TextEncoder().encode(parts.signed) });
+    const keys = signatureVerificationKeys();
+    const verification = await openpgp.verify({ message, signature, verificationKeys: keys });
+    const check = await checkSignatures(verification.signatures, keys);
+    return { success: true, signature: check || { status: 'unverified', signers: [] } };
+  } catch (err) {
+    return {
+      success: false,
+      reason: 'verify_failed',
+      message: (err as Error)?.message || String(err),
+    };
+  }
+}
+
 async function handleParseRawTask(task) {
   const { raw, existingAttachments = [] } = task;
 
@@ -2296,7 +2328,8 @@ async function handleTask(taskId, task) {
       task?.type === 'decryptMessage' ||
       task?.type === 'parseRaw' ||
       task?.type === 'encryptMessage' ||
-      task?.type === 'signMessage';
+      task?.type === 'signMessage' ||
+      task?.type === 'verifySigned';
     if (!apiBase || (!isLocalOnlyTask && !authFor(accountKey(task?.account)))) {
       throw new Error('Worker not initialized');
     }
@@ -2329,6 +2362,8 @@ async function handleTask(taskId, task) {
       summary = await handleEncryptMessageTask(task);
     } else if (task.type === 'signMessage') {
       summary = await handleSignMessageTask(task);
+    } else if (task.type === 'verifySigned') {
+      summary = await handleVerifySignedTask(task);
     } else {
       throw new Error(`Unsupported task type: ${task.type}`);
     }

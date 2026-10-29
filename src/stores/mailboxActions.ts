@@ -1,5 +1,6 @@
 import { writable, derived, get } from 'svelte/store';
 import Dexie from 'dexie';
+import type { Message, PgpSignatureCheck } from '../types';
 import { Remote } from '../utils/remote';
 import { Local, Session, Accounts } from '../utils/storage';
 import { withDeadline } from '../utils/with-deadline';
@@ -2853,6 +2854,44 @@ const fetchRawOriginal = async (msg) => {
     warn('[viewOriginal] raw fetch failed', err);
     return null;
   }
+};
+
+/**
+ * Check the signature on a signed-only (multipart/signed) PGP message.
+ *
+ * The check needs the raw source, which the reader does not otherwise fetch,
+ * so this costs one extra request and only for messages that declare a PGP
+ * signature. The result is recorded on the cached row like the one from a
+ * decrypt. Returns null when the message could not be checked.
+ */
+export const verifySignedMessage = async (
+  msg: Message | null,
+): Promise<PgpSignatureCheck | null> => {
+  if (!msg) return null;
+  // The account this check belongs to, before any await can see a switch
+  const account = Local.get('email') || 'default';
+  const res = await fetchRawOriginal(msg);
+  const raw = typeof res === 'string' ? res : res?.raw;
+  if (!raw || typeof raw !== 'string') return null;
+  const { requestPgpSignatureCheck } = await import('../utils/sync-worker-client.js');
+  let result;
+  try {
+    result = await requestPgpSignatureCheck({ raw });
+  } catch {
+    return null;
+  }
+  if (!result?.success || !result.signature) return null;
+  const signature = result.signature;
+  if ((Local.get('email') || 'default') !== account) return null;
+  const apiId = getMessageApiId(msg);
+  if (apiId) {
+    db.messages
+      .where('[account+id]')
+      .equals([account, apiId])
+      .modify({ pgpSignature: signature })
+      .catch(() => {});
+  }
+  return signature;
 };
 
 const fetchEmlOriginal = async (msg) => {

@@ -391,6 +391,14 @@ export async function requestPgpSignature({ plaintext, from }) {
 }
 
 /**
+ * Check the signature on a received multipart/signed message, given its raw
+ * RFC 822 source (sync.worker.ts handleVerifySignedTask).
+ */
+export async function requestPgpSignatureCheck({ raw }) {
+  return sendSyncTask({ type: 'verifySigned', raw }, { timeout: 30000 });
+}
+
+/**
  * Unlock a PGP key with a passphrase from the main thread
  * Called after user provides passphrase via modal
  *
