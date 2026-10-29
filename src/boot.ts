@@ -17,4 +17,20 @@ if (await loadDeviceKey({ create: true })) {
   sealExistingLocalStorage(isSensitiveLocalKey, isEncrypted);
 }
 
-await import('./main');
+try {
+  await import('./main');
+} catch (err) {
+  // The app chunk did not load. Leaving the page cancels the load, which
+  // needs no handling. Otherwise it is almost always a deploy that replaced
+  // the chunk this page was built against: index.html's recovery clears the
+  // asset caches and reloads, as it did when the app was a static entry.
+  const page = window as unknown as {
+    __fePageLeaving?: boolean;
+    __feRecoverStaleChunks?: () => void;
+  };
+  if (!page.__fePageLeaving) {
+    if (typeof page.__feRecoverStaleChunks !== 'function') throw err;
+    console.error('[boot] the app failed to load:', err);
+    page.__feRecoverStaleChunks();
+  }
+}

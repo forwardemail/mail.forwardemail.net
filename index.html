@@ -210,6 +210,25 @@
     </div>
 
     <script>
+      // Set once the page starts to go away (a reload, a navigation). Loads
+      // still in flight are cancelled then, and those failures say nothing
+      // about the app: they must neither show the fatal overlay nor clear the
+      // asset caches. The app is imported dynamically (src/boot.ts), so on a
+      // navigation right after load its own chunks can still be loading.
+      window.__fePageLeaving = false;
+      window.addEventListener('beforeunload', function () {
+        window.__fePageLeaving = true;
+      });
+      window.addEventListener('pagehide', function () {
+        window.__fePageLeaving = true;
+      });
+      // A pagehide into the back/forward cache can come back
+      window.addEventListener('pageshow', function () {
+        window.__fePageLeaving = false;
+      });
+    </script>
+
+    <script>
       // Fatal-error diagnostic overlay.
       // Registered before /src/main.ts so it sees module-init failures (e.g.
       // a library mutating Object.prototype under freezePrototype, throwing
@@ -378,6 +397,7 @@
               } catch (_) {}
               return;
             }
+            if (window.__fePageLeaving) return;
             var err = event.error;
             if (!err) {
               err = {
@@ -401,7 +421,8 @@
           // Skip chunk-load rejections — chunk-recovery handler handles them
           var msg = (reason && reason.message) || '';
           if (
-            /Failed to fetch dynamically imported module|Loading chunk|error loading dynamically imported module/i.test(
+            window.__fePageLeaving ||
+            /Failed to fetch dynamically imported module|Loading chunk|error loading dynamically imported module|Importing a module script failed/i.test(
               msg,
             )
           ) {
@@ -451,6 +472,8 @@
         var alreadyRecovering = false;
 
         function clearAssetCachesAndReload() {
+          // A load cancelled by leaving the page is not a stale chunk
+          if (window.__fePageLeaving) return;
           if (alreadyRecovering) return;
           alreadyRecovering = true;
 
@@ -536,7 +559,9 @@
             ((reason.message &&
               (/Failed to fetch dynamically imported module/.test(reason.message) ||
                 /Loading chunk/.test(reason.message) ||
-                /error loading dynamically imported module/i.test(reason.message))) ||
+                /error loading dynamically imported module/i.test(reason.message) ||
+                // WebKit's wording (Safari, iOS, the Tauri WKWebView)
+                /Importing a module script failed/i.test(reason.message))) ||
               reason.name === 'ChunkLoadError')
           ) {
             console.error('[Recovery] Dynamic import failed:', reason.message || reason);
@@ -544,6 +569,9 @@
             clearAssetCachesAndReload();
           }
         });
+
+        // src/boot.ts calls this when the app itself fails to import
+        window.__feRecoverStaleChunks = clearAssetCachesAndReload;
 
         // Clear the recovery flag once the app bootstraps successfully,
         // so the next deploy can trigger auto-recovery again.

@@ -127,9 +127,21 @@ export async function setupAuthenticatedMailbox(page) {
 /**
  * Navigate to mailbox and wait for messages to load.
  */
+/**
+ * Wait until the app has finished starting on the current page
+ * (window.__appBootstrapped, set at the end of bootstrap in main.ts).
+ */
+export async function waitForAppBoot(page, timeout = 15_000) {
+  await page.waitForFunction(() => window.__appBootstrapped === true, null, { timeout });
+}
+
 export async function navigateToMailbox(page) {
   // First go to the root to let addInitScript set localStorage
   await page.goto('/');
+  // The app is a dynamic import (src/boot.ts), so `load` can fire before it
+  // has started. Navigating on right away cancels its chunk loads, and the
+  // errors from that page would be counted against the next one.
+  await waitForAppBoot(page);
   // Then navigate to mailbox — the app should see the auth tokens
   await page.goto('/mailbox#INBOX');
   // Wait for the message list to render — or at least the mailbox shell
