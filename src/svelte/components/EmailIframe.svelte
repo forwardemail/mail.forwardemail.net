@@ -23,6 +23,10 @@
   import { buildIframeSrcdoc } from '../../utils/iframe-srcdoc';
   import { htmlToPlainText } from '../../utils/sanitize.js';
   import { isTauriDesktop, isTauriMobile } from '../../utils/platform.js';
+  import {
+    knownOpaqueFrameSupport,
+    probeOpaqueFrameSupport,
+  } from '../../utils/frame-isolation-probe';
   import { describeLinkTarget, type LinkPreview } from '../../utils/link-preview';
   import { portal } from '../../utils/portal';
 
@@ -83,7 +87,17 @@
   //   document while the reader waited on the new one.
   // - themeVersion: recreate on theme change
   // - plainText: recreate to re-measure height for the new rendering mode
-  const contentSignature = $derived(`${messageId}:${themeVersion}:${plainText}`);
+  // Whether the email document can have an opaque origin here. Web: yes.
+  // Tauri mobile: not yet (see the comment on the iframe). Tauri desktop:
+  // what the once-per-session probe found; null while it runs, when the frame
+  // is opaque and is rebuilt if the engine turns out not to support that.
+  let opaqueSupported = $state<boolean | null>(
+    isTauriMobile ? false : isTauriDesktop ? knownOpaqueFrameSupport() : true,
+  );
+  const sameOriginFrame = $derived(opaqueSupported === false);
+  const contentSignature = $derived(
+    `${messageId}:${themeVersion}:${plainText}:${sameOriginFrame ? 'so' : 'opaque'}`,
+  );
 
   const heightKey = $derived(`${messageId}:${plainText ? 'text' : 'html'}`);
 
@@ -438,6 +452,11 @@
 
   onMount(() => {
     mounted = true;
+    if (opaqueSupported === null) {
+      void probeOpaqueFrameSupport().then((supported) => {
+        if (mounted) opaqueSupported = supported;
+      });
+    }
     window.addEventListener('message', handleMessage);
 
     // Set initial dark mode state
@@ -485,19 +504,22 @@
 
 {#key contentSignature}
   <div class="fe-email-iframe-container" style="height: {iframeHeight}px;">
-    <!-- The email document gets an opaque origin everywhere except Tauri
-         mobile. With allow-same-origin next to allow-scripts, a script that got
-         past the sanitizer and the srcdoc CSP would share the app's origin and
-         could reach its native bridge. The runtime talks to the parent only by
-         postMessage, which works without it. Mobile keeps allow-same-origin
-         for now: the parent attaches touch listeners to the frame's document
-         because Android WebView can swallow touches inside it, and that path
-         has not been checked on devices without it. -->
+    <!-- The email document gets an opaque origin wherever the engine runs the
+         frame runtime that way (frame-isolation-probe.ts). With
+         allow-same-origin next to allow-scripts, a script that got past the
+         sanitizer and the srcdoc CSP would share the app's origin and could
+         reach its native bridge. Older WebKit (macOS 15, Ubuntu 22.04) does
+         not run the runtime in an opaque frame, so there it keeps
+         allow-same-origin. Mobile keeps it for now too: the parent attaches
+         touch listeners to the frame's document because Android WebView can
+         swallow touches inside it, and that path has not been checked on
+         devices without it. -->
     {#if frameDoc.hasContent}
       <iframe
         bind:this={iframeRef}
         {srcdoc}
-        sandbox={isTauriMobile ? 'allow-scripts allow-same-origin' : 'allow-scripts'}
+        sandbox={sameOriginFrame ? 'allow-scripts allow-same-origin' : 'allow-scripts'}
+        data-frame-isolation={sameOriginFrame ? 'same-origin' : 'opaque'}
         data-frame-ready={frameReady ? 'true' : 'false'}
         title="Email content"
         class="fe-email-iframe"

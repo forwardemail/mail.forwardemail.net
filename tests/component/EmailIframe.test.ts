@@ -14,12 +14,23 @@ vi.mock('../../src/utils/platform.js', () => ({
   },
 }));
 
+const probe = vi.hoisted(() => ({
+  supported: true as boolean | null,
+  answer: Promise.resolve(true),
+}));
+vi.mock('../../src/utils/frame-isolation-probe', () => ({
+  knownOpaqueFrameSupport: () => probe.supported,
+  probeOpaqueFrameSupport: () => probe.answer,
+}));
+
 import EmailIframe from '../../src/svelte/components/EmailIframe.svelte';
 
 afterEach(() => {
   cleanup();
   platform.desktop = true;
   platform.mobile = false;
+  probe.supported = true;
+  probe.answer = Promise.resolve(true);
 });
 
 /** Post a message the way the sandboxed runtime would, from this iframe's window. */
@@ -191,6 +202,32 @@ describe('<EmailIframe /> sandbox', () => {
     render(EmailIframe, { props: { html: '<p>hi</p>', messageId: 'sb1' } });
     const iframe = document.querySelector('iframe.fe-email-iframe') as HTMLIFrameElement;
     expect(iframe.getAttribute('sandbox')).toBe('allow-scripts');
+  });
+
+  it('keeps allow-same-origin on an engine that cannot run an opaque frame', () => {
+    probe.supported = false;
+    render(EmailIframe, { props: { html: '<p>hi</p>', messageId: 'sb3' } });
+    const iframe = document.querySelector('iframe.fe-email-iframe') as HTMLIFrameElement;
+    expect(iframe.getAttribute('sandbox')).toBe('allow-scripts allow-same-origin');
+    expect(iframe.getAttribute('data-frame-isolation')).toBe('same-origin');
+  });
+
+  it('rebuilds the frame with allow-same-origin when the probe says no', async () => {
+    let answer: (supported: boolean) => void = () => {};
+    probe.supported = null;
+    probe.answer = new Promise((resolve) => (answer = resolve));
+    render(EmailIframe, { props: { html: '<p>hi</p>', messageId: 'sb4' } });
+    const frame = () => document.querySelector('iframe.fe-email-iframe') as HTMLIFrameElement;
+
+    // Opaque while the engine is being asked
+    expect(frame().getAttribute('data-frame-isolation')).toBe('opaque');
+    const first = frame();
+
+    answer(false);
+    await waitFor(() => expect(frame().getAttribute('data-frame-isolation')).toBe('same-origin'));
+    expect(frame().getAttribute('sandbox')).toBe('allow-scripts allow-same-origin');
+    // A new frame: a sandbox change only applies to a document loaded after it
+    expect(frame()).not.toBe(first);
   });
 
   it('still reports ready over postMessage', async () => {

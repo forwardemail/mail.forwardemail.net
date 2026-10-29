@@ -5,9 +5,10 @@ import { openApp } from '../support/app.js';
 import { clearStorage } from '../support/state.js';
 import { activateDemo } from '../support/demo.js';
 
-// The email body renders in a sandboxed srcdoc frame. On desktop it must get
-// an opaque origin (no allow-same-origin), and its runtime must still reach
-// the app by postMessage: the frame reports ready and a height.
+// The email body renders in a sandboxed srcdoc frame. Whatever isolation the
+// engine supports (frame-isolation-probe.ts: opaque on current engines,
+// allow-same-origin on older WebKit), the frame runtime must reach the app:
+// it reports ready and a height. And an opaque frame must really be opaque.
 describe('email frame isolation', () => {
   let browser: WebdriverIO.Browser;
 
@@ -40,7 +41,7 @@ describe('email frame isolation', () => {
     await rows[0].click();
   }
 
-  it('renders the email in an opaque-origin frame whose runtime still reports in', async () => {
+  it('renders the email in a frame whose runtime reports in, isolated where the engine allows', async () => {
     await openFirstMessage();
 
     await browser.waitUntil(
@@ -68,14 +69,22 @@ describe('email frame isolation', () => {
       }
       return {
         sandbox: f.getAttribute('sandbox') || '',
+        isolation: f.getAttribute('data-frame-isolation') || '',
         documentReachable,
         height: f.getBoundingClientRect().height,
       };
     });
 
-    expect(frame.sandbox.split(/\s+/)).toContain('allow-scripts');
-    expect(frame.sandbox.split(/\s+/)).not.toContain('allow-same-origin');
-    expect(frame.documentReachable).toBe(false);
+    console.log(`[email-frame-isolation] this engine runs the email frame as: ${frame.isolation}`);
+    const tokens = frame.sandbox.split(/\s+/);
+    expect(tokens).toContain('allow-scripts');
     expect(frame.height).toBeGreaterThan(50);
+    if (frame.isolation === 'opaque') {
+      expect(tokens).not.toContain('allow-same-origin');
+      expect(frame.documentReachable).toBe(false);
+    } else {
+      expect(frame.isolation).toBe('same-origin');
+      expect(tokens).toContain('allow-same-origin');
+    }
   });
 });
