@@ -74,7 +74,26 @@ There is no analytics, telemetry or crash reporting SDK. The app contacts:
 - It flags punycode/IDN hosts.
 - It strips credentials from the URL.
 
-**Sender authentication.** SPF, DKIM and DMARC results are parsed from `Authentication-Results` and shown in the message details (`security-helpers.js`). There is no look-alike-domain or display-name-spoofing banner yet.
+**Sender authentication.** SPF, DKIM and DMARC results are parsed from `Authentication-Results` and shown in the message details (`security-helpers.js`). That display reads the first such header it finds, including ones the sender wrote (see Known gaps).
+
+**Sender warnings.** A banner appears above a message that may not be from who it says (`sender-warnings.ts`). It shows only for strong signals, and not for the user's own Sent or Drafts:
+
+- The display name carries an address on another domain, for example `"PayPal <service@paypal.com>" <x@evil.test>`. The "via" rewrite that mailing lists use is not flagged.
+- DMARC failed, according to Forward Email's own servers. Only `Authentication-Results` and `ARC-Authentication-Results` headers whose authserv-id is `forwardemail.net` or a subdomain are believed. The MX strips any such header a sender wrote before adding its own (RFC 8601 section 5, `helpers/on-data-mx.js` in the server repository).
+- The sender's domain is internationalized (an `xn--` label), which is how look-alike domains are written.
+
+**Mailing lists and blocking.**
+
+- **Unsubscribe.** It appears only when a message has a usable `List-Unsubscribe` header, and acts only after the user confirms (`list-unsubscribe.ts`, `UnsubscribeButton.svelte`).
+  - Only `https:` and `mailto:` targets are used, and a URL that carries credentials is ignored.
+  - An email target is preferred. The request goes from the user's account and is not saved to Sent.
+  - An https target opens in the system browser. The app does not make the RFC 8058 POST itself, because its CSP allows connections only to the Forward Email API.
+- **Block sender.** This adds a rule to the app's managed Sieve script that files the sender's mail into Junk (`blockSender` in `filtersStore.ts`).
+  - It refuses rather than switch off a script the user wrote elsewhere, because only one Sieve script is active and saving activates the managed one.
+  - It also refuses to write over a hand-edited managed script.
+  - The rule uses only existing condition types, so an older app version that re-saves the filters keeps it.
+
+**Link tracking.** With the "Remove tracking from links" setting on (it is off by default), links opened from an email lose attribution parameters such as `utm_*`, `fbclid` and `gclid` (`tracking-params.ts`). Other parameters are left alone.
 
 ## Content Security Policy
 
@@ -214,7 +233,7 @@ All OpenPGP work runs in the sync worker with openpgp.js v6.
   - **invalid**: a held key's signature does not match
   - **signing key revoked**: the key is held but its owner revoked it
   - **signed, not verified**: no key for it is held
-- Signed-only messages (`multipart/signed`) that arrive are not verified yet.
+- Signed-only messages (`multipart/signed`) are checked the same way. The reader fetches the raw source for these messages only, and the signed part is cut from it byte for byte (`pgp-signed-parts.ts`), because re-encoding would break a genuine signature.
 
 **Sending.**
 
@@ -288,11 +307,10 @@ These are tracked and not yet addressed:
 
 - **Plaintext storage without App Lock.** Without App Lock, the web and mobile apps keep credentials and PGP keys in plaintext `localStorage`. The desktop seal does not apply there yet.
 - **Mobile email frame.** It still uses `allow-same-origin` (see [Rendering email](#rendering-email)).
-- **PGP verification and key discovery.**
-  - Incoming `multipart/signed` messages are not verified.
+- **PGP key discovery.**
   - There is no client-side WKD or Autocrypt.
   - S/MIME is not supported.
-- **Sender warnings.** There is no warning for look-alike domains or display-name spoofing.
+- **Message details read any `Authentication-Results` header.** The SPF/DKIM/DMARC line in the message details reads the first such header, preferring ARC, and a sender can write one. The sender-warning banner uses only Forward Email's own headers; the details line does not yet.
 - **Image proxy.** There is no server-side image proxy, so loading remote images reveals the reader's IP address to the sender.
 - **`'unsafe-inline'`.** It remains in `script-src`.
 
