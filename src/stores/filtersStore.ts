@@ -19,6 +19,7 @@ import { Local } from '../utils/storage';
 import { getAuthHeaderForAccount } from '../utils/auth';
 import {
   MANAGED_SCRIPT_NAME,
+  createRule,
   rulesToSieve,
   sieveToRules,
   type FilterRule,
@@ -327,4 +328,89 @@ export function resetFilters(): void {
   filtersBlocked.set('');
   filtersWarnings.set([]);
   managedScriptUnreadable.set(false);
+}
+
+export type BlockSenderResult = { ok: true; already: boolean } | { ok: false; message: string };
+
+/** The two conditions that match an address in From, with or without a display name. */
+export function blockConditions(address: string): FilterRule['conditions'] {
+  return [
+    // "Name <bob@example.com>". The brackets keep notbob@example.com out.
+    { field: 'from', op: 'contains', value: `<${address}>` },
+    // A bare "bob@example.com" header
+    { field: 'from', op: 'is', value: address },
+  ];
+}
+
+function isBlockRuleFor(rule: FilterRule, address: string): boolean {
+  const wanted = blockConditions(address);
+  return (
+    rule.enabled &&
+    rule.match === 'any' &&
+    wanted.every((w) =>
+      rule.conditions.some(
+        (c) => c.field === w.field && c.op === w.op && c.value.toLowerCase() === w.value,
+      ),
+    )
+  );
+}
+
+/**
+ * File future mail from `address` into the junk folder, as a rule at the top
+ * of the managed filters.
+ *
+ * Built only from the existing condition types, so an older app version that
+ * opens and saves the filters keeps the rule intact. Refuses, rather than
+ * guessing, when saving would replace something the user did not ask to
+ * change: an edited managed script, or another script that is the active one
+ * (only one Sieve script runs, and saving activates ours).
+ */
+export async function blockSender(address: string, junkFolder: string): Promise<BlockSenderResult> {
+  const target = String(address || '')
+    .trim()
+    .toLowerCase();
+  if (!/^[^\s@<>"]+@[^\s@<>"]+\.[^\s@<>"]+$/.test(target)) {
+    return { ok: false, message: 'This sender has no address that can be blocked.' };
+  }
+  if (!junkFolder) return { ok: false, message: 'No junk folder is set up for this account.' };
+
+  await loadFilters();
+  const blocked = get(filtersBlocked);
+  if (blocked === 'imap') {
+    return { ok: false, message: 'Filters need IMAP turned on for this alias.' };
+  }
+  if (blocked === 'catchall') {
+    return { ok: false, message: 'Filters are not available when signed in with a catch-all.' };
+  }
+  const loadError = get(filtersError);
+  if (loadError) return { ok: false, message: loadError };
+  if (get(managedScriptUnreadable)) {
+    return {
+      ok: false,
+      message:
+        'This account has a filter script that was edited outside the app, so blocking cannot be added to it.',
+    };
+  }
+  const activeForeign = get(foreignScripts).find((s) => s.is_active);
+  if (activeForeign) {
+    return {
+      ok: false,
+      message: `Your filter script "${activeForeign.name}" is active. Blocking here would turn it off, so add the rule to that script instead.`,
+    };
+  }
+
+  const rules = get(filterRules);
+  if (rules.some((rule) => isBlockRuleFor(rule, target))) return { ok: true, already: true };
+
+  const rule = createRule({
+    name: `Block ${target}`,
+    match: 'any',
+    conditions: blockConditions(target),
+    actions: { fileinto: junkFolder, stop: true },
+  });
+  const saved = await saveFilters([rule, ...rules]);
+  if (!saved) {
+    return { ok: false, message: get(filtersError) || 'Could not save the filter.' };
+  }
+  return { ok: true, already: false };
 }

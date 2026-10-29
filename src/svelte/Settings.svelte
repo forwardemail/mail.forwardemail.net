@@ -237,6 +237,8 @@
   let pgpKeys = $state<{ name: string; value: string }[]>([]);
   let pairingScannerOpen = $state(false);
   let keyFormVisible = $state(false);
+  // The account the open key form (add, edit or create) is for
+  let keyFormAccount = '';
   let genFormVisible = $state(false);
   let genName = $state('');
   let genPassphrase = $state('');
@@ -257,6 +259,7 @@
   let spamReportDelete = $state(false);
   let notifyAppUpdates = $state(true);
   let blockTrackingPixels = $state(true);
+  let stripLinkTracking = $state(false);
   let viewPlainText = $state(false);
   let hideCompletedTodosValue = $state(false);
   let startWeekOnSundayValue = $state(true);
@@ -767,10 +770,31 @@
     subscriptions.forEach((fn) => fn?.());
   });
 
+  // Bumped by every load. onMount and the account subscription both start
+  // one, and each awaits the settings fetch: without this the older one could
+  // finish last and fill the page in for the account as it was before
+  // (an empty key list, say, while the stored keys were there).
+  let loadGeneration = 0;
+
+  const readStoredPgpKeys = (account: string) => {
+    try {
+      const storedKeys = Local.get(`pgp_keys_${account}`);
+      return storedKeys ? JSON.parse(storedKeys) : [];
+    } catch {
+      return [];
+    }
+  };
+
   const loadFromStorage = async () => {
+    const generation = ++loadGeneration;
     error = '';
     success = '';
+    // The key list is on this device: show it now rather than after the
+    // settings fetch. Until then the card said "No keys added yet", and
+    // "Clear saved data" skipped its confirmation as if there were none.
+    pgpKeys = readStoredPgpKeys(getAccountId());
     await fetchSettings();
+    if (generation !== loadGeneration) return;
     const currentAcct = getAccountId();
     apiKey = Local.get('api_key') || '';
     theme = getEffectiveSettingValue('theme', { account: currentAcct }) || 'system';
@@ -806,13 +830,7 @@
     aliasEmail = getAliasEmail();
     debugPerfEnabled = Local.get('debug_perf') === '1';
 
-    try {
-      const pgpKey = `pgp_keys_${currentAcct}`;
-      const storedKeys = Local.get(pgpKey);
-      pgpKeys = storedKeys ? JSON.parse(storedKeys) : [];
-    } catch {
-      pgpKeys = [];
-    }
+    pgpKeys = readStoredPgpKeys(currentAcct);
     blockRemoteImages = Boolean(
       getEffectiveSettingValue('block_remote_images', { account: currentAcct }),
     );
@@ -826,6 +844,9 @@
     notifyAppUpdates = getEffectiveSettingValue('notify_app_updates') !== false;
     blockTrackingPixels = Boolean(
       getEffectiveSettingValue('block_tracking_pixels', { account: currentAcct }),
+    );
+    stripLinkTracking = Boolean(
+      getEffectiveSettingValue('strip_link_tracking', { account: currentAcct }),
     );
     viewPlainText = Boolean(getEffectiveSettingValue('view_plain_text', { account: currentAcct }));
     hideCompletedTodosValue = Boolean(
@@ -858,10 +879,17 @@
         });
     }
 
-    keyFormVisible = false;
-    editingKeyName = '';
-    editingKeyValue = '';
-    editingIndex = -1;
+    // Close the key forms only when they belong to another account. This runs
+    // after the settings fetch, so a form opened while that was in flight (or
+    // when the account store was set again to the same account) used to
+    // vanish under the user's typing.
+    if (keyFormAccount !== currentAcct) {
+      keyFormVisible = false;
+      genFormVisible = false;
+      editingKeyName = '';
+      editingKeyValue = '';
+      editingIndex = -1;
+    }
     section = section || 'general';
     refreshHybridOverrides();
 
@@ -1464,6 +1492,20 @@
     }
   };
 
+  const toggleStripLinkTracking = () => {
+    try {
+      setSettingValue('strip_link_tracking', stripLinkTracking, { account: getAccountId() });
+      toasts?.show?.(
+        stripLinkTracking
+          ? 'Tracking parameters will be removed from links you open'
+          : 'Links will open exactly as written',
+        'success',
+      );
+    } catch (err) {
+      showMutationError(err, 'Failed to update link tracking setting');
+    }
+  };
+
   const toggleBlockTrackingPixels = () => {
     try {
       setSettingValue('block_tracking_pixels', blockTrackingPixels, { account: getAccountId() });
@@ -1567,11 +1609,14 @@
 
   const resetSectionChanges = () => {
     const currentSection = section;
+    cancelKeyForm();
+    genFormVisible = false;
     loadFromStorage();
     section = currentSection || 'general';
   };
 
   const openNewKey = () => {
+    keyFormAccount = getAccountId();
     keyFormVisible = true;
     editingIndex = -1;
     editingKeyName = '';
@@ -1583,6 +1628,7 @@
     'Your saved keys could not be read: the system keychain did not answer when the app started. Restart the app and try again.';
 
   const openGenerateKey = () => {
+    keyFormAccount = getAccountId();
     keyFormVisible = false;
     genFormVisible = true;
     genName = (profileNameValue || '').trim();
@@ -1675,6 +1721,7 @@
   const editKey = (key: { name: string; value: string }) => {
     const idx = pgpKeys.indexOf(key);
     if (idx === -1) return;
+    keyFormAccount = getAccountId();
     keyFormVisible = true;
     editingIndex = idx;
     editingKeyName = key.name || '';
@@ -2918,6 +2965,17 @@
             </label>
             <p class="text-sm text-muted-foreground">
               Blocks tiny invisible images used to track email opens.
+            </p>
+            <label class="flex items-center gap-3">
+              <Checkbox
+                bind:checked={stripLinkTracking}
+                onCheckedChange={toggleStripLinkTracking}
+              />
+              <span>Remove tracking from links</span>
+            </label>
+            <p class="text-sm text-muted-foreground">
+              Removes parameters such as utm_source and fbclid from links before they open. Other
+              parts of the link are left alone.
             </p>
             <label class="flex items-center gap-3">
               <Checkbox bind:checked={viewPlainText} onCheckedChange={toggleViewPlainText} />

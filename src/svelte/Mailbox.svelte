@@ -12,7 +12,7 @@
   import { searchStore } from '../stores/searchStore';
   import { getPendingDeleteIds, getPendingFlagMutations } from '../stores/mailboxStore';
   import { Remote } from '../utils/remote';
-  import { isDemoBlockedError, isDemoMode } from '../utils/demo-mode';
+  import { isDemoBlockedError, isDemoMode, showDemoBlockedToast } from '../utils/demo-mode';
   import { evaluateEdgeSwipe, isEdgeSwipeStart } from '../utils/mobile-edge-swipe';
   import { db } from '../utils/db';
   import { sendSyncRequest } from '../utils/sync-worker-client.js';
@@ -33,7 +33,13 @@
   import DOMPurify from 'dompurify';
   import { restoreBlockedImages, sanitizeQuotedHtml } from '../utils/sanitize.js';
   import { trustImageSender } from '../utils/remote-image-trust';
+  import { linkToOpen } from '../utils/tracking-params';
   import PgpBadges from './components/PgpBadges.svelte';
+  import SenderWarningBanner from './components/SenderWarningBanner.svelte';
+  import UnsubscribeButton from './components/UnsubscribeButton.svelte';
+  import { blockSender } from '../stores/filtersStore';
+  import { isPgpSignedNodemailer } from '../utils/pgp-signed-parts';
+  import UserX from '@lucide/svelte/icons/user-x';
   import {
     LABEL_PALETTE,
     pickLabelColor as pickLabelColorFromPalette,
@@ -99,6 +105,7 @@
     indexProgress,
     reportSpamMessage,
     shouldDeleteReportedSpam,
+    verifySignedMessage,
     toggleStar,
     openServerDraft,
     initialSyncStarted,
@@ -2427,6 +2434,69 @@
     }
     await deleteSelected();
     showToast(`Reported to ${address} and deleted`, 'success');
+  };
+
+  // The parsed message the API returned for the open message, once loaded
+  const readerNodemailer = $derived(
+    ($selectedMessage as { nodemailer?: unknown } | null)?.nodemailer ?? null,
+  );
+
+  const signedChecksInFlight = new Set<string>();
+  const checkSignedOnly = async (msg: Message) => {
+    if (signedChecksInFlight.has(msg.id)) return;
+    signedChecksInFlight.add(msg.id);
+    try {
+      const signature = await verifySignedMessage(msg);
+      if (!signature) return;
+      const shown = get(selectedMessage) as Message | null;
+      if (shown?.id === msg.id) {
+        source.state?.selectedMessage?.set?.({ ...shown, pgpSignature: signature });
+      }
+    } finally {
+      signedChecksInFlight.delete(msg.id);
+    }
+  };
+
+  // Block sender: a filter that files the sender's future mail into Junk,
+  // after the user confirms. The open message moves there too.
+  let blockSenderTarget = $state<Message | null>(null);
+  let blockingSender = $state(false);
+  const blockSenderAddress = $derived(
+    blockSenderTarget ? normalizeEmail(blockSenderTarget.from || '') : '',
+  );
+
+  const confirmBlockSender = async () => {
+    const msg = blockSenderTarget;
+    const address = blockSenderAddress;
+    if (!msg || !address || blockingSender) return;
+    if (isDemoMode()) {
+      blockSenderTarget = null;
+      showDemoBlockedToast('Block sender');
+      return;
+    }
+    blockingSender = true;
+    try {
+      const result = await blockSender(address, spamFolderPath);
+      if (!result.ok) {
+        showToast(result.message, 'error');
+        return;
+      }
+      blockSenderTarget = null;
+      const summary = result.already
+        ? `${address} was already blocked`
+        : `Blocked ${address}. Future mail goes to ${spamFolderName}`;
+      // Only the message the block was asked from, and only if it is still open
+      const stillOpen = getActiveMessage()?.id === msg.id;
+      if (stillOpen && !readerIsSpamOrJunk && spamFolderPath) {
+        await moveReaderTo(spamFolderPath, { successToast: summary });
+      } else {
+        showToast(summary, 'success');
+      }
+    } catch (err) {
+      showMutationError(err, 'Failed to block sender');
+    } finally {
+      blockingSender = false;
+    }
   };
 
   const markNotSpam = async () => {
@@ -5766,6 +5836,14 @@
             !sameText(currentSel.cc, enriched.cc) ||
             !sameText(currentSel.replyTo, enriched.replyTo);
           if (changed) source.state?.selectedMessage?.set?.(enriched);
+          // A signed-only PGP message: check its signature (one extra request,
+          // for these messages only)
+          if (
+            !msg.pgpEncrypted &&
+            isPgpSignedNodemailer((meta as { nodemailer?: unknown }).nodemailer)
+          ) {
+            void checkSignedOnly(msg);
+          }
           if (resolvedFrom && resolvedFrom !== msg.from) {
             if (source.state?.messages?.update) {
               mailboxStore.state.messages.update((items: Message[]) =>
@@ -5925,7 +6003,8 @@
       // CSP frame-src. Route desktop and mobile Tauri links through the
       // shared helper so Windows browser overrides and safe fallbacks apply.
       try {
-        await openExternalUrl(url, {
+        // Tracking parameters come off only when the user turned that on
+        await openExternalUrl(linkToOpen(url), {
           log: (...args: unknown[]) => console.warn('[Mailbox]', ...args),
         });
       } catch (err) {
@@ -9154,13 +9233,22 @@
                       <strong class="text-lg font-semibold"
                         >{threadSubject || $selectedMessage.subject}</strong
                       >
-                      {#if $selectedMessage.pgpEncrypted && !$pgpLocked}
+                      {#if ($selectedMessage.pgpEncrypted && !$pgpLocked) || $selectedMessage.pgpSignature}
                         <span class="ml-2 inline-flex flex-wrap gap-1.5 align-middle">
                           <PgpBadges
-                            encrypted
+                            encrypted={Boolean($selectedMessage.pgpEncrypted && !$pgpLocked)}
                             signed={$selectedMessage.pgpSigned}
                             signature={$selectedMessage.pgpSignature}
                             from={$selectedMessage.from}
+                          />
+                        </span>
+                      {/if}
+                      {#if !readerIsSentFolder && !readerIsDraftFolder && readerNodemailer}
+                        <span class="ml-1 align-middle">
+                          <UnsubscribeButton
+                            nodemailer={readerNodemailer}
+                            account={Local.get('email') || ''}
+                            onToast={showToast}
                           />
                         </span>
                       {/if}
@@ -9353,6 +9441,20 @@
                               >
                                 <ShieldAlert class="h-4 w-4" />
                                 <span>Report spam</span>
+                              </button>
+                            {/if}
+                            {#if canReportSpam && normalizeEmail($selectedMessage.from || '')}
+                              <button
+                                type="button"
+                                class="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground cursor-pointer active:bg-accent"
+                                onclick={() => {
+                                  actionMenuOpen = false;
+                                  blockSenderTarget = $selectedMessage;
+                                }}
+                                data-testid="action-menu-block-sender"
+                              >
+                                <UserX class="h-4 w-4" />
+                                <span>Block sender</span>
                               </button>
                             {/if}
                             {#if canArchive}
@@ -9959,6 +10061,9 @@
                                   {/if}
                                 </div>
                               {/if}
+                              {#if !readerIsSentFolder && !readerIsDraftFolder}
+                                <SenderWarningBanner message={$selectedMessage} />
+                              {/if}
                               {#if $hasBlockedImages}
                                 <div
                                   class="flex items-center gap-3 p-3 mb-4 bg-state-caution/10 border border-state-caution/20 text-sm"
@@ -10241,6 +10346,9 @@
                             </button>
                           {/if}
                         </div>
+                      {/if}
+                      {#if !readerIsSentFolder && !readerIsDraftFolder}
+                        <SenderWarningBanner message={$selectedMessage} />
                       {/if}
                       {#if $hasBlockedImages}
                         <div
@@ -10621,6 +10729,39 @@
     </div>
   {/if}
 </Tooltip.Provider>
+
+<Dialog.Root
+  open={Boolean(blockSenderTarget)}
+  onOpenChange={(open) => {
+    if (!open && !blockingSender) blockSenderTarget = null;
+  }}
+>
+  <Dialog.Content class="sm:max-w-[420px]">
+    <Dialog.Header>
+      <Dialog.Title>Block {blockSenderAddress}?</Dialog.Title>
+    </Dialog.Header>
+    <div class="py-2 text-sm text-muted-foreground space-y-2">
+      <p>
+        New mail from this address will go straight to {spamFolderName || 'Junk'}. This message
+        moves there too.
+      </p>
+      <p>The block is a filter: remove it in Settings, Filters to undo it.</p>
+    </div>
+    <Dialog.Footer>
+      <Button variant="ghost" disabled={blockingSender} onclick={() => (blockSenderTarget = null)}>
+        Cancel
+      </Button>
+      <Button
+        variant="destructive"
+        disabled={blockingSender}
+        onclick={confirmBlockSender}
+        data-testid="block-sender-confirm"
+      >
+        {blockingSender ? 'Blocking…' : 'Block sender'}
+      </Button>
+    </Dialog.Footer>
+  </Dialog.Content>
+</Dialog.Root>
 
 <!-- Mailto handler prompt (shown once on first INBOX render after sign-in) -->
 {#if $selectedFolder === 'INBOX'}

@@ -15,6 +15,9 @@
   import * as Tooltip from '$lib/components/ui/tooltip';
   import EmailIframe from './EmailIframe.svelte';
   import PgpBadges from './PgpBadges.svelte';
+  import SenderWarningBanner from './SenderWarningBanner.svelte';
+  import UnsubscribeButton from './UnsubscribeButton.svelte';
+  import { isPgpSignedNodemailer } from '../../utils/pgp-signed-parts';
 
   // Icons
   import Reply from '@lucide/svelte/icons/reply';
@@ -37,6 +40,7 @@
   import { processQuotedContent } from '../../utils/quote-collapse.js';
   import { restoreBlockedImages } from '../../utils/sanitize.js';
   import { trustImageSender } from '../../utils/remote-image-trust';
+  import { linkToOpen } from '../../utils/tracking-params';
   import { formatFriendlyDate } from '../../utils/date';
   import { extractDisplayName } from '../../utils/address.ts';
   import { openComposeWindow } from '../../utils/compose-window';
@@ -56,6 +60,7 @@
     archiveMessage,
     toggleRead,
     getForwardAttachments,
+    verifySignedMessage,
   } from '../../stores/mailboxActions';
   import type { Message, Attachment, PgpSignatureCheck } from '../../types';
 
@@ -94,6 +99,17 @@
   let showAllRecipients = $state(false);
   let showAllCc = $state(false);
   let error = $state('');
+
+  // The parsed message the API returned, once onMeta has added it
+  const messageNodemailer = $derived(
+    (message as (Message & { nodemailer?: unknown }) | null)?.nodemailer ?? null,
+  );
+
+  // The user's own mail (Sent, Drafts) gets no sender warning or unsubscribe
+  const fromSelf = $derived(
+    Boolean(message?.from) &&
+      normalizeEmail(message?.from || '') === normalizeEmail(accountEmail || ''),
+  );
 
   // Puts back the images the sanitizer held back, tracking pixels excepted.
   // Hiding the banner alone left them blocked.
@@ -216,6 +232,15 @@
           // Enrich message with parsed metadata
           if (meta?.nodemailer) {
             message = { ...message!, nodemailer: meta.nodemailer };
+            // A signed-only PGP message: check its signature
+            const checked = message;
+            if (checked && !checked.pgpEncrypted && isPgpSignedNodemailer(meta.nodemailer)) {
+              void verifySignedMessage(checked).then((signature) => {
+                if (signature && message && message.id === checked.id) {
+                  message = { ...message, pgpSignature: signature };
+                }
+              });
+            }
           }
         },
         onError: (err: string) => {
@@ -297,7 +322,7 @@
       return;
     }
     try {
-      await openExternalUrl(url, {
+      await openExternalUrl(linkToOpen(url), {
         log: (...args: unknown[]) => console.warn('[MessageTab]', ...args),
       });
     } catch (err) {
@@ -469,13 +494,16 @@
         <!-- Subject -->
         <div class="mb-4 flex flex-wrap items-center gap-2">
           <h1 class="text-xl font-semibold">{message.subject || '(No subject)'}</h1>
-          {#if message.pgpEncrypted && !pgpLocked}
+          {#if (message.pgpEncrypted && !pgpLocked) || message.pgpSignature}
             <PgpBadges
-              encrypted
+              encrypted={Boolean(message.pgpEncrypted && !pgpLocked)}
               signed={message.pgpSigned}
               signature={message.pgpSignature}
               from={message.from}
             />
+          {/if}
+          {#if !fromSelf && messageNodemailer}
+            <UnsubscribeButton nodemailer={messageNodemailer} account={accountEmail} />
           {/if}
         </div>
 
@@ -495,6 +523,10 @@
           </div>
           <span class="text-sm text-muted-foreground shrink-0 ml-4">{dateDisplay}</span>
         </div>
+
+        {#if !fromSelf}
+          <SenderWarningBanner {message} />
+        {/if}
 
         <!-- Blocked Images Warning -->
         {#if hasBlockedImages && blockedImageCount > 0 && !showAllImages}

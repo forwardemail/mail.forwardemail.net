@@ -385,6 +385,17 @@ export const SETTINGS_REGISTRY: Record<string, SettingDefinition> = {
     localParse: (raw) => parseBoolean(raw, true),
     localSerialize: (value) => serializeBoolean(Boolean(value)),
   },
+  strip_link_tracking: {
+    id: 'strip_link_tracking',
+    portable: true,
+    label: 'Remove Link Tracking',
+    scope: SETTING_SCOPES.DEVICE,
+    localKey: 'strip_link_tracking',
+    valueType: 'boolean',
+    defaultValue: false,
+    localParse: (raw) => parseBoolean(raw, false),
+    localSerialize: (value) => serializeBoolean(Boolean(value)),
+  },
   block_tracking_pixels: {
     id: 'block_tracking_pixels',
     portable: true,
