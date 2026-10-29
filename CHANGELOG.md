@@ -6,6 +6,22 @@ release notes are taken from here. To change what a commit says, add a
 `Release-note: <text>` line to its message (or `Release-note: none` to leave
 it out).
 
+## 0.16.0 (2026-10-29)
+
+### New
+
+- Desktop now protects saved passwords and PGP keys with your system
+- Create PGP keys, see verified signatures, and sign without encrypting
+- Remote images are blocked by default; allow them per message or per sender
+- Signed (not encrypted) PGP mail now shows whether its signature checks
+- Unsubscribe from lists, block senders, and see warnings on suspicious senders
+
+### Fixes
+
+- On desktop, email content is now fully isolated from the app
+- Keep email frames working on older WebKit _(Desktop)_
+- Recover from stale chunks on WebKit
+
 ## 0.15.12 (2026-10-26)
 
 ### Fixes

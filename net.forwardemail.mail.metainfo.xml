@@ -36,6 +36,24 @@
   </screenshots>
   <!-- scripts/sync-version.cjs prepends a release entry on every version bump. -->
   <releases>
+    <release version="0.16.0" date="2026-10-29">
+      <description>
+        <p>New</p>
+        <ul>
+          <li>Desktop now protects saved passwords and PGP keys with your system</li>
+          <li>Create PGP keys, see verified signatures, and sign without encrypting</li>
+          <li>Remote images are blocked by default; allow them per message or per sender</li>
+          <li>Signed (not encrypted) PGP mail now shows whether its signature checks</li>
+          <li>Unsubscribe from lists, block senders, and see warnings on suspicious senders</li>
+        </ul>
+        <p>Fixes</p>
+        <ul>
+          <li>On desktop, email content is now fully isolated from the app</li>
+          <li>Keep email frames working on older WebKit</li>
+          <li>Recover from stale chunks on WebKit</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.15.12" date="2026-10-26">
       <description>
         <p>Fixes</p>
