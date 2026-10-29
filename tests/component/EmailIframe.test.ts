@@ -3,11 +3,14 @@ import { render, screen, cleanup, waitFor } from '@testing-library/svelte';
 
 // The status bar is desktop-app only; the flag is read at module evaluation,
 // so it is flipped per test through a hoisted holder the mock reads live.
-const platform = vi.hoisted(() => ({ desktop: true }));
+const platform = vi.hoisted(() => ({ desktop: true, mobile: false }));
 vi.mock('../../src/utils/platform.js', () => ({
   isTauri: false,
   get isTauriDesktop() {
     return platform.desktop;
+  },
+  get isTauriMobile() {
+    return platform.mobile;
   },
 }));
 
@@ -16,6 +19,7 @@ import EmailIframe from '../../src/svelte/components/EmailIframe.svelte';
 afterEach(() => {
   cleanup();
   platform.desktop = true;
+  platform.mobile = false;
 });
 
 /** Post a message the way the sandboxed runtime would, from this iframe's window. */
@@ -177,5 +181,24 @@ describe('<EmailIframe /> frame per message', () => {
     // A fresh instance, as after the reader skeleton or a tab switch
     render(EmailIframe, { props: { html: '<p>tall</p>', messageId: 'f' } });
     expect(frame().style.height).toBe('950px');
+  });
+});
+
+describe('<EmailIframe /> sandbox', () => {
+  // With allow-same-origin next to allow-scripts, script in the email
+  // document would share the app's origin and reach its native bridge
+  it('gives the email document an opaque origin on desktop', () => {
+    render(EmailIframe, { props: { html: '<p>hi</p>', messageId: 'sb1' } });
+    const iframe = document.querySelector('iframe.fe-email-iframe') as HTMLIFrameElement;
+    expect(iframe.getAttribute('sandbox')).toBe('allow-scripts');
+  });
+
+  it('still reports ready over postMessage', async () => {
+    render(EmailIframe, { props: { html: '<p>hi</p>', messageId: 'sb2' } });
+    const iframe = document.querySelector('iframe.fe-email-iframe') as HTMLIFrameElement;
+    expect(iframe.getAttribute('data-frame-ready')).toBe('false');
+    const token = iframe.getAttribute('srcdoc')?.match(/data-fe-token="([^"]*)"/)?.[1];
+    postFromIframe({ type: 'ready', payload: { token } });
+    await waitFor(() => expect(iframe.getAttribute('data-frame-ready')).toBe('true'));
   });
 });

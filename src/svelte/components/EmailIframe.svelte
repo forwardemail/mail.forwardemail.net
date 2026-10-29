@@ -22,7 +22,7 @@
   import { onMount, onDestroy, untrack } from 'svelte';
   import { buildIframeSrcdoc } from '../../utils/iframe-srcdoc';
   import { htmlToPlainText } from '../../utils/sanitize.js';
-  import { isTauri, isTauriDesktop } from '../../utils/platform.js';
+  import { isTauriDesktop, isTauriMobile } from '../../utils/platform.js';
   import { describeLinkTarget, type LinkPreview } from '../../utils/link-preview';
   import { portal } from '../../utils/portal';
 
@@ -114,8 +114,11 @@
   const srcdoc = $derived(frameDoc.doc);
 
   // The token of the document that last said it is ready or reported a height
-  let readyToken = '';
+  let readyToken = $state('');
   let heightToken = '';
+  // The runtime in the current document has started. Exposed on the frame for
+  // tests, which cannot look inside it.
+  const frameReady = $derived(readyToken !== '' && readyToken === frameDoc.token);
 
   // Measure iframe content height directly via contentDocument.
   // Returns 0 if cross-origin restrictions prevent access.
@@ -358,9 +361,10 @@
   let themeObserver: MutationObserver | null = null;
 
   // Android WebView can swallow touch events inside iframes before they
-  // reach document-level listeners in the srcdoc. Since we use
-  // allow-same-origin on Tauri, attach touch listeners directly on the
-  // iframe's contentDocument from the parent as a reliable fallback.
+  // reach document-level listeners in the srcdoc. Tauri mobile keeps
+  // allow-same-origin, so there the parent attaches touch listeners directly
+  // on the iframe's contentDocument as a fallback. Elsewhere contentDocument
+  // is null and the runtime's swipe messages are the only path.
   let swipeState = {
     startX: 0,
     startY: 0,
@@ -481,17 +485,20 @@
 
 {#key contentSignature}
   <div class="fe-email-iframe-container" style="height: {iframeHeight}px;">
-    <!-- On Tauri/WRY, sandboxed srcdoc iframes without allow-same-origin
-         cannot postMessage to the parent (WebKit limitation). We add
-         allow-same-origin on desktop — this is safe because the srcdoc CSP
-         blocks all network access (default-src 'none', no connect-src),
-         preventing data exfiltration even if email HTML contains scripts.
-         Tauri's isolation pattern + WRY provide the real security boundary. -->
+    <!-- The email document gets an opaque origin everywhere except Tauri
+         mobile. With allow-same-origin next to allow-scripts, a script that got
+         past the sanitizer and the srcdoc CSP would share the app's origin and
+         could reach its native bridge. The runtime talks to the parent only by
+         postMessage, which works without it. Mobile keeps allow-same-origin
+         for now: the parent attaches touch listeners to the frame's document
+         because Android WebView can swallow touches inside it, and that path
+         has not been checked on devices without it. -->
     {#if frameDoc.hasContent}
       <iframe
         bind:this={iframeRef}
         {srcdoc}
-        sandbox={isTauri ? 'allow-scripts allow-same-origin' : 'allow-scripts'}
+        sandbox={isTauriMobile ? 'allow-scripts allow-same-origin' : 'allow-scripts'}
+        data-frame-ready={frameReady ? 'true' : 'false'}
         title="Email content"
         class="fe-email-iframe"
         style="height: {iframeHeight}px; color-scheme: {isDarkMode ? 'dark' : 'light'};"
