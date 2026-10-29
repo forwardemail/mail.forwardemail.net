@@ -72,7 +72,8 @@
   import { attachmentThumbnail, releaseAttachmentThumbnail } from '../utils/attachment-thumbnail';
   import { htmlToPlainText, sanitizeQuotedHtml } from '../utils/sanitize.js';
   import { hasRichFormatting } from '../utils/compose-format';
-  import { buildEncryptedPayload } from '../utils/pgp-send';
+  import { buildEncryptedPayload, buildSignedPayload } from '../utils/pgp-send';
+  import { readPgpKeys } from '../utils/pgp-local';
   import { recipientKeyCoverage } from '../utils/pgp-recipients';
   import { pickFiles } from '../utils/file-picker';
   import { isTauriDesktop } from '../utils/platform';
@@ -166,6 +167,7 @@
   import FileText from '@lucide/svelte/icons/file-text';
   import Lock from '@lucide/svelte/icons/lock';
   import LockOpen from '@lucide/svelte/icons/lock-open';
+  import Signature from '@lucide/svelte/icons/signature';
 
   interface ToastApi {
     show?: (message: string, type?: string) => void;
@@ -357,6 +359,15 @@
         'warning',
       );
     }
+  };
+  // Sign without encrypting (RFC 3156 multipart/signed). Encrypting signs as
+  // well, so this only matters while encryption is off. Offered only when the
+  // account has a private key.
+  let signEnabled = $state(false);
+  const accountHasSigningKey = () => readPgpKeys(activeAccount() || undefined).length > 0;
+  let hasSigningKey = $state(accountHasSigningKey());
+  const toggleSign = () => {
+    signEnabled = !signEnabled;
   };
   let showCc = $state(false);
   let showBcc = $state(false);
@@ -1548,6 +1559,8 @@
     body = '';
     isPlainText = getPlainTextDefault();
     encryptEnabled = false;
+    signEnabled = false;
+    hasSigningKey = accountHasSigningKey();
     attachments = [];
     attachmentError = '';
     attachmentLoading = 0;
@@ -2648,6 +2661,12 @@
       toasts?.show?.(error, 'error');
       return;
     }
+    if (signEnabled) {
+      // Same reason as above: a signed message is sent raw as well
+      error = 'Scheduled send is not available for signed messages yet.';
+      toasts?.show?.(error, 'error');
+      return;
+    }
     const payload = buildPayload();
     if (!payload) return;
     sending = true;
@@ -2775,6 +2794,29 @@
       // read: the /v1/emails POST, the outbox, and the Sent copy.
       for (const key of ['html', 'text', 'attachments', 'has_attachment']) delete payload[key];
       payload.raw = encrypted.payload?.raw;
+    } else if (signEnabled) {
+      const signed = await buildSignedPayload({
+        from: payload.from as string,
+        to: payload.to as string[],
+        cc: payload.cc as string[],
+        bcc: payload.bcc as string[],
+        subject: payload.subject as string,
+        text: payload.text as string,
+        html: payload.html as string,
+        attachments: payload.attachments as { filename?: string }[],
+        replyTo: payload.reply_to as string,
+        inReplyTo: payload.inReplyTo as string,
+        references: payload.references as string,
+        messageId: payload.messageId as string,
+      });
+      if (!signed.ok) {
+        error = signed.message || 'Could not sign this message.';
+        toasts?.show?.(error, 'error');
+        sending = false;
+        return;
+      }
+      for (const key of ['html', 'text', 'attachments', 'has_attachment']) delete payload[key];
+      payload.raw = signed.payload?.raw;
     }
 
     // Undo-send: when enabled and online, hold the message in the outbox for
@@ -4480,6 +4522,34 @@
                 </p>
               </Tooltip.Content>
             </Tooltip.Root>
+            {#if hasSigningKey}
+              <Tooltip.Root>
+                <Tooltip.Trigger>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    class={signEnabled || encryptEnabled ? 'bg-accent text-fg-link' : ''}
+                    aria-pressed={signEnabled || encryptEnabled}
+                    disabled={encryptEnabled}
+                    onclick={toggleSign}
+                    data-testid="compose-toggle-sign"
+                  >
+                    <Signature class="h-4 w-4" />
+                  </Button>
+                </Tooltip.Trigger>
+                <Tooltip.Content>
+                  <p>
+                    {#if encryptEnabled}
+                      Encrypted messages are signed too
+                    {:else if signEnabled}
+                      Signed with your PGP key. Turn off to send unsigned
+                    {:else}
+                      Sign with your PGP key
+                    {/if}
+                  </p>
+                </Tooltip.Content>
+              </Tooltip.Root>
+            {/if}
             <Tooltip.Root>
               <Tooltip.Trigger>
                 <Button

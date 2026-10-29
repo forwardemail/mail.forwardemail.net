@@ -24,6 +24,7 @@
     saveRecipientKey,
     type RecipientKey,
   } from '../../utils/pgp-recipients';
+  import { refreshSyncWorkerPgpKeys } from '../../utils/sync-worker-client.js';
 
   interface Props {
     onToast?: (message: string, type?: string) => void;
@@ -64,6 +65,8 @@
       return;
     }
     keys = saveRecipientKey({ email, armored });
+    // The worker checks signatures against pinned keys
+    refreshSyncWorkerPgpKeys();
     showAdd = false;
     onToast?.(`Public key saved for ${email}`, 'success');
   };
@@ -72,6 +75,7 @@
     if (!pendingDelete) return;
     const email = pendingDelete.email;
     keys = deleteRecipientKey(email);
+    refreshSyncWorkerPgpKeys();
     pendingDelete = null;
     onToast?.(`Removed the key for ${email}`, 'success');
   };

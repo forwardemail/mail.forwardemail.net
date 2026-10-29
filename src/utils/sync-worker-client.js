@@ -1,6 +1,7 @@
 import { config } from '../config.js';
 import SyncWorker from '../workers/sync.worker.ts?worker&inline';
 import { Local } from './storage.js';
+import { readRecipientKeys } from './pgp-recipients';
 import { initializeDatabase } from './db.js';
 import { onDbWorkerChange, openDbPortForWorker } from './db-worker-client.js';
 import { getAuthHeader } from './auth.ts';
@@ -35,9 +36,11 @@ function getPgpPayload() {
     const keys = rawKeys ? JSON.parse(rawKeys) : [];
     const rawPass = Local.get(`pgp_passphrases_${currentAcct}`);
     const passphrases = rawPass ? JSON.parse(rawPass) : {};
-    return { keys: Array.isArray(keys) ? keys : [], passphrases: passphrases || {} };
+    // Pinned contact keys, which the worker checks signatures against
+    const contactKeys = readRecipientKeys(currentAcct).map((k) => k.armored);
+    return { keys: Array.isArray(keys) ? keys : [], passphrases: passphrases || {}, contactKeys };
   } catch {
-    return { keys: [], passphrases: {} };
+    return { keys: [], passphrases: {}, contactKeys: [] };
   }
 }
 
@@ -377,6 +380,14 @@ export async function requestPgpEncryption({ plaintext, recipientKeys, sign = tr
     },
     { timeout: 30000 },
   );
+}
+
+/**
+ * Request a detached signature over a MIME entity, made with the unlocked
+ * key for `from` (sync.worker.ts handleSignMessageTask).
+ */
+export async function requestPgpSignature({ plaintext, from }) {
+  return sendSyncTask({ type: 'signMessage', plaintext, from }, { timeout: 30000 });
 }
 
 /**

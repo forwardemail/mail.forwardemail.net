@@ -204,10 +204,8 @@ export function buildInnerMime(parts: MessageParts): string {
  * mail client expects to read it without a key. Callers that want it hidden
  * must replace it before calling.
  */
-export function buildPgpMimeMessage(armored: string, headers: OuterHeaders): string {
-  const boundary = makeBoundary('pgp');
+function outerHeaderLines(headers: OuterHeaders): string[] {
   const date = headers.date || new Date();
-
   const lines: string[] = [
     'MIME-Version: 1.0',
     `Date: ${date.toUTCString().replace(/GMT$/, '+0000')}`,
@@ -223,6 +221,12 @@ export function buildPgpMimeMessage(armored: string, headers: OuterHeaders): str
   if (messageId) lines.push(`Message-ID: ${messageId}`);
   if (inReplyTo) lines.push(`In-Reply-To: ${inReplyTo}`);
   if (references) lines.push(`References: ${references}`);
+  return lines;
+}
+
+export function buildPgpMimeMessage(armored: string, headers: OuterHeaders): string {
+  const boundary = makeBoundary('pgp');
+  const lines = outerHeaderLines(headers);
 
   lines.push(
     `Content-Type: multipart/encrypted; protocol="application/pgp-encrypted"; boundary="${boundary}"`,
@@ -248,5 +252,44 @@ export function buildPgpMimeMessage(armored: string, headers: OuterHeaders): str
     '',
   );
 
+  return lines.join(CRLF);
+}
+
+/**
+ * Wrap a MIME entity and its detached signature in the multipart/signed
+ * envelope (RFC 3156 section 5) and add the outer headers.
+ *
+ * `entity` must be the exact text that was signed, CRLF line endings
+ * included: receivers check the signature over the first part's bytes as they
+ * appear between the boundaries. buildInnerMime base64-encodes every body, so
+ * no line has the trailing whitespace transports would strip.
+ */
+export function buildPgpSignedMessage(
+  entity: string,
+  armoredSignature: string,
+  micalg: string,
+  headers: OuterHeaders,
+): string {
+  const boundary = makeBoundary('sig');
+  const safeMicalg = /^pgp-[a-z0-9-]+$/.test(micalg) ? micalg : 'pgp-sha256';
+  const lines = outerHeaderLines(headers);
+  lines.push(
+    `Content-Type: multipart/signed; micalg="${safeMicalg}"; protocol="application/pgp-signature"; boundary="${boundary}"`,
+    '',
+    'This is an OpenPGP/MIME signed message (RFC 3156).',
+    `--${boundary}`,
+    entity.replace(/\r?\n/g, CRLF),
+    `--${boundary}`,
+    'Content-Type: application/pgp-signature; name="signature.asc"',
+    'Content-Description: OpenPGP digital signature',
+    'Content-Disposition: attachment; filename="signature.asc"',
+    '',
+    String(armoredSignature || '')
+      .replace(/\r?\n/g, CRLF)
+      .trim(),
+    '',
+    `--${boundary}--`,
+    '',
+  );
   return lines.join(CRLF);
 }

@@ -1792,6 +1792,7 @@ async function fetchAndCacheBodyWithOptions(account, folder, msg, options = {}) 
             const changes: Record<string, unknown> = {
               pgpEncrypted: true,
               pgpSigned: lastDecryptSigned,
+              pgpSignature: lastDecryptSignature,
             };
             pgpInfo = { encrypted: true };
             if (typeof parsed.subject === 'string' && parsed.subject.trim()) {
@@ -1900,10 +1901,63 @@ function extractPgpArmor(raw) {
 
 let lastDecryptError = '';
 let lastDecryptSigned = false;
+// What checking the signatures found, for the last decrypt
+let lastDecryptSignature: PgpSignatureCheck | null = null;
+
+/**
+ * The outcome of checking a decrypted message's signatures.
+ * - verified: a signature checks out against a key the user holds (a pinned
+ *   contact key or their own). `signers` are that key's addresses; whether one
+ *   is the From address is for the reader to compare.
+ * - invalid: a signature from a key the user holds does not match the
+ *   content. Either the message changed after signing or it was forged.
+ * - unverified: signed, but by no key the user holds, so nothing can be said.
+ * - revoked: the signing key is held, but its owner has revoked it. The
+ *   signature may be intact; the key can no longer vouch for anything.
+ */
+interface PgpSignatureCheck {
+  status: 'verified' | 'invalid' | 'unverified' | 'revoked';
+  signers: string[];
+}
+
+async function checkSignatures(signatures, keys): Promise<PgpSignatureCheck | null> {
+  if (!Array.isArray(signatures) || !signatures.length) return null;
+  let sawUnknown = false;
+  for (const sig of signatures) {
+    const signer = (keys || []).find((key) => key.getKeyIDs().some((id) => id.equals(sig.keyID)));
+    if (!signer) {
+      sawUnknown = true;
+      continue;
+    }
+    try {
+      await sig.verified;
+    } catch (err) {
+      // openpgp rejects a signature from a revoked key the same way as one
+      // that does not match. Telling them apart matters: one is a key the
+      // owner retired, the other a message changed after signing.
+      const revoked = /revoked/i.test(String((err as Error)?.message || err));
+      return { status: revoked ? 'revoked' : 'invalid', signers: keyAddresses(signer) };
+    }
+    return { status: 'verified', signers: keyAddresses(signer) };
+  }
+  return sawUnknown ? { status: 'unverified', signers: [] } : null;
+}
+
+function keyAddresses(key): string[] {
+  try {
+    return key.users
+      .map((user) => user.userID?.email)
+      .filter((email) => typeof email === 'string' && email)
+      .map((email) => email.toLowerCase());
+  } catch {
+    return [];
+  }
+}
 
 async function decryptPgp(armored) {
   lastDecryptError = '';
   lastDecryptSigned = false;
+  lastDecryptSignature = null;
   await pgpKeysReady.catch(() => {});
   if (!armored || !unlockedPgpKeys.length) return '';
 
@@ -1986,14 +2040,14 @@ async function decryptPgp(armored) {
 
     const message = await openpgp.readMessage({ armoredMessage: pgpBlock });
 
+    const keys = signatureVerificationKeys();
     const { data, signatures } = await openpgp.decrypt({
       message,
       decryptionKeys: unlockedPgpKeys,
+      verificationKeys: keys,
     });
-    // Signature PACKETS present, but sender authenticity is NOT verified (we
-    // pass no verificationKeys / have no public-key store yet). Callers must
-    // present this as "signed (unverified)".
     lastDecryptSigned = Array.isArray(signatures) && signatures.length > 0;
+    lastDecryptSignature = await checkSignatures(signatures, keys);
     return data || '';
   } catch (err) {
     lastDecryptError = err?.message || String(err);
@@ -2069,6 +2123,7 @@ async function handleDecryptMessageTask(task) {
       attachments: [],
       rawDecrypted: true,
       signed: lastDecryptSigned,
+      signature: lastDecryptSignature,
       keyCount: unlockedPgpKeys.length,
     };
   }
@@ -2082,6 +2137,7 @@ async function handleDecryptMessageTask(task) {
     // when the sender didn't encrypt the subject).
     subject: parsed.subject,
     signed: lastDecryptSigned,
+    signature: lastDecryptSignature,
     keyCount: unlockedPgpKeys.length,
   };
 }
@@ -2144,6 +2200,68 @@ async function handleEncryptMessageTask(task) {
   }
 }
 
+/**
+ * The unlocked key to sign as `from`: the one with that address among its
+ * user ids, else the first. Several accounts' keys can be loaded at once.
+ */
+function signingKeyFor(from) {
+  const address = String(from || '')
+    .trim()
+    .toLowerCase();
+  if (address) {
+    const match = unlockedPgpKeys.find((key) => keyAddresses(key).includes(address));
+    if (match) return match;
+  }
+  return unlockedPgpKeys[0] || null;
+}
+
+/**
+ * Make a detached signature over a MIME entity, for an RFC 3156
+ * multipart/signed message (pgp-mime.ts buildPgpSignedMessage).
+ *
+ * The signature covers the entity's exact bytes with CRLF line endings, which
+ * is how receivers canonicalize it before checking. `micalg` names the hash
+ * the signature used, since the outer Content-Type has to say it.
+ */
+async function handleSignMessageTask(task) {
+  const { plaintext, from } = task;
+  if (!plaintext || typeof plaintext !== 'string') {
+    return { success: false, reason: 'invalid_input', message: 'Nothing to sign' };
+  }
+  await pgpKeysReady.catch(() => {});
+  const signingKey = signingKeyFor(from);
+  if (!signingKey) {
+    return {
+      success: false,
+      reason: 'no_signing_key',
+      message:
+        'No unlocked PGP key to sign with. Add your key and save its passphrase in Settings, or open an encrypted message to unlock it.',
+    };
+  }
+  try {
+    const canonical = plaintext.replace(/\r?\n/g, '\r\n');
+    const message = await openpgp.createMessage({
+      binary: new TextEncoder().encode(canonical),
+    });
+    const armored = await openpgp.sign({
+      message,
+      signingKeys: signingKey,
+      detached: true,
+      format: 'armored',
+    });
+    const signature = await openpgp.readSignature({ armoredSignature: armored });
+    const hashId = signature.packets?.[0]?.hashAlgorithm;
+    const hashName = hashId !== undefined ? openpgp.enums.read(openpgp.enums.hash, hashId) : '';
+    return {
+      success: true,
+      signature: armored,
+      micalg: `pgp-${String(hashName || 'sha256').toLowerCase()}`,
+    };
+  } catch (err) {
+    return { success: false, reason: 'sign_failed', message: err?.message || 'Signing failed' };
+  }
+}
+
 async function handleParseRawTask(task) {
   const { raw, existingAttachments = [] } = task;
 
@@ -2177,7 +2295,8 @@ async function handleTask(taskId, task) {
     const isLocalOnlyTask =
       task?.type === 'decryptMessage' ||
       task?.type === 'parseRaw' ||
-      task?.type === 'encryptMessage';
+      task?.type === 'encryptMessage' ||
+      task?.type === 'signMessage';
     if (!apiBase || (!isLocalOnlyTask && !authFor(accountKey(task?.account)))) {
       throw new Error('Worker not initialized');
     }
@@ -2208,6 +2327,8 @@ async function handleTask(taskId, task) {
       summary = await handleParseRawTask(task);
     } else if (task.type === 'encryptMessage') {
       summary = await handleEncryptMessageTask(task);
+    } else if (task.type === 'signMessage') {
+      summary = await handleSignMessageTask(task);
     } else {
       throw new Error(`Unsupported task type: ${task.type}`);
     }
@@ -2585,7 +2706,37 @@ async function handleRequest(requestId, action, payload) {
 // reader down the slow main-thread unlock. decryptPgp waits on this instead.
 let pgpKeysReady: Promise<void> = Promise.resolve();
 
-async function updatePgpKeys(keys = [], passphrases = {}) {
+// Public keys the user has pinned for contacts (pgp-recipients.ts), parsed
+let contactPublicKeys = [];
+
+/** Keys a signature can be checked against: pinned contacts and the user's own. */
+function signatureVerificationKeys() {
+  const own = [];
+  for (const key of unlockedPgpKeys) {
+    try {
+      own.push(key.toPublic());
+    } catch {
+      // a key that cannot give its public half signs nothing we can check
+    }
+  }
+  return [...contactPublicKeys, ...own];
+}
+
+async function updateContactKeys(armoredKeys = []) {
+  const parsed = [];
+  for (const armored of Array.isArray(armoredKeys) ? armoredKeys : []) {
+    if (typeof armored !== 'string' || !armored) continue;
+    try {
+      parsed.push(await openpgp.readKey({ armoredKey: armored }));
+    } catch {
+      // the composer reports unreadable pinned keys; skip it here
+    }
+  }
+  contactPublicKeys = parsed;
+}
+
+async function updatePgpKeys(keys = [], passphrases = {}, contactKeys = []) {
+  await updateContactKeys(contactKeys);
   pgpPassphrases = passphrases || {};
   const previous: Array<{ getFingerprint: () => string }> = unlockedPgpKeys;
   const unlocked = [];
@@ -2827,7 +2978,11 @@ self.onmessage = (event) => {
     return;
   }
   if (data.type === 'pgpKeys') {
-    pgpKeysReady = updatePgpKeys(data.keys || [], data.passphrases || {}).catch((err) => {
+    pgpKeysReady = updatePgpKeys(
+      data.keys || [],
+      data.passphrases || {},
+      data.contactKeys || [],
+    ).catch((err) => {
       console.warn('[sync.worker] PGP key update failed', err?.message);
     });
     return;

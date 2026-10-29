@@ -2,6 +2,19 @@
  * Message-related type definitions
  */
 
+/**
+ * The outcome of checking a decrypted message's signatures (sync.worker.ts).
+ * - verified: a signature checks out against a key the user holds.
+ * - invalid: a signature from a key the user holds does not match.
+ * - unverified: signed by no key the user holds.
+ * - revoked: signed by a held key that its owner has since revoked.
+ * `signers` are the addresses on the signing key.
+ */
+export interface PgpSignatureCheck {
+  status: 'verified' | 'invalid' | 'unverified' | 'revoked';
+  signers: string[];
+}
+
 export interface Message {
   id: string;
   account: string;
@@ -36,8 +49,10 @@ export interface Message {
   updatedAt: number;
   /** PGP-encrypted message that was successfully decrypted at least once. */
   pgpEncrypted?: boolean;
-  /** Signature packets were present on decrypt but NOT verified. */
+  /** Signature packets were present on decrypt. */
   pgpSigned?: boolean;
+  /** What checking those signatures found (see PgpSignatureCheck). */
+  pgpSignature?: PgpSignatureCheck | null;
   // The subject the server has (a protected-headers placeholder such as "...")
   // while `subject` holds the one decrypted on this device
   pgpOuterSubject?: string | null;

@@ -5,9 +5,14 @@
  * untouched, which is what makes client-side encryption possible at all: the
  * server never sees the plaintext.
  */
-import { buildInnerMime, buildPgpMimeMessage, type MessageParts } from './pgp-mime';
+import {
+  buildInnerMime,
+  buildPgpMimeMessage,
+  buildPgpSignedMessage,
+  type MessageParts,
+} from './pgp-mime';
 import { normalizeAddress, recipientKeyCoverage, readRecipientKeys } from './pgp-recipients';
-import { requestPgpEncryption } from './sync-worker-client.js';
+import { requestPgpEncryption, requestPgpSignature } from './sync-worker-client.js';
 
 export interface EncryptedSendInput extends MessageParts {
   from: string;
@@ -26,7 +31,13 @@ export interface EncryptedSendResult {
   /** The payload to POST when ok. */
   payload?: { raw: string };
   signed?: boolean;
-  reason?: 'no_recipients' | 'bcc_unsupported' | 'missing_keys' | 'encrypt_failed';
+  reason?:
+    | 'no_recipients'
+    | 'bcc_unsupported'
+    | 'missing_keys'
+    | 'encrypt_failed'
+    | 'no_signing_key'
+    | 'sign_failed';
   missing?: string[];
   message?: string;
 }
@@ -138,4 +149,65 @@ export async function buildEncryptedPayload(
   });
 
   return { ok: true, signed: Boolean(result.signed), payload: { raw } };
+}
+
+/**
+ * Build a signed but not encrypted payload (RFC 3156 multipart/signed).
+ *
+ * Anyone can read it; a recipient holding the sender's public key can check
+ * that it came from that key and was not changed. Like an encrypted send it
+ * goes out as `raw`, so Bcc is refused for the same reason.
+ */
+export async function buildSignedPayload(input: EncryptedSendInput): Promise<EncryptedSendResult> {
+  if ((input.bcc || []).some((entry) => normalizeAddress(entry))) {
+    return {
+      ok: false,
+      reason: 'bcc_unsupported',
+      message: 'Bcc is not available for signed messages. Move those recipients to To or Cc.',
+    };
+  }
+  if (!collectRecipients(input).length) {
+    return { ok: false, reason: 'no_recipients', message: 'Add a recipient first.' };
+  }
+
+  const entity = buildInnerMime({
+    text: input.text,
+    html: input.html,
+    attachments: input.attachments,
+  });
+
+  let result;
+  try {
+    result = await requestPgpSignature({
+      plaintext: entity,
+      from: normalizeAddress(input.from),
+    });
+  } catch (err) {
+    return {
+      ok: false,
+      reason: 'sign_failed',
+      message: (err as Error)?.message || 'Signing failed',
+    };
+  }
+
+  if (!result?.success || !result.signature) {
+    return {
+      ok: false,
+      reason: result?.reason === 'no_signing_key' ? 'no_signing_key' : 'sign_failed',
+      message: result?.message || 'Signing failed',
+    };
+  }
+
+  const raw = buildPgpSignedMessage(entity, result.signature, result.micalg, {
+    from: input.from,
+    to: input.to,
+    cc: input.cc,
+    subject: input.subject,
+    replyTo: input.replyTo,
+    inReplyTo: input.inReplyTo,
+    references: input.references,
+    messageId: input.messageId,
+  });
+
+  return { ok: true, signed: true, payload: { raw } };
 }
