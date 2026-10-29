@@ -32,6 +32,8 @@
   import { validateLabelName } from '../utils/label-validation.ts';
   import DOMPurify from 'dompurify';
   import { restoreBlockedImages, sanitizeQuotedHtml } from '../utils/sanitize.js';
+  import { trustImageSender } from '../utils/remote-image-trust';
+  import PgpBadges from './components/PgpBadges.svelte';
   import {
     LABEL_PALETTE,
     pickLabelColor as pickLabelColorFromPalette,
@@ -5648,8 +5650,24 @@
           // placeholder until the next list reload.
           const subject = typeof status.subject === 'string' ? status.subject.trim() : '';
           const shown = get(selectedMessage) as Message | null;
-          if (subject && shown && shown.id === msg.id && shown.subject !== subject) {
-            source.state?.selectedMessage?.set?.({ ...shown, subject });
+          if (shown && shown.id === msg.id) {
+            const changes: Partial<Message> = {};
+            if (subject && shown.subject !== subject) changes.subject = subject;
+            // The reader shows what decrypting found: encrypted, and whether
+            // the signature checked out
+            if (status.encrypted && !shown.pgpEncrypted) changes.pgpEncrypted = true;
+            if (status.signed !== undefined && status.signed !== shown.pgpSigned) {
+              changes.pgpSigned = status.signed;
+            }
+            if (
+              status.signature !== undefined &&
+              JSON.stringify(status.signature) !== JSON.stringify(shown.pgpSignature ?? null)
+            ) {
+              changes.pgpSignature = status.signature;
+            }
+            if (Object.keys(changes).length) {
+              source.state?.selectedMessage?.set?.({ ...shown, ...changes });
+            }
           }
         },
         onMeta: (meta) => {
@@ -5871,6 +5889,13 @@
       hasBlockedImages.set(get(trackingPixelCount) > 0); // Still blocked if pixels remain
       blockedImageCount.set(0);
     }, 0);
+  };
+
+  // Loads this message's images and every later one from the same sender
+  const alwaysLoadRemoteImages = () => {
+    const from = (get(selectedMessage) as Message | null)?.from;
+    if (from) trustImageSender(from);
+    loadRemoteImages();
   };
 
   const loadAllIncludingPixels = () => {
@@ -9129,6 +9154,16 @@
                       <strong class="text-lg font-semibold"
                         >{threadSubject || $selectedMessage.subject}</strong
                       >
+                      {#if $selectedMessage.pgpEncrypted && !$pgpLocked}
+                        <span class="ml-2 inline-flex flex-wrap gap-1.5 align-middle">
+                          <PgpBadges
+                            encrypted
+                            signed={$selectedMessage.pgpSigned}
+                            signature={$selectedMessage.pgpSignature}
+                            from={$selectedMessage.from}
+                          />
+                        </span>
+                      {/if}
                       {#if Array.isArray($selectedMessage.labels) && $selectedMessage.labels.length}
                         <div class="flex flex-wrap gap-1.5 mt-2">
                           {#each $selectedMessage.labels as lbl}
@@ -9959,6 +9994,15 @@
                                       >
                                         Load Images
                                       </button>
+                                      {#if $selectedMessage?.from}
+                                        <button
+                                          class="inline-flex items-center justify-center px-3 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground"
+                                          type="button"
+                                          onclick={alwaysLoadRemoteImages}
+                                        >
+                                          Always from this sender
+                                        </button>
+                                      {/if}
                                     {/if}
                                     {#if $trackingPixelCount > 0}
                                       <button
@@ -10229,6 +10273,15 @@
                               >
                                 Load Images
                               </button>
+                              {#if $selectedMessage?.from}
+                                <button
+                                  class="inline-flex items-center justify-center px-3 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground"
+                                  type="button"
+                                  onclick={alwaysLoadRemoteImages}
+                                >
+                                  Always from this sender
+                                </button>
+                              {/if}
                             {/if}
                             {#if $trackingPixelCount > 0}
                               <button

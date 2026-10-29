@@ -14,6 +14,7 @@
   import { Button } from '$lib/components/ui/button';
   import * as Tooltip from '$lib/components/ui/tooltip';
   import EmailIframe from './EmailIframe.svelte';
+  import PgpBadges from './PgpBadges.svelte';
 
   // Icons
   import Reply from '@lucide/svelte/icons/reply';
@@ -26,8 +27,6 @@
   import Download from '@lucide/svelte/icons/download';
   import Paperclip from '@lucide/svelte/icons/paperclip';
   import ShieldAlert from '@lucide/svelte/icons/shield-alert';
-  import ShieldCheck from '@lucide/svelte/icons/shield-check';
-  import LockKeyhole from '@lucide/svelte/icons/lock-keyhole';
   import ImageIcon from '@lucide/svelte/icons/image';
   import Loader2 from '@lucide/svelte/icons/loader-2';
 
@@ -36,6 +35,8 @@
   import { isDemoBlockedError, isDemoMode } from '../../utils/demo-mode';
   import { Local } from '../../utils/storage';
   import { processQuotedContent } from '../../utils/quote-collapse.js';
+  import { restoreBlockedImages } from '../../utils/sanitize.js';
+  import { trustImageSender } from '../../utils/remote-image-trust';
   import { formatFriendlyDate } from '../../utils/date';
   import { extractDisplayName } from '../../utils/address.ts';
   import { openComposeWindow } from '../../utils/compose-window';
@@ -56,7 +57,7 @@
     toggleRead,
     getForwardAttachments,
   } from '../../stores/mailboxActions';
-  import type { Message, Attachment } from '../../types';
+  import type { Message, Attachment, PgpSignatureCheck } from '../../types';
 
   // ─── Props ──────────────────────────────────────────────────────────
 
@@ -93,6 +94,18 @@
   let showAllRecipients = $state(false);
   let showAllCc = $state(false);
   let error = $state('');
+
+  // Puts back the images the sanitizer held back, tracking pixels excepted.
+  // Hiding the banner alone left them blocked.
+  const loadImages = () => {
+    body = restoreBlockedImages(body);
+    showAllImages = true;
+  };
+
+  const alwaysLoadImages = () => {
+    if (message?.from) trustImageSender(message.from, accountEmail);
+    loadImages();
+  };
 
   // Plain-text view setting — reactive to localSettingsVersion bumps so the
   // user can toggle the setting without re-opening the message.
@@ -181,6 +194,7 @@
           locked?: boolean;
           encrypted?: boolean;
           signed?: boolean;
+          signature?: PgpSignatureCheck | null;
           subject?: string;
         }) => {
           pgpLocked = status.locked || false;
@@ -192,6 +206,7 @@
               ...message,
               pgpEncrypted: true,
               ...(status.signed !== undefined ? { pgpSigned: status.signed } : {}),
+              ...(status.signature !== undefined ? { pgpSignature: status.signature } : {}),
               ...(status.subject && status.subject.trim() ? { subject: status.subject } : {}),
             };
           }
@@ -455,22 +470,12 @@
         <div class="mb-4 flex flex-wrap items-center gap-2">
           <h1 class="text-xl font-semibold">{message.subject || '(No subject)'}</h1>
           {#if message.pgpEncrypted && !pgpLocked}
-            <span
-              class="inline-flex shrink-0 items-center gap-1 rounded border border-state-success/25 bg-state-success/10 px-1.5 py-0.5 text-xs text-state-success"
-              title="This message was PGP encrypted and decrypted with your key"
-            >
-              <LockKeyhole class="h-3 w-3" />
-              Encrypted
-            </span>
-            {#if message.pgpSigned}
-              <span
-                class="inline-flex shrink-0 items-center gap-1 rounded border border-border bg-muted px-1.5 py-0.5 text-xs text-muted-foreground"
-                title="A PGP signature is present but has not been verified"
-              >
-                <ShieldCheck class="h-3 w-3" />
-                Signed (unverified)
-              </span>
-            {/if}
+            <PgpBadges
+              encrypted
+              signed={message.pgpSigned}
+              signature={message.pgpSignature}
+              from={message.from}
+            />
           {/if}
         </div>
 
@@ -492,21 +497,18 @@
         </div>
 
         <!-- Blocked Images Warning -->
-        {#if hasBlockedImages && !showAllImages}
+        {#if hasBlockedImages && blockedImageCount > 0 && !showAllImages}
           <div
             class="flex items-center gap-2 p-3 mb-4 bg-state-caution/10 border border-state-caution/25 text-sm"
           >
             <ImageIcon class="h-4 w-4 text-state-caution shrink-0" />
             <span>Remote images blocked ({blockedImageCount})</span>
-            <Button
-              variant="outline"
-              size="sm"
-              onclick={() => {
-                showAllImages = true;
-              }}
-            >
-              Load Images
-            </Button>
+            <Button variant="outline" size="sm" onclick={loadImages}>Load Images</Button>
+            {#if message?.from}
+              <Button variant="ghost" size="sm" onclick={alwaysLoadImages}>
+                Always from this sender
+              </Button>
+            {/if}
           </div>
         {/if}
 

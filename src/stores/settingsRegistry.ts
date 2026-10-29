@@ -371,8 +371,8 @@ export const SETTINGS_REGISTRY: Record<string, SettingDefinition> = {
     scope: SETTING_SCOPES.DEVICE,
     localKey: 'block_remote_images',
     valueType: 'boolean',
-    defaultValue: false,
-    localParse: (raw) => parseBoolean(raw, false),
+    defaultValue: true,
+    localParse: (raw) => parseBoolean(raw, true),
     localSerialize: (value) => serializeBoolean(Boolean(value)),
   },
   notify_app_updates: {

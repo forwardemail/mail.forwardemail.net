@@ -47,6 +47,10 @@
   import Pencil from '@lucide/svelte/icons/pencil';
   import QrCodeIcon from '@lucide/svelte/icons/qr-code';
   import X from '@lucide/svelte/icons/x';
+  import { readTrustedImageSenders, untrustImageSender } from '../utils/remote-image-trust';
+  import { generatePgpKeyPair, MIN_PASSPHRASE_LENGTH } from '../utils/pgp-keygen';
+  import { saveRecipientKey } from '../utils/pgp-recipients';
+  import { downloadFile } from '../utils/download';
   import MessageSquare from '@lucide/svelte/icons/message-square';
   import AlertCircle from '@lucide/svelte/icons/alert-circle';
   import CheckCircle from '@lucide/svelte/icons/check-circle';
@@ -233,10 +237,22 @@
   let pgpKeys = $state<{ name: string; value: string }[]>([]);
   let pairingScannerOpen = $state(false);
   let keyFormVisible = $state(false);
+  let genFormVisible = $state(false);
+  let genName = $state('');
+  let genPassphrase = $state('');
+  let genPassphraseConfirm = $state('');
+  let generatingKey = $state(false);
+  let generatedKey = $state<{
+    email: string;
+    publicKey: string;
+    revocationCertificate: string;
+    fingerprint: string;
+  } | null>(null);
   let editingKeyName = $state('');
   let editingKeyValue = $state('');
   let editingKeyPassphrase = $state('');
-  let blockRemoteImages = $state(false);
+  let blockRemoteImages = $state(true);
+  let trustedImageSenders = $state<string[]>([]);
   let spamReportAddress = $state('');
   let spamReportDelete = $state(false);
   let notifyAppUpdates = $state(true);
@@ -800,6 +816,7 @@
     blockRemoteImages = Boolean(
       getEffectiveSettingValue('block_remote_images', { account: currentAcct }),
     );
+    trustedImageSenders = readTrustedImageSenders(currentAcct);
     spamReportAddress =
       String(
         getEffectiveSettingValue('spam_report_address', { account: currentAcct }) || '',
@@ -1562,6 +1579,99 @@
     editingKeyPassphrase = '';
   };
 
+  const KEY_STORE_UNAVAILABLE =
+    'Your saved keys could not be read: the system keychain did not answer when the app started. Restart the app and try again.';
+
+  const openGenerateKey = () => {
+    keyFormVisible = false;
+    genFormVisible = true;
+    genName = (profileNameValue || '').trim();
+    genPassphrase = '';
+    genPassphraseConfirm = '';
+    generatedKey = null;
+  };
+
+  const cancelGenerateKey = () => {
+    genFormVisible = false;
+    genPassphrase = '';
+    genPassphraseConfirm = '';
+  };
+
+  // Makes a key pair for this address, saves the private key like an imported
+  // one (with its passphrase, so signing works right away) and pins the public
+  // key for the address itself, so encrypted mail to Sent stays readable.
+  const generateKey = async () => {
+    if (generatingKey) return;
+    const email = (activeEmail || getAliasEmail() || Local.get('email') || '').trim();
+    if (!email.includes('@')) {
+      setError('Sign in with an email address to make a key for it.');
+      return;
+    }
+    if (genPassphrase.length < MIN_PASSPHRASE_LENGTH) {
+      setError(`Use a passphrase of at least ${MIN_PASSPHRASE_LENGTH} characters.`);
+      return;
+    }
+    if (genPassphrase !== genPassphraseConfirm) {
+      setError('The passphrases do not match.');
+      return;
+    }
+    generatingKey = true;
+    try {
+      const pair = await generatePgpKeyPair({
+        name: genName,
+        email,
+        passphrase: genPassphrase,
+      });
+      const name = `${email} (${pair.fingerprint.slice(-8)})`;
+      const keys = [...pgpKeys, { name, value: pair.privateKey }];
+      if (!Local.set(`pgp_keys_${email}`, JSON.stringify(keys))) {
+        setError(KEY_STORE_UNAVAILABLE);
+        return;
+      }
+      pgpKeys = keys;
+      persistStoredPgpPassphrases({ ...loadStoredPgpPassphrases(), [name]: genPassphrase });
+      saveRecipientKey(
+        {
+          email,
+          armored: pair.publicKey,
+          fingerprint: pair.fingerprint,
+          label: 'Your key',
+        },
+        email,
+      );
+      refreshSyncWorkerPgpKeys();
+      clearPgpKeyCache();
+      generatedKey = {
+        email,
+        publicKey: pair.publicKey,
+        revocationCertificate: pair.revocationCertificate,
+        fingerprint: pair.fingerprint,
+      };
+      genFormVisible = false;
+      genPassphrase = '';
+      genPassphraseConfirm = '';
+      setSuccess('Key created. Share the public key so others can encrypt to you.');
+    } catch (err) {
+      setError((err as Error)?.message || 'Could not create a key.');
+    } finally {
+      generatingKey = false;
+    }
+  };
+
+  const downloadGeneratedPublicKey = () => {
+    if (!generatedKey) return;
+    downloadFile(generatedKey.publicKey, `${generatedKey.email}.pub.asc`, 'application/pgp-keys');
+  };
+
+  const downloadRevocationCertificate = () => {
+    if (!generatedKey) return;
+    downloadFile(
+      generatedKey.revocationCertificate,
+      `${generatedKey.email}.revocation.asc`,
+      'application/pgp-keys',
+    );
+  };
+
   const editKey = (key: { name: string; value: string }) => {
     const idx = pgpKeys.indexOf(key);
     if (idx === -1) return;
@@ -1679,9 +1789,12 @@
       } else {
         keys.push({ name, value });
       }
-      pgpKeys = keys;
       const currentAcct = activeEmail || getAliasEmail() || Local.get('email') || '';
-      Local.set(`pgp_keys_${currentAcct}`, JSON.stringify(pgpKeys));
+      if (!Local.set(`pgp_keys_${currentAcct}`, JSON.stringify(keys))) {
+        setError(KEY_STORE_UNAVAILABLE);
+        return;
+      }
+      pgpKeys = keys;
 
       const storedPassphrases = loadStoredPgpPassphrases();
       if (previousKey?.name && previousKey.name !== name) {
@@ -2603,7 +2716,10 @@
           <Card.Content class="space-y-4">
             <div class="flex items-center justify-between">
               <span class="text-sm text-muted-foreground">PGP encryption keys</span>
-              <Button variant="ghost" size="sm" onclick={openNewKey}>Add key</Button>
+              <div class="flex gap-1">
+                <Button variant="ghost" size="sm" onclick={openGenerateKey}>Create key</Button>
+                <Button variant="ghost" size="sm" onclick={openNewKey}>Add key</Button>
+              </div>
             </div>
             <div class="space-y-2">
               {#if pgpKeys.length === 0}
@@ -2633,6 +2749,63 @@
                 </div>
               {/each}
             </div>
+            {#if genFormVisible}
+              <div class="space-y-3 border border-border p-4" data-testid="pgp-generate-form">
+                <p class="text-sm">
+                  Creates a key for <strong>{aliasEmail || Local.get('email') || ''}</strong>. It is
+                  stored on this device only.
+                </p>
+                <Input type="text" placeholder="Your name (optional)" bind:value={genName} />
+                <Input
+                  type="password"
+                  placeholder={`Passphrase (at least ${MIN_PASSPHRASE_LENGTH} characters)`}
+                  autocomplete="new-password"
+                  bind:value={genPassphrase}
+                />
+                <Input
+                  type="password"
+                  placeholder="Repeat the passphrase"
+                  autocomplete="new-password"
+                  bind:value={genPassphraseConfirm}
+                />
+                <div class="flex gap-2">
+                  <Button variant="ghost" onclick={cancelGenerateKey}>Cancel</Button>
+                  <Button onclick={generateKey} disabled={generatingKey}>
+                    {generatingKey ? 'Creating…' : 'Create key'}
+                  </Button>
+                </div>
+                <p class="text-xs text-muted-foreground">
+                  The passphrase protects the private key if it is ever copied off this device.
+                  Losing it, and this device, means losing the key.
+                </p>
+              </div>
+            {/if}
+            {#if generatedKey}
+              <div class="space-y-2 border border-border p-4" data-testid="pgp-generated-key">
+                <p class="text-sm">
+                  Key created for <strong>{generatedKey.email}</strong>
+                </p>
+                <p class="font-mono text-xs break-all text-muted-foreground">
+                  {generatedKey.fingerprint.replace(/(.{4})/g, '$1 ').trim()}
+                </p>
+                <div class="flex flex-wrap gap-2">
+                  <Button variant="outline" size="sm" onclick={downloadGeneratedPublicKey}>
+                    Download public key
+                  </Button>
+                  <Button variant="outline" size="sm" onclick={downloadRevocationCertificate}>
+                    Download revocation certificate
+                  </Button>
+                  <Button variant="ghost" size="sm" onclick={() => (generatedKey = null)}>
+                    Done
+                  </Button>
+                </div>
+                <p class="text-xs text-muted-foreground">
+                  Send the public key to people who should be able to encrypt to you. Keep the
+                  revocation certificate somewhere safe: it is how you tell others to stop using
+                  this key if you lose it.
+                </p>
+              </div>
+            {/if}
             {#if keyFormVisible}
               <div class="space-y-3 border border-border p-4">
                 <Input
@@ -2711,9 +2884,31 @@
               <span>Block all external images by default</span>
             </label>
             <p class="text-sm text-muted-foreground">
-              Blocks all external images from loading. You can still load images for individual
-              emails.
+              Loading a remote image tells the sender when you read the email and your IP address.
+              You can still load images for one email, or always for a sender.
             </p>
+            {#if trustedImageSenders.length > 0}
+              <div class="space-y-1">
+                <p class="text-sm font-medium">Images always load from</p>
+                <ul class="space-y-1">
+                  {#each trustedImageSenders as sender (sender)}
+                    <li class="flex items-center justify-between gap-2 text-sm">
+                      <span class="truncate">{sender}</span>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        aria-label={`Stop loading images from ${sender}`}
+                        onclick={() => {
+                          trustedImageSenders = untrustImageSender(sender, getAccountId());
+                        }}
+                      >
+                        <X class="h-4 w-4" />
+                      </Button>
+                    </li>
+                  {/each}
+                </ul>
+              </div>
+            {/if}
             <label class="flex items-center gap-3">
               <Checkbox
                 bind:checked={blockTrackingPixels}

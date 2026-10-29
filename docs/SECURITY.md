@@ -1,249 +1,315 @@
-# Security Hardening Guide
+# Security Architecture
 
-This document describes the security architecture, hardening measures, and best practices implemented across the Forward Email application. It covers the Tauri v2 backend, the PWA/webmail frontend, the service-worker replacement (sync-shim), WebSocket communication, notifications, auto-updater, and CI/CD pipelines.
+This document describes what the Forward Email webmail and apps do to protect users, as the code does it today. It covers the web app (PWA), the Tauri desktop and mobile apps, and the release pipeline. Where a protection is partial or missing, it says so. If you find a claim here that the code does not back up, that is a bug in this document: please report it.
 
-## Table of Contents
+## Contents
 
-1. [Tauri Backend (Rust)](#tauri-backend-rust)
-2. [Content Security Policy](#content-security-policy)
-3. [IPC Isolation Pattern](#ipc-isolation-pattern)
-4. [Capability Least-Privilege](#capability-least-privilege)
-5. [Frontend Bridges](#frontend-bridges)
-6. [Service Worker and Sync-Shim](#service-worker-and-sync-shim)
-7. [WebSocket Client](#websocket-client)
-8. [Notifications](#notifications)
-9. [Auto-Updater](#auto-updater)
-10. [Deep-Links](#deep-links)
-11. [IndexedDB and Local Storage](#indexeddb-and-local-storage)
-12. [CI/CD Pipeline](#cicd-pipeline)
-13. [Code Signing](#code-signing)
-14. [Reporting Vulnerabilities](#reporting-vulnerabilities)
+1. [Threat model in brief](#threat-model-in-brief)
+2. [What leaves the device](#what-leaves-the-device)
+3. [Rendering email](#rendering-email)
+4. [Content Security Policy](#content-security-policy)
+5. [IPC boundary and capabilities](#ipc-boundary-and-capabilities)
+6. [Credentials and local storage](#credentials-and-local-storage)
+7. [App Lock](#app-lock)
+8. [OpenPGP](#openpgp)
+9. [Realtime (WebSocket)](#realtime-websocket)
+10. [Service worker and offline queue](#service-worker-and-offline-queue)
+11. [Notifications](#notifications)
+12. [Deep links](#deep-links)
+13. [Auto-update](#auto-update)
+14. [Release pipeline and signing](#release-pipeline-and-signing)
+15. [Known gaps](#known-gaps)
+16. [Reporting vulnerabilities](#reporting-vulnerabilities)
 
----
+## Threat model in brief
 
-## Tauri Backend (Rust)
+Treated as hostile:
 
-The Tauri backend in `src-tauri/src/lib.rs` implements the following hardening measures.
+- **Email content.** Any HTML, headers, attachments or links in a message.
+- **Realtime and push payloads.** Their fields can carry sender-controlled text.
+- **Deep links.** `mailto:` and `forwardemail://` URLs.
 
-All IPC commands validate their inputs before processing. String parameters are checked for length limits and forbidden characters. Numeric parameters are bounds-checked. The `set_badge_count` command, for example, clamps its input to the range `[0, 99999]` and rejects non-finite values. The `open_external_url` command validates that URLs use the `https` scheme and belong to an allowlist of trusted domains (`forwardemail.net`, `github.com`, `github.com/forwardemail`). Any URL that does not match is rejected with an error.
+Treated as trusted:
 
-The `show_notification` command sanitises title and body strings by stripping control characters and enforcing maximum lengths (256 for titles, 1024 for bodies). This prevents injection of invisible characters or excessively long strings that could cause UI issues.
+- the Forward Email API (`api.forwardemail.net`)
+- the app's own bundled code
 
-Error handling uses Rust's `Result` type throughout, with descriptive error messages that do not leak internal paths or stack traces to the frontend.
+Protection against other software running as the same OS user is limited. Without App Lock, such software can read whatever the app can.
+
+## What leaves the device
+
+There is no analytics, telemetry or crash reporting SDK. The app contacts:
+
+| Host                                   | When                                                                             |
+| -------------------------------------- | -------------------------------------------------------------------------------- |
+| `api.forwardemail.net` (HTTPS and WSS) | All mail, calendar and contacts traffic, and realtime updates                    |
+| `api.github.com`, `github.com`         | Release checks (`web-updater.js`, `desktop-download.js`) and the desktop updater |
+| Hosts named in an email                | Only if remote images are loaded for that message or sender (see below)          |
+| `api.forwardemail.net/v1/lookup`       | Only from the hidden Diagnostics page, without credentials                       |
+
+**Feedback.** The feedback form sends an email from the user's own address to support@forwardemail.net. It shows a preview first, redacts paths, and includes only the categories the user ticked (`FeedbackModal.svelte`, `feedback-payload.ts`).
+
+## Rendering email
+
+**Sanitizing.** Message HTML goes through a dedicated DOMPurify instance (`src/utils/sanitize.js`). Links get `target="_blank" rel="noopener noreferrer"` and are opened by the app, never by navigating the frame.
+
+**Remote content.**
+
+- Remote images are blocked by default (`remoteImagesBlockedByDefault`, the `block_remote_images` setting).
+- Tracking pixels are stripped by default (`block_tracking_pixels`). Pixels stay blocked when the user loads images, unless they choose "Load All".
+- The user can load images for one message, or for every message from one sender. The trusted-sender list is kept per account in `remote-image-trust.ts`.
+- When images are blocked, the frame's own CSP narrows `img-src` to `data: blob:`. That stops remote loads the HTML rewrite cannot see (`srcset`, CSS `url()`, `background=`).
+- A body cached while images were allowed is sanitized again when blocking is on (`cachedBodyNeedsResanitize`), so the cache never serves images past the setting.
+
+**The email frame.**
+
+- Each body renders in a sandboxed `srcdoc` iframe (`EmailIframe.svelte`).
+- Its CSP (`iframe-srcdoc.ts`) is `default-src 'none'`. The only script it allows is `/email-iframe.js`, the app's own runtime, so inline script in an email does not run. It also sets `form-action 'none'` and `base-uri 'none'`.
+- The sandbox is `allow-scripts` without `allow-same-origin` on the web and the desktop apps. The email document gets an opaque origin, so even script that got past both the sanitizer and the CSP could not reach the app's storage or the Tauri bridge. It talks to the app only by `postMessage`, and the app checks `event.source` and a per-document token.
+- **Exception:** the iOS and Android apps still add `allow-same-origin`. The parent attaches touch listeners to the frame's document because Android WebView can swallow touches inside it. That path has not yet been checked on devices without it, so on mobile the sanitizer and the frame CSP are the boundary.
+
+**Link preview (desktop).** Hovering a link shows its real destination (`link-preview.ts`):
+
+- It warns when the link text names a different host than the link goes to.
+- It flags punycode/IDN hosts.
+- It strips credentials from the URL.
+
+**Sender authentication.** SPF, DKIM and DMARC results are parsed from `Authentication-Results` and shown in the message details (`security-helpers.js`). There is no look-alike-domain or display-name-spoofing banner yet.
 
 ## Content Security Policy
 
-The CSP is defined in `src-tauri/tauri.conf.json` and enforces the following restrictions:
+There are three policies:
 
-| Directive         | Value                                                        | Purpose                                                   |
-| ----------------- | ------------------------------------------------------------ | --------------------------------------------------------- |
-| `default-src`     | `'self'`                                                     | Block all resources not explicitly allowed                |
-| `script-src`      | `'self'`                                                     | No inline scripts, no `eval()`                            |
-| `style-src`       | `'self' 'unsafe-inline'`                                     | Allow inline styles (required by Svelte)                  |
-| `img-src`         | `'self' https: data:`                                        | Allow images from HTTPS and data URIs                     |
-| `connect-src`     | `'self' https://*.forwardemail.net wss://*.forwardemail.net` | Restrict API and WebSocket connections to trusted origins |
-| `font-src`        | `'self' data:`                                               | Allow fonts from self and data URIs                       |
-| `object-src`      | `'none'`                                                     | Block all plugins (Flash, Java, etc.)                     |
-| `base-uri`        | `'self'`                                                     | Prevent base tag hijacking                                |
-| `form-action`     | `'self'`                                                     | Restrict form submissions to same origin                  |
-| `frame-ancestors` | `'none'`                                                     | Prevent clickjacking via framing                          |
+| Runtime                    | Source                                            |
+| -------------------------- | ------------------------------------------------- |
+| Web app                    | `<meta http-equiv>` in `index.html`               |
+| Web compose window         | `<meta http-equiv>` in `compose.html`             |
+| Tauri (desktop and mobile) | `app.security.csp` in `src-tauri/tauri.conf.json` |
 
-The `dangerousRemoteDomainIpcAccess` array is empty, meaning no remote domains can invoke Tauri IPC commands.
+For Tauri builds, the `strip-csp-meta-for-tauri` plugin in `vite.config.js` removes the meta tags, so only the Tauri policy applies.
 
-### Cross-Platform Gotchas
+| Directive                 | Web (`index.html`)                                                                      | Tauri                                           |
+| ------------------------- | --------------------------------------------------------------------------------------- | ----------------------------------------------- |
+| `default-src`             | `'self'`                                                                                | `'self' tauri: asset:`                          |
+| `script-src`              | `'self' 'unsafe-inline' 'wasm-unsafe-eval'`                                             | `'self' 'unsafe-inline' 'wasm-unsafe-eval'`     |
+| `style-src`               | `'self' 'unsafe-inline'`                                                                | `'self' 'unsafe-inline'`                        |
+| `img-src`                 | `'self' data: blob: https:`                                                             | `'self' data: blob: https: http: tauri: asset:` |
+| `connect-src`             | `'self' https://api.forwardemail.net wss://api.forwardemail.net https://api.github.com` | the same three hosts, plus Tauri's IPC origins  |
+| `frame-src`               | `'self'`                                                                                | `'self' blob: data: tauri:`                     |
+| `worker-src`              | `'self' blob:`                                                                          | `'self' blob:`                                  |
+| `object-src`              | `'none'`                                                                                | `'none'`                                        |
+| `base-uri`, `form-action` | `'self'`                                                                                | not set                                         |
 
-CSP enforcement is not uniform across the three runtimes. Changes to `script-src`, `frame-src`, or anything the email iframe touches must be validated on each one.
+Notes on these policies:
 
-**1. Three distinct policies are active.**
+- `'unsafe-inline'` in `script-src` is there for the small boot scripts in `index.html`. In Tauri, the runtime injects a nonce for its IPC bootstrap, and a nonce disables `'unsafe-inline'` for every script without one. That is why the email runtime is an external file rather than inline.
+- `'wasm-unsafe-eval'` is for libsodium and Argon2.
+- There is no `frame-ancestors`. A meta CSP cannot set it, and it is not set in the Tauri policy.
+- When adding a new origin, update `index.html`, `compose.html` and `tauri.conf.json` together. The web build will work while Tauri rejects the origin, or the other way round.
+- Sandboxed `srcdoc` frames inherit the parent's policy and add their own. The stricter rule wins.
 
-| Runtime    | Policy source                       | Parent origin           |
-| ---------- | ----------------------------------- | ----------------------- |
-| Web (PWA)  | `<meta http-equiv>` in `index.html` | `https://webmail.…`     |
-| Tauri dev  | `src-tauri/tauri.conf.json` → `csp` | `http://localhost:5174` |
-| Tauri prod | `src-tauri/tauri.conf.json` → `csp` | `tauri://localhost`     |
+## IPC boundary and capabilities
 
-`vite.config.js` strips the `<meta>` CSP for Tauri builds (the `strip-csp-meta-for-tauri` plugin) so the two policies don't collide into a more-restrictive union.
+The app runs Tauri's default ("brownfield") pattern. The isolation pattern is not enabled. A script running in the main webview is limited by:
 
-**2. Tauri injects a nonce at runtime for its IPC bootstrap.** Per CSP spec, _once any nonce or hash is present in `script-src`, `'unsafe-inline'` is ignored_ for scripts that don't match. This silently breaks inline scripts that "worked" on web or in release builds. Symptom: `Refused to execute a script because its hash, its nonce, or 'unsafe-inline' does not appear in the script-src directive` even though `'unsafe-inline'` is in the declared CSP.
+1. **The capabilities in `src-tauri/capabilities/`, enforced in Rust.**
+   - `default.json` covers the main window and compose windows. `desktop.json`, `mobile.json` and the per-platform push files add more.
+   - Grants:
+     - Notifications: permission, notify, channels, action types.
+     - `core:webview:allow-create-webview-window`, for compose windows.
+     - Updater check and install (desktop).
+     - Deep links.
+     - Dialog open and save.
+     - Process exit and restart, log, OS info, window state, and the push plugins.
+   - The opener may open any `http://` or `https://` URL in the system browser, and only `$TEMP/forwardemail-original-*` files as paths.
+   - `fs` write access is scoped to the same temporary files. Read and remove get their paths at runtime from the file dialog. There is no static `**` scope.
+   - There is no shell plugin.
+2. **Input checks in each app command** (`src-tauri/src/*.rs`). There is no blanket validator.
+   - `set_badge_count` rejects values over 99999.
+   - `is_valid_deep_link` rejects control characters and links over 8 KB.
+   - `open_url_in_browser` (the Windows external-browser override) accepts only `http(s)` URLs with a host. It rejects shell metacharacters, UNC paths and `..` in the browser path.
+3. **`ALLOWED_COMMANDS` in `src/utils/tauri-bridge.js`.** This only filters calls made through that module. Code that reaches `window.__TAURI_INTERNALS__` directly is not filtered by it.
 
-**3. Sandboxed srcdoc iframes inherit the parent's CSP.** They add their own meta CSP on top, and the effective policy is the intersection (most restrictive wins). So point 2 propagates into every email iframe. An inline script that works on web will fail inside the same iframe under Tauri dev.
+No capability sets `remote`, so pages from other origins cannot call IPC.
 
-**4. The email iframe uses an external script, not inline.** `public/email-iframe.js` is loaded via `<script src="${parent-origin}/email-iframe.js">` (see `src/utils/iframe-srcdoc.ts`). The srcdoc CSP is `script-src ${parent-origin}/email-iframe.js`, which allows that one file and no other script the app serves. This side-steps the nonce-kills-unsafe-inline interaction because source-expression matches are unaffected by nonce presence. The previous hash-based approach had a race (the async SHA-256 computation wasn't always ready by first render) and would have been defeated by any future change to the script text. Do not revert to inline without also removing Tauri's nonce injection (which is not optional because it's part of the IPC bootstrap).
+## Credentials and local storage
 
-**5. When a link inside the email iframe appears to silently fail,** check the _iframe's_ devtools frame, not the top-level page. Two errors typically appear together: the srcdoc script is blocked (script-src), then the iframe's `<a>` navigates to the link target, which is blocked by the parent's `frame-src` because it's an external origin. Fixing the first also fixes the second: the external script registers the capture-phase click interceptor that postMessages the URL up to `handleIframeLinkClick` in `Mailbox.svelte`, which calls `openUrl()` instead of navigating.
+**Where data lives.**
 
-**6. When adding a new external origin (script, frame, connect),** update _both_ `index.html` and `src-tauri/tauri.conf.json`. It's easy to miss one; the web build will silently work while Tauri rejects, or vice versa.
+- Credentials are either an alias password (`alias_auth`, sent as HTTP Basic) or an API key.
+- A sign-in validates by calling `GET /v1/folders`. There are no tokens to refresh. Three consecutive 401s sign the tab out.
+- Credentials are tab-scoped: each tab keeps its own copy in `sessionStorage`. The `localStorage` copy is what survives a restart, unless the user turned off "Stay signed in".
+- Several accounts can be signed in. Requests carry the auth of the account they were made for, not whichever account is active when they complete.
+- Mail is cached in one IndexedDB database, `webmail-cache-v1`, with an `account` column on each record. Accounts share the database. They are not separate databases.
 
-## IPC Boundary
+**Sensitive values.** These `localStorage` keys are treated as sensitive (`isSensitiveLocalKey` in `crypto-store.js`):
 
-The application runs Tauri's default **brownfield** pattern. The isolation pattern is **not** enabled: `tauri.conf.json` sets no `app.security.pattern`, and the `tauri` crate is built without the `isolation` feature, so `src-tauri/isolation/index.html` is not loaded. (Its hook only checks the payload size and passes every command through; it never enforced a command allowlist.)
+- credentials and the multi-account list
+- catch-all passwords
+- PGP private keys and their passphrases
 
-What limits a script running in the webview is therefore:
+How they are stored depends on the platform and on App Lock:
 
-1. The capabilities in `src-tauri/capabilities/`, which Tauri enforces in Rust for every plugin command.
-2. Input validation in each app command (`src-tauri/src/*.rs`), which treats the webview as untrusted.
-3. The `ALLOWED_COMMANDS` set in `src/utils/tauri-bridge.js`. This only covers calls made through that module; script that reaches `window.__TAURI_INTERNALS__` directly is not filtered by it.
+| Situation                       | How sensitive values are stored                                                                                                                                 |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| App Lock on, unlocked           | Encrypted with the vault key (see App Lock)                                                                                                                     |
+| App Lock off, desktop app       | Sealed with a random key kept in the OS credential store (Keychain, Credential Manager, Secret Service). See `device-seal.ts` and `src-tauri/src/device_key.rs` |
+| App Lock off, web or mobile app | Plaintext                                                                                                                                                       |
 
-The email iframe is same-origin with the app on Tauri (`allow-scripts allow-same-origin`), so the HTML sanitizer and the srcdoc CSP (which allows only `/email-iframe.js`) are the boundary for email content. There is no second IPC boundary behind them.
+**The desktop device key.**
 
-## Capability Least-Privilege
+- A copy of the profile directory alone no longer gives away credentials or private keys: a backup, a synced home folder, or a lost disk.
+- It does not stop code running as the same user, which can ask the credential store for the key too.
+- The key is loaded by `src/boot.ts` before the app reads any credential, so reads stay synchronous.
+- If the credential store is unavailable (for example, a Linux session without a Secret Service), values stay as they were and the app works as before.
+- If the key is lost, sealed values cannot be read, and the user signs in again.
+- If the store does not answer within 4 seconds (for example, a keyring unlock prompt), the app starts without the key. Sealed lists such as PGP keys are then protected from being overwritten. If the key arrives later, the app picks it up.
+- The Diagnostics page has a "Credential sealing" line. It shows whether sealing is on, why it is unavailable, and how many saved values cannot be opened.
 
-The capabilities file (`src-tauri/capabilities/default.json`) grants only the minimum permissions required for each plugin:
+## App Lock
 
-| Plugin       | Permissions Granted                                                                                                                   | Permissions Denied                                                |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
-| Notification | `allow-is-permission-granted`, `allow-request-permission`, `allow-notify`                                                             | `allow-register-action-types`, `allow-cancel`                     |
-| Updater      | `allow-check`, `allow-download-and-install`                                                                                           | n/a                                                               |
-| Deep Link    | `allow-get-current`                                                                                                                   | n/a                                                               |
-| Window       | `allow-close`, `allow-set-title`, `allow-show`, `allow-hide`, `allow-minimize`, `allow-maximize`, `allow-set-size`, `allow-set-focus` | `allow-create`, `allow-destroy`, `allow-set-always-on-top`        |
-| Shell        | `allow-open`                                                                                                                          | `allow-execute`, `allow-spawn`, `allow-stdin-write`, `allow-kill` |
+App Lock is opt-in. It locks the UI and encrypts local data at rest. See [app-lock-architecture.md](./app-lock-architecture.md) for the full design.
 
-The `shell:allow-execute`, `shell:allow-spawn`, and `shell:allow-kill` permissions are explicitly **denied** to prevent command injection attacks.
+**Keys.**
 
-## Frontend Bridges
+- A random data key (DEK) encrypts the data.
+- The DEK is wrapped with libsodium `secretbox` under a key-encryption key (KEK).
+- The KEK is derived from the PIN with Argon2id (3 iterations, 256 MiB), or from a passkey through the WebAuthn PRF extension and keyed BLAKE2b.
+- The settings UI adds passkeys only after a PIN is set. The API itself can create a passkey-only vault.
 
-All frontend bridge modules (`tauri-bridge.js`, `notification-bridge.js`, `updater-bridge.js`, `sync-bridge.js`) implement the following patterns.
+**What is encrypted.**
 
-**Input validation.** Every function that accepts user-provided or event-provided data validates types and lengths before passing to Tauri IPC. String inputs are truncated to safe maximums and stripped of control characters.
+- **IndexedDB.** `db-crypto.ts` seals records in `messages`, `messageBodies`, `drafts`, `outbox`, `searchIndex` and the sensitive `meta` families (mutation queue, contacts, attachment blobs, saved searches, calendars) with AES-256-GCM. The subkey is derived from the DEK.
+  - Fields the database indexes stay in plaintext so queries work: account, id, folder, dates, flags, labels, unread state, and attachment and modseq markers.
+  - So do label names, folder paths and unread counts.
+  - Writes to sealed tables fail closed while locked.
+- **localStorage.** The sensitive keys listed above are encrypted with the DEK. Each unlock sweeps any value written while locked.
+- **Not covered.** While a tab is unlocked, `sessionStorage` holds plaintext credentials and the DEK, so a reload does not prompt again. Both are cleared on lock and when the tab closes.
 
-**Credential handling.** Credentials (email/password) are never stored in module-level variables. They are read from `Local` storage only at the moment they are needed (e.g., WebSocket connection) and are not cached in closures or global state.
+**Locking.**
 
-**Safe postMessage.** The `sync-bridge.js` module validates the `origin` of incoming `message` events against the expected origin before processing. Messages with unexpected origins are silently dropped.
+- Inactivity timeouts: 30 s, 1, 2, 5, 10, 15 or 30 min, 1 h, or never. Lock on minimize is optional.
+- On lock, the DEK buffer is zeroed and dropped.
+- Wrong PINs back off: 30 s after the 3rd attempt, then 60 s, 120 s, 300 s, 600 s, 1800 s, and 3600 s from the 9th. The state survives reloads. Nothing is wiped after repeated failures.
+- The service worker has no access to the key, so background content sync is skipped while App Lock is on.
 
-**Error boundaries.** All async operations are wrapped in try/catch blocks. Errors are logged with contextual information but never expose stack traces or internal paths to the user.
+## OpenPGP
 
-## Service Worker and Sync-Shim
+All OpenPGP work runs in the sync worker with openpgp.js v6.
 
-The service worker (`public/sw-sync.js`) and its main-thread replacement (`src/utils/sync-shim.js`) implement these hardening measures.
+**Keys.**
 
-**Message validation.** The SW adapter validates every incoming `message` event, checking that `event.data` has a `type` field from a known allowlist (`SYNC_NOW`, `PROCESS_MUTATIONS`, `FETCH`, `GET_PENDING_COUNT`). Unknown message types are rejected.
+- Users can create a key pair (v4, Curve25519) or import a private key. Both are stored per account.
+- The creation flow requires a passphrase of at least 8 characters, offers the public key and a revocation certificate for download, and pins the public key for the user's own address.
+- Passphrases can be remembered. They are stored like the other sensitive values above.
 
-**Origin checks.** In the web context, the SW only processes messages from clients with the same origin. In the Tauri context, the sync-shim validates that `postMessage` events come from the expected origin.
+**Contacts' keys.** Users pin public keys per correspondent (`pgp-recipients.ts`). The client does no WKD, keyserver or Autocrypt lookup. The server encrypts opportunistically when it finds a WKD key, but the client cannot see or force that.
 
-**Retry limits.** The sync-core module enforces a maximum retry count (default: 5) for failed mutations. After the limit is reached, the mutation is moved to a dead-letter queue in IndexedDB rather than retried indefinitely, preventing infinite retry loops.
+**Decryption.**
 
-**Exponential backoff.** Retry delays use exponential backoff with jitter to prevent thundering herd problems when the server recovers from an outage.
+- Handles PGP/MIME and inline messages, and protected-headers subjects.
+- Signatures inside encrypted messages are checked against pinned contact keys and the user's own keys. The reader shows one of:
+  - **verified**: the signing key is held and belongs to the From address
+  - **signed by someone else**: valid, but the key belongs to another address
+  - **invalid**: a held key's signature does not match
+  - **signing key revoked**: the key is held but its owner revoked it
+  - **signed, not verified**: no key for it is held
+- Signed-only messages (`multipart/signed`) that arrive are not verified yet.
 
-**Queue size limits.** The mutation queue enforces a maximum size (default: 10,000 entries). New mutations are rejected when the queue is full, preventing memory exhaustion.
+**Sending.**
 
-## WebSocket Client
+- Encrypting builds RFC 3156 PGP/MIME on the device and posts it as `raw`, so the server never sees the plaintext. Encrypted messages are signed when a key is unlocked.
+- Users can also sign without encrypting (RFC 3156 `multipart/signed`).
+- Both refuse Bcc: for a raw message, the API builds the delivery envelope from the headers, so a Bcc recipient would be visible.
+- Scheduled send is not available for either, because a raw message carries its own Date.
+- The Subject is not encrypted.
 
-The WebSocket client (`src/utils/websocket-client.js`) implements these hardening measures.
+## Realtime (WebSocket)
 
-**Authentication.** Credentials are sent as a base64-encoded `Authorization` header during the WebSocket handshake, not as URL parameters. This prevents credentials from appearing in server logs or browser history.
+`src/utils/websocket-client.js` keeps one socket per signed-in account to `wss://api.forwardemail.net/v1/ws`.
 
-**Reconnection abuse prevention.** The client uses exponential backoff (1s, 2s, 4s, 8s, ... up to 60s) with random jitter for reconnection attempts. A maximum reconnection attempt limit (default: 100) prevents infinite reconnection loops. The attempt counter resets after a successful connection that lasts longer than 30 seconds.
+- **Auth.** It connects with `?auth=message` and sends the credentials in the first message (`{event: 'auth', ...}`), so they never appear in the URL.
+- **Limits.** Messages over 64 KB are dropped. More than 200 messages in 60 s triggers a single `rate-limit` event, and listeners respond with a full refresh rather than processing the flood.
+- **Liveness.** The server pings every 30 s. The client closes the socket if no ping arrives within 45 s.
+- **Reconnects.** Backoff starts at 1 s and doubles up to 60 s, with up to 2 s of jitter. The client gives up after 50 attempts. The counter resets when the server confirms the connection, when the device comes back online, or on a manual reconnect.
+- **Event checks.** Events must have a string name. Per-event payload checks happen in the handlers.
+- **Account gating.** Multi-account handlers act only on events stamped with the account they belong to.
 
-**Message rate limiting.** Inbound messages are rate-limited to 100 messages per second. Messages exceeding this rate are dropped with a warning. This prevents a compromised or misbehaving server from flooding the client.
+## Service worker and offline queue
 
-**Message size limits.** Messages larger than 1 MB are rejected before parsing. This prevents memory exhaustion from oversized payloads.
-
-**Heartbeat/ping.** The client sends periodic ping frames (every 30s) and expects pong responses within 10s. If no pong is received, the connection is considered dead and is closed and reconnected.
-
-**Payload validation.** All parsed message payloads are type-checked before being dispatched to event handlers. Payloads that do not match the expected structure for their event type are dropped.
+- `public/sw-sync.js` runs background sync of folders, messages and the mutation queue.
+- It handles a fixed set of message types: `startSync`, `cancelSync`, `syncStatus`, `push-accounts`, `close-idb`, `reopen-idb`. It ignores anything else. It does not check the sender's origin; same-origin clients are the only ones that can reach it.
+- Offline changes (read, star, move, delete, label) queue in IndexedDB. They retry with exponential backoff (3 s base, 2 min cap, up to 20% jitter) for at most 5 attempts.
+- A mutation that still fails is reported to the UI and removed. There is no dead-letter store, and the queue has no size cap.
 
 ## Notifications
 
-The notification system (`src/utils/notification-manager.js`, `src/utils/notification-bridge.js`) implements the following.
+`notification-manager.js` and `notification-bridge.js` handle notifications.
 
-**Input sanitisation.** All notification content (titles, bodies, tags) from WebSocket event payloads is sanitised before display. HTML entities are escaped, control characters are stripped, and strings are truncated to safe maximums (256 chars for titles, 1024 for bodies).
+- **Sanitizing.** Titles and bodies have control characters stripped and are truncated: 256 characters for titles, 1024 for bodies in the manager, and 4096 in the bridge. On Linux, markup is escaped before display.
+- **Click targets.** Only app paths under `/calendar`, `/contacts` and `/mailbox/settings` are followed. Release links must be `https` on github.com or forwardemail.net.
+- **Deduplication.** Tags already notified are remembered for 3 days, up to 500 entries.
+- **Permission.** It is requested only from a user action.
 
-**Path validation.** Notification click paths are validated against an allowlist of prefixes (`#inbox`, `#folders`, `#calendar`, `#contacts`, `#settings`). Unknown paths default to `#inbox`.
+## Deep links
 
-**URL validation.** URLs in notification data (e.g., release URLs) are validated to ensure they use `https` and belong to trusted domains (`github.com`, `forwardemail.net`).
+- The desktop app registers `mailto:` and `forwardemail://`.
+- In Rust, `is_valid_deep_link` rejects control characters and links over 8 KB, and buffers at most 32 links that arrive before the frontend is ready.
+- `mailto:` links are parsed by `parseMailto` and only pre-fill the composer. They never send.
+- `forwardemail://` links are mapped to an in-app target. Otherwise a path that starts with `/` and a letter is navigated as an in-app route. Nothing outside the app is opened.
 
-**Deduplication.** A time-windowed deduplication map (2-second window) prevents notification spam. The map is size-limited to 200 entries to prevent memory exhaustion.
+## Auto-update
 
-**Permission checks.** Notification permission is requested lazily (on first notification) and cached. The system gracefully degrades when permission is denied.
+- **Desktop updates are signed.** The Tauri updater verifies each package against the public key in `tauri.conf.json`. The signing key lives in the `release` CI environment, and a release build fails without it.
+- **Source.** The manifest is `latest.json` on the GitHub release (`github.com/forwardemail/mail.forwardemail.net/releases/latest/download/latest.json`).
+- **Updates install automatically.** The app checks hourly, and when a realtime `newRelease` event arrives. When a newer version exists it shows a toast ("Installing update vX, the app will restart"), installs, and relaunches. It does not ask first. A failed install leaves the current version in place and is retried at the next check.
+- **Web app.** The web app updates through its service worker.
 
-## Auto-Updater
+## Release pipeline and signing
 
-The auto-updater (`src/utils/updater-bridge.js`) implements these protections.
+- **Workflow permissions.** Workflows declare explicit permissions. CI uses `{}` at the top with per-job grants. Release workflows grant `contents: write` plus `id-token` and `attestations` for provenance.
+- **Secrets.** Signing secrets are scoped to the `release` environment.
+- **Tags and builds.** Release tags must be semver. Release workflows do not cancel in progress.
+- **Android keystore.** The main Android job overwrites the decoded keystore with random data before deleting it.
+- **Checksums and provenance.** Releases attach `SHA256SUMS.txt` when there are artifacts, and SLSA build provenance attestations.
+- **Dependencies.** Dependency advisories come from Dependabot. There is no in-workflow audit gate.
 
-**Signature verification.** All update packages are cryptographically signed using the Tauri updater signing key. The Tauri runtime verifies signatures before applying updates. The signing private key is stored as a GitHub Actions secret and is never exposed to the frontend.
+| Platform | Signing                                   |
+| -------- | ----------------------------------------- |
+| macOS    | Apple Developer ID, notarized             |
+| Windows  | SSL.com eSigner (HSM-backed) Authenticode |
+| Linux    | Updater signature (`.sig`)                |
+| Android  | Release keystore                          |
+| iOS      | Apple distribution certificate            |
 
-**HTTPS-only.** The update endpoint URL is validated to use `https` only. The endpoint is hardcoded to `https://releases.forwardemail.net` and cannot be overridden by the frontend.
+## Known gaps
 
-**User consent.** Updates are never applied silently. The user is prompted with the version number and changelog before installation begins.
+These are tracked and not yet addressed:
 
-**Rollback.** If an update fails to install, the application remains on the current version. The updater does not retry failed installations automatically.
+- **Plaintext storage without App Lock.** Without App Lock, the web and mobile apps keep credentials and PGP keys in plaintext `localStorage`. The desktop seal does not apply there yet.
+- **Mobile email frame.** It still uses `allow-same-origin` (see [Rendering email](#rendering-email)).
+- **PGP verification and key discovery.**
+  - Incoming `multipart/signed` messages are not verified.
+  - There is no client-side WKD or Autocrypt.
+  - S/MIME is not supported.
+- **Sender warnings.** There is no warning for look-alike domains or display-name spoofing.
+- **Image proxy.** There is no server-side image proxy, so loading remote images reveals the reader's IP address to the sender.
+- **`'unsafe-inline'`.** It remains in `script-src`.
 
-## Deep-Links
+## Reporting vulnerabilities
 
-The deep-link handler (`src-tauri/src/lib.rs`) validates all incoming deep-link URLs.
+Follow the organization security policy:
 
-**Scheme validation.** Only the registered `forwardemail://` scheme is accepted.
+- <https://forwardemail.net/security>
+- <https://forwardemail.net/security.txt>
+- <https://github.com/forwardemail/.github/blob/main/SECURITY.md>
 
-**Path validation.** The path component is validated against a known set of routes. Unknown paths are redirected to the inbox.
+Please do not open a public issue for a vulnerability.
 
-**Parameter sanitisation.** Query parameters are URL-decoded and sanitised before being passed to the frontend router.
+## Related documentation
 
-## App Lock and Client-Side Encryption
-
-The application provides an optional App Lock feature that encrypts all locally stored data (IndexedDB records, sensitive localStorage values) using libsodium. This protects user data at rest on the device.
-
-**Envelope encryption architecture.** A random 256-bit Data Encryption Key (DEK) is generated per device. The DEK encrypts all data. The DEK itself is encrypted by a Key Encryption Key (KEK) derived from the user's PIN or passkey. The encrypted DEK and its salt are stored in localStorage as the "vault". This two-layer design means changing the PIN only requires re-encrypting the DEK, not re-encrypting all data.
-
-**Key derivation.** The KEK is derived from the user's PIN using Argon2id with moderate-level parameters (3 iterations, 256 MiB memory). This makes brute-force attacks on the PIN computationally expensive. For passkey-based authentication, the WebAuthn PRF extension is used to derive the KEK directly from the authenticator, with a keyed BLAKE2b hash applied for domain separation.
-
-**Passkey (WebAuthn) authentication.** Users can register a passkey (biometric, security key, or platform authenticator) using the `@passwordless-id/webauthn` library. The passkey can be used to unlock the app instead of a PIN. A backup PIN is always required as a fallback. The WebAuthn ceremony is performed entirely client-side with no server round-trips.
-
-**IndexedDB encryption.** When App Lock is enabled, the database engine (`src/utils/db-crypto.ts`, wired into `src/utils/db-engine.ts`) seals every sensitive record with AES-256-GCM (WebCrypto) using a subkey derived from the DEK via keyed BLAKE2b. Sensitive tables are `messages`, `messageBodies`, `drafts`, `outbox`, `searchIndex`, and sensitive `meta` key families (mutation queue, contact cache, attachment blobs, saved searches). Non-index content fields are serialized and sealed into a single `_enc` envelope per record; only fields required by queried indexes (e.g., `account`, `id`, `folder`, `date`) remain plaintext. Writes to sensitive tables fail closed while the vault is locked. Legacy plaintext records remain readable and are upgraded by a background sweep when App Lock is enabled; disabling App Lock decrypts all records before the DEK is discarded. Because the service worker has no access to the key, background content sync is skipped while App Lock is enabled (the `app_lock_enabled` meta flag gates it).
-
-**localStorage encryption.** Sensitive localStorage keys (credentials, the multi-account list, PGP keys and passphrases, auth tokens) are encrypted with the DEK when App Lock is enabled. The `SENSITIVE_LOCAL_KEYS` set defines which keys are encrypted, and every write through the `Local` storage utility routes through this protection (not only a one-time setup sweep); each unlock re-sweeps any values written while locked. Non-sensitive keys (UI preferences, lock configuration) remain unencrypted since they are needed before unlock. Plaintext copies of tab-scoped credentials (and the DEK itself) live in `sessionStorage` for the lifetime of an unlocked tab session so reloads do not re-prompt; they are cleared on lock and on tab close.
-
-**Memory safety.** The DEK is held in a module-scoped closure variable, never exposed on `window` or any global scope. On lock, `sodium.memzero()` is called to wipe the DEK from memory. The KEK is never stored; it is derived on-demand during unlock and immediately discarded after decrypting the DEK.
-
-**Brute-force protection.** Failed PIN attempts trigger exponential backoff: 30 seconds after 3 failures, 60 seconds after 4, 300 seconds after 5+. The attempt counter and lockout timestamp are stored in localStorage and persist across page reloads. After 10 consecutive failures, the user is warned that continued failures may result in data wipe.
-
-**Inactivity auto-lock.** A configurable inactivity timer monitors mouse, keyboard, touch, and scroll events. When the timeout expires, the app locks automatically, wiping the DEK from memory. The timer resets on any user interaction. Supported timeouts: 1 minute, 5 minutes, 15 minutes, 30 minutes, 1 hour, or never.
-
-## IndexedDB and Local Storage
-
-**IndexedDB isolation.** Each account's data is stored in a separate IndexedDB database, namespaced by account identifier. This prevents cross-account data leakage.
-
-**Transaction safety.** All IndexedDB operations use explicit transactions with appropriate modes (`readonly` for reads, `readwrite` for writes). Transactions are kept as short as possible to prevent lock contention.
-
-## CI/CD Pipeline
-
-The CI/CD workflows implement the following supply chain protections.
-
-**Minimal permissions.** Every workflow declares explicit `permissions` at the top level. CI build workflows use `contents: read` only. Release workflows use `contents: write` only. No workflow has `write-all` or `admin` permissions.
-
-**Environment scoping.** Release workflows use GitHub's `environment` feature to scope secrets to the `release` environment. This prevents CI builds from accessing signing keys or credentials.
-
-**Supply chain audits.** Dependency vulnerability scanning is handled by GitHub's native Dependabot alerts rather than in-workflow gates. In-workflow scanners (`cargo audit`, OSV-Scanner against `pnpm-lock.yaml`) were removed because npm's legacy audit endpoint was retired (410 Gone) and the remaining scans produced noisy advisories on dev-only dep paths that did not ship in the user bundle. Dependabot + GitHub's security advisories are the system of record; critical findings are triaged via PRs rather than blocking CI.
-
-**Concurrency controls.** Release workflows use `cancel-in-progress: false` to prevent partial releases. CI workflows use `cancel-in-progress: true` to save resources.
-
-**Artifact retention.** CI artifacts are retained for 7 days. Release artifacts are attached to GitHub Releases for permanent storage.
-
-**Keystore cleanup.** The Android release workflow securely deletes the decoded keystore file after use, overwriting it with random data before deletion to prevent recovery.
-
-**Version validation.** The release orchestrator validates that the tag matches semver format before creating a release, preventing malformed releases.
-
-## Code Signing
-
-All release binaries are code-signed.
-
-| Platform | Signing Method                        | Verification                                               |
-| -------- | ------------------------------------- | ---------------------------------------------------------- |
-| macOS    | Apple Developer ID + Notarization     | Gatekeeper verifies on first launch                        |
-| Windows  | SSL.com certificate via eSigner (HSM) | Authenticode; SmartScreen reputation builds from downloads |
-| Linux    | Tauri updater signature (.sig files)  | Verified by the built-in updater                           |
-| Android  | Android Keystore (release key)        | Play Store and APK signature verification                  |
-| iOS      | Apple Distribution Certificate        | App Store and device-level verification                    |
-
-SHA-256 checksums for all release artifacts are generated and attached to each GitHub Release as `SHA256SUMS.txt`.
-
-## Reporting Vulnerabilities
-
-If you discover a security vulnerability, report it responsibly by emailing **security@forwardemail.net**. Do not open a public GitHub issue for security vulnerabilities. We will acknowledge receipt within 48 hours and provide a timeline for a fix.
-
-## Related Documentation
-
-- [ARCHITECTURE.md](./ARCHITECTURE.md): Full architecture document including encryption details
-- [SECRETS.md](./SECRETS.md): Required secrets for CI/CD and code signing
-- [Desktop CI Secrets](./desktop-ci-secrets.md): Detailed desktop signing setup
-- [RELEASES.md](./RELEASES.md): Release process and artifact signing
-- [App Lock Architecture](./app-lock-architecture.md): Detailed App Lock encryption design
+- [ARCHITECTURE.md](./ARCHITECTURE.md)
+- [App Lock Architecture](./app-lock-architecture.md)
+- [SECRETS.md](./SECRETS.md) and [Desktop CI Secrets](./desktop-ci-secrets.md)
+- [RELEASES.md](./RELEASES.md)
+- [WEBSOCKET.md](./WEBSOCKET.md)

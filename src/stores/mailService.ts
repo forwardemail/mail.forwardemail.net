@@ -2,7 +2,12 @@ import { Remote } from '../utils/remote.js';
 import Dexie from 'dexie';
 import { db } from '../utils/db.js';
 import { Local } from '../utils/storage.js';
-import { sanitizeHtml } from '../utils/sanitize.js';
+import {
+  sanitizeHtml,
+  remoteImagesBlockedByDefault,
+  restoreBlockedImages,
+} from '../utils/sanitize.js';
+import { isTrustedImageSender } from '../utils/remote-image-trust';
 import { formatFriendlyDate } from '../utils/date.ts';
 import { createPerfTracer } from '../utils/perf-logger.ts';
 import { createPgpModal } from '../utils/pgp-key-prompt.ts';
@@ -24,7 +29,7 @@ import { getCachedAttachmentBlob, cacheAttachmentBlob } from '../utils/attachmen
 import { isTauri } from '../utils/platform.js';
 import { isMemoryConstrained } from '../utils/memory-profile';
 import { slimBodyMeta, slimCachedAttachments } from '../workers/sync-pure';
-import type { Message, Attachment, PerfTracer, PgpKey } from '../types';
+import type { Message, Attachment, PerfTracer, PgpKey, PgpSignatureCheck } from '../types';
 import { messages } from './messageStore';
 import { writable } from 'svelte/store';
 import { warn } from '../utils/logger.ts';
@@ -39,6 +44,7 @@ import {
   composeAbortSignals,
   sanitizeAttachments,
   cachedBodyForDisplay,
+  cachedBodyNeedsResanitize,
 } from './mail-service-helpers';
 
 export interface MessageDetailCallbacks {
@@ -64,8 +70,10 @@ export interface PgpStatus {
   locked: boolean;
   /** Message was PGP-encrypted and successfully decrypted. */
   encrypted?: boolean;
-  /** Signature packets present but NOT verified (no public-key store yet). */
+  /** Signature packets present (see `signature` for whether they checked out). */
   signed?: boolean;
+  /** Result of checking the signatures against the keys the user holds. */
+  signature?: PgpSignatureCheck | null;
   /** Protected-headers subject from the decrypted inner MIME. */
   subject?: string;
 }
@@ -94,8 +102,10 @@ interface DecryptResult {
   keyCount?: number;
   /** Protected-headers subject parsed from the decrypted inner MIME. */
   subject?: string;
-  /** Signature packets present in the decrypted message (unverified). */
+  /** Signature packets present in the decrypted message. */
   signed?: boolean;
+  /** What checking them against the keys the user holds found. */
+  signature?: PgpSignatureCheck | null;
 }
 
 interface PassphraseModalRef {
@@ -702,10 +712,15 @@ export const clearMailServiceState = (): void => {
  * cached db.messages record and the in-memory list so the row and any open
  * reader reflect it immediately.
  */
+function sameSignatureCheck(a: PgpSignatureCheck | null, b: PgpSignatureCheck | null): boolean {
+  if (!a || !b) return a === b;
+  return a.status === b.status && a.signers.join(',') === b.signers.join(',');
+}
+
 async function persistDecryptedEnvelope(
   message: Message,
   account: string,
-  decrypted: { subject?: string; signed?: boolean },
+  decrypted: { subject?: string; signed?: boolean; signature?: PgpSignatureCheck | null },
   // getPgpKeysVersion() when the decrypt started: keys removed since then
   // took what they decrypted with them, so this must not write it back
   keysVersion?: number,
@@ -721,13 +736,23 @@ async function persistDecryptedEnvelope(
       ? decrypted.subject
       : undefined;
   const signed = Boolean(decrypted.signed);
+  const signature = decrypted.signature ?? null;
 
   // Nothing new to record. Avoids a write on every open of an already-flagged message.
-  if (innerSubject === undefined && message.pgpEncrypted && message.pgpSigned === signed) {
+  if (
+    innerSubject === undefined &&
+    message.pgpEncrypted &&
+    message.pgpSigned === signed &&
+    sameSignatureCheck(message.pgpSignature ?? null, signature)
+  ) {
     return;
   }
 
-  const changes: Partial<Message> = { pgpEncrypted: true, pgpSigned: signed };
+  const changes: Partial<Message> = {
+    pgpEncrypted: true,
+    pgpSigned: signed,
+    pgpSignature: signature,
+  };
   if (innerSubject !== undefined) {
     changes.subject = innerSubject;
     // Kept so removing the keys can put the server's subject back
@@ -803,7 +828,11 @@ async function handleCachedPgpRaw(
 
         debugLog('[PGP] Message already decrypted by background task');
         // (a row the sync worker wrote holds the body as it came)
-        const display = cachedBodyForDisplay(freshCache, sanitizeHtml);
+        const display = cachedBodyForDisplay(
+          freshCache,
+          sanitizeHtml,
+          remoteImagesBlockedByDefault(),
+        );
         const hydrated = applyInlineAttachments(display.html, freshCache.attachments || []);
         onBody?.(`<div class="fe-message-canvas">${hydrated}</div>`);
         onImageStatus?.({
@@ -831,6 +860,7 @@ async function handleCachedPgpRaw(
       locked: false,
       encrypted: true,
       signed: result.signed,
+      signature: result.signature ?? null,
       subject: result.subject,
     });
     persistDecryptedEnvelope(message, account, result, keysVersion).catch(() => {});
@@ -908,7 +938,7 @@ export const mailService = {
       onAttachments,
       onError,
       onMeta,
-      onImageStatus,
+      onImageStatus: rawOnImageStatus,
       onPgpStatus,
       perf,
       signal,
@@ -934,10 +964,29 @@ export const mailService = {
     // stayed up until the cache write after delivery finished, which could
     // take seconds while the db worker was busy, with the decrypted body ready
     // underneath it.
+    //
+    // Every path sanitizes with remote images blocked when that is the
+    // default. For a sender the user trusts with images, the blocked images
+    // are put back here (tracking pixels stay out), on whichever path the
+    // body came by.
+    const imagesAllowed = isTrustedImageSender(message.from, account);
     const onBody = rawOnBody
       ? (html: string): void => {
-          rawOnBody(html);
+          rawOnBody(imagesAllowed ? restoreBlockedImages(html) : html);
           onLoading?.(false);
+        }
+      : undefined;
+    const onImageStatus = rawOnImageStatus
+      ? (status: ImageStatus): void => {
+          rawOnImageStatus(
+            imagesAllowed
+              ? {
+                  ...status,
+                  hasBlockedImages: status.trackingPixelCount > 0,
+                  blockedRemoteImageCount: 0,
+                }
+              : status,
+          );
         }
       : undefined;
     const tracer =
@@ -986,7 +1035,8 @@ export const mailService = {
         new Promise((resolve) => setTimeout(() => resolve(undefined), READER_CACHE_READ_CAP_MS)),
       ]).catch(() => undefined)) as CachedBody | undefined;
       // Check if cached message needs re-sanitization (missing tracking pixel data from worker cache)
-      const needsResanitize = cached?.body && cached.trackingPixelCount === undefined;
+      // (or one sanitized while remote images were allowed, now blocked)
+      const needsResanitize = cachedBodyNeedsResanitize(cached, remoteImagesBlockedByDefault());
       // Detect stale cache: raw PGP/MIME content was incorrectly stored as body
       const isStalePgpBody =
         cached?.body && typeof cached.body === 'string' && isPgpEncrypted(cached.body);
@@ -1079,7 +1129,11 @@ export const mailService = {
             .equals([account, messageId])
             .first()) as CachedBody | undefined;
           if (freshCached?.body && !isPgpEncrypted(freshCached.body)) {
-            const display = cachedBodyForDisplay(freshCached, sanitizeHtml);
+            const display = cachedBodyForDisplay(
+              freshCached,
+              sanitizeHtml,
+              remoteImagesBlockedByDefault(),
+            );
             const hydrated = applyInlineAttachments(display.html, freshCached.attachments || []);
 
             onBody?.(`<div class="fe-message-canvas">${hydrated}</div>`);
@@ -1347,6 +1401,7 @@ export const mailService = {
             locked: false,
             encrypted: true,
             signed: decryptResult.signed,
+            signature: decryptResult.signature ?? null,
             subject: decryptResult.subject,
           });
           persistDecryptedEnvelope(message, account, decryptResult, keysVersion).catch(() => {});
@@ -1492,7 +1547,11 @@ export const mailService = {
           .equals([account, messageId])
           .first()) as CachedBody | undefined;
         if (cached?.body && !isPgpEncrypted(cached.body)) {
-          const display = cachedBodyForDisplay(cached, sanitizeHtml);
+          const display = cachedBodyForDisplay(
+            cached,
+            sanitizeHtml,
+            remoteImagesBlockedByDefault(),
+          );
           const hydrated = applyInlineAttachments(display.html, cached.attachments || []);
 
           onBody?.(`<div class="fe-message-canvas">${hydrated}</div>`);

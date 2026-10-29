@@ -6,6 +6,7 @@
 // store state belongs back in mailService.ts.
 
 import type { Attachment } from '../types';
+import { REMOTE_IMAGES_BLOCKED_MARKER } from '../utils/remote-images-marker';
 
 /**
  * Trim a raw body down to just its inline PGP MESSAGE block. Returns the input
@@ -240,6 +241,24 @@ export function sanitizeAttachments(list: unknown[]): Attachment[] {
     .filter((a) => a.name);
 }
 
+/**
+ * Whether a cached body has to be sanitized again before it is shown.
+ *
+ * Besides rows the background writers stored raw (no trackingPixelCount), a
+ * body sanitized while remote images were allowed still has them in place.
+ * When blocking is on now, that copy would load them, so it is sanitized
+ * again. A body sanitized with blocking on carries the blocked marker; the
+ * reader restores its images itself when they are allowed.
+ */
+export function cachedBodyNeedsResanitize(
+  cached: { body?: string; trackingPixelCount?: number } | null | undefined,
+  blockRemoteImages: boolean,
+): boolean {
+  if (!cached?.body) return false;
+  if (cached.trackingPixelCount === undefined) return true;
+  return blockRemoteImages && !cached.body.includes(REMOTE_IMAGES_BLOCKED_MARKER);
+}
+
 export interface CachedBodyDisplay {
   html: string;
   hasBlockedImages: boolean;
@@ -258,8 +277,9 @@ export interface CachedBodyDisplay {
 export function cachedBodyForDisplay(
   cached: { body?: string; trackingPixelCount?: number; blockedRemoteImageCount?: number },
   sanitize: (html: string) => CachedBodyDisplay,
+  blockRemoteImages = false,
 ): CachedBodyDisplay {
-  if (cached.trackingPixelCount === undefined) {
+  if (cachedBodyNeedsResanitize(cached, blockRemoteImages)) {
     const sanitized = sanitize(cached.body || '');
     return {
       html: sanitized.html,

@@ -60,6 +60,15 @@ const CSS_BLOCKED_URL_MARKER = 'fe-blocked-url:';
 
 export { REMOTE_IMAGES_BLOCKED_MARKER };
 
+/**
+ * Whether remote images are blocked unless the user loads them. On unless the
+ * user turned it off: a remote image tells the sender when and from what IP
+ * address the message was read, the same as a tracking pixel.
+ */
+export function remoteImagesBlockedByDefault() {
+  return Local.get('block_remote_images') !== 'false';
+}
+
 // Remote references the <img src> rewrite does not rewrite, checked on the
 // sanitized output so the "load images" control is offered for them too.
 const OTHER_REMOTE_IMAGE_REFS =
@@ -476,7 +485,7 @@ export function sanitizeHtml(html, { blockRemoteImages, blockTrackingPixels } = 
 
   // Read user preference if not explicitly provided
   if (blockRemoteImages === undefined) {
-    blockRemoteImages = Local.get('block_remote_images') === 'true';
+    blockRemoteImages = remoteImagesBlockedByDefault();
   }
 
   // Read tracking pixel setting if not explicitly provided
@@ -953,8 +962,7 @@ export function sanitizeQuotedHtml(html, options = {}) {
   if (!html || typeof html !== 'string') return '';
 
   let { blockRemoteImages, blockTrackingPixels } = options;
-  if (blockRemoteImages === undefined)
-    blockRemoteImages = Local.get('block_remote_images') === 'true';
+  if (blockRemoteImages === undefined) blockRemoteImages = remoteImagesBlockedByDefault();
   if (blockTrackingPixels === undefined)
     blockTrackingPixels = Local.get('block_tracking_pixels') !== 'false';
 
