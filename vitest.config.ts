@@ -33,6 +33,8 @@ export default defineConfig({
         'src/workers/**',
         'src/main.ts',
         'src/compose-main.ts',
+        'src/boot.ts',
+        'src/compose-boot.ts',
         'src/polyfills.ts',
       ],
     },

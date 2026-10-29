@@ -6,6 +6,7 @@ import {
   protectLocalValue,
   revealLocalValue,
 } from './crypto-store.js';
+import { hasDeviceKey, isDeviceSealed, sealForDevice, unsealFromDevice } from './device-seal';
 
 const PREFIX = 'webmail_';
 const ACCOUNTS_KEY = `${PREFIX}accounts`; // List of all logged-in accounts (localStorage - persistent)
@@ -145,6 +146,7 @@ const ACCOUNT_LOCAL_KEY_PREFIXES = [
   'pgp_keys_',
   'pgp_passphrases_',
   'pgp_recipients_',
+  'remote_images_trusted_',
   'signature_',
   'signature_html_',
   'signature_enabled_',
@@ -310,6 +312,32 @@ export const localCredentialsBelongToTab = () => {
   }
 };
 
+// What Local.set writes to localStorage: encrypted with the App Lock vault
+// key while that is unlocked, otherwise sealed with the device key where the
+// OS credential store holds one (device-seal.ts), otherwise the value itself.
+const persistedLocalValue = (key, value) => {
+  const protectedValue = protectLocalValue(key, value);
+  if (protectedValue !== value || typeof value !== 'string') return protectedValue;
+  if (!isSensitiveLocalKey(key)) return value;
+  return sealForDevice(value);
+};
+
+// Values that hold a whole list (every PGP key, every catch-all password).
+// A caller that read one as missing and writes it back would replace the list.
+const isCollectionLocalKey = (key) =>
+  key === 'catchall_credentials' ||
+  key.startsWith('pgp_keys_') ||
+  key.startsWith('pgp_passphrases_');
+
+// The stored copy is sealed but the device key did not load this session (a
+// credential store prompt that went unanswered, say). It reads as missing, so
+// writing a list over it would lose what it holds. Single values (a password,
+// an API key) may still be replaced: the user just signed in again.
+const wouldClobberSealedList = (key) => {
+  if (!isCollectionLocalKey(key) || hasDeviceKey()) return false;
+  return isDeviceSealed(localStorage.getItem(`${PREFIX}${key}`));
+};
+
 export const Local = {
   get(key) {
     try {
@@ -328,7 +356,10 @@ export const Local = {
         }
         if (CREDENTIAL_KEYS.has(key) && !localCredentialsBelongToTab()) return null;
         // First read in this tab — copy from localStorage to lock in the account
-        const localValue = localStorage.getItem(prefixedKey);
+        const storedValue = localStorage.getItem(prefixedKey);
+        // Sealed with the device key (device-seal.ts): open it, or treat it as
+        // missing when it cannot be opened here.
+        const localValue = unsealFromDevice(storedValue);
         if (localValue !== null) {
           if (localValue.startsWith(ENCRYPTED_PREFIX)) {
             // Decrypt when the vault is unlocked; while locked the value is
@@ -346,6 +377,7 @@ export const Local = {
       if (value !== null && value.startsWith(ENCRYPTED_PREFIX) && isSensitiveLocalKey(key)) {
         return revealLocalValue(value);
       }
+      if (isDeviceSealed(value)) return unsealFromDevice(value);
       return value;
     } catch (error) {
       console.error('localStorage.getItem failed:', error);
@@ -366,7 +398,11 @@ export const Local = {
       const sessionOnly =
         TAB_SCOPED_KEYS.has(key) && isSessionOnlyAccount(tabScopedOwner(key, value));
       if (!sessionOnly) {
-        localStorage.setItem(`${PREFIX}${key}`, protectLocalValue(key, value));
+        if (wouldClobberSealedList(key)) {
+          warn(`Not saving ${key}: its stored copy is sealed and the device key is unavailable`);
+          return false;
+        }
+        localStorage.setItem(`${PREFIX}${key}`, persistedLocalValue(key, value));
       }
       if (TAB_SCOPED_KEYS.has(key) && hasSessionStorage) {
         sessionStorage.setItem(`${PREFIX}${key}`, value);
@@ -628,7 +664,9 @@ const readAccountsList = (storage, storageKey) => {
   try {
     const data = storage.getItem(storageKey);
     if (!data) return [];
-    const text = data.startsWith(ENCRYPTED_PREFIX) ? revealLocalValue(data) : data;
+    const text = data.startsWith(ENCRYPTED_PREFIX)
+      ? revealLocalValue(data)
+      : unsealFromDevice(data);
     if (text === null) return null;
     const parsed = JSON.parse(text);
     return Array.isArray(parsed) ? parsed : [];
@@ -645,7 +683,7 @@ const readAccountsList = (storage, storageKey) => {
  */
 const writeAccountsList = (storage, storageKey, accounts) => {
   const json = JSON.stringify(accounts);
-  const value = storage === localStorage ? protectLocalValue('accounts', json) : json;
+  const value = storage === localStorage ? persistedLocalValue('accounts', json) : json;
   storage.setItem(storageKey, value);
 };
 

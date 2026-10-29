@@ -27,6 +27,7 @@
 
 import { ARGON2_SALT_BYTES as ARGON2_SALT_BYTES_SHARED, deriveArgon2Key } from './argon2-kdf.js';
 import { localCredentialsBelongToTab } from './storage.js';
+import { sealForDevice, unsealFromDevice } from './device-seal';
 
 const VAULT_KEY = 'webmail_crypto_vault';
 const LOCK_PREFS_KEY = 'webmail_lock_prefs';
@@ -980,7 +981,9 @@ async function encryptExistingLocalStorage() {
     const key = fullKey.slice(prefix.length);
     if (!isSensitiveLocalKey(key)) continue;
 
-    const value = localStorage.getItem(fullKey);
+    // A value sealed with the device key (device-seal.ts) is opened first,
+    // so the vault encrypts the plaintext, not the sealed copy.
+    const value = unsealFromDevice(localStorage.getItem(fullKey));
     if (value && !isEncrypted(value)) {
       try {
         localStorage.setItem(fullKey, encryptValue(value));
@@ -1008,9 +1011,11 @@ async function decryptExistingLocalStorage() {
     if (value && isEncrypted(value)) {
       try {
         const decrypted = decryptValue(value);
+        // Back to how values are kept without App Lock: sealed with the
+        // device key where there is one, plaintext otherwise.
         localStorage.setItem(
           fullKey,
-          typeof decrypted === 'string' ? decrypted : JSON.stringify(decrypted),
+          sealForDevice(typeof decrypted === 'string' ? decrypted : JSON.stringify(decrypted)),
         );
       } catch (err) {
         console.error(`[crypto-store] Failed to decrypt localStorage key ${key}:`, err);
@@ -1107,7 +1112,7 @@ function copyPlainCredentialsToSession() {
     const fullKey = `${prefix}${key}`;
     try {
       if (sessionStorage.getItem(fullKey) !== null) continue;
-      const localValue = localStorage.getItem(fullKey);
+      const localValue = unsealFromDevice(localStorage.getItem(fullKey));
       if (localValue && !isEncrypted(localValue)) {
         sessionStorage.setItem(fullKey, localValue);
       }
@@ -1156,8 +1161,9 @@ function restoreSessionCredentials() {
       // in the background, leaving Local.get() with no session copy.
       try {
         const existing = sessionStorage.getItem(fullKey);
-        if (existing === null) {
-          sessionStorage.setItem(fullKey, localValue);
+        const plain = unsealFromDevice(localValue);
+        if (existing === null && plain !== null) {
+          sessionStorage.setItem(fullKey, plain);
         }
       } catch {
         // ignore

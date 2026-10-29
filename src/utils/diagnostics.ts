@@ -474,6 +474,49 @@ export const checkAppLock = (): Promise<DiagnosticResult> =>
   });
 
 /**
+ * Credential sealing on desktop (device-seal.ts): whether the key from the OS
+ * credential store loaded, and whether any saved values cannot be opened. The
+ * second case is the one support needs to spot: the user looks signed out and
+ * their PGP keys look gone, but the data is intact and comes back once the
+ * keyring answers (unlock it, then restart).
+ */
+export const checkCredentialSealing = (): Promise<DiagnosticResult> =>
+  runCheck('credential-sealing', 'Credential sealing', async () => {
+    const { getDeviceSealStatus } = await import('./device-seal');
+    const status = getDeviceSealStatus();
+    const store = await import('./crypto-store.js');
+    const appLock = store.isLockEnabled();
+    const detail = { ...status, appLock };
+    if (status.state === 'unsupported') {
+      return { status: 'skip', message: 'Not used on this platform', detail };
+    }
+    const unreadable = status.sealedValues - status.readableValues;
+    if (unreadable > 0) {
+      return {
+        status: 'fail',
+        message: `${unreadable} saved value${unreadable === 1 ? '' : 's'} cannot be opened: the OS credential store did not provide the key${status.reason ? ` (${status.reason})` : ''}. Unlock the system keyring, then restart the app.`,
+        detail,
+      };
+    }
+    if (status.state === 'on') {
+      return {
+        status: 'pass',
+        message: appLock
+          ? 'On; App Lock encrypts credentials while it is enabled'
+          : `On (OS credential store)${status.adoptedLate ? ', key arrived after startup' : ''}`,
+        detail,
+      };
+    }
+    return {
+      status: appLock ? 'skip' : 'warn',
+      message: appLock
+        ? 'OS credential store unavailable; App Lock encrypts credentials'
+        : `OS credential store unavailable${status.reason ? ` (${status.reason})` : ''}; credentials are stored unsealed`,
+      detail,
+    };
+  });
+
+/**
  * Desktop renderer watchdog. Rust pings the page and reloads the window when
  * the WebKit content process stops answering. A reload count above zero on a
  * support report is the tell for the renderer dying mid-session, which
@@ -724,6 +767,7 @@ export const runDiagnostics = async (): Promise<DiagnosticsReport> => {
     checkQrDecoder(),
     checkPushRegistration(),
     checkAppLock(),
+    checkCredentialSealing(),
     checkRendererWatchdog(),
     checkStorageUsage(),
     checkCacheContents(),

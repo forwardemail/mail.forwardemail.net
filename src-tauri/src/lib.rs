@@ -4,6 +4,8 @@ use tauri::{Emitter, Listener, Manager};
 
 #[cfg(desktop)]
 mod browser_override;
+#[cfg(desktop)]
+mod device_key;
 mod diagnostics;
 mod redaction;
 mod renderer_watchdog;
@@ -1279,6 +1281,10 @@ pub fn run() {
             diagnostics::get_log_path,
             diagnostics::read_recent_logs,
             diagnostics::clear_logs,
+            #[cfg(desktop)]
+            device_key::device_key_get,
+            #[cfg(desktop)]
+            device_key::device_key_set,
             #[cfg(desktop)]
             toggle_window_visibility,
             #[cfg(desktop)]

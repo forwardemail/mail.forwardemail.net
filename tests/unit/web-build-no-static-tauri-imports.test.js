@@ -91,6 +91,18 @@ function walkStaticImportGraph(entryFile) {
 }
 
 describe('static import graph from web entry points', () => {
+  it.each(['src/boot.ts', 'src/compose-boot.ts'])(
+    '%s must not transitively import Tauri bare modules',
+    (entry) => {
+      const violations = walkStaticImportGraph(path.join(ROOT, entry));
+      expect(
+        violations.map((v) => `${v.file} imports "${v.specifier}"`),
+        'Static Tauri imports in the entry graph cause a blank page. ' +
+          'Use platform-guarded dynamic import() instead.',
+      ).toEqual([]);
+    },
+  );
+
   it('src/main.ts must not transitively import Tauri bare modules', () => {
     const violations = walkStaticImportGraph(path.join(ROOT, 'src/main.ts'));
     expect(

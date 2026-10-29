@@ -64,6 +64,10 @@ tauri-plugin-window-state = "2.4.1"
 tauri-plugin-updater = "2.10.1"
 tauri-plugin-global-shortcut = "2.3.1"
 tauri-plugin-webdriver = { version = "0.2.1", optional = true }
+# OS credential store for the key that seals credentials in localStorage
+# (src/device_key.rs). The Linux backend is the pure-Rust Secret Service
+# client, so no libdbus headers are needed to build.
+keyring = { version = "3.6", features = ["apple-native", "windows-native", "async-secret-service", "tokio", "crypto-rust"] }
 
 # Mobile-only: native haptic feedback (iOS Taptic Engine + Android vibrator).
 # navigator.vibrate is a no-op inside the iOS WKWebView, so iOS gets no haptics

@@ -30,10 +30,22 @@ vi.mock('../../src/utils/crypto-store.js', () => ({
 }));
 const lockState = { enabled: false, configured: false, unlocked: false, hasPasskey: false };
 
+const sealStatus = vi.hoisted(() => ({
+  state: 'unsupported' as string,
+  reason: '',
+  adoptedLate: false,
+  sealedValues: 0,
+  readableValues: 0,
+}));
+vi.mock('../../src/utils/device-seal', () => ({
+  getDeviceSealStatus: () => ({ ...sealStatus }),
+}));
+
 import {
   checkApiConnectivity,
   checkAppLock,
   checkCamera,
+  checkCredentialSealing,
   checkCSPEnforcement,
   checkIndexedDB,
   checkPushRegistration,
@@ -347,6 +359,70 @@ describe('checkAppLock', () => {
       'hasPasskey',
       'pinLength',
       'unlocked',
+    ]);
+  });
+});
+
+describe('checkCredentialSealing', () => {
+  beforeEach(() => {
+    Object.assign(sealStatus, {
+      state: 'unsupported',
+      reason: '',
+      adoptedLate: false,
+      sealedValues: 0,
+      readableValues: 0,
+    });
+    lockState.enabled = false;
+  });
+
+  it('skips off the desktop app', async () => {
+    expect((await checkCredentialSealing()).status).toBe('skip');
+  });
+
+  it('passes when the key loaded and every sealed value opens', async () => {
+    Object.assign(sealStatus, { state: 'on', sealedValues: 3, readableValues: 3 });
+    const r = await checkCredentialSealing();
+    expect(r.status).toBe('pass');
+    expect(r.message).toBe('On (OS credential store)');
+  });
+
+  it('warns when the store is unavailable and nothing was sealed yet', async () => {
+    Object.assign(sealStatus, { state: 'unavailable', reason: 'no secret service' });
+    const r = await checkCredentialSealing();
+    expect(r.status).toBe('warn');
+    expect(r.message).toMatch(/unsealed/);
+    expect(r.message).toContain('no secret service');
+  });
+
+  it('fails, with the way out, when saved values cannot be opened', async () => {
+    Object.assign(sealStatus, {
+      state: 'unavailable',
+      reason: 'no answer in 4000ms',
+      sealedValues: 4,
+      readableValues: 0,
+    });
+    const r = await checkCredentialSealing();
+    expect(r.status).toBe('fail');
+    expect(r.message).toMatch(/^4 saved values cannot be opened/);
+    expect(r.message).toMatch(/Unlock the system keyring, then restart/);
+  });
+
+  it('defers to App Lock when that is on', async () => {
+    lockState.enabled = true;
+    Object.assign(sealStatus, { state: 'unavailable' });
+    expect((await checkCredentialSealing()).status).toBe('skip');
+  });
+
+  it('never puts a stored value in the report', async () => {
+    Object.assign(sealStatus, { state: 'on', sealedValues: 1, readableValues: 1 });
+    const r = await checkCredentialSealing();
+    expect(Object.keys(r.detail ?? {}).sort()).toEqual([
+      'adoptedLate',
+      'appLock',
+      'readableValues',
+      'reason',
+      'sealedValues',
+      'state',
     ]);
   });
 });
