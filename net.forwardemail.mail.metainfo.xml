@@ -36,6 +36,14 @@
   </screenshots>
   <!-- scripts/sync-version.cjs prepends a release entry on every version bump. -->
   <releases>
+    <release version="0.16.1" date="2026-10-31">
+      <description>
+        <p>Fixes</p>
+        <ul>
+          <li>Label and move menus no longer hide behind a message's attachments, and reopening a draft no longer adds your signature above its text</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.16.0" date="2026-10-29">
       <description>
         <p>New</p>

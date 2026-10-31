@@ -6,6 +6,12 @@ release notes are taken from here. To change what a commit says, add a
 `Release-note: <text>` line to its message (or `Release-note: none` to leave
 it out).
 
+## 0.16.1 (2026-10-31)
+
+### Fixes
+
+- Label and move menus no longer hide behind a message's attachments, and reopening a draft no longer adds your signature above its text
+
 ## 0.16.0 (2026-10-29)
 
 ### New
