@@ -9227,7 +9227,7 @@
                     </div>
                   </div>
                 {/if}
-                <div class="sticky top-0 z-10 bg-[var(--color-panel)] p-4 border-b border-border">
+                <div class="sticky top-0 z-20 bg-[var(--color-panel)] p-4 border-b border-border">
                   <div class="flex items-start justify-between gap-4 mb-2">
                     <div class="flex-1 min-w-0">
                       <strong class="text-lg font-semibold"

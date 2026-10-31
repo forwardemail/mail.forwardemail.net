@@ -3293,8 +3293,11 @@
     // quote) for a fresh new message or forward. Skipped for draft reopens
     // (body already holds prior content) and for replies (bodyLoading: the
     // quote arrives later via updateReplyBody, which inserts the signature
-    // itself, so inserting here too would just be overwritten).
-    const skipSig = resolvedPrefill.draftId || resolvedPrefill.bodyLoading;
+    // itself, so inserting here too would just be overwritten). A draft that
+    // only exists on the server arrives with serverDraftId and no local
+    // draftId; its body already carries whatever signature it was written with.
+    const skipSig =
+      resolvedPrefill.draftId || resolvedPrefill.serverDraftId || resolvedPrefill.bodyLoading;
     const sig = skipSig ? { enabled: false, text: '', html: '' } : LocalSettings.getSignature();
     if (sig.enabled && !isSignatureEmpty(sig)) {
       if (isPlainText) {
