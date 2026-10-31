@@ -3024,6 +3024,7 @@
           visible={$active}
           account={activeEmail || Local.get('email') || ''}
           folders={availableFolders.map((path) => ({ path, label: path }))}
+          archiveFolder={mailboxStore.actions.getArchiveFolderPath()}
           labels={labelsList.map((l: LabelItem) => ({
             keyword: getLabelKey(l) as string,
             name: l.name || (getLabelKey(l) as string),
