@@ -6,6 +6,12 @@ release notes are taken from here. To change what a commit says, add a
 `Release-note: <text>` line to its message (or `Release-note: none` to leave
 it out).
 
+## 1.0.0 (2026-11-02)
+
+### Fixes
+
+- Filters that forward a copy of a message can be saved again, and forwarded messages now stay in your inbox
+
 ## 0.16.1 (2026-10-31)
 
 ### Fixes

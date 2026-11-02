@@ -36,6 +36,14 @@
   </screenshots>
   <!-- scripts/sync-version.cjs prepends a release entry on every version bump. -->
   <releases>
+    <release version="1.0.0" date="2026-11-02">
+      <description>
+        <p>Fixes</p>
+        <ul>
+          <li>Filters that forward a copy of a message can be saved again, and forwarded messages now stay in your inbox</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.16.1" date="2026-10-31">
       <description>
         <p>Fixes</p>
