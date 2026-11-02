@@ -68,6 +68,51 @@ describe('rulesToSieve', () => {
     expect(flagged).toContain('require ["body", "imap4flags"];');
   });
 
+  it('declares redirect and copy for a forwarding rule (fb-40677b8c)', () => {
+    // The rule from the report: any of subject/body contains "invoice", star
+    // it, forward a copy. The backend rejected the save because redirect was
+    // used without being required.
+    const out = rulesToSieve([
+      rule({
+        name: 'forward_to_automation_mail',
+        match: 'any',
+        conditions: [
+          { field: 'subject', op: 'contains', value: 'invoice' },
+          { field: 'body', op: 'contains', value: 'invoice' },
+        ],
+        actions: { star: true, redirect: 'automation@example.com' },
+      }),
+    ]);
+    expect(out).toContain('require ["body", "copy", "imap4flags", "redirect"];');
+    expect(out).toContain(
+      'if anyof (header :contains "subject" "invoice", body :text :contains "invoice") {',
+    );
+    expect(out).toContain('addflag "\\\\Flagged";');
+  });
+
+  it('forwards with :copy so the message still lands in the inbox', () => {
+    // A bare redirect cancels the implicit keep (RFC 5228 section 4.2), which
+    // would move the mail out of the inbox instead of forwarding a copy.
+    const out = rulesToSieve([
+      rule({
+        conditions: [{ field: 'from', op: 'contains', value: 'a@b.com' }],
+        actions: { redirect: 'c@d.com' },
+      }),
+    ]);
+    expect(out).toContain('  redirect :copy "c@d.com";');
+    expect(out).not.toMatch(/redirect "c@d.com"/);
+  });
+
+  it('does not pull in extensions from a folder name that looks like a command', () => {
+    const out = rulesToSieve([
+      rule({
+        conditions: [{ field: 'from', op: 'contains', value: 'a@b.com' }],
+        actions: { fileinto: 'redirect addflag :copy' },
+      }),
+    ]);
+    expect(out).toContain('require ["fileinto", "mailbox"];');
+  });
+
   it('escapes the IMAP backslash flags the way a Sieve string needs', () => {
     const out = rulesToSieve([
       rule({

@@ -131,10 +131,18 @@ export function requiredCapabilities(rules: FilterRule[]): string[] {
       caps.add('body');
     }
     for (const line of actionLines(rule.actions || {})) {
-      if (line.includes('fileinto')) caps.add('fileinto');
+      // Look only at the command and its tags. The quoted argument is a folder
+      // name or address the user typed, and a folder called "redirect" must
+      // not pull in an extension.
+      const [command, ...tags] = line.split('"')[0].trim().split(/\s+/);
+      if (command === 'fileinto') caps.add('fileinto');
       // :create belongs to the mailbox extension (RFC 5490), not fileinto.
-      if (line.includes(':create')) caps.add('mailbox');
-      if (line.includes('addflag')) caps.add('imap4flags');
+      if (tags.includes(':create')) caps.add('mailbox');
+      if (command === 'addflag') caps.add('imap4flags');
+      // RFC 5228 makes redirect a core command, but the Forward Email engine
+      // rejects any script that uses it without declaring it.
+      if (command === 'redirect') caps.add('redirect');
+      if (tags.includes(':copy')) caps.add('copy');
     }
   }
   return [...caps].sort();
@@ -155,7 +163,10 @@ function actionLines(actions: FilterActions): string[] {
     lines.push(`  addflag ${flags.length === 1 ? list : `[${list}]`};`);
   }
 
-  if (actions.redirect) lines.push(`  redirect ${quoted(actions.redirect)};`);
+  // :copy (RFC 3894) because the UI promises to forward a copy. A plain
+  // redirect cancels the implicit keep, so a rule that only forwards would
+  // take the message out of the inbox.
+  if (actions.redirect) lines.push(`  redirect :copy ${quoted(actions.redirect)};`);
 
   if (actions.delete) {
     // discard alone still leaves the implicit keep in some readings, so be
