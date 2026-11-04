@@ -169,6 +169,53 @@ describe('notification-bridge click routing', () => {
 
     await vi.waitFor(() => expect(navigated).toEqual(['/mailbox#INBOX/local-2']));
   });
+  it('does not switch accounts when the window gains focus after another account notified', async () => {
+    // Desktop cannot tell a click on the notification from the user bringing
+    // the app forward by hand. Waking a Mac does the second: catch-up mail
+    // for bob notifies, the user clicks the app, and the account on screen
+    // must stay alice.
+    const { initTauriNotificationClickHandler, notify } =
+      await import('../../src/utils/notification-bridge.js');
+    await initTauriNotificationClickHandler();
+    const offered = [];
+    const onOffer = (event) => offered.push(event.detail);
+    window.addEventListener('fe:notification-other-account', onOffer);
+    try {
+      await notify({
+        title: 'Carol Chen',
+        body: 'Quarterly numbers',
+        data: { account: 'bob@example.com', folder: 'INBOX', messageId: 'bob-1' },
+      });
+
+      focusHandler({ payload: true });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      expect(switched).toEqual([]);
+      expect(navigated).toEqual([]);
+      expect(session.active).toBe('alice@example.com');
+      expect(offered).toHaveLength(1);
+      expect(offered[0]).toMatchObject({ account: 'bob@example.com', messageId: 'bob-1' });
+    } finally {
+      window.removeEventListener('fe:notification-other-account', onOffer);
+    }
+  });
+
+  it('still switches accounts for a real tap on another account notification', async () => {
+    const { initTauriNotificationClickHandler } =
+      await import('../../src/utils/notification-bridge.js');
+    await initTauriNotificationClickHandler();
+
+    actionHandler(
+      androidTap({
+        id: 7,
+        extra: { account: 'bob@example.com', folder: 'INBOX', messageId: 'bob-2' },
+      }),
+    );
+
+    await vi.waitFor(() => expect(navigated).toEqual(['/mailbox#INBOX/bob-2']));
+    expect(switched).toEqual(['bob@example.com']);
+  });
+
   it('iOS: opens the message and switches account from a tap that carries only the id', async () => {
     const { initTauriNotificationClickHandler, notify } =
       await import('../../src/utils/notification-bridge.js');

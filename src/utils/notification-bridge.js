@@ -17,6 +17,8 @@
 
 import { isTauri, isTauriMobile } from './platform.js';
 import { notificationDataToTarget, openNotificationTarget } from './notification-open.ts';
+import { sameAccount } from './account-scope.ts';
+import { Local } from './storage.js';
 
 // Android-specific detection. tauri-plugin-notification @ 2.3.x has known
 // breakage on Android (tauri-apps/plugins-workspace#2341): cancelAll throws,
@@ -77,6 +79,26 @@ if (typeof window !== 'undefined') {
   window.addEventListener('fe:push-tap', () => {
     _lastNotificationData = null;
   });
+}
+
+// Desktop has no click callback (the plugin shows notifications through
+// notify-rust), so the focus fallback below is a guess: the window gaining
+// focus soon after a notification is taken to mean it was clicked. Bringing
+// the app forward by hand in that window looks exactly the same. Waking a Mac
+// is the common case: the socket reconnects, catch-up mail notifies, and the
+// first click on the app landed in whichever account got the last of it.
+// So a guess never switches accounts. For another account it asks instead:
+// notification-manager, which owns toasts, offers to open it.
+function openGuessedNotification(data) {
+  const target = notificationDataToTarget(data);
+  if (!target) return;
+  if (target.account && !sameAccount(target.account, Local.get('email'))) {
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('fe:notification-other-account', { detail: target }));
+    }
+    return;
+  }
+  openNotificationTarget(target);
 }
 
 function trackNotification(data) {
@@ -376,8 +398,9 @@ export async function initTauriNotificationClickHandler() {
         _lastNotificationData = null;
         return;
       }
-      navigateToNotification(_lastNotificationData);
+      const data = _lastNotificationData;
       _lastNotificationData = null;
+      openGuessedNotification(data);
     });
   } catch {
     /* ignore */

@@ -67,6 +67,19 @@ let unmatchedTapNoticeInstalled = false;
 function installUnmatchedTapNotice() {
   if (unmatchedTapNoticeInstalled || typeof window === 'undefined') return;
   unmatchedTapNoticeInstalled = true;
+  // The window came forward soon after a notification for another account,
+  // which may or may not have been a click on it (notification-bridge cannot
+  // tell on desktop). Offer it rather than switching the account on screen.
+  window.addEventListener('fe:notification-other-account', (event) => {
+    const target = event?.detail;
+    if (!target?.account) return;
+    _toasts?.show?.(`New email for ${sanitizePlain(target.account, MAX_TITLE_LEN)}`, 'info', 8000, {
+      label: 'Open',
+      callback() {
+        openNotificationTarget(target);
+      },
+    });
+  });
   window.addEventListener('fe:notification-unmatched', () => {
     _toasts?.show?.(
       'Could not match this email to an account on this device. Refreshing notifications.',
