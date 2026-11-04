@@ -1734,7 +1734,11 @@ const createMailboxStore = () => {
       // Defensive probe for list sources that were already normalized or
       // cache-filled before reaching fetchAddressSafePage. The raw stripped-page
       // path above retries immediately, so a known-bad envelope never renders.
-      if (noteLightweightListResponse(mapped)) folderMessageCache.clear();
+      // Only a page asked for as lightweight says anything about lightweight
+      // responses (see api-capabilities).
+      if (requestParams.lightweight === true && noteLightweightListResponse(mapped)) {
+        folderMessageCache.clear();
+      }
 
       // If the active account changed while this request was in flight,
       // still write to IDB for this account's cache.
@@ -4143,7 +4147,16 @@ const createMailboxStore = () => {
       fetchPage: async (page) => {
         const res = await Remote.request(
           'MessageList',
-          { folder: folderPath, page, limit: PAGE_SIZE, raw: false, attachments: false },
+          // Only ids and flags are needed: lightweight keeps the server from
+          // rebuilding and parsing every message of every page of the folder.
+          {
+            folder: folderPath,
+            page,
+            limit: PAGE_SIZE,
+            lightweight: true,
+            raw: false,
+            attachments: false,
+          },
           { method: 'GET', pathOverride: '/v1/messages', timeout: 60_000, authHeader },
         );
         return extractMessageList('main', res);

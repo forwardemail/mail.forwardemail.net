@@ -9,16 +9,17 @@
  * the stored header array, which costs no extra I/O.
  *
  * Rather than pin the client to one server version, ask for lightweight and
- * watch what comes back: a non-empty page where NOT ONE message yields a sender
- * proves this server strips addresses, so stop asking for lightweight. The
+ * watch what comes back: a non-empty lightweight page where NOT ONE message has
+ * a From, To, Cc or Bcc proves this server strips addresses, so stop asking for
+ * lightweight. The
  * verdict is cached in localStorage so the penalty is one page now and then
  * rather than one per list request. It records the apiBase, when it was made
  * and the app version, and only holds for the same server, the same app build
  * and VERDICT_TTL_MS. A server fixed at the same URL is probed again within a
  * week, and so is every server after an app update.
  *
- * A false positive is harmless in a way a false negative would not be: it only
- * costs server time, never a blank sender.
+ * A false "strips addresses" verdict is not harmless: every list request of the
+ * device then makes the server rebuild and parse each message of the page.
  */
 
 import { Local } from './storage.js';
@@ -92,23 +93,45 @@ export function lightweightListSupported(): boolean {
   return verdict;
 }
 
+const hasAddressValue = (value: unknown): boolean =>
+  (typeof value === 'string' && value.trim().length > 0) ||
+  (Array.isArray(value) && value.length > 0);
+
+const ADDRESS_FIELDS = ['from', 'to', 'cc', 'bcc'] as const;
+
 /**
- * Record what a lightweight list response actually contained. Pass the messages
- * after normalization, so `from` is the display string the UI would render.
+ * Whether a list page proves the server strips addresses from lightweight
+ * responses: it is not empty and NOT ONE message has a From, To, Cc or Bcc.
+ *
+ * A page without a single sender is normal on a server that does return them
+ * (Drafts, a Junk page of sender-less spam, system notifications), so the
+ * sender alone proves nothing. Concluding "strips addresses" from such a page
+ * turned lightweight off for every list request of the device for a week, and
+ * every full list makes the server rebuild and parse each message of the page.
+ * Old builds return none of these fields, so a page without any of them still
+ * catches them. Works on raw rows (address arrays) and normalized ones
+ * (display strings).
+ */
+export function pageProvesAddressesStripped(
+  messages: Array<Record<string, unknown>> | null | undefined,
+): boolean {
+  if (!Array.isArray(messages) || messages.length === 0) return false;
+  return !messages.some((msg) => ADDRESS_FIELDS.some((field) => hasAddressValue(msg?.[field])));
+}
+
+/**
+ * Record what a lightweight list response actually contained. Only pass pages
+ * that were requested with `lightweight: true`: a full page says nothing about
+ * lightweight responses.
  *
  * Returns true when this call flipped the verdict, letting the caller react
  * (e.g. re-fetch the page now that it knows to ask for the full shape).
  */
 export function noteLightweightListResponse(
-  messages: Array<{ from?: unknown }> | null | undefined,
+  messages: Array<Record<string, unknown>> | null | undefined,
 ): boolean {
-  if (!Array.isArray(messages) || messages.length === 0) return false;
   if (verdict === false) return false;
-
-  const anySender = messages.some(
-    (msg) => typeof msg?.from === 'string' && (msg.from as string).trim().length > 0,
-  );
-  if (anySender) return false;
+  if (!pageProvesAddressesStripped(messages)) return false;
 
   verdict = false;
   verdictExpiresAt = Date.now() + VERDICT_TTL_MS;

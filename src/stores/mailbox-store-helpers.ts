@@ -10,7 +10,7 @@
 // response/record params below are left untyped (implicit any) like the rest.
 
 import { hasDeletedFlag, normalizeMessageForCache } from '../utils/sync-helpers';
-import { lightweightListSupported } from '../utils/api-capabilities';
+import { lightweightListSupported, pageProvesAddressesStripped } from '../utils/api-capabilities';
 import { normalizeSortDate } from '../utils/message-sort';
 
 // Validate a value the way Dexie validates a primary key, used as a fallback
@@ -601,12 +601,10 @@ export const buildMessageListParams = ({
 // the returned params no longer include `lightweight`, this cannot recurse.
 export const getNonLightweightRetryParams = (
   params: Record<string, unknown>,
-  messages: Array<{ from?: unknown }> = [],
+  messages: Array<Record<string, unknown>> = [],
 ) => {
-  if (params.lightweight !== true || messages.length === 0) {
-    return null;
-  }
-  if (messages.some((message) => hasFromValue(message?.from))) return null;
+  if (params.lightweight !== true) return null;
+  if (!pageProvesAddressesStripped(messages)) return null;
   const retryParams = { ...params };
   delete retryParams.lightweight;
   return retryParams;

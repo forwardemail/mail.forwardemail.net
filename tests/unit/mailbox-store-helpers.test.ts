@@ -698,6 +698,18 @@ describe('getNonLightweightRetryParams', () => {
     ).toBeNull();
   });
 
+  it('does not retry a page without senders that still has recipients', () => {
+    // Drafts and sender-less spam: a server that returns addresses can list a
+    // whole page without one From. Only a page with no address at all proves
+    // the server strips them.
+    expect(
+      getNonLightweightRetryParams(lightweightParams, [
+        { id: 'draft-1', subject: 'Draft', to: [{ address: 'friend@example.com', name: '' }] },
+        { id: 'draft-2', subject: 'Draft', cc: 'Someone <someone@example.com>' },
+      ]),
+    ).toBeNull();
+  });
+
   it('does not retry empty pages or requests already made without lightweight mode', () => {
     expect(getNonLightweightRetryParams(lightweightParams, [])).toBeNull();
     expect(

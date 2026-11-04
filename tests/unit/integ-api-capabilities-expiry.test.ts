@@ -60,6 +60,29 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
+describe('what proves a server strips addresses', () => {
+  it('ignores a page without senders that still has recipients', () => {
+    // A Drafts folder, or a Junk page of sender-less spam, on a current server
+    const draftsPage = [
+      { id: '64b7f0c2e4b0a1a2b3000003', subject: 'Draft', from: '', to: 'Friend <f@example.com>' },
+      {
+        id: '64b7f0c2e4b0a1a2b3000004',
+        subject: 'Draft',
+        from: '',
+        cc: [{ address: 'c@example.com' }],
+      },
+    ];
+    expect(noteLightweightListResponse(draftsPage)).toBe(false);
+    expect(lightweightListSupported()).toBe(true);
+    expect(env.store.has('api_lightweight_addresses')).toBe(false);
+  });
+
+  it('still catches a page with no address at all', () => {
+    expect(noteLightweightListResponse(strippedPage)).toBe(true);
+    expect(lightweightListSupported()).toBe(false);
+  });
+});
+
 describe('lightweight verdict persistence', () => {
   it('keeps the verdict across launches on the same server and build', () => {
     expect(noteLightweightListResponse(strippedPage)).toBe(true);
