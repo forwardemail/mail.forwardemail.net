@@ -37,6 +37,7 @@ import {
   slimCachedAttachments,
   worklistFromHeaders,
   backfillBatchDone,
+  createBodyFailureMemo,
   type CachedBodyStatus,
 } from './sync-pure.ts';
 import { createCircuitBreaker, parseRetryAfterMs } from '../utils/circuit-breaker.js';
@@ -58,6 +59,10 @@ const CACHE_LOOKUP_WAIT_MS = 1_500;
 // Set when a database request went unanswered, cleared by the next answer or
 // a new port. While set, opening a message does not wait on the cache at all.
 let dbStalled = false;
+// For the database health snapshot in feedback reports (dbHealthSnapshot).
+let dbTimeouts = 0;
+let dbReconnects = 0;
+let lastDbTimeoutAt = 0;
 
 function dbSend(action, table: string | null = null, payload: Record<string, unknown> = {}) {
   return new Promise((resolve, reject) => {
@@ -70,6 +75,8 @@ function dbSend(action, table: string | null = null, payload: Record<string, unk
     const timer = setTimeout(() => {
       if (!dbPendingRequests.has(id)) return;
       dbPendingRequests.delete(id);
+      dbTimeouts += 1;
+      lastDbTimeoutAt = Date.now();
       // The port may be dead (the database moved and this side was not told);
       // the main thread opens a new one.
       if (!dbStalled) {
@@ -78,7 +85,7 @@ function dbSend(action, table: string | null = null, payload: Record<string, unk
       }
       reject(new Error(`Database request "${action}" timed out after ${DB_REQUEST_TIMEOUT_MS}ms`));
     }, DB_REQUEST_TIMEOUT_MS);
-    dbPendingRequests.set(id, { resolve, reject, timer });
+    dbPendingRequests.set(id, { resolve, reject, timer, action, table, startedAt: Date.now() });
     dbPort.postMessage({ id, action, table, payload });
   });
 }
@@ -106,6 +113,28 @@ function handleDbResponse(event) {
   } else {
     pending.reject(new Error(error || 'Database operation failed'));
   }
+}
+
+// What this worker sees of the database: how many of its requests are
+// waiting and for how long. Read with the db worker's own snapshot, it tells a
+// dead port (the db worker is idle) from a db worker that is stuck.
+function dbHealthSnapshot() {
+  const now = Date.now();
+  let oldest = null;
+  for (const pending of dbPendingRequests.values()) {
+    if (!oldest || pending.startedAt < oldest.startedAt) oldest = pending;
+  }
+  return {
+    connected: Boolean(dbPort),
+    pending: dbPendingRequests.size,
+    oldestPending: oldest
+      ? { action: oldest.action, table: oldest.table, ageMs: now - oldest.startedAt }
+      : null,
+    stalled: dbStalled,
+    timeouts: dbTimeouts,
+    lastTimeoutAgoMs: lastDbTimeoutAt ? now - lastDbTimeoutAt : null,
+    reconnects: dbReconnects,
+  };
 }
 
 // Database proxy object
@@ -342,6 +371,7 @@ function fetchWithTimeout(url, options = {}, timeoutMs = FETCH_TIMEOUT_MS) {
       } else {
         fetchCircuit.recordSuccess();
       }
+      if (res.ok) bodyFailures.healthy();
       return res;
     })
     .catch((err) => {
@@ -1282,7 +1312,7 @@ async function runBodiesTask(task, postProgress) {
     const keptStatuses: Array<CachedBodyStatus | null> = [];
     headers.forEach((header, idx) => {
       if (isPgpLockedStatus(statuses[idx]) && !canTryLockedBody(account, header.id)) return;
-      if (bodyRetryBlocked(account, header.id, now)) return;
+      if (bodyFailures.blocked(account, header.id, now)) return;
       keptHeaders.push(header);
       keptStatuses.push(statuses[idx]);
     });
@@ -1342,14 +1372,14 @@ async function runBodiesTask(task, postProgress) {
     // no `folder`).
     try {
       await fetchAndCacheBody(account, folder, msg, { returnPayload: false });
-      clearBodyFailure(account, msg.id);
+      bodyFailures.succeeded(account, msg.id);
     } catch (err) {
       // One message that will not download (deleted on the server, a parse
       // error, a timeout) must not stop the rest of the pass. It backs off
       // and is tried again on a later pass. A pass-wide problem (the backend
       // is backing off, or this account was signed out) ends the pass.
       if (isPassWideFailure(err)) throw err;
-      noteBodyFailure(account, msg.id);
+      bodyFailures.note(account, msg.id, err);
       failed += 1;
       console.warn('[sync.worker] body fetch failed for', msg.id, err);
     }
@@ -1377,28 +1407,9 @@ async function runBodiesTask(task, postProgress) {
   }
 }
 
-// Per-message memo of failed body downloads, so a message that keeps failing
-// is retried with growing gaps instead of on every pass. In memory only: a
-// fresh worker gives everything another try.
-const BODY_RETRY_BASE_MS = 60_000;
-const BODY_RETRY_MAX_MS = 6 * 60 * 60_000;
-const bodyFailures = new Map<string, { count: number; retryAt: number }>();
-
-function noteBodyFailure(account: string, id: string, now = Date.now()) {
-  const key = `${account}::${id}`;
-  const count = (bodyFailures.get(key)?.count || 0) + 1;
-  const delay = Math.min(BODY_RETRY_BASE_MS * 2 ** (count - 1), BODY_RETRY_MAX_MS);
-  bodyFailures.set(key, { count, retryAt: now + delay });
-}
-
-function clearBodyFailure(account: string, id: string) {
-  bodyFailures.delete(`${account}::${id}`);
-}
-
-function bodyRetryBlocked(account: string, id: string, now = Date.now()) {
-  const entry = bodyFailures.get(`${account}::${id}`);
-  return Boolean(entry && entry.retryAt > now);
-}
+// Failed body downloads back off per message (see createBodyFailureMemo). In
+// memory only: a fresh worker gives everything another try.
+const bodyFailures = createBodyFailureMemo();
 
 function isPassWideFailure(err: unknown): boolean {
   const e = err as { circuitOpen?: boolean; message?: string } | null;
@@ -1731,7 +1742,10 @@ async function fetchAndCacheBodyWithOptions(account, folder, msg, options = {}) 
     });
     if (!res.ok) {
       const text = await res.text();
-      throw new Error(text || res.statusText || 'Request failed');
+      // The status tells an API outage from a message the server will never return.
+      throw Object.assign(new Error(text || res.statusText || 'Request failed'), {
+        status: res.status,
+      });
     }
     const json = await res.json();
     return json?.Result || json;
@@ -2701,6 +2715,11 @@ async function runDraftSyncTask(task, postProgress) {
 }
 
 async function handleRequest(requestId, action, payload) {
+  // Diagnostics: answered without an account or the network.
+  if (action === 'dbHealth') {
+    self.postMessage({ type: 'requestComplete', requestId, action, result: dbHealthSnapshot() });
+    return;
+  }
   try {
     // unlockPgpKey is local-only; every other action fetches as payload.account.
     const isLocalOnlyAction = action === 'unlockPgpKey';
@@ -2969,6 +2988,7 @@ self.onmessage = (event) => {
   // Handle database port connection
   if (data.type === 'connectDbPort' && event.ports?.[0]) {
     if (dbPort && dbPort !== event.ports[0]) {
+      dbReconnects += 1;
       rejectPendingDbRequests(new Error('Database worker reconnected'));
       try {
         dbPort.close();

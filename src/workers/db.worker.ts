@@ -21,6 +21,84 @@ import {
 // lifetime of the worker so their MessageChannel handlers aren't GC'd.
 const connectedPorts = new Map<string, MessagePort>();
 
+// ── Health ──────────────────────────────────────────────────────────────────
+//
+// Every request is tracked while it runs, and the slow ones are kept, so a
+// feedback report can say what the worker is doing when the app has gone slow.
+// Callers give up on the database after 1.5s (reader cache reads) or 60s (the
+// sync worker), and from the outside a busy worker and a wedged one look the
+// same: the cache is simply skipped. 'health' is answered here, ahead of the
+// engine, so it still answers while every table request is stuck.
+const SLOW_OP_MS = 2_000;
+const MAX_SLOW_OPS = 20;
+const bootedAt = Date.now();
+let nextOpId = 0;
+let served = 0;
+const inFlight = new Map<
+  number,
+  { action: string; table?: string | null; source: string; startedAt: number }
+>();
+const slowOps: Array<{
+  action: string;
+  table?: string | null;
+  source: string;
+  ms: number;
+  at: string;
+  failed: boolean;
+}> = [];
+
+async function runTracked(op: Parameters<typeof executeOperation>[0], source: string) {
+  const opId = ++nextOpId;
+  const startedAt = Date.now();
+  inFlight.set(opId, { action: op.action, table: op.table, source, startedAt });
+  let failed = false;
+  try {
+    return await executeOperation(op);
+  } catch (error) {
+    failed = true;
+    throw error;
+  } finally {
+    inFlight.delete(opId);
+    served += 1;
+    const ms = Date.now() - startedAt;
+    if (ms >= SLOW_OP_MS) {
+      slowOps.push({
+        action: op.action,
+        table: op.table,
+        source,
+        ms,
+        at: new Date(startedAt).toISOString(),
+        failed,
+      });
+      if (slowOps.length > MAX_SLOW_OPS) slowOps.shift();
+      console.warn(
+        `[db.worker] slow ${op.action}${op.table ? ` ${op.table}` : ''} from ${source}: ` +
+          `${ms}ms, ${inFlight.size} other requests in flight`,
+      );
+    }
+  }
+}
+
+function healthSnapshot() {
+  const now = Date.now();
+  return {
+    uptimeMs: now - bootedAt,
+    served,
+    // Oldest first: the head of this list is what the rest are waiting behind.
+    inFlight: [...inFlight.values()]
+      .sort((a, b) => a.startedAt - b.startedAt)
+      .slice(0, 15)
+      .map(({ action, table, source, startedAt }) => ({
+        action,
+        table,
+        source,
+        ageMs: now - startedAt,
+      })),
+    inFlightCount: inFlight.size,
+    slowOps: [...slowOps],
+  };
+}
+
 /**
  * Handle messages from the main thread
  */
@@ -34,8 +112,13 @@ self.onmessage = async (event: MessageEvent<DbWorkerMessage>) => {
     return;
   }
 
+  if (action === 'health') {
+    self.postMessage({ id, ok: true, result: healthSnapshot() } as DbWorkerResponse);
+    return;
+  }
+
   try {
-    const result = await executeOperation({ action, table, payload });
+    const result = await runTracked({ action, table, payload }, 'main');
     self.postMessage({ id, ok: true, result } as DbWorkerResponse);
   } catch (error) {
     console.error('[db.worker] Operation failed:', action, error);
@@ -68,7 +151,7 @@ self.addEventListener('message', (event: MessageEvent<DbWorkerMessage>) => {
         const { id, action, table, payload } = portEvent.data;
 
         try {
-          const result = await executeOperation({ action: action!, table, payload });
+          const result = await runTracked({ action: action!, table, payload }, workerId);
           port.postMessage({ id, ok: true, result } as DbWorkerResponse);
         } catch (error) {
           console.error('[db.worker] Port operation failed:', action, error);

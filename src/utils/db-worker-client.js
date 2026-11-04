@@ -1058,6 +1058,34 @@ export async function clearCache(options = {}) {
   return send('clearCache', null, { includeLocalOnly: Boolean(options.includeLocalOnly) });
 }
 
+/**
+ * What the db worker is doing right now: requests in flight with their age and
+ * the recent slow ones (see the worker's healthSnapshot). The worker answers
+ * this ahead of its engine, so a worker whose table requests are all stuck
+ * still replies; one that does not reply at all is blocked outright. Never
+ * waits longer than `timeoutMs`.
+ * @param {number} [timeoutMs]
+ */
+export async function getDbWorkerHealth(timeoutMs = 3000) {
+  if (useMainThread) return { engine: 'main-thread' };
+  const started = Date.now();
+  let timer = null;
+  try {
+    const result = await Promise.race([
+      send('health'),
+      new Promise((resolve) => {
+        timer = setTimeout(() => resolve(undefined), timeoutMs);
+      }),
+    ]);
+    if (result === undefined) return { engine: 'worker', answered: false, waitedMs: timeoutMs };
+    return { engine: 'worker', answered: true, replyMs: Date.now() - started, ...result };
+  } catch (error) {
+    return { engine: 'worker', answered: false, error: error?.message || String(error) };
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 export async function resetDatabase() {
   return send('reset');
 }

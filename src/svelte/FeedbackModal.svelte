@@ -16,6 +16,7 @@
   import { isOnline } from '../utils/network-status';
   import { isTauri } from '../utils/platform';
   import { readRecentLogs } from '../utils/tauri-bridge';
+  import { collectDbHealth } from '../utils/db-health';
   import {
     buildPayload,
     buildEmailSubject,
@@ -111,6 +112,14 @@
     }
 
     systemInfo = info;
+
+    // Whether the local database is answering. A long-open app that has
+    // stopped using its cache shows up here and nowhere else in the report.
+    collectDbHealth(activeEmail)
+      .then((database) => {
+        systemInfo = { ...systemInfo, database };
+      })
+      .catch(() => {});
 
     if (navigator.storage?.estimate) {
       navigator.storage.estimate().then((estimate) => {
@@ -329,7 +338,7 @@
               <div class="grid gap-1">
                 <Label for="consent-system" class="cursor-pointer">System information</Label>
                 <p class="text-xs text-muted-foreground">
-                  App version, browser, OS, viewport, storage usage.
+                  App version, browser, OS, viewport, storage usage, local database health.
                 </p>
               </div>
             </div>
