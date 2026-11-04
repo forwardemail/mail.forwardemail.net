@@ -431,3 +431,61 @@ export function nextBackfillDecision(
   if (streak >= BACKFILL_NO_PROGRESS_CAP) return { requeue: false, noProgressStreak: 0 };
   return { requeue: true, noProgressStreak: streak };
 }
+
+// Per-message memo of failed body downloads, so a message that keeps failing
+// is retried with growing gaps instead of on every pass.
+//
+// A failure is either the message's own problem (deleted on the server, a
+// parse error) or the network, the API or the local database being unwell. The
+// second kind says nothing about the message, so once things have worked again
+// for a while those holds are dropped and the bodies are fetched on the next
+// pass. Without that, an hour of API timeouts left messages uncached for hours
+// after the API had recovered, and only a restart cleared them.
+export const BODY_RETRY_BASE_MS = 60_000;
+export const BODY_RETRY_MAX_MS = 6 * 60 * 60_000;
+// How long body downloads must go without a transient failure before the
+// holds left by the outage are dropped. Long enough that a flapping API keeps
+// its backoff.
+export const BODY_RECOVERY_QUIET_MS = 2 * 60_000;
+
+export function isTransientBodyFailure(err: unknown): boolean {
+  const e = err as { name?: string; status?: number; message?: string } | null;
+  if (!e) return false;
+  // Our own fetch timeout aborts the request; a dropped connection is a TypeError.
+  if (e.name === 'AbortError' || e.name === 'TimeoutError' || e.name === 'TypeError') return true;
+  const status = Number(e.status);
+  if (status === 408 || status === 429 || status >= 500) return true;
+  return /timed out after|Database worker reconnected/.test(String(e.message || ''));
+}
+
+export function createBodyFailureMemo() {
+  const entries = new Map<string, { count: number; retryAt: number; transient: boolean }>();
+  let lastTransientAt = 0;
+  const key = (account: string, id: string) => `${account}::${id}`;
+
+  return {
+    note(account: string, id: string, err: unknown, now = Date.now()) {
+      const transient = isTransientBodyFailure(err);
+      if (transient) lastTransientAt = now;
+      const count = (entries.get(key(account, id))?.count || 0) + 1;
+      const delay = Math.min(BODY_RETRY_BASE_MS * 2 ** (count - 1), BODY_RETRY_MAX_MS);
+      entries.set(key(account, id), { count, retryAt: now + delay, transient });
+    },
+    // Something worked: an API request came back, or a body was cached. When
+    // nothing transient has failed for a while, drop the outage's holds.
+    healthy(now = Date.now()) {
+      if (now - lastTransientAt < BODY_RECOVERY_QUIET_MS) return;
+      for (const [k, entry] of entries) {
+        if (entry.transient) entries.delete(k);
+      }
+    },
+    succeeded(account: string, id: string, now = Date.now()) {
+      entries.delete(key(account, id));
+      this.healthy(now);
+    },
+    blocked(account: string, id: string, now = Date.now()) {
+      const entry = entries.get(key(account, id));
+      return Boolean(entry && entry.retryAt > now);
+    },
+  };
+}
