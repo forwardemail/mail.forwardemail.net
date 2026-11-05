@@ -36,6 +36,16 @@
   </screenshots>
   <!-- scripts/sync-version.cjs prepends a release entry on every version bump. -->
   <releases>
+    <release version="1.0.1" date="2026-11-05">
+      <description>
+        <p>Fixes</p>
+        <ul>
+          <li>The desktop app no longer switches to another account when you return to it after it has been idle or asleep</li>
+          <li>Offline message caching picks up again on its own after the server has been slow, without restarting the app</li>
+          <li>Keep lightweight lists on for pages without senders</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.0.0" date="2026-11-02">
       <description>
         <p>Fixes</p>

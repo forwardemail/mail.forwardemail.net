@@ -6,6 +6,14 @@ release notes are taken from here. To change what a commit says, add a
 `Release-note: <text>` line to its message (or `Release-note: none` to leave
 it out).
 
+## 1.0.1 (2026-11-05)
+
+### Fixes
+
+- The desktop app no longer switches to another account when you return to it after it has been idle or asleep
+- Offline message caching picks up again on its own after the server has been slow, without restarting the app
+- Keep lightweight lists on for pages without senders
+
 ## 1.0.0 (2026-11-02)
 
 ### Fixes
