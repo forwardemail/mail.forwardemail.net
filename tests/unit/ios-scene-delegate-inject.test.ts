@@ -5,7 +5,8 @@
  * 1. Copies SceneDelegate.swift, TaoWindowCapture.m, and bridging header
  * 2. Adds SWIFT_VERSION and SWIFT_OBJC_BRIDGING_HEADER to project.yml
  * 3. Adds UIApplicationSceneManifest to project.yml info.properties
- * 4. Falls back to direct plist injection if xcodegen is unavailable
+ * 4. Falls back to direct plist injection if the generated plist lacks the manifest
+ * 5. Fails the build when xcodegen fails or the xcodeproj lacks the sources
  *
  * The tests mock the filesystem to simulate the generated iOS project structure
  * that `tauri ios init` produces.
@@ -14,7 +15,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { execSync } from 'node:child_process';
+import { execSync, spawnSync } from 'node:child_process';
 
 const ROOT = path.resolve(__dirname, '../..');
 const INJECT_SCRIPT = path.join(ROOT, 'scripts', 'inject-ios-scene-delegate.cjs');
@@ -116,7 +117,87 @@ describe('inject-ios-scene-delegate.cjs', () => {
     expect(content).toContain('willConnectTo session');
   });
 
+  // The body of a Swift method, from its declaration to its closing brace.
+  const swiftMethod = (content: string, signature: string) => {
+    const start = content.indexOf(signature);
+    expect(start).toBeGreaterThan(-1);
+    return content.slice(start, content.indexOf('\n    }\n', start));
+  };
+
+  it('SceneDelegate.swift finds the tao window again for a reconnected scene', () => {
+    const content = fs.readFileSync(SCENE_DELEGATE_SRC, 'utf8');
+    // The capture is cleared after the first scene uses it, and tao's
+    // AppDelegate has no window property, so a later scene needs this.
+    expect(content).toContain('private static weak var taoWindow: UIWindow?');
+    expect(swiftMethod(content, 'private func assignScene(')).toContain(
+      'TaoSceneDelegate.taoWindow = window',
+    );
+    const connect = swiftMethod(content, 'willConnectTo session');
+    expect(connect).toContain('captured.first ?? TaoSceneDelegate.taoWindow');
+    expect(connect).toContain('windows.first ?? TaoSceneDelegate.taoWindow');
+    expect(connect).not.toContain('appDelegate.window');
+  });
+
+  it('SceneDelegate.swift stops polling for the window when the scene disconnects', () => {
+    const content = fs.readFileSync(SCENE_DELEGATE_SRC, 'utf8');
+    expect(swiftMethod(content, 'willConnectTo session')).toContain('pollTimer = timer');
+    expect(swiftMethod(content, 'func sceneDidDisconnect(')).toContain('pollTimer?.invalidate()');
+  });
+
+  it('SceneDelegate.swift forwards opened URLs to the app delegate tao listens on', () => {
+    const content = fs.readFileSync(SCENE_DELEGATE_SRC, 'utf8');
+    // UIKit delivers URLs to the scene when a scene manifest is present.
+    expect(content).toContain(
+      'func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>)',
+    );
+    expect(swiftMethod(content, 'willConnectTo session')).toContain(
+      'forwardDeepLinks(connectionOptions.urlContexts)',
+    );
+    const forward = swiftMethod(content, 'private static func forwardDeepLinks(');
+    expect(forward).toContain('isForwardableDeepLink(context.url)');
+    expect(forward).toContain('UIApplication.shared.delegate?.application?(');
+    expect(forward).toContain('UIApplication.shared, open: context.url, options: [:])');
+  });
+
+  it('SceneDelegate.swift forwards only the URL schemes the app registers', () => {
+    const content = fs.readFileSync(SCENE_DELEGATE_SRC, 'utf8');
+    const literal = content.match(/deepLinkSchemes: Set<String> = \[([^\]]*)\]/);
+    expect(literal).not.toBeNull();
+    const swiftSchemes = [...literal![1].matchAll(/"([^"]+)"/g)].map((m) => m[1]).sort();
+    const config = JSON.parse(
+      fs.readFileSync(path.join(ROOT, 'src-tauri', 'tauri.conf.json'), 'utf8'),
+    );
+    const registered = config.plugins['deep-link'].mobile
+      .flatMap((entry: { scheme: string[] }) => entry.scheme)
+      .sort();
+    expect(swiftSchemes).toEqual(registered);
+
+    // tao aborts on a URL Url::parse rejects, so the check also refuses a
+    // user, password, port or unusual host.
+    const check = swiftMethod(content, 'private static func isForwardableDeepLink(');
+    expect(check).toContain('deepLinkSchemes.contains(scheme)');
+    expect(check).toContain('parts.user == nil, parts.password == nil, parts.port == nil');
+    expect(check).toContain('hostCharacters.contains($0)');
+  });
+
   // ─── TaoWindowCapture.m content tests ───────────────────────────────────────
+
+  it('TaoWindowCapture.m method type encodings match their selectors', () => {
+    const content = fs.readFileSync(TAO_CAPTURE_SRC, 'utf8');
+    const added = [...content.matchAll(/class_addMethod\(cls, (\w+), \w+, "([^"]+)"\)/g)];
+    expect(added.length).toBe(3);
+    for (const [, selVar, encoding] of added) {
+      const sel = content.match(new RegExp(`SEL ${selVar} = sel_registerName\\("([^"]+)"\\)`));
+      expect(sel).not.toBeNull();
+      const argCount = sel![1].split(':').length - 1;
+      // Return type void, then self and _cmd, then one object or block per
+      // argument (a block is "@?").
+      expect(encoding.startsWith('v@:')).toBe(true);
+      const args = encoding.slice(3).match(/@\?|@/g) ?? [];
+      expect(args.join('')).toBe(encoding.slice(3));
+      expect({ sel: sel![1], args: args.length }).toEqual({ sel: sel![1], args: argCount });
+    }
+  });
 
   it('TaoWindowCapture.m uses +load for early swizzle', () => {
     const content = fs.readFileSync(TAO_CAPTURE_SRC, 'utf8');
@@ -170,6 +251,90 @@ describe('inject-ios-scene-delegate.cjs', () => {
     expect(content).toContain('SceneDelegate.swift');
     expect(content).toContain('TaoWindowCapture.m');
     expect(content).toContain('TaoWindowCapture-Bridging.h');
+  });
+
+  // ─── Running the inject scripts ─────────────────────────────────────────────
+
+  // `tauri ios build` never runs xcodegen, so a failed regeneration or an
+  // xcodeproj without the sources must stop the build: Info.ios.plist always
+  // names TaoSceneDelegate, and an app without it is a black screen on iOS 26.
+
+  // A stand-in xcodegen first on PATH, so a run neither needs nor touches a
+  // real one.
+  function envWithXcodegen(exitCode: number) {
+    const bin = path.join(tmpDir, 'bin');
+    fs.mkdirSync(bin, { recursive: true });
+    fs.writeFileSync(path.join(bin, 'xcodegen'), `#!/bin/sh\nexit ${exitCode}\n`, {
+      mode: 0o755,
+    });
+    return { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}` };
+  }
+
+  // The scripts resolve the repo root from their own location, so they run
+  // from a copy inside the sandbox.
+  function runScript(name: string, env: typeof process.env) {
+    fs.mkdirSync(path.join(tmpDir, 'scripts'), { recursive: true });
+    const script = path.join(tmpDir, 'scripts', name);
+    fs.copyFileSync(path.join(ROOT, 'scripts', name), script);
+    return spawnSync(process.execPath, [script], { env, encoding: 'utf8' });
+  }
+
+  function runSceneInject(env: typeof process.env, pbxproj: string) {
+    fs.cpSync(INJECT_DIR, path.join(tmpDir, 'src-tauri', 'ios-inject'), { recursive: true });
+    const xcodeproj = path.join(appleDir, 'forwardemail-desktop.xcodeproj');
+    fs.mkdirSync(xcodeproj, { recursive: true });
+    fs.writeFileSync(path.join(xcodeproj, 'project.pbxproj'), pbxproj);
+    return runScript('inject-ios-scene-delegate.cjs', env);
+  }
+
+  const PBXPROJ_WITH_SOURCES =
+    '/* SceneDelegate.swift in Sources */\n/* TaoWindowCapture.m in Sources */\n';
+
+  it('inject script succeeds when the xcodeproj compiles both sources', () => {
+    const result = runSceneInject(envWithXcodegen(0), PBXPROJ_WITH_SOURCES);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('✓ SceneDelegate.swift is in xcodeproj compile sources');
+    expect(result.stdout).toContain('✓ TaoWindowCapture.m is in xcodeproj compile sources');
+  });
+
+  it('inject script fails when the xcodeproj does not compile the scene delegate', () => {
+    const result = runSceneInject(envWithXcodegen(0), '/* TaoWindowCapture.m in Sources */\n');
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('SceneDelegate.swift NOT found');
+  });
+
+  it('inject script fails when xcodegen fails', () => {
+    const result = runSceneInject(envWithXcodegen(1), PBXPROJ_WITH_SOURCES);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('xcodegen generate failed');
+  });
+
+  it('inject-ios-signing.cjs fails when xcodegen fails', () => {
+    fs.writeFileSync(path.join(tmpDir, 'package.json'), '{"version":"1.0.1"}');
+    fs.writeFileSync(
+      path.join(tmpDir, 'src-tauri', 'tauri.conf.json'),
+      '{"identifier":"net.forwardemail.mail"}',
+    );
+    fs.writeFileSync(path.join(tmpDir, 'src-tauri', 'Entitlements.plist'), SAMPLE_INFO_PLIST);
+    // The signing script requires this helper from its own directory.
+    fs.mkdirSync(path.join(tmpDir, 'scripts'), { recursive: true });
+    fs.copyFileSync(
+      path.join(ROOT, 'scripts', 'ios-export-compliance.cjs'),
+      path.join(tmpDir, 'scripts', 'ios-export-compliance.cjs'),
+    );
+    fs.writeFileSync(
+      path.join(appleDir, 'project.yml'),
+      SAMPLE_PROJECT_YML.replace(
+        '    info:\n',
+        '    entitlements:\n      path: forwardemail-desktop_iOS/forwardemail-desktop_iOS.entitlements\n    info:\n',
+      ),
+    );
+    const result = runScript('inject-ios-signing.cjs', {
+      ...envWithXcodegen(1),
+      APPLE_TEAM_ID: 'TEAM123456',
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('xcodegen generate failed');
   });
 
   // ─── project.yml modification tests ─────────────────────────────────────────
@@ -246,6 +411,17 @@ describe('inject-ios-scene-delegate.cjs', () => {
     expect(infoPlist).toContain('TaoSceneDelegate');
     expect(infoPlist).toContain('UIWindowSceneSessionRoleApplication');
     expect(infoPlist).toContain('Default Configuration');
+  });
+
+  it('Info.ios.plist explains microphone use, for video taken from the attach picker', () => {
+    // The compose attach input accepts any file, so iOS offers "Take Photo or
+    // Video". Recording video without this string ends the app.
+    const infoPlist = fs.readFileSync(path.join(ROOT, 'src-tauri', 'Info.ios.plist'), 'utf8');
+    const usage = infoPlist.match(
+      /<key>NSMicrophoneUsageDescription<\/key>\s*<string>([^<]+)<\/string>/,
+    );
+    expect(usage).not.toBeNull();
+    expect(usage![1]).toMatch(/^Forward Email uses the microphone /);
   });
 
   // ─── Build script integration tests ─────────────────────────────────────────
@@ -331,7 +507,7 @@ describe('inject-ios-scene-delegate.cjs', () => {
 
   // ─── Plist fallback injection test ──────────────────────────────────────────
 
-  it('plist fallback injection works when xcodegen is unavailable', () => {
+  it('plist fallback injection works when the generated plist lacks the manifest', () => {
     let plist = SAMPLE_INFO_PLIST;
     expect(plist).not.toContain('UIApplicationSceneManifest');
 

@@ -413,6 +413,32 @@ emailPurify.addHook('afterSanitizeAttributes', (node) => {
     node.setAttribute('target', '_blank');
     node.setAttribute('rel', 'noopener noreferrer');
   }
+  // An image the <img> pass in sanitizeHtml did not see (an <image> tag, which
+  // the parser turns into <img>, or a ">" inside an attribute) is blocked here
+  // the same way. One that pass blocked has no src left.
+  const src = node.tagName === 'IMG' && activeCssContext ? node.getAttribute('src') : null;
+  if (src && !/^\s*data:/i.test(src)) {
+    const attributes = [...node.attributes].map((a) => ` ${a.name}="${a.value}"`).join('');
+    const isPixel = isTrackingPixel(attributes);
+    if (isPixel ? activeCssContext.blockTrackingPixels : activeCssContext.blockRemoteImages) {
+      const originalStyle = node.getAttribute('style');
+      node.removeAttribute('src');
+      node.setAttribute('data-original-src', src);
+      if (originalStyle) node.setAttribute('data-original-style', originalStyle);
+      if (!node.getAttribute('alt')) {
+        node.setAttribute('alt', isPixel ? 'Tracking pixel blocked' : 'Image blocked for privacy');
+      }
+      if (isPixel) {
+        node.removeAttribute('srcset');
+        node.setAttribute('data-tracking-pixel', 'true');
+        node.setAttribute('style', 'display: none;');
+        activeCssContext.pixelCount++;
+      } else {
+        if (!originalStyle) node.setAttribute('style', BLOCKED_IMAGE_PLACEHOLDER_STYLE);
+        activeCssContext.blockedCount++;
+      }
+    }
+  }
 });
 
 // One attribute of a tag, split the way the HTML parser splits it: a name
@@ -572,7 +598,14 @@ export function sanitizeHtml(html, { blockRemoteImages, blockTrackingPixels } = 
 
     // <style> carries the email's own responsive rules, so it is allowed
     // through and its contents run past sanitizeEmailCss via the hook above.
-    activeCssContext = { blockRemoteUrls: blockRemoteImages === true, blockedCount: 0 };
+    // The images the <img> pass missed are blocked by the attribute hook.
+    activeCssContext = {
+      blockRemoteUrls: blockRemoteImages === true,
+      blockRemoteImages: Boolean(blockRemoteImages),
+      blockTrackingPixels: Boolean(blockTrackingPixels),
+      blockedCount: 0,
+      pixelCount: 0,
+    };
     let sanitized;
     try {
       sanitized = emailPurify.sanitize(withHoistedStyles(processedHtml), {
@@ -584,6 +617,10 @@ export function sanitizeHtml(html, { blockRemoteImages, blockTrackingPixels } = 
       if (activeCssContext.blockedCount > 0) {
         hasBlockedImages = true;
         blockedRemoteImageCount += activeCssContext.blockedCount;
+      }
+      if (activeCssContext.pixelCount > 0) {
+        hasBlockedImages = true;
+        trackingPixelCount += activeCssContext.pixelCount;
       }
     } finally {
       activeCssContext = null;

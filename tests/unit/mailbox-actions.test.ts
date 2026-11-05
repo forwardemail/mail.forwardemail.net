@@ -818,6 +818,25 @@ describe('load() on a cold launch over a slow connection', () => {
   });
 });
 
+describe('load() starting background sync', () => {
+  it('syncs the folder on screen first', async () => {
+    hoisted.localStore.set('email', 'sync-1@example.com');
+    hoisted.loadFolders.mockResolvedValue(undefined);
+    const folders = [{ path: 'INBOX' }, { path: 'Work' }];
+    mailboxStore.state.folders.set(folders);
+    mailboxStore.state.selectedFolder.set('Work');
+
+    void load();
+
+    await vi.waitFor(() => expect(hoisted.startInitialSync).toHaveBeenCalled());
+    expect(hoisted.startInitialSync).toHaveBeenCalledWith(
+      'sync-1@example.com',
+      folders,
+      expect.objectContaining({ folder: 'Work' }),
+    );
+  });
+});
+
 describe('reply / forward helpers', () => {
   it('addReplyPrefix adds and dedupes Re:', () => {
     expect(addReplyPrefix('Hi')).toBe('Re: Hi');

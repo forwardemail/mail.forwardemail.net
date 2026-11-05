@@ -193,10 +193,13 @@ if (entitlementsBlockMatch) {
 if (modified) {
   fs.writeFileSync(projectYmlPath, projYml);
   // Re-run xcodegen so the generated .xcodeproj picks up the new settings.
+  // `tauri ios build` never runs it, so without this the app would build
+  // without the signing settings and entitlements above.
   try {
     execSync('xcodegen generate', { cwd: appleDir, stdio: 'inherit' });
   } catch {
-    console.warn('xcodegen not available — tauri will regenerate xcodeproj on build');
+    console.error('xcodegen generate failed; the signing settings would not reach the build');
+    process.exit(1);
   }
 }
 

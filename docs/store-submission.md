@@ -136,6 +136,10 @@ Apple issues (`scripts/ios-export-compliance.cjs`).
   photo library so you can attach photos to emails and set profile pictures."_
 - `NSCameraUsageDescription`: present. QR device pairing scans a code shown by another device
   (`scripts/configure-mobile-camera.cjs`). No camera data leaves the device.
+- `NSMicrophoneUsageDescription`: present (`src-tauri/Info.ios.plist`). The compose attach
+  picker accepts any file, so iOS offers "Take Photo or Video", and recording video uses the
+  microphone. String: _"Forward Email uses the microphone to record sound when you take a video to
+  attach to an email."_ Without it iOS ends the app instead of asking.
 - `NSLocalNetworkUsageDescription`: development builds only. `scripts/ios-dev.sh` sets
   `IOS_DEV_LOCAL_NETWORK=1` for `tauri ios dev`; release builds leave the string out.
 - **Not needed (correctly absent):** `NSFaceIDUsageDescription` (biometric is WebAuthn/passkeys
@@ -228,8 +232,10 @@ schemes, so no `assetlinks.json` file is needed. `MainActivity` is the only expo
 the FileProvider is not exported. The merged manifest is generated at build time; check it before
 answering Play's Advertising ID question.
 
-**iOS:** `NSPhotoLibraryUsageDescription` (image picker), `NSCameraUsageDescription` (QR pairing),
-the `PrivacyInfo.xcprivacy` manifest, and the iOS-only `aps-environment` entitlement for APNs.
+**iOS:** `NSPhotoLibraryUsageDescription` (image picker), `NSCameraUsageDescription` (QR pairing
+and photos taken from the attach picker), `NSMicrophoneUsageDescription` (sound for videos taken
+from the attach picker), the `PrivacyInfo.xcprivacy` manifest, and the iOS-only `aps-environment`
+entitlement for APNs.
 `NSLocalNetworkUsageDescription` is in development builds only. Custom-scheme deep links do not
 require Associated Domains.
 

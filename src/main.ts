@@ -2693,11 +2693,9 @@ async function bootstrap() {
       },
     });
 
-    // macOS self-heal: refresh LaunchServices and, if we find stale
-    // bundles from a broken 0.10.17–0.10.21 install in the user's home
-    // directory, offer to move them to Trash. No-op on non-macOS and
-    // when nothing stale is found. See
-    // docs/desktop-postmortem-macos-entitlements-2026-05-19.md
+    // macOS self-heal: refresh LaunchServices once per app version so it
+    // forgets stale bundles from a broken 0.10.17–0.10.21 install. No-op on
+    // non-macOS. See docs/desktop-postmortem-macos-entitlements-2026-05-19.md
     import('./utils/self-heal-macos.js')
       .then(({ runMacOSSelfHeal }) => runMacOSSelfHeal())
       .catch((err) => {

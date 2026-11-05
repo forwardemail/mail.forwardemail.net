@@ -702,6 +702,19 @@ jobs:
           IPHONEOS_DEPLOYMENT_TARGET: '16.0'
         run: pnpm tauri ios build --ci --verbose --target aarch64 --export-method app-store-connect $(node scripts/web-inspector-args.cjs)
 
+      # Xcode's archive step strips the app binary, and the IPA carries no
+      # symbols, so crash logs from App Review or TestFlight symbolicate only
+      # against these dSYMs (the Rust code included). Missing dSYMs only warn:
+      # they are for diagnostics and must not fail the release.
+      - name: Upload iOS dSYMs
+        if: steps.check.outputs.enabled == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ios-dsyms
+          path: src-tauri/gen/apple/build/forwardemail-desktop_iOS.xcarchive/dSYMs
+          if-no-files-found: warn
+          retention-days: 90
+
       - name: Rename IPA with version
         if: steps.check.outputs.enabled == 'true'
         run: |
@@ -725,6 +738,36 @@ jobs:
       - name: Verify APNs entitlement (built IPA)
         if: steps.check.outputs.enabled == 'true'
         run: bash scripts/verify-ios-push-entitlement.sh "$IPA_PATH" production
+
+      # Info.ios.plist always names TaoSceneDelegate. If the class did not make
+      # it into the binary (an injection that never reached the Xcode
+      # project), the app starts to a black screen on iOS 26.
+      - name: Verify scene delegate (built IPA)
+        if: steps.check.outputs.enabled == 'true'
+        run: |
+          set -euo pipefail
+          WORK=$(mktemp -d)
+          trap 'rm -rf "$WORK"' EXIT
+          unzip -q "$IPA_PATH" -d "$WORK"
+          APP=$(find "$WORK/Payload" -maxdepth 1 -name '*.app' -type d | head -n 1)
+          PLIST="$APP/Info.plist"
+          DELEGATE=$(/usr/libexec/PlistBuddy -c "Print :UIApplicationSceneManifest:UISceneConfigurations:UIWindowSceneSessionRoleApplication:0:UISceneDelegateClassName" "$PLIST")
+          if [ "$DELEGATE" != "TaoSceneDelegate" ]; then
+            echo "::error::Scene manifest names '$DELEGATE', expected TaoSceneDelegate"
+            exit 1
+          fi
+          EXECUTABLE=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$PLIST")
+          # The class names section is read directly (it holds every class the
+          # binary defines, whatever its fixup format), and written to a file
+          # first: grep -q closing the pipe early would fail under pipefail.
+          xcrun otool -v -s __TEXT __objc_classname "$APP/$EXECUTABLE" > "$WORK/objc.txt"
+          for CLASS in TaoSceneDelegate TaoWindowCapture; do
+            if ! grep -qw "$CLASS" "$WORK/objc.txt"; then
+              echo "::error::$CLASS is not an Objective-C class in the app binary"
+              exit 1
+            fi
+          done
+          echo "Scene manifest and TaoSceneDelegate class present"
 
       - name: Repack IPA with unique CFBundleVersion (re-sign)
         if: steps.check.outputs.enabled == 'true'
@@ -814,8 +857,12 @@ jobs:
           # Repackage. zip(1) with -X strips extra attributes that altool
           # occasionally complains about; running from $WORK keeps the
           # canonical Payload/<App>.app/ layout inside the IPA.
+          # Symbols/ (when the export wrote one) lets App Store Connect
+          # symbolicate crash logs; zipping Payload alone dropped it.
           REPACK="$WORK/repacked.ipa"
-          (cd "$WORK" && zip -qry -X "$REPACK" Payload)
+          CONTENTS=(Payload)
+          if [ -d "$WORK/Symbols" ]; then CONTENTS+=(Symbols); fi
+          (cd "$WORK" && zip -qry -X "$REPACK" "${CONTENTS[@]}")
           mv "$REPACK" "$IPA_PATH"
           echo "Repacked IPA at: $IPA_PATH"
 

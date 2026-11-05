@@ -115,6 +115,13 @@ describe('trusted image senders', () => {
     expect(isTrustedImageSender('news@example.com', 'a')).toBe(false);
   });
 
+  it('does not extend trust to a sender naming the trusted address', () => {
+    trustImageSender('news@example.com', 'a');
+    expect(isTrustedImageSender('News <news@example.com> <x@evil.test>', 'a')).toBe(false);
+    trustImageSender('News <news@example.com> <x@evil.test>', 'b');
+    expect(readTrustedImageSenders('b')).toEqual(['x@evil.test']);
+  });
+
   it('survives a corrupted stored list', () => {
     Local.set('remote_images_trusted_a', '{not json');
     expect(readTrustedImageSenders('a')).toEqual([]);

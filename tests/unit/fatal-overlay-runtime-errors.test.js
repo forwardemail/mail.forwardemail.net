@@ -35,6 +35,17 @@ function boot() {
   return window;
 }
 
+// The page as it ships: the overlay and the chunk recovery after it.
+function bootWithRecovery() {
+  const window = boot();
+  const recoveryStart = index.indexOf('// Automatic chunk load error recovery.');
+  const recoveryEnd = index.indexOf('// Show fallback UI if', recoveryStart);
+  window.__feRecoverStaleChunks = () => {};
+  window.eval(index.slice(recoveryStart, recoveryEnd));
+  window.__feRecoverStaleChunks = () => {};
+  return window;
+}
+
 function overlay(window) {
   return window.document.getElementById('fe-fatal-error');
 }
@@ -111,6 +122,22 @@ describe('index.html fatal overlay', () => {
     after.__appBootstrapped = true;
     fireRejection(after, new after.Error('boom at runtime'));
     expect(overlay(after)).toBeNull();
+  });
+
+  it('leaves every chunk-load rejection the recovery knows to the recovery', () => {
+    for (const message of [
+      'Unable to preload CSS for /assets/index-abc123.css',
+      "'text/html' is not a valid JavaScript MIME type.",
+      'Failed to fetch dynamically imported module: /assets/main-abc123.js',
+    ]) {
+      const window = bootWithRecovery();
+      expect(typeof window.__feIsChunkLoadError).toBe('function');
+      fireRejection(window, new window.Error(message));
+      expect(overlay(window), message).toBeNull();
+    }
+    const window = bootWithRecovery();
+    fireRejection(window, new window.TypeError('x.findLast is not a function'));
+    expect(overlay(window)).not.toBeNull();
   });
 
   it('keeps ignoring resource-load errors so chunk recovery can handle them', () => {

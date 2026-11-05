@@ -9,9 +9,11 @@
  * routing launches at even after the working build is installed into
  * `/Applications/`.
  *
- * On launch (gated by isTauriDesktop + macOS) we tell LaunchServices to
- * forget cached path bindings via `lsregister -kill -r`. That's
- * non-destructive, takes <1s, and fixes the stale launch-routing.
+ * On the first launch of each app version (gated by isTauriDesktop + macOS)
+ * we tell LaunchServices to forget cached path bindings via
+ * `lsregister -kill -r`. That's non-destructive and fixes the stale
+ * launch-routing, but re-registers every app on disk and can take seconds,
+ * so it is not repeated on every launch.
  *
  * NOTE: this used to also scan ~/Downloads, ~/Desktop and ~/Documents for
  * stray app copies and offer to Trash them. After the App Sandbox was
@@ -24,6 +26,10 @@
  */
 
 import { isTauriDesktop } from './platform.js';
+import { Local } from './storage.js';
+
+// The app version the flush last ran for.
+const FLUSHED_VERSION_KEY = 'macos_self_heal_version';
 
 function isMacOS(): boolean {
   if (typeof navigator === 'undefined') return false;
@@ -32,6 +38,13 @@ function isMacOS(): boolean {
 
 export async function runMacOSSelfHeal(): Promise<void> {
   if (!isTauriDesktop || !isMacOS()) return;
+
+  // Once per installed version: installing a working build is what leaves the
+  // stale binding behind, and its first launch clears it. Marked before the
+  // call so a second bootstrap (account switch, unlock) does not repeat it.
+  const version = String(import.meta.env.VITE_PKG_VERSION || '');
+  if (Local.get(FLUSHED_VERSION_KEY) === version) return;
+  Local.set(FLUSHED_VERSION_KEY, version);
 
   let invoke: <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
   try {

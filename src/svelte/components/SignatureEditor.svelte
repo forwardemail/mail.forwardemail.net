@@ -167,6 +167,8 @@
           aria-label="Bold"
           aria-pressed={isActive('bold')}
           onclick={() => editor?.chain().focus().toggleBold().run()}
+          data-tooltip="Bold"
+          data-tooltip-position="bottom"
         >
           <Bold class="h-4 w-4" />
         </Button>
@@ -177,6 +179,8 @@
           aria-label="Italic"
           aria-pressed={isActive('italic')}
           onclick={() => editor?.chain().focus().toggleItalic().run()}
+          data-tooltip="Italic"
+          data-tooltip-position="bottom"
         >
           <Italic class="h-4 w-4" />
         </Button>
@@ -187,6 +191,8 @@
           aria-label="Underline"
           aria-pressed={isActive('underline')}
           onclick={() => editor?.chain().focus().toggleUnderline().run()}
+          data-tooltip="Underline"
+          data-tooltip-position="bottom"
         >
           <UnderlineIcon class="h-4 w-4" />
         </Button>
@@ -197,6 +203,8 @@
           aria-label="Bullet list"
           aria-pressed={isActive('bulletList')}
           onclick={() => editor?.chain().focus().toggleBulletList().run()}
+          data-tooltip="Bullet list"
+          data-tooltip-position="bottom"
         >
           <ListIcon class="h-4 w-4" />
         </Button>
@@ -207,6 +215,8 @@
           aria-label="Insert link"
           aria-pressed={isActive('link')}
           onclick={promptLink}
+          data-tooltip="Insert link"
+          data-tooltip-position="bottom"
         >
           <Link2 class="h-4 w-4" />
         </Button>
@@ -230,6 +240,8 @@
           class="h-8 w-8"
           aria-label="Clear formatting"
           onclick={() => editor?.chain().focus().unsetAllMarks().run()}
+          data-tooltip="Clear formatting"
+          data-tooltip-position="bottom"
         >
           <RemoveFormatting class="h-4 w-4" />
         </Button>

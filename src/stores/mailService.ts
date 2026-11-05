@@ -968,8 +968,10 @@ export const mailService = {
     // Every path sanitizes with remote images blocked when that is the
     // default. For a sender the user trusts with images, the blocked images
     // are put back here (tracking pixels stay out), on whichever path the
-    // body came by.
-    const imagesAllowed = isTrustedImageSender(message.from, account);
+    // body came by. So they are when the user turned blocking off: a body
+    // cached while it was on still has its images blocked.
+    const imagesAllowed =
+      !remoteImagesBlockedByDefault() || isTrustedImageSender(message.from, account);
     const onBody = rawOnBody
       ? (html: string): void => {
           rawOnBody(imagesAllowed ? restoreBlockedImages(html) : html);

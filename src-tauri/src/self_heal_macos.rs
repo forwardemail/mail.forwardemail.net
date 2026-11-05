@@ -9,9 +9,10 @@
 //! working build into `/Applications/`. Users see the same "the
 //! application can't be opened" error indefinitely.
 //!
-//! This module runs at app startup (macOS only) and re-registers every
-//! .app with LaunchServices (`lsregister -kill -r`) so the OS forgets the
-//! stale path bindings. Non-destructive and safe on every launch.
+//! This module runs at app startup (macOS only; the page calls it once per
+//! app version) and re-registers every .app with LaunchServices
+//! (`lsregister -kill -r`) so the OS forgets the stale path bindings.
+//! Non-destructive and safe on every launch.
 //!
 //! NOTE: an earlier version also scanned ~/Downloads, ~/Desktop and
 //! ~/Documents with `std::fs::read_dir` to find and Trash stray copies of
@@ -38,9 +39,15 @@ const LSREGISTER: &str = "/System/Library/Frameworks/CoreServices.framework\
 /// Forces the OS to forget cached path bindings that may point at stale
 /// or deleted bundles. Safe to call on every launch — touches no
 /// TCC-protected user folders, so it never prompts.
+///
+/// Async, with lsregister on a blocking thread: a sync command runs on the
+/// main thread, and the full re-register takes seconds, which froze the
+/// window at launch.
 #[tauri::command]
-pub fn self_heal_flush_launch_services() -> Result<(), String> {
-    flush_launch_services()
+pub async fn self_heal_flush_launch_services() -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(flush_launch_services)
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 // ── internals ───────────────────────────────────────────────────────────────

@@ -65,18 +65,17 @@ function setDeviceFamily(appleDir) {
   let yml = fs.readFileSync(projectYmlPath, 'utf8');
   if (/^\s*TARGETED_DEVICE_FAMILY:/m.test(yml)) return false;
 
-  // The iOS target's settings.base block is the one that carries
-  // SWIFT_VERSION in the Tauri template. Insert directly after that line so
-  // the key inherits the same indentation.
-  const anchor = /^(\s*)SWIFT_VERSION:[^\n]*\n/m;
-  const match = yml.match(anchor);
-  if (!match) {
-    console.warn('Could not find settings.base in project.yml; TARGETED_DEVICE_FAMILY not set');
-    return false;
+  // Insert at the top of the iOS target's settings.base block, found the way
+  // inject-ios-signing.cjs finds it (4-space target keys, 6-space settings).
+  // The Tauri template has no SWIFT_VERSION line to anchor on: that is added
+  // later by inject-ios-scene-delegate.cjs, so the key was never written.
+  const anchor = / {4}settings:\n {6}base:\n/;
+  if (!anchor.test(yml)) {
+    throw new Error('Could not find the iOS target settings.base in project.yml');
   }
   yml = yml.replace(
     anchor,
-    `${match[0]}${match[1]}TARGETED_DEVICE_FAMILY: "${TARGETED_DEVICE_FAMILY}"\n`,
+    (match) => `${match}        TARGETED_DEVICE_FAMILY: "${TARGETED_DEVICE_FAMILY}"\n`,
   );
   fs.writeFileSync(projectYmlPath, yml);
   console.log(`Set TARGETED_DEVICE_FAMILY=${TARGETED_DEVICE_FAMILY} in project.yml`);

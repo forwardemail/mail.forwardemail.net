@@ -1412,7 +1412,14 @@
       <DropdownMenu.Root bind:open={importMenuOpen}>
         <DropdownMenu.Trigger>
           {#snippet child({ props })}
-            <Button variant="ghost" size="icon" {...props} aria-label="Import vCard">
+            <Button
+              variant="ghost"
+              size="icon"
+              {...props}
+              aria-label="Import vCard"
+              data-tooltip="Import vCard"
+              data-tooltip-position="bottom"
+            >
               <Upload class="h-4 w-4" />
             </Button>
           {/snippet}
@@ -1696,7 +1703,14 @@
             <DropdownMenu.Root>
               <DropdownMenu.Trigger>
                 {#snippet child({ props })}
-                  <Button variant="outline" size="icon" {...props}>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    {...props}
+                    aria-label="More actions"
+                    data-tooltip="More actions"
+                    data-tooltip-position="bottom"
+                  >
                     <MoreHorizontal class="h-4 w-4" />
                   </Button>
                 {/snippet}

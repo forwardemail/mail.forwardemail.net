@@ -428,6 +428,16 @@ const createMailboxStore = () => {
     } else {
       loadMessages();
     }
+
+    // Sync the opened folder next, ahead of other queued sync work. Demo mode
+    // runs no sync. The sync controller imports this store, so it is loaded
+    // here when needed.
+    if (path && !isDemoMode()) {
+      const account = activeAccountName();
+      import('../utils/sync-controller.js')
+        .then(({ syncFolderOnDemand }) => syncFolderOnDemand(path, account))
+        .catch(() => {});
+    }
   };
 
   const selectMessage = (msg) => {

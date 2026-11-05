@@ -2291,7 +2291,9 @@
               Your accounts
               <Tooltip.Provider>
                 <Tooltip.Root>
-                  <Tooltip.Trigger>
+                  <Tooltip.Trigger
+                    aria-label="Accounts are stored on this device only and are not synced."
+                  >
                     <Info class="h-4 w-4 text-muted-foreground" />
                   </Tooltip.Trigger>
                   <Tooltip.Content>
@@ -2780,7 +2782,8 @@
                       variant="ghost"
                       size="icon"
                       onclick={() => editKey(key)}
-                      aria-label="Edit"
+                      aria-label="Edit key"
+                      data-tooltip="Edit key"
                     >
                       <Pencil class="h-4 w-4" />
                     </Button>
@@ -2788,7 +2791,8 @@
                       variant="ghost"
                       size="icon"
                       onclick={() => removeKey(key)}
-                      aria-label="Remove"
+                      aria-label="Remove key"
+                      data-tooltip="Remove key"
                     >
                       <X class="h-4 w-4" />
                     </Button>
@@ -2948,6 +2952,7 @@
                         onclick={() => {
                           trustedImageSenders = untrustImageSender(sender, getAccountId());
                         }}
+                        data-tooltip={`Stop loading images from ${sender}`}
                       >
                         <X class="h-4 w-4" />
                       </Button>
@@ -3165,6 +3170,7 @@
                     onclick={() => deleteFolderFromSettings(folder)}
                     disabled={folderDeleting === folder.path}
                     aria-label={`Delete folder ${folder.label}`}
+                    data-tooltip={`Delete folder ${folder.label}`}
                   >
                     <X class="h-4 w-4" />
                   </Button>
@@ -3209,7 +3215,8 @@
                         variant="ghost"
                         size="icon"
                         onclick={() => openEditLabelModal(label)}
-                        aria-label="Edit"
+                        aria-label="Edit label"
+                        data-tooltip="Edit label"
                       >
                         <Pencil class="h-4 w-4" />
                       </Button>
@@ -3218,7 +3225,8 @@
                         size="icon"
                         onclick={() => deleteLabel(label)}
                         disabled={labelsDeleting === getLabelKey(label)}
-                        aria-label="Remove"
+                        aria-label="Delete label"
+                        data-tooltip="Delete label"
                       >
                         <X class="h-4 w-4" />
                       </Button>

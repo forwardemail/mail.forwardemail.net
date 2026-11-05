@@ -237,7 +237,9 @@ static void _injectApnsMethodsIntoClass(Class cls) {
             }
         });
 
-        if (class_addMethod(cls, didReceiveSel, didReceiveImp, "v@:@@?")) {
+        // Three object arguments (application, userInfo, completion block,
+        // which is "@?").
+        if (class_addMethod(cls, didReceiveSel, didReceiveImp, "v@:@@@?")) {
             NSLog(@"[TaoWindowCapture:APNs] Added didReceiveRemoteNotification:fetchCompletionHandler: to %@", NSStringFromClass(cls));
         } else {
             NSLog(@"[TaoWindowCapture:APNs] WARN: class_addMethod failed for didReceive on %@", NSStringFromClass(cls));

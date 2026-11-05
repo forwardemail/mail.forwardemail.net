@@ -44,9 +44,9 @@ struct SingleInstancePayload {
     cwd: String,
 }
 
-/// Holds deep-link URLs that arrived before the frontend was ready.
-/// The frontend calls `get_pending_deep_links` once during bootstrap
-/// to drain any URLs that arrived during cold start.
+/// Holds deep-link URLs until the frontend drains them with
+/// `get_pending_deep_links`: once during bootstrap for URLs that arrived
+/// during cold start, and on every `deep-link-received` event.
 struct PendingDeepLinks(Mutex<Vec<String>>);
 
 // ── IPC Commands ─────────────────────────────────────────────────────────────
@@ -1513,8 +1513,9 @@ pub fn run() {
 
             // Register deep-link handler with URL validation.
             // When the app is already running, URLs arrive here.
-            // We also push to the pending queue in case the frontend
-            // listener isn't ready yet (e.g. page reload).
+            // Each URL is queued before the event is emitted: the frontend
+            // drains the queue when the event arrives, or at bootstrap if
+            // its listener isn't ready yet (e.g. page reload).
             let handle = app.handle().clone();
             app.listen("deep-link://new-url", move |event| {
                 if let Ok(urls) = serde_json::from_str::<Vec<String>>(event.payload()) {
@@ -1522,7 +1523,7 @@ pub fn run() {
                     let safe_urls: Vec<String> =
                         urls.into_iter().filter(|u| is_valid_deep_link(u)).collect();
                     if !safe_urls.is_empty() {
-                        // Also push to pending queue as a safety net
+                        // Queue first: the frontend reads the queue, not the payload
                         if let Some(state) = handle.try_state::<PendingDeepLinks>() {
                             let mut queue = state.0.lock().unwrap_or_else(|e| e.into_inner());
                             push_pending_deep_links(&mut queue, safe_urls.clone());

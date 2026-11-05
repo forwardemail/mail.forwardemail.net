@@ -228,17 +228,27 @@ export async function setDefaultMailtoHandler() {
  * Register a handler for deep-link URLs (mailto:, forwardemail://).
  * URLs are validated against the allowed scheme list before dispatch.
  * Returns an unlisten function.
+ *
+ * Rust queues every link before it emits deep-link-received, so the event is
+ * handled by draining that queue rather than reading its payload. Handling the
+ * payload left the link queued, and the next page load replayed it (a mailto
+ * link reopened Compose after every reload). The drain is atomic, so a link
+ * reaches the handler once whether this drain or initTauriBridge's takes it.
  */
 export async function onDeepLink(handler) {
-  return listen('deep-link-received', (event) => {
-    if (event.payload && Array.isArray(event.payload.urls)) {
-      for (const url of event.payload.urls) {
-        if (isValidDeepLink(url)) {
-          handler(sanitizeString(url, 2048));
-        }
-      }
+  return listen('deep-link-received', () => drainPendingDeepLinks(handler));
+}
+
+async function drainPendingDeepLinks(handler) {
+  try {
+    const pending = await getPendingDeepLinks();
+    if (!Array.isArray(pending)) return;
+    for (const url of pending) {
+      if (isValidDeepLink(url)) handler(sanitizeString(url, 2048));
     }
-  });
+  } catch (err) {
+    console.warn('[tauri-bridge] Failed to drain pending deep links:', err);
+  }
 }
 
 /**
@@ -347,9 +357,10 @@ export async function initTauriBridge() {
 
   // Listen for deep-link URLs and dispatch a custom DOM event
   // so existing code can handle mailto: links.
-  await onDeepLink((url) => {
+  const dispatchDeepLink = (url) => {
     window.dispatchEvent(new CustomEvent('app:deep-link', { detail: { url } }));
-  });
+  };
+  await onDeepLink(dispatchDeepLink);
 
   // Listen for single-instance events (second launch with args).
   await onSingleInstance((payload) => {
@@ -358,20 +369,7 @@ export async function initTauriBridge() {
 
   // Drain any deep-link URLs that arrived before listeners were ready
   // (cold-start: OS delivered the URL before the webview JS loaded).
-  try {
-    const pending = await getPendingDeepLinks();
-    if (Array.isArray(pending)) {
-      for (const url of pending) {
-        if (isValidDeepLink(url)) {
-          window.dispatchEvent(
-            new CustomEvent('app:deep-link', { detail: { url: sanitizeString(url, 2048) } }),
-          );
-        }
-      }
-    }
-  } catch (err) {
-    console.warn('[tauri-bridge] Failed to drain pending deep links:', err);
-  }
+  await drainPendingDeepLinks(dispatchDeepLink);
 
   console.log('[tauri-bridge] initialized');
 }

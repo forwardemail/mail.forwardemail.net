@@ -381,8 +381,13 @@ export async function initTauriNotificationClickHandler() {
           _lastNotificationData = null; // prevent focus fallback double-fire
         });
       }
-    } catch {
-      /* ignore */
+    } catch (err) {
+      // Desktop has no tap listener and relies on the focus fallback below.
+      // On mobile a failure here means taps do nothing (the capability once
+      // lacked notification:allow-register-listener), so say so.
+      if (isTauriMobile) {
+        console.warn('[notification-bridge] notification tap listener failed:', err);
+      }
     }
   }
 

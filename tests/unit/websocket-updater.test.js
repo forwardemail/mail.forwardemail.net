@@ -296,6 +296,23 @@ describe('createInboxUpdater', () => {
     updater.destroy();
   });
 
+  it("reports a socket auth failure to the app only for the active account's socket", () => {
+    setupCredentials();
+    const updater = createInboxUpdater();
+    updater.start();
+    const failed = [];
+    const onFailed = (event) => failed.push(event.detail.account);
+    window.addEventListener('fe:auth-failed', onFailed);
+
+    // e.g. another account is an alias without IMAP (4403)
+    simulateWsEvent('_authFailed', { code: 4403, _account: 'other@example.com' });
+    simulateWsEvent('_authFailed', { code: 4401, _account: 'user@example.com' });
+
+    window.removeEventListener('fe:auth-failed', onFailed);
+    updater.destroy();
+    expect(failed).toEqual(['user@example.com']);
+  });
+
   it('subscribes to all 6 CalDAV events via manager.on()', () => {
     setupCredentials();
     const updater = createInboxUpdater();
@@ -334,6 +351,23 @@ describe('createInboxUpdater', () => {
     updater.start();
     expect(mockConnectMultiAccountNotifications).toHaveBeenCalledWith(mockManager);
     updater.destroy();
+  });
+
+  it('retries refused sockets on resume or unlock but not on a visibility change', () => {
+    setupCredentials();
+    const updater = createInboxUpdater();
+    updater.start();
+    try {
+      document.dispatchEvent(new Event('visibilitychange'));
+      expect(mockMgrReconnectAll).toHaveBeenCalledTimes(1);
+      expect(mockMgrReconnectAll).toHaveBeenLastCalledWith();
+
+      globalThis.dispatchEvent(new CustomEvent('fe:force-reconnect'));
+      expect(mockMgrReconnectAll).toHaveBeenCalledTimes(2);
+      expect(mockMgrReconnectAll).toHaveBeenLastCalledWith({ force: true });
+    } finally {
+      updater.destroy();
+    }
   });
 });
 

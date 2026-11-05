@@ -11,9 +11,11 @@
  *    UIApplicationSceneManifest to project.yml so that xcodegen generates
  *    the xcodeproj AND plist correctly.
  * 3. Re-runs xcodegen to regenerate the .xcodeproj with the new source files
- *    and the scene manifest baked into the generated Info.plist.
+ *    and the scene manifest baked into the generated Info.plist. Exits
+ *    non-zero if xcodegen fails.
  * 4. As a safety net, verifies the generated Info.plist contains the
  *    UIApplicationSceneManifest — if not, injects it directly.
+ * 5. Exits non-zero if the .xcodeproj does not compile both source files.
  *
  * IMPORTANT: The scene manifest MUST be in project.yml BEFORE xcodegen runs,
  * because xcodegen regenerates plists from project.yml and would overwrite
@@ -137,11 +139,15 @@ if (fs.existsSync(projectYmlPath)) {
 }
 
 // ─── Step 3: Re-run xcodegen ────────────────────────────────────────────────
+// `tauri ios build` never runs xcodegen, so a project not regenerated here
+// does not compile SceneDelegate.swift or TaoWindowCapture.m, while
+// Info.ios.plist still names TaoSceneDelegate: a black screen on iOS 26.
 try {
   execSync('xcodegen generate', { cwd: appleDir, stdio: 'inherit' });
   console.log('Regenerated xcodeproj with SceneDelegate + TaoWindowCapture');
 } catch {
-  console.warn('xcodegen not available — tauri will regenerate xcodeproj on build');
+  console.error('xcodegen generate failed; the scene delegate would not be compiled');
+  process.exit(1);
 }
 
 // ─── Step 4: Safety net — verify plist has the manifest ─────────────────────
@@ -181,21 +187,16 @@ if (fs.existsSync(infoPlistPath)) {
 }
 
 // ─── Step 5: Final verification ─────────────────────────────────────────────
+// The app must not ship without these (see Step 3), so a project that lacks
+// them fails the build here.
 const xcodeprojDir = fs.readdirSync(appleDir).find((f) => f.endsWith('.xcodeproj'));
-if (xcodeprojDir) {
-  const pbxprojPath = path.join(appleDir, xcodeprojDir, 'project.pbxproj');
-  if (fs.existsSync(pbxprojPath)) {
-    const pbx = fs.readFileSync(pbxprojPath, 'utf8');
-    const checks = [
-      ['SceneDelegate.swift', 'SceneDelegate.swift'],
-      ['TaoWindowCapture.m', 'TaoWindowCapture.m'],
-    ];
-    for (const [name, search] of checks) {
-      if (pbx.includes(search)) {
-        console.log(`✓ ${name} is in xcodeproj compile sources`);
-      } else {
-        console.error(`⚠️  ${name} NOT found in xcodeproj — it may not be compiled!`);
-      }
-    }
+const pbxprojPath = xcodeprojDir && path.join(appleDir, xcodeprojDir, 'project.pbxproj');
+const pbx = pbxprojPath && fs.existsSync(pbxprojPath) ? fs.readFileSync(pbxprojPath, 'utf8') : '';
+for (const name of ['SceneDelegate.swift', 'TaoWindowCapture.m']) {
+  if (pbx.includes(name)) {
+    console.log(`✓ ${name} is in xcodeproj compile sources`);
+  } else {
+    console.error(`${name} NOT found in the xcodeproj; it would not be compiled`);
+    process.exitCode = 1;
   }
 }

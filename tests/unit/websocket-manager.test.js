@@ -25,6 +25,7 @@ function createMockClient(email) {
     connected: true,
     connect: vi.fn(),
     reconnect: vi.fn(),
+    updateCredentials: vi.fn(),
     destroy: vi.fn(() => {
       client.connected = false;
     }),
@@ -182,6 +183,28 @@ describe('WebSocket Manager – Multi-Account', () => {
         email: 'charlie@example.com',
         password: 'pass3',
       });
+    });
+
+    it('gives an existing client the new password after a sign-in with it', () => {
+      // The server refused the old password; that socket stays closed until
+      // the client is given new credentials.
+      Accounts.getAll.mockReturnValue([
+        { email: 'alice@example.com', aliasAuth: 'alice@example.com:old:pass' },
+      ]);
+      Local.get.mockReturnValue(null);
+      mgr = getWebSocketManager();
+      mgr.reconcile();
+      const alice = mockClients.get('alice@example.com');
+
+      Accounts.getAll.mockReturnValue([
+        { email: 'alice@example.com', aliasAuth: 'alice@example.com:new:pass' },
+      ]);
+      mgr.reconcile();
+      mgr.reconcile();
+
+      expect(createWebSocketClient).toHaveBeenCalledTimes(1);
+      expect(alice.updateCredentials).toHaveBeenCalledTimes(1);
+      expect(alice.updateCredentials).toHaveBeenCalledWith('alice@example.com', 'new:pass');
     });
   });
 
@@ -379,6 +402,20 @@ describe('WebSocket Manager – Multi-Account', () => {
 
       expect(mockClients.get('alice@example.com').reconnect).toHaveBeenCalled();
       expect(mockClients.get('bob@example.com').reconnect).not.toHaveBeenCalled();
+    });
+
+    it('passes a forced reconnect on to the clients', () => {
+      Accounts.getAll.mockReturnValue([
+        { email: 'alice@example.com', aliasAuth: 'alice@example.com:pass1' },
+      ]);
+      Local.get.mockReturnValue(null);
+      mgr = getWebSocketManager();
+      mgr.reconcile();
+      mockClients.get('alice@example.com').connected = false;
+
+      mgr.reconnectAll({ force: true });
+
+      expect(mockClients.get('alice@example.com').reconnect).toHaveBeenCalledWith({ force: true });
     });
   });
 

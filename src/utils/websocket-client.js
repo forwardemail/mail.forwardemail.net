@@ -138,6 +138,9 @@ export function createWebSocketClient(opts = {}) {
   let connected = false;
   let authenticated = false;
   let reconnectAttempts = 0;
+  // Set by a NO_RETRY_CLOSE_CODES close: the same credentials would only be
+  // refused again, so nothing reconnects until updateCredentials()
+  let rejected = false;
   // Whether this client instance uses msgpackr (opt-in per instance)
   const wantsMsgpackr = opts.useMsgpackr === true;
 
@@ -153,7 +156,7 @@ export function createWebSocketClient(opts = {}) {
   }
 
   function handleOnline() {
-    if (destroyed) return;
+    if (destroyed || rejected) return;
     reconnectAttempts = 0;
     backoff = INITIAL_BACKOFF_MS;
     // If not currently connected, trigger a reconnect immediately
@@ -514,6 +517,7 @@ export function createWebSocketClient(opts = {}) {
       // stops) if the stored password is no longer valid
       if (NO_RETRY_CLOSE_CODES.has(event.code)) {
         console.warn('[ws] Authentication failed, not reconnecting');
+        rejected = true;
         dispatch('_authFailed', { code: event.code });
         return;
       }
@@ -590,6 +594,7 @@ export function createWebSocketClient(opts = {}) {
       if (typeof email !== 'string' || typeof password !== 'string') return;
       opts.email = email;
       opts.password = password;
+      rejected = false;
       reconnectAttempts = 0;
       backoff = INITIAL_BACKOFF_MS;
       if (destroyed) return;
@@ -609,10 +614,15 @@ export function createWebSocketClient(opts = {}) {
     /**
      * Reconnect if currently disconnected. Resets the reconnect counter
      * first so a previously exhausted budget doesn't block recovery.
-     * Safe to call when already connected (no-op).
+     * Safe to call when already connected (no-op). Also a no-op after the
+     * server refused the credentials, until updateCredentials(), unless
+     * `force` is set: a refusal is not always about the password (a token
+     * mid-restore, IMAP turned on since), so a resume or unlock tries once more.
+     * @param {{ force?: boolean }} [options]
      */
-    reconnect() {
-      if (destroyed || connected || isConnecting()) return;
+    reconnect({ force = false } = {}) {
+      if (force) rejected = false;
+      if (destroyed || rejected || connected || isConnecting()) return;
       reconnectAttempts = 0;
       backoff = INITIAL_BACKOFF_MS;
       connect();

@@ -286,13 +286,14 @@ export default defineConfig({
       },
       output: {
         manualChunks: {
+          // Not openpgp: the main thread loads it lazily, and in vendor it was
+          // preloaded at launch, close to 400 KB more for iOS to hold.
           vendor: [
             'svelte',
             'dexie',
             'ky',
             'dompurify',
             'flexsearch',
-            'openpgp',
             '@tiptap/core',
             '@tiptap/starter-kit',
             '@tiptap/extension-link',

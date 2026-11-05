@@ -638,11 +638,12 @@ async function runMetadataTask(task, postProgress) {
 //   enough to cover the shift, and the overlap is deduped.
 // - An empty or short page only ends the walk when it agrees with the server
 //   total (the API clamps `limit` to 100, so pages here never ask for more).
-//   An empty page while the total says there is more is transient: the batch
-//   stops without marking the folder complete and resumes at the same page.
-// - A finished walk records the server total. When the total later grows, or
-//   the last full walk is older than BACKFILL_SWEEP_INTERVAL_MS, a new walk
-//   starts from page 1.
+//   An empty page while the total says there is more is taken as transient:
+//   the batch stops without marking the folder complete and resumes at the
+//   same page, until BACKFILL_EMPTY_STREAK_LIMIT empty answers end the walk.
+// - A finished walk records the folder list's total. When that total later
+//   grows past what the cache holds, or the last full walk is older than
+//   BACKFILL_SWEEP_INTERVAL_MS, a new walk starts from page 1.
 // - A walk from page 1 that reached the end collects every id the server
 //   listed. Cached rows in the folder the listing did not include are then
 //   checked one by one against the server and removed only on a 404 (see
@@ -692,16 +693,30 @@ interface BackfillWalk {
 // nothing is decrypted or cloned whole. Rows without a date are left alone.
 const TRIM_DELETE_BATCH = 500;
 const trimmedFolders = new Set<string>();
+
+// How many messages of the folder are cached, counted in the db worker without
+// reading any row. Null when the database could not answer.
+async function countCachedInFolder(account: string, folder: string): Promise<number | null> {
+  try {
+    const count = Number(
+      await dbSend('query', 'messages', {
+        index: '[account+folder]',
+        where: { op: 'equals', value: [account, folder] },
+        queryMode: 'count',
+      }),
+    );
+    return Number.isFinite(count) ? count : null;
+  } catch {
+    return null;
+  }
+}
+
 async function trimFolderToMobileCap(account: string, folder: string): Promise<number> {
   const key = toKey(account, folder);
   if (!memoryConstrained || trimmedFolders.has(key)) return 0;
   trimmedFolders.add(key);
-  const count = (await dbSend('query', 'messages', {
-    index: '[account+folder]',
-    where: { op: 'equals', value: [account, folder] },
-    queryMode: 'count',
-  })) as number;
-  const excess = (Number(count) || 0) - MOBILE_BACKFILL_SAFETY_CAP;
+  const count = await countCachedInFolder(account, folder);
+  const excess = (count || 0) - MOBILE_BACKFILL_SAFETY_CAP;
   if (excess <= 0) return 0;
   const oldestFirst = ((await dbSend('query', 'messages', {
     index: '[account+folder+date]',
@@ -840,7 +855,8 @@ async function runBackfillTask(task, postProgress) {
   if (pruneQueues.get(key)?.ids.length) {
     const result = await pruneUnlisted(account, folder, task.pendingDeleteIds || []);
     return {
-      done: !pruneQueues.get(key)?.ids.length,
+      // Rejected credentials end the run; the next sync after sign-in resumes.
+      done: result.authRejected || !pruneQueues.get(key)?.ids.length,
       reason: 'pruning',
       inserted: 0,
       pruned: result.pruned,
@@ -850,11 +866,20 @@ async function runBackfillTask(task, postProgress) {
   }
 
   let manifest = await getManifest(account, folder);
-  let total = await readFolderTotal(account, folder);
+  // The folder list's count can disagree with X-Item-Count (it is only as fresh
+  // as the last folder list), so each is only compared with its own kind: the
+  // backfill*ListTotal fields hold folder list counts, the rest page totals.
+  const listTotal = await readFolderTotal(account, folder);
+  let total = listTotal;
 
   if (manifest.backfillComplete) {
+    // New mail that forward sync already cached also grows the total. Walk
+    // again only when the cache holds fewer messages than the server.
     const grown =
-      total !== null && Number.isFinite(manifest.backfillTotal) && total > manifest.backfillTotal;
+      listTotal !== null &&
+      // A manifest saved before backfillListTotal existed has nothing to compare.
+      (!Number.isFinite(manifest.backfillListTotal) || listTotal > manifest.backfillListTotal) &&
+      ((await countCachedInFolder(account, folder)) ?? 0) < listTotal;
     const sweepDue = Date.now() - (manifest.lastSweepAt || 0) >= BACKFILL_SWEEP_INTERVAL_MS;
     if (!grown && !sweepDue) return { done: true, reason: 'already_complete' };
     manifest = await updateManifest(account, folder, {
@@ -863,13 +888,15 @@ async function runBackfillTask(task, postProgress) {
       backfillLimit: limit,
       backfillEmptyStreak: 0,
       backfillRestarts: 0,
-      backfillPrevTotal: total,
+      backfillPrevTotal: null,
+      backfillPrevListTotal: listTotal,
     });
   }
   if ((manifest.backfillTotalInserted || 0) >= backfillSafetyCap()) {
     await updateManifest(account, folder, {
       backfillComplete: true,
       backfillTotal: total,
+      backfillListTotal: listTotal,
       lastSweepAt: Date.now(),
     });
     return { done: true, reason: 'safety_cap' };
@@ -903,15 +930,16 @@ async function runBackfillTask(task, postProgress) {
     walk = null;
   }
 
-  let prevTotal = Number.isFinite(manifest.backfillPrevTotal) ? manifest.backfillPrevTotal : total;
+  // The last page total seen, from X-Item-Count.
+  let prevTotal = Number.isFinite(manifest.backfillPrevTotal) ? manifest.backfillPrevTotal : null;
   // Messages left the folder (going by the last folder list) since the last
   // batch: later ones moved up onto pages already read, so start back far
   // enough to read them.
-  if (total !== null && prevTotal !== null && total < prevTotal) {
-    page = Math.max(1, page - Math.ceil((prevTotal - total) / limit));
+  const prevListTotal = manifest.backfillPrevListTotal;
+  if (listTotal !== null && Number.isFinite(prevListTotal) && listTotal < prevListTotal) {
+    page = Math.max(1, page - Math.ceil((prevListTotal - listTotal) / limit));
     if (walk) walk.shifted = true;
   }
-  if (total !== null) prevTotal = total;
   let emptyStreak = manifest.backfillEmptyStreak || 0;
   let totalInsertedThisRun = 0;
   let pagesThisRun = 0;
@@ -957,10 +985,11 @@ async function runBackfillTask(task, postProgress) {
     }
     if (!rawList.length) {
       const moreOnServer = total !== null && (page - 1) * limit < total;
-      if (moreOnServer || (total === null && emptyStreak + 1 < BACKFILL_EMPTY_STREAK_LIMIT)) {
+      if ((moreOnServer || total === null) && emptyStreak + 1 < BACKFILL_EMPTY_STREAK_LIMIT) {
         // Either the server says there is more, or with no total to go on we
         // want a few empty answers in a row before believing it. Stop here
-        // without marking anything complete; the next batch asks again.
+        // without marking anything complete; the next batch asks again. A
+        // total that stays above what the listing returns is given up on too.
         emptyStreak += 1;
         stalled = moreOnServer;
         break;
@@ -1033,6 +1062,7 @@ async function runBackfillTask(task, postProgress) {
     backfillLimit: limit,
     backfillEmptyStreak: emptyStreak,
     backfillPrevTotal: prevTotal,
+    backfillPrevListTotal: listTotal ?? prevListTotal,
     backfillTotalInserted: (manifest.backfillTotalInserted || 0) + totalInsertedThisRun,
     lastBackfillAt: Date.now(),
   };
@@ -1047,7 +1077,6 @@ async function runBackfillTask(task, postProgress) {
       // left during the walk. Walk again from the top; the overlap dedupes.
       nextManifest.backfillPage = 1;
       nextManifest.backfillRestarts = (manifest.backfillRestarts || 0) + 1;
-      nextManifest.backfillPrevTotal = total;
       backfillWalks.delete(key);
       restarted = true;
     } else {
@@ -1055,6 +1084,7 @@ async function runBackfillTask(task, postProgress) {
       Object.assign(nextManifest, {
         backfillComplete: true,
         backfillTotal: total,
+        backfillListTotal: listTotal,
         backfillRestarts: 0,
         lastSweepAt: Date.now(),
       });
@@ -1109,32 +1139,24 @@ async function judgeFinishedWalk(
   if (total === null) return 'done';
   // A walk object only exists for a walk that began at page 1.
   if (walk && walk.ids.size >= total) return 'prune';
-  let cached = 0;
-  try {
-    const rows = (await db.messages
-      .where('[account+folder]')
-      .equals([account, folder])
-      .toArray()) as unknown[];
-    cached = rows.length;
-  } catch {
-    return 'done';
-  }
+  const cached = await countCachedInFolder(account, folder);
+  if (cached === null) return 'done';
   return cached < total ? 'restart' : 'done';
 }
 
 // Cached rows of the folder the finished listing did not include. Rows written
 // after the walk started (new mail, a local move) are left alone: the listing
-// may simply predate them.
+// may simply predate them. Only the two fields used are read; both are stored
+// in the clear, so no row is decrypted or copied whole.
 async function queueUnlisted(account: string, folder: string, walk: BackfillWalk) {
   let rows: Array<{ id?: string; updatedAt?: number }> = [];
   try {
-    rows = (await db.messages
-      .where('[account+folder]')
-      .equals([account, folder])
-      .toArray()) as Array<{
-      id?: string;
-      updatedAt?: number;
-    }>;
+    rows = ((await dbSend('query', 'messages', {
+      index: '[account+folder]',
+      where: { op: 'equals', value: [account, folder] },
+      queryMode: 'fields',
+      fields: ['id', 'updatedAt'],
+    })) || []) as Array<{ id?: string; updatedAt?: number }>;
   } catch {
     return;
   }
@@ -1154,13 +1176,14 @@ async function queueUnlisted(account: string, folder: string, walk: BackfillWalk
 async function pruneUnlisted(account: string, folder: string, pendingDeleteIds: string[]) {
   const key = toKey(account, folder);
   const queue = pruneQueues.get(key);
-  if (!queue?.ids.length) return { pruned: 0, prunedIds: [], checked: 0 };
+  if (!queue?.ids.length) return { pruned: 0, prunedIds: [], checked: 0, authRejected: false };
   const batch = queue.ids.splice(0, PRUNE_VERIFY_PER_BATCH);
   if (!queue.ids.length) pruneQueues.delete(key);
   const skip = new Set(pendingDeleteIds);
   const gone: string[] = [];
   let checked = 0;
-  for (const id of batch) {
+  let authRejected = false;
+  for (const [i, id] of batch.entries()) {
     if (skip.has(id)) continue;
     let res;
     try {
@@ -1176,6 +1199,14 @@ async function pruneUnlisted(account: string, folder: string, pendingDeleteIds: 
       console.warn('[sync.worker] prune check failed for', id, err);
       if (isPassWideFailure(err)) break;
       continue;
+    }
+    if (res.status === 401 || res.status === 403) {
+      // Each try counts as a failed sign-in on the server. Keep the unchecked
+      // ids queued for after sign-in.
+      queue.ids.unshift(...batch.slice(i));
+      pruneQueues.set(key, queue);
+      authRejected = true;
+      break;
     }
     checked += 1;
     if (res.status === 404) {
@@ -1208,7 +1239,7 @@ async function pruneUnlisted(account: string, folder: string, pendingDeleteIds: 
     }
     postToSearch('remove', { account, ids: gone });
   }
-  return { pruned: gone.length, prunedIds: gone, checked };
+  return { pruned: gone.length, prunedIds: gone, checked, authRejected };
 }
 
 // Keyed `${account}::${folder}` — prevents repeated heal scans within a
@@ -1377,7 +1408,8 @@ async function runBodiesTask(task, postProgress) {
       // One message that will not download (deleted on the server, a parse
       // error, a timeout) must not stop the rest of the pass. It backs off
       // and is tried again on a later pass. A pass-wide problem (the backend
-      // is backing off, or this account was signed out) ends the pass.
+      // is backing off, or this account was signed out or its password is
+      // stale) ends the pass.
       if (isPassWideFailure(err)) throw err;
       bodyFailures.note(account, msg.id, err);
       failed += 1;
@@ -1412,8 +1444,11 @@ async function runBodiesTask(task, postProgress) {
 const bodyFailures = createBodyFailureMemo();
 
 function isPassWideFailure(err: unknown): boolean {
-  const e = err as { circuitOpen?: boolean; message?: string } | null;
+  const e = err as { circuitOpen?: boolean; status?: number; message?: string } | null;
   if (e?.circuitOpen) return true;
+  // Rejected credentials fail every message alike, and each attempt counts as
+  // a failed sign-in on the server, which can lock out the next real one.
+  if (e?.status === 401 || e?.status === 403) return true;
   return /No credentials for account|Database worker not connected/.test(String(e?.message || ''));
 }
 

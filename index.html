@@ -418,13 +418,11 @@
         );
         window.addEventListener('unhandledrejection', function (event) {
           var reason = event.reason || { message: 'unhandled rejection' };
-          // Skip chunk-load rejections — chunk-recovery handler handles them
-          var msg = (reason && reason.message) || '';
+          // Skip chunk-load rejections — chunk-recovery handler handles them.
+          // Its check is defined further down, so it is looked up here.
           if (
             window.__fePageLeaving ||
-            /Failed to fetch dynamically imported module|Loading chunk|error loading dynamically imported module|Importing a module script failed/i.test(
-              msg,
-            )
+            (window.__feIsChunkLoadError && window.__feIsChunkLoadError(reason))
           ) {
             return;
           }
@@ -551,26 +549,36 @@
           true,
         ); // capture phase to catch before the error is swallowed
 
+        // A dynamic import() that failed to load, in each engine's wording
+        function isChunkLoadError(reason) {
+          if (!reason) return false;
+          var msg = reason.message || '';
+          return (
+            /Failed to fetch dynamically imported module/.test(msg) ||
+            /Loading chunk/.test(msg) ||
+            /error loading dynamically imported module/i.test(msg) ||
+            // WebKit's wording (Safari, iOS, the Tauri WKWebView)
+            /Importing a module script failed/i.test(msg) ||
+            // WebKit, when the chunk URL now serves the HTML fallback page
+            /is not a valid JavaScript MIME type/.test(msg) ||
+            // Vite's preload helper, for a chunk's CSS
+            /Unable to preload CSS/.test(msg) ||
+            reason.name === 'ChunkLoadError'
+          );
+        }
+
         // Also catch dynamic import() failures (Vite code-split chunks)
         window.addEventListener('unhandledrejection', function (event) {
           var reason = event.reason;
-          if (
-            reason &&
-            ((reason.message &&
-              (/Failed to fetch dynamically imported module/.test(reason.message) ||
-                /Loading chunk/.test(reason.message) ||
-                /error loading dynamically imported module/i.test(reason.message) ||
-                // WebKit's wording (Safari, iOS, the Tauri WKWebView)
-                /Importing a module script failed/i.test(reason.message))) ||
-              reason.name === 'ChunkLoadError')
-          ) {
+          if (isChunkLoadError(reason)) {
             console.error('[Recovery] Dynamic import failed:', reason.message || reason);
             event.preventDefault();
             clearAssetCachesAndReload();
           }
         });
 
-        // src/boot.ts calls this when the app itself fails to import
+        // src/boot.ts calls these when the app itself fails to import
+        window.__feIsChunkLoadError = isChunkLoadError;
         window.__feRecoverStaleChunks = clearAssetCachesAndReload;
 
         // Clear the recovery flag once the app bootstraps successfully,

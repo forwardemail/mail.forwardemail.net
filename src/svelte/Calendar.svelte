@@ -4303,7 +4303,14 @@
         <DropdownMenu.Root>
           <DropdownMenu.Trigger>
             {#snippet child({ props })}
-              <Button variant="ghost" size="icon" aria-label="Calendar menu" {...props}>
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label="Calendar menu"
+                {...props}
+                data-tooltip="Calendar menu"
+                data-tooltip-position="bottom"
+              >
                 <MoreVertical class="h-5 w-5" />
               </Button>
             {/snippet}
@@ -4581,6 +4588,7 @@
                     newEvent.hasTime = false;
                     modalDirty = true;
                   }}
+                  data-tooltip="Remove due date"
                 >
                   <X class="h-4 w-4" />
                 </button>
@@ -4680,6 +4688,7 @@
                   newEvent.hasTime = false;
                   modalDirty = true;
                 }}
+                data-tooltip="Remove time"
               >
                 <X class="h-4 w-4" />
               </button>
@@ -4895,6 +4904,8 @@
                     size="sm"
                     disabled={!newAttendeeDraft.trim()}
                     onclick={addAttendeeToNewEvent}
+                    aria-label="Add attendee"
+                    data-tooltip="Add attendee"
                   >
                     <Plus class="h-4 w-4" />
                   </Button>
@@ -4911,6 +4922,7 @@
                       size="icon"
                       onclick={() => removeAttendeeFromNewEvent(email)}
                       aria-label="Remove {email}"
+                      data-tooltip="Remove {email}"
                     >
                       <X class="h-4 w-4" />
                     </Button>
@@ -5025,6 +5037,7 @@
                     editEvent.hasTime = false;
                     modalDirty = true;
                   }}
+                  data-tooltip="Remove due date"
                 >
                   <X class="h-4 w-4" />
                 </button>
@@ -5070,6 +5083,7 @@
                       editEvent.hasTime = false;
                       modalDirty = true;
                     }}
+                    data-tooltip="Remove time"
                   >
                     <X class="h-4 w-4" />
                   </button>
@@ -5315,6 +5329,8 @@
                     size="sm"
                     disabled={!editAttendeeDraft.trim()}
                     onclick={addAttendeeToEditEvent}
+                    aria-label="Add attendee"
+                    data-tooltip="Add attendee"
                   >
                     <Plus class="h-4 w-4" />
                   </Button>
@@ -5331,6 +5347,7 @@
                       size="icon"
                       onclick={() => removeAttendeeFromEditEvent(email)}
                       aria-label="Remove {email}"
+                      data-tooltip="Remove {email}"
                     >
                       <X class="h-4 w-4" />
                     </Button>

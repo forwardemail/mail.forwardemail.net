@@ -121,6 +121,47 @@ describe('sanitizeHtml', () => {
       expect(result.trackingPixelCount).toBe(0);
       expect(result.hasBlockedImages).toBe(false);
     });
+
+    // The parser turns <image> into <img>, and a ">" inside an attribute ends
+    // a text match of the tag early; neither may slip a pixel through.
+    const PIXEL = 'https://track.example.test/o.gif';
+    const loads = (html, url) => {
+      const template = document.createElement('template');
+      template.innerHTML = html;
+      return [...template.content.querySelectorAll('img')].some(
+        (img) => img.getAttribute('src') === url,
+      );
+    };
+    for (const [label, html] of [
+      ['an <image> tag', `<p>Hi</p><image src="${PIXEL}" width="1" height="1">`],
+      ['a ">" inside alt', `<p>Hi</p><img alt=">" src="${PIXEL}" width="1" height="1">`],
+    ]) {
+      it(`blocks a pixel written as ${label}`, () => {
+        const result = sanitizeHtml(html, { blockRemoteImages: false, blockTrackingPixels: true });
+        expect(loads(result.html, PIXEL)).toBe(false);
+        expect(result.html).toContain(`data-original-src="${PIXEL}"`);
+        expect(result.html).toContain('data-tracking-pixel="true"');
+        expect(result.trackingPixelCount).toBe(1);
+        expect(result.hasBlockedImages).toBe(true);
+      });
+
+      it(`keeps a pixel written as ${label} blocked when other images are restored`, () => {
+        const result = sanitizeHtml(html, { blockRemoteImages: true, blockTrackingPixels: true });
+        expect(result.trackingPixelCount).toBe(1);
+        expect(loads(restoreBlockedImages(result.html), PIXEL)).toBe(false);
+      });
+    }
+
+    it('blocks a remote image written as an <image> tag, and restores it', () => {
+      const url = 'https://cdn.example.test/hero.png';
+      const result = sanitizeHtml(`<image src="${url}" width="600" height="300">`, {
+        blockRemoteImages: true,
+        blockTrackingPixels: true,
+      });
+      expect(loads(result.html, url)).toBe(false);
+      expect(result.blockedRemoteImageCount).toBe(1);
+      expect(loads(restoreBlockedImages(result.html), url)).toBe(true);
+    });
   });
 
   describe('remote image blocking', () => {

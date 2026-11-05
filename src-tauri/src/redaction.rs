@@ -13,8 +13,11 @@ pub const REDACTION_VERSION: u32 = 1;
 // Regex instances are built once on first use.
 struct Patterns {
     bearer: Regex,
+    credential_json: Regex,
+    credential_json_single: Regex,
     credential_kv: Regex,
     authorization: Regex,
+    email_credential: Regex,
     posix_home: Regex,
     windows_home: Regex,
     email: Regex,
@@ -25,12 +28,21 @@ fn patterns() -> &'static Patterns {
     P.get_or_init(|| Patterns {
         // (?i) enables case-insensitive matching to mirror the JS /gi flag.
         bearer: Regex::new(r"(?i)\b(Basic|Bearer)\s+[A-Za-z0-9+/=_-]{8,}").unwrap(),
+        credential_json: Regex::new(
+            r#"(?i)((?:alias_auth|api[_-]?key|password|token|secret|credential)"\s*:\s*")(?:[^"\\]|\\[\s\S])*"#,
+        )
+        .unwrap(),
+        credential_json_single: Regex::new(
+            r#"(?i)((?:alias_auth|api[_-]?key|password|token|secret|credential)'\s*:\s*')(?:[^'\\]|\\[\s\S])*"#,
+        )
+        .unwrap(),
         credential_kv: Regex::new(
-            r"(?i)\b(alias_auth|api_key|password|token|secret|credential)[=:]\s*\S+",
+            r"(?i)(alias_auth|api[_-]?key|password|token|secret|credential)[=:]\s*\S+",
         )
         .unwrap(),
         authorization: Regex::new(r#"(?i)(["']?authorization["']?\s*[:=]\s*["']?)[^"'\s,}]+"#)
             .unwrap(),
+        email_credential: Regex::new(r"(@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}):\S+").unwrap(),
         posix_home: Regex::new(r"/(?:Users|home)/[A-Za-z0-9._-]+").unwrap(),
         windows_home: Regex::new(r"([A-Za-z]):\\Users\\[A-Za-z0-9._-]+").unwrap(),
         email: Regex::new(r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b").unwrap(),
@@ -63,11 +75,20 @@ pub fn redact(input: &str) -> String {
         .bearer
         .replace_all(input, |caps: &Captures| format!("{} [REDACTED]", &caps[1]));
     let s = p
+        .credential_json
+        .replace_all(&s, |caps: &Captures| format!("{}[REDACTED]", &caps[1]));
+    let s = p
+        .credential_json_single
+        .replace_all(&s, |caps: &Captures| format!("{}[REDACTED]", &caps[1]));
+    let s = p
         .credential_kv
         .replace_all(&s, |caps: &Captures| format!("{}=[REDACTED]", &caps[1]));
     let s = p
         .authorization
         .replace_all(&s, |caps: &Captures| format!("{}[REDACTED]", &caps[1]));
+    let s = p
+        .email_credential
+        .replace_all(&s, |caps: &Captures| format!("{}:[REDACTED]", &caps[1]));
 
     // Stage 2 — home directory paths.
     let s = p.posix_home.replace_all(&s, "~");

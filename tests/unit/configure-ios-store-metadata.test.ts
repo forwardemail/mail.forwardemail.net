@@ -16,7 +16,9 @@ const ROOT = path.resolve(__dirname, '../..');
 const SCRIPT = path.join(ROOT, 'scripts', 'configure-ios-store-metadata.cjs');
 const TRACKED_MANIFEST = path.join(ROOT, 'src-tauri', 'PrivacyInfo.xcprivacy');
 
-// Mirrors the settings block Tauri's project.yml template generates.
+// Mirrors the settings block Tauri's project.yml template generates. It has
+// no SWIFT_VERSION or bridging header: inject-ios-scene-delegate.cjs adds
+// those, and it runs after this script.
 const SAMPLE_PROJECT_YML = `name: forwardemail-desktop
 targets:
   forwardemail-desktop_iOS:
@@ -30,8 +32,6 @@ targets:
         LSRequiresIPhoneOS: true
     settings:
       base:
-        SWIFT_OBJC_BRIDGING_HEADER: "forwardemail-desktop_iOS/TaoWindowCapture-Bridging.h"
-        SWIFT_VERSION: "5.0"
         ENABLE_BITCODE: false
       groups: [app]
 `;
@@ -202,8 +202,17 @@ describe('configure-ios-store-metadata', () => {
     run(sandbox.dir);
     const yml = fs.readFileSync(path.join(sandbox.appleDir, 'project.yml'), 'utf8');
     const lines = yml.split('\n');
-    const swiftLine = lines.findIndex((l) => l.includes('SWIFT_VERSION:'));
-    expect(lines[swiftLine + 1]).toBe('        TARGETED_DEVICE_FAMILY: "1,2"');
+    const baseLine = lines.indexOf('      base:');
+    expect(lines[baseLine - 1]).toBe('    settings:');
+    expect(lines[baseLine + 1]).toBe('        TARGETED_DEVICE_FAMILY: "1,2"');
+  });
+
+  it('fails loudly when project.yml has no iOS target settings.base block', () => {
+    fs.writeFileSync(
+      path.join(sandbox.appleDir, 'project.yml'),
+      SAMPLE_PROJECT_YML.replace('    settings:\n      base:\n', ''),
+    );
+    expect(() => run(sandbox.dir)).toThrow(/settings\.base/);
   });
 
   it('is idempotent across a second run', () => {

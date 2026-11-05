@@ -1,8 +1,8 @@
 {
   "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/tauri-v2.0.0/crates/tauri-cli/capabilities-schema.json",
   "identifier": "mobile",
-  "description": "Mobile-only permission for native haptic feedback.",
+  "description": "Mobile-only permissions for native haptic feedback and notification taps (the plugin reports taps through a listener only on Android and iOS).",
   "windows": ["main"],
-  "permissions": ["haptics:default"],
+  "permissions": ["haptics:default", "notification:allow-register-listener"],
   "platforms": ["android", "iOS"]
 }

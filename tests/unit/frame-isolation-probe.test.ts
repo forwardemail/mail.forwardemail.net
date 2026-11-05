@@ -13,6 +13,8 @@ import {
 afterEach(() => {
   resetFrameIsolationProbeForTests();
   vi.useRealTimers();
+  // a probe that ran out of time keeps its frame while it waits for a late ready
+  document.querySelectorAll('iframe[aria-hidden="true"]').forEach((frame) => frame.remove());
 });
 
 function probeFrame(): HTMLIFrameElement {
@@ -45,11 +47,44 @@ describe('probeOpaqueFrameSupport', () => {
     expect(sessionStorage.getItem('fe_opaque_frame_support')).toBe('1');
   });
 
-  it('says no when the runtime never reports in', async () => {
+  it('says no when the runtime never reports in, until the app is next loaded', async () => {
     vi.useFakeTimers();
     const result = probeOpaqueFrameSupport(500);
     vi.advanceTimersByTime(600);
     await expect(result).resolves.toBe(false);
+    expect(knownOpaqueFrameSupport()).toBe(false);
+    // A busy main thread at launch also runs out the time: not stored
+    expect(sessionStorage.getItem('fe_opaque_frame_support')).toBeNull();
+    vi.resetModules();
+    const nextLoad = await import('../../src/utils/frame-isolation-probe');
+    expect(nextLoad.knownOpaqueFrameSupport()).toBeNull();
+  });
+
+  it('takes a ready that comes after the time ran out, and stores it', async () => {
+    vi.useFakeTimers();
+    const result = probeOpaqueFrameSupport(500);
+    const frame = probeFrame();
+    const token = frame.srcdoc.match(/data-fe-token="([^"]+)"/)?.[1] || '';
+    vi.advanceTimersByTime(600);
+    await expect(result).resolves.toBe(false);
+
+    postReady(frame, token);
+    expect(knownOpaqueFrameSupport()).toBe(true);
+    expect(sessionStorage.getItem('fe_opaque_frame_support')).toBe('1');
+    await expect(probeOpaqueFrameSupport(500)).resolves.toBe(true);
+    expect(document.querySelector('iframe[aria-hidden="true"]')).toBeNull();
+  });
+
+  it('stops waiting for a late ready after a while', async () => {
+    vi.useFakeTimers();
+    const result = probeOpaqueFrameSupport(500);
+    const frame = probeFrame();
+    const token = frame.srcdoc.match(/data-fe-token="([^"]+)"/)?.[1] || '';
+    vi.advanceTimersByTime(600);
+    await expect(result).resolves.toBe(false);
+    vi.advanceTimersByTime(30000);
+    expect(document.querySelector('iframe[aria-hidden="true"]')).toBeNull();
+    postReady(frame, token);
     expect(knownOpaqueFrameSupport()).toBe(false);
   });
 
@@ -69,8 +104,17 @@ describe('probeOpaqueFrameSupport', () => {
   });
 
   it('asks only once per session', async () => {
-    sessionStorage.setItem('fe_opaque_frame_support', '0');
-    await expect(probeOpaqueFrameSupport(500)).resolves.toBe(false);
+    sessionStorage.setItem('fe_opaque_frame_support', '1');
+    await expect(probeOpaqueFrameSupport(500)).resolves.toBe(true);
     expect(document.querySelector('iframe[aria-hidden="true"]')).toBeNull();
+  });
+
+  it('asks again over a "no" an earlier version stored for the session', async () => {
+    vi.useFakeTimers();
+    sessionStorage.setItem('fe_opaque_frame_support', '0');
+    const result = probeOpaqueFrameSupport(500);
+    const frame = probeFrame();
+    postReady(frame, frame.srcdoc.match(/data-fe-token="([^"]+)"/)?.[1] || '');
+    await expect(result).resolves.toBe(true);
   });
 });

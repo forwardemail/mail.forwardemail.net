@@ -16,14 +16,16 @@ export async function signInWithAliasPassword(
   password: string,
   { staySignedIn }: { staySignedIn: boolean },
 ): Promise<void> {
-  const authHeader = buildAliasAuthHeader(`${email}:${password}`);
+  // Bound to the account being signed in, so a wrong password or a sign-in
+  // rate limit is not taken as the signed-in account's session ending or as
+  // the backend struggling.
   const result = await Remote.request(
     'Folders',
     {},
     {
       method: 'GET',
-      skipAuth: true,
-      headers: { Authorization: authHeader },
+      authHeader: buildAliasAuthHeader(`${email}:${password}`),
+      bypassCircuit: true,
       timeout: LOGIN_FOLDERS_TIMEOUT_MS,
     },
   );

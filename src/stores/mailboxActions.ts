@@ -384,7 +384,10 @@ export const load = async () => {
     // flakiness in interaction e2e on slow runners (selection/toast races) and
     // serves no purpose in demo, so skip it entirely.
     if (folders.length && !isDemoMode()) {
-      startInitialSync(nextAccount, folders, { wantBodies: false });
+      startInitialSync(nextAccount, folders, {
+        wantBodies: false,
+        folder: get(mailboxStore.state.selectedFolder),
+      });
       // A phone warms fewer bodies at launch: each is downloaded, parsed and
       // sealed in the same web process the app runs in. None after the page
       // kept dying at launch (isRecoveryBoot): bodies still load when opened.

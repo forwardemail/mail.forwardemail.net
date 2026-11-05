@@ -31,6 +31,12 @@ describe('getSenderWarnings', () => {
     expect(warnings[0].message).toContain('x@evil.test');
   });
 
+  it('flags it from the list row’s From too, before the parsed headers load', () => {
+    const warnings = getSenderWarnings({ from: 'PayPal <service@paypal.com> <x@evil.test>' });
+    expect(warnings.map((w) => w.kind)).toEqual(['display-name']);
+    expect(warnings[0].message).toContain('came from x@evil.test');
+  });
+
   it('accepts an address in the name on the same domain or a subdomain', () => {
     expect(kinds(message({ name: 'help@example.com', address: 'help@example.com' }))).toEqual([]);
     expect(

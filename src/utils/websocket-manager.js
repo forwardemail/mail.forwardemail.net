@@ -72,6 +72,8 @@ export function destroyWebSocketManager() {
 function createWebSocketManager() {
   /** @type {Map<string, ReturnType<typeof createWebSocketClient>>} */
   const clients = new Map();
+  // The password each client was given, to notice a sign-in with a new one.
+  const passwords = new Map();
   /** @type {Map<string, Set<Function>>} */
   const listeners = new Map();
   let destroyed = false;
@@ -157,6 +159,7 @@ function createWebSocketManager() {
 
     client.connect();
     clients.set(email, client);
+    passwords.set(email, password);
     console.info(`[ws-manager] Connected account: ${email}`);
   }
 
@@ -168,6 +171,7 @@ function createWebSocketManager() {
     if (client) {
       client.destroy();
       clients.delete(email);
+      passwords.delete(email);
       console.info(`[ws-manager] Disconnected account: ${email}`);
     }
   }
@@ -214,6 +218,11 @@ function createWebSocketManager() {
       for (const [email, password] of desiredAccounts) {
         if (!clients.has(email)) {
           connectAccount(email, password);
+        } else if (passwords.get(email) !== password) {
+          // Signed in again with a new password. A socket the server refused
+          // stays closed until it is given new credentials.
+          passwords.set(email, password);
+          clients.get(email).updateCredentials(email, password);
         }
       }
 
@@ -235,12 +244,13 @@ function createWebSocketManager() {
 
     /**
      * Force reconnect all clients (e.g. after network recovery).
+     * @param {{ force?: boolean }} [options] - see the client's reconnect()
      */
-    reconnectAll() {
+    reconnectAll(options) {
       if (destroyed) return;
       for (const client of clients.values()) {
         if (!client.connected) {
-          client.reconnect();
+          client.reconnect(options);
         }
       }
     },

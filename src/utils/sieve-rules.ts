@@ -139,8 +139,9 @@ export function requiredCapabilities(rules: FilterRule[]): string[] {
       // :create belongs to the mailbox extension (RFC 5490), not fileinto.
       if (tags.includes(':create')) caps.add('mailbox');
       if (command === 'addflag') caps.add('imap4flags');
-      // RFC 5228 makes redirect a core command, but the Forward Email engine
-      // rejects any script that uses it without declaring it.
+      // RFC 5228 makes redirect a core command. The Forward Email engine
+      // accepts it undeclared now, but refused it for a time, so it is still
+      // declared for servers from then.
       if (command === 'redirect') caps.add('redirect');
       if (tags.includes(':copy')) caps.add('copy');
     }

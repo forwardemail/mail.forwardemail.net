@@ -70,9 +70,11 @@ function recordAuthFailure() {
 // each into more attempts, and the backend gets hammered. After a burst of
 // transient failures (timeouts / 5xx / 429) the breaker opens and we fail GETs
 // fast for a short cooldown so the client stops piling on. Mutations
-// (POST/PUT/DELETE) bypass it — they're low-volume and user-initiated — as
-// does any caller that passes { bypassCircuit: true }. The sync worker runs an
-// independent instance of this same breaker over its own raw-fetch path.
+// (POST/PUT/DELETE) bypass it — they're low-volume and user-initiated. A
+// caller that passes { bypassCircuit: true } neither waits on it nor feeds it:
+// a sign-in's 429 limits that sign-in, not the signed-in account. The sync
+// worker runs an independent instance of this same breaker over its own
+// raw-fetch path.
 const requestCircuit = createCircuitBreaker();
 
 // Create base ky instance with default configuration
@@ -89,6 +91,9 @@ const api = ky.create({
     methods: ['get', 'head', 'put', 'delete'],
     statusCodes: [0, 408, 500, 502, 503, 504],
     backoffLimit: 5000,
+    // ky waits out Retry-After (or an X-RateLimit-Reset epoch) on 503 with no
+    // limit by default; a rekey or overload 503 must not hold a load for minutes.
+    maxRetryAfter: 5000,
     delay: (attemptCount) => addJitter(Math.min(1000 * Math.pow(2, attemptCount - 1), 5000)),
   },
   headers: {
@@ -122,7 +127,8 @@ export const Remote = {
 
     // Circuit breaker: when tripped, fail GETs fast instead of adding to the
     // storm. Mutations and explicit { bypassCircuit } callers go through.
-    if (method === 'get' && !options.bypassCircuit && requestCircuit.isOpen()) {
+    const circuit = options.bypassCircuit ? null : requestCircuit;
+    if (method === 'get' && circuit?.isOpen()) {
       const err = new Error('Backing off: service temporarily unavailable');
       err.status = 503;
       err.circuitOpen = true;
@@ -229,7 +235,7 @@ export const Remote = {
       // Successful response — reset consecutive auth failure counter and
       // close the circuit breaker.
       recordAuthSuccess();
-      requestCircuit.recordSuccess();
+      circuit?.recordSuccess();
 
       // Allow callers to explicitly request text (e.g. raw RFC822 EML downloads)
       if (options.responseAs === 'text') {
@@ -271,11 +277,11 @@ export const Remote = {
         // backend is rate-limiting or struggling — back off rather than pile on.
         // Any other status (4xx incl. 404) proves the backend is alive — close it.
         if (err.status === 429) {
-          requestCircuit.recordFailure(parseRetryAfterMs(error.response?.headers));
+          circuit?.recordFailure(parseRetryAfterMs(error.response?.headers));
         } else if (err.status >= 500) {
-          requestCircuit.recordFailure();
+          circuit?.recordFailure();
         } else {
-          requestCircuit.recordSuccess();
+          circuit?.recordSuccess();
         }
 
         // Try to get error details from response
@@ -294,7 +300,7 @@ export const Remote = {
       } else if (error.name === 'TimeoutError') {
         // Timeout error — counts toward the circuit breaker (a degraded env
         // times everything out; backing off is what protects the backend).
-        requestCircuit.recordFailure();
+        circuit?.recordFailure();
         const err = new Error('Request timeout');
         err.status = 408;
         // Distinguishes "we gave up waiting" (the server may still have acted
@@ -304,7 +310,7 @@ export const Remote = {
         throw err;
       } else {
         // Network error or other error (no status code)
-        requestCircuit.recordFailure();
+        circuit?.recordFailure();
         logApiError(action, method.toUpperCase(), 0, error);
         throw error;
       }

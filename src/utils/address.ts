@@ -63,15 +63,18 @@ type AddressInput = string | AddressObject | AddressObject[] | null | undefined;
  * Split a comma-separated address string into individual addresses,
  * respecting quoted strings and angle brackets.
  * e.g. "jake@x.com, Vicky <vicky@x.com>" → ["jake@x.com", "Vicky <vicky@x.com>"]
+ * A quote that never closes (a name the app stored unquoted, e.g.
+ * `Screen 27" Deals <d@x>`) is split again with quotes as plain text, as
+ * angleAddr does, so it does not swallow the addresses after it.
  */
-const splitAddressString = (str: string): string[] => {
+const splitAddressString = (str: string, plain = false): string[] => {
   const parts: string[] = [];
   let current = '';
   let inQuotes = false;
   let inAngle = 0;
   for (let i = 0; i < str.length; i++) {
     const ch = str[i];
-    if (ch === '"' && str[i - 1] !== '\\') {
+    if (ch === '"' && !plain && str[i - 1] !== '\\') {
       inQuotes = !inQuotes;
       current += ch;
     } else if (!inQuotes && ch === '<') {
@@ -88,6 +91,7 @@ const splitAddressString = (str: string): string[] => {
       current += ch;
     }
   }
+  if (inQuotes && !plain) return splitAddressString(str, true);
   const trimmed = current.trim();
   if (trimmed) parts.push(trimmed);
   return parts;
@@ -332,16 +336,37 @@ export const extractEmail = (address: AddressInput): string => {
 // "<" or spaces, which froze the app while it rendered such a message.
 //
 
-// The text inside the first "<...>" with something in it, as /<([^>]+)>/.
+// The text inside the last "<...>" with something in it, outside quoted text
+// and comments, as a mail parser reads it. The address of a name-addr comes
+// last; a display name or a comment can carry its own "<...>" to pass for
+// another sender, as in "PayPal <service@paypal.com>" <x@evil.test> or
+// <x@evil.test> (<service@paypal.com>).
 const angleAddr = (raw: string): string | null => {
-  let start = raw.indexOf('<');
-  while (start !== -1) {
-    const end = raw.indexOf('>', start + 1);
-    if (end === -1) return null;
-    if (end > start + 1) return raw.slice(start + 1, end);
-    start = raw.indexOf('<', end);
+  let quoted = false;
+  let comment = 0; // comments nest
+  let open = -1; // the "<" of the "<...>" being read
+  let start = -1;
+  let end = -1;
+  for (let i = 0; i < raw.length; i++) {
+    const char = raw[i];
+    if (open !== -1) {
+      // The last "<" before the ">" starts the address, as in /<([^<>]+)>/.
+      if (char === '<') open = i;
+      else if (char === '>') {
+        if (i > open + 1) [start, end] = [open + 1, i];
+        open = -1;
+      }
+    } else if (quoted) {
+      if (char === '\\') i++;
+      else if (char === '"') quoted = false;
+    } else if (comment) {
+      if (char === '(') comment++;
+      else if (char === ')') comment--;
+    } else if (char === '"') quoted = true;
+    else if (char === '(') comment = 1;
+    else if (char === '<') open = i;
   }
-  return null;
+  return start === -1 ? null : raw.slice(start, end);
 };
 
 const LINE_TERMINATOR = /[\n\r\u2028\u2029]/;
@@ -359,6 +384,28 @@ const nameAddr = (raw: string): [string, string] | null => {
   if (name.endsWith('"') || name.endsWith("'")) name = name.slice(0, -1);
   if (!name || NAME_UNSAFE.test(name)) return null;
   return [name, address];
+};
+
+// The app writes "Name <address>" with the name unquoted, so the address is
+// the "<...>" that ends the string. Read it back from the end, past a quoted
+// local part ("a <b>"@x), so nothing in the name can stand in for it.
+const endAddr = (raw: string): string | null => {
+  if (raw[raw.length - 1] !== '>') return null;
+  let quoted = false;
+  for (let i = raw.length - 2; i >= 0; i--) {
+    if (raw[i] === '"') {
+      let k = i;
+      while (k > 0 && raw[k - 1] === '\\') k--;
+      if ((i - k) % 2 === 0) quoted = !quoted;
+    } else if (quoted) {
+      continue;
+    } else if (raw[i] === '>') {
+      return null;
+    } else if (raw[i] === '<') {
+      return i < raw.length - 2 ? raw.slice(i + 1, -1) : null;
+    }
+  }
+  return null;
 };
 
 export const normalizeEmail = (value: AddressInput = ''): string => {
@@ -380,7 +427,7 @@ export const normalizeEmail = (value: AddressInput = ''): string => {
     raw = value;
   }
   if (typeof raw !== 'string') return '';
-  const inside = angleAddr(raw);
+  const inside = endAddr(raw.trim()) ?? angleAddr(raw);
   const email = (inside === null ? raw : inside).trim().toLowerCase();
   return email;
 };
@@ -479,6 +526,7 @@ export const isValidEmail = (email: string): boolean => {
   const normalized = normalizeEmail(email);
   if (!normalized) return false;
   // Basic email regex - allows standard email formats
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  // (the lookahead keeps a long domain from making the match quadratic)
+  const emailRegex = /^[^\s@]+@(?=[^\s@]+$)[^\s@]+\.[^\s@]+$/;
   return emailRegex.test(normalized);
 };

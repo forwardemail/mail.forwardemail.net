@@ -25,6 +25,24 @@ class TaoSceneDelegate: UIResponder, UIWindowSceneDelegate {
     var window: UIWindow?
     private static var hasFixedViewport = false
 
+    /// tao's window. tao keeps it for the life of the app, but the capture
+    /// below is cleared once it is used, and tao's AppDelegate has no window
+    /// property. When iPadOS disconnects the scene (the window controls close
+    /// it, or the system reclaims it in the background) and later connects a
+    /// new one, this is how the new scene finds the window; without it the
+    /// new scene stayed black.
+    private static weak var taoWindow: UIWindow?
+    /// Polls for tao's window until tao has made it; stopped on disconnect.
+    private var pollTimer: Timer?
+
+    /// URL schemes the app registers (plugins.deep-link.mobile in
+    /// tauri.conf.json); the only URLs forwarded to tao.
+    private static let deepLinkSchemes: Set<String> = ["mailto", "forwardemail"]
+    /// Characters of a plain (RFC 3986 reg-name) host, all of which
+    /// Url::parse accepts.
+    private static let hostCharacters = CharacterSet.alphanumerics
+        .union(CharacterSet(charactersIn: "-._~%!$&'()*+,;="))
+
     /// Navigation-delegate classes that already reload on content-process
     /// termination (see installRendererRecovery).
     private static var recoveryInstalledClasses = Set<ObjectIdentifier>()
@@ -59,11 +77,15 @@ class TaoSceneDelegate: UIResponder, UIWindowSceneDelegate {
         NSLog("[SceneDelegate] scene:willConnectTo: sceneBounds=(%g,%g,%g,%g)",
               bounds.origin.x, bounds.origin.y, bounds.size.width, bounds.size.height)
 
-        // Get windows captured by TaoWindowCapture's +load swizzle.
+        // A mailto: or forwardemail:// link that launched or reopened the app.
+        TaoSceneDelegate.forwardDeepLinks(connectionOptions.urlContexts)
+
+        // Get windows captured by TaoWindowCapture's +load swizzle, or the
+        // window an earlier scene used.
         let captured = TaoWindowCapture.capturedWindows()
 
-        if let taoWindow = captured.first {
-            NSLog("[SceneDelegate] Found captured tao window")
+        if let taoWindow = captured.first ?? TaoSceneDelegate.taoWindow {
+            NSLog("[SceneDelegate] Found tao window")
             assignScene(window: taoWindow, windowScene: windowScene)
             TaoWindowCapture.clearCapturedWindows()
             return
@@ -74,22 +96,19 @@ class TaoSceneDelegate: UIResponder, UIWindowSceneDelegate {
 
         var pollCount = 0
         let timer = Timer(timeInterval: 0.05, repeats: true) { [weak self] timer in
-            pollCount += 1
-
-            let windows = TaoWindowCapture.capturedWindows()
-            if let taoWindow = windows.first {
-                NSLog("[SceneDelegate:poll:%d] Found captured tao window", pollCount)
-                self?.assignScene(window: taoWindow, windowScene: windowScene)
-                TaoWindowCapture.clearCapturedWindows()
+            // A released delegate's scene is gone; clearing the capture here
+            // would hide the window from the next scene.
+            guard let self = self else {
                 timer.invalidate()
                 return
             }
+            pollCount += 1
 
-            // Also check the app delegate's window property
-            if let appDelegate = UIApplication.shared.delegate,
-               let delegateWindow = appDelegate.window ?? nil {
-                NSLog("[SceneDelegate:poll:%d] Found window via AppDelegate", pollCount)
-                self?.assignScene(window: delegateWindow, windowScene: windowScene)
+            let windows = TaoWindowCapture.capturedWindows()
+            if let taoWindow = windows.first ?? TaoSceneDelegate.taoWindow {
+                NSLog("[SceneDelegate:poll:%d] Found tao window", pollCount)
+                self.assignScene(window: taoWindow, windowScene: windowScene)
+                TaoWindowCapture.clearCapturedWindows()
                 timer.invalidate()
                 return
             }
@@ -99,7 +118,40 @@ class TaoSceneDelegate: UIResponder, UIWindowSceneDelegate {
                 timer.invalidate()
             }
         }
+        pollTimer = timer
         RunLoop.main.add(timer, forMode: .common)
+    }
+
+    /// With a scene manifest, UIKit hands opened URLs to the scene and never
+    /// calls application(_:open:options:), the only place tao listens (it
+    /// turns them into RunEvent::Opened for the deep-link plugin).
+    func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) {
+        TaoSceneDelegate.forwardDeepLinks(URLContexts)
+    }
+
+    private static func forwardDeepLinks(_ contexts: Set<UIOpenURLContext>) {
+        for context in contexts {
+            guard isForwardableDeepLink(context.url) else {
+                NSLog("[SceneDelegate] Ignoring an opened URL the app does not handle")
+                continue
+            }
+            _ = UIApplication.shared.delegate?.application?(
+                UIApplication.shared, open: context.url, options: [:])
+        }
+    }
+
+    /// tao parses each URL with Url::parse(..).unwrap(), and a panic there
+    /// aborts the app. Forward only the app's own schemes, and only URLs that
+    /// parse: no user, password or port, and a plain host when there is one.
+    private static func isForwardableDeepLink(_ url: URL) -> Bool {
+        guard let scheme = url.scheme?.lowercased(),
+              deepLinkSchemes.contains(scheme),
+              let parts = URLComponents(string: url.absoluteString),
+              parts.user == nil, parts.password == nil, parts.port == nil else {
+            return false
+        }
+        guard let host = parts.percentEncodedHost else { return true }
+        return !host.isEmpty && host.unicodeScalars.allSatisfy { hostCharacters.contains($0) }
     }
 
     /// Assign the windowScene to the window and fix the viewport.
@@ -118,8 +170,10 @@ class TaoSceneDelegate: UIResponder, UIWindowSceneDelegate {
         // 3. Re-call makeKeyAndVisible now that the window has a scene
         window.makeKeyAndVisible()
 
-        // 4. Store reference so UIKit knows this is our window
+        // 4. Store reference so UIKit knows this is our window, and keep it
+        //    for a scene that connects later.
         self.window = window
+        TaoSceneDelegate.taoWindow = window
 
         NSLog("[SceneDelegate] Assignment complete. isKeyWindow=%d, isHidden=%d",
               window.isKeyWindow ? 1 : 0,
@@ -535,6 +589,10 @@ class TaoSceneDelegate: UIResponder, UIWindowSceneDelegate {
 
     func sceneDidDisconnect(_ scene: UIScene) {
         NSLog("[SceneDelegate] sceneDidDisconnect")
+        // A poll still running would hand tao's window to this dead scene.
+        // The next scene finds the window through taoWindow.
+        pollTimer?.invalidate()
+        pollTimer = nil
     }
 
     /// Dispatch a custom DOM event to the WKWebView so JavaScript can react

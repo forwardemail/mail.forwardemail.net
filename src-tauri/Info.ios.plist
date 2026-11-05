@@ -26,11 +26,20 @@
     Photo library usage string. The compose attach flow and profile/contact
     avatar pickers (e.g. Compose.svelte triggerImagePicker) can open the system
     photo picker on iOS; this purpose string is required so the picker doesn't
-    crash/deny when a code path hits the legacy photo-library API. Declared as
-    the sole iOS permission in docs/store-submission.md (no camera key by design).
+    crash/deny when a code path hits the legacy photo-library API. Listed with
+    the other iOS usage strings in docs/store-submission.md.
   -->
   <key>NSPhotoLibraryUsageDescription</key>
   <string>Forward Email uses your photo library so you can attach photos to emails and set profile pictures.</string>
+
+  <!--
+    Microphone usage string. The compose attach input accepts any file, so
+    iOS offers "Take Photo or Video" there, and recording a video uses the
+    microphone. Without this string iOS kills the app on that first access
+    instead of asking.
+  -->
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Forward Email uses the microphone to record sound when you take a video to attach to an email.</string>
 
   <!--
     Background modes. remote-notification enables the app to receive and

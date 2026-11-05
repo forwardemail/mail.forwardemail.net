@@ -273,6 +273,7 @@
                   disabled={index === 0}
                   aria-label="Move up"
                   onclick={() => moveRule(index, -1)}
+                  data-tooltip="Move up"
                 >
                   <ChevronUp class="h-4 w-4" />
                 </Button>
@@ -283,6 +284,7 @@
                   disabled={index === rules.length - 1}
                   aria-label="Move down"
                   onclick={() => moveRule(index, 1)}
+                  data-tooltip="Move down"
                 >
                   <ChevronDown class="h-4 w-4" />
                 </Button>
@@ -292,6 +294,7 @@
                   class="h-8 w-8"
                   aria-label="Edit filter"
                   onclick={() => openEdit(rule, index)}
+                  data-tooltip="Edit filter"
                 >
                   <Pencil class="h-4 w-4" />
                 </Button>
@@ -301,6 +304,7 @@
                   class="h-8 w-8"
                   aria-label="Delete filter"
                   onclick={() => removeRule(index)}
+                  data-tooltip="Delete filter"
                 >
                   <Trash2 class="h-4 w-4" />
                 </Button>
@@ -411,6 +415,7 @@
               aria-label="Remove condition"
               disabled={editing.conditions.length === 1}
               onclick={() => removeCondition(index)}
+              data-tooltip="Remove condition"
             >
               <Trash2 class="h-4 w-4" />
             </Button>

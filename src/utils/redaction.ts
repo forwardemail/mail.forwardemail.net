@@ -12,12 +12,24 @@ export const REDACTION_VERSION = 1;
 
 type Pattern = readonly [RegExp, string];
 
-// Stage 1 — credentials. Matches the pre-existing patterns from error-logger.ts
-// byte-for-byte so this refactor is a pure extraction.
+// Stage 1 — credentials. The names match inside longer ones too (access_token,
+// device_token, X-API-Key), and api key with or without a separator (apiKey).
 const CREDENTIAL_PATTERNS: readonly Pattern[] = [
   [/\b(Basic|Bearer)\s+[A-Za-z0-9+/=_-]{8,}/gi, '$1 [REDACTED]'],
-  [/\b(alias_auth|api_key|password|token|secret|credential)[=:]\s*\S+/gi, '$1=[REDACTED]'],
+  // JSON or a logged object: {"password":"…"} keeps its quotes. The value runs
+  // to its own closing quote, past the other quote character and escapes.
+  [
+    /((?:alias_auth|api[_-]?key|password|token|secret|credential)"\s*:\s*")(?:[^"\\]|\\[\s\S])*/gi,
+    '$1[REDACTED]',
+  ],
+  [
+    /((?:alias_auth|api[_-]?key|password|token|secret|credential)'\s*:\s*')(?:[^'\\]|\\[\s\S])*/gi,
+    '$1[REDACTED]',
+  ],
+  [/(alias_auth|api[_-]?key|password|token|secret|credential)[=:]\s*\S+/gi, '$1=[REDACTED]'],
   [/(["']?authorization["']?\s*[:=]\s*["']?)[^"'\s,}]+/gi, '$1[REDACTED]'],
+  // user@example.com:password. The address itself is hashed in stage 3.
+  [/(@[A-Za-z0-9.-]+\.[A-Za-z]{2,}):\S+/g, '$1:[REDACTED]'],
 ];
 
 // Stage 2 — home-directory paths. Replace the user-identifying segment with `~`.

@@ -13,7 +13,8 @@
         outline:
           'bg-background hover:bg-accent hover:text-accent-foreground dark:bg-input/30 dark:border-input dark:hover:bg-input/50 border shadow-xs',
         secondary: 'bg-secondary text-secondary-foreground hover:bg-secondary/80 shadow-xs',
-        ghost: 'hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50',
+        ghost:
+          'hover:bg-accent hover:text-accent-foreground active:bg-accent dark:hover:bg-accent/50',
         link: 'text-fg-link underline-offset-4 hover:underline',
         // Specification §4.1. A raised fill with no border, for toolbars and
         // dense contexts where `outline` reads as too many boxes.

@@ -162,6 +162,8 @@
   import FolderContextMenu from './components/FolderContextMenu.svelte';
   import FolderActionModal from './components/FolderActionModal.svelte';
   import LabelChip from './components/LabelChip.svelte';
+  import RowStatusIcons from './components/RowStatusIcons.svelte';
+  import { filterDownloadableAttachments, hasAttachments } from '../utils/attachment-flags';
   import LabelModal from './components/LabelModal.svelte';
   import KeyboardShortcutsModal from './components/KeyboardShortcutsModal.svelte';
 
@@ -1306,22 +1308,6 @@
     }
   });
 
-  const hasAttachments = (item) => {
-    if (!item) return false;
-    // When the full attachments array is available, use filterDownloadableAttachments
-    // to exclude inline CID images (e.g. signature logos)
-    if (Array.isArray(item.attachments) && item.attachments.length) {
-      return filterDownloadableAttachments(item.attachments).length > 0;
-    }
-    if (item.has_attachments) return true;
-    if (item.attachment_count > 0) return true;
-    if (item.latestHasAttachments) return true;
-    if (Array.isArray(item.messages)) {
-      return item.messages.some((m) => hasAttachments(m));
-    }
-    return false;
-  };
-
   const isMessageStarred = (item) => {
     if (!item) return false;
     if (item.is_starred) return true;
@@ -1469,24 +1455,6 @@
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  };
-
-  // Filter attachments for the download/preview section.
-  // Only hide attachments that are purely inline decorations (e.g. signature logos):
-  // they must have a CID, be an image, AND have inline disposition explicitly set.
-  // All other attachments (including images without disposition or with disposition=attachment) are shown.
-  const filterDownloadableAttachments = (atts) => {
-    if (!Array.isArray(atts)) return [];
-    return atts.filter((att) => {
-      if (!att.contentId) return true;
-      const type = (att.contentType || att.mimeType || att.type || '').toLowerCase();
-      if (!type.startsWith('image/')) return true;
-      // Only hide if disposition is explicitly 'inline' — these are CID images
-      // embedded in the body (e.g. signature logos). If disposition is missing or
-      // is 'attachment', always show the file.
-      const disp = (att.disposition || '').toLowerCase();
-      return disp !== 'inline';
-    });
   };
 
   let isDarkMode = $state(false);
@@ -6754,7 +6722,7 @@
             {#if showHeaderShortcuts}
               <div class="inline-flex items-center gap-1.5">
                 <button
-                  class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                  class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground active:bg-accent"
                   type="button"
                   data-tooltip="Contacts"
                   data-tooltip-position="bottom"
@@ -6764,7 +6732,7 @@
                   <BookUser class="h-4.5 w-4.5" />
                 </button>
                 <button
-                  class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                  class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground active:bg-accent"
                   type="button"
                   data-tooltip="Calendar"
                   data-tooltip-position="bottom"
@@ -6774,7 +6742,7 @@
                   <CalendarIcon class="h-4.5 w-4.5" />
                 </button>
                 <button
-                  class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                  class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground active:bg-accent"
                   type="button"
                   data-tooltip="Tasks"
                   data-tooltip-position="bottom"
@@ -6784,7 +6752,7 @@
                   <ListTodo class="h-4.5 w-4.5" />
                 </button>
                 <button
-                  class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                  class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground active:bg-accent"
                   type="button"
                   data-tooltip="Settings"
                   data-tooltip-position="bottom"
@@ -6794,7 +6762,7 @@
                   <SettingsIcon class="h-4.5 w-4.5" />
                 </button>
                 <button
-                  class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                  class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground active:bg-accent"
                   type="button"
                   data-tooltip={isDarkMode ? 'Light mode' : 'Dark mode'}
                   data-tooltip-position="bottom"
@@ -6809,7 +6777,7 @@
                 </button>
                 {#if lockUiVisible}
                   <button
-                    class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                    class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground active:bg-accent"
                     type="button"
                     data-tooltip="Lock app"
                     data-tooltip-position="bottom"
@@ -6824,7 +6792,7 @@
             <div class="inline-flex items-center gap-2.5">
               {#if !showHeaderShortcuts && lockUiVisible}
                 <button
-                  class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                  class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground active:bg-accent"
                   type="button"
                   data-tooltip="Lock app"
                   data-tooltip-position="bottom"
@@ -7051,8 +7019,11 @@
                       {#if folder.count}
                         <span
                           class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-primary/10 text-fg-link"
-                          >{folder.count}</span
+                          data-tooltip={`${folder.count} unread`}
+                          data-tooltip-position="left">{folder.count}</span
                         >
+                        <!-- Outside the badge, so the badge text stays the bare count. -->
+                        <span class="sr-only">unread</span>
                       {/if}
                     </button>
                   </li>
@@ -7265,7 +7236,7 @@
                     </button>
                   {/if}
                   <button
-                    class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                    class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground active:bg-accent"
                     type="button"
                     data-tooltip="Refresh (F5)"
                     data-tooltip-position="bottom"
@@ -7276,7 +7247,7 @@
                   </button>
                   {#if !isMobile && !powerDensity}
                     <button
-                      class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground hidden sm:inline-flex"
+                      class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground active:bg-accent hidden sm:inline-flex"
                       type="button"
                       data-tooltip={cardView ? 'Switch to classic view' : 'Switch to card view'}
                       data-tooltip-position="bottom"
@@ -7292,7 +7263,7 @@
                   {/if}
                   <div class="relative" data-sort-toggle>
                     <button
-                      class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                      class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground active:bg-accent"
                       type="button"
                       aria-label="Sort"
                       aria-expanded={sortMenuOpen}
@@ -7344,7 +7315,7 @@
                   </div>
                   <div class="relative" data-labels-toggle>
                     <button
-                      class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                      class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground active:bg-accent"
                       type="button"
                       aria-label="Labels"
                       aria-expanded={labelMenuOpen}
@@ -7408,7 +7379,7 @@
                   </div>
                   <div class="relative" data-filters-toggle>
                     <button
-                      class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                      class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground active:bg-accent"
                       type="button"
                       aria-label="Filters"
                       aria-expanded={$showFiltersStore}
@@ -7532,7 +7503,7 @@
               </div>
               <div class="flex items-center gap-1 flex-wrap">
                 <button
-                  class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                  class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground active:bg-accent"
                   type="button"
                   aria-label="Clear selection"
                   data-tooltip="Clear selection"
@@ -7543,7 +7514,7 @@
                 </button>
                 {#if !matchesFolderKey( $selectedFolder, ['ARCHIVE'], ) && !listIsSpamOrJunk && !listIsDraftFolder && !listIsTrashFolder}
                   <button
-                    class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                    class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground active:bg-accent"
                     type="button"
                     aria-label="Archive selected"
                     data-tooltip="Archive selected"
@@ -7554,7 +7525,7 @@
                   </button>
                 {/if}
                 <button
-                  class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                  class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground active:bg-accent"
                   type="button"
                   aria-label="Delete selected"
                   data-tooltip="Delete selected"
@@ -7567,7 +7538,7 @@
                   <!-- Mark read/unread are hidden on mobile so the bulk bar
                          stays on a single row instead of wrapping to two. -->
                   <button
-                    class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                    class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground active:bg-accent"
                     type="button"
                     aria-label="Mark selected as read"
                     data-tooltip="Mark selected as read"
@@ -7577,7 +7548,7 @@
                     <MailOpen class="h-5 w-5" />
                   </button>
                   <button
-                    class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                    class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground active:bg-accent"
                     type="button"
                     aria-label="Mark selected as unread"
                     data-tooltip="Mark selected as unread"
@@ -7589,7 +7560,7 @@
                 {/if}
                 <div class="relative" data-bulk-move>
                   <button
-                    class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                    class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground active:bg-accent"
                     type="button"
                     aria-label="Move selected"
                     data-tooltip="Move selected"
@@ -7710,7 +7681,7 @@
                             <div class="flex items-center gap-2 mt-2">
                               {#if item.status !== 'sending'}
                                 <button
-                                  class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                                  class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground active:bg-accent"
                                   type="button"
                                   title={item.status === 'scheduled' ? 'Cancel' : 'Delete'}
                                   onclick={(e) => {
@@ -7958,7 +7929,13 @@
                                 <div class="flex items-center justify-between gap-2">
                                   <div class="flex items-center gap-1.5 min-w-0">
                                     {#if conv.hasUnread || conv.is_unread}
-                                      <span class="w-2 h-2 rounded-full bg-primary shrink-0"></span>
+                                      <span
+                                        class="w-2 h-2 rounded-full bg-primary shrink-0"
+                                        role="img"
+                                        aria-label="Unread"
+                                        data-tooltip="Unread"
+                                        data-tooltip-position="right"
+                                      ></span>
                                     {/if}
                                     <span
                                       class={`truncate text-sm ${conv.hasUnread || conv.is_unread ? 'font-semibold' : ''}`}
@@ -7968,8 +7945,13 @@
                                         : getConversationFromName(conv)}
                                     </span>
                                     {#if conv.messageCount > 1}
-                                      <span class="text-xs text-muted-foreground shrink-0"
-                                        >({conv.messageCount})</span
+                                      <span
+                                        class="text-xs text-muted-foreground shrink-0"
+                                        data-tooltip={`${conv.messageCount} messages`}
+                                        data-tooltip-position="right"
+                                        >({conv.messageCount}<span class="sr-only">
+                                          messages</span
+                                        >)</span
                                       >
                                     {/if}
                                   </div>
@@ -7998,37 +7980,13 @@
                                       </span>
                                     {/if}
                                   </div>
-                                  <button
-                                    type="button"
-                                    class="shrink-0"
-                                    aria-label={isMessageStarred(conv) ? 'Unstar' : 'Star'}
-                                    onclick={(e) => {
-                                      e.stopPropagation();
-                                      toggleStarConversation(conv);
-                                    }}
-                                  >
-                                    {#if isMessageStarred(conv)}
-                                      <Star class="h-4 w-4 text-state-starred fill-state-starred" />
-                                    {:else}
-                                      <StarOff class="h-4 w-4 text-muted-foreground" />
-                                    {/if}
-                                  </button>
-                                  {#if hasAttachments(conv)}
-                                    <svg
-                                      viewBox="0 0 24 24"
-                                      class="h-3.5 w-3.5 text-muted-foreground shrink-0"
-                                      aria-hidden="true"
-                                    >
-                                      <path
-                                        d="M21.44 11.05l-8.49 8.49a5 5 0 0 1-7.07-7.07l9.19-9.19a3 3 0 1 1 4.24 4.24l-9.19 9.19a1 1 0 1 1-1.41-1.41l8.49-8.49"
-                                        fill="none"
-                                        stroke="currentColor"
-                                        stroke-width="2"
-                                        stroke-linecap="round"
-                                        stroke-linejoin="round"
-                                      ></path>
-                                    </svg>
-                                  {/if}
+                                  <RowStatusIcons
+                                    replied={hasUserReplied(conv)}
+                                    attachments={hasAttachments(conv)}
+                                    starred={isMessageStarred(conv)}
+                                    onToggleStar={() => toggleStarConversation(conv)}
+                                    iconClass="h-4 w-4"
+                                  />
                                 </div>
                               </div>
                             {:else}
@@ -8057,7 +8015,12 @@
                                   <div class="flex items-center justify-between gap-2">
                                     <div class="flex items-center gap-1.5 min-w-0 flex-1">
                                       {#if conv.hasUnread || conv.is_unread}
-                                        <span class="w-1.5 h-1.5 rounded-full bg-primary shrink-0"
+                                        <span
+                                          class="w-1.5 h-1.5 rounded-full bg-primary shrink-0"
+                                          role="img"
+                                          aria-label="Unread"
+                                          data-tooltip="Unread"
+                                          data-tooltip-position="right"
                                         ></span>
                                       {/if}
                                       <span
@@ -8067,63 +8030,25 @@
                                           : getConversationFromName(conv)}</span
                                       >
                                       {#if conv.messageCount > 1}
-                                        <span class="text-[11px] text-muted-foreground shrink-0"
-                                          >({conv.messageCount})</span
+                                        <span
+                                          class="text-[11px] text-muted-foreground shrink-0"
+                                          data-tooltip={`${conv.messageCount} messages`}
+                                          data-tooltip-position="right"
+                                          >({conv.messageCount}<span class="sr-only">
+                                            messages</span
+                                          >)</span
                                         >
                                       {/if}
                                     </div>
                                     <div
                                       class="flex items-center gap-1.5 shrink-0 text-muted-foreground"
                                     >
-                                      {#if hasUserReplied(conv)}
-                                        <svg viewBox="0 0 24 24" class="h-3 w-3" aria-hidden="true">
-                                          <path
-                                            d="M9 17l-5-5 5-5"
-                                            fill="none"
-                                            stroke="currentColor"
-                                            stroke-width="2"
-                                            stroke-linecap="round"
-                                            stroke-linejoin="round"
-                                          ></path>
-                                          <path
-                                            d="M20 18v-2a4 4 0 0 0-4-4H4"
-                                            fill="none"
-                                            stroke="currentColor"
-                                            stroke-width="2"
-                                            stroke-linecap="round"
-                                            stroke-linejoin="round"
-                                          ></path>
-                                        </svg>
-                                      {/if}
-                                      {#if hasAttachments(conv)}
-                                        <svg viewBox="0 0 24 24" class="h-3 w-3" aria-hidden="true">
-                                          <path
-                                            d="M21.44 11.05l-8.49 8.49a5 5 0 0 1-7.07-7.07l9.19-9.19a3 3 0 1 1 4.24 4.24l-9.19 9.19a1 1 0 1 1-1.41-1.41l8.49-8.49"
-                                            fill="none"
-                                            stroke="currentColor"
-                                            stroke-width="2"
-                                            stroke-linecap="round"
-                                            stroke-linejoin="round"
-                                          ></path>
-                                        </svg>
-                                      {/if}
-                                      <button
-                                        type="button"
-                                        class="shrink-0"
-                                        aria-label={isMessageStarred(conv) ? 'Unstar' : 'Star'}
-                                        onclick={(e) => {
-                                          e.stopPropagation();
-                                          toggleStarConversation(conv);
-                                        }}
-                                      >
-                                        {#if isMessageStarred(conv)}
-                                          <Star
-                                            class="h-3 w-3 fill-state-starred text-state-starred"
-                                          />
-                                        {:else}
-                                          <StarOff class="h-3 w-3" />
-                                        {/if}
-                                      </button>
+                                      <RowStatusIcons
+                                        replied={hasUserReplied(conv)}
+                                        attachments={hasAttachments(conv)}
+                                        starred={isMessageStarred(conv)}
+                                        onToggleStar={() => toggleStarConversation(conv)}
+                                      />
                                       <span class="text-[11px] whitespace-nowrap">
                                         {#if conv.latestDate}
                                           {formatCompactDate(conv.latestDate)}
@@ -8183,7 +8108,12 @@
                                       class="w-[30%] min-w-[140px] max-w-[280px] shrink-0 flex items-center gap-1"
                                     >
                                       {#if conv.hasUnread || conv.is_unread}
-                                        <span class="w-1.5 h-1.5 rounded-full bg-primary shrink-0"
+                                        <span
+                                          class="w-1.5 h-1.5 rounded-full bg-primary shrink-0"
+                                          role="img"
+                                          aria-label="Unread"
+                                          data-tooltip="Unread"
+                                          data-tooltip-position="right"
                                         ></span>
                                       {/if}
                                       <span
@@ -8193,8 +8123,13 @@
                                           : getConversationFromName(conv)}</span
                                       >
                                       {#if conv.messageCount > 1}
-                                        <span class="text-[11px] text-muted-foreground shrink-0"
-                                          >({conv.messageCount})</span
+                                        <span
+                                          class="text-[11px] text-muted-foreground shrink-0"
+                                          data-tooltip={`${conv.messageCount} messages`}
+                                          data-tooltip-position="right"
+                                          >({conv.messageCount}<span class="sr-only">
+                                            messages</span
+                                          >)</span
                                         >
                                       {/if}
                                     </div>
@@ -8221,55 +8156,12 @@
                                     <div
                                       class="fe-row-meta flex items-center gap-1.5 shrink-0 text-muted-foreground"
                                     >
-                                      {#if hasUserReplied(conv)}
-                                        <svg viewBox="0 0 24 24" class="h-3 w-3" aria-hidden="true">
-                                          <path
-                                            d="M9 17l-5-5 5-5"
-                                            fill="none"
-                                            stroke="currentColor"
-                                            stroke-width="2"
-                                            stroke-linecap="round"
-                                            stroke-linejoin="round"
-                                          ></path>
-                                          <path
-                                            d="M20 18v-2a4 4 0 0 0-4-4H4"
-                                            fill="none"
-                                            stroke="currentColor"
-                                            stroke-width="2"
-                                            stroke-linecap="round"
-                                            stroke-linejoin="round"
-                                          ></path>
-                                        </svg>
-                                      {/if}
-                                      {#if hasAttachments(conv)}
-                                        <svg viewBox="0 0 24 24" class="h-3 w-3" aria-hidden="true">
-                                          <path
-                                            d="M21.44 11.05l-8.49 8.49a5 5 0 0 1-7.07-7.07l9.19-9.19a3 3 0 1 1 4.24 4.24l-9.19 9.19a1 1 0 1 1-1.41-1.41l8.49-8.49"
-                                            fill="none"
-                                            stroke="currentColor"
-                                            stroke-width="2"
-                                            stroke-linecap="round"
-                                            stroke-linejoin="round"
-                                          ></path>
-                                        </svg>
-                                      {/if}
-                                      <button
-                                        type="button"
-                                        class="shrink-0"
-                                        aria-label={isMessageStarred(conv) ? 'Unstar' : 'Star'}
-                                        onclick={(e) => {
-                                          e.stopPropagation();
-                                          toggleStarConversation(conv);
-                                        }}
-                                      >
-                                        {#if isMessageStarred(conv)}
-                                          <Star
-                                            class="h-3 w-3 fill-state-starred text-state-starred"
-                                          />
-                                        {:else}
-                                          <StarOff class="h-3 w-3" />
-                                        {/if}
-                                      </button>
+                                      <RowStatusIcons
+                                        replied={hasUserReplied(conv)}
+                                        attachments={hasAttachments(conv)}
+                                        starred={isMessageStarred(conv)}
+                                        onToggleStar={() => toggleStarConversation(conv)}
+                                      />
                                       <span class="text-[11px] whitespace-nowrap">
                                         {#if conv.latestDate}
                                           {formatCompactDate(conv.latestDate)}
@@ -8379,7 +8271,12 @@
                                 <div class="flex items-center justify-between gap-2">
                                   <div class="flex items-center gap-1.5 min-w-0 flex-1">
                                     {#if msg.is_unread}
-                                      <span class="w-1.5 h-1.5 rounded-full bg-primary shrink-0"
+                                      <span
+                                        class="w-1.5 h-1.5 rounded-full bg-primary shrink-0"
+                                        role="img"
+                                        aria-label="Unread"
+                                        data-tooltip="Unread"
+                                        data-tooltip-position="right"
                                       ></span>
                                     {/if}
                                     <span
@@ -8392,55 +8289,12 @@
                                   <div
                                     class="flex items-center gap-1.5 shrink-0 text-muted-foreground"
                                   >
-                                    {#if hasAnsweredFlag(msg)}
-                                      <svg viewBox="0 0 24 24" class="h-3 w-3" aria-hidden="true">
-                                        <path
-                                          d="M9 17l-5-5 5-5"
-                                          fill="none"
-                                          stroke="currentColor"
-                                          stroke-width="2"
-                                          stroke-linecap="round"
-                                          stroke-linejoin="round"
-                                        ></path>
-                                        <path
-                                          d="M20 18v-2a4 4 0 0 0-4-4H4"
-                                          fill="none"
-                                          stroke="currentColor"
-                                          stroke-width="2"
-                                          stroke-linecap="round"
-                                          stroke-linejoin="round"
-                                        ></path>
-                                      </svg>
-                                    {/if}
-                                    {#if hasAttachments(msg)}
-                                      <svg viewBox="0 0 24 24" class="h-3 w-3" aria-hidden="true">
-                                        <path
-                                          d="M21.44 11.05l-8.49 8.49a5 5 0 0 1-7.07-7.07l9.19-9.19a3 3 0 1 1 4.24 4.24l-9.19 9.19a1 1 0 1 1-1.41-1.41l8.49-8.49"
-                                          fill="none"
-                                          stroke="currentColor"
-                                          stroke-width="2"
-                                          stroke-linecap="round"
-                                          stroke-linejoin="round"
-                                        ></path>
-                                      </svg>
-                                    {/if}
-                                    <button
-                                      type="button"
-                                      class="shrink-0"
-                                      aria-label={isMessageStarred(msg) ? 'Unstar' : 'Star'}
-                                      onclick={(e) => {
-                                        e.stopPropagation();
-                                        toggleStarMessage(msg);
-                                      }}
-                                    >
-                                      {#if isMessageStarred(msg)}
-                                        <Star
-                                          class="h-3 w-3 fill-state-starred text-state-starred"
-                                        />
-                                      {:else}
-                                        <StarOff class="h-3 w-3" />
-                                      {/if}
-                                    </button>
+                                    <RowStatusIcons
+                                      replied={hasAnsweredFlag(msg)}
+                                      attachments={hasAttachments(msg)}
+                                      starred={isMessageStarred(msg)}
+                                      onToggleStar={() => toggleStarMessage(msg)}
+                                    />
                                     <span class="text-[11px] whitespace-nowrap">
                                       {formatCompactDate(msg.date)}
                                     </span>
@@ -8485,7 +8339,12 @@
                                     class="w-[30%] min-w-[140px] max-w-[280px] shrink-0 flex items-center gap-1"
                                   >
                                     {#if msg.is_unread}
-                                      <span class="w-1.5 h-1.5 rounded-full bg-primary shrink-0"
+                                      <span
+                                        class="w-1.5 h-1.5 rounded-full bg-primary shrink-0"
+                                        role="img"
+                                        aria-label="Unread"
+                                        data-tooltip="Unread"
+                                        data-tooltip-position="right"
                                       ></span>
                                     {/if}
                                     <span class={`truncate ${msg.is_unread ? 'font-semibold' : ''}`}
@@ -8511,55 +8370,12 @@
                                   <div
                                     class="fe-row-meta flex items-center gap-1.5 shrink-0 text-muted-foreground"
                                   >
-                                    {#if hasAnsweredFlag(msg)}
-                                      <svg viewBox="0 0 24 24" class="h-3 w-3" aria-hidden="true">
-                                        <path
-                                          d="M9 17l-5-5 5-5"
-                                          fill="none"
-                                          stroke="currentColor"
-                                          stroke-width="2"
-                                          stroke-linecap="round"
-                                          stroke-linejoin="round"
-                                        ></path>
-                                        <path
-                                          d="M20 18v-2a4 4 0 0 0-4-4H4"
-                                          fill="none"
-                                          stroke="currentColor"
-                                          stroke-width="2"
-                                          stroke-linecap="round"
-                                          stroke-linejoin="round"
-                                        ></path>
-                                      </svg>
-                                    {/if}
-                                    {#if hasAttachments(msg)}
-                                      <svg viewBox="0 0 24 24" class="h-3 w-3" aria-hidden="true">
-                                        <path
-                                          d="M21.44 11.05l-8.49 8.49a5 5 0 0 1-7.07-7.07l9.19-9.19a3 3 0 1 1 4.24 4.24l-9.19 9.19a1 1 0 1 1-1.41-1.41l8.49-8.49"
-                                          fill="none"
-                                          stroke="currentColor"
-                                          stroke-width="2"
-                                          stroke-linecap="round"
-                                          stroke-linejoin="round"
-                                        ></path>
-                                      </svg>
-                                    {/if}
-                                    <button
-                                      type="button"
-                                      class="shrink-0"
-                                      aria-label={isMessageStarred(msg) ? 'Unstar' : 'Star'}
-                                      onclick={(e) => {
-                                        e.stopPropagation();
-                                        toggleStarMessage(msg);
-                                      }}
-                                    >
-                                      {#if isMessageStarred(msg)}
-                                        <Star
-                                          class="h-3 w-3 fill-state-starred text-state-starred"
-                                        />
-                                      {:else}
-                                        <StarOff class="h-3 w-3" />
-                                      {/if}
-                                    </button>
+                                    <RowStatusIcons
+                                      replied={hasAnsweredFlag(msg)}
+                                      attachments={hasAttachments(msg)}
+                                      starred={isMessageStarred(msg)}
+                                      onToggleStar={() => toggleStarMessage(msg)}
+                                    />
                                     <span class="text-[11px] whitespace-nowrap">
                                       {formatCompactDate(msg.date)}
                                     </span>
@@ -8981,7 +8797,7 @@
                     style="padding-top: max(0.5rem, env(safe-area-inset-top, 0px))"
                   >
                     <button
-                      class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                      class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground active:bg-accent"
                       type="button"
                       aria-label="Back"
                       onclick={() => {
@@ -9061,8 +8877,9 @@
                     <Tooltip.Root>
                       <Tooltip.Trigger>
                         <button
-                          class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                          class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground active:bg-accent"
                           type="button"
+                          aria-label="Delete"
                           onclick={() => {
                             handleDeleteOutbox(selectedOutboxItem);
                             selectedOutboxItem = null;
@@ -9116,7 +8933,7 @@
                     style="padding-top: max(0.5rem, env(safe-area-inset-top, 0px))"
                   >
                     <button
-                      class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                      class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground active:bg-accent"
                       type="button"
                       aria-label="Back to list"
                       data-tooltip="Back"
@@ -9127,7 +8944,7 @@
                     </button>
                     <div class="flex items-center gap-1">
                       <button
-                        class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                        class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground active:bg-accent"
                         type="button"
                         aria-label={isMessageStarred($selectedMessage) ? 'Unstar' : 'Star'}
                         data-tooltip={isMessageStarred($selectedMessage) ? 'Unstar' : 'Star'}
@@ -9142,7 +8959,7 @@
                       </button>
                       {#if canArchive}
                         <button
-                          class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                          class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground active:bg-accent"
                           type="button"
                           aria-label="Archive"
                           data-tooltip="Archive"
@@ -9154,7 +8971,7 @@
                       {/if}
                       {#if canNotSpam}
                         <button
-                          class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                          class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground active:bg-accent"
                           type="button"
                           aria-label="Not spam"
                           data-tooltip="Not spam"
@@ -9165,7 +8982,7 @@
                         </button>
                       {/if}
                       <button
-                        class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                        class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground active:bg-accent"
                         type="button"
                         aria-label={readerIsTrashFolder ? 'Delete permanently' : 'Delete'}
                         data-tooltip={readerIsTrashFolder ? 'Delete permanently' : 'Delete'}
@@ -9176,7 +8993,7 @@
                       </button>
                       {#if canToggleRead}
                         <button
-                          class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                          class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground active:bg-accent"
                           type="button"
                           aria-label={$selectedMessage?.is_unread ? 'Mark read' : 'Mark unread'}
                           data-tooltip={$selectedMessage?.is_unread ? 'Mark read' : 'Mark unread'}
@@ -9188,7 +9005,7 @@
                       {/if}
                       <div class="relative" data-reader-toolbar-move>
                         <button
-                          class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground"
+                          class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground active:bg-accent"
                           type="button"
                           aria-label="Move to"
                           data-tooltip="Move to"

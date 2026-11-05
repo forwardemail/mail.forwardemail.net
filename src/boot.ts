@@ -24,12 +24,17 @@ try {
   // needs no handling. Otherwise it is almost always a deploy that replaced
   // the chunk this page was built against: index.html's recovery clears the
   // asset caches and reloads, as it did when the app was a static entry.
+  // An error the app threw while it first ran is not a stale chunk: rethrown,
+  // it reaches the fatal overlay with its stack instead of a reload.
   const page = window as unknown as {
     __fePageLeaving?: boolean;
+    __feIsChunkLoadError?: (reason: unknown) => boolean;
     __feRecoverStaleChunks?: () => void;
   };
   if (!page.__fePageLeaving) {
-    if (typeof page.__feRecoverStaleChunks !== 'function') throw err;
+    if (!page.__feIsChunkLoadError?.(err) || typeof page.__feRecoverStaleChunks !== 'function') {
+      throw err;
+    }
     console.error('[boot] the app failed to load:', err);
     page.__feRecoverStaleChunks();
   }

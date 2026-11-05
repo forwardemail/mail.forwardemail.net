@@ -686,9 +686,12 @@ function createWebSocketUpdater() {
           updateCoalescer.destroy();
         });
 
-        // Dispatch auth failure to the app
+        // Dispatch auth failure to the app. Only the active account's: the app
+        // answers it by deleting the active credentials, and another account's
+        // socket can fail on its own (no IMAP, changed password).
         wsUnsubs.push(
           wsManager.on('_authFailed', (data) => {
+            if (!isActiveAccount(data?._account)) return;
             window.dispatchEvent(
               new CustomEvent('fe:auth-failed', {
                 detail: { account: data?._account },
@@ -774,7 +777,10 @@ function createWebSocketUpdater() {
         refreshCurrentFolder();
         if (wsManager) {
           wsManager.reconcile();
-          wsManager.reconnectAll();
+          // Also tries a socket the server refused once more; a visibility
+          // change does not, so a background account without IMAP is not
+          // retried on every focus.
+          wsManager.reconnectAll({ force: true });
         }
       };
       globalThis.addEventListener('fe:force-reconnect', forceReconnectHandler);

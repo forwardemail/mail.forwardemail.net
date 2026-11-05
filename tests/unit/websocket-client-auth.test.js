@@ -153,10 +153,8 @@ describe('websocket client first-message authentication', () => {
   let client;
 
   beforeEach(async () => {
-    globalThis.window = globalThis.window || {
-      addEventListener() {},
-      removeEventListener() {},
-    };
+    // an EventTarget so a test can fire the browser's 'online' event
+    globalThis.window = globalThis.window || new EventTarget();
     ctx = await startServer();
   });
 
@@ -234,6 +232,54 @@ describe('websocket client first-message authentication', () => {
       expect(ctx.state.upgrades).toHaveLength(1);
     });
   }
+
+  it('stays closed after a refusal until the credentials change', async () => {
+    // e.g. an alias without IMAP: every visibilitychange or resume calls
+    // reconnect(), and each refusal used to reach the app as another auth failure
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    ctx.state.failNext.push(4403);
+    await create();
+    const failures = [];
+    client.on('_authFailed', (payload) => failures.push(payload.code));
+    client.connect();
+    await vi.waitFor(() => expect(failures).toEqual([4403]));
+
+    client.reconnect();
+    globalThis.window.dispatchEvent(new Event('online'));
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    expect(ctx.state.upgrades).toHaveLength(1);
+    expect(failures).toEqual([4403]);
+
+    const authenticated = once(client, '_authenticated');
+    client.updateCredentials(EMAIL, PASSWORD);
+    await expect(authenticated).resolves.toEqual({ aliasId: 'alias1' });
+    expect(ctx.state.upgrades).toHaveLength(2);
+  });
+
+  it('retries a refused socket once on a forced reconnect', async () => {
+    // A refusal the stored password does not explain (a token mid-restore,
+    // IMAP turned on since): a resume or unlock tries the same credentials again.
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    ctx.state.failNext.push(4403, 4403);
+    await create();
+    const failures = [];
+    client.on('_authFailed', (payload) => failures.push(payload.code));
+    client.connect();
+    await vi.waitFor(() => expect(failures).toEqual([4403]));
+
+    // Refused again: one try, then closed as before.
+    client.reconnect({ force: true });
+    await vi.waitFor(() => expect(failures).toEqual([4403, 4403]));
+    client.reconnect();
+    globalThis.window.dispatchEvent(new Event('online'));
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    expect(ctx.state.upgrades).toHaveLength(2);
+
+    const authenticated = once(client, '_authenticated');
+    client.reconnect({ force: true });
+    await expect(authenticated).resolves.toEqual({ aliasId: 'alias1' });
+    expect(ctx.state.upgrades).toHaveLength(3);
+  });
 
   it('retries with backoff when the server asks to try again', async () => {
     vi.spyOn(Math, 'random').mockReturnValue(0);

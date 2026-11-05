@@ -15,27 +15,35 @@
  * allow-same-origin as before, and the sanitizer and frame CSP remain the
  * boundary on that engine. The probe document is the app's own and holds no
  * email content, so nothing an email contains can sway the answer.
+ *
+ * Only a yes is stored for the session. A main thread busy at launch holds the
+ * probe frame's runtime back as well, so running out of time can also mean
+ * the engine was slow to answer: the probe keeps listening for a while and
+ * takes a late yes, and a no lasts only until the app is next loaded.
  */
 import { buildIframeSrcdoc } from './iframe-srcdoc';
 
 const SESSION_KEY = 'fe_opaque_frame_support';
 const PROBE_TIMEOUT_MS = 3000;
+// How long a probe that ran out of time still waits for a late ready
+const LATE_READY_MS = 30000;
 
 let pending: Promise<boolean> | null = null;
 let known: boolean | null = null;
 
 function readSession(): boolean | null {
   try {
-    const value = sessionStorage.getItem(SESSION_KEY);
-    return value === '1' ? true : value === '0' ? false : null;
+    // A stored "0" came from a probe that ran out of time; it is asked again
+    return sessionStorage.getItem(SESSION_KEY) === '1' ? true : null;
   } catch {
     return null;
   }
 }
 
-function writeSession(value: boolean): void {
+function rememberSupported(): void {
+  known = true;
   try {
-    sessionStorage.setItem(SESSION_KEY, value ? '1' : '0');
+    sessionStorage.setItem(SESSION_KEY, '1');
   } catch {
     // the probe just runs again next time
   }
@@ -47,7 +55,7 @@ export function knownOpaqueFrameSupport(): boolean | null {
   return known;
 }
 
-function runProbe(timeoutMs: number): Promise<boolean> {
+function runProbe(timeoutMs: number, onLateReady: () => void): Promise<boolean> {
   return new Promise((resolve) => {
     if (typeof document === 'undefined' || !document.body) {
       resolve(false);
@@ -62,20 +70,27 @@ function runProbe(timeoutMs: number): Promise<boolean> {
       'position:absolute;width:1px;height:1px;left:-9999px;top:-9999px;border:0;visibility:hidden';
 
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const finish = (supported: boolean) => {
+    let timedOut = false;
+    const stop = () => {
       clearTimeout(timer);
       window.removeEventListener('message', onMessage);
       frame.remove();
-      resolve(supported);
     };
     const onMessage = (event: MessageEvent) => {
       if (event.source !== frame.contentWindow) return;
       const data = event.data as { type?: string; payload?: { token?: string } } | null;
-      if (data?.type === 'ready' && data.payload?.token === token) finish(true);
+      if (data?.type !== 'ready' || data.payload?.token !== token) return;
+      stop();
+      if (timedOut) onLateReady();
+      else resolve(true);
     };
 
     window.addEventListener('message', onMessage);
-    timer = setTimeout(() => finish(false), timeoutMs);
+    timer = setTimeout(() => {
+      timedOut = true;
+      resolve(false);
+      timer = setTimeout(stop, LATE_READY_MS);
+    }, timeoutMs);
     frame.srcdoc = buildIframeSrcdoc('<p></p>', false, false, token);
     document.body.appendChild(frame);
   });
@@ -86,12 +101,14 @@ export function probeOpaqueFrameSupport(timeoutMs = PROBE_TIMEOUT_MS): Promise<b
   const cached = knownOpaqueFrameSupport();
   if (cached !== null) return Promise.resolve(cached);
   if (!pending) {
-    pending = runProbe(timeoutMs).then((supported) => {
-      known = supported;
-      writeSession(supported);
-      if (!supported) {
+    pending = runProbe(timeoutMs, rememberSupported).then((supported) => {
+      if (supported) {
+        rememberSupported();
+      } else {
+        // Not stored, so the next load asks again
+        known = false;
         console.warn(
-          '[frame-isolation] this webview cannot run the email frame with an opaque origin; using allow-same-origin',
+          '[frame-isolation] the email frame runtime did not report in with an opaque origin; using allow-same-origin',
         );
       }
       return supported;

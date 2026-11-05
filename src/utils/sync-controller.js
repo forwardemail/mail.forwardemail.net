@@ -48,8 +48,12 @@ export const syncSummary = derived([status, progressMap], ([$status, $progress])
 });
 
 let queue = [];
-let inFlight = false;
+// The task being run, with its account, or null.
+let inFlight = null;
 let currentAccount = null;
+// The folder the user has open. Its backfill batches go ahead of other
+// folders' backfills, so its older mail fills in first.
+let openFolder = null;
 // Consecutive zero-progress backfill batches seen, PER FOLDER — used to cap the
 // backfill re-queue loop (see nextBackfillDecision). Reset on progress, done, or
 // error. This must be per-folder: a single shared counter let one folder's
@@ -73,6 +77,25 @@ const unshiftTask = (task) => {
   const key = buildQueueKey(task);
   if (queuedKeys.has(key)) return false;
   queue.unshift(task);
+  queuedKeys.add(key);
+  return true;
+};
+// Take a task off the queue so it can be queued again elsewhere.
+const takeTask = (key) => {
+  const task = queue.find((t) => buildQueueKey(t) === key);
+  if (!task) return null;
+  queue = queue.filter((t) => t !== task);
+  queuedKeys.delete(key);
+  return task;
+};
+// The open folder's backfill goes ahead of other backfills; the rest wait at
+// the back, behind any other queued work.
+const queueBackfill = (task) => {
+  if (task.folder !== openFolder) return pushTask(task);
+  const key = buildQueueKey(task);
+  if (queuedKeys.has(key)) return false;
+  const at = queue.findIndex((t) => t.type === 'backfill');
+  queue.splice(at < 0 ? queue.length : at, 0, task);
   queuedKeys.add(key);
   return true;
 };
@@ -161,11 +184,12 @@ async function runTask(task) {
       });
     }
     // Forward sync just stopped at the sync_max_headers cap. Schedule a
-    // low-priority backfill so older history fills in over time. Appended
-    // (not unshifted) so it sits behind any other queued work, and
-    // re-enqueued in small batches so the queue interleaves naturally
-    // with user-triggered tasks (folder switch, manual refresh).
-    pushTask({
+    // low-priority backfill so older history fills in over time. It sits
+    // behind any other queued work (the open folder's only ahead of other
+    // backfills), and is re-enqueued in small batches so the queue
+    // interleaves naturally with user-triggered tasks (folder switch, manual
+    // refresh).
+    queueBackfill({
       type: 'backfill',
       folder: task.folder,
       pageSize: task.pageSize || settings.pageSize || 50,
@@ -204,14 +228,14 @@ async function runTask(task) {
     }
     // Re-queue the next batch only while the worker reports !done AND batches
     // keep making progress. nextBackfillDecision caps consecutive zero-page
-    // batches so a misbehaving worker can't spin the queue forever. The append
-    // (pushTask) ensures any user-triggered work queued during this batch runs
-    // first.
+    // batches so a misbehaving worker can't spin the queue forever. Queuing it
+    // behind other work ensures any user-triggered work queued during this
+    // batch (a folder the user opened) runs first.
     const folderStreak = backfillNoProgressStreakByFolder.get(task.folder) || 0;
     const decision = nextBackfillDecision(result, folderStreak);
     if (decision.requeue) {
       backfillNoProgressStreakByFolder.set(task.folder, decision.noProgressStreak);
-      pushTask({
+      queueBackfill({
         type: 'backfill',
         folder: task.folder,
         pageSize: task.pageSize || settings.pageSize || 50,
@@ -280,7 +304,7 @@ async function pump() {
     }));
   }
 
-  inFlight = true;
+  inFlight = { ...task, account: taskAccount };
   try {
     await runTask(task);
   } catch (err) {
@@ -289,7 +313,7 @@ async function pump() {
       warn('[sync-controller] task failed', err);
     }
   } finally {
-    inFlight = false;
+    inFlight = null;
   }
   // The account changed while the task ran. The old queue was dropped by the
   // switch, and whatever is queued now belongs to the new account; its pump
@@ -331,6 +355,7 @@ export function startInitialSync(account, folders = [], options = {}) {
   if (resetQueue) {
     queue = [];
     queuedKeys.clear();
+    openFolder = null;
     progressMap.set(new Map());
     resetSyncWorkerReady();
   }
@@ -347,6 +372,9 @@ export function startInitialSync(account, folders = [], options = {}) {
   }));
 
   tasks.forEach((task) => pushTask(task));
+  // The folder on screen (the account's current folder after a switch) syncs
+  // first.
+  if (options.folder) bumpFolder(options.folder);
   setStatus({ account: currentAccount, queue: [...queue] });
 
   // Update sync progress store and show toast
@@ -424,41 +452,48 @@ export function prefetchMessages(folder, account, ids = []) {
   pump();
 }
 
-export function syncFolderOnDemand(folder, account, opts = {}) {
-  const settings = getSyncSettings();
-  const normalizedAccount = accountKey(account || currentAccount);
-  if (currentAccount && currentAccount !== normalizedAccount) {
-    queue = [];
-    queuedKeys.clear();
-    progressMap.set(new Map());
-    resetSyncWorkerReady();
+// Sync a folder next: its metadata goes to the front of the queue (moving a
+// copy already queued; one already running is left alone) and its backfill
+// ahead of other folders' backfills. Only the latest folder keeps the backfill
+// priority, so switching folders quickly neither duplicates work nor holds
+// other folders back for good.
+function bumpFolder(folder) {
+  openFolder = folder;
+  const backfill = takeTask(buildQueueKey({ type: 'backfill', folder }));
+  if (backfill) queueBackfill(backfill);
+  if (
+    inFlight?.account === currentAccount &&
+    inFlight.type === 'metadata' &&
+    inFlight.folder === folder
+  ) {
+    return;
   }
-  currentAccount = normalizedAccount;
-  if (!folder) return;
+  const settings = getSyncSettings();
+  unshiftTask(
+    takeTask(buildQueueKey({ type: 'metadata', folder })) || {
+      type: 'metadata',
+      folder,
+      pageSize: settings.pageSize || 50,
+      maxMessages: settings.maxHeaders,
+      wantBodies: false,
+    },
+  );
+}
 
-  // Queue metadata sync for the folder (high priority - add to front)
-  const metadataTask = {
-    type: 'metadata',
-    folder,
-    pageSize: opts.pageSize || settings.pageSize || 50,
-    maxMessages: opts.maxMessages || settings.maxHeaders || 300,
-    wantBodies: opts.wantBodies || false,
-  };
-
-  // Add to front of queue for immediate processing
-  unshiftTask(metadataTask);
-  setStatus({ account: currentAccount, queue: [...queue] });
-
-  // Update sync progress to show we're syncing this folder
-  syncProgress.set({
-    active: true,
-    stage: 'metadata',
-    folder,
-    current: 0,
-    total: 0,
-    message: `Syncing ${folder}...`,
-  });
-
+/**
+ * The user opened a folder: sync it next. A task already running finishes its
+ * batch first; "Syncing <folder>" shows the folder once its sync starts.
+ */
+export function syncFolderOnDemand(folder, account) {
+  // Only the account being synced. Before sync starts, or while it still runs
+  // for the account switched away from, startInitialSync puts the open folder
+  // first when it starts the account.
+  if (!folder || !currentAccount || accountKey(account || currentAccount) !== currentAccount) {
+    return;
+  }
+  bumpFolder(folder);
+  setStatus({ queue: [...queue] });
+  syncProgress.update((p) => ({ ...p, active: true }));
   pump();
 }
 
@@ -481,14 +516,8 @@ export function syncFolderForEvent(account, folder) {
   }
   currentAccount = normalizedAccount;
 
-  const key = buildQueueKey({ type: 'metadata', folder: folderPath });
-  const queued = queue.find((t) => buildQueueKey(t) === key);
-  if (queued) {
-    queue = queue.filter((t) => t !== queued);
-    queuedKeys.delete(key);
-  }
   unshiftTask(
-    queued || {
+    takeTask(buildQueueKey({ type: 'metadata', folder: folderPath })) || {
       type: 'metadata',
       folder: folderPath,
       pageSize: settings.pageSize || 50,

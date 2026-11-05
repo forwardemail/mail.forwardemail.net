@@ -3499,7 +3499,13 @@
         class="flex h-14 items-center justify-between gap-3 px-4 bg-muted/30"
         style="padding-top: env(safe-area-inset-top, 0px); box-sizing: content-box;"
       >
-        <Button variant="ghost" size="icon" class="md:hidden" onclick={() => closeComposer()}>
+        <Button
+          variant="ghost"
+          size="icon"
+          class="md:hidden"
+          onclick={() => closeComposer()}
+          aria-label="Close"
+        >
           <ChevronLeft class="h-5 w-5" />
         </Button>
 
@@ -3538,6 +3544,7 @@
                   size="icon"
                   class="hidden md:flex"
                   onclick={minimizeComposer}
+                  aria-label="Minimize to dock"
                 >
                   <Minus class="h-4 w-4" />
                 </Button>
@@ -3558,6 +3565,7 @@
                       expanded = false;
                       setCompact(true);
                     }}
+                    aria-label="Compact view"
                   >
                     <Minimize2 class="h-4 w-4" />
                   </Button>
@@ -3576,6 +3584,7 @@
                       setCompact(false);
                       expanded = true;
                     }}
+                    aria-label="Expand to fullscreen"
                   >
                     <Maximize2 class="h-4 w-4" />
                   </Button>
@@ -3594,6 +3603,7 @@
                       setCompact(false);
                       expanded = true;
                     }}
+                    aria-label="Expand"
                   >
                     <Maximize2 class="h-4 w-4" />
                   </Button>
@@ -3610,6 +3620,7 @@
                   size="icon"
                   class="hidden md:flex"
                   onclick={() => closeComposer()}
+                  aria-label="Close"
                 >
                   <X class="h-4 w-4" />
                 </Button>
@@ -3623,6 +3634,7 @@
             size="icon"
             class="md:hidden h-12 w-12"
             onclick={triggerFilePicker}
+            aria-label="Attach file"
           >
             <Paperclip size={32} />
           </Button>
@@ -3632,6 +3644,7 @@
             class="md:hidden h-12 w-12"
             onclick={send}
             disabled={sending}
+            aria-label="Send"
           >
             <Send size={32} class="text-fg-link" />
           </Button>
@@ -3641,6 +3654,7 @@
               size="icon"
               class="mobile-menu h-12 w-12"
               onclick={() => (showMobileMenu = !showMobileMenu)}
+              aria-label="More options"
             >
               <MoreVertical size={32} />
             </Button>
@@ -3832,6 +3846,7 @@
                     type="button"
                     class="hover:bg-muted-foreground/20 rounded-full p-0.5"
                     onclick={() => removeRecipient('to', rec)}
+                    aria-label={`Remove ${rec}`}
                   >
                     <X class="h-3.5 w-3.5 md:h-3 md:w-3" />
                   </button>
@@ -3917,6 +3932,7 @@
                       type="button"
                       class="hover:bg-muted-foreground/20 rounded-full p-0.5"
                       onclick={() => removeRecipient('cc', rec)}
+                      aria-label={`Remove ${rec}`}
                     >
                       <X class="h-3.5 w-3.5 md:h-3 md:w-3" />
                     </button>
@@ -3981,6 +3997,7 @@
                       type="button"
                       class="hover:bg-muted-foreground/20 rounded-full p-0.5"
                       onclick={() => removeRecipient('bcc', rec)}
+                      aria-label={`Remove ${rec}`}
                     >
                       <X class="h-3.5 w-3.5 md:h-3 md:w-3" />
                     </button>
@@ -4119,6 +4136,7 @@
                 size="icon"
                 class="h-6 w-6"
                 onclick={() => removeAttachment(card.att)}
+                aria-label={`Remove ${card.name}`}
               >
                 <X class="h-3 w-3" />
               </Button>
@@ -4152,6 +4170,7 @@
                   size="icon"
                   class={isFormatActive('bold') ? 'bg-accent' : ''}
                   onclick={() => editorView?.chain().focus().toggleBold().run()}
+                  aria-label="Bold"
                 >
                   <Bold class="h-4 w-4" />
                 </Button>
@@ -4165,6 +4184,7 @@
                   size="icon"
                   class={isFormatActive('italic') ? 'bg-accent' : ''}
                   onclick={() => editorView?.chain().focus().toggleItalic().run()}
+                  aria-label="Italic"
                 >
                   <Italic class="h-4 w-4" />
                 </Button>
@@ -4178,6 +4198,7 @@
                   size="icon"
                   class={isFormatActive('underline') ? 'bg-accent' : ''}
                   onclick={() => editorView?.chain().focus().toggleUnderline().run()}
+                  aria-label="Underline"
                 >
                   <UnderlineIcon class="h-4 w-4" />
                 </Button>
@@ -4190,6 +4211,7 @@
                   variant="ghost"
                   size="icon"
                   onclick={() => editorView?.chain().focus().unsetAllMarks().clearNodes().run()}
+                  aria-label="Clear formatting"
                 >
                   <RemoveFormatting class="h-4 w-4" />
                 </Button>
@@ -4264,7 +4286,12 @@
             <Separator orientation="vertical" class="h-6 mx-1" />
             <Tooltip.Root>
               <Tooltip.Trigger>
-                <Button variant="ghost" size="icon" onclick={openLinkModal}>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onclick={openLinkModal}
+                  aria-label="Insert link"
+                >
                   <Link2 class="h-4 w-4" />
                 </Button>
               </Tooltip.Trigger>
@@ -4277,6 +4304,7 @@
                   variant="ghost"
                   size="icon"
                   onclick={() => (showFormatAdvanced = !showFormatAdvanced)}
+                  aria-label="More formatting"
                 >
                   <MoreVertical class="h-4 w-4" />
                 </Button>
@@ -4293,6 +4321,7 @@
                       size="icon"
                       class={alignment === 'left' ? 'bg-accent' : ''}
                       onclick={() => setAlignment('left')}
+                      aria-label="Align left"
                     >
                       <AlignLeft class="h-4 w-4" />
                     </Button>
@@ -4306,6 +4335,7 @@
                       size="icon"
                       class={alignment === 'center' ? 'bg-accent' : ''}
                       onclick={() => setAlignment('center')}
+                      aria-label="Align center"
                     >
                       <AlignCenter class="h-4 w-4" />
                     </Button>
@@ -4319,6 +4349,7 @@
                       size="icon"
                       class={alignment === 'right' ? 'bg-accent' : ''}
                       onclick={() => setAlignment('right')}
+                      aria-label="Align right"
                     >
                       <AlignRight class="h-4 w-4" />
                     </Button>
@@ -4333,6 +4364,7 @@
                       size="icon"
                       class={isFormatActive('bulletList') ? 'bg-accent' : ''}
                       onclick={() => editorView?.chain().focus().toggleBulletList().run()}
+                      aria-label="Bullet list"
                     >
                       <List class="h-4 w-4" />
                     </Button>
@@ -4346,6 +4378,7 @@
                       size="icon"
                       class={isFormatActive('orderedList') ? 'bg-accent' : ''}
                       onclick={() => editorView?.chain().focus().toggleOrderedList().run()}
+                      aria-label="Numbered list"
                     >
                       <ListOrdered class="h-4 w-4" />
                     </Button>
@@ -4359,6 +4392,7 @@
                       size="icon"
                       class={isFormatActive('blockquote') ? 'bg-accent' : ''}
                       onclick={() => editorView?.chain().focus().toggleBlockquote().run()}
+                      aria-label="Quote"
                     >
                       <Quote class="h-4 w-4" />
                     </Button>
@@ -4372,6 +4406,7 @@
                       size="icon"
                       class={isFormatActive('code') ? 'bg-accent' : ''}
                       onclick={() => editorView?.chain().focus().toggleCode().run()}
+                      aria-label="Code"
                     >
                       <Code class="h-4 w-4" />
                     </Button>
@@ -4395,6 +4430,7 @@
                   disabled={sending}
                   class="inline-flex items-center justify-center h-9 px-2 rounded-none border-l border-primary-foreground/20 bg-primary text-primary-foreground hover:bg-primary/90 disabled:pointer-events-none disabled:opacity-50"
                   onclick={() => (showSendDropdown = !showSendDropdown)}
+                  aria-label="Send options"
                 >
                   <ChevronDown class="h-4 w-4" />
                 </button>
@@ -4455,6 +4491,7 @@
                   size="icon"
                   onclick={triggerFilePicker}
                   data-testid="compose-add-attachment"
+                  aria-label="Attach file"
                 >
                   <Paperclip class="h-4 w-4" />
                 </Button>
@@ -4464,7 +4501,12 @@
             <div class="relative" bind:this={emojiButtonRef}>
               <Tooltip.Root>
                 <Tooltip.Trigger>
-                  <Button variant="ghost" size="icon" onclick={toggleEmoji}>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onclick={toggleEmoji}
+                    aria-label="Insert emoji"
+                  >
                     <Smile class="h-4 w-4" />
                   </Button>
                 </Tooltip.Trigger>
@@ -4481,7 +4523,12 @@
             </div>
             <Tooltip.Root>
               <Tooltip.Trigger>
-                <Button variant="ghost" size="icon" onclick={triggerImagePicker}>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onclick={triggerImagePicker}
+                  aria-label="Insert image"
+                >
                   <ImageIcon class="h-4 w-4" />
                 </Button>
               </Tooltip.Trigger>
@@ -4500,6 +4547,7 @@
                   aria-pressed={encryptEnabled}
                   onclick={toggleEncrypt}
                   data-testid="compose-toggle-encrypt"
+                  aria-label="Encrypt"
                 >
                   {#if encryptEnabled}
                     <Lock class="h-4 w-4" />
@@ -4536,6 +4584,7 @@
                     disabled={encryptEnabled}
                     onclick={toggleSign}
                     data-testid="compose-toggle-sign"
+                    aria-label="Sign"
                   >
                     <Signature class="h-4 w-4" />
                   </Button>
@@ -4562,6 +4611,7 @@
                   aria-pressed={isPlainText}
                   onclick={togglePlainText}
                   data-testid="compose-toggle-plain-text"
+                  aria-label="Plain text"
                 >
                   {#if isPlainText}
                     <Type class="h-4 w-4" />
@@ -4576,7 +4626,12 @@
             </Tooltip.Root>
             <Tooltip.Root>
               <Tooltip.Trigger>
-                <Button variant="ghost" size="icon" onclick={saveCurrentDraft}>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onclick={saveCurrentDraft}
+                  aria-label="Save draft"
+                >
                   <Save class="h-4 w-4" />
                 </Button>
               </Tooltip.Trigger>
@@ -4586,7 +4641,12 @@
 
           <Tooltip.Root>
             <Tooltip.Trigger>
-              <Button variant="ghost" size="icon" onclick={promptDiscardDraft}>
+              <Button
+                variant="ghost"
+                size="icon"
+                onclick={promptDiscardDraft}
+                aria-label="Discard draft"
+              >
                 <Trash2 class="h-4 w-4" />
               </Button>
             </Tooltip.Trigger>

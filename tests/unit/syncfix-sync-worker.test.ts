@@ -90,6 +90,10 @@ function answer(action: string, name: string, payload: Row) {
       const [account, folder] = (where.value || where.lower) as unknown[];
       const rows = [...t.values()].filter((r) => r.account === account && r.folder === folder);
       if (payload.queryMode === 'count') return rows.length;
+      if (payload.queryMode === 'fields') {
+        const fields = payload.fields as string[];
+        return rows.map((r) => Object.fromEntries(fields.map((f) => [f, r[f]])));
+      }
       const byDate = (a: Row, b: Row) =>
         Number(new Date(a.date as string | number)) - Number(new Date(b.date as string | number));
       if (payload.queryMode === 'primaryKeys') {
@@ -143,6 +147,8 @@ const serverMsg = (n: number, folder: string, extra: Row = {}) => ({
 // Folder contents on the server, newest first, as the list endpoint pages them.
 const serverFolders = new Map<string, Row[]>();
 let exposeItemCount = false;
+// X-Item-Count for a folder when it should differ from what the listing holds.
+const itemCounts = new Map<string, number>();
 let listHook: ((url: URL) => Row[] | null | void) | null = null;
 let detailHook: ((id: string, url: URL) => Response | Promise<Response> | null | void) | null =
   null;
@@ -156,7 +162,7 @@ function listResponse(url: URL) {
   const all = serverFolders.get(folder) || [];
   const body = override ?? all.slice((page - 1) * limit, page * limit);
   const headers: Record<string, string> = {};
-  if (exposeItemCount) headers['X-Item-Count'] = String(all.length);
+  if (exposeItemCount) headers['X-Item-Count'] = String(itemCounts.get(folder) ?? all.length);
   return new Response(JSON.stringify(body), { status: 200, headers });
 }
 
@@ -271,6 +277,10 @@ async function backfillUntilDone(folder: string, maxBatches = 30) {
   }
   return results;
 }
+
+const listRequestsFor = (folder: string) =>
+  requests.filter((u) => u.pathname === '/v1/messages' && u.searchParams.get('folder') === folder);
+const detailRequests = () => requests.filter((u) => /\/v1\/messages\/[^/]+$/.test(u.pathname));
 
 describe('offline history on a phone', () => {
   const setMemoryConstrained = (memoryConstrained: boolean) =>
@@ -432,6 +442,135 @@ describe('backfill paging', () => {
       vi.useRealTimers();
     }
   }, 30_000);
+
+  it('walks a grown folder whose manifest was saved before backfillListTotal existed', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true, advanceTimeDelta: 50 });
+    try {
+      const folder = 'OldManifest';
+      // 300 cached by an earlier version, which marked the folder complete.
+      const older = Array.from({ length: 300 }, (_, i) => serverMsg(170_000 + 300 - i, folder));
+      for (const m of older) {
+        table('messages').set(keyOf([ACCOUNT, m.id]), { ...m, account: ACCOUNT, folder });
+      }
+      table('syncManifests').set(keyOf([ACCOUNT, folder]), {
+        account: ACCOUNT,
+        folder,
+        backfillComplete: true,
+        backfillTotal: 300,
+        backfillPage: 4,
+        backfillLimit: 100,
+        lastSweepAt: Date.now(),
+      });
+      // 150 more were moved in that forward sync did not pick up.
+      const moved = Array.from({ length: 150 }, (_, i) => serverMsg(171_000 + 150 - i, folder));
+      serverFolders.set(folder, [...moved, ...older]);
+      seedFolderTotal(folder, 450);
+      exposeItemCount = true;
+      await backfillUntilDone(folder);
+      expect(listRequestsFor(folder).length).toBeGreaterThan(0);
+      expect(cachedIds(folder)).toHaveLength(450);
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 60_000);
+
+  // 600 messages take two batches, so the second batch compares totals.
+  const seedTwoBatchFolder = (folder: string, base: number, folderListTotal: number) => {
+    const all = Array.from({ length: 600 }, (_, i) => serverMsg(base + 600 - i, folder));
+    serverFolders.set(folder, all);
+    seedFolderTotal(folder, folderListTotal);
+    exposeItemCount = true;
+    // Cached long ago and gone from the server: a full walk prunes it.
+    const stale = oid(base + 999);
+    table('messages').set(keyOf([ACCOUNT, stale]), {
+      id: stale,
+      account: ACCOUNT,
+      folder,
+      updatedAt: 1,
+    });
+    return stale;
+  };
+
+  it('walks once and prunes when the folder list is behind X-Item-Count', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true, advanceTimeDelta: 50 });
+    try {
+      const folder = 'ListBehind';
+      // New mail arrived after the last folder list.
+      const stale = seedTwoBatchFolder(folder, 100_000, 590);
+      await backfillUntilDone(folder);
+      expect(listRequestsFor(folder)).toHaveLength(6);
+      expect(table('messages').has(keyOf([ACCOUNT, stale]))).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 90_000);
+
+  it('does not walk again when the folder list counts more than X-Item-Count', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true, advanceTimeDelta: 50 });
+    try {
+      const folder = 'ListAhead';
+      const stale = seedTwoBatchFolder(folder, 110_000, 605);
+      await backfillUntilDone(folder);
+      expect(listRequestsFor(folder)).toHaveLength(6);
+      expect(table('messages').has(keyOf([ACCOUNT, stale]))).toBe(false);
+      expect(manifestOf(folder)?.backfillComplete).toBe(true);
+
+      // The next metadata sync queues another backfill task.
+      requests.length = 0;
+      await backfillUntilDone(folder);
+      expect(listRequestsFor(folder)).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 90_000);
+
+  it('does not walk the folder again for new mail forward sync already cached', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true, advanceTimeDelta: 50 });
+    try {
+      const folder = 'NewMail';
+      const all = Array.from({ length: 300 }, (_, i) => serverMsg(120_000 + 300 - i, folder));
+      serverFolders.set(folder, all);
+      seedFolderTotal(folder, 300);
+      exposeItemCount = true;
+      await backfillUntilDone(folder);
+      expect(manifestOf(folder)?.backfillComplete).toBe(true);
+
+      const fresh = serverMsg(120_500, folder);
+      serverFolders.set(folder, [fresh, ...all]);
+      table('messages').set(keyOf([ACCOUNT, fresh.id]), {
+        id: fresh.id,
+        account: ACCOUNT,
+        folder,
+        updatedAt: Date.now(),
+      });
+      seedFolderTotal(folder, 301);
+      requests.length = 0;
+      await backfillUntilDone(folder);
+      expect(listRequestsFor(folder)).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 60_000);
+
+  it('finishes when X-Item-Count stays above what the listing returns', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true, advanceTimeDelta: 50 });
+    try {
+      const folder = 'Overcount';
+      const all = Array.from({ length: 200 }, (_, i) => serverMsg(130_000 + 200 - i, folder));
+      serverFolders.set(folder, all);
+      seedFolderTotal(folder, 203);
+      exposeItemCount = true;
+      // The count includes three messages the listing leaves out.
+      itemCounts.set(folder, 203);
+      for (let round = 0; round < 12 && !manifestOf(folder)?.backfillComplete; round += 1) {
+        await backfillUntilDone(folder);
+      }
+      expect(manifestOf(folder)?.backfillComplete).toBe(true);
+      expect(cachedIds(folder)).toEqual(all.map((m) => m.id as string).sort());
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 60_000);
 });
 
 describe('pruning messages the server no longer has', () => {
@@ -439,6 +578,8 @@ describe('pruning messages the server no longer has', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true, advanceTimeDelta: 50 });
     try {
       const folder = 'Prune';
+      // Earlier walks prune their own folders.
+      searchPortMessages.length = 0;
       const live = Array.from({ length: 60 }, (_, i) => serverMsg(3000 + 60 - i, folder));
       serverFolders.set(folder, live);
       seedFolderTotal(folder, 60);
@@ -525,6 +666,87 @@ describe('pruning messages the server no longer has', () => {
       vi.useRealTimers();
     }
   }, 30_000);
+
+  it('stops checking on a rejected password and checks the rest after sign-in', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true, advanceTimeDelta: 50 });
+    try {
+      const folder = 'PruneStale';
+      serverFolders.set(
+        folder,
+        Array.from({ length: 10 }, (_, i) => serverMsg(170_000 + 10 - i, folder)),
+      );
+      seedFolderTotal(folder, 10);
+      // More gone rows than one prune batch checks.
+      const gone = Array.from({ length: 30 }, (_, i) => oid(170_500 + i));
+      for (const id of gone) {
+        table('messages').set(keyOf([ACCOUNT, id]), { id, account: ACCOUNT, folder, updatedAt: 1 });
+      }
+      detailHook = () => new Response('{"message":"Invalid password"}', { status: 401 });
+      await backfillUntilDone(folder);
+      // At most one try per backfill task.
+      expect(detailRequests().length).toBeLessThanOrEqual(2);
+
+      // Signed in again: the next backfill checks every queued row.
+      detailHook = null;
+      await backfillUntilDone(folder);
+      for (const id of gone) expect(table('messages').has(keyOf([ACCOUNT, id]))).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 30_000);
+
+  it('counts and lists the cached folder without reading whole rows', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true, advanceTimeDelta: 50 });
+    try {
+      const fullReads: string[] = [];
+      onDbAction = (action, name) => {
+        if (action === 'queryEquals' && name === 'messages') fullReads.push(action);
+      };
+      const old = Date.now() - 86_400_000;
+
+      // A full listing: the cached rows it left out are queued for checking.
+      const listed = 'Listed';
+      serverFolders.set(
+        listed,
+        Array.from({ length: 150 }, (_, i) => serverMsg(140_000 + 150 - i, listed)),
+      );
+      seedFolderTotal(listed, 150);
+      exposeItemCount = true;
+      const stale = oid(140_999);
+      table('messages').set(keyOf([ACCOUNT, stale]), {
+        id: stale,
+        account: ACCOUNT,
+        folder: listed,
+        updatedAt: old,
+      });
+      await backfillUntilDone(listed);
+      expect(table('messages').has(keyOf([ACCOUNT, stale]))).toBe(false);
+
+      // A listing short of the folder list's total: the cache is counted.
+      const counted = 'Counted';
+      serverFolders.set(
+        counted,
+        Array.from({ length: 150 }, (_, i) => serverMsg(150_000 + 150 - i, counted)),
+      );
+      seedFolderTotal(counted, 152);
+      exposeItemCount = false;
+      for (const n of [150_991, 150_992]) {
+        table('messages').set(keyOf([ACCOUNT, oid(n)]), {
+          id: oid(n),
+          account: ACCOUNT,
+          folder: counted,
+          updatedAt: old,
+        });
+      }
+      await backfillUntilDone(counted);
+      expect(manifestOf(counted)?.backfillComplete).toBe(true);
+      expect(listRequestsFor(counted)).toHaveLength(2);
+
+      expect(fullReads).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 30_000);
 });
 
 describe('bodies pass', () => {
@@ -553,6 +775,27 @@ describe('bodies pass', () => {
     requests.length = 0;
     await runTask({ type: 'bodies', folder, limit: 10 });
     expect(requests.filter((u) => u.pathname.endsWith(ids[1]))).toHaveLength(0);
+  });
+
+  it('stops at the first rejected password and fetches every body after sign-in', async () => {
+    const folder = 'StalePassword';
+    const ids = [160_001, 160_002, 160_003, 160_004, 160_005].map(oid);
+    ids.forEach((id, i) =>
+      table('messages').set(keyOf([ACCOUNT, id]), { id, account: ACCOUNT, folder, date: 5000 - i }),
+    );
+    detailHook = () => new Response('{"message":"Invalid password"}', { status: 401 });
+    await runTask({ type: 'bodies', folder, limit: 10 });
+    expect(detailRequests()).toHaveLength(1);
+
+    // Signed in again: no message is held back by the failed pass.
+    detailHook = (id) =>
+      new Response(JSON.stringify({ id, html: `<p>body of ${id}</p>`, text: 'hi' }), {
+        status: 200,
+      });
+    await runTask({ type: 'bodies', folder, limit: 10 });
+    for (const id of ids) {
+      expect(table('messageBodies').get(keyOf([ACCOUNT, id]))?.body).toContain('body of');
+    }
   });
 
   it('downloads a PGP message it cannot decrypt only once', async () => {

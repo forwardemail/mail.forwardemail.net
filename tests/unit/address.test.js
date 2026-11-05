@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import PostalMime from 'postal-mime';
 import {
   recipientsToList,
   extractAddressList,
@@ -246,6 +247,119 @@ describe('normalizeEmail', () => {
     expect(normalizeEmail(undefined)).toBe('');
     expect(normalizeEmail('')).toBe('');
   });
+
+  // The reader's From is "Name <address>" as toDisplayAddress writes it, so a
+  // display name holding an address of its own must not stand in for the
+  // sender's (Block sender, image trust and the own-mail check read this).
+  it('takes the address, not one written in the display name', () => {
+    const from = toDisplayAddress({
+      name: 'PayPal <service@paypal.example>',
+      address: 'x@evil.test',
+    });
+    expect(normalizeEmail(from)).toBe('x@evil.test');
+    expect(extractEmail(from)).toBe('x@evil.test');
+    expect(normalizeEmail('"<Me@Example.org>" <X@Evil.test>')).toBe('x@evil.test');
+    expect(normalizeEmail('Ann <ann@example.com> <>')).toBe('ann@example.com');
+  });
+
+  // Raw header values reach this too, so neither can a comment or quoted text
+  // after the address.
+  it('takes the address a mail parser takes, not one in a comment or quotes', async () => {
+    for (const header of [
+      '<a@x.test> (via <list@y.test>)',
+      '<attacker@evil.test> (<trusted@bank.test>)',
+      '<a@x.test> ("<list@y.test>")',
+      'Ann (<b@y.test>) <ann@example.com>',
+      'Ann <ann@example.com> (Ann)',
+      '"Ann \\"<b@y.test>\\"" <ann@example.com>',
+      '"Ann \\\\" <ann@example.com>',
+      '"PayPal <service@paypal.example>" <x@evil.test>',
+      '"<Me@Example.org>" <X@Evil.test>',
+      'Ann <ann@example.com> <>',
+      'Ann <<ann@example.com>',
+      'Alice <alice@example.com>',
+    ]) {
+      const { from } = await PostalMime.parse(`From: ${header}\r\n\r\n`);
+      expect(normalizeEmail(header), header).toBe(from.address.toLowerCase());
+    }
+    // Comments nest (RFC 5322), which this parser does not follow.
+    expect(normalizeEmail('Ann (team (ops) <b@y.test>) <ann@example.com>')).toBe('ann@example.com');
+  });
+});
+
+describe('addresses the app builds from a parsed From', () => {
+  // The display name is stored unquoted, so a quote or parenthesis in it must
+  // not hide the address that follows.
+  it('takes the address after a name with an unclosed quote or parenthesis', () => {
+    for (const name of [
+      'PayPal <service@paypal.com> "',
+      'PayPal <service@paypal.com> (',
+      'Bob :(',
+      'Screen 27" Deals',
+    ]) {
+      const from = toDisplayAddress({ name, address: 'x@evil.test' });
+      expect(normalizeEmail(from), from).toBe('x@evil.test');
+      expect(extractEmail(from), from).toBe('x@evil.test');
+    }
+  });
+
+  it('takes the address when a quote in the name pairs with one in the address', () => {
+    for (const [name, address] of [
+      ['PayPal <service@paypal.com> "', '"a\\"b"@evil.test'],
+      ['PayPal <service@paypal.com> (', '"a)\\""@evil.test'],
+      ['"PayPal <service@paypal.com>', '"x"@evil.test'],
+    ]) {
+      const from = toDisplayAddress({ name, address });
+      expect(normalizeEmail(from), from).not.toBe('service@paypal.com');
+      expect(extractEmail(from), from).not.toBe('service@paypal.com');
+    }
+  });
+});
+
+describe('addresses with a quoted local part', () => {
+  // A quoted local part can hold "<...>" or ">", so the address of a string
+  // the app built is read from the end, skipping quoted text.
+  it('reads a quoted local part that holds "<...>" as the address', () => {
+    for (const address of [
+      '"<me@example.com>"@evil.test',
+      '"a>b"@evil.test',
+      '"a <b@c.test>"@evil.test',
+    ]) {
+      for (const name of ['Boss', 'PayPal <service@paypal.example>', 'x "', '(']) {
+        const from = toDisplayAddress({ name, address });
+        expect(normalizeEmail(from), from).toBe(address.toLowerCase());
+        expect(extractEmail(from), from).toBe(address.toLowerCase());
+      }
+    }
+  });
+
+  it('takes the address a mail parser takes when a stray ">" ends the header', async () => {
+    for (const header of ['<a@x.test> "<b@y.test>">', 'Ann <ann@example.com> ("<b@y.test>")>']) {
+      const { from } = await PostalMime.parse(`From: ${header}\r\n\r\n`);
+      expect(normalizeEmail(header), header).toBe(from.address.toLowerCase());
+    }
+  });
+});
+
+describe('lists with a name the app stored unquoted', () => {
+  it('splits after a name with a quote that never closes', () => {
+    expect(recipientsToList('Screen 27" Deals <deals@x.test>, User <user@example.com>')).toEqual([
+      'Screen 27" Deals <deals@x.test>',
+      'User <user@example.com>',
+    ]);
+    expect(recipientsToList('"Doe, J" <j@x.test>, k@x.test')).toEqual([
+      '"Doe, J" <j@x.test>',
+      'k@x.test',
+    ]);
+  });
+
+  it('checks a long address in linear time', () => {
+    const long = 'a@' + 'b.'.repeat(200000) + '@x';
+    const start = performance.now();
+    expect(isValidEmail(long)).toBe(false);
+    expect(isValidEmail('a@' + 'b.'.repeat(200000) + 'x')).toBe(true);
+    expect(performance.now() - start).toBeLessThan(1000);
+  });
 });
 
 describe('dedupeAddresses', () => {
@@ -362,7 +476,7 @@ describe('isValidEmail', () => {
 });
 
 describe('address parsing of hostile headers', () => {
-  // the previous implementations, for comparison
+  // the regular expressions the linear scans replace, for comparison
   const previousDisplayName = (value) => {
     const raw = value.trim();
     if (!raw) return '';
@@ -370,13 +484,15 @@ describe('address parsing of hostile headers', () => {
     if (match) return match[1].trim() || match[2].trim();
     return raw.trim();
   };
+  // The address is the last "<...>" (it used to be the first, which a display
+  // name could supply)
   const previousNormalize = (raw) => {
     if (!raw) return '';
-    const match = raw.match(/<([^>]+)>/);
+    const match = [...raw.matchAll(/<([^<>]+)>/g)].pop();
     return (match ? match[1] : raw).trim().toLowerCase();
   };
 
-  it('parses as before', () => {
+  it('parses as the regular expressions do', () => {
     const alphabet = ['"', "'", '<', '>', ' ', 'a', 'B', '@', '\n', '\t'];
     let seed = 1;
     const random = () => {
@@ -388,7 +504,8 @@ describe('address parsing of hostile headers', () => {
       const length = Math.floor(random() * 14);
       for (let j = 0; j < length; j++) value += alphabet[Math.floor(random() * alphabet.length)];
       expect(extractDisplayName(value)).toBe(previousDisplayName(value));
-      expect(normalizeEmail(value)).toBe(previousNormalize(value));
+      // The address scan skips quoted text, which the expression did not.
+      if (!value.includes('"')) expect(normalizeEmail(value)).toBe(previousNormalize(value));
     }
   });
 

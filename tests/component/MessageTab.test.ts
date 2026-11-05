@@ -185,3 +185,44 @@ describe('MessageTab store integration', () => {
     expect(mocks.deleteMessage).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('MessageTab sender checks', () => {
+  it('treats a stranger whose display name shows the account as a stranger', async () => {
+    const { container } = renderTab(
+      makeMessage({ is_unread: false, from: '<me@example.com> <x@evil.test>' }),
+    );
+    await waitFor(() => {
+      const banner = container.querySelector('[data-testid="sender-warning"]');
+      expect(banner?.getAttribute('data-warning-kinds')).toBe('display-name');
+    });
+  });
+
+  it('replies from the first recipient when To is a list', async () => {
+    const { openComposeWindow } = await import('../../src/utils/compose-window');
+    const { container } = renderTab(
+      makeMessage({ is_unread: false, to: 'me@example.com, Bob <bob@example.org>' }),
+    );
+    await fireEvent.click(findIconButton(container, 'lucide-reply'));
+    expect(vi.mocked(openComposeWindow)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prefill: expect.objectContaining({ from: 'me@example.com' }),
+      }),
+    );
+  });
+});
+
+describe('MessageTab reply sender with a comma in a name', () => {
+  it('replies from the first recipient whose name holds a comma', async () => {
+    const { openComposeWindow } = await import('../../src/utils/compose-window');
+    vi.mocked(openComposeWindow).mockClear();
+    const { container } = renderTab(
+      makeMessage({ is_unread: false, to: 'Doe, John <me@example.com>, Bob <bob@example.org>' }),
+    );
+    await fireEvent.click(findIconButton(container, 'lucide-reply'));
+    expect(vi.mocked(openComposeWindow)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prefill: expect.objectContaining({ from: 'me@example.com' }),
+      }),
+    );
+  });
+});

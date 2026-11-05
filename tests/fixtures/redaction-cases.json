@@ -101,6 +101,61 @@
       "name": "email inside stack trace",
       "input": "Error: user shaun@forwardemail.net not found\n    at handler (file.js:10:5)",
       "expected": "Error: user <email:3192f268> not found\n    at handler (file.js:10:5)"
+    },
+    {
+      "name": "access_token in URL query string",
+      "input": "GET /v1/account?access_token=abc123def&x=1",
+      "expected": "GET /v1/account?access_token=[REDACTED]"
+    },
+    {
+      "name": "device_token key=value",
+      "input": "registered device_token=f00dfeed1234",
+      "expected": "registered device_token=[REDACTED]"
+    },
+    {
+      "name": "camelCase apiKey",
+      "input": "config apiKey=sk_test_abc123 loaded",
+      "expected": "config apiKey=[REDACTED] loaded"
+    },
+    {
+      "name": "X-API-Key header",
+      "input": "X-API-Key: sk_live_abc123",
+      "expected": "X-API-Key=[REDACTED]"
+    },
+    {
+      "name": "password in JSON",
+      "input": "{\"password\":\"hunter2\",\"user\":\"bob\"}",
+      "expected": "{\"password\":\"[REDACTED]\",\"user\":\"bob\"}"
+    },
+    {
+      "name": "password in JSON holding the other quote character",
+      "input": "{\"password\":\"ab'cd-SECRETTAIL\",\"user\":\"bob\"}",
+      "expected": "{\"password\":\"[REDACTED]\",\"user\":\"bob\"}"
+    },
+    {
+      "name": "password in JSON holding an escaped quote",
+      "input": "{\"password\":\"ab\\\"cd-SECRETTAIL\",\"user\":\"bob\"}",
+      "expected": "{\"password\":\"[REDACTED]\",\"user\":\"bob\"}"
+    },
+    {
+      "name": "token in a single-quoted object holding a double quote",
+      "input": "{'token': 'ab\"cd-SECRETTAIL', 'id': 7}",
+      "expected": "{'token': '[REDACTED]', 'id': 7}"
+    },
+    {
+      "name": "token in JSON with spaces",
+      "input": "{\"token\": \"abc123\", \"id\": 7}",
+      "expected": "{\"token\": \"[REDACTED]\", \"id\": 7}"
+    },
+    {
+      "name": "email:password pair",
+      "input": "login alice@example.com:hunter2 failed",
+      "expected": "login <email:94a4b546>:[REDACTED] failed"
+    },
+    {
+      "name": "email followed by a colon and a space keeps the message",
+      "input": "Error: user alice@example.com: not found",
+      "expected": "Error: user <email:94a4b546>: not found"
     }
   ]
 }

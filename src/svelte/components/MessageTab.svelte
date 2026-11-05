@@ -47,7 +47,7 @@
   import { openExternalUrl } from '../../utils/external-links.js';
   import { parseMailto, mailtoToPrefill } from '../../utils/mailto';
   import { closeTab } from '../../stores/tabStore';
-  import { normalizeEmail, extractAddressList } from '../../utils/address.ts';
+  import { normalizeEmail, extractAddressList, recipientsToList } from '../../utils/address.ts';
   import { extractRecipientsField } from '../../utils/sync-helpers';
   import { getEffectiveSettingValue, localSettingsVersion } from '../../stores/settingsStore';
   import {
@@ -287,7 +287,13 @@
   function getDeliveredToAddress(): string {
     if (!message) return '';
     const raw = (message as { envelope_to?: unknown }).envelope_to || message.to || '';
-    return normalizeEmail(raw as Parameters<typeof normalizeEmail>[0]);
+    // The first recipient; To is often a list in one string, and a name in it
+    // can hold a comma ("Doe, John <john@...>"), so skip pieces with no address
+    return (
+      recipientsToList(raw as Parameters<typeof recipientsToList>[0])
+        .map((addr) => normalizeEmail(addr))
+        .find((email) => email.includes('@')) || ''
+    );
   }
 
   function handleReply(replyAll = false) {
@@ -453,7 +459,7 @@
     <div class="flex items-center gap-1">
       <Tooltip.Root>
         <Tooltip.Trigger>
-          <Button variant="ghost" size="icon" onclick={handleArchive}>
+          <Button variant="ghost" size="icon" onclick={handleArchive} aria-label="Archive">
             <Archive class="h-4 w-4" />
           </Button>
         </Tooltip.Trigger>
@@ -467,6 +473,7 @@
             size="icon"
             class="text-destructive hover:text-destructive"
             onclick={handleDelete}
+            aria-label="Delete"
           >
             <Trash2 class="h-4 w-4" />
           </Button>
