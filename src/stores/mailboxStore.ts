@@ -426,12 +426,23 @@ const createMailboxStore = () => {
     // being left.
     selectedConversation.set(null);
 
+    // Whether the list was shown from a cache the socket kept current. Then
+    // asking the server for the folder's first page again would only repeat
+    // what it already sent.
+    let servedFresh: Promise<boolean> = Promise.resolve(false);
     const effectiveQuery = buildSearchQuery(get(query) || '');
     if (effectiveQuery) {
       searchMessages(get(query) || '');
     } else {
+      let decide: (fresh: boolean) => void = () => {};
+      servedFresh = new Promise((resolve) => {
+        decide = resolve;
+      });
       // Choosing the folder already open is how people ask for a refresh.
-      loadMessages({ preferCache: !reselecting });
+      loadMessages({ preferCache: !reselecting, onFresh: decide }).then(
+        () => decide(false),
+        () => decide(false),
+      );
     }
 
     // Sync the opened folder next, ahead of other queued sync work. Demo mode
@@ -442,8 +453,10 @@ const createMailboxStore = () => {
       !reselecting && listFreshness.isFresh(activeAccountName(), path, firstPageKey(), Infinity);
     if (path && !isDemoMode() && !keptCurrent) {
       const account = activeAccountName();
-      import('../utils/sync-controller.js')
-        .then(({ syncFolderOnDemand }) => syncFolderOnDemand(path, account))
+      Promise.all([servedFresh, import('../utils/sync-controller.js')])
+        .then(([fresh, { syncFolderOnDemand }]) =>
+          syncFolderOnDemand(path, account, { metadata: !fresh }),
+        )
         .catch(() => {});
     }
   };
@@ -1337,8 +1350,13 @@ const createMailboxStore = () => {
   // `preferCache` is for navigation (opening a folder, switching account,
   // turning a page): the cached page is shown without a request while the
   // socket keeps it current (see list-freshness.ts). Reloads after a change
-  // made here leave it off and always ask the server.
-  const loadMessages = async (options: { refresh?: boolean; preferCache?: boolean } = {}) => {
+  // made here leave it off and always ask the server. `onFresh` is told
+  // whether the cached page was used that way, as soon as that is known and
+  // before any request; a caller that wants to know on every path also has to
+  // treat the returned promise settling as false.
+  const loadMessages = async (
+    options: { refresh?: boolean; preferCache?: boolean; onFresh?: (fresh: boolean) => void } = {},
+  ) => {
     const refresh = options?.refresh === true;
     if (refresh && inFlightMessageListRequest) {
       inFlightMessageListRequest.trailing = true;
@@ -1552,8 +1570,10 @@ const createMailboxStore = () => {
       listFreshness.isFresh(account, folder, freshnessKey, cachedPage.length)
     ) {
       tracer.end({ status: 'fresh_cache', count: cachedPage.length });
+      options.onFresh?.(true);
       return;
     }
+    options.onFresh?.(false);
 
     // Build request key for deduplication
     const requestKey = buildMessageListRequestKey({

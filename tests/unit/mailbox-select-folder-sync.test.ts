@@ -114,6 +114,8 @@ describe('selectFolder', () => {
 
     mailboxStore.actions.selectFolder('Work');
 
-    await vi.waitFor(() => expect(h.syncFolderOnDemand).toHaveBeenCalledWith('Work', 'a@test.com'));
+    await vi.waitFor(() =>
+      expect(h.syncFolderOnDemand).toHaveBeenCalledWith('Work', 'a@test.com', { metadata: true }),
+    );
   });
 });

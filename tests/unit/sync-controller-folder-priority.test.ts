@@ -59,7 +59,11 @@ const sent = () =>
 
 describe('sync-controller folder switch priority', () => {
   let startInitialSync: (account: string, folders: unknown[], options?: unknown) => void;
-  let syncFolderOnDemand: (folder: string, account: string) => void;
+  let syncFolderOnDemand: (
+    folder: string,
+    account: string,
+    options?: { metadata?: boolean },
+  ) => void;
   let syncSummary: Readable<string>;
   let syncProgress: Writable<{ active: boolean; folder: string }>;
 
@@ -122,6 +126,34 @@ describe('sync-controller folder switch priority', () => {
       'backfill:INBOX',
       'backfill:INBOX',
     ]);
+  });
+
+  it('a folder the socket kept current keeps its place for metadata, but backfills first', async () => {
+    startInitialSync('a@b.com', folders('INBOX', 'A', 'B', 'C'));
+    await tick();
+
+    syncFolderOnDemand('C', 'a@b.com', { metadata: false });
+    await finishCurrent();
+    // Its first page was just shown from a current cache: asking for it again
+    // ahead of A and B would only repeat it.
+    expect(sent()).toEqual(['metadata:INBOX', 'metadata:A']);
+
+    await drain();
+    expect(sent().filter((t) => t.startsWith('backfill:'))[0]).toBe('backfill:C');
+    expect(sent().filter((t) => t === 'metadata:C')).toHaveLength(1);
+  });
+
+  it('a current folder with nothing queued for it starts no sync', async () => {
+    startInitialSync('a@b.com', folders('INBOX'));
+    await drain();
+    hoisted.sendSyncTask.mockClear();
+    syncProgress.set({ active: false, folder: '' });
+
+    syncFolderOnDemand('INBOX', 'a@b.com', { metadata: false });
+    await tick();
+
+    expect(sent()).toEqual([]);
+    expect(get(syncProgress).active).toBe(false);
   });
 
   it('runs only the last of several quickly opened folders first, without duplicates', async () => {

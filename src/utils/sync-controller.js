@@ -456,17 +456,18 @@ export function prefetchMessages(folder, account, ids = []) {
 // copy already queued; one already running is left alone) and its backfill
 // ahead of other folders' backfills. Only the latest folder keeps the backfill
 // priority, so switching folders quickly neither duplicates work nor holds
-// other folders back for good.
-function bumpFolder(folder) {
+// other folders back for good. With `metadata` false only the backfill moves.
+function bumpFolder(folder, { metadata = true } = {}) {
   openFolder = folder;
   const backfill = takeTask(buildQueueKey({ type: 'backfill', folder }));
   if (backfill) queueBackfill(backfill);
+  if (!metadata) return Boolean(backfill);
   if (
     inFlight?.account === currentAccount &&
     inFlight.type === 'metadata' &&
     inFlight.folder === folder
   ) {
-    return;
+    return true;
   }
   const settings = getSyncSettings();
   unshiftTask(
@@ -478,20 +479,26 @@ function bumpFolder(folder) {
       wantBodies: false,
     },
   );
+  return true;
 }
 
 /**
  * The user opened a folder: sync it next. A task already running finishes its
  * batch first; "Syncing <folder>" shows the folder once its sync starts.
+ * `metadata: false` is for a folder whose list the WebSocket kept current: its
+ * first page is not asked for again, but its backfill still goes first.
+ * @param {string} folder
+ * @param {string} [account]
+ * @param {{ metadata?: boolean }} [options]
  */
-export function syncFolderOnDemand(folder, account) {
+export function syncFolderOnDemand(folder, account, options = {}) {
   // Only the account being synced. Before sync starts, or while it still runs
   // for the account switched away from, startInitialSync puts the open folder
   // first when it starts the account.
   if (!folder || !currentAccount || accountKey(account || currentAccount) !== currentAccount) {
     return;
   }
-  bumpFolder(folder);
+  if (!bumpFolder(folder, options)) return;
   setStatus({ queue: [...queue] });
   syncProgress.update((p) => ({ ...p, active: true }));
   pump();
