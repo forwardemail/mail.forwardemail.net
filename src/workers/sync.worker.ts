@@ -38,6 +38,8 @@ import {
   worklistFromHeaders,
   backfillBatchDone,
   createBodyFailureMemo,
+  honoredSinceModseq,
+  metadataPassDone,
   type CachedBodyStatus,
 } from './sync-pure.ts';
 import { createCircuitBreaker, parseRetryAfterMs } from '../utils/circuit-breaker.js';
@@ -596,7 +598,15 @@ async function runMetadataTask(task, postProgress) {
       target: maxMessages,
     });
 
-    if (writeResult.inserted === 0 && writeResult.updated === 0) {
+    if (
+      metadataPassDone({
+        filtered: honoredSinceModseq(sinceModSeq, normalized),
+        rows: rawList.length,
+        limit,
+        inserted: writeResult.inserted,
+        updated: writeResult.updated,
+      })
+    ) {
       break;
     }
 

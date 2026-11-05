@@ -489,3 +489,39 @@ export function createBodyFailureMemo() {
     },
   };
 }
+
+// Whether the server filtered a page by since_modseq. Older API releases
+// ignore the parameter and list the folder newest first; then some rows are
+// at or below the MODSEQ asked for.
+export function honoredSinceModseq(
+  sinceModSeq: unknown,
+  rows: Array<{ modseq?: unknown }>,
+): boolean {
+  const since = Number(sinceModSeq);
+  if (sinceModSeq == null || sinceModSeq === '' || !Number.isFinite(since)) return false;
+  return rows.every((row) => {
+    const modseq = Number(row?.modseq);
+    return Number.isFinite(modseq) && modseq > since;
+  });
+}
+
+// When a metadata pass stops paging. A filtered listing holds only changes,
+// and a page of them can all be ones the WebSocket already applied here, so
+// it pages on until the server runs out. An unfiltered one is the folder
+// newest first, and the first page with nothing new ends the pass.
+export function metadataPassDone({
+  filtered,
+  rows,
+  limit,
+  inserted,
+  updated,
+}: {
+  filtered: boolean;
+  rows: number;
+  limit: number;
+  inserted: number;
+  updated: number;
+}): boolean {
+  if (filtered) return rows < limit;
+  return inserted === 0 && updated === 0;
+}
