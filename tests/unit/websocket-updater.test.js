@@ -53,6 +53,7 @@ const mockRemoveRemoteMessages = vi.fn();
 const mockApplyRemoteFlags = vi.fn();
 const mockApplyRemoteLabels = vi.fn();
 const mockApplyRemoteMailboxChange = vi.fn();
+const mockIsCurrentViewFresh = vi.fn(() => false);
 
 // Create writable stores for the mock mailbox state
 const selectedFolderStore = writable('INBOX');
@@ -83,6 +84,7 @@ vi.mock('../../src/stores/mailboxStore', () => ({
       applyRemoteFlags: (...args) => mockApplyRemoteFlags(...args),
       applyRemoteLabels: (...args) => mockApplyRemoteLabels(...args),
       applyRemoteMailboxChange: (...args) => mockApplyRemoteMailboxChange(...args),
+      isCurrentViewFresh: (...args) => mockIsCurrentViewFresh(...args),
     },
   },
 }));
@@ -170,6 +172,7 @@ vi.mock('../../src/utils/websocket-client', () => ({
 import { Accounts, Local } from '../../src/utils/storage';
 import { createInboxUpdater } from '../../src/utils/websocket-updater.js';
 import { PUSH_COALESCE_MS } from '../../src/utils/realtime-event-coalescer.js';
+import { listFreshness } from '../../src/utils/list-freshness';
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -1041,5 +1044,126 @@ describe('event payloads applied to the store', () => {
     await vi.advanceTimersByTimeAsync(60_000);
 
     expect(mockLoadMessages).toHaveBeenCalledWith({ refresh: true });
+  });
+});
+
+describe('cached pages the socket keeps current', () => {
+  // The real freshness tracker, fed by the updater: a shared inbox depends
+  // on another person's changes reaching here, so every way the socket can
+  // miss one has to make the cached pages stale.
+  const ME = 'user@example.com';
+  const PAGE = 'p1|newest|50';
+  let updater;
+  let calendarSpy;
+
+  const syncPage = (folder, ids = []) =>
+    listFreshness.mark(listFreshness.begin(ME), { folder, key: PAGE, rows: 1, ids });
+  const fresh = (folder) => listFreshness.isFresh(ME, folder, PAGE, 1);
+  const returnToApp = () => document.dispatchEvent(new Event('visibilitychange'));
+
+  beforeEach(() => {
+    mgrEventHandlers.clear();
+    mockMgrOn.mockClear();
+    mockLoadMessages.mockReset();
+    mockIsCurrentViewFresh.mockReset();
+    mockIsCurrentViewFresh.mockReturnValue(false);
+    vi.mocked(Local.get).mockReset();
+    mockGetClient.mockImplementation(() => ({
+      connected: true,
+      authenticated: true,
+      lastHeardAt: Date.now(),
+    }));
+    selectedFolderStore.set('INBOX');
+    Object.defineProperty(document, 'visibilityState', {
+      value: 'visible',
+      writable: true,
+      configurable: true,
+    });
+    Object.defineProperty(document, 'hidden', { value: false, configurable: true });
+    calendarSpy = vi.fn();
+    window.addEventListener('fe:calendar-changed', calendarSpy);
+    setupCredentials();
+    updater = createInboxUpdater();
+    updater.start();
+  });
+
+  afterEach(() => {
+    updater.destroy();
+    window.removeEventListener('fe:calendar-changed', calendarSpy);
+    mockGetClient.mockImplementation(() => ({ connected: true }));
+  });
+
+  it('an event naming a folder makes that folder stale and leaves others alone', () => {
+    syncPage('INBOX', ['mbx-inbox']);
+    syncPage('Sent', ['mbx-sent']);
+    simulateWsEvent('flagsUpdated', {
+      _account: ME,
+      mailbox: 'mbx-inbox',
+      action: 'set',
+      flags: ['\\Seen'],
+      uids: [7],
+    });
+    expect(fresh('INBOX')).toBe(false);
+    expect(fresh('Sent')).toBe(true);
+  });
+
+  it('a move makes both its folders stale', () => {
+    syncPage('INBOX', ['mbx-inbox']);
+    syncPage('Archive', ['mbx-archive']);
+    simulateWsEvent('messagesMoved', {
+      _account: ME,
+      sourceMailbox: 'mbx-inbox',
+      destinationMailbox: 'mbx-archive',
+      sourceUid: [7],
+      destinationUid: [70],
+    });
+    expect(fresh('INBOX')).toBe(false);
+    expect(fresh('Archive')).toBe(false);
+  });
+
+  it('a disconnect or a dropped event makes every folder of that account stale', () => {
+    syncPage('INBOX');
+    simulateWsEvent('_disconnected', { _account: ME, code: 1006 });
+    expect(fresh('INBOX')).toBe(false);
+
+    syncPage('INBOX');
+    simulateWsEvent('_messageDropped', { _account: ME, reason: 'rate-limit' });
+    expect(fresh('INBOX')).toBe(false);
+  });
+
+  it('stopping realtime drops every cached page', () => {
+    syncPage('INBOX');
+    updater.stop();
+    expect(fresh('INBOX')).toBe(false);
+  });
+
+  it('returning to the app refetches the folder only when it is not current', () => {
+    mockIsCurrentViewFresh.mockReturnValue(true);
+    returnToApp();
+    expect(mockLoadMessages).not.toHaveBeenCalled();
+
+    mockIsCurrentViewFresh.mockReturnValue(false);
+    returnToApp();
+    expect(mockLoadMessages).toHaveBeenCalledWith({ refresh: true });
+  });
+
+  it('calendars reload on return only after the socket may have missed a change', () => {
+    vi.useFakeTimers({ now: Date.now(), toFake: ['Date'] });
+    try {
+      returnToApp();
+      expect(calendarSpy).toHaveBeenCalledTimes(1);
+
+      // Past the 30 s throttle, with the socket delivering everything since.
+      vi.setSystemTime(Date.now() + 60_000);
+      returnToApp();
+      expect(calendarSpy).toHaveBeenCalledTimes(1);
+
+      simulateWsEvent('_disconnected', { _account: ME, code: 1006 });
+      vi.setSystemTime(Date.now() + 60_000);
+      returnToApp();
+      expect(calendarSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

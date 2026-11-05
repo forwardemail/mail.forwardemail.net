@@ -137,6 +137,9 @@ export function createWebSocketClient(opts = {}) {
   let destroyed = false;
   let connected = false;
   let authenticated = false;
+  // When the server last sent anything, pings included. A socket that looks
+  // open but has been silent past the ping interval may be dead after a sleep.
+  let lastHeardAt = 0;
   let reconnectAttempts = 0;
   // Set by a NO_RETRY_CLOSE_CODES close: the same credentials would only be
   // refused again, so nothing reconnects until updateCredentials()
@@ -435,6 +438,7 @@ export function createWebSocketClient(opts = {}) {
 
     ws.addEventListener('message', async (event) => {
       if (socket !== ws) return;
+      lastHeardAt = Date.now();
       // Rate limit check
       if (isRateLimited()) {
         reportDropped('rate-limit');
@@ -636,6 +640,11 @@ export function createWebSocketClient(opts = {}) {
     /** Whether the server has confirmed authentication. */
     get authenticated() {
       return authenticated;
+    },
+
+    /** When the server last sent anything on this socket (0 if never). */
+    get lastHeardAt() {
+      return lastHeardAt;
     },
   };
 }

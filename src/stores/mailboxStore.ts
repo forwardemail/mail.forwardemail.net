@@ -84,6 +84,7 @@ import { folderMessageCache } from './folder-message-cache';
 import { isOnline } from '../utils/network-status';
 import { getAuthHeader, getAuthHeaderForAccount } from '../utils/auth';
 import { noteLightweightListResponse, lightweightListSupported } from '../utils/api-capabilities';
+import { listFreshness } from '../utils/list-freshness';
 import {
   isValidDexieKeyFallback,
   coerceLabelList,
@@ -426,7 +427,8 @@ const createMailboxStore = () => {
     if (effectiveQuery) {
       searchMessages(get(query) || '');
     } else {
-      loadMessages();
+      // Choosing the folder already open is how people ask for a refresh.
+      loadMessages({ preferCache: !reselecting });
     }
 
     // Sync the opened folder next, ahead of other queued sync work. Demo mode
@@ -1314,7 +1316,23 @@ const createMailboxStore = () => {
     }, 10_000);
   }
 
-  const loadMessages = async (options: { refresh?: boolean } = {}) => {
+  // Whether the first page of the folder on screen is still current without
+  // asking the server: what a return to the app would otherwise refetch.
+  const isCurrentViewFresh = () => {
+    const folder = get(selectedFolder);
+    if (!folder || isDemoMode()) return false;
+    const account = Local.get('email') || 'default';
+    const shown = (get(messages) || []).filter(
+      (m) => String(m?.folder || '').toLowerCase() === String(folder).toLowerCase(),
+    ).length;
+    return listFreshness.isFresh(account, folder, `p1|${get(sortOrder)}|${getLimit()}`, shown);
+  };
+
+  // `preferCache` is for navigation (opening a folder, switching account,
+  // turning a page): the cached page is shown without a request while the
+  // socket keeps it current (see list-freshness.ts). Reloads after a change
+  // made here leave it off and always ask the server.
+  const loadMessages = async (options: { refresh?: boolean; preferCache?: boolean } = {}) => {
     const refresh = options?.refresh === true;
     if (refresh && inFlightMessageListRequest) {
       inFlightMessageListRequest.trailing = true;
@@ -1516,6 +1534,21 @@ const createMailboxStore = () => {
         warn('cached load failed', err);
       }
 
+    // The page on screen came from the cache, and the socket has delivered
+    // every change to this folder since the server last sent it.
+    const freshnessKey = `p${currentPage}|${currentSort}|${limit}`;
+    if (
+      options?.preferCache === true &&
+      !refresh &&
+      isBasicQuery &&
+      !isDemoMode() &&
+      cachedPage.length > 0 &&
+      listFreshness.isFresh(account, folder, freshnessKey, cachedPage.length)
+    ) {
+      tracer.end({ status: 'fresh_cache', count: cachedPage.length });
+      return;
+    }
+
     // Build request key for deduplication
     const requestKey = buildMessageListRequestKey({
       account,
@@ -1668,6 +1701,9 @@ const createMailboxStore = () => {
         });
     }
 
+    // Taken before the request: a change after this point arrives as an event.
+    const freshnessToken = isBasicQuery ? listFreshness.begin(account) : null;
+
     // Track this request (inFlightMessageListRequest already set eagerly above)
     const requestPromise = fetchAddressSafePage(requestParams, 'request_start');
 
@@ -1763,6 +1799,14 @@ const createMailboxStore = () => {
       }
       // A page fetched before a change elsewhere can still list removed rows.
       merged = merged.filter((m) => !isRemotelyRemoved(account, m));
+      if (!isNoContent) {
+        listFreshness.mark(freshnessToken, {
+          folder,
+          key: freshnessKey,
+          rows: merged.length,
+          ids: [folderRec?.id, (folderRec as { _id?: unknown } | undefined)?._id],
+        });
+      }
 
       // Server-confirmed-empty: when the folder's own metadata reports zero
       // messages AND this basic page-1 fetch returned none, the folder is
@@ -3703,7 +3747,7 @@ const createMailboxStore = () => {
     const next = allowed.includes(order) ? order : 'newest';
     sortOrder.set(next);
     page.set(1);
-    loadMessages();
+    loadMessages({ preferCache: true });
   };
 
   // Folder management actions
@@ -4421,6 +4465,7 @@ const createMailboxStore = () => {
       removeRemoteMessages,
       applyRemoteFlags,
       applyRemoteLabels,
+      isCurrentViewFresh,
       applyRemoteMailboxChange,
       refreshSearch,
       addPendingFlagMutation,

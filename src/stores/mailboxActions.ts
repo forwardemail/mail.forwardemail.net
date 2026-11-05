@@ -310,7 +310,7 @@ export const load = async () => {
     }
     const earlyMessages =
       get(mailboxStore.state.selectedFolder) && get(mailboxStore.state.folders)?.length
-        ? mailboxStore.actions.loadMessages()
+        ? mailboxStore.actions.loadMessages({ preferCache: true })
         : null;
     earlyMessages?.catch?.(() => {});
 
@@ -340,7 +340,7 @@ export const load = async () => {
     // filter dropdown, not message rendering. No reason to serialize them.
     const [labelsResult, messagesResult] = await Promise.allSettled([
       loadLabels(),
-      earlyMessages || mailboxStore.actions.loadMessages(),
+      earlyMessages || mailboxStore.actions.loadMessages({ preferCache: true }),
     ]);
     if (labelsResult.status === 'rejected') {
       warn('[load] loadLabels failed, continuing without labels', labelsResult.reason);

@@ -97,6 +97,18 @@ export async function installMailServer(page, options = {}) {
 }
 
 /**
+ * One mailbox that several pages sign in to, like a support inbox shared by
+ * a team or one person's laptop and phone. Every page reads and changes the
+ * same server state. `onChange` receives the realtime event the real server
+ * sends for each change (see installSharedSocket).
+ */
+export async function installSharedMailServer(pages, options = {}) {
+  const server = createMailServer(options);
+  for (const page of pages) await routeApi(page, server.handle, () => server.offline);
+  return server;
+}
+
+/**
  * One server per signed-in account, picked by the credentials each request
  * carries, as the real API does. `accounts` maps an email to its password and
  * the installMailServer options for its mailbox. Requests with credentials
@@ -146,6 +158,7 @@ function createMailServer({
   listDelay = null,
   detailBody = null,
   indexLag = 0,
+  onChange = null,
 } = {}) {
   const state = new Map(messages.map((m) => [m.id, structuredClone(m)]));
   // id -> { folder, until }: the folder lists still report until `until`
@@ -160,10 +173,87 @@ function createMailServer({
     releaseHeld = resolve;
   });
 
+  const folderId = (path) => {
+    const i = folders.findIndex((f) => f.path === path);
+    return i < 0 ? path : `folder-${i + 1}`;
+  };
+
+  // The events the real server sends every session of the alias for a change,
+  // with the same fields (helpers/send-notification.js, notifyFlagChange).
+  const announce = (before, msg) => {
+    if (!onChange) return;
+    if (!msg) {
+      onChange({
+        event: 'messagesExpunged',
+        mailbox: folderId(before.folder_path),
+        path: before.folder_path,
+        uids: [before.uid],
+      });
+      return;
+    }
+    if (before.folder_path !== msg.folder_path) {
+      onChange({
+        event: 'messagesMoved',
+        sourceMailbox: folderId(before.folder_path),
+        sourcePath: before.folder_path,
+        destinationMailbox: folderId(msg.folder_path),
+        destinationPath: msg.folder_path,
+        sourceUid: [msg.uid],
+        destinationUid: [msg.uid],
+      });
+    }
+    if (JSON.stringify(before.flags || []) !== JSON.stringify(msg.flags || [])) {
+      onChange({
+        event: 'flagsUpdated',
+        mailbox: folderId(msg.folder_path),
+        path: msg.folder_path,
+        action: 'set',
+        flags: [...(msg.flags || [])],
+        uids: [msg.uid],
+      });
+    }
+  };
+
+  // A change made outside this app, such as Thunderbird over IMAP. It reaches
+  // the server state and is announced the same way.
+  const applyChange = (id, change = {}) => {
+    const msg = state.get(id);
+    if (!msg) return null;
+    const before = structuredClone(msg);
+    let flags = [...(msg.flags || [])];
+    if (Array.isArray(change.flags_add) || Array.isArray(change.flags_remove)) {
+      for (const f of change.flags_add || []) if (!flags.includes(f)) flags.push(f);
+      flags = flags.filter((f) => !(change.flags_remove || []).includes(f));
+    } else if (Array.isArray(change.flags)) {
+      flags = [...change.flags];
+    }
+    msg.flags = flags;
+    if (typeof change.folder === 'string' && change.folder) {
+      if (indexLag && change.folder !== msg.folder_path) {
+        lagging.set(id, { folder: msg.folder_path, until: Date.now() + indexLag });
+      }
+      msg.folder_path = change.folder;
+    }
+    if (Array.isArray(change.labels)) msg.labels = [...change.labels];
+    announce(before, msg);
+    return msg;
+  };
+
   const server = {
     offline: false,
     log,
     messages: state,
+    applyChange,
+    // A message that arrives, or is saved by another client (a sent reply).
+    add(msg) {
+      state.set(msg.id, structuredClone(msg));
+      onChange?.({
+        event: 'newMessage',
+        mailbox: folderId(msg.folder_path),
+        path: msg.folder_path,
+        uid: msg.uid,
+      });
+    },
     get(id) {
       return state.get(id);
     },
@@ -269,26 +359,11 @@ function createMailServer({
         });
       }
       if (method === 'PUT') {
-        const change = body || {};
-        let flags = [...(msg.flags || [])];
-        if (Array.isArray(change.flags_add) || Array.isArray(change.flags_remove)) {
-          for (const f of change.flags_add || []) if (!flags.includes(f)) flags.push(f);
-          flags = flags.filter((f) => !(change.flags_remove || []).includes(f));
-        } else if (Array.isArray(change.flags)) {
-          flags = [...change.flags];
-        }
-        msg.flags = flags;
-        if (typeof change.folder === 'string' && change.folder) {
-          if (indexLag && change.folder !== msg.folder_path) {
-            lagging.set(id, { folder: msg.folder_path, until: Date.now() + indexLag });
-          }
-          msg.folder_path = change.folder;
-        }
-        if (Array.isArray(change.labels)) msg.labels = [...change.labels];
-        return json(route, listItem(msg));
+        return json(route, listItem(applyChange(id, body || {})));
       }
       if (method === 'DELETE') {
         state.delete(id);
+        announce(msg, null);
         return json(route, { success: true });
       }
     }
@@ -326,6 +401,61 @@ export async function installMockSocket(page) {
     send(payload) {
       const frame = JSON.stringify({ timestamp: Date.now(), ...payload });
       for (const ws of sockets) ws.send(frame);
+    },
+  };
+}
+
+/**
+ * The API's WebSocket for several pages signed in to one alias. `send` goes
+ * to every open socket, as the server fans each change out to all sessions.
+ * Sockets ping every `pingEveryMs` like the server's keep-alive, and `drop`
+ * closes one page's socket the way a sleep or a network change does: the app
+ * reconnects on its own, and events sent in between never reach it.
+ */
+export async function installSharedSocket(pages, { pingEveryMs = 10_000 } = {}) {
+  const open = new Map(pages.map((p) => [p, new Set()]));
+  const down = new Set();
+  for (const page of pages) {
+    await page.routeWebSocket(/\/v1\/ws/, (ws) => {
+      if (down.has(page)) {
+        ws.close({ code: 4000, reason: 'unreachable' });
+        return;
+      }
+      ws.onMessage((message) => {
+        let parsed = null;
+        try {
+          parsed = JSON.parse(String(message));
+        } catch {
+          return;
+        }
+        if (parsed?.event === 'auth') {
+          open.get(page).add(ws);
+          ws.send(JSON.stringify({ event: 'connected', aliasId: 'alias-e2e' }));
+        }
+      });
+      ws.onClose(() => open.get(page).delete(ws));
+    });
+  }
+  const frame = (payload) => JSON.stringify({ timestamp: Date.now(), ...payload });
+  const timer = setInterval(() => {
+    for (const set of open.values()) for (const ws of set) ws.send(frame({ event: 'ping' }));
+  }, pingEveryMs);
+  return {
+    connected: (page) => open.get(page).size,
+    send(payload) {
+      for (const set of open.values()) for (const ws of set) ws.send(frame(payload));
+    },
+    // Until restore(), the page cannot connect again.
+    drop(page) {
+      down.add(page);
+      for (const ws of open.get(page)) ws.close({ code: 4000, reason: 'gone' });
+      open.get(page).clear();
+    },
+    restore(page) {
+      down.delete(page);
+    },
+    stop() {
+      clearInterval(timer);
     },
   };
 }

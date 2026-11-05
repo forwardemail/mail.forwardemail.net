@@ -5904,7 +5904,7 @@
     if ($hasNextPage) {
       page.update((p) => p + 1);
       if (mailboxStore?.actions?.loadMessages) {
-        mailboxStore.actions.loadMessages();
+        mailboxStore.actions.loadMessages({ preferCache: true });
       } else {
         mailboxView.loadMessages?.();
       }
@@ -5914,7 +5914,7 @@
     if ($page > 1) {
       page.update((p) => p - 1);
       if (mailboxStore?.actions?.loadMessages) {
-        mailboxStore.actions.loadMessages();
+        mailboxStore.actions.loadMessages({ preferCache: true });
       } else {
         mailboxView.loadMessages?.();
       }

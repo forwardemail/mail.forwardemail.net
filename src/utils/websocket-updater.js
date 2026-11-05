@@ -36,6 +36,7 @@ import {
 import { isDemoMode } from './demo-mode.js';
 import { fetchLabels } from '../stores/settingsStore';
 import { getWebSocketManager, destroyWebSocketManager } from './websocket-manager.js';
+import { listFreshness } from './list-freshness';
 import { createRealtimeEventCoalescer } from './realtime-event-coalescer.js';
 import {
   MAX_REALTIME_UIDS,
@@ -49,6 +50,11 @@ import {
 const FALLBACK_POLL_INTERVAL_MS = 60_000; // 1 min fallback when WS disconnected
 const SETTINGS_SYNC_THROTTLE_MS = 30_000; // Throttle visibility-based settings sync
 const CALDAV_RESYNC_THROTTLE_MS = 30_000; // Throttle visibility-based calendar/contacts reload
+// While the socket has delivered everything since the last reload, a return
+// to the app reloads these only this often. The socket carries calendar and
+// contact changes; label definitions have no event, so they get a shorter cap.
+const CALDAV_TRUSTED_MAX_MS = 15 * 60_000;
+const SETTINGS_TRUSTED_MAX_MS = 5 * 60_000;
 const CATCH_UP_DELAY_MS = 2_000; // Collapse reconnect and dropped-message catch-ups
 // How long a change for the account being switched to waits for its list to
 // replace the previous account's on screen, and how often that is checked.
@@ -104,6 +110,9 @@ function createWebSocketUpdater() {
   let forceReconnectHandler = null;
   let lastSettingsSync = 0;
   let lastCaldavResync = 0;
+  // Freshness tokens from the last visibility reloads, for the active account
+  let caldavToken = null;
+  let settingsToken = null;
   const wsUnsubs = [];
 
   /**
@@ -118,6 +127,45 @@ function createWebSocketUpdater() {
    */
   function isActiveAccountEvent(eventData) {
     return isActiveAccount(eventData?._account, { treatUnknownAsActive: true });
+  }
+
+  const MAIL_EVENTS = new Set([
+    WS_EVENTS.NEW_MESSAGE,
+    WS_EVENTS.MESSAGES_MOVED,
+    WS_EVENTS.MESSAGES_COPIED,
+    WS_EVENTS.MESSAGES_EXPUNGED,
+    WS_EVENTS.FLAGS_UPDATED,
+    WS_EVENTS.LABELS_UPDATED,
+  ]);
+  const FOLDER_EVENTS = new Set([
+    WS_EVENTS.MAILBOX_CREATED,
+    WS_EVENTS.MAILBOX_DELETED,
+    WS_EVENTS.MAILBOX_RENAMED,
+  ]);
+  const FOLDER_FIELDS = [
+    'mailbox',
+    'path',
+    'sourceMailbox',
+    'source_mailbox',
+    'sourcePath',
+    'source_path',
+    'destinationMailbox',
+    'destination_mailbox',
+    'destinationPath',
+    'destination_path',
+  ];
+
+  // A change to a folder makes its cached pages stale. The folder on screen
+  // is fetched again by the event's own refresh; any other one is fetched
+  // when it is next opened.
+  function noteFolderChange(eventName, data) {
+    if (!MAIL_EVENTS.has(eventName) && !FOLDER_EVENTS.has(eventName)) return;
+    const account = isNonEmptyString(data?._account) ? data._account : Local.get('email');
+    if (!isNonEmptyString(account)) return;
+    const named = FOLDER_EVENTS.has(eventName)
+      ? []
+      : FOLDER_FIELDS.map((field) => normalizeIdentifier(data?.[field])).filter(isNonEmptyString);
+    listFreshness.noteChanged(account, named);
   }
 
   // Refresh the current folder — polls whatever the user is viewing, not just INBOX.
@@ -543,7 +591,10 @@ function createWebSocketUpdater() {
   function startFallbackPoll() {
     stopFallbackPoll();
     fallbackTimer = setInterval(() => {
-      if (!activeAccountConnected()) {
+      // Connected, the socket keeps the folder current, but only up to the
+      // freshness window: past it the folder is fetched again in case an
+      // event was lost in a way the client cannot see.
+      if (!activeAccountConnected() || !mailboxStore.actions.isCurrentViewFresh?.()) {
         refreshCurrentFolder();
       }
     }, FALLBACK_POLL_INTERVAL_MS);
@@ -593,8 +644,18 @@ function createWebSocketUpdater() {
         const updateHandlers = new Map();
         const updateCoalescer = createRealtimeEventCoalescer({
           onEvent(eventName, data) {
+            noteFolderChange(eventName, data);
             updateHandlers.get(eventName)?.(data);
           },
+        });
+
+        // Pages the socket was keeping current are only as good as the
+        // connection: see list-freshness.ts.
+        listFreshness.setProbe((account) => {
+          const client = wsManager?.getClient?.(account);
+          return client
+            ? { authenticated: Boolean(client.authenticated), lastHeardAt: client.lastHeardAt || 0 }
+            : null;
         });
         const registerUpdateHandler = (eventName, handler) => {
           updateHandlers.set(eventName, handler);
@@ -691,6 +752,9 @@ function createWebSocketUpdater() {
         // socket can fail on its own (no IMAP, changed password).
         wsUnsubs.push(
           wsManager.on('_authFailed', (data) => {
+            // Any account's cached folders stop being trusted, not only the
+            // active one's: the user may switch to it next.
+            if (isNonEmptyString(data?._account)) listFreshness.noteMissed(data._account);
             if (!isActiveAccount(data?._account)) return;
             window.dispatchEvent(
               new CustomEvent('fe:auth-failed', {
@@ -705,7 +769,11 @@ function createWebSocketUpdater() {
         const disconnectedAccounts = new Set();
         wsUnsubs.push(
           wsManager.on('_disconnected', (data) => {
-            if (isNonEmptyString(data?._account)) disconnectedAccounts.add(data._account);
+            if (!isNonEmptyString(data?._account)) return;
+            disconnectedAccounts.add(data._account);
+            // Every account, not only the one on screen: another account's
+            // cached folders are not trusted when the user switches to it.
+            listFreshness.noteMissed(data._account);
           }),
           wsManager.on('_authenticated', (data) => {
             if (!isNonEmptyString(data?._account)) return;
@@ -715,6 +783,7 @@ function createWebSocketUpdater() {
           }),
           // An event dropped for size or rate cannot be replayed: refresh instead.
           wsManager.on('_messageDropped', (data) => {
+            if (isNonEmptyString(data?._account)) listFreshness.noteMissed(data._account);
             if (isActiveAccountEvent(data)) scheduleCatchUp();
           }),
         );
@@ -745,8 +814,14 @@ function createWebSocketUpdater() {
         // The unlock path re-runs this via fe:force-reconnect.
         if (isVaultLocked()) return;
 
-        // 1. Always refresh the current folder when user returns
-        refreshCurrentFolder();
+        // Each step below is skipped while the active account's socket has
+        // delivered every change since it last ran (see list-freshness.ts).
+        // Coming back after a sleep, a dropped connection or a dropped event
+        // reloads everything as before.
+        const account = Local.get('email') || 'default';
+
+        // 1. Refresh the current folder
+        if (!mailboxStore.actions.isCurrentViewFresh?.()) refreshCurrentFolder();
 
         // 2. Reconnect any disconnected WebSocket clients
         if (wsManager) {
@@ -756,15 +831,23 @@ function createWebSocketUpdater() {
 
         // 3. Reconcile calendar + contacts
         const now = Date.now();
-        if (now - lastCaldavResync >= CALDAV_RESYNC_THROTTLE_MS) {
+        const caldavCurrent =
+          caldavToken?.account === account.toLowerCase() &&
+          listFreshness.holds(caldavToken, CALDAV_TRUSTED_MAX_MS);
+        if (!caldavCurrent && now - lastCaldavResync >= CALDAV_RESYNC_THROTTLE_MS) {
           lastCaldavResync = now;
+          caldavToken = listFreshness.begin(account);
           dispatchFrozen('fe:calendar-changed', { source: 'visibility' });
           dispatchFrozen('fe:contacts-changed', { source: 'visibility' });
         }
 
         // 4. Re-sync labels/settings (throttled to avoid hammering)
-        if (now - lastSettingsSync < SETTINGS_SYNC_THROTTLE_MS) return;
+        const settingsCurrent =
+          settingsToken?.account === account.toLowerCase() &&
+          listFreshness.holds(settingsToken, SETTINGS_TRUSTED_MAX_MS);
+        if (settingsCurrent || now - lastSettingsSync < SETTINGS_SYNC_THROTTLE_MS) return;
         lastSettingsSync = now;
+        settingsToken = listFreshness.begin(account);
         fetchLabels(true, { force: true }).catch(() => {});
       };
       document.addEventListener('visibilitychange', visibilityHandler);
@@ -806,6 +889,11 @@ function createWebSocketUpdater() {
     stop() {
       started = false;
       stopFallbackPoll();
+      // Nothing keeps cached pages current once realtime stops.
+      listFreshness.reset();
+      listFreshness.setProbe(null);
+      caldavToken = null;
+      settingsToken = null;
       if (switchTimer) {
         clearTimeout(switchTimer);
         switchTimer = null;
