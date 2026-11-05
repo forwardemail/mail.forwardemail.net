@@ -6,6 +6,12 @@ release notes are taken from here. To change what a commit says, add a
 `Release-note: <text>` line to its message (or `Release-note: none` to leave
 it out).
 
+## 1.0.2 (2026-11-05)
+
+### Fixes
+
+- iOS scene, sync totals and priority, account auth, icon labels
+
 ## 1.0.1 (2026-11-05)
 
 ### Fixes

@@ -36,6 +36,14 @@
   </screenshots>
   <!-- scripts/sync-version.cjs prepends a release entry on every version bump. -->
   <releases>
+    <release version="1.0.2" date="2026-11-05">
+      <description>
+        <p>Fixes</p>
+        <ul>
+          <li>iOS scene, sync totals and priority, account auth, icon labels</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.0.1" date="2026-11-05">
       <description>
         <p>Fixes</p>
