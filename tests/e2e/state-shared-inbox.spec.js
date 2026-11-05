@@ -43,15 +43,22 @@ function countListRequests(page, folder) {
     if (req.method() !== 'GET') return;
     const url = new URL(req.url());
     if (url.pathname === '/v1/messages' && url.searchParams.get('folder') === folder) {
-      seen.push(Date.now());
+      seen.push({ at: Date.now(), limit: url.searchParams.get('limit') });
     }
   });
   return {
     count: () => seen.length,
+    // The sync worker's first pass over the folder is over: its backfill,
+    // which pages 100 at a time, comes after the folder's metadata pages. On
+    // a busy runner it can start more than a quiet spell after them, and
+    // then landed in the middle of the measurement.
+    synced: async () => {
+      await expect.poll(() => seen.some((r) => r.limit === '100'), { timeout: 30_000 }).toBe(true);
+    },
     // No list request for this folder in the last `ms`.
     quiet: async (ms = 1500) => {
       await expect
-        .poll(() => Date.now() - (seen.at(-1) || 0), { timeout: 20_000 })
+        .poll(() => Date.now() - (seen.at(-1)?.at || 0), { timeout: 20_000 })
         .toBeGreaterThan(ms);
     },
   };
@@ -174,6 +181,7 @@ test.describe('Shared inbox', () => {
     await expect(row(b, 'Archived earlier')).toBeVisible();
     await openFolder(b, 'INBOX');
     await expect(row(b, 'Message 0001')).toBeVisible();
+    await archiveLists.synced();
     await archiveLists.quiet();
     const before = archiveLists.count();
     expect(before).toBeGreaterThan(0);

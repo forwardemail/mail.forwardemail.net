@@ -73,14 +73,14 @@ var __swNormalize = function(exports) {
     if (typeof value !== "string") return "";
     return decodeMimeHeader(value).trim();
   };
-  const splitAddressString = (str) => {
+  const splitAddressString = (str, plain = false) => {
     const parts = [];
     let current = "";
     let inQuotes = false;
     let inAngle = 0;
     for (let i = 0; i < str.length; i++) {
       const ch = str[i];
-      if (ch === '"' && str[i - 1] !== "\\") {
+      if (ch === '"' && !plain && str[i - 1] !== "\\") {
         inQuotes = !inQuotes;
         current += ch;
       } else if (!inQuotes && ch === "<") {
@@ -97,6 +97,7 @@ var __swNormalize = function(exports) {
         current += ch;
       }
     }
+    if (inQuotes && !plain) return splitAddressString(str, true);
     const trimmed = current.trim();
     if (trimmed) parts.push(trimmed);
     return parts;

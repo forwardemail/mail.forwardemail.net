@@ -402,6 +402,9 @@ const createMailboxStore = () => {
     return settings.pageSize || 50;
   };
 
+  // The freshness key of a folder's first page (see loadMessages)
+  const firstPageKey = () => `p1|${get(sortOrder)}|${getLimit()}`;
+
   const selectFolder = (path) => {
     // Re-selecting the same folder clears active filters so the user isn't stuck
     const reselecting = get(selectedFolder) === path;
@@ -433,8 +436,11 @@ const createMailboxStore = () => {
 
     // Sync the opened folder next, ahead of other queued sync work. Demo mode
     // runs no sync. The sync controller imports this store, so it is loaded
-    // here when needed.
-    if (path && !isDemoMode()) {
+    // here when needed. Not a folder the socket kept current: its cached page
+    // is shown without a request, and the sync would ask the server for it.
+    const keptCurrent =
+      !reselecting && listFreshness.isFresh(activeAccountName(), path, firstPageKey(), Infinity);
+    if (path && !isDemoMode() && !keptCurrent) {
       const account = activeAccountName();
       import('../utils/sync-controller.js')
         .then(({ syncFolderOnDemand }) => syncFolderOnDemand(path, account))
@@ -1325,7 +1331,7 @@ const createMailboxStore = () => {
     const shown = (get(messages) || []).filter(
       (m) => String(m?.folder || '').toLowerCase() === String(folder).toLowerCase(),
     ).length;
-    return listFreshness.isFresh(account, folder, `p1|${get(sortOrder)}|${getLimit()}`, shown);
+    return listFreshness.isFresh(account, folder, firstPageKey(), shown);
   };
 
   // `preferCache` is for navigation (opening a folder, switching account,
@@ -1710,15 +1716,17 @@ const createMailboxStore = () => {
     try {
       const { source, res } = await requestPromise;
       const activeNow = Local.get('email') || 'default';
-      const activeFolder = get(selectedFolder);
-      const isStaleRequest = isStaleListRequest({
-        activeAccount: activeNow,
-        account,
-        activeFolder,
-        folder,
-        inFlightKey: inFlightMessageListRequest?.key,
-        requestKey,
-      });
+      // Whether the user has since moved on to another folder or account
+      const staleNow = () =>
+        isStaleListRequest({
+          activeAccount: Local.get('email') || 'default',
+          account,
+          activeFolder: get(selectedFolder),
+          folder,
+          inFlightKey: inFlightMessageListRequest?.key,
+          requestKey,
+        });
+      let isStaleRequest = staleNow();
       if (isStaleRequest) {
         tracer.stage('stale_request_continue_cache', { source });
       }
@@ -1796,6 +1804,10 @@ const createMailboxStore = () => {
       if (mapped.length) {
         merged = await mergeMissingLabels(bulkGetMessages, account, mapped, labelPresence);
         merged = await mergeMissingAddressFields(bulkGetMessages, account, merged);
+        // Asked again after those reads: a folder opened meanwhile from a
+        // fresh cache (see list-freshness.ts) sends no request of its own
+        // that would replace this list, so it must not land on that folder.
+        isStaleRequest = isStaleRequest || staleNow();
       }
       // A page fetched before a change elsewhere can still list removed rows.
       merged = merged.filter((m) => !isRemotelyRemoved(account, m));
