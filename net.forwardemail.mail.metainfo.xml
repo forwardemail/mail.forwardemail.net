@@ -36,6 +36,17 @@
   </screenshots>
   <!-- scripts/sync-version.cjs prepends a release entry on every version bump. -->
   <releases>
+    <release version="1.0.3" date="2026-11-05">
+      <description>
+        <p>Fixes</p>
+        <ul>
+          <li>Switching folders and returning to the app is faster and uses less data, while changes made by others in a shared inbox still appear right away</li>
+          <li>Messages read or changed on another device while this one was closed now show their current state, including older messages</li>
+          <li>Opening a folder the socket kept current sends no request</li>
+          <li>Opening a folder you looked at recently no longer downloads its message list again</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.0.2" date="2026-11-05">
       <description>
         <p>Fixes</p>

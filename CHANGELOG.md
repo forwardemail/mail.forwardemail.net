@@ -6,6 +6,15 @@ release notes are taken from here. To change what a commit says, add a
 `Release-note: <text>` line to its message (or `Release-note: none` to leave
 it out).
 
+## 1.0.3 (2026-11-05)
+
+### Fixes
+
+- Switching folders and returning to the app is faster and uses less data, while changes made by others in a shared inbox still appear right away
+- Messages read or changed on another device while this one was closed now show their current state, including older messages
+- Opening a folder the socket kept current sends no request
+- Opening a folder you looked at recently no longer downloads its message list again
+
 ## 1.0.2 (2026-11-05)
 
 ### Fixes
