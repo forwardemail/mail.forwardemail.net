@@ -6,6 +6,12 @@ release notes are taken from here. To change what a commit says, add a
 `Release-note: <text>` line to its message (or `Release-note: none` to leave
 it out).
 
+## 1.0.4 (2026-11-06)
+
+### Fixes
+
+- Fewer requests while mail arrives in bursts
+
 ## 1.0.3 (2026-11-05)
 
 ### Fixes
