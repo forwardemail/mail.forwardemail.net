@@ -60,6 +60,10 @@ const CATCH_UP_DELAY_MS = 2_000; // Collapse reconnect and dropped-message catch
 // replace the previous account's on screen, and how often that is checked.
 const SWITCH_SETTLE_MS = 10_000;
 const SWITCH_CHECK_MS = 100;
+// The server is asked again for a folder an event changed at most once per
+// this window: the first event of a burst at once, the rest of it once at
+// the end (see refreshFolder).
+export const FOLDER_REFRESH_WINDOW_MS = 1000;
 
 /**
  * @typedef {Object} InboxUpdater
@@ -106,6 +110,9 @@ function createWebSocketUpdater() {
   let fallbackTimer = null;
   let destroyed = false;
   let started = false;
+  // per folder: when the server was last asked again, and the refresh
+  // waiting for the end of the window
+  const folderRefreshes = new Map();
   let visibilityHandler = null;
   let forceReconnectHandler = null;
   let lastSettingsSync = 0;
@@ -199,6 +206,64 @@ function createWebSocketUpdater() {
     }
   }
 
+  //
+  // Ask the server again for a folder an event changed: a sync of its
+  // changes, and the list when it is on screen. Each event of a burst (a
+  // batch of deliveries, a bulk move or flag change) asked again for the same
+  // folder, each one a list of the folder on the server. The event's change
+  // is already applied here (see applyThenRefresh), so the first event of a
+  // burst asks at once and the rest of it once, at the end of the window.
+  //
+  function refreshFolderOnServer(account, folder, listedFolder) {
+    if (!folder && !listedFolder) return;
+    const key = `${account}\0${folder?.path || folder?.name || folder?.id || listedFolder}`;
+    const ask = () => {
+      // (switched to another account meanwhile: its own sync is not to be
+      // replaced by this one's, see syncFolderForEvent)
+      if (!sameAccount(Local.get('email') || 'default', account)) return;
+      if (folder) syncFolderForEvent(account, folder);
+      // (the list only if the folder is still on screen)
+      if (
+        listedFolder &&
+        String(get(mailboxStore.state.selectedFolder) || '').toUpperCase() ===
+          listedFolder.toUpperCase() &&
+        !get(mailboxStore.state.searchActive)
+      ) {
+        mailboxStore.actions.loadMessages({ refresh: true });
+      }
+    };
+
+    const now = Date.now();
+    const entry = folderRefreshes.get(key);
+    const elapsed = entry ? now - entry.at : FOLDER_REFRESH_WINDOW_MS;
+    // (a clock set back since starts a new window)
+    if (!entry || elapsed < 0 || elapsed >= FOLDER_REFRESH_WINDOW_MS) {
+      if (entry?.timer) clearTimeout(entry.timer);
+      folderRefreshes.set(key, { at: now, timer: null, ask: null });
+      ask();
+      return;
+    }
+
+    // within the window: once at its end, for the latest event
+    entry.ask = ask;
+    if (entry.timer) return;
+    entry.timer = setTimeout(() => {
+      entry.timer = null;
+      entry.at = Date.now();
+      const pending = entry.ask;
+      entry.ask = null;
+      if (destroyed || !started || !pending) return;
+      pending();
+    }, FOLDER_REFRESH_WINDOW_MS - elapsed);
+  }
+
+  function clearFolderRefreshes() {
+    for (const entry of folderRefreshes.values()) {
+      if (entry.timer) clearTimeout(entry.timer);
+    }
+    folderRefreshes.clear();
+  }
+
   /**
    * Refresh a specific folder — triggers both a background metadata sync
    * AND an immediate loadMessages() call so the UI updates right away.
@@ -224,12 +289,6 @@ function createWebSocketUpdater() {
         ? folders.find((f) => f.path?.toUpperCase?.() === pathHint.toUpperCase())
         : null);
 
-    // Always kick off a background metadata sync for the matched folder,
-    // ahead of any queued background work
-    if (folder) {
-      syncFolderForEvent(account, folder);
-    }
-
     // Determine if the affected folder matches what the user is viewing.
     const folderPath = folder?.path || (isNonEmptyString(pathHint) ? pathHint : '');
     const affectsCurrentFolder = !currentFolder
@@ -242,10 +301,11 @@ function createWebSocketUpdater() {
       if (typeof mailboxStore.actions.invalidateFolderInMemCache === 'function') {
         mailboxStore.actions.invalidateFolderInMemCache(account, currentFolder);
       }
-      if (!get(mailboxStore.state.searchActive)) {
-        mailboxStore.actions.loadMessages({ refresh: true });
-      }
     }
+
+    // A background metadata sync for the matched folder, ahead of any queued
+    // background work, and the list on screen again
+    refreshFolderOnServer(account, folder, affectsCurrentFolder ? currentFolder : '');
 
     // Always update sidebar unread counts
     if (typeof mailboxStore.actions.updateFolderUnreadCounts === 'function') {
@@ -899,6 +959,7 @@ function createWebSocketUpdater() {
         switchTimer = null;
       }
       waitingForSwitch.length = 0;
+      clearFolderRefreshes();
       if (visibilityHandler) {
         document.removeEventListener('visibilitychange', visibilityHandler);
         visibilityHandler = null;

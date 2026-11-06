@@ -170,7 +170,7 @@ vi.mock('../../src/utils/websocket-client', () => ({
 
 // Now import the module under test
 import { Accounts, Local } from '../../src/utils/storage';
-import { createInboxUpdater } from '../../src/utils/websocket-updater.js';
+import { createInboxUpdater, FOLDER_REFRESH_WINDOW_MS } from '../../src/utils/websocket-updater.js';
 import { PUSH_COALESCE_MS } from '../../src/utils/realtime-event-coalescer.js';
 import { listFreshness } from '../../src/utils/list-freshness';
 
@@ -445,6 +445,73 @@ describe('refreshFolder (core sync bug fix)', () => {
     expect(mockLoadMessages).not.toHaveBeenCalled();
     // But sync should still run
     expect(mockSyncFolderForEvent).toHaveBeenCalled();
+  });
+
+  // A batch of deliveries asked the server again for the folder once per
+  // message: a sync and the list, each a list of the folder on the server.
+  it('asks the server once at once and once more for a burst of events in one folder', async () => {
+    vi.useFakeTimers();
+    for (let uid = 1; uid <= 5; uid++) simulateWsEvent('newMessage', { mailbox: 'INBOX', uid });
+    expect(mockSyncFolderForEvent).toHaveBeenCalledTimes(1);
+    expect(mockLoadMessages).toHaveBeenCalledTimes(1);
+    // each event still drops the cached pages of the folder at once
+    expect(mockInvalidateFolderInMemCache).toHaveBeenCalledTimes(5);
+
+    await vi.advanceTimersByTimeAsync(FOLDER_REFRESH_WINDOW_MS);
+    expect(mockSyncFolderForEvent).toHaveBeenCalledTimes(2);
+    expect(mockLoadMessages).toHaveBeenCalledTimes(2);
+
+    // another folder is not held back by it
+    simulateWsEvent('newMessage', { mailbox: 'Sent', uid: 9 });
+    expect(mockSyncFolderForEvent).toHaveBeenCalledTimes(3);
+
+    // and an event after the window asks at once again
+    await vi.advanceTimersByTimeAsync(FOLDER_REFRESH_WINDOW_MS);
+    simulateWsEvent('newMessage', { mailbox: 'INBOX', uid: 6 });
+    expect(mockSyncFolderForEvent).toHaveBeenCalledTimes(4);
+    expect(mockLoadMessages).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not reload a list the user left before the end of the window', async () => {
+    vi.useFakeTimers();
+    simulateWsEvent('newMessage', { mailbox: 'INBOX', uid: 1 });
+    simulateWsEvent('newMessage', { mailbox: 'INBOX', uid: 2 });
+    selectedFolderStore.set('Sent');
+    await vi.advanceTimersByTimeAsync(FOLDER_REFRESH_WINDOW_MS);
+    // the folder is still synced, the list on screen is another one
+    expect(mockSyncFolderForEvent).toHaveBeenCalledTimes(2);
+    expect(mockLoadMessages).toHaveBeenCalledTimes(1);
+  });
+
+  // syncFolderForEvent for another account resets the sync queue to it
+  it('does not sync the folder of an account switched away from at the end of the window', async () => {
+    vi.useFakeTimers();
+    simulateWsEvent('newMessage', { mailbox: 'INBOX', uid: 1 });
+    simulateWsEvent('newMessage', { mailbox: 'INBOX', uid: 2 });
+    vi.mocked(Local.get).mockImplementation((key) =>
+      key === 'email' ? 'other@example.com' : null,
+    );
+    await vi.advanceTimersByTimeAsync(FOLDER_REFRESH_WINDOW_MS);
+    expect(mockSyncFolderForEvent).toHaveBeenCalledTimes(1);
+    expect(mockSyncFolderForEvent).toHaveBeenCalledWith('user@example.com', expect.anything());
+  });
+
+  it('asks at once after the clock was set back', async () => {
+    vi.useFakeTimers();
+    simulateWsEvent('newMessage', { mailbox: 'INBOX', uid: 1 });
+    vi.setSystemTime(Date.now() - 60_000);
+    simulateWsEvent('newMessage', { mailbox: 'INBOX', uid: 2 });
+    expect(mockSyncFolderForEvent).toHaveBeenCalledTimes(2);
+    expect(mockLoadMessages).toHaveBeenCalledTimes(2);
+  });
+
+  it('drops a refresh still waiting for the end of the window when stopped', async () => {
+    vi.useFakeTimers();
+    simulateWsEvent('newMessage', { mailbox: 'INBOX', uid: 1 });
+    simulateWsEvent('newMessage', { mailbox: 'INBOX', uid: 2 });
+    updater.stop();
+    await vi.advanceTimersByTimeAsync(FOLDER_REFRESH_WINDOW_MS);
+    expect(mockSyncFolderForEvent).toHaveBeenCalledTimes(1);
   });
 
   it('calls loadMessages() for flagsUpdated on current folder', () => {
