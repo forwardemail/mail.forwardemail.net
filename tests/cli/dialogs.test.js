@@ -129,3 +129,15 @@ describe('alert()', () => {
     expect(row(fake.written.slice(0, 1))).toBe(' Saved.  Enter OK');
   });
 });
+
+describe('control characters in a question', () => {
+  it('draws C0 and C1 controls of the message as spaces', () => {
+    const fake = fakeTerminal(['y']);
+    const win = windowWith(fake.terminal);
+    win.confirm('Delete\u009b2Jlabel\u001b]0;x\u0007?');
+    const drawn = fake.written.find((text) => text.includes('Delete'));
+    expect(drawn).not.toMatch(/[\u0080-\u009f]/);
+    expect(drawn).not.toContain('\u001b]0;');
+    expect(drawn).not.toContain('\u0007');
+  });
+});

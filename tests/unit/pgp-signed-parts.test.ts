@@ -49,6 +49,90 @@ describe('splitSignedMime', () => {
     expect(splitSignedMime('no headers at all')).toBeNull();
     expect(splitSignedMime('')).toBeNull();
   });
+
+  //
+  // A signed part + signature covers exactly two parts (RFC 3156). The body
+  // the reader sees is produced by a full MIME parse of the whole message, so
+  // any construction where that parse can pick up bytes outside the single
+  // signed part must not be reported as signed — otherwise the signer's
+  // identity would be shown over content they never signed.
+  //
+  const ct = (extra = '') =>
+    `Content-Type: multipart/signed; micalg=pgp-sha256; protocol="application/pgp-signature"; boundary="b1"${extra}`;
+  const signedPart = 'Content-Type: text/plain\r\n\r\nthe real message';
+  const sigPart = ['Content-Type: application/pgp-signature', '', SIG].join('\r\n');
+  const injected = 'Content-Type: text/html\r\n\r\n<p>attacker content</p>';
+
+  it('rejects a third body part after the signature', () => {
+    const forged = [
+      'From: a@example.com',
+      ct(),
+      '',
+      '--b1',
+      signedPart,
+      '--b1',
+      sigPart,
+      '--b1',
+      injected,
+      '--b1--',
+      '',
+    ].join('\r\n');
+    expect(splitSignedMime(forged)).toBeNull();
+  });
+
+  it('rejects a duplicated boundary= parameter', () => {
+    const forged = [
+      'From: a@example.com',
+      `${ct()}; boundary="b2"`,
+      '',
+      '--b1',
+      signedPart,
+      '--b1',
+      sigPart,
+      '--b1--',
+      '--b2',
+      injected,
+      '--b2--',
+      '',
+    ].join('\r\n');
+    expect(splitSignedMime(forged)).toBeNull();
+  });
+
+  it('rejects a duplicated top-level Content-Type header', () => {
+    const forged = [
+      'From: a@example.com',
+      ct(),
+      'Content-Type: multipart/mixed; boundary="b2"',
+      '',
+      '--b1',
+      signedPart,
+      '--b1',
+      sigPart,
+      '--b1--',
+      '--b2',
+      injected,
+      '--b2--',
+      '',
+    ].join('\r\n');
+    expect(splitSignedMime(forged)).toBeNull();
+  });
+
+  it('still accepts a well-formed two-part message', () => {
+    const ok = [
+      'From: a@example.com',
+      ct(),
+      '',
+      '--b1',
+      signedPart,
+      '--b1',
+      sigPart,
+      '--b1--',
+      '',
+    ].join('\r\n');
+    const parts = splitSignedMime(ok);
+    expect(parts?.signed).toBe(signedPart);
+    expect(parts?.signature).toBe(SIG);
+  });
 });
 
 describe('isPgpSignedNodemailer', () => {

@@ -1603,8 +1603,16 @@ async function parseRawMessage(raw, existingAttachments = []) {
 
     // Use HTML if available, otherwise wrap text in <pre>
     // Never fall back to raw MIME source — it contains headers that should not be displayed
+    // (a text body is text: escaped, so "<" in it is shown, not parsed as
+    // markup the sender did not send as HTML)
     const body =
-      email.html || (email.text ? `<pre style="white-space:pre-wrap">${email.text}</pre>` : '');
+      email.html ||
+      (email.text
+        ? `<pre style="white-space:pre-wrap">${email.text
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')}</pre>`
+        : '');
 
     // Apply inline attachments (cid: → data:)
     const inlined = applyInlineAttachments(body, deduped);

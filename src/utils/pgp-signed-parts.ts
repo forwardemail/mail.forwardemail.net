@@ -31,6 +31,13 @@ function headerValue(headers: string, name: string): string {
   return re.exec(unfolded)?.[1]?.trim() || '';
 }
 
+/** How many top-level header lines carry this name (folding joined first). */
+function countHeader(headers: string, name: string): number {
+  const unfolded = headers.replace(/\r?\n[ \t]+/g, ' ');
+  const re = new RegExp(`^${name}[ \\t]*:`, 'gim');
+  return (unfolded.match(re) || []).length;
+}
+
 function param(value: string, name: string): string {
   const re = new RegExp(`;\\s*${name}\\s*=\\s*(?:"([^"]*)"|([^;\\s]+))`, 'i');
   const m = re.exec(value);
@@ -51,8 +58,22 @@ export function splitSignedMime(raw: string): SignedParts | null {
   const text = raw.replace(/\r?\n/g, CRLF);
   const top = splitHeaderBody(text);
   if (!top) return null;
+  //
+  // The signature is only meaningful if the part it covers is the same part
+  // the reader is shown, and the reader's body comes from a full MIME parse
+  // (PostalMime), not from here. A structurally ambiguous message is one where
+  // this function and that parser can disagree about which bytes make up the
+  // signed container, so a validly-signed benign part would vouch for an
+  // unsigned one the reader actually sees. Refuse to verify those rather than
+  // risk a forged "verified" badge:
+  //   - a second top-level Content-Type header (parsers differ on which wins)
+  //   - a duplicated boundary= parameter (likewise)
+  //   - a third body part after the signature (RFC 3156 allows exactly two)
+  //
+  if (countHeader(top.headers, 'content-type') !== 1) return null;
   const contentType = headerValue(top.headers, 'content-type');
   if (!isPgpSignedContentType(contentType)) return null;
+  if ((contentType.match(/;\s*boundary\s*=/gi) || []).length !== 1) return null;
   const boundary = param(contentType, 'boundary');
   if (!boundary) return null;
 
@@ -68,9 +89,19 @@ export function splitSignedMime(raw: string): SignedParts | null {
   if (secondAt === -1) return null;
 
   const signed = body.slice(signedStart, secondAt);
-  const rest = body.slice(secondAt + delimiter.length);
+
+  // The signature part runs from the second delimiter to the third, and the
+  // signature must be found inside it (not in some later part). The third
+  // delimiter must be the closing one (--boundary--): anything else means a
+  // further part follows, which the reader would render unsigned.
+  const sigPartStart = secondAt + delimiter.length;
+  const thirdAt = body.indexOf(delimiter, sigPartStart);
+  if (thirdAt === -1) return null;
+  if (!body.slice(thirdAt + delimiter.length).startsWith('--')) return null;
+
+  const signaturePart = body.slice(sigPartStart, thirdAt);
   const signature = /-----BEGIN PGP SIGNATURE-----[\s\S]+?-----END PGP SIGNATURE-----/.exec(
-    rest,
+    signaturePart,
   )?.[0];
   if (!signed || !signature) return null;
   return { signed, signature };

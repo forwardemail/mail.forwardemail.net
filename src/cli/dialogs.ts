@@ -42,11 +42,15 @@ const PASTE_END = '\x1b[201~';
 // How long the rest of a sequence split between two reads is waited for.
 const SPLIT_WAIT = 50;
 
+// Runs of control characters, C1 too (U+009B is a CSI in terminals that take
+// 8-bit controls): never written to the terminal as they are.
+// eslint-disable-next-line no-control-regex
+const CONTROLS = /[\u0000-\u001f\u007f-\u009f]+/g;
+
 // A message on one line.
 const oneLine = (text: unknown) =>
   String(text ?? '')
-    // eslint-disable-next-line no-control-regex
-    .replace(/[\u0000-\u001f\u007f]+/g, ' ')
+    .replace(CONTROLS, ' ')
     .trim();
 
 /** The process's own terminal, read synchronously. */
@@ -250,8 +254,7 @@ export function installNativeDialogs(win: AnyRecord, terminal: DialogTerminal = 
         for (const input of next()) {
           // Pasted text is typed as it is, on one line.
           if ('paste' in input) {
-            // eslint-disable-next-line no-control-regex
-            value += input.paste.replace(/\r\n?|\n/g, ' ').replace(/[\u0000-\u001f\u007f]/g, '');
+            value += input.paste.replace(/\r\n?|\n/g, ' ').replace(CONTROLS, '');
             continue;
           }
           if (!('key' in input)) continue;

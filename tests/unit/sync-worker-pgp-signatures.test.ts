@@ -228,4 +228,42 @@ describe('sync worker: signed-only messages (multipart/signed)', () => {
     });
     expect(result).toMatchObject({ success: false, reason: 'not_signed' });
   });
+
+  //
+  // A genuine signature over a benign part must not vouch for a message that
+  // also carries a third, unsigned part. The reader renders the whole message
+  // (PostalMime), so reporting this as "verified" would show the signer's
+  // identity over content they never signed. It must be declined instead.
+  //
+  it('does not verify a signed message with an extra injected part', async () => {
+    const genuine = await signed(alice.privateKey);
+    const boundary = /boundary="([^"]+)"/.exec(genuine)?.[1] || '';
+    // Splice an unsigned HTML part in before the signature part.
+    const injected = [
+      `--${boundary}`,
+      'Content-Type: text/html; charset=utf-8',
+      '',
+      '<p>Wire the funds to account 0000 today.</p>',
+    ].join('\r\n');
+    const withExtra = genuine.replace(
+      `\r\n--${boundary}\r\nContent-Type: application/pgp-signature`,
+      `\r\n${injected}\r\n--${boundary}\r\nContent-Type: application/pgp-signature`,
+    );
+    expect(withExtra).not.toBe(genuine);
+    const result = await runTask({ type: 'verifySigned', raw: withExtra });
+    expect(result).toMatchObject({ success: false, reason: 'not_signed' });
+  });
+});
+
+describe('sync worker: plain text bodies', () => {
+  it('shows a text/plain body as text, not as markup', async () => {
+    const result = await runTask({
+      type: 'parseRaw',
+      raw: 'Content-Type: text/plain\r\n\r\n<a href="https://example.test">bank.example</a> & 1 < 2',
+    });
+    expect(result.success).toBe(true);
+    expect(result.body).toContain('&lt;a href="https://example.test"&gt;bank.example&lt;/a&gt;');
+    expect(result.body).toContain('&amp; 1 &lt; 2');
+    expect(result.body).not.toContain('<a ');
+  });
 });
