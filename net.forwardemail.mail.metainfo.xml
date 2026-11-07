@@ -36,6 +36,14 @@
   </screenshots>
   <!-- scripts/sync-version.cjs prepends a release entry on every version bump. -->
   <releases>
+    <release version="1.0.8" date="2026-11-07">
+      <description>
+        <p>Fixes</p>
+        <ul>
+          <li>Stop a wedged app before relaunching it</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.0.7" date="2026-11-07">
       <description>
         <p>Fixes</p>

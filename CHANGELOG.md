@@ -6,6 +6,12 @@ release notes are taken from here. To change what a commit says, add a
 `Release-note: <text>` line to its message (or `Release-note: none` to leave
 it out).
 
+## 1.0.8 (2026-11-07)
+
+### Fixes
+
+- Stop a wedged app before relaunching it
+
 ## 1.0.7 (2026-11-07)
 
 ### Fixes
