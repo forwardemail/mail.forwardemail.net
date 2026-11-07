@@ -6,6 +6,12 @@ release notes are taken from here. To change what a commit says, add a
 `Release-note: <text>` line to its message (or `Release-note: none` to leave
 it out).
 
+## 1.0.7 (2026-11-07)
+
+### Fixes
+
+- Send timeout for large messages, Cc in forwards, writing direction
+
 ## 1.0.6 (2026-11-07)
 
 ### Fixes

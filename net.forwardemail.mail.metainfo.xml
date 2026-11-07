@@ -36,6 +36,14 @@
   </screenshots>
   <!-- scripts/sync-version.cjs prepends a release entry on every version bump. -->
   <releases>
+    <release version="1.0.7" date="2026-11-07">
+      <description>
+        <p>Fixes</p>
+        <ul>
+          <li>Send timeout for large messages, Cc in forwards, writing direction</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.0.6" date="2026-11-07">
       <description>
         <p>Fixes</p>
