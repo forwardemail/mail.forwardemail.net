@@ -6,6 +6,16 @@ release notes are taken from here. To change what a commit says, add a
 `Release-note: <text>` line to its message (or `Release-note: none` to leave
 it out).
 
+## 1.0.9 (2026-11-07)
+
+### New
+
+- One-click unsubscribe (RFC 8058) from the reader
+
+### Fixes
+
+- Gestures on tablets, tablet compose, iPad window controls _(Android, iOS)_
+
 ## 1.0.8 (2026-11-07)
 
 ### Fixes
