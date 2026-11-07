@@ -6,6 +6,12 @@ release notes are taken from here. To change what a commit says, add a
 `Release-note: <text>` line to its message (or `Release-note: none` to leave
 it out).
 
+## 1.0.6 (2026-11-07)
+
+### Fixes
+
+- Keep the original HTML only for quotes the editor inserted
+
 ## 1.0.5 (2026-11-07)
 
 ### Fixes
