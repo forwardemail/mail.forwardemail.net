@@ -1,6 +1,7 @@
 import { remote } from 'webdriverio';
 import { execFile } from 'node:child_process';
 import net from 'node:net';
+import { resolveAppBinary } from './platform.js';
 
 type RemoteOptions = Parameters<typeof remote>[0];
 
@@ -22,13 +23,15 @@ const IN_APP_WEBDRIVER_PORT = 4445;
  * subsequent spec cascades. Force-killing the app frees the port and tears down
  * the stuck dialog, so each spec gets a clean instance.
  *
- * Runs in teardown (closeBrowser) and, defensively, again right before the next
- * spec connects (newBrowser) — teardown alone has two holes that still poison
+ * Runs in teardown (closeBrowser, through stopApp) and, defensively, again
+ * right before the next spec connects (newBrowser) — teardown alone has two
+ * holes that still poison
  * the next launch: taskkill returns before the OS releases :4445, and a spec
  * whose own beforeAll timed out never set `current`, so its closeBrowser was a
  * no-op and nothing was reclaimed. No-op on macOS/Linux: they dismiss the dialog
  * reliably, those CI rows don't exhibit the cascade, and a name-based kill
- * there could take out a developer's `tauri dev` instance during a local run.
+ * there could take out a developer's `tauri dev` instance during a local run
+ * (stopApp kills there by the e2e binary's exact path instead).
  */
 async function forceKillApp(): Promise<void> {
   if (process.platform !== 'win32') return;
@@ -72,6 +75,33 @@ async function waitForPortFree(port: number, capMs = 6000): Promise<void> {
   }
   // Best-effort: fall through after the cap. remote() then proceeds as it did
   // before this guard existed — no worse than the prior behaviour.
+}
+
+/**
+ * Stop the app of a session that has stopped answering, and wait for it to let
+ * go of the in-app webdriver port, before a new session launches another.
+ *
+ * tauri-webdriver ends a session's app only once the app answers its DELETE,
+ * which a wedged one may never do, and a new session kills the old app without
+ * waiting for it to exit, then takes whatever answers on :4445 for the new app.
+ * The dying app still could: the session went to it, and every command after
+ * it was refused, or not found by the new app once it was up (linux-24,
+ * macos-x64). And a new app that finds the old one still
+ * registered as the single instance hands it its arguments and exits
+ * (tauri-plugin-single-instance). Killed by its exact path, so other Tauri
+ * apps (a developer's `tauri dev`) are left alone.
+ */
+export async function stopApp(): Promise<void> {
+  if (process.platform === 'win32') {
+    await forceKillApp();
+  } else {
+    const binary = resolveAppBinary().replace(/[\\^$.*+?()[\]{}|]/g, '\\$&');
+    await new Promise<void>((resolve) => {
+      execFile('pkill', ['-KILL', '-f', `^${binary}( |$)`], () => resolve());
+    });
+  }
+
+  await waitForPortFree(IN_APP_WEBDRIVER_PORT, 10_000);
 }
 
 /** Reject after `ms` without disturbing the underlying promise. */
@@ -152,5 +182,6 @@ export async function closeBrowser(): Promise<void> {
   // the real cleanup.
   const deleted = browser.deleteSession().catch(() => {});
   await Promise.race([deleted, new Promise<void>((resolve) => setTimeout(resolve, 8000))]);
-  await forceKillApp();
+  // (gone before the next spec launches another, see stopApp)
+  await stopApp();
 }

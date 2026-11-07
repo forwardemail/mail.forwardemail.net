@@ -1,3 +1,5 @@
+import { stopApp } from './browser.js';
+
 // Tauri 2 serves the embedded frontend over a custom scheme. On Windows the
 // default is http://tauri.localhost (https only when app.windows.useHttpsScheme
 // is set in tauri.conf.json — we don't); macOS/Linux use tauri://localhost.
@@ -44,6 +46,8 @@ export async function relaunchIfWedged(browser: WebdriverIO.Browser): Promise<bo
   clearTimeout(timer);
   if (responsive) return false;
   console.warn('[openApp] the page stopped answering scripts; relaunching the app');
+  // (the wedged app goes first, see stopApp)
+  await stopApp();
   await browser.reloadSession();
   return true;
 }
