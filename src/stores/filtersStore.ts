@@ -17,6 +17,13 @@ import { get, writable, type Writable } from 'svelte/store';
 import { Remote } from '../utils/remote';
 import { Local } from '../utils/storage';
 import { getAuthHeaderForAccount } from '../utils/auth';
+import { flagChangeBody, labelChangeBody } from '../utils/message-changes';
+import { canonicalizeLabelKeyword } from '../utils/labels';
+import {
+  extractFromField,
+  extractRecipientsField,
+  getMessageApiId,
+} from '../utils/sync-helpers';
 import {
   MANAGED_SCRIPT_NAME,
   createRule,
@@ -83,7 +90,258 @@ function blockedReason(err: unknown): FiltersBlockedReason {
 function asArray<T>(res: unknown): T[] {
   if (Array.isArray(res)) return res as T[];
   const list = (res as { Result?: { List?: T[] } })?.Result?.List;
-  return Array.isArray(list) ? list : [];
+  if (Array.isArray(list)) return list;
+  const data = (res as { data?: T[] })?.data;
+  if (Array.isArray(data)) return data;
+  const messages = (res as { messages?: T[] })?.messages;
+  return Array.isArray(messages) ? messages : [];
+}
+
+const EXISTING_PAGE_SIZE = 100;
+
+type ExistingMessage = Record<string, unknown>;
+
+function valuesForCondition(message: ExistingMessage, field: string): string[] {
+  if (field === 'from') return [extractFromField(message as never)];
+  if (field === 'to' || field === 'cc') {
+    return [extractRecipientsField(message as never, field)];
+  }
+  if (field === 'subject') return [String(message.subject ?? message.Subject ?? '')];
+  if (field === 'any') {
+    return [
+      extractFromField(message as never),
+      extractRecipientsField(message as never, 'to'),
+      extractRecipientsField(message as never, 'cc'),
+    ];
+  }
+  return [];
+}
+
+function conditionKey(condition: FilterRule['conditions'][number]): string {
+  return `${condition.field}\u0000${condition.op}\u0000${condition.value.trim().toLowerCase()}`;
+}
+
+async function fetchExistingBodyMatches(
+  value: string,
+  auth: { authHeader?: string },
+): Promise<Set<string>> {
+  const matches = new Set<string>();
+  for (let page = 1; ; page += 1) {
+    const response = await Remote.request(
+      'MessageList',
+      {
+        page,
+        limit: EXISTING_PAGE_SIZE,
+        raw: false,
+        attachments: false,
+        body: value,
+      },
+      { ...auth, method: 'GET', pathOverride: '/v1/messages' },
+    );
+    const messages = asArray<ExistingMessage>(response);
+    let newRows = 0;
+    for (const message of messages) {
+      const apiId = getMessageApiId(message as never);
+      if (apiId != null && !matches.has(String(apiId))) {
+        matches.add(String(apiId));
+        newRows += 1;
+      }
+    }
+    if (messages.length < EXISTING_PAGE_SIZE || !newRows) break;
+  }
+  return matches;
+}
+
+function matchesExistingRule(
+  message: ExistingMessage,
+  rule: FilterRule,
+  bodyMatches: Map<string, Set<string>>,
+): boolean {
+  const conditions = (rule.conditions || []).filter((condition) => condition.value?.trim());
+  if (!conditions.length) return false;
+  const apiId = getMessageApiId(message as never);
+
+  const matches = conditions.map((condition) => {
+    if (condition.field === 'body') {
+      return apiId != null && bodyMatches.get(conditionKey(condition))?.has(String(apiId)) === true;
+    }
+    const needle = condition.value.trim().toLowerCase();
+    const values = valuesForCondition(message, condition.field).map((value) => value.toLowerCase());
+    const found = values.some((value) =>
+      condition.op === 'is' ? value === needle : value.includes(needle),
+    );
+    return condition.op === 'not_contains' ? !found : found;
+  });
+
+  return rule.match === 'any' ? matches.some(Boolean) : matches.every(Boolean);
+}
+
+function updateForExistingMessage(
+  message: ExistingMessage,
+  rule: FilterRule,
+): Record<string, unknown> | null {
+  const actions = rule.actions || {};
+  const update: Record<string, unknown> = {};
+  const flags = Array.isArray(message.flags)
+    ? message.flags.filter((flag): flag is string => typeof flag === 'string')
+    : [];
+  const flagsToAdd: string[] = [];
+
+  if (actions.markRead && !flags.some((flag) => flag.toLowerCase() === '\\seen')) {
+    flagsToAdd.push('\\Seen');
+  }
+  if (
+    actions.star &&
+    !Boolean(message.is_starred || message.is_flagged) &&
+    !flags.some((flag) => flag.toLowerCase() === '\\flagged')
+  ) {
+    flagsToAdd.push('\\Flagged');
+  }
+  if (flagsToAdd.length) {
+    Object.assign(update, flagChangeBody([...flags, ...flagsToAdd], { add: flagsToAdd }));
+  }
+
+  const label = canonicalizeLabelKeyword(actions.label);
+  if (label) {
+    const rawLabels = Array.isArray(message.labels)
+      ? message.labels
+      : Array.isArray(message.Labels)
+        ? message.Labels
+        : [];
+    const labels = rawLabels
+      .map((value) => canonicalizeLabelKeyword(value))
+      .filter(Boolean);
+    if (!labels.includes(label)) {
+      Object.assign(update, labelChangeBody([...labels, label], labels));
+    }
+  }
+
+  const targetFolder = actions.fileinto;
+  const currentFolder = String(message.folder ?? message.folder_path ?? '').toLowerCase();
+  if (targetFolder && currentFolder !== targetFolder.toLowerCase()) {
+    update.folder = targetFolder;
+  }
+
+  return Object.keys(update).length ? update : null;
+}
+
+export interface ApplyExistingFilterResult {
+  matched: number;
+  updated: number;
+  failed: number;
+  error?: string;
+}
+
+/** Apply the supported, reversible actions of a rule to messages already on the server. */
+export async function applyFilterToExisting(
+  rule: FilterRule,
+  requestedAccount?: string,
+): Promise<ApplyExistingFilterResult> {
+  const unsupportedBodyCondition = (rule.conditions || []).some(
+    (condition) =>
+      condition.field === 'body' && condition.value?.trim() && condition.op !== 'contains',
+  );
+  if (unsupportedBodyCondition) {
+    return {
+      matched: 0,
+      updated: 0,
+      failed: 0,
+      error: 'Existing-message filters currently support From, To, Cc, and Subject conditions.',
+    };
+  }
+  if (rule.actions?.delete || rule.actions?.redirect) {
+    return {
+      matched: 0,
+      updated: 0,
+      failed: 0,
+      error: 'Delete and forwarding actions apply to new mail only.',
+    };
+  }
+
+  const account = requestedAccount || Local.get('email') || '';
+  const auth = requestOptionsFor(account);
+  const seen = new Set<string>();
+  const updates: { apiId: string | number; body: Record<string, unknown> }[] = [];
+  let matched = 0;
+  let updated = 0;
+  let failed = 0;
+
+  try {
+    const bodyMatches = new Map<string, Set<string>>();
+    const bodyConditions = (rule.conditions || []).filter(
+      (condition) => condition.field === 'body' && condition.value?.trim(),
+    );
+    for (const condition of bodyConditions) {
+      const key = conditionKey(condition);
+      if (!bodyMatches.has(key)) {
+        bodyMatches.set(key, await fetchExistingBodyMatches(condition.value.trim(), auth));
+      }
+    }
+
+    for (let page = 1; ; page += 1) {
+      const response = await Remote.request(
+        'MessageList',
+        {
+          page,
+          limit: EXISTING_PAGE_SIZE,
+          raw: false,
+          attachments: false,
+        },
+        { ...auth, method: 'GET', pathOverride: '/v1/messages' },
+      );
+      const messages = asArray<ExistingMessage>(response);
+      if (!messages.length) break;
+
+      const pageMatches: ExistingMessage[] = [];
+      let newRows = 0;
+      for (const message of messages) {
+        const apiId = getMessageApiId(message as never);
+        if (apiId == null || seen.has(String(apiId))) continue;
+        seen.add(String(apiId));
+        newRows += 1;
+        if (matchesExistingRule(message, rule, bodyMatches)) pageMatches.push(message);
+      }
+      if (!newRows) break;
+
+      matched += pageMatches.length;
+      for (const message of pageMatches) {
+        const apiId = getMessageApiId(message as never);
+        const body = updateForExistingMessage(message, rule);
+        if (apiId != null && body) updates.push({ apiId, body });
+      }
+
+      if (messages.length < EXISTING_PAGE_SIZE) break;
+    }
+
+    // Finish scanning before moving anything. Moving a message out of the
+    // current page could shift later pages on APIs that return Inbox-first.
+    const CONCURRENCY = 6;
+    for (let offset = 0; offset < updates.length; offset += CONCURRENCY) {
+      const chunk = updates.slice(offset, offset + CONCURRENCY);
+      const results = await Promise.allSettled(
+        chunk.map(({ apiId, body }) =>
+          Remote.request('MessageUpdate', body, {
+            ...auth,
+            method: 'PUT',
+            pathOverride: `/v1/messages/${encodeURIComponent(apiId)}`,
+          }),
+        ),
+      );
+      for (const result of results) {
+        if (result.status === 'fulfilled') updated += 1;
+        else failed += 1;
+      }
+    }
+  } catch (err) {
+    return {
+      matched,
+      updated,
+      failed,
+      error: errorMessage(err),
+    };
+  }
+
+  return { matched, updated, failed };
 }
 
 /** Auth for one account, so a request keeps its account across a switch. */
