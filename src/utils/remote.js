@@ -27,6 +27,23 @@ const TIMEOUT_BY_ACTION = {
   default: 30000,
 };
 
+// A message is uploaded with its attachments, so a large one takes longer to
+// send on a slow connection than the default allows: give it 30 seconds more
+// for each megabyte, up to 10 minutes
+const SEND_TIMEOUT_PER_MB = 30_000;
+const SEND_TIMEOUT_MAX = 600_000;
+export const getRequestTimeout = (action, params) => {
+  const timeout = TIMEOUT_BY_ACTION[action] ?? TIMEOUT_BY_ACTION.default;
+  if (action !== 'Emails' || !params) return timeout;
+  let size = 0;
+  try {
+    size = JSON.stringify(params).length;
+  } catch {
+    return timeout;
+  }
+  return Math.min(SEND_TIMEOUT_MAX, timeout + Math.floor(size / 1_048_576) * SEND_TIMEOUT_PER_MB);
+};
+
 const addJitter = (delay) => delay + Math.random() * 1000;
 
 // ── Global 401 interception ──────────────────────────────────────────
@@ -162,7 +179,7 @@ export const Remote = {
       method,
       headers,
       signal,
-      timeout: options.timeout ?? TIMEOUT_BY_ACTION[action] ?? TIMEOUT_BY_ACTION.default,
+      timeout: options.timeout ?? getRequestTimeout(action, params),
       hooks: {
         afterResponse: [
           async (request, options, response) => {

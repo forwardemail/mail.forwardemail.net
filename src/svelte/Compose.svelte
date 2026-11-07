@@ -75,7 +75,7 @@
     sanitizeQuotedHtml,
     stripUntrustedRawQuotes,
   } from '../utils/sanitize.js';
-  import { hasRichFormatting } from '../utils/compose-format';
+  import { hasRichFormatting, TextDirection } from '../utils/compose-format';
   import { buildEncryptedPayload, buildSignedPayload } from '../utils/pgp-send';
   import { readPgpKeys } from '../utils/pgp-local';
   import { recipientKeyCoverage } from '../utils/pgp-recipients';
@@ -140,6 +140,7 @@
   import { Separator } from '$lib/components/ui/separator';
   import ChevronLeft from '@lucide/svelte/icons/chevron-left';
   import Send from '@lucide/svelte/icons/send';
+  import Loader2 from '@lucide/svelte/icons/loader-2';
   import Paperclip from '@lucide/svelte/icons/paperclip';
   import Save from '@lucide/svelte/icons/save';
   import Trash2 from '@lucide/svelte/icons/trash-2';
@@ -2076,6 +2077,7 @@
         TableHeader,
         RawHtmlQuote,
         SafeBlockquote,
+        TextDirection,
       ],
       editorProps: {
         // Clean up pasted HTML from Word/Outlook
@@ -3695,9 +3697,13 @@
             class="md:hidden h-12 w-12"
             onclick={send}
             disabled={sending}
-            aria-label="Send"
+            aria-label={sending ? 'Sending' : 'Send'}
           >
-            <Send size={32} class="text-fg-link" />
+            {#if sending}
+              <Loader2 size={32} class="text-fg-link animate-spin" />
+            {:else}
+              <Send size={32} class="text-fg-link" />
+            {/if}
           </Button>
           <div class="relative md:hidden">
             <Button
@@ -4145,6 +4151,7 @@
               class="flex-1 min-h-[200px] resize-none"
               rows={14}
               placeholder="Message"
+              dir="auto"
               bind:value={body}
               oninput={markDraftDirty}
               onfocus={() => (lastFocusedField = 'editor')}

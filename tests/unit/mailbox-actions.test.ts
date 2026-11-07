@@ -1210,6 +1210,21 @@ describe('quote headers', () => {
     expect(html).toContain('To: bob@example.com');
   });
 
+  // <https://github.com/forwardemail/mail.forwardemail.net/issues/114>
+  it('lists the Cc recipients of the original, with their addresses', () => {
+    const html = buildForwardQuotedBody(
+      {
+        from: 'Alice <alice@example.com>',
+        to: 'Bob <bob@example.com>',
+        cc: [{ name: 'Carol', address: 'carol@example.com' }],
+      },
+      '',
+    );
+
+    expect(html).toContain('Cc: Carol &lt;carol@example.com&gt;');
+    expect(buildForwardQuotedBody({ from: 'a@x.com', to: 'b@x.com' }, '')).not.toContain('Cc:');
+  });
+
   it('still handles a plain comma-separated string', () => {
     const html = buildForwardQuotedBody(
       { from: 'alice@example.com', to: 'bob@example.com, carol@example.com' },

@@ -243,7 +243,9 @@ describe('device-seal', () => {
       Local.set('alias_auth', 'a@b.c:pw');
       Local.set('pgp_passphrases_a@b.c', '{"k":"correct horse"}');
 
-      expect(localStorage.getItem('webmail_alias_auth')).not.toContain('pw');
+      // (':' is not in the sealed text's base64url alphabet, whereas 'pw' alone
+      // turns up in a random ciphertext about once in twenty runs)
+      expect(localStorage.getItem('webmail_alias_auth')).not.toContain(':pw');
       expect(isDeviceSealed(localStorage.getItem('webmail_alias_auth'))).toBe(true);
       expect(localStorage.getItem('webmail_pgp_passphrases_a@b.c')).not.toContain('horse');
       expect(Local.get('alias_auth')).toBe('a@b.c:pw');
@@ -267,7 +269,7 @@ describe('device-seal', () => {
       Accounts.add('a@b.c', { aliasAuth: 'a@b.c:pw' }, true);
       const raw = localStorage.getItem('webmail_accounts') || '';
       expect(isDeviceSealed(raw)).toBe(true);
-      expect(raw).not.toContain('pw');
+      expect(raw).not.toContain(':pw');
       expect(Accounts.getPersistent().map((a) => a.email)).toEqual(['a@b.c']);
     });
 

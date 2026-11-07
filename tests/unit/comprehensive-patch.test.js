@@ -1086,9 +1086,7 @@ describe('Large mailbox bootstrap timeout regressions', () => {
   });
 
   it('should allow per-request timeout overrides in the remote client', () => {
-    expect(remoteSrc).toContain(
-      'options.timeout ?? TIMEOUT_BY_ACTION[action] ?? TIMEOUT_BY_ACTION.default',
-    );
+    expect(remoteSrc).toContain('options.timeout ?? getRequestTimeout(action, params)');
   });
 
   it('should use a longer folders timeout during login bootstrap', () => {

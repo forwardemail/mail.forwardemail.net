@@ -1073,6 +1073,7 @@ export const buildReplyQuotedBody = (msg, originalBody) => {
 export const buildForwardQuotedBody = (msg, originalBody) => {
   const from = formatQuoteAddresses(msg, 'from');
   const to = formatQuoteAddresses(msg, 'to');
+  const cc = formatQuoteAddresses(msg, 'cc');
   const dateStr = formatAttributionDate(msg?.date || msg?.dateMs);
   const subject = msg?.subject || '';
 
@@ -1082,6 +1083,8 @@ export const buildForwardQuotedBody = (msg, originalBody) => {
     `Date: ${dateStr}`,
     `Subject: ${subject}`,
     `To: ${to}`,
+    // (the other recipients of the original, when it had any)
+    ...(cc ? [`Cc: ${cc}`] : []),
   ]
     .map(escapeQuoteText)
     .join('<br>');

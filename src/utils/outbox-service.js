@@ -1,7 +1,7 @@
 import { db } from './db';
 import { Local } from './storage';
 import { isActiveAccount } from './account-scope.ts';
-import { Remote } from './remote';
+import { Remote, getRequestTimeout } from './remote';
 import { missingSenderMessage, resolveSenderAuth, senderRequestOptions } from './send-as';
 import { writable } from 'svelte/store';
 import { saveSentCopy } from './sent-copy.js';
@@ -625,9 +625,12 @@ async function sendOutboxItem(queuedItem) {
 const UNCONFIRMED_SEND_MESSAGE =
   'The server did not confirm this message in time. It may have been sent; check Sent before retrying.';
 
-// Longer than the send request timeout (30 s) plus margin, so an item another
-// tab is still sending is not mistaken for an abandoned one.
-const STALE_SENDING_MS = 2 * 60 * 1000;
+// Longer than the send request timeout plus margin, so an item another tab is
+// still sending is not mistaken for an abandoned one (a larger message is
+// given longer to send, see `getRequestTimeout`)
+const STALE_SENDING_MARGIN_MS = 90 * 1000;
+const getStaleSendingMs = (item) =>
+  getRequestTimeout('Emails', item?.emailData) + STALE_SENDING_MARGIN_MS;
 
 /**
  * 4xx responses that mean the request itself is unacceptable. Auth failures,
@@ -645,14 +648,14 @@ function isPermanentSendError(status) {
  */
 async function recoverInterruptedSends() {
   const account = getAccount();
-  const cutoff = Date.now() - STALE_SENDING_MS;
+  const now = Date.now();
   try {
     const items = await db.outbox
       .where('[account+id]')
       .between([account, ''], [account, '\uffff'])
       .toArray();
     const stale = items.filter(
-      (item) => item.status === 'sending' && (item.updatedAt || 0) <= cutoff,
+      (item) => item.status === 'sending' && (item.updatedAt || 0) <= now - getStaleSendingMs(item),
     );
     for (const item of stale) {
       await db.outbox.update([account, item.id], {

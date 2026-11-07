@@ -4,7 +4,7 @@
  * noise, and no prompt on a formatted reply would be a silent data loss.
  */
 import { describe, expect, it } from 'vitest';
-import { hasRichFormatting } from '../../src/utils/compose-format';
+import { hasRichFormatting, TextDirection } from '../../src/utils/compose-format';
 
 describe('hasRichFormatting', () => {
   it('ignores structure that survives the plain-text round trip', () => {
@@ -53,5 +53,33 @@ describe('hasRichFormatting', () => {
     expect(hasRichFormatting('')).toBe(false);
     expect(hasRichFormatting(null)).toBe(false);
     expect(hasRichFormatting(undefined)).toBe(false);
+  });
+});
+
+// <https://github.com/forwardemail/forwardemail.net/issues/485>
+describe('TextDirection', () => {
+  const render = async (content: string) => {
+    const { Editor } = await import('@tiptap/core');
+    const { default: StarterKit } = await import('@tiptap/starter-kit');
+    const editor = new Editor({
+      element: document.createElement('div'),
+      extensions: [StarterKit, TextDirection],
+      content,
+    });
+    const html = editor.getHTML();
+    editor.destroy();
+    return html;
+  };
+
+  it('lets each paragraph take its direction from its text', async () => {
+    const html = await render('<p>Hello</p><p>مرحبا بالعالم</p><h2>Title</h2>');
+    expect(html).toBe(
+      '<p dir="auto">Hello</p><p dir="auto">مرحبا بالعالم</p><h2 dir="auto">Title</h2>',
+    );
+  });
+
+  it('keeps a direction the message already had', async () => {
+    const html = await render('<p dir="rtl">שלום</p><p dir="LTR">Hi</p><p dir="bogus">x</p>');
+    expect(html).toBe('<p dir="rtl">שלום</p><p dir="ltr">Hi</p><p dir="auto">x</p>');
   });
 });

@@ -25,7 +25,9 @@ const h = vi.hoisted(() => ({
 vi.mock('../../src/utils/storage', () => ({
   Local: { get: vi.fn(() => h.activeEmail) },
 }));
-vi.mock('../../src/utils/remote', () => ({
+vi.mock('../../src/utils/remote', async (importOriginal) => ({
+  getRequestTimeout: (await importOriginal<typeof import('../../src/utils/remote')>())
+    .getRequestTimeout,
   Remote: { request: (...a: unknown[]) => h.remoteRequest(...a) },
 }));
 vi.mock('../../src/utils/auth', () => ({
@@ -300,6 +302,19 @@ describe('processOutbox never sends the same email twice by guesswork', () => {
     expect(item).toMatchObject({ status: 'failed' });
     expect(String(item!.lastError)).toMatch(/may have been sent/i);
     expect(h.remoteRequest).not.toHaveBeenCalled();
+  });
+
+  // (a larger message is given longer to send, mail.forwardemail.net#114)
+  it('leaves a large send that is still in flight elsewhere alone', async () => {
+    const large = { ...email, attachments: [{ content: 'a'.repeat(8 * 1_048_576) }] };
+    h.outbox.set(
+      'a',
+      pending({ status: 'sending', emailData: large, updatedAt: Date.now() - 5 * 60 * 1000 }),
+    );
+
+    await drain();
+
+    expect(await getOutboxItem('a')).toMatchObject({ status: 'sending' });
   });
 
   it('leaves a send that is still in flight elsewhere alone', async () => {
