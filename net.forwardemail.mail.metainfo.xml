@@ -36,6 +36,14 @@
   </screenshots>
   <!-- scripts/sync-version.cjs prepends a release entry on every version bump. -->
   <releases>
+    <release version="1.0.5" date="2026-11-07">
+      <description>
+        <p>Fixes</p>
+        <ul>
+          <li>Harden PGP signature verification, body and dialog rendering</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.0.4" date="2026-11-06">
       <description>
         <p>Fixes</p>

@@ -6,6 +6,12 @@ release notes are taken from here. To change what a commit says, add a
 `Release-note: <text>` line to its message (or `Release-note: none` to leave
 it out).
 
+## 1.0.5 (2026-11-07)
+
+### Fixes
+
+- Harden PGP signature verification, body and dialog rendering
+
 ## 1.0.4 (2026-11-06)
 
 ### Fixes
