@@ -7,7 +7,7 @@ vi.mock('../../src/utils/storage', () => ({
   },
 }));
 
-import { sanitizeQuotedHtml } from '../../src/utils/sanitize.js';
+import { sanitizeQuotedHtml, stripUntrustedRawQuotes } from '../../src/utils/sanitize.js';
 
 // The function Compose.svelte's RawHtmlQuote node view uses to render the
 // original message quoted in a reply or forward. The quote renders in the
@@ -221,5 +221,48 @@ describe('RawHtmlQuote sanitize', () => {
     expect(out).not.toMatch(/popover|evil\.example/i);
     for (const text of ['View message', 'One', 'Two', 'Sign in', 'Three', 'Four'])
       expect(out).toContain(text);
+  });
+});
+
+// The paste hook of Compose.svelte: a raw quote is shown sanitized but sent
+// as written, so only those the editor itself inserted may keep their HTML.
+describe('stripUntrustedRawQuotes', () => {
+  const encode = (html: string) => btoa(unescape(encodeURIComponent(html)));
+  const raw = encode('<p>original message</p>');
+  const quote = (value: string, inner = '') =>
+    `<blockquote data-raw-html="${value}" data-raw-variant="reply">${inner}</blockquote>`;
+
+  it('keeps a raw quote the editor inserted (cut and pasted back)', () => {
+    const html = `<p>hi</p>${quote(raw)}`;
+    expect(stripUntrustedRawQuotes(html, new Set([raw]))).toBe(html);
+  });
+
+  it('drops an empty raw quote from elsewhere', () => {
+    const out = stripUntrustedRawQuotes(
+      `<p>hi</p>${quote(encode('<p>hidden</p>'))}`,
+      new Set([raw]),
+    );
+    expect(out).not.toContain('data-raw-html');
+    expect(out).not.toContain('<blockquote');
+    expect(out).toContain('<p>hi</p>');
+  });
+
+  it('keeps the visible content of a raw quote from elsewhere as a plain quote', () => {
+    const out = stripUntrustedRawQuotes(quote(encode('<p>hidden</p>'), '<p>shown</p>'), new Set());
+    expect(out).toBe('<blockquote><p>shown</p></blockquote>');
+  });
+
+  it('finds a raw quote whatever the case of its attribute', () => {
+    const out = stripUntrustedRawQuotes(
+      `<blockquote DATA-RAW-HTML="${encode('<p>hidden</p>')}"><p>shown</p></blockquote>`,
+      new Set(),
+    );
+    expect(out).toBe('<blockquote><p>shown</p></blockquote>');
+  });
+
+  it('leaves pastes without raw quotes exactly as they were', () => {
+    const html =
+      '<meta charset="utf-8"><p class="MsoNormal">Word <b>text</b></p><blockquote>q</blockquote>';
+    expect(stripUntrustedRawQuotes(html, new Set())).toBe(html);
   });
 });

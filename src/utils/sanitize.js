@@ -964,6 +964,38 @@ function isHiddenOrTiny(el) {
 }
 
 /**
+ * Pasted HTML with a raw quote the editor did not insert loses what makes it
+ * one.  A `blockquote[data-raw-html]` is the editor's quoted original
+ * message: it is shown sanitized but sent as written, so one arriving on the
+ * clipboard (copied from any page) would send HTML the sender never saw.
+ * Quotes the editor already holds (a reply quote cut and pasted back) keep
+ * theirs; any other becomes a plain blockquote of what it contains, or is
+ * dropped when it contains nothing.
+ *
+ * @param {string} html - Clipboard HTML
+ * @param {Set<string>} trusted - `data-raw-html` values the editor inserted
+ * @returns {string} The HTML to paste
+ */
+export function stripUntrustedRawQuotes(html, trusted) {
+  // (attribute names are case-insensitive: DATA-RAW-HTML is one too)
+  if (!html || !/data-raw-html/i.test(html) || typeof DOMParser === 'undefined') return html;
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  let changed = false;
+  for (const el of doc.querySelectorAll('blockquote[data-raw-html]')) {
+    if (trusted?.has(el.getAttribute('data-raw-html'))) continue;
+    changed = true;
+    if (el.textContent.trim() || el.querySelector('img')) {
+      el.removeAttribute('data-raw-html');
+      el.removeAttribute('data-raw-variant');
+    } else {
+      el.remove();
+    }
+  }
+
+  return changed ? doc.body.innerHTML : html;
+}
+
+/**
  * Sanitize the original message quoted in a reply or forward.
  *
  * The compose window renders the quote straight into the app's own DOM, not

@@ -70,7 +70,11 @@
   import TableHeader from '@tiptap/extension-table-header';
   import { extractTextContent } from '../utils/mime-utils.js';
   import { attachmentThumbnail, releaseAttachmentThumbnail } from '../utils/attachment-thumbnail';
-  import { htmlToPlainText, sanitizeQuotedHtml } from '../utils/sanitize.js';
+  import {
+    htmlToPlainText,
+    sanitizeQuotedHtml,
+    stripUntrustedRawQuotes,
+  } from '../utils/sanitize.js';
   import { hasRichFormatting } from '../utils/compose-format';
   import { buildEncryptedPayload, buildSignedPayload } from '../utils/pgp-send';
   import { readPgpKeys } from '../utils/pgp-local';
@@ -537,6 +541,32 @@
       };
     },
   });
+
+  // The raw quotes (`data-raw-html` values) this editor has held: the ones
+  // the app put in (reply, forward, a reopened draft), so that one cut and
+  // pasted back keeps its original HTML while one pasted from elsewhere does
+  // not (see stripUntrustedRawQuotes).
+  const trustedRawQuotes = new Set<string>();
+  const rememberRawQuotes = (doc: {
+    descendants: (
+      fn: (node: {
+        type: { name: string };
+        attrs: Record<string, unknown>;
+        isTextblock: boolean;
+      }) => boolean | void,
+    ) => void;
+  }) => {
+    doc.descendants((node) => {
+      if (node.type.name === 'rawHtmlQuote') {
+        if (typeof node.attrs.raw === 'string' && node.attrs.raw)
+          trustedRawQuotes.add(node.attrs.raw);
+        return false;
+      }
+
+      // (a raw quote is a block, never inside a paragraph)
+      return !node.isTextblock;
+    });
+  };
 
   const RawHtmlQuote = Node.create({
     name: 'rawHtmlQuote',
@@ -2050,7 +2080,8 @@
       editorProps: {
         // Clean up pasted HTML from Word/Outlook
         transformPastedHTML(html: string) {
-          return (
+          // (raw quotes last: the cleanup could join one out of what was not)
+          return stripUntrustedRawQuotes(
             html
               // Remove Word conditional comments
               .replace(/<!--\[if[^]*?endif\]-->/gi, '')
@@ -2059,8 +2090,24 @@
               // Remove class="Mso*" attributes
               .replace(/\s*class="Mso[^"]*"/gi, '')
               // Remove mso-* CSS properties
-              .replace(/mso-[^;:"']+:[^;:"']+;?/gi, '')
+              .replace(/mso-[^;:"']+:[^;:"']+;?/gi, ''),
+            trustedRawQuotes,
           );
+        },
+        // What a paste or drop was parsed into: ProseMirror can read HTML
+        // otherwise than DOMParser does above, so one that still carries a
+        // raw quote this editor does not hold is not pasted at all
+        // (Slice.empty, as prosemirror-model is not a dependency of its own)
+        transformPasted(slice) {
+          let untrusted = false;
+          slice.content.descendants((node) => {
+            if (node.type.name === 'rawHtmlQuote' && !trustedRawQuotes.has(node.attrs.raw))
+              untrusted = true;
+            return !untrusted;
+          });
+          return untrusted
+            ? (slice.constructor as unknown as { empty: typeof slice }).empty
+            : slice;
         },
         // Convert plain-text-only paste to rich HTML
         handlePaste: (view, event) => {
@@ -2098,6 +2145,10 @@
         },
       },
       content: body || '',
+      onCreate: ({ editor }) => rememberRawQuotes(editor.state.doc),
+      onTransaction: ({ editor, transaction }) => {
+        if (transaction.docChanged) rememberRawQuotes(editor.state.doc);
+      },
       onUpdate: ({ editor }) => {
         body = editor.getHTML();
         markDraftDirty();
