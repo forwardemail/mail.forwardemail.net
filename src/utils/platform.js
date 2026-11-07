@@ -51,6 +51,20 @@ export const isTauriMobile = isTauri && (nativePlatform === 'android' || nativeP
  */
 export const isTauriMacOS = isTauri && nativePlatform === 'macos';
 
+/**
+ * True on phones and tablets: the Android and iOS apps, or a browser whose
+ * primary pointer is a finger. In a browser, a tablet with a trackpad or
+ * mouse attached reports a fine, hovering pointer and counts as a desktop.
+ */
+export function isTouchPrimary() {
+  if (isTauriMobile) return true;
+  try {
+    return Boolean(globalThis.matchMedia?.('(hover: none) and (pointer: coarse)')?.matches);
+  } catch {
+    return false;
+  }
+}
+
 export const isServiceWorkerSupported =
   typeof navigator !== 'undefined' && 'serviceWorker' in navigator;
 

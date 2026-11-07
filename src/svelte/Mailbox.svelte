@@ -87,7 +87,7 @@
   import { getSyncSettings } from '../utils/sync-settings.js';
   import { parseMailto, mailtoToPrefill } from '../utils/mailto';
   import MailtoPrompt from './components/MailtoPrompt.svelte';
-  import { isTauriMobile } from '../utils/platform.js';
+  import { isTauriMobile, isTouchPrimary } from '../utils/platform.js';
   import { getLayoutWidth, onLayoutWidthChange } from '../utils/viewport-guard';
   import { openExternalUrl } from '../utils/external-links.js';
   import { thumbnailSrc } from '../utils/attachment-thumbnail';
@@ -896,6 +896,12 @@
   let selectedOutboxItem = $state<{ id?: string; emailData?: { to?: string[] } } | null>(null);
   let previousFolder: string | null = null;
 
+  // Swipes on rows, pull to refresh and swipes in the reader. Gated on the
+  // phone width alone, a phone turned sideways and every tablet had none.
+  // A mouse sends no touches, so this only matters where a finger does.
+  const touchPrimary = isTouchPrimary();
+  const swipesEnabled = () => touchPrimary || window.innerWidth <= 640;
+
   // Pull-to-refresh state
   const pullStartMaxOffset = 80;
   let pullToRefreshActive = $state(false);
@@ -1239,6 +1245,10 @@
   const isMobile = $derived(viewportWidth <= BREAKPOINT_MOBILE);
   // Where the sidebar is a drawer over the list (mailbox.css max-width: 820px).
   const isDrawerViewport = () => viewportWidth <= DRAWER_MAX_WIDTH;
+  // Compose is in the sidebar, and on phones in the tab bar. Wider than a
+  // phone with the sidebar shut (an iPad in portrait, where it is shut for
+  // the list, or a desktop that hid it), there was none, so the header has it.
+  const showHeaderCompose = $derived(!isMobile && !$sidebarOpen);
   const closeDrawer = () => {
     if (isDrawerViewport() && get(sidebarOpen)) sidebarOpen.set(false);
   };
@@ -2878,6 +2888,10 @@
     // and the Android keyboard resize the page, which shut a drawer the user
     // had just opened.
     let wasSmall: boolean | null = null;
+    // Whether the sidebar was open when the page became small and shut it.
+    // Growing back, as an iPad turned to landscape, opens it again; it had
+    // stayed shut, with Compose and the folders out of sight.
+    let sidebarOpenBeforeSmall = false;
     const handleResize = () => {
       if (typeof window === 'undefined') return;
       // Update reactive viewport width for layout calculations
@@ -2885,8 +2899,11 @@
       const small = viewportWidth <= 900;
       showHeaderShortcuts = !small;
       if (small && wasSmall !== true) {
+        sidebarOpenBeforeSmall = get(sidebarOpen);
         source.state?.sidebarOpen?.set?.(false);
         mailboxView?.sidebarOpen?.set?.(false);
+      } else if (!small && wasSmall === true && sidebarOpenBeforeSmall) {
+        sidebarOpen.set(true);
       }
       wasSmall = small;
     };
@@ -3340,8 +3357,7 @@
   };
   const handlePullStart = (e) => {
     pullToRefreshActive = false;
-    // Only activate on mobile screens
-    if (window.innerWidth > 640) return;
+    if (!swipesEnabled()) return;
 
     const container = messageListWrapper;
     if (!container || isRefreshing) return;
@@ -3425,8 +3441,7 @@
 
   const handleSwipeStart = (e, item) => {
     swipeCandidateId = null;
-    // Only on mobile
-    if (window.innerWidth > 640) return;
+    if (!swipesEnabled()) return;
     if (swipeAnimating) return;
     // A touch on a control in the row (the avatar that checks the message)
     // is a tap on that control, never the start of a swipe.
@@ -3444,7 +3459,7 @@
 
   const handleSwipeMove = (e, item) => {
     if (!swipeCandidateId || swipeCandidateId !== item.id) return;
-    if (window.innerWidth > 640) return;
+    if (!swipesEnabled()) return;
     if (swipeAnimating) return;
 
     const currentX = e.touches[0].clientX;
@@ -3790,14 +3805,16 @@
 
   // Reader swipe navigation handlers
   const handleReaderSwipeStart = (e) => {
-    if (window.innerWidth > 640) return;
+    if (!swipesEnabled()) return;
     if (!$mobileReader) return;
 
     const touch = e.touches[0];
     // A strip that scrolls sideways (the attachments) keeps its own swipe:
-    // reading it as a reader swipe opened another message instead.
+    // reading it as a reader swipe opened another message instead. An outbox
+    // item has no next or previous: the list behind it is the folder left.
     const target = e.target as Element | null;
     if (
+      outboxSelected ||
       isEdgeSwipeStart(touch.clientX) ||
       target?.closest?.('.overflow-x-auto, [data-no-reader-swipe]')
     ) {
@@ -3818,7 +3835,7 @@
   };
 
   const handleReaderSwipeMove = (e) => {
-    if (window.innerWidth > 640) return;
+    if (!swipesEnabled()) return;
     if (!$mobileReader) return;
     if (readerSwipeStartX === 0) return;
 
@@ -3841,7 +3858,7 @@
   };
 
   const handleReaderSwipeEnd = () => {
-    if (window.innerWidth > 640) return;
+    if (!swipesEnabled()) return;
     if (!$mobileReader) return;
 
     const distance = Math.abs(readerSwipeDistance);
@@ -3883,12 +3900,14 @@
    * swipe phase events to us and we reuse the same reader swipe logic.
    */
   const handleIframeSwipe = (phase, detail) => {
-    if (window.innerWidth > 640) return;
+    if (!swipesEnabled()) return;
     if (!$mobileReader) return;
     if (phase === 'start') {
       readerSwipeStartX = typeof detail?.x === 'number' ? detail.x : 0;
       readerSwipeStartY = typeof detail?.y === 'number' ? detail.y : 0;
-      iframeEdgeBackGesture = isEdgeSwipeStart(readerSwipeStartX);
+      // (the frame's own x: at the screen's edge only where the reader is
+      // the full width, and edge back is only there, up to the drawer width)
+      iframeEdgeBackGesture = isDrawerViewport() && isEdgeSwipeStart(readerSwipeStartX);
       readerSwipeDistance = 0;
       readerSwiping = false;
       readerSwipeDirection = null;
@@ -6719,6 +6738,19 @@
             </div>
           {/if}
           <div class="inline-flex items-center gap-2.5 ml-auto shrink-0">
+            {#if showHeaderCompose}
+              <button
+                class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground active:bg-accent"
+                type="button"
+                data-tooltip="Compose"
+                data-tooltip-position="bottom"
+                aria-label="Compose"
+                data-testid="header-compose-button"
+                onclick={handleMobileCompose}
+              >
+                <Pencil class="h-4.5 w-4.5" />
+              </button>
+            {/if}
             {#if showHeaderShortcuts}
               <div class="inline-flex items-center gap-1.5">
                 <button
@@ -7598,6 +7630,7 @@
 
             <div
               class="fe-message-list-wrapper relative flex-1 min-h-0 overflow-y-auto"
+              class:fe-touch-list={touchPrimary}
               bind:this={messageListWrapper}
             >
               {#if outboxSelected}
@@ -10740,6 +10773,18 @@
          overscroll bounce intercepts the touch before our JS handler fires. */
       overscroll-behavior-y: none;
     }
+  }
+
+  /* The same wherever a finger pulls to refresh (swipesEnabled): a tablet, or
+     a phone turned sideways, wider than the rule above. */
+  .fe-touch-list {
+    overscroll-behavior-y: none;
+  }
+
+  /* Sideways on a row is the row's swipe (archive, delete). Left to the
+     browser, Chrome took it for a swipe back to the page before. */
+  [data-conversation-row] {
+    touch-action: pan-y pinch-zoom;
   }
 
   /* Pagination should not grow */

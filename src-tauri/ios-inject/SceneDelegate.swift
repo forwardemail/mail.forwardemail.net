@@ -129,6 +129,21 @@ class TaoSceneDelegate: UIResponder, UIWindowSceneDelegate {
         TaoSceneDelegate.forwardDeepLinks(URLContexts)
     }
 
+#if compiler(>=6.2)
+    /// iPadOS 26 draws the window controls over the top-leading corner of a
+    /// windowed app, where they covered the sidebar button and the compose
+    /// title. The page cannot read the corner-adapted layout regions, but the
+    /// minimal style adds the controls to the top safe area, and lib.rs pins
+    /// the WKWebView to the safe area layout guide, so the page starts below
+    /// them. Swift 6.2 is Xcode 26, the first SDK with this API.
+    @available(iOS 26.0, *)
+    func preferredWindowingControlStyle(
+        for windowScene: UIWindowScene
+    ) -> UIWindowScene.WindowingControlStyle {
+        .minimal
+    }
+#endif
+
     private static func forwardDeepLinks(_ contexts: Set<UIOpenURLContext>) {
         for context in contexts {
             guard isForwardableDeepLink(context.url) else {

@@ -4059,7 +4059,13 @@
     const target = new Date(anchor);
     if (view === 'day') {
       target.setDate(target.getDate() + sign);
-    } else if (view === 'month-grid') {
+    } else if (view === 'month-grid' || view === 'month-agenda') {
+      // The phone's month (month-agenda) moved a week, still the same month.
+      // And the range starts on the grid's first day, often in the month
+      // before, so a month on from there could be the month on screen: step
+      // from the 1st of the month the middle of the grid is in.
+      target.setDate(target.getDate() + 14);
+      target.setDate(1);
       target.setMonth(target.getMonth() + sign);
     } else {
       target.setDate(target.getDate() + 7 * sign);
@@ -4112,6 +4118,15 @@
     if (!swipeActive && Math.abs(dx) > 15 && Math.abs(dx) > Math.abs(dy) * 2) {
       swipeActive = true;
     }
+  };
+
+  // A touch the system takes (the home indicator, Control Center) ends in
+  // touchcancel, and that swipe is dropped: ending it like touchend moved the
+  // calendar a week or month while the user was leaving the app.
+  const onCalendarTouchCancel = () => {
+    swipeStartX = 0;
+    swipeStartY = 0;
+    swipeActive = false;
   };
 
   const onCalendarTouchEnd = (e: TouchEvent) => {
@@ -4457,7 +4472,7 @@
           ontouchstart={onCalendarTouchStart}
           ontouchmove={onCalendarTouchMove}
           ontouchend={onCalendarTouchEnd}
-          ontouchcancel={onCalendarTouchEnd}
+          ontouchcancel={onCalendarTouchCancel}
         >
           <ScheduleXCalendar calendarApp={calendarInstance} />
         </div>

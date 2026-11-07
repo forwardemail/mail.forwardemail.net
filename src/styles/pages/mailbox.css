@@ -219,6 +219,14 @@ body.light-mode .fe-reader {
   box-shadow: var(--elev-2);
 }
 
+/* Wherever the reader covers the list, a sideways swipe in it moves to the
+ * next or previous message (Mailbox.svelte), at any width on a touch tablet:
+ * vertical scrolling stays native, and Chrome does not take a sideways pan
+ * for a swipe back to the page before. */
+.mobile-reader .fe-reader {
+  touch-action: pan-y;
+}
+
 /* Mobile Responsive */
 @media (min-width: 821px) {
   .fe-folders {
@@ -316,7 +324,6 @@ body.light-mode .fe-reader {
     border: none;
     padding: 0 0 calc(24px + var(--sai-bottom, env(safe-area-inset-bottom, 0px)));
     overflow-y: auto;
-    touch-action: pan-y; /* Allow vertical scroll, enable horizontal swipe gestures */
     z-index: var(--z-modal); /* 60 - above everything except sidebar */
     /* No fill: its end state is no transform anyway, and a filled transform
        kept the whole reader (iframe included) a separate compositing layer,

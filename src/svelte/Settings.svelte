@@ -2307,15 +2307,17 @@
           <Card.Content class="space-y-3">
             {#each $accounts as account}
               <div
-                class="flex items-center justify-between border border-border p-3 {account.email ===
+                class="flex items-center justify-between gap-3 border border-border p-3 {account.email ===
                 $currentAccount
                   ? 'bg-primary/5'
                   : ''}"
               >
-                <div class="flex items-center gap-3">
-                  <User class="h-5 w-5 text-muted-foreground" />
-                  <div>
-                    <div class="font-medium">{account.email}</div>
+                <!-- min-w-0 and break-all: on a phone a long address wraps
+                     instead of running under the button. -->
+                <div class="flex min-w-0 items-center gap-3">
+                  <User class="h-5 w-5 shrink-0 text-muted-foreground" />
+                  <div class="min-w-0">
+                    <div class="font-medium break-all">{account.email}</div>
                     <div class="text-xs text-muted-foreground">
                       {account.email === $currentAccount
                         ? 'Active account'

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const originalUserAgent = navigator.userAgent;
+const originalMatchMedia = window.matchMedia;
 
 function setUserAgent(value) {
   Object.defineProperty(navigator, 'userAgent', {
@@ -24,6 +25,7 @@ describe('native mobile platform detection', () => {
     delete window.__TAURI_INTERNALS__;
     delete window.__TAURI_OS_PLUGIN_INTERNALS__;
     setUserAgent(originalUserAgent);
+    window.matchMedia = originalMatchMedia;
   });
 
   it.each([
@@ -57,5 +59,64 @@ describe('native mobile platform detection', () => {
 
     expect(detected.nativePlatform).toBe('ios');
     expect(detected.isTauriMobile).toBe(true);
+  });
+
+  it.each(['ios', 'android'])(
+    'treats the %s app as touch-first even with a trackpad pointer',
+    async (platform) => {
+      setNativePlatform(platform);
+      window.matchMedia = vi.fn(() => ({ matches: false }));
+
+      const detected = await import('../../src/utils/platform.js');
+
+      expect(detected.isTouchPrimary()).toBe(true);
+    },
+  );
+
+  it('does not treat a desktop app with a mouse as touch-first', async () => {
+    setNativePlatform('macos');
+    window.matchMedia = vi.fn(() => ({ matches: false }));
+
+    const detected = await import('../../src/utils/platform.js');
+
+    expect(detected.isTouchPrimary()).toBe(false);
+  });
+});
+
+describe('touch-first browsers', () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    window.matchMedia = originalMatchMedia;
+  });
+
+  it('is touch-first when the primary pointer is a finger that cannot hover', async () => {
+    window.matchMedia = vi.fn((query) => ({
+      matches: query === '(hover: none) and (pointer: coarse)',
+    }));
+
+    const { isTouchPrimary } = await import('../../src/utils/platform.js');
+
+    expect(isTouchPrimary()).toBe(true);
+  });
+
+  it('is not touch-first with a mouse or a tablet trackpad', async () => {
+    window.matchMedia = vi.fn(() => ({ matches: false }));
+
+    const { isTouchPrimary } = await import('../../src/utils/platform.js');
+
+    expect(isTouchPrimary()).toBe(false);
+  });
+
+  it('is not touch-first when matchMedia throws', async () => {
+    window.matchMedia = vi.fn(() => {
+      throw new Error('unsupported');
+    });
+
+    const { isTouchPrimary } = await import('../../src/utils/platform.js');
+
+    expect(isTouchPrimary()).toBe(false);
   });
 });

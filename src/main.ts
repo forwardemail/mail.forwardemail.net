@@ -96,7 +96,7 @@ import { setNotificationToasts } from './utils/notification-manager';
 import { bindExternalLinkInterceptor } from './utils/external-links.js';
 import { bindEdgeSwipeBack } from './utils/mobile-edge-swipe';
 import { onBackButton } from './utils/tauri-bridge.js';
-import { setShellBackground } from './utils/tauri-bridge.js';
+import { syncShellBackground } from './utils/shell-background.js';
 import { installPasteNormalizer } from './utils/paste-normalizer';
 // Database initialization with recovery support
 import {
@@ -1679,6 +1679,7 @@ routeStore.subscribe((route) => {
   document.body.classList.toggle('mailbox-mode', mailboxMode);
   document.body.classList.toggle('settings-mode', route === 'settings');
   document.body.classList.toggle('route-mailbox', route === 'mailbox');
+  syncShell();
   if (route !== 'mailbox') {
     composeApi.close();
   }
@@ -2029,7 +2030,22 @@ function showShortcutsHelp() {
   mailboxApi?.showShortcutsHelp?.();
 }
 
-let lastShellDark: boolean | undefined;
+// The strips around the iOS webview are native views. They start in the
+// system appearance; this keeps them on the theme the user picked and on the
+// sign-in screen's own ground (see utils/shell-background.js).
+function syncShell() {
+  syncShellBackground({
+    themeDark: document.documentElement.classList.contains('dark'),
+    route: currentRoute(),
+    width: window.innerWidth,
+  });
+}
+
+// The sign-in ground changes at the phone width, which an iPad crosses in
+// Split View.
+if (isTauriMobile && nativePlatform === 'ios') {
+  window.addEventListener('resize', syncShell, { passive: true });
+}
 
 function applyTheme(pref) {
   const theme = pref || getEffectiveSettingValue('theme') || 'system';
@@ -2044,14 +2060,7 @@ function applyTheme(pref) {
   document.body.classList.remove('light-mode', 'dark-mode');
   document.body.classList.add(isDark ? 'dark-mode' : 'light-mode');
 
-  // The strips around the iOS webview are native views. They start in the
-  // system appearance; this keeps them on the theme the user picked.
-  if (isTauriMobile && nativePlatform === 'ios' && isDark !== lastShellDark) {
-    lastShellDark = isDark;
-    setShellBackground(isDark).catch(() => {
-      lastShellDark = undefined;
-    });
-  }
+  syncShell();
 }
 
 /**

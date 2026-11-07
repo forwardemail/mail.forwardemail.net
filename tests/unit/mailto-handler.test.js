@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // ── Mock platform.js ────────────────────────────────────────────────────────
-// We need to control isTauri and isTauriDesktop for each test.
+// We need to control isTauri, isTauriDesktop and isTouchPrimary for each test.
 let mockIsTauri = false;
 let mockIsTauriDesktop = false;
+let mockIsTouchPrimary = false;
 
 vi.mock('../../src/utils/platform.js', () => ({
   get isTauri() {
@@ -12,6 +13,7 @@ vi.mock('../../src/utils/platform.js', () => ({
   get isTauriDesktop() {
     return mockIsTauriDesktop;
   },
+  isTouchPrimary: () => mockIsTouchPrimary,
 }));
 
 // ── Mock tauri-bridge.js ────────────────────────────────────────────────────
@@ -43,6 +45,7 @@ import {
 beforeEach(() => {
   mockIsTauri = false;
   mockIsTauriDesktop = false;
+  mockIsTouchPrimary = false;
   mockIsDefaultMailtoHandler.mockReset();
   mockSetDefaultMailtoHandler.mockReset();
   localStorage.clear();
@@ -481,6 +484,12 @@ describe('shouldShowMailtoPrompt', () => {
     navigator.registerProtocolHandler = vi.fn();
     markPromptShown('alice@example.com');
     expect(shouldShowMailtoPrompt('bob@example.com')).toBe(true);
+  });
+
+  it('returns false on a phone or tablet, which has no default mail app setting', () => {
+    navigator.registerProtocolHandler = vi.fn();
+    mockIsTouchPrimary = true;
+    expect(shouldShowMailtoPrompt('user@example.com')).toBe(false);
   });
 });
 

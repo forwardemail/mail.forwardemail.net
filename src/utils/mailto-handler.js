@@ -19,7 +19,7 @@
  *   - Tauri IPC results are type-checked before use.
  */
 
-import { isTauri, isTauriDesktop } from './platform.js';
+import { isTauri, isTauriDesktop, isTouchPrimary } from './platform.js';
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
@@ -292,21 +292,11 @@ export async function resolveMailtoFromHash(hash) {
  * @param {string} account - Current user email
  * @returns {boolean}
  */
-/**
- * Phones and tablets have no "default email app" setting a web page can
- * change, and the banner there sat on top of the bottom tab bar.
- */
-function isTouchPrimaryDevice() {
-  try {
-    return Boolean(globalThis.matchMedia?.('(hover: none) and (pointer: coarse)')?.matches);
-  } catch {
-    return false;
-  }
-}
-
 export function shouldShowMailtoPrompt(account) {
   if (!isMailtoHandlerSupported()) return false;
-  if (isTouchPrimaryDevice()) return false;
+  // Phones and tablets have no "default email app" setting a web page can
+  // change, and the banner there sat on top of the bottom tab bar.
+  if (isTouchPrimary()) return false;
   if (hasPromptBeenShown(account)) return false;
   // Don't show if we already know we're the default
   if (getRegistrationStatusSync() === 'default') return false;

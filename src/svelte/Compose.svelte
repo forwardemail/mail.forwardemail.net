@@ -80,7 +80,7 @@
   import { readPgpKeys } from '../utils/pgp-local';
   import { recipientKeyCoverage } from '../utils/pgp-recipients';
   import { pickFiles } from '../utils/file-picker';
-  import { isTauriDesktop } from '../utils/platform';
+  import { isTauriDesktop, isTouchPrimary } from '../utils/platform';
   import { i18n } from '../utils/i18n';
   import { Remote } from '../utils/remote';
   import { isDemoBlockedError, isDemoMode, showDemoBlockedToast } from '../utils/demo-mode';
@@ -221,6 +221,12 @@
   const minimizedState = writable(false);
   let compact = $state(false);
   const compactState = writable(false);
+  // Phones and tablets open compose full screen. On a tablet the desktop
+  // panel was a 560px box in the corner with the on-screen keyboard over
+  // half of it, so the md: placements below are left off there.
+  const fullScreen = isTouchPrimary();
+  const floating = $derived(!nativeWindow && !expanded && !fullScreen);
+  const centered = $derived(!nativeWindow && expanded && !fullScreen);
   let showMobileMenu = $state(false);
   let showScheduleModal = $state(false);
   let showSendDropdown = $state(false);
@@ -3505,30 +3511,30 @@
 
 <Tooltip.Provider>
   {#if visible && !minimized}
-    {#if expanded && !nativeWindow}
+    {#if centered}
       <div class="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm"></div>
     {/if}
     <div
       class={nativeWindow
         ? 'relative flex flex-col bg-background w-full h-screen overflow-hidden'
         : 'fixed inset-0 z-50 flex flex-col bg-background border border-border shadow-2xl ring-1 ring-black/5 dark:ring-white/10 overflow-hidden transition-all'}
-      class:md:inset-auto={!nativeWindow && !expanded}
-      class:md:bottom-4={!nativeWindow && !expanded}
-      class:md:right-4={!nativeWindow && !expanded}
-      class:md:left-auto={!nativeWindow && !expanded}
-      class:md:top-auto={!nativeWindow && !expanded}
+      class:md:inset-auto={floating}
+      class:md:bottom-4={floating}
+      class:md:right-4={floating}
+      class:md:left-auto={floating}
+      class:md:top-auto={floating}
       class:w-full={!nativeWindow && !expanded}
       class:h-full={!nativeWindow && !expanded}
-      class:md:w-[560px]={!nativeWindow && !expanded && !compact}
-      class:md:h-[600px]={!nativeWindow && !expanded && !compact}
-      class:md:w-[650px]={!nativeWindow && !expanded && compact}
-      class:md:h-[700px]={!nativeWindow && !expanded && compact}
-      class:md:top-8={!nativeWindow && expanded}
-      class:md:bottom-8={!nativeWindow && expanded}
-      class:md:left-0={!nativeWindow && expanded}
-      class:md:right-0={!nativeWindow && expanded}
-      class:md:max-w-5xl={!nativeWindow && expanded}
-      class:md:mx-auto={!nativeWindow && expanded}
+      class:md:w-[560px]={floating && !compact}
+      class:md:h-[600px]={floating && !compact}
+      class:md:w-[650px]={floating && compact}
+      class:md:h-[700px]={floating && compact}
+      class:md:top-8={centered}
+      class:md:bottom-8={centered}
+      class:md:left-0={centered}
+      class:md:right-0={centered}
+      class:md:max-w-5xl={centered}
+      class:md:mx-auto={centered}
       role="dialog"
       aria-modal={!compact && !nativeWindow}
       bind:this={composeRoot}
@@ -3605,7 +3611,7 @@
               <Tooltip.Content side="bottom"><p>Minimize to dock</p></Tooltip.Content>
             </Tooltip.Root>
           {/if}
-          {#if !nativeWindow}
+          {#if !nativeWindow && !fullScreen}
             {#if expanded}
               <Tooltip.Root>
                 <Tooltip.Trigger>
