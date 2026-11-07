@@ -21,7 +21,19 @@ afterEach(() => {
   cleanup();
   hoisted.queueEmail.mockClear();
   hoisted.openExternalUrl.mockClear();
+  Reflect.deleteProperty(navigator, 'serviceWorker');
 });
+
+// The web app's service worker, which sends the one-click POST
+// (public/sw-sync.js), replying whether it was sent
+function withServiceWorker(ok: boolean) {
+  const postMessage = vi.fn((_data: unknown, [port]: MessagePort[]) => port.postMessage({ ok }));
+  Object.defineProperty(navigator, 'serviceWorker', {
+    configurable: true,
+    value: { controller: { postMessage } },
+  });
+  return postMessage;
+}
 
 const plain = {
   from: 'Example News <news@example.com>',
@@ -34,6 +46,17 @@ const plain = {
 const listMail = (target: string) => ({
   headerLines: [{ key: 'list-unsubscribe', line: `List-Unsubscribe: <${target}>` }],
 });
+
+// (both targets, and RFC 8058 one-click support)
+const oneClickMail = {
+  headerLines: [
+    {
+      key: 'list-unsubscribe',
+      line: 'List-Unsubscribe: <mailto:leave@news.example.com>, <https://news.example.com/u?id=1>',
+    },
+    { key: 'list-unsubscribe-post', line: 'List-Unsubscribe-Post: List-Unsubscribe=One-Click' },
+  ],
+};
 
 describe('ordinary messages', () => {
   it('render no banner and no unsubscribe button', () => {
@@ -116,5 +139,61 @@ describe('<UnsubscribeButton />', () => {
     await waitFor(() => expect(hoisted.queueEmail).toHaveBeenCalled());
     expect(onToast).not.toHaveBeenCalled();
     expect(screen.queryByTestId('reader-unsubscribe-done')).toBeNull();
+  });
+
+  it('sends the one-click request from this device after confirming', async () => {
+    const postMessage = withServiceWorker(true);
+    const onToast = vi.fn();
+    render(UnsubscribeButton, { props: { nodemailer: oneClickMail, onToast } });
+
+    await fireEvent.click(screen.getByTestId('reader-unsubscribe'));
+    expect(postMessage).not.toHaveBeenCalled();
+    expect(await screen.findByText('news.example.com')).toBeTruthy();
+    expect(screen.getByText(/without your cookies/)).toBeTruthy();
+
+    await fireEvent.click(screen.getByTestId('reader-unsubscribe-confirm'));
+    expect(await screen.findByTestId('reader-unsubscribe-done')).toBeTruthy();
+    expect(postMessage).toHaveBeenCalledWith(
+      { type: 'one-click-unsubscribe', url: 'https://news.example.com/u?id=1' },
+      [expect.any(MessagePort)],
+    );
+    expect(onToast).toHaveBeenCalledWith(expect.stringContaining('news.example.com'), 'success');
+    // (nothing else is sent or opened)
+    expect(hoisted.queueEmail).not.toHaveBeenCalled();
+    expect(hoisted.openExternalUrl).not.toHaveBeenCalled();
+  });
+
+  it('offers the email instead when the one-click request could not be sent', async () => {
+    withServiceWorker(false);
+    const onToast = vi.fn();
+    render(UnsubscribeButton, {
+      props: { nodemailer: oneClickMail, account: 'me@example.org', onToast },
+    });
+
+    await fireEvent.click(screen.getByTestId('reader-unsubscribe'));
+    await fireEvent.click(await screen.findByTestId('reader-unsubscribe-confirm'));
+    await waitFor(() =>
+      expect(onToast).toHaveBeenCalledWith(expect.stringContaining('news.example.com'), 'error'),
+    );
+    // (nothing else was done without asking: the dialog now names the email)
+    expect(hoisted.queueEmail).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('reader-unsubscribe-done')).toBeNull();
+    expect(await screen.findByText('leave@news.example.com')).toBeTruthy();
+
+    await fireEvent.click(screen.getByTestId('reader-unsubscribe-confirm'));
+    await waitFor(() => expect(hoisted.queueEmail).toHaveBeenCalledTimes(1));
+    expect(hoisted.queueEmail).toHaveBeenCalledWith(
+      expect.objectContaining({ from: 'me@example.org', to: ['leave@news.example.com'] }),
+    );
+  });
+
+  it('uses the email without a service worker (the desktop and mobile apps)', async () => {
+    render(UnsubscribeButton, {
+      props: { nodemailer: oneClickMail, account: 'me@example.org' },
+    });
+    await fireEvent.click(screen.getByTestId('reader-unsubscribe'));
+    expect(await screen.findByText('leave@news.example.com')).toBeTruthy();
+    await fireEvent.click(screen.getByTestId('reader-unsubscribe-confirm'));
+    await waitFor(() => expect(hoisted.queueEmail).toHaveBeenCalledTimes(1));
   });
 });

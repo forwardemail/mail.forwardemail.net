@@ -1180,10 +1180,109 @@
     );
   });
 
+  //
+  // One-click unsubscribe (RFC 8058): the POST a mailing list asks for, sent
+  // here for the reader's Unsubscribe button (src/utils/list-unsubscribe.ts)
+  // because the page's CSP allows connections to the Forward Email API only.
+  //
+  // Only a top-level window of the app may ask (never a message's iframe,
+  // which shares this worker), one request at a time, and only for an https
+  // URL on a public host name (the rule of isOneClickUrl in
+  // list-unsubscribe.ts): never an IP address or a local name, which could
+  // reach a device on the user's own network. The request carries no
+  // cookies and no referrer, only the body RFC 8058 defines.
+  //
+  const ONE_CLICK_MAX_URL = 2048;
+  const ONE_CLICK_TIMEOUT_MS = 15000;
+  const ONE_CLICK_LOCAL_NAMES =
+    /(?:^|\.)(?:localhost|local|localdomain|internal|intranet|lan|home|corp|private|arpa)$/;
+  let oneClickInFlight = false;
+
+  function oneClickUrl(value) {
+    if (typeof value !== 'string' || value.length > ONE_CLICK_MAX_URL) return '';
+    let url;
+    try {
+      url = new URL(value);
+    } catch {
+      return '';
+    }
+    if (url.protocol !== 'https:' || url.username || url.password || url.port) return '';
+    const host = url.hostname.toLowerCase();
+    const labels = host.split('.');
+    const tld = labels[labels.length - 1] || '';
+    if (
+      labels.length < 2 ||
+      labels.some((label) => label.length === 0) ||
+      host.includes(':') ||
+      host.startsWith('[') ||
+      !/^(?:[a-z]{2,63}|xn--[a-z0-9-]{1,59})$/.test(tld) ||
+      ONE_CLICK_LOCAL_NAMES.test(host)
+    )
+      return '';
+    return url.href;
+  }
+
+  function sendOneClickUnsubscribe(event, data) {
+    const port = event.ports && event.ports[0];
+    const reply = (ok) => {
+      try {
+        if (port) port.postMessage({ ok });
+      } catch {
+        /* the window went away */
+      }
+    };
+
+    const source = event.source;
+    const url = oneClickUrl(data.url);
+    let fromApp = false;
+    try {
+      fromApp =
+        Boolean(source) &&
+        source.type === 'window' &&
+        source.frameType === 'top-level' &&
+        new URL(source.url).origin === self.location.origin;
+    } catch {
+      fromApp = false;
+    }
+
+    if (!port || !url || !fromApp || oneClickInFlight) {
+      reply(false);
+      return;
+    }
+
+    oneClickInFlight = true;
+    const abort = typeof AbortController === 'function' ? new AbortController() : null;
+    const timer = setTimeout(() => {
+      if (abort) abort.abort();
+    }, ONE_CLICK_TIMEOUT_MS);
+    // (an opaque response: one the list's server received resolves)
+    const sent = fetch(url, {
+      method: 'POST',
+      mode: 'no-cors',
+      credentials: 'omit',
+      referrerPolicy: 'no-referrer',
+      cache: 'no-store',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: 'List-Unsubscribe=One-Click',
+      ...(abort ? { signal: abort.signal } : {}),
+    })
+      .then(
+        () => reply(true),
+        () => reply(false),
+      )
+      .finally(() => {
+        clearTimeout(timer);
+        oneClickInFlight = false;
+      });
+    if (event.waitUntil) event.waitUntil(sent);
+  }
+
   self.addEventListener('message', (event) => {
     const data = event.data || {};
     if (!data.type) return;
-    if (data.type === 'startSync') {
+    if (data.type === 'one-click-unsubscribe') {
+      sendOneClickUnsubscribe(event, data);
+    } else if (data.type === 'startSync') {
       startSync(data);
     } else if (data.type === 'cancelSync') {
       const key = `${data.accountId}:${data.folderId}`;

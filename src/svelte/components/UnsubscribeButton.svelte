@@ -4,14 +4,23 @@
    *
    * Shown only when the message carries a usable List-Unsubscribe header (see
    * list-unsubscribe.ts), and nothing happens without a confirmation that
-   * names the destination. An email target is preferred: it goes out from the
-   * user's own account, is kept out of Sent, and does not open a page that
-   * learns their IP address. An https target opens in the system browser.
+   * names the destination.
+   *
+   * A list that supports one-click (RFC 8058) gets its POST from this
+   * device, without cookies or a referrer, when the web app's service worker
+   * can send it. Otherwise (or if it could not be sent) an email target is
+   * preferred: it goes out from the user's own account, is kept out of Sent,
+   * and does not open a page that learns their IP address. An https target
+   * opens in the system browser.
    */
   import { Button } from '$lib/components/ui/button';
   import * as Dialog from '$lib/components/ui/dialog';
   import MailMinus from '@lucide/svelte/icons/mail-minus';
-  import { getUnsubscribeOptions } from '../../utils/list-unsubscribe';
+  import {
+    canSendOneClick,
+    getUnsubscribeOptions,
+    sendOneClickUnsubscribe,
+  } from '../../utils/list-unsubscribe';
   import { openExternalUrl } from '../../utils/external-links.js';
   import { Local } from '../../utils/storage';
 
@@ -29,15 +38,22 @@
   let working = $state(false);
   // Shown in place of the button once done, for hosts without toasts
   let done = $state('');
+  // The one-click request could not be sent: the email or the page instead
+  let oneClickFailed = $state(false);
   // The reader keeps this component across messages
   $effect(() => {
     void nodemailer;
     done = '';
     confirming = false;
+    oneClickFailed = false;
   });
 
+  const oneClick = $derived(
+    Boolean(options?.oneClick && options.url) && !oneClickFailed && canSendOneClick(),
+  );
+
   const destination = $derived.by(() => {
-    if (options?.mail) return options.mail.to;
+    if (options?.mail && !oneClick) return options.mail.to;
     if (options?.url) {
       try {
         return new URL(options.url).hostname;
@@ -52,6 +68,20 @@
     if (!options || working) return;
     working = true;
     try {
+      if (oneClick && options.url) {
+        const host = destination;
+        if (await sendOneClickUnsubscribe(options.url)) {
+          done = 'Unsubscribe request sent';
+          onToast?.(`Unsubscribe request sent to ${host}`, 'success');
+          confirming = false;
+        } else {
+          // (the dialog now offers the email or the page instead)
+          oneClickFailed = true;
+          onToast?.(`Could not send the unsubscribe request to ${host}`, 'error');
+        }
+        return;
+      }
+
       if (options.mail) {
         const from = account || Local.get('email') || '';
         const { queueEmail } = await import('../../utils/outbox-service.js');
@@ -102,7 +132,12 @@
         <Dialog.Title>Unsubscribe from this list?</Dialog.Title>
       </Dialog.Header>
       <div class="py-2 text-sm text-muted-foreground">
-        {#if options.mail}
+        {#if oneClick}
+          <p>
+            An unsubscribe request will be sent to
+            <strong class="text-foreground">{destination}</strong> from this device, without your cookies.
+          </p>
+        {:else if options.mail}
           <p>
             An unsubscribe email will be sent from {account || 'your account'} to
             <strong class="text-foreground">{options.mail.to}</strong>. It is not saved to Sent.

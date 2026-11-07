@@ -1,5 +1,11 @@
-import { describe, expect, it } from 'vitest';
-import { getUnsubscribeOptions, listUnsubscribeTargets } from '../../src/utils/list-unsubscribe';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+  canSendOneClick,
+  getUnsubscribeOptions,
+  isOneClickUrl,
+  listUnsubscribeTargets,
+  sendOneClickUnsubscribe,
+} from '../../src/utils/list-unsubscribe';
 
 // Shapes as the API returns them: mailparser's headerLines plus its parsed `list`
 const withLines = (lines: Record<string, string>) => ({
@@ -70,5 +76,83 @@ describe('getUnsubscribeOptions', () => {
     expect(
       getUnsubscribeOptions(withLines({ 'list-unsubscribe': '<mailto:?subject=x>' })),
     ).toBeNull();
+  });
+});
+
+describe('one-click unsubscribe', () => {
+  const oneClick = (target: string) =>
+    getUnsubscribeOptions(
+      withLines({
+        'list-unsubscribe': `<${target}>`,
+        'list-unsubscribe-post': 'List-Unsubscribe=One-Click',
+      }),
+    );
+
+  it('is only claimed for an https URL on a public host name', () => {
+    expect(oneClick('https://news.example.com/u?id=1')?.oneClick).toBe(true);
+    expect(oneClick('https://xn--mnchen-3ya.example.de/u')?.oneClick).toBe(true);
+
+    // (a device on the user's own network, or not the default port: the page
+    // may still be opened, but nothing is sent to it from here)
+    for (const target of [
+      'https://192.168.1.1/u',
+      'https://127.0.0.1/u',
+      'https://2130706433/u',
+      'https://[::1]/u',
+      'https://localhost/u',
+      'https://router.local/u',
+      'https://nas.home.arpa/u',
+      'https://printer.lan/u',
+      'https://intranet/u',
+      'https://news.example.com:8443/u',
+      `https://news.example.com/${'a'.repeat(3000)}`,
+    ]) {
+      expect(oneClick(target)?.oneClick, target).toBe(false);
+    }
+    expect(isOneClickUrl('http://news.example.com/u')).toBe(false);
+    expect(isOneClickUrl('not a url')).toBe(false);
+  });
+
+  describe('sendOneClickUnsubscribe', () => {
+    const url = 'https://news.example.com/u?id=1';
+
+    function withServiceWorker(reply: ((data: unknown) => unknown) | null) {
+      const postMessage = vi.fn((data: unknown, [port]: MessagePort[]) => {
+        if (reply) port.postMessage(reply(data));
+      });
+      Object.defineProperty(navigator, 'serviceWorker', {
+        configurable: true,
+        value: { controller: { postMessage } },
+      });
+      return postMessage;
+    }
+
+    afterEach(() => {
+      Reflect.deleteProperty(navigator, 'serviceWorker');
+    });
+
+    it('asks the service worker to send it, and resolves with whether it was sent', async () => {
+      const postMessage = withServiceWorker(() => ({ ok: true }));
+      expect(canSendOneClick()).toBe(true);
+      await expect(sendOneClickUnsubscribe(url)).resolves.toBe(true);
+      expect(postMessage).toHaveBeenCalledWith({ type: 'one-click-unsubscribe', url }, [
+        expect.any(MessagePort),
+      ]);
+
+      withServiceWorker(() => ({ ok: false }));
+      await expect(sendOneClickUnsubscribe(url)).resolves.toBe(false);
+    });
+
+    it('is not sent without a service worker, to a local host, or past the timeout', async () => {
+      expect(canSendOneClick()).toBe(false);
+      await expect(sendOneClickUnsubscribe(url)).resolves.toBe(false);
+
+      const postMessage = withServiceWorker(() => ({ ok: true }));
+      await expect(sendOneClickUnsubscribe('https://192.168.1.1/u')).resolves.toBe(false);
+      expect(postMessage).not.toHaveBeenCalled();
+
+      withServiceWorker(null);
+      await expect(sendOneClickUnsubscribe(url, 50)).resolves.toBe(false);
+    });
   });
 });

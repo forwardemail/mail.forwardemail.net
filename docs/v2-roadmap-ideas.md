@@ -84,7 +84,6 @@ See `docs/agent-mode-discovery.md` on that branch. No server work has started.
 ## 3. Smaller items parked for v2
 
 - **Server-side image proxy.** Remote images are blocked by default now, but loading them still reveals the reader's IP address.
-- **One-click unsubscribe POST (RFC 8058) from the server.** The app opens the page in a browser today, because its CSP allows connections to the Forward Email API only.
 - **Client-side WKD lookup.** On desktop through a Rust command; on web through a server endpoint.
 - **Autocrypt headers.** Check first that `/v1/emails` accepts custom headers.
 - **Credential sealing on mobile.** iOS Keychain through keyring; Android Keystore through a plugin.

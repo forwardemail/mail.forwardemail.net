@@ -86,8 +86,12 @@ There is no analytics, telemetry or crash reporting SDK. The app contacts:
 
 - **Unsubscribe.** It appears only when a message has a usable `List-Unsubscribe` header, and acts only after the user confirms (`list-unsubscribe.ts`, `UnsubscribeButton.svelte`).
   - Only `https:` and `mailto:` targets are used, and a URL that carries credentials is ignored.
-  - An email target is preferred. The request goes from the user's account and is not saved to Sent.
-  - An https target opens in the system browser. The app does not make the RFC 8058 POST itself, because its CSP allows connections only to the Forward Email API.
+  - One-click (RFC 8058) comes first in the web app. The service worker sends the POST, because the page's CSP allows connections only to the Forward Email API (`public/sw-sync.js`).
+    - It sends no cookies, no referrer and only the RFC 8058 body, one request at a time.
+    - It sends only to an https URL on a public host name: never an IP address, a local name such as `router.local`, or a port other than 443 (`isOneClickUrl`).
+    - It sends only when a top-level window of the app asks, never a message's frame.
+  - Otherwise, or when that request could not be sent, an email target is preferred. The request goes from the user's account and is not saved to Sent.
+  - An https target opens in the system browser. The desktop and mobile apps have no service worker, so they use the email or the page.
 - **Block sender.** This adds a rule to the app's managed Sieve script that files the sender's mail into Junk (`blockSender` in `filtersStore.ts`).
   - It refuses rather than switch off a script the user wrote elsewhere, because only one Sieve script is active and saving activates the managed one.
   - It also refuses to write over a hand-edited managed script.
@@ -126,6 +130,7 @@ Notes on these policies:
 - There is no `frame-ancestors`. A meta CSP cannot set it, and it is not set in the Tauri policy.
 - When adding a new origin, update `index.html`, `compose.html` and `tauri.conf.json` together. The web build will work while Tauri rejects the origin, or the other way round.
 - Sandboxed `srcdoc` frames inherit the parent's policy and add their own. The stricter rule wins.
+- The service worker is outside these policies. Besides the app's own files and the Forward Email API, it connects only to send a one-click unsubscribe request (see Mailing lists and blocking).
 
 ## IPC boundary and capabilities
 
