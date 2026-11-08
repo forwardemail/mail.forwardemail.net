@@ -36,6 +36,15 @@
   </screenshots>
   <!-- scripts/sync-version.cjs prepends a release entry on every version bump. -->
   <releases>
+    <release version="1.0.10" date="2026-11-08">
+      <description>
+        <p>Fixes</p>
+        <ul>
+          <li>Removed png</li>
+          <li>Encrypted messages no longer show a paperclip unless they contain a real attachment</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.0.9" date="2026-11-07">
       <description>
         <p>New</p>

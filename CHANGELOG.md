@@ -6,6 +6,13 @@ release notes are taken from here. To change what a commit says, add a
 `Release-note: <text>` line to its message (or `Release-note: none` to leave
 it out).
 
+## 1.0.10 (2026-11-08)
+
+### Fixes
+
+- Removed png
+- Encrypted messages no longer show a paperclip unless they contain a real attachment
+
 ## 1.0.9 (2026-11-07)
 
 ### New
