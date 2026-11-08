@@ -39,3 +39,25 @@ describe('hasAttachments', () => {
     ]);
   });
 });
+
+describe('PGP/MIME envelope parts', () => {
+  const envelope = [
+    { filename: 'PGP_MIME_version_identification', contentType: 'application/pgp-encrypted' },
+    { filename: 'encrypted.asc', contentType: 'application/octet-stream' },
+  ];
+
+  it('are not counted as attachments', () => {
+    expect(filterDownloadableAttachments(envelope)).toEqual([]);
+    expect(hasAttachments({ attachments: envelope })).toBe(false);
+  });
+
+  it('leave a real attachment inside an encrypted message counted', () => {
+    const real = { filename: 'invoice.pdf', contentType: 'application/pdf' };
+    expect(filterDownloadableAttachments([...envelope, real])).toEqual([real]);
+  });
+
+  it('do not hide a user file that is named encrypted.asc but is not an octet-stream', () => {
+    const doc = { filename: 'encrypted.asc', contentType: 'text/plain' };
+    expect(filterDownloadableAttachments([doc])).toEqual([doc]);
+  });
+});

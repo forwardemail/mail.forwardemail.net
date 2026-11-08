@@ -1,6 +1,7 @@
 import { Remote } from '../utils/remote.js';
 import Dexie from 'dexie';
 import { db } from '../utils/db.js';
+import { filterDownloadableAttachments } from '../utils/attachment-flags';
 import { Local } from '../utils/storage.js';
 import {
   sanitizeHtml,
@@ -720,7 +721,12 @@ function sameSignatureCheck(a: PgpSignatureCheck | null, b: PgpSignatureCheck | 
 async function persistDecryptedEnvelope(
   message: Message,
   account: string,
-  decrypted: { subject?: string; signed?: boolean; signature?: PgpSignatureCheck | null },
+  decrypted: {
+    subject?: string;
+    signed?: boolean;
+    signature?: PgpSignatureCheck | null;
+    attachments?: unknown[];
+  },
   // getPgpKeysVersion() when the decrypt started: keys removed since then
   // took what they decrypted with them, so this must not write it back
   keysVersion?: number,
@@ -738,8 +744,17 @@ async function persistDecryptedEnvelope(
   const signed = Boolean(decrypted.signed);
   const signature = decrypted.signature ?? null;
 
+  // The server flags the PGP/MIME envelope parts as attachments, so the list
+  // paperclip is only right once the real content is known.
+  const hasRealAttachments = Array.isArray(decrypted.attachments)
+    ? filterDownloadableAttachments(decrypted.attachments).length > 0
+    : undefined;
+  const attachmentFlagStale =
+    hasRealAttachments !== undefined && Boolean(message.has_attachment) !== hasRealAttachments;
+
   // Nothing new to record. Avoids a write on every open of an already-flagged message.
   if (
+    !attachmentFlagStale &&
     innerSubject === undefined &&
     message.pgpEncrypted &&
     message.pgpSigned === signed &&
@@ -753,6 +768,7 @@ async function persistDecryptedEnvelope(
     pgpSigned: signed,
     pgpSignature: signature,
   };
+  if (attachmentFlagStale) changes.has_attachment = hasRealAttachments;
   if (innerSubject !== undefined) {
     changes.subject = innerSubject;
     // Kept so removing the keys can put the server's subject back

@@ -23,9 +23,24 @@ type Attachment = {
  * decorations are hidden (a CID image with inline disposition, such as a
  * signature logo); every other attachment is shown.
  */
+/**
+ * The two parts of a PGP/MIME envelope. The server counts them as attachments,
+ * so every encrypted message would show a paperclip.
+ */
+export function isPgpEnvelopePart(att: Attachment): boolean {
+  const type = (att.contentType || att.mimeType || att.type || '')
+    .toLowerCase()
+    .split(';')[0]
+    .trim();
+  if (type === 'application/pgp-encrypted') return true;
+  const name = String(att.filename || att.name || '').toLowerCase();
+  return name === 'encrypted.asc' && (type === 'application/octet-stream' || type === '');
+}
+
 export function filterDownloadableAttachments(atts: unknown): Attachment[] {
   if (!Array.isArray(atts)) return [];
   return atts.filter((att: Attachment) => {
+    if (isPgpEnvelopePart(att)) return false;
     if (!att.contentId) return true;
     const type = (att.contentType || att.mimeType || att.type || '').toLowerCase();
     if (!type.startsWith('image/')) return true;
