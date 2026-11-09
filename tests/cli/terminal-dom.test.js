@@ -9,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { TermDOM } from '@b9g/termdom';
 import createDOMPurify from 'dompurify';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { installAnimations, installDomFixes } from '../../src/cli/dom-fixes';
 import { installFrames } from '../../src/cli/frames';
 import { createImageConstructor } from '../../src/cli/images';
@@ -228,7 +228,7 @@ describe('CSS lengths to cells', () => {
 });
 
 describe('message frames', () => {
-  it('lays out an iframe srcdoc inside the frame, with scoped styles and linked clicks', async () => {
+  it('reports the message frame ready, with the height of its own document', async () => {
     const term = new TermDOM({ transport: quietTransport() });
     const win = term.window;
     installFrames(win);
@@ -239,64 +239,93 @@ describe('message frames', () => {
     frame.className = 'fe-email-iframe';
     term.document.body.append(frame);
     frame.srcdoc =
-      '<!DOCTYPE html><html class="fe-iframe-dark"><head><style>body{margin:0} p{padding-left:16px}</style>' +
-      '<script src="/email-iframe.js"></script></head><body><p>Hello from the message</p>' +
-      '<a href="https://forwardemail.net/">a link</a><script>alert(1)</script></body></html>';
-    await new Promise((resolve) => setTimeout(resolve, 20));
+      '<!DOCTYPE html><html><body><p>Hello from the message</p><p>Second line</p></body></html>';
+    await vi.waitFor(() => expect(messages.map((message) => message.type)).toContain('height'));
 
-    const view = frame.querySelector('.fe-frame-view');
-    expect(view).toBeTruthy();
-    const root = view.shadowRoot.querySelector('.fe-frame-root');
-    expect(root.className).toContain('fe-iframe-dark');
-    expect(root.textContent).toContain('Hello from the message');
-    expect(view.shadowRoot.querySelector('script')).toBeNull();
-    expect(view.shadowRoot.querySelector('style').textContent).toContain('padding-left:2px');
+    expect(frame.children.length).toBe(0);
+    expect(frame.contentDocument.body.textContent).toContain('Hello from the message');
     expect(messages.map((message) => message.type)).toEqual(['ready', 'height']);
-
-    root.querySelector('a').click();
-    expect(messages.at(-1)).toEqual({
-      type: 'link',
-      payload: { url: 'https://forwardemail.net/', isMailto: false },
-    });
+    expect(messages[1].payload.height).toBe(
+      frame.contentDocument.documentElement.getBoundingClientRect().height,
+    );
+    expect(messages[1].payload.height).toBeGreaterThan(0);
   });
 
-  it('strips inline handlers and javascript: URLs from the copied-in message nodes', async () => {
+  it('converts the message frame’s px lengths to cells once', async () => {
+    const term = new TermDOM({ transport: quietTransport() });
+    const win = term.window;
+    geometry(win);
+    installFrames(win);
+    const messages = [];
+    win.addEventListener('message', (event) => messages.push(event.data));
+
+    const frame = term.document.createElement('iframe');
+    term.document.body.append(frame);
+    frame.srcdoc =
+      '<style>.pad{padding-left:16px}</style><p class="pad">a</p><table style="width:600px"><tr><td>b</td></tr></table>';
+    await vi.waitFor(() => expect(messages.map((message) => message.type)).toContain('height'));
+
+    const doc = frame.contentDocument;
+    const style = (el) => frame.contentWindow.getComputedStyle(el);
+    expect(style(doc.querySelector('.pad')).paddingLeft).toBe('2px');
+    expect(doc.querySelector('table').getAttribute('style')).toBe('width:75px');
+    expect(style(doc.querySelector('table')).width).toBe('75px');
+  });
+
+  it('makes the message frame same-origin, and sends link clicks from its own document', async () => {
     const term = new TermDOM({ transport: quietTransport() });
     const win = term.window;
     installFrames(win);
+    const messages = [];
+    win.addEventListener('message', (event) => messages.push(event.data));
+
+    const frame = term.document.createElement('iframe');
+    frame.setAttribute('sandbox', 'allow-scripts');
+    term.document.body.append(frame);
+    frame.srcdoc =
+      '<!DOCTYPE html><html><body><a href="mailto:demo@forwardemail.net">write</a></body></html>';
+    await vi.waitFor(() => expect(messages.map((message) => message.type)).toContain('height'));
+
+    expect(frame.getAttribute('sandbox')).toBe('allow-scripts allow-same-origin');
+    frame.contentDocument.querySelector('a').click();
+    expect(messages.at(-1)).toEqual({
+      type: 'link',
+      payload: { url: 'mailto:demo@forwardemail.net', isMailto: true },
+    });
+  });
+
+  it('runs nothing from the message: inline handlers and javascript: links', async () => {
+    const term = new TermDOM({ transport: quietTransport() });
+    const win = term.window;
+    installFrames(win);
+    const messages = [];
+    win.addEventListener('message', (event) => messages.push(event.data));
 
     const flags = globalThis;
     flags.__feFrameHandlerRan = false;
 
     const frame = term.document.createElement('iframe');
-    frame.className = 'fe-email-iframe';
+    frame.setAttribute('sandbox', 'allow-scripts');
     term.document.body.append(frame);
     frame.srcdoc =
-      '<!DOCTYPE html><html><body>' +
-      '<details open ontoggle="globalThis.__feFrameHandlerRan = true"><summary>s</summary>x</details>' +
+      '<!DOCTYPE html><html><body onload="globalThis.__feFrameHandlerRan = true">' +
       '<p onclick="globalThis.__feFrameHandlerRan = true">body</p>' +
       '<img src="x" onerror="globalThis.__feFrameHandlerRan = true">' +
-      '<a href="  JaVaScript:globalThis.__feFrameHandlerRan = true">evil</a>' +
+      '<a href="javascript:globalThis.__feFrameHandlerRan = true">evil</a>' +
+      '<script>globalThis.__feFrameHandlerRan = true</script>' +
       '</body></html>';
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await vi.waitFor(() => expect(messages.map((message) => message.type)).toContain('height'));
 
-    const view = frame.querySelector('.fe-frame-view');
-    const root = view.shadowRoot.querySelector('.fe-frame-root');
-
-    // No event-handler attribute survives on any node that reached the app's
-    // own document (the scheme check is case- and whitespace-insensitive).
-    for (const el of root.querySelectorAll('*')) {
-      for (const name of el.getAttributeNames()) {
-        expect(name.toLowerCase().startsWith('on')).toBe(false);
-      }
-    }
-    expect(root.querySelector('a').getAttribute('href')).toBeNull();
-
-    // And clicking the de-fanged link runs nothing of its own.
-    flags.__feFrameHandlerRan = false;
-    root.querySelector('a').click();
+    const doc = frame.contentDocument;
+    doc.querySelector('p').click();
+    doc.querySelector('a').click();
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(flags.__feFrameHandlerRan).toBe(false);
+    // The link goes to the app, which refuses a javascript: URL.
+    expect(messages.at(-1)).toEqual({
+      type: 'link',
+      payload: { url: 'javascript:globalThis.__feFrameHandlerRan = true', isMailto: false },
+    });
   });
 });
 
