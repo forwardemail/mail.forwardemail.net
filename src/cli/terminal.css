@@ -29,10 +29,9 @@ iframe {
   display: none !important;
 }
 
-/* A message body is laid out inside its frame (see frames.ts). */
+/* TermDOM draws a message body from its frame's own document (frames.ts). */
 .fe-email-iframe {
   display: block !important;
-  height: auto !important;
   border-style: none !important;
 }
 

@@ -12,6 +12,7 @@ import path from 'node:path';
 import { TermDOM } from '@b9g/termdom';
 import { afterEach, describe, expect, it } from 'vitest';
 import { installClipboard } from '../../src/cli/clipboard';
+import { installFrames } from '../../src/cli/frames';
 import {
   MAX_TERMINAL_COPY,
   clipboardSequences,
@@ -665,6 +666,46 @@ describe('navigator.clipboard in the terminal', () => {
       expect(term.window.closed).toBe(false);
       expect(notices).toEqual([{ text: 'Could not copy: xclip failed', failed: true }]);
       expect(term.window.getSelection().toString()).toBe('hello');
+    } finally {
+      await term.dispose();
+    }
+  });
+  it('copies text selected in a message frame on Ctrl+C, and shows Copy while it is', async () => {
+    const { term, type, written } = terminal();
+    installFrames(term.window);
+    const states = [];
+    term.window.addEventListener('fe-terminal-selection', (event) =>
+      states.push(event.detail.active),
+    );
+    await term.attach();
+    try {
+      const loaded = new Promise((resolve) =>
+        term.window.addEventListener('message', (event) => {
+          if (event.data?.type === 'height') resolve();
+        }),
+      );
+      const frame = term.document.createElement('iframe');
+      frame.sandbox = 'allow-scripts';
+      frame.srcdoc = '<!DOCTYPE html><html><body><p>message words</p></body></html>';
+      term.document.body.append(frame);
+      await loaded;
+      expect(frame.getAttribute('sandbox')).toBe('allow-scripts allow-same-origin');
+
+      const doc = frame.contentDocument;
+      const range = doc.createRange();
+      range.setStart(doc.querySelector('p').firstChild, 0);
+      range.setEnd(doc.querySelector('p').firstChild, 7);
+      frame.contentWindow.getSelection().addRange(range);
+      await tick();
+      expect(term.window.getSelection().toString()).toBe('');
+      expect(states).toEqual([true]);
+
+      type('\u0003');
+      await tick(150);
+      expect(term.window.closed).toBe(false);
+      expect(written).toEqual([osc52('message')]);
+      expect(frame.contentWindow.getSelection().toString()).toBe('');
+      expect(states).toEqual([true, false]);
     } finally {
       await term.dispose();
     }
