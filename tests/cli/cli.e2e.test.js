@@ -550,9 +550,11 @@ describe.runIf(canRunInteractive)('in a terminal', () => {
     await session.waitFor((text) => FORMATTING.test(text), { label: 'the formatting toolbar' });
     // Once the compose window has put the caret at the top, as it does.
     await new Promise((resolve) => setTimeout(resolve, 1500));
-    const attribution = session.locate('wrote:');
-    const line = session.screen().split('\n')[attribution.row - 1];
-    session.clickAt(line.indexOf('On ') + 1, attribution.row);
+    // The attribution can wrap, leaving "wrote:" a row below "On <date>".
+    const lines = session.screen().split('\n');
+    let row = session.locate('wrote:').row;
+    if (!lines[row - 1].includes('On ')) row -= 1;
+    session.clickAt(lines[row - 1].indexOf('On ') + 1, row);
     await new Promise((resolve) => setTimeout(resolve, 500));
     session.type('XYZ');
     await session.waitFor('XYZOn ');
