@@ -10,7 +10,7 @@ import path from 'node:path';
 import { TermDOM } from '@b9g/termdom';
 import createDOMPurify from 'dompurify';
 import { describe, expect, it, vi } from 'vitest';
-import { installAnimations, installDomFixes } from '../../src/cli/dom-fixes';
+import { installDomFixes } from '../../src/cli/dom-fixes';
 import { installFrames } from '../../src/cli/frames';
 import { createImageConstructor } from '../../src/cli/images';
 import { bytesFor, displayCombo, installHints } from '../../src/cli/hints';
@@ -343,7 +343,6 @@ describe('DOM fixes', () => {
 
   it('finishes element animations at once, as Svelte transitions expect', async () => {
     const term = new TermDOM({ transport: quietTransport() });
-    installAnimations(term.window);
     const el = term.document.createElement('div');
     const animation = el.animate([{ opacity: 0 }, { opacity: 1 }], {
       duration: 300,

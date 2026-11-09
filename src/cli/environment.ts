@@ -6,7 +6,7 @@ import { FileReader } from './file-reader';
 import { createImageConstructor } from './images';
 import { createStorage } from './storage';
 import { installCentering } from './center';
-import { installAnimations, installDomFixes, installEditingFixes } from './dom-fixes';
+import { installDomFixes, installEditingFixes } from './dom-fixes';
 import { installFocusNavigation } from './focus-navigation';
 import { installFrames } from './frames';
 import { installHistory } from './history';
@@ -252,7 +252,6 @@ export function installEnvironment(options: EnvironmentOptions) {
   installCentering(win);
   installDomFixes(win);
   installEditingFixes(win);
-  installAnimations(win);
   installGeometry(win);
   installFrames(win);
   installTextareaSizing(win);
