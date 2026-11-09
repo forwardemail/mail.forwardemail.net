@@ -150,7 +150,13 @@ describe('command line', () => {
       home: tempHome(),
       env: { FORWARDEMAIL_NOTIFICATIONS: '1', DISPLAY: ':0', SSH_CONNECTION: '' },
     });
-    if (process.platform === 'darwin' || process.platform === 'win32') {
+    const noRosetta =
+      process.platform === 'darwin' &&
+      process.arch === 'arm64' &&
+      !fs.existsSync('/Library/Apple/usr/libexec/oah/libRosettaRuntime');
+    if (noRosetta) {
+      expect(on.stdout).toContain('Rosetta 2 is not installed');
+    } else if (process.platform === 'darwin' || process.platform === 'win32') {
       expect(on.status).toBe(0);
       const program = on.stdout.match(/program: (.+)/)?.[1];
       expect(program).toBeTruthy();

@@ -420,9 +420,20 @@ describe('backgroundUpdate', () => {
 
 // The shell's view of PATH runs these stand-ins, and they need node and sh.
 const posixOnly = it.skipIf(process.platform === 'win32');
+// Node alone, not the folder it is installed in, where a global forwardemail
+// may be installed too.
+let nodeDir = null;
+const nodeOnly = () => {
+  if (!nodeDir) {
+    nodeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'forwardemail-node-'));
+    fs.symlinkSync(process.execPath, path.join(nodeDir, 'node'));
+  }
+  return nodeDir;
+};
+
 const envWith = (...dirs) => ({
   ...process.env,
-  PATH: [...dirs, path.dirname(process.execPath), '/usr/bin', '/bin'].join(path.delimiter),
+  PATH: [...dirs, nodeOnly(), '/usr/bin', '/bin'].join(path.delimiter),
 });
 
 // A global install laid out the way a package manager does it: the package
