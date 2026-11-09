@@ -23,7 +23,7 @@ function homeWithFocusColor() {
   return home;
 }
 
-const inList = (text) => text.includes('INBOX(') && !text.includes('To: Demo User');
+const inList = (text) => text.includes('INBOX (') && !text.includes('To: Demo User');
 
 describe.runIf(canRunInteractive)('keyboard focus after a click', () => {
   let session;
@@ -150,19 +150,17 @@ describe.runIf(canRunInteractive)('keyboard focus after a click', () => {
     await session.waitFor('Appearance');
     session.click('Appearance');
     await session.waitFor('(x) Auto (follow system)');
-    // A click on the label text picks Light and focuses it; Tab moves to
-    // Dark, and Space picks that.
+    // A click on the label text picks Light and focuses it; ↓ moves to Dark
+    // in the same group and picks it.
     session.click('Light');
     await session.waitFor('(x) Light');
-    session.type(KEYS.tab);
-    session.type(' ');
+    session.type(KEYS.down);
     await session.waitFor('(x) Dark');
-    // A click on a heading, then Tab: the controls under it, Compact and
-    // then Comfortable.
+    // A click on a heading, then Tab: the checked control under it,
+    // Compact, and ↓ picks Comfortable.
     session.click('Density');
     session.type(KEYS.tab);
-    session.type(KEYS.tab);
-    session.type(' ');
+    session.type(KEYS.down);
     await session.waitFor('(x) Comfortable');
   });
 });
