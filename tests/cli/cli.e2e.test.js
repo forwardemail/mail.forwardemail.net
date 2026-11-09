@@ -927,15 +927,32 @@ describe.runIf(canRunInteractive)('in a terminal', () => {
     session = startTerminal({ home, args: ['--demo'] });
     await session.waitFor('Welcome to Forward Email!');
     await session.stop();
-    // The demo account stays signed in; a notification's target opens once
-    // the app is ready, the way a click on one or its toast's View does.
+    // The page load a click on a notification or its toast's View makes: the
+    // next instance gets the tab's session, where the demo account is signed
+    // in, and opens the notification's target once the app is ready.
+    const demo = {
+      email: 'demo@forwardemail.net',
+      alias: 'demo@forwardemail.net:demo-password-not-real',
+    };
+    const sessionFile = path.join(home, 'session-1.json');
+    fs.writeFileSync(
+      sessionFile,
+      JSON.stringify({
+        webmail_session_accounts: JSON.stringify([
+          { email: demo.email, apiKey: null, aliasAuth: demo.alias },
+        ]),
+        webmail_active_account: demo.email,
+        webmail_email: demo.email,
+        webmail_alias_auth: demo.alias,
+      }),
+    );
     const target = encodeURIComponent(JSON.stringify({ folder: 'INBOX', messageId: 'demo-2' }));
     session = startTerminal({
       home,
       env: {
         FORWARDEMAIL_RESUME: JSON.stringify({
           url: `https://mail.forwardemail.net/mailbox?fe_notify=${target}`,
-          session: null,
+          session: sessionFile,
         }),
       },
     });
