@@ -172,6 +172,18 @@ a.border::after {
   margin-inline-start: 1ch;
 }
 
+/* A checkbox reads [ ] or [✓], as wide as its brackets and mark. */
+[data-slot='checkbox'] {
+  width: auto !important;
+}
+button[data-slot='checkbox']::before,
+button[data-slot='checkbox']::after {
+  margin-inline: 0;
+}
+[data-slot='checkbox-indicator'] {
+  width: 1ch;
+}
+
 /* Message list rows: no minimum height, no vertical padding. */
 [data-conversation-row] {
   min-height: 0 !important;
