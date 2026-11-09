@@ -425,6 +425,16 @@ describe.runIf(canRunInteractive)('in a terminal', () => {
     });
   });
 
+  it('reads Esc and the key after it as two keys when they arrive together', async () => {
+    session = startTerminal({ home: tempHome(), args: ['--demo'] });
+    await session.waitFor('Welcome to Forward Email!');
+    // A terminal sends this for Esc then Ctrl+N pressed while the client is
+    // busy, and also for Alt+Ctrl+N.
+    session.type(KEYS.escape + KEYS.ctrlN);
+    await session.waitFor('Subject');
+    expect(session.screen()).toContain('New message');
+  });
+
   it('Esc closes a menu first, then goes back from an open message', async () => {
     session = startTerminal({ home: tempHome(), args: ['--demo'] });
     await session.waitFor('Welcome to Forward Email!');

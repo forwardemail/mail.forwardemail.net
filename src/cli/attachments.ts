@@ -219,21 +219,11 @@ export async function readFiles(
   return { files, problems };
 }
 
-/** A FileList of TermDOM's, holding `files`. */
-function fileListOf(win: AnyRecord, files: File[]): AnyRecord {
-  const list = Object.create(win.FileList.prototype);
-  files.forEach((file, index) => Object.defineProperty(list, index, { value: file }));
-  Object.defineProperties(list, {
-    length: { value: files.length },
-    item: { value: (index: number) => files[index] ?? null },
-    [Symbol.iterator]: { value: () => files[Symbol.iterator]() },
-  });
-  return list;
-}
-
 /** Gives a file input its files, as a browser does once the user picks them. */
 export function setInputFiles(win: AnyRecord, input: AnyRecord, files: File[]) {
-  input.files = fileListOf(win, files);
+  const transfer = new win.DataTransfer();
+  for (const file of files) transfer.items.add(file);
+  input.files = transfer.files;
   input.dispatchEvent(new win.Event('input', { bubbles: true, composed: true }));
   input.dispatchEvent(new win.Event('change', { bubbles: true }));
 }

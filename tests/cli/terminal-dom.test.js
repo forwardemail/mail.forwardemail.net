@@ -484,10 +484,11 @@ describe('text area rows', () => {
     expect(wrappedRows('ab 日本語のテキストです', 12)).toBe(2);
   });
 
-  it('moves a tab to the next stop of eight, wrapping when it does not fit', () => {
+  it('moves a tab to the next stop of eight, hanging past the edge when it does not fit', () => {
     expect(wrappedRows('a\tb', 12)).toBe(1);
-    expect(wrappedRows('a\tb\tc\td\te', 12)).toBe(4);
-    expect(wrappedRows('\t\t\tword', 12)).toBe(3);
+    expect(wrappedRows('a\tb\tc\td\te', 12)).toBe(3);
+    expect(wrappedRows('\t\t\tword', 12)).toBe(2);
+    expect(wrappedRows('abcdefghijk\tx', 12)).toBe(2);
   });
 
   it('wraps text the way TermDOM wraps a text area', async () => {

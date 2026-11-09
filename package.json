@@ -128,7 +128,7 @@
     "tauri-plugin-remote-push-api": "1.0.10"
   },
   "devDependencies": {
-    "@b9g/termdom": "0.1.9",
+    "@b9g/termdom": "0.2.6",
     "@commitlint/cli": "^20.5.3",
     "@commitlint/config-conventional": "^20.5.3",
     "@eslint/js": "^9.39.5",
@@ -221,7 +221,6 @@
       "basic-ftp@<6.2.1": "6.2.3"
     },
     "patchedDependencies": {
-      "@b9g/termdom@0.1.9": "patches/@b9g__termdom@0.1.9.patch",
       "@tiptap/core@2.27.2": "patches/@tiptap__core@2.27.2.patch",
       "rrule@2.8.1": "patches/rrule@2.8.1.patch"
     }
