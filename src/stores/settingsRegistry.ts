@@ -7,13 +7,36 @@ export const SETTING_SCOPES = {
 
 /**
  * The terminal client (src/cli) sets this before the app loads. A terminal
- * draws text, so messages are shown and composed as plain text there by
- * default; both stay switchable in Settings. Other platforms keep their
- * defaults.
+ * draws text, so messages are composed as plain text there by default (still
+ * switchable in Settings) and always shown as plain text (getMessageFormat).
+ * Other platforms keep their defaults.
  */
 const isTerminalClient =
   typeof globalThis !== 'undefined' &&
   (globalThis as { __FORWARDEMAIL_TERMINAL__?: boolean }).__FORWARDEMAIL_TERMINAL__ === true;
+
+export const MESSAGE_FORMATS = ['html', 'text-first', 'text'] as const;
+export type MessageFormat = (typeof MESSAGE_FORMATS)[number];
+
+/**
+ * How much of a new email a notification shows, from most to least:
+ * sender, subject and preview; sender and subject; sender; nothing.
+ */
+export const NOTIFICATION_PREVIEWS = ['full', 'sender_subject', 'sender', 'none'] as const;
+export type NotificationPreview = (typeof NOTIFICATION_PREVIEWS)[number];
+
+const previewSetting = (id: string, label: string, fallback: NotificationPreview) => ({
+  id,
+  portable: true,
+  label,
+  scope: SETTING_SCOPES.DEVICE,
+  localKey: id,
+  valueType: 'string' as const,
+  defaultValue: fallback,
+  localParse: (raw: unknown) => (NOTIFICATION_PREVIEWS.includes(raw as never) ? raw : fallback),
+  localSerialize: (value: unknown) =>
+    NOTIFICATION_PREVIEWS.includes(value as never) ? String(value) : fallback,
+});
 
 export type SettingScope = (typeof SETTING_SCOPES)[keyof typeof SETTING_SCOPES];
 export type ValueType = 'string' | 'boolean' | 'number' | 'json';
@@ -407,6 +430,37 @@ export const SETTINGS_REGISTRY: Record<string, SettingDefinition> = {
     localParse: (raw) => parseBoolean(raw, true),
     localSerialize: (value) => serializeBoolean(Boolean(value)),
   },
+  // What a new-mail notification shows while the app is unlocked (or has no
+  // App Lock), and while App Lock has it locked.
+  notification_preview_unlocked: previewSetting(
+    'notification_preview_unlocked',
+    'Notification content when unlocked',
+    'sender_subject',
+  ),
+  notification_preview_locked: previewSetting(
+    'notification_preview_locked',
+    'Notification content when locked',
+    'none',
+  ),
+  /**
+   * How a message is shown: as the sender formatted it (html), the sender's
+   * own plain-text version when there is one (text-first), or always as
+   * plain text (text). Read through getMessageFormat, which falls back to the
+   * older view_plain_text switch and keeps the terminal on plain text.
+   */
+  message_format: {
+    id: 'message_format',
+    portable: true,
+    label: 'Message format',
+    scope: SETTING_SCOPES.DEVICE,
+    localKey: 'message_format',
+    valueType: 'string',
+    defaultValue: 'html',
+    localParse: (raw) => (MESSAGE_FORMATS.includes(raw as never) ? raw : 'html'),
+    localSerialize: (value) => (MESSAGE_FORMATS.includes(value as never) ? String(value) : 'html'),
+  },
+  // The earlier on/off switch, read only to carry a saved choice over to
+  // message_format (see getMessageFormat).
   view_plain_text: {
     id: 'view_plain_text',
     portable: true,

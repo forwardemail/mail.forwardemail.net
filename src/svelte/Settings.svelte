@@ -111,6 +111,8 @@
     fetchSettings,
     effectiveTheme,
     getEffectiveSettingValue,
+    getMessageFormat,
+    isTerminalClient,
     setSettingValue,
     LocalSettings,
     isSettingOverrideEnabled,
@@ -120,6 +122,9 @@
     SETTING_SCOPES,
     settingsActions,
   } from '../stores/settingsStore';
+  import type { MessageFormat, NotificationPreview } from '../stores/settingsRegistry';
+  import { shareNotificationPreview } from '../utils/notification-manager.js';
+  import { isLockEnabled } from '../utils/crypto-store.js';
   import { mailboxStore } from '../stores/mailboxStore';
   import { detectJunkFolder } from '../utils/junk-folder';
   const { folders: foldersStore } = mailboxStore.state;
@@ -260,7 +265,81 @@
   let notifyAppUpdates = $state(true);
   let blockTrackingPixels = $state(true);
   let stripLinkTracking = $state(false);
-  let viewPlainText = $state(false);
+  let messageFormat = $state<MessageFormat>('html');
+  const messageFormatOptions: { value: MessageFormat; label: string; description: string }[] = [
+    {
+      value: 'html',
+      label: 'Formatted (Recommended)',
+      description:
+        'Show emails as the sender designed them. Emails sent as plain text are shown as plain text.',
+    },
+    {
+      value: 'text-first',
+      label: 'Plain text when available',
+      description:
+        "Show the sender's plain-text version when the email includes one, and the formatted email otherwise.",
+    },
+    {
+      value: 'text',
+      label: 'Plain text only',
+      description:
+        'Always show plain text. Formatting, styles, images and remote content are never loaded; links still work. Emails without a plain-text version are converted.',
+    },
+  ];
+  // Notification privacy (Privacy & Security): what a new-mail alert shows.
+  let previewUnlocked = $state<NotificationPreview>('sender_subject');
+  let previewLocked = $state<NotificationPreview>('none');
+  let appLockOn = $state(false);
+  // FCM and APNs alerts for a closed app are drawn by the system from the
+  // server's push, so this setting cannot change them.
+  let serverDrawnPush = $state(false);
+  const previewOptions: { value: NotificationPreview; label: string; example: string }[] = [
+    {
+      value: 'full',
+      label: 'Sender, subject and preview',
+      example: 'Alex Rivera · Lunch on Friday? · Are you free at noon…',
+    },
+    {
+      value: 'sender_subject',
+      label: 'Sender and subject',
+      example: 'Alex Rivera · Lunch on Friday?',
+    },
+    { value: 'sender', label: 'Sender only', example: 'Alex Rivera' },
+    { value: 'none', label: 'Nothing, just "New email"', example: 'New email' },
+  ];
+  const previewRows = $derived([
+    {
+      id: 'notification_preview_unlocked',
+      label: 'While unlocked',
+      value: previewUnlocked,
+      hint: appLockOn
+        ? 'When the app is open and unlocked.'
+        : 'Applies to every notification, because App Lock is off.',
+    },
+    {
+      id: 'notification_preview_locked',
+      label: 'While locked',
+      value: previewLocked,
+      hint: appLockOn
+        ? 'When App Lock has locked the app, or the app is closed.'
+        : 'Takes effect when you turn on App Lock above.',
+    },
+  ]);
+  const previewRank = (value: NotificationPreview) =>
+    previewOptions.findIndex((option) => option.value === value);
+  const refreshAppLockOn = () => {
+    appLockOn = isLockEnabled();
+  };
+  const savePreview = (id: string, value: NotificationPreview, label: string) => {
+    try {
+      setSettingValue(id, value, { account: getAccountId() });
+      shareNotificationPreview();
+      const option = previewOptions.find((o) => o.value === value);
+      toasts?.show?.(`${label}: ${option?.label || value}`, 'success');
+    } catch (err) {
+      showMutationError(err, 'Failed to update notification privacy');
+    }
+  };
   let hideCompletedTodosValue = $state(false);
   let startWeekOnSundayValue = $state(true);
   let fontChoice = $state('system');
@@ -695,6 +774,8 @@
     loadDatabaseInfo();
 
     window.addEventListener('hashchange', onSettingsHashChange);
+    // App Lock is turned on and off in its own card on this page.
+    globalThis.addEventListener('fe:lock-state-changed', refreshAppLockOn);
 
     subscriptions = [
       // Opened at a section (#privacy from "Add PGP Key", a Get Started step)
@@ -766,6 +847,7 @@
 
   onDestroy(() => {
     window.removeEventListener('hashchange', onSettingsHashChange);
+    globalThis.removeEventListener('fe:lock-state-changed', refreshAppLockOn);
     flushSignatureSave();
     subscriptions.forEach((fn) => fn?.());
   });
@@ -848,7 +930,23 @@
     stripLinkTracking = Boolean(
       getEffectiveSettingValue('strip_link_tracking', { account: currentAcct }),
     );
-    viewPlainText = Boolean(getEffectiveSettingValue('view_plain_text', { account: currentAcct }));
+    messageFormat = getMessageFormat({ account: currentAcct });
+    previewUnlocked = getEffectiveSettingValue('notification_preview_unlocked', {
+      account: currentAcct,
+    }) as NotificationPreview;
+    previewLocked = getEffectiveSettingValue('notification_preview_locked', {
+      account: currentAcct,
+    }) as NotificationPreview;
+    refreshAppLockOn();
+    void import('../utils/push-notifications.js')
+      .then((push) => {
+        const provider = push.getPushProviderForAccount(currentAcct);
+        serverDrawnPush =
+          provider === 'fcm' || (provider === 'apns' && (isTauriMobile || isTauriMacOS));
+      })
+      .catch(() => {
+        serverDrawnPush = false;
+      });
     hideCompletedTodosValue = Boolean(
       getEffectiveSettingValue('hide_completed_todos', { account: currentAcct }),
     );
@@ -1520,15 +1618,16 @@
     }
   };
 
-  const toggleViewPlainText = () => {
+  const saveMessageFormat = () => {
     try {
-      setSettingValue('view_plain_text', viewPlainText, { account: getAccountId() });
+      setSettingValue('message_format', messageFormat, { account: getAccountId() });
+      const option = messageFormatOptions.find((o) => o.value === messageFormat);
       toasts?.show?.(
-        viewPlainText ? 'Emails will render as plain text' : 'Emails will render with formatting',
+        `Messages: ${option?.label.replace(' (Recommended)', '') || 'Formatted'}`,
         'success',
       );
     } catch (err) {
-      showMutationError(err, 'Failed to update plain text setting');
+      showMutationError(err, 'Failed to update message format');
     }
   };
 
@@ -2582,6 +2681,43 @@
 
         <Card.Root>
           <Card.Header>
+            <Card.Title>Message format</Card.Title>
+            <Card.Description>How emails are shown when you open them.</Card.Description>
+          </Card.Header>
+          <Card.Content class="space-y-3">
+            {#if isTerminalClient()}
+              <p class="text-sm text-muted-foreground" data-testid="message-format-terminal">
+                The terminal always shows emails as plain text.
+              </p>
+            {:else}
+              <div class="flex flex-col gap-3" role="radiogroup" aria-label="Message format">
+                {#each messageFormatOptions as option (option.value)}
+                  <label class="flex items-start gap-2">
+                    <input
+                      type="radio"
+                      name="message-format"
+                      value={option.value}
+                      bind:group={messageFormat}
+                      onchange={saveMessageFormat}
+                      class="mt-1 accent-primary"
+                    />
+                    <span>
+                      <span class="block">{option.label}</span>
+                      <span class="block text-sm text-muted-foreground">{option.description}</span>
+                    </span>
+                  </label>
+                {/each}
+              </div>
+              <p class="text-sm text-muted-foreground">
+                A message shown as plain text has a bar above it to show that message with
+                formatting.
+              </p>
+            {/if}
+          </Card.Content>
+        </Card.Root>
+
+        <Card.Root>
+          <Card.Header>
             <Card.Title>Composer defaults</Card.Title>
           </Card.Header>
           <Card.Content class="space-y-4">
@@ -2754,6 +2890,63 @@
 
         <!-- App Lock section - above PGP encryption -->
         <AppLockSettings />
+
+        <Card.Root data-testid="notification-privacy">
+          <Card.Header>
+            <Card.Title>Notification privacy</Card.Title>
+            <Card.Description>
+              What notifications on this device show about new mail. Someone nearby can read a
+              notification without opening the app. With "Nothing", calendar, contact and folder
+              notifications leave out their details too.
+            </Card.Description>
+          </Card.Header>
+          <Card.Content class="space-y-5">
+            {#each previewRows as row (row.id)}
+              {@const value = row.value}
+              <div class="space-y-2">
+                <Label for={`${row.id}-select`}>{row.label}</Label>
+                <Select.Root
+                  type="single"
+                  {value}
+                  onValueChange={(next) => {
+                    const level = next as NotificationPreview;
+                    if (row.id === 'notification_preview_locked') previewLocked = level;
+                    else previewUnlocked = level;
+                    savePreview(row.id, level, row.label);
+                  }}
+                >
+                  <Select.Trigger id={`${row.id}-select`} class="w-full">
+                    {previewOptions.find((option) => option.value === value)?.label}
+                  </Select.Trigger>
+                  <Select.Content>
+                    {#each previewOptions as option (option.value)}
+                      <Select.Item value={option.value}>{option.label}</Select.Item>
+                    {/each}
+                  </Select.Content>
+                </Select.Root>
+                <p class="text-sm text-muted-foreground">
+                  {row.hint} Looks like:
+                  <span class="text-foreground" data-testid={`${row.id}-example`}
+                    >{previewOptions.find((option) => option.value === value)?.example}</span
+                  >
+                </p>
+              </div>
+            {/each}
+            {#if appLockOn && previewRank(previewLocked) < previewRank(previewUnlocked)}
+              <p class="text-sm text-muted-foreground" data-testid="notification-privacy-mismatch">
+                Locked notifications show more than unlocked ones. Usually the locked choice is the
+                same or stricter.
+              </p>
+            {/if}
+            {#if serverDrawnPush}
+              <p class="text-sm text-muted-foreground" data-testid="notification-privacy-push-note">
+                Push alerts the system draws on its own, while the app is closed or in the
+                background, show what the server sends: the sender and subject, whatever you choose
+                here. Alerts the app shows follow this setting.
+              </p>
+            {/if}
+          </Card.Content>
+        </Card.Root>
 
         <RecipientKeysCard onToast={(message, type) => toasts?.show?.(message, type)} />
 
@@ -2984,13 +3177,9 @@
               Removes parameters such as utm_source and fbclid from links before they open. Other
               parts of the link are left alone.
             </p>
-            <label class="flex items-center gap-3">
-              <Checkbox bind:checked={viewPlainText} onCheckedChange={toggleViewPlainText} />
-              <span>View emails as plain text</span>
-            </label>
             <p class="text-sm text-muted-foreground">
-              Strip HTML, CSS, and remote content from incoming emails and render them as plain
-              text. Links and image alt text are preserved.
+              To show emails as plain text, with no styles, images or remote content, choose a
+              message format under Appearance.
             </p>
           </Card.Content>
         </Card.Root>
@@ -3031,6 +3220,7 @@
           visible={$active}
           account={activeEmail || Local.get('email') || ''}
           folders={availableFolders.map((path) => ({ path, label: path }))}
+          archiveFolder={String(mailboxStore.actions.getArchiveFolderPath() || '')}
           labels={labelsList.map((l: LabelItem) => ({
             keyword: getLabelKey(l) as string,
             name: l.name || (getLabelKey(l) as string),

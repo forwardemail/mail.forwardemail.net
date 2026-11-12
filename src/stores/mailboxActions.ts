@@ -60,6 +60,7 @@ import {
   supersedeQueuedMutations,
 } from '../utils/mutation-queue';
 import { getAuthHeaderForAccount } from '../utils/auth';
+import { getCatchallCredentialFor, listCatchallAddresses } from '../utils/catchall-credentials';
 import { flagChangeBody, labelChangeBody } from '../utils/message-changes';
 import { config } from '../config';
 import { createInboxUpdater } from '../utils/websocket-updater';
@@ -191,9 +192,54 @@ const getUserEmails = () => {
   return emails;
 };
 
-export const computeReplyTargets = (msg = {}, options = {}) => {
-  const { replyAll = false } = options;
+/**
+ * The user's own address to reply to or forward a message from:
+ *   1. the message's own From, when the user sent it (an account signed in
+ *      here, or an address on a catch-all domain sent from before), so a
+ *      reply from Sent keeps its From;
+ *   2. an account signed in on this device, in To or Cc;
+ *   3. X-Original-To or Delivered-To, when the user can send as it (mail that
+ *      reached the user by Bcc, a list, or a catch-all);
+ *   4. an address in To or Cc on a domain with a saved catch-all password,
+ *      such as contact@ for mail sent to contact@. Addresses sent from before
+ *      come first; with several others and none sent from before, the choice
+ *      is not guessed (a colleague on the same domain is also in To);
+ *   5. otherwise the account being viewed.
+ * Compose sends with the catch-all password for a catch-all address.
+ */
+export const pickOwnAddress = (msg: Record<string, unknown>): string => {
   const selfEmails = getUserEmails();
+  const emailsIn = (fields: string[]): string[] =>
+    fields
+      .flatMap((field) => extractAddressList(msg as never, field))
+      .map((addr) => normalizeEmail(addr))
+      .filter(Boolean);
+  const remembered = new Set(listCatchallAddresses());
+  const canSendAs = (email: string) =>
+    selfEmails.has(email) || Boolean(getCatchallCredentialFor(email));
+  const recipients = emailsIn(['to', 'cc']);
+  const catchall = recipients.filter((email) => getCatchallCredentialFor(email));
+  return (
+    emailsIn(['from']).find((email) => selfEmails.has(email) || remembered.has(email)) ||
+    recipients.find((email) => selfEmails.has(email)) ||
+    emailsIn(['x-original-to', 'delivered-to']).find(canSendAs) ||
+    catchall.find((email) => remembered.has(email)) ||
+    (catchall.length === 1 ? catchall[0] : '') ||
+    get(currentAccount) ||
+    Local.get('email') ||
+    ''
+  );
+};
+
+export const computeReplyTargets = (
+  msg = {},
+  options: { replyAll?: boolean; fromAddress?: string } = {},
+) => {
+  const { replyAll = false, fromAddress = '' } = options;
+  const selfEmails = getUserEmails();
+  // The address being replied from counts as the user's own too, so an
+  // alias a reply is sent from is not copied on it.
+  if (fromAddress) selfEmails.add(normalizeEmail(fromAddress));
   const isSelf = (addr) => selfEmails.has(normalizeEmail(addr));
 
   const replyToList = extractAddressList(msg, 'replyTo').length
@@ -1120,7 +1166,11 @@ export const addForwardPrefix = (subject) => {
  */
 export const replyTo = async (msg, options = {}) => {
   if (!composeModalRef) return;
-  const targets = computeReplyTargets(msg, options);
+  // Reply from the address the message was sent to (see pickOwnAddress).
+  // Using the sender's address would make the API reject the send with
+  // "From header must be equal to ...".
+  const replyFromAddress = pickOwnAddress(msg);
+  const targets = computeReplyTargets(msg, { ...options, fromAddress: replyFromAddress });
   const headerRecord =
     msg?.nodemailer?.headers?.['message-id'] || msg?.nodemailer?.headers?.['Message-ID'];
   const headerValue = headerRecord?.value || headerRecord?.text || headerRecord;
@@ -1157,29 +1207,6 @@ export const replyTo = async (msg, options = {}) => {
     refsArray.push(normalizedInReplyTo);
   }
   const references = refsArray.join(' ');
-
-  // Determine which of the user's own accounts received this message.
-  // The `from` field in the prefill must be the user's address (the one
-  // that appeared in To/CC of the original message), NOT the sender's
-  // address.  Using the sender's address causes the SMTP API to reject
-  // with "From header must be equal to ..." when replying from a
-  // secondary account.
-  const selfEmails = getUserEmails();
-  const toList = extractAddressList(msg, 'to');
-  const ccList = extractAddressList(msg, 'cc');
-  const allRecipients = [...toList, ...ccList];
-  let replyFromAddress = '';
-  for (const addr of allRecipients) {
-    const email = normalizeEmail(addr);
-    if (email && selfEmails.has(email)) {
-      replyFromAddress = email;
-      break;
-    }
-  }
-  // Fallback: use the current account email
-  if (!replyFromAddress) {
-    replyFromAddress = get(currentAccount) || Local.get('email') || '';
-  }
 
   // Open compose immediately with loading state
   const replyToApiId = getMessageApiId(msg);
@@ -1246,24 +1273,7 @@ export const forwardMessage = async (msg) => {
     });
   }
 
-  // Determine which of the user's own accounts received this message.
-  // Same logic as replyTo — the `from` field must be the user's address
-  // that appeared in To/CC of the original message, not the sender's address.
-  const selfEmails = getUserEmails();
-  const toList = extractAddressList(msg, 'to');
-  const ccList = extractAddressList(msg, 'cc');
-  const allRecipients = [...toList, ...ccList];
-  let forwardFromAddress = '';
-  for (const addr of allRecipients) {
-    const email = normalizeEmail(addr);
-    if (email && selfEmails.has(email)) {
-      forwardFromAddress = email;
-      break;
-    }
-  }
-  if (!forwardFromAddress) {
-    forwardFromAddress = get(currentAccount) || Local.get('email') || '';
-  }
+  const forwardFromAddress = pickOwnAddress(msg);
 
   composeModalRef.forward?.({
     subject: addForwardPrefix(msg?.subject),

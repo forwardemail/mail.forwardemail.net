@@ -191,3 +191,18 @@ export async function shareAccountsWithServiceWorker(accountsByAliasId) {
     // The worker falls back to opening the mailbox without an account.
   }
 }
+
+/**
+ * Tell the service worker what a Web Push alert for new mail may show
+ * (Settings > Privacy & Security). It keeps the last copy in Cache Storage.
+ *
+ * @param {{unlocked: string, locked: string, lockEnabled: boolean, lockedNow: boolean}} preview
+ */
+export async function sharePushPreviewWithServiceWorker(preview) {
+  try {
+    const registration = await getExistingRegistration();
+    registration?.active?.postMessage({ type: 'push-preview', preview });
+  } catch {
+    // The worker keeps its last copy, or the private defaults.
+  }
+}

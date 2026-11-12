@@ -34,6 +34,11 @@
     html: string;
     messageId: string;
     plainText?: boolean;
+    /**
+     * With plainText: the sender's own plain-text version to show. Without
+     * it, plain text is made from the HTML.
+     */
+    text?: string;
     onLinkClick?: (url: string, isMailto: boolean) => void;
     onHeightChange?: (height: number) => void;
     onFormSubmit?: (action: string, method: string, data: Record<string, unknown>) => void;
@@ -44,6 +49,7 @@
     html,
     messageId,
     plainText = false,
+    text = undefined,
     onLinkClick,
     onHeightChange,
     onFormSubmit,
@@ -113,15 +119,16 @@
   let lastDoc: { mode: string; source: string; token: string } | null = null;
   const frameDoc = $derived.by(() => {
     const darkMode = mounted ? isDarkMode : detectDarkMode();
-    const source = html || '';
-    const mode = `${plainText ? 'text' : 'html'}:${darkMode ? 'dark' : 'light'}`;
+    const ownText = plainText && typeof text === 'string' && text.trim() !== '';
+    const source = ownText ? (text as string) : html || '';
+    const mode = `${plainText ? (ownText ? 'own-text' : 'text') : 'html'}:${darkMode ? 'dark' : 'light'}`;
     const token =
       lastDoc && lastDoc.mode === mode && lastDoc.source === source
         ? lastDoc.token
         : `${++documentCounter}`;
     lastDoc = { mode, source, token };
     const doc = plainText
-      ? buildIframeSrcdoc(htmlToPlainText(source), darkMode, true, token)
+      ? buildIframeSrcdoc(ownText ? source : htmlToPlainText(source), darkMode, true, token)
       : buildIframeSrcdoc(source, darkMode, false, token);
     return { doc, token, hasContent: source.length > 0 };
   });

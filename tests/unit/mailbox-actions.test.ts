@@ -354,6 +354,7 @@ vi.mock('../../src/utils/db', () => {
 
 import {
   computeReplyTargets,
+  pickOwnAddress,
   toggleRead,
   toggleStar,
   switchAccount,
@@ -396,6 +397,91 @@ beforeEach(() => {
   mailboxStore.state.folders.set([]);
   mailboxStore.state.selectedMessage.set(null);
   currentAccount.set('user@example.com');
+});
+
+describe('pickOwnAddress (reply and forward From)', () => {
+  const catchall = (domain: string, addresses: string[] = []) =>
+    hoisted.localStore.set(
+      'catchall_credentials',
+      JSON.stringify([{ domain, password: 'catchall-secret', addresses }]),
+    );
+
+  it('replies from the alias on a catch-all domain the message was sent to', () => {
+    catchall('domain.test');
+    const msg = { from: ['client@else.test'], to: ['contact@domain.test'] };
+    expect(pickOwnAddress(msg)).toBe('contact@domain.test');
+  });
+
+  it('prefers an account signed in here over a catch-all alias', () => {
+    catchall('example.com');
+    const msg = { from: ['client@else.test'], to: ['sales@example.com', 'user@example.com'] };
+    expect(pickOwnAddress(msg)).toBe('user@example.com');
+  });
+
+  it('uses X-Original-To or Delivered-To for mail that came by Bcc', () => {
+    catchall('domain.test');
+    const msg = {
+      from: ['list@else.test'],
+      to: ['list@else.test'],
+      headers: { 'x-original-to': 'hidden@domain.test' },
+    };
+    expect(pickOwnAddress(msg)).toBe('hidden@domain.test');
+  });
+
+  it('falls back to the account being viewed, and never picks the sender', () => {
+    const msg = { from: ['contact@domain.test'], to: ['someone@else.test'] };
+    expect(pickOwnAddress(msg)).toBe('user@example.com');
+  });
+
+  it('ignores an address on a domain with no saved catch-all password', () => {
+    catchall('other.test');
+    const msg = { from: ['client@else.test'], to: ['contact@domain.test'] };
+    expect(pickOwnAddress(msg)).toBe('user@example.com');
+  });
+
+  it('a reply from Sent keeps the From it was sent with, not a recipient on the domain', () => {
+    catchall('example.com');
+    const msg = { from: ['user@example.com'], to: ['bob@example.com'] };
+    expect(pickOwnAddress(msg)).toBe('user@example.com');
+    catchall('domain.test', ['contact@domain.test']);
+    const fromAlias = { from: ['contact@domain.test'], to: ['bob@domain.test'] };
+    expect(pickOwnAddress(fromAlias)).toBe('contact@domain.test');
+  });
+
+  it('with several catch-all recipients, picks one sent from before, else does not guess', () => {
+    catchall('domain.test', ['contact@domain.test']);
+    const msg = {
+      from: ['client@else.test'],
+      to: ['colleague@domain.test', 'contact@domain.test'],
+    };
+    expect(pickOwnAddress(msg)).toBe('contact@domain.test');
+    catchall('domain.test');
+    expect(pickOwnAddress(msg)).toBe('user@example.com');
+  });
+
+  it('reply-all leaves out the alias being replied from, and keeps colleagues', () => {
+    catchall('domain.test', ['contact@domain.test']);
+    const msg = {
+      from: ['client@else.test'],
+      to: ['colleague@domain.test', 'contact@domain.test'],
+    };
+    const fromAddress = pickOwnAddress(msg);
+    const out = computeReplyTargets(msg, { replyAll: true, fromAddress });
+    expect(fromAddress).toBe('contact@domain.test');
+    expect(out.to).toEqual(['client@else.test', 'colleague@domain.test']);
+  });
+
+  it('replyTo opens compose from the alias, and forward does too', async () => {
+    catchall('domain.test');
+    const reply = vi.fn();
+    const forward = vi.fn();
+    setComposeModal({ reply, forward, updateReplyBody: vi.fn() } as never);
+    const msg = { id: 'm1', from: ['client@else.test'], to: ['contact@domain.test'] };
+    await replyTo(msg);
+    expect(reply).toHaveBeenCalledWith(expect.objectContaining({ from: 'contact@domain.test' }));
+    await forwardMessage(msg);
+    expect(forward).toHaveBeenCalledWith(expect.objectContaining({ from: 'contact@domain.test' }));
+  });
 });
 
 describe('computeReplyTargets', () => {

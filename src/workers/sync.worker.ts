@@ -35,6 +35,7 @@ import {
   isPgpLockedStatus,
   slimBodyMeta,
   slimCachedAttachments,
+  apiTextPart,
   worklistFromHeaders,
   backfillBatchDone,
   createBodyFailureMemo,
@@ -1523,6 +1524,36 @@ async function extractNestedAttachments(att) {
   }
 }
 
+// Whether the message carries a plain-text part of its own. postal-mime fills
+// email.text from the HTML when there is none, so its presence alone says
+// nothing; the MIME tree does.
+interface MimeNode {
+  contentType?: { parsed?: { value?: string } };
+  childNodes?: MimeNode[];
+}
+
+function hasPlainTextPart(parser: {
+  root?: MimeNode;
+  isInlineTextNode?: (node: MimeNode) => boolean;
+}): boolean {
+  const walk = (node: MimeNode | undefined, depth = 0): boolean => {
+    if (!node || depth > 50) return false;
+    if (
+      node.contentType?.parsed?.value === 'text/plain' &&
+      typeof parser.isInlineTextNode === 'function' &&
+      parser.isInlineTextNode(node)
+    ) {
+      return true;
+    }
+    return (node.childNodes || []).some((child: MimeNode) => walk(child, depth + 1));
+  };
+  try {
+    return walk(parser.root);
+  } catch {
+    return false;
+  }
+}
+
 async function parseRawMessage(raw, existingAttachments = []) {
   if (!raw) return null;
   try {
@@ -1622,6 +1653,11 @@ async function parseRawMessage(raw, existingAttachments = []) {
       rawBody: body,
       attachments: deduped,
       textContent: email.text || extractTextContent(body),
+      // The sender's own plain-text part, only when the message has one; the
+      // reader's message format setting uses it (textContent above can be
+      // text taken out of the HTML).
+      textPart:
+        hasPlainTextPart(parser as never) && typeof email.text === 'string' ? email.text : '',
       // Inner MIME headers. For PGP with protected headers (RFC 3156 +
       // draft-autocrypt "memory hole"), the REAL Subject lives here while the
       // outer/cached subject is a placeholder like "...", and the decrypt path
@@ -1657,7 +1693,7 @@ async function fetchAndCacheBodyWithOptions(account, folder, msg, options = {}) 
   // plaintext with them (invalidatePgpCachedBodies); it is not cached again.
   let decryptedWithKeys = -1;
   const keysChangedSinceDecrypt = () => Boolean(pgpInfo) && decryptedWithKeys !== pgpKeysVersion;
-  const persistBody = async (body, textContent, attachments = [], meta = null) => {
+  const persistBody = async (body, textContent, attachments = [], meta = null, textPart = '') => {
     // A phone keeps a lean copy: no raw message, no large attachment content
     // (see slimBodyMeta). The reader gets the same lean copy it would read
     // back from the cache.
@@ -1675,6 +1711,7 @@ async function fetchAndCacheBodyWithOptions(account, folder, msg, options = {}) 
             folder,
             body,
             textContent,
+            textPart,
             attachments: keptAttachments,
             meta: keptMeta,
             // The attachment list is worked out: an empty one means there
@@ -1714,6 +1751,7 @@ async function fetchAndCacheBodyWithOptions(account, folder, msg, options = {}) 
       folder,
       body,
       textContent,
+      textPart,
       attachments: keptAttachments,
       meta: keptMeta,
       ...(pgpInfo ? { pgp: pgpInfo } : {}),
@@ -1815,6 +1853,7 @@ async function fetchAndCacheBodyWithOptions(account, folder, msg, options = {}) 
     const raw = result?.raw;
     let body = '';
     let textContent = '';
+    let textPart = '';
     let attachments = [];
 
     if (raw) {
@@ -1853,6 +1892,7 @@ async function fetchAndCacheBodyWithOptions(account, folder, msg, options = {}) 
         if (parsed) {
           body = parsed.body;
           textContent = parsed.textContent;
+          textPart = parsed.textPart;
           attachments = parsed.attachments;
           // Record the badge flags and, for protected-headers senders, the
           // real subject (the cached outer subject is a placeholder).
@@ -1889,6 +1929,7 @@ async function fetchAndCacheBodyWithOptions(account, folder, msg, options = {}) 
         if (parsed) {
           body = parsed.body;
           textContent = parsed.textContent;
+          textPart = parsed.textPart;
           attachments = parsed.attachments;
         }
       }
@@ -1940,9 +1981,10 @@ async function fetchAndCacheBodyWithOptions(account, folder, msg, options = {}) 
       const inlined = applyInlineAttachments(html, attachments);
       body = inlined;
       textContent = serverText || extractTextContent(inlined);
+      textPart = apiTextPart(result);
     }
 
-    return await persistBody(body, textContent, attachments, result);
+    return await persistBody(body, textContent, attachments, result, textPart);
   })();
 
   inFlightBodyRequests.set(requestKey, requestPromise);
@@ -2200,6 +2242,7 @@ async function handleDecryptMessageTask(task) {
     success: true,
     body: parsed.body,
     textContent: parsed.textContent,
+    textPart: parsed.textPart,
     attachments: parsed.attachments,
     // Protected-headers subject from the decrypted inner MIME (undefined
     // when the sender didn't encrypt the subject).
@@ -2378,6 +2421,7 @@ async function handleParseRawTask(task) {
     body: parsed.body,
     rawBody: parsed.rawBody,
     textContent: parsed.textContent,
+    textPart: parsed.textPart,
     attachments: parsed.attachments,
   };
 }

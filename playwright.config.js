@@ -49,7 +49,14 @@ export default defineConfig({
             use: { ...devices['Desktop Firefox'] },
             // Firefox only runs smoke + web-adapter suites — the legacy
             // desktop specs use selectors we haven't validated cross-browser.
-            testMatch: [/smoke\//, /adapters\/web\//, /compose-recipient-suggestions\.spec/],
+            testMatch: [
+              /smoke\//,
+              /adapters\/web\//,
+              /compose-recipient-suggestions\.spec/,
+              /message-format\.spec/,
+              /catchall-reply-from\.spec/,
+              /filters-apply-existing\.spec/,
+            ],
           },
         ]
       : []),
@@ -58,7 +65,13 @@ export default defineConfig({
           {
             name: 'web-webkit',
             use: { ...devices['Desktop Safari'] },
-            testMatch: [/smoke\//, /adapters\/web\//, /compose-recipient-suggestions\.spec/],
+            testMatch: [
+              /smoke\//,
+              /adapters\/web\//,
+              /compose-recipient-suggestions\.spec/,
+              /catchall-reply-from\.spec/,
+              /filters-apply-existing\.spec/,
+            ],
           },
         ]
       : []),

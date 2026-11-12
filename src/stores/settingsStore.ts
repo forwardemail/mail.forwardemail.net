@@ -15,7 +15,7 @@ import {
   serializeLocalValue,
   normalizeRemoteValue,
 } from './settingsRegistry';
-import type { SettingDefinition } from './settingsRegistry';
+import type { MessageFormat, SettingDefinition } from './settingsRegistry';
 import type { Label, PgpKey } from '../types';
 import {
   readPgpKeys,
@@ -318,6 +318,42 @@ export const getEffectiveSettingValue = (
     return getRemoteSettingValue(def, remote);
   }
   return def.defaultValue;
+};
+
+/** The terminal draws text only, so it always shows messages as plain text. */
+export const isTerminalClient = (): boolean =>
+  (globalThis as { __FORWARDEMAIL_TERMINAL__?: boolean }).__FORWARDEMAIL_TERMINAL__ === true;
+
+/**
+ * How messages are shown (Settings > Appearance > Message format). A choice
+ * saved with the earlier "View emails as plain text" switch carries over.
+ */
+export const getMessageFormat = (context: SettingsContext = {}): MessageFormat => {
+  if (isTerminalClient()) return 'text';
+  const def = getSettingDefinition('message_format');
+  const key = def ? resolveLocalKey(def, getAccountKey(context.account)) : null;
+  const saved = key ? Local.get(key) : null;
+  if (saved === null || saved === undefined) {
+    return getEffectiveSettingValue('view_plain_text', context) === true ? 'text' : 'html';
+  }
+  return getEffectiveSettingValue('message_format', context) as MessageFormat;
+};
+
+/**
+ * What the reader shows for one message: the formatted HTML, or plain text.
+ * `text` is the sender's own plain-text version; without it, plain text is
+ * made from the HTML. textPart is the message's plain-text part ('' when it
+ * has none).
+ */
+export const messageViewFor = (
+  format: MessageFormat,
+  textPart: string | undefined,
+): { plainText: boolean; text?: string } => {
+  const hasTextPart = typeof textPart === 'string' && textPart.trim() !== '';
+  if (format === 'text')
+    return hasTextPart ? { plainText: true, text: textPart } : { plainText: true };
+  if (format === 'text-first' && hasTextPart) return { plainText: true, text: textPart };
+  return { plainText: false };
 };
 
 export const setSettingValue = async (

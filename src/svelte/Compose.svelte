@@ -104,7 +104,12 @@
     senderRequestOptions,
     type SendableAccount,
   } from '../utils/send-as';
-  import { getCatchallCredentialFor, listCatchallDomains } from '../utils/catchall-credentials';
+  import {
+    getCatchallCredentialFor,
+    listCatchallAddresses,
+    listCatchallDomains,
+    rememberCatchallAddress,
+  } from '../utils/catchall-credentials';
   import { getAuthHeaderForAccount } from '../utils/auth';
   import { MAX_SCHEDULE_LEAD_MS, queueEmail, scheduleEmail } from '../utils/outbox-service';
   import {
@@ -248,6 +253,8 @@
   // credentials or its domain's catch-all password.
   let sendableAccounts = $state<SendableAccount[]>([]);
   let catchallDomains = $state<string[]>([]);
+  // Addresses on those domains sent from before (remembered after each send)
+  let catchallAddresses = $state<string[]>([]);
   // Set while sending from a typed address on a catch-all domain: the From
   // line becomes an input for the part before the @.
   let customFromDomain = $state('');
@@ -281,6 +288,7 @@
       (email) => Boolean(getAuthHeaderForAccount(email)),
     );
     catchallDomains = listCatchallDomains();
+    catchallAddresses = listCatchallAddresses();
   };
 
   const customFromAddress = $derived(
@@ -2902,6 +2910,11 @@
   // Once a send is accepted (sent, queued or scheduled), suggest these people
   // right away next time, before the Sent folder syncs.
   const rememberRecipients = (payload: Record<string, unknown>) => {
+    // A catch-all From address is offered in the From menu from now on.
+    if (customFromDomain && customFromAddress) {
+      rememberCatchallAddress(customFromAddress);
+      catchallAddresses = listCatchallAddresses();
+    }
     const addresses = ['to', 'cc', 'bcc'].flatMap((key) =>
       Array.isArray(payload[key]) ? (payload[key] as string[]) : [],
     );
@@ -4032,6 +4045,16 @@
                 {#if catchallDomains.length}
                   <DropdownMenu.Separator />
                   {#each catchallDomains as domain (domain)}
+                    {#each catchallAddresses.filter( (address) => address.endsWith(`@${domain}`), ) as address (address)}
+                      <DropdownMenu.Item onclick={() => selectFrom(address)}>
+                        <div class="min-w-0">
+                          <div class="truncate">{address}</div>
+                          <div class="truncate text-xs text-muted-foreground">
+                            Sent from before, with the catch-all password
+                          </div>
+                        </div>
+                      </DropdownMenu.Item>
+                    {/each}
                     <DropdownMenu.Item onclick={() => startCustomFrom(domain)}>
                       <div class="min-w-0">
                         <div class="truncate">Other address @{domain}…</div>

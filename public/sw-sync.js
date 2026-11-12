@@ -1057,6 +1057,59 @@
     }
   };
 
+  // What a new-mail alert may show (Settings > Privacy & Security), shared by
+  // the page (push-preview message) with the App Lock state. Kept in Cache
+  // Storage because the worker can be stopped between pushes.
+  const PUSH_PREVIEW_KEY = new URL(
+    '__fe-push-preview',
+    self.registration?.scope || self.location.origin + '/',
+  ).href;
+  const PREVIEW_LEVELS = ['full', 'sender_subject', 'sender', 'none'];
+  const previewLevel = (value, fallback) => (PREVIEW_LEVELS.includes(value) ? value : fallback);
+
+  const savePushPreview = async (preview, clientId) => {
+    try {
+      const clean = {
+        unlocked: previewLevel(preview?.unlocked, 'sender_subject'),
+        locked: previewLevel(preview?.locked, 'none'),
+        lockEnabled: preview?.lockEnabled === true,
+        lockedNow: preview?.lockedNow === true,
+        // The window that reported the state; see currentPreviewLevel.
+        clientId: typeof clientId === 'string' ? clientId : '',
+      };
+      const cache = await caches.open(PUSH_META_CACHE);
+      await cache.put(
+        PUSH_PREVIEW_KEY,
+        new Response(JSON.stringify(clean), { headers: { 'Content-Type': 'application/json' } }),
+      );
+    } catch (err) {
+      LOG && console.warn('[SW] could not store notification preview', err);
+    }
+  };
+
+  // The level for a push arriving now. With App Lock on, "unlocked" is only
+  // believed while the window that said so is still open: a closed window's
+  // last word says nothing about a new one, which starts at the lock screen.
+  const currentPreviewLevel = async () => {
+    let saved = {};
+    try {
+      const cache = await caches.open(PUSH_META_CACHE);
+      const response = await cache.match(PUSH_PREVIEW_KEY);
+      saved = response ? await response.json() : {};
+    } catch {
+      saved = {};
+    }
+    const unlocked = previewLevel(saved.unlocked, 'sender_subject');
+    const locked = previewLevel(saved.locked, 'none');
+    if (!saved.lockEnabled) return unlocked;
+    if (saved.lockedNow || !saved.clientId) return locked;
+    try {
+      return (await self.clients.get(saved.clientId)) ? unlocked : locked;
+    } catch {
+      return locked;
+    }
+  };
+
   const pushText = (value) =>
     typeof value === 'string'
       ? value
@@ -1116,9 +1169,33 @@
         const accounts = await readPushAccounts();
         const aliasId = pushText(data.alias_id);
         const account = aliasId && typeof accounts[aliasId] === 'string' ? accounts[aliasId] : '';
-        const title = pushText(data.title) || 'New message';
-        const body = pushText(data.body);
+        let title = pushText(data.title) || 'New message';
+        let body = pushText(data.body);
         const id = pushText(data.message_id);
+        // Cut down to what the notification privacy setting allows. For new
+        // mail the server sends the sender as the title and the subject (then
+        // any preview) as the body. Calendar and contact alerts keep their
+        // text unless the level is "none".
+        const level = await currentPreviewLevel();
+        const event = pushText(data.event);
+        if (/^calendar/i.test(event) || /^(?:contact|addressBook)/i.test(event)) {
+          if (level === 'none') {
+            title = /^calendar/i.test(event) ? 'Calendar updated' : 'Contacts updated';
+            body = '';
+          }
+        } else {
+          const subject =
+            pushText(data.subject) ||
+            (typeof data.body === 'string' ? pushText(data.body.split(/\r?\n/)[0]) : '');
+          if (level === 'none') {
+            title = 'New email';
+            body = '';
+          } else if (level === 'sender') {
+            body = '';
+          } else if (level === 'sender_subject') {
+            body = subject;
+          }
+        }
         await self.registration.showNotification(title, {
           body,
           icon: '/icons/icon-192.png',
@@ -1301,6 +1378,9 @@
           lastSyncAt: manifest?.lastSyncAt || null,
         });
       });
+    } else if (data.type === 'push-preview') {
+      const saved = savePushPreview(data.preview, event.source?.id);
+      if (event.waitUntil) event.waitUntil(saved);
     } else if (data.type === 'push-accounts') {
       const saved = savePushAccounts(data.accounts);
       if (event.waitUntil) event.waitUntil(saved);

@@ -27,7 +27,13 @@
     loadFilters,
     saveFilters,
     deleteAllFilters,
+    applyFilterToExisting,
+    existingFilterUnsupportedReason,
+    type ApplyExistingProgress,
+    type ExistingMessageActions,
   } from '../../stores/filtersStore';
+  import { mailboxStore } from '../../stores/mailboxStore';
+  import { contextLabel, toggleRead, toggleStar } from '../../stores/mailboxActions';
   import {
     CONDITION_FIELD_LABELS,
     CONDITION_OP_LABELS,
@@ -48,17 +54,55 @@
     folders?: { path: string; label: string }[];
     /** Label keywords offered in the "apply label" picker. */
     labels?: { keyword: string; name: string }[];
+    /** Account's resolved archive folder. */
+    archiveFolder?: string;
     onToast?: (message: string, type?: string) => void;
   }
 
-  const { visible = true, account = '', folders = [], labels = [], onToast }: Props = $props();
+  const {
+    visible = true,
+    account = '',
+    folders = [],
+    labels = [],
+    archiveFolder = '',
+    onToast,
+  }: Props = $props();
 
   let editing = $state<FilterRule | null>(null);
   let editingIndex = $state(-1);
   let showDeleteAll = $state(false);
   let dirty = $state(false);
+  let editingApplyExisting = $state(false);
+  /** The rule being applied to existing mail, with its progress so far. */
+  let applyRun = $state<{ name: string; progress: ApplyExistingProgress } | null>(null);
+  let applyController: AbortController | null = null;
+  const applyingExisting = $derived(applyRun !== null);
+  const applyStatus = $derived.by(() => {
+    if (!applyRun) return '';
+    const { scanned, matched, updated } = applyRun.progress;
+    return `Applying "${applyRun.name}" to the Inbox: ${scanned} checked, ${matched} match, ${updated} changed.`;
+  });
+  const pendingExistingRuleIds = new Set<string>();
+
+  // Through the mailbox's own actions, so the open list, the local cache and
+  // the offline queue all see these changes as if made by hand.
+  const existingActions: ExistingMessageActions = {
+    markRead: (message) => toggleRead(message),
+    star: (message) => toggleStar(message),
+    addLabel: (message, label) => contextLabel(message, label, { action: 'add', silent: true }),
+    move: (messages, folder) => mailboxStore.actions.bulkMoveMessages(messages, folder),
+  };
 
   const rules = $derived($filterRules);
+  // Only a folder the account has, so a rule never files into (or moves
+  // existing mail to) a folder that is not there.
+  const resolvedArchiveFolder = $derived(
+    folders.find((folder) => folder.path.toLowerCase() === archiveFolder.toLowerCase())?.path ||
+      folders.find((folder) => folder.path.toLowerCase() === 'archive')?.path ||
+      '',
+  );
+  const existingUnsupportedReason = $derived(existingFilterUnsupportedReason(editing));
+  const existingMatchUnsupported = $derived(Boolean(existingUnsupportedReason));
 
   // The rules live on the server and can change from another device or the
   // website, so reload whenever this view is shown again: first mount, the
@@ -72,9 +116,12 @@
       if (acct !== lastAccount) {
         // Edits belong to the account they were made under.
         lastAccount = acct;
+        applyController?.abort();
         dirty = false;
         editing = null;
         editingIndex = -1;
+        editingApplyExisting = false;
+        pendingExistingRuleIds.clear();
       }
       if (shown && !dirty) loadFilters();
     });
@@ -92,6 +139,7 @@
     window.addEventListener('focus', refreshIfShown);
     document.addEventListener('visibilitychange', refreshIfShown);
     return () => {
+      applyController?.abort();
       window.removeEventListener('focus', refreshIfShown);
       document.removeEventListener('visibilitychange', refreshIfShown);
     };
@@ -103,12 +151,14 @@
   const openNew = () => {
     editing = createRule({ name: '' });
     editingIndex = -1;
+    editingApplyExisting = false;
   };
 
   const openEdit = (rule: FilterRule, index: number) => {
     // Clone so Cancel really cancels.
     editing = JSON.parse(JSON.stringify(rule)) as FilterRule;
     editingIndex = index;
+    editingApplyExisting = false;
   };
 
   const commitEdit = () => {
@@ -117,13 +167,17 @@
     const rule = { ...editing, name: editing.name.trim() || 'Untitled rule' };
     if (editingIndex >= 0) next[editingIndex] = rule;
     else next.push(rule);
+    if (editingApplyExisting && !existingMatchUnsupported) pendingExistingRuleIds.add(rule.id);
+    else pendingExistingRuleIds.delete(rule.id);
     filterRules.set(next);
     editing = null;
     editingIndex = -1;
+    editingApplyExisting = false;
     dirty = true;
   };
 
   const removeRule = (index: number) => {
+    pendingExistingRuleIds.delete(rules[index]?.id);
     filterRules.set(rules.filter((_, i) => i !== index));
     dirty = true;
   };
@@ -145,12 +199,71 @@
   };
 
   const persist = async () => {
+    const targetAccount = account;
+    const applyIds = new Set(pendingExistingRuleIds);
+    const rulesToApply = rules.filter((rule) => applyIds.has(rule.id));
     const ok = await saveFilters(rules);
     if (ok) {
       dirty = false;
       onToast?.('Filters saved', 'success');
+      pendingExistingRuleIds.clear();
+      if (rulesToApply.length) await applyToExisting(rulesToApply, targetAccount);
     }
   };
+
+  const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`;
+
+  const applyToExisting = async (rulesToApply: FilterRule[], targetAccount: string) => {
+    applyController = new AbortController();
+    const { signal } = applyController;
+    try {
+      for (const rule of rulesToApply) {
+        if (signal.aborted) break;
+        const name = rule.name || 'Untitled rule';
+        applyRun = { name, progress: { scanned: 0, matched: 0, updated: 0 } };
+        const result = await applyFilterToExisting(rule, {
+          account: targetAccount,
+          actions: existingActions,
+          signal,
+          onProgress: (progress) => {
+            if (applyRun) applyRun = { name, progress };
+          },
+        });
+        if (result.cancelled) {
+          onToast?.(
+            result.updated
+              ? `Stopped "${name}" after changing ${plural(result.updated, 'message')}.`
+              : `Stopped "${name}" before changing anything.`,
+            'info',
+          );
+        } else if (result.error) {
+          onToast?.(
+            result.updated
+              ? `"${name}" stopped after ${plural(result.updated, 'message')}: ${result.error}`
+              : `"${name}" was not applied to existing mail: ${result.error}`,
+            'error',
+          );
+        } else if (!result.matched) {
+          onToast?.(`No messages in the Inbox match "${name}".`, 'info');
+        } else if (!result.updated) {
+          onToast?.(
+            `Nothing to change: the Inbox messages matching "${name}" already have its changes.`,
+            'info',
+          );
+        } else {
+          onToast?.(
+            `Applied "${name}": changed ${plural(result.updated, 'message')} in the Inbox.`,
+            'success',
+          );
+        }
+      }
+    } finally {
+      applyRun = null;
+      applyController = null;
+    }
+  };
+
+  const cancelApply = () => applyController?.abort();
 
   const confirmDeleteAll = async () => {
     showDeleteAll = false;
@@ -180,7 +293,7 @@
     <Card.Title>Filters</Card.Title>
     <Card.Description>
       Rules run on the mail server as messages arrive, so they apply on every device even when this
-      app is closed.
+      app is closed. A filter can also be applied to mail already in the Inbox.
     </Card.Description>
   </Card.Header>
   <Card.Content class="space-y-4">
@@ -322,8 +435,15 @@
           <Plus class="mr-2 h-4 w-4" />
           Add filter
         </Button>
-        <Button onclick={persist} disabled={!dirty || $filtersSaving || $managedScriptUnreadable}>
-          {$filtersSaving ? 'Saving…' : 'Save filters'}
+        <Button
+          onclick={persist}
+          disabled={!dirty || $filtersSaving || $managedScriptUnreadable || applyingExisting}
+        >
+          {$filtersSaving
+            ? 'Saving…'
+            : applyingExisting
+              ? 'Applying to existing mail…'
+              : 'Save filters'}
         </Button>
         {#if rules.length}
           <Button
@@ -339,6 +459,18 @@
           <span class="text-xs text-muted-foreground">Unsaved changes</span>
         {/if}
       </div>
+
+      {#if applyRun}
+        <div
+          class="flex flex-wrap items-center gap-3 rounded-md border border-border p-3 text-sm"
+          role="status"
+          aria-live="polite"
+          data-testid="filter-apply-progress"
+        >
+          <span class="min-w-0 flex-1">{applyStatus}</span>
+          <Button variant="outline" size="sm" onclick={cancelApply}>Cancel</Button>
+        </div>
+      {/if}
     {/if}
   </Card.Content>
 </Card.Root>
@@ -428,6 +560,18 @@
 
         <div class="space-y-3 border-t border-border pt-4">
           <Label>Then</Label>
+
+          {#if resolvedArchiveFolder}
+            <label class="flex items-center gap-3 text-sm">
+              <Checkbox
+                checked={editing.actions.fileinto === resolvedArchiveFolder}
+                onCheckedChange={(v) =>
+                  editing &&
+                  (editing.actions.fileinto = Boolean(v) ? resolvedArchiveFolder : undefined)}
+              />
+              <span>Skip the Inbox (archive)</span>
+            </label>
+          {/if}
 
           <div class="space-y-2">
             <Label class="text-xs text-muted-foreground" for="filter-folder">Move to folder</Label>
@@ -521,6 +665,25 @@
             />
             <span>Stop processing later filters</span>
           </label>
+
+          <div class="border-t border-border pt-4">
+            <label class="flex items-center gap-3 text-sm">
+              <Checkbox
+                checked={editingApplyExisting}
+                disabled={existingMatchUnsupported || applyingExisting}
+                onCheckedChange={(v) => (editingApplyExisting = Boolean(v))}
+              />
+              <span>Also apply to messages already in the Inbox</span>
+            </label>
+            <p class="mt-2 text-xs text-muted-foreground" data-testid="filter-apply-existing-help">
+              {#if existingMatchUnsupported}
+                {existingUnsupportedReason}
+              {:else}
+                Runs when you save. Moves, labels, marks read or stars matching Inbox messages.
+                Other folders are left alone, and you can cancel while it runs.
+              {/if}
+            </p>
+          </div>
         </div>
       </div>
     {/if}

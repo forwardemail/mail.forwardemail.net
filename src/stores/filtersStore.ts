@@ -17,9 +17,20 @@ import { get, writable, type Writable } from 'svelte/store';
 import { Remote } from '../utils/remote';
 import { Local } from '../utils/storage';
 import { getAuthHeaderForAccount } from '../utils/auth';
+import { canonicalizeLabelKeyword } from '../utils/labels';
+import { extractAddressList, normalizeEmail, recipientsToList } from '../utils/address';
+import { decodeMimeHeader } from '../utils/mime-utils';
+import { lightweightListSupported, noteLightweightListResponse } from '../utils/api-capabilities';
+import {
+  extractFromField,
+  extractRecipientsField,
+  getMessageApiId,
+  normalizeMessageForCache,
+} from '../utils/sync-helpers';
 import {
   MANAGED_SCRIPT_NAME,
   createRule,
+  exactConditionAddress,
   rulesToSieve,
   sieveToRules,
   type FilterRule,
@@ -83,7 +94,336 @@ function blockedReason(err: unknown): FiltersBlockedReason {
 function asArray<T>(res: unknown): T[] {
   if (Array.isArray(res)) return res as T[];
   const list = (res as { Result?: { List?: T[] } })?.Result?.List;
-  return Array.isArray(list) ? list : [];
+  if (Array.isArray(list)) return list;
+  const data = (res as { data?: T[] })?.data;
+  if (Array.isArray(data)) return data;
+  const messages = (res as { messages?: T[] })?.messages;
+  return Array.isArray(messages) ? messages : [];
+}
+
+/*
+ * Applying a rule to mail already in the Inbox.
+ *
+ * Sieve only sees new mail, so this scans the Inbox page by page and runs the
+ * rule's reversible actions through the mailbox's own actions. Those update
+ * the open list and the local cache and queue a change that could not be sent,
+ * the same as when the user marks or moves a message by hand.
+ *
+ * Only the Inbox is scanned. Sieve runs at delivery, which is the Inbox, so
+ * this matches what the rule would have done; scanning every folder would also
+ * move Sent, Drafts, Trash and Junk mail.
+ */
+const EXISTING_PAGE_SIZE = 100;
+const EXISTING_FOLDER = 'INBOX';
+/** Messages changed at once, so a large Inbox does not flood the server. */
+const EXISTING_CONCURRENCY = 4;
+
+type ExistingMessage = Record<string, unknown>;
+
+/**
+ * The mailbox actions a rule runs through. Passed in by the caller so this
+ * store does not import the mailbox store.
+ */
+export interface ExistingMessageActions {
+  markRead: (message: ExistingMessage) => Promise<unknown>;
+  star: (message: ExistingMessage) => Promise<unknown>;
+  addLabel: (message: ExistingMessage, label: string) => Promise<unknown>;
+  move: (messages: ExistingMessage[], folder: string) => Promise<unknown>;
+}
+
+export interface ApplyExistingProgress {
+  /** Inbox messages checked so far. */
+  scanned: number;
+  /** Of those, how many the rule matches. */
+  matched: number;
+  /** Matching messages changed so far (ones that already matched the rule's actions are not counted). */
+  updated: number;
+}
+
+export interface ApplyExistingFilterResult extends ApplyExistingProgress {
+  cancelled: boolean;
+  error?: string;
+}
+
+export interface ApplyExistingOptions {
+  account: string;
+  actions: ExistingMessageActions;
+  signal?: AbortSignal;
+  onProgress?: (progress: ApplyExistingProgress) => void;
+}
+
+/**
+ * Why a rule cannot be applied to existing mail, or '' when it can. Deleting
+ * and forwarding old mail cannot be undone, and the server's body search has
+ * no "is exactly" or "does not contain".
+ */
+export function existingFilterUnsupportedReason(rule: FilterRule | null | undefined): string {
+  if (!rule) return '';
+  if (rule.enabled === false) return 'Turn this filter on first.';
+  if (rule.actions?.delete || rule.actions?.redirect) {
+    return 'Delete and forward apply to new mail only.';
+  }
+  const conditions = (rule.conditions || []).filter((c) => c.value?.trim());
+  if (conditions.some((c) => c.field === 'body' && c.op !== 'contains')) {
+    return 'For existing mail, a Body condition can only use "contains".';
+  }
+  if (!conditions.length) return 'Add a condition first.';
+  const a = rule.actions || {};
+  if (!a.fileinto && !a.label && !a.markRead && !a.star) {
+    return 'Choose a folder, label, mark read or star first.';
+  }
+  return '';
+}
+
+const ADDRESS_FIELDS: Record<string, string[]> = {
+  from: ['from'],
+  to: ['to'],
+  cc: ['cc'],
+  any: ['from', 'to', 'cc'],
+};
+
+function displayValue(message: ExistingMessage, field: string): string {
+  return field === 'from'
+    ? extractFromField(message as never)
+    : extractRecipientsField(message as never, field);
+}
+
+/** Bare, lowercased addresses in one header of a server row. */
+function addressesIn(message: ExistingMessage, field: string): string[] {
+  const parsed = extractAddressList(message as never, field);
+  const list = parsed.length ? parsed : recipientsToList(displayValue(message, field));
+  return list.map((entry) => normalizeEmail(entry)).filter(Boolean);
+}
+
+/** Same comparison the Sieve script makes for this condition. */
+function conditionMatches(
+  message: ExistingMessage,
+  condition: FilterRule['conditions'][number],
+  bodyMatches: Set<string> | undefined,
+): boolean {
+  const apiId = getMessageApiId(message as never);
+  if (condition.field === 'body') {
+    return apiId != null && Boolean(bodyMatches?.has(String(apiId)));
+  }
+
+  const needle = condition.value.trim().toLowerCase();
+  const address = exactConditionAddress(condition);
+  if (address) {
+    return (ADDRESS_FIELDS[condition.field] || []).some((field) =>
+      addressesIn(message, field).includes(address),
+    );
+  }
+
+  const values =
+    condition.field === 'subject'
+      ? [decodeMimeHeader(String(message.subject ?? message.Subject ?? ''))]
+      : (ADDRESS_FIELDS[condition.field] || []).map((field) => displayValue(message, field));
+  const found = values.some((value) => {
+    const lower = value.toLowerCase();
+    return condition.op === 'is' ? lower.trim() === needle : lower.includes(needle);
+  });
+  return condition.op === 'not_contains' ? !found : found;
+}
+
+function ruleMatches(
+  message: ExistingMessage,
+  conditions: FilterRule['conditions'],
+  match: FilterRule['match'],
+  bodyMatches: Map<string, Set<string>>,
+): boolean {
+  const results = conditions.map((condition) =>
+    conditionMatches(message, condition, bodyMatches.get(condition.value.trim().toLowerCase())),
+  );
+  return match === 'any' ? results.some(Boolean) : results.every(Boolean);
+}
+
+const cancelledError = () => Object.assign(new Error('Cancelled'), { name: 'AbortError' });
+
+const isAbort = (err: unknown, signal?: AbortSignal) =>
+  Boolean(signal?.aborted) || (err as { name?: string })?.name === 'AbortError';
+
+/** One Inbox page, lightweight when the server keeps addresses on those. */
+async function fetchInboxPage(
+  page: number,
+  auth: { authHeader?: string },
+  signal: AbortSignal | undefined,
+  extra: Record<string, unknown> = {},
+): Promise<ExistingMessage[]> {
+  const request = (lightweight: boolean) =>
+    Remote.request(
+      'MessageList',
+      {
+        folder: EXISTING_FOLDER,
+        page,
+        limit: EXISTING_PAGE_SIZE,
+        raw: false,
+        attachments: false,
+        ...(lightweight ? { lightweight: true, include_body: 0 } : {}),
+        ...extra,
+      },
+      { ...auth, method: 'GET', pathOverride: '/v1/messages', timeout: 60_000, signal },
+    );
+  const lightweight = lightweightListSupported();
+  let messages = asArray<ExistingMessage>(await request(lightweight));
+  // A server that strips addresses from lightweight rows would make every
+  // From/To/Cc condition miss, so ask again for the full rows.
+  if (lightweight && noteLightweightListResponse(messages)) {
+    messages = asArray<ExistingMessage>(await request(false));
+  }
+  return messages;
+}
+
+/** Ids of Inbox messages whose body contains the value (server-side search). */
+async function inboxBodyMatches(
+  value: string,
+  auth: { authHeader?: string },
+  signal: AbortSignal | undefined,
+): Promise<Set<string>> {
+  const matches = new Set<string>();
+  for (let page = 1; ; page += 1) {
+    if (signal?.aborted) throw cancelledError();
+    const messages = await fetchInboxPage(page, auth, signal, { body: value });
+    let added = 0;
+    for (const message of messages) {
+      const apiId = getMessageApiId(message as never);
+      if (apiId != null && !matches.has(String(apiId))) {
+        matches.add(String(apiId));
+        added += 1;
+      }
+    }
+    if (messages.length < EXISTING_PAGE_SIZE || !added) break;
+  }
+  return matches;
+}
+
+/**
+ * Run a rule's folder, label, read and star actions on matching Inbox mail.
+ *
+ * Reports progress as it goes and stops between messages when the signal
+ * aborts; what was already changed stays changed. Must run for the active
+ * account, because the mailbox actions act on it.
+ */
+export async function applyFilterToExisting(
+  rule: FilterRule,
+  { account, actions, signal, onProgress }: ApplyExistingOptions,
+): Promise<ApplyExistingFilterResult> {
+  const progress: ApplyExistingProgress = { scanned: 0, matched: 0, updated: 0 };
+  const finish = (extra: Partial<ApplyExistingFilterResult> = {}): ApplyExistingFilterResult => ({
+    ...progress,
+    cancelled: false,
+    ...extra,
+  });
+
+  const reason = existingFilterUnsupportedReason(rule);
+  if (reason) return finish({ error: reason });
+
+  const activeAccount = () => (Local.get('email') || '') === account;
+  if (!account || !activeAccount()) {
+    return finish({ error: 'Switch to this account to apply the filter to its mail.' });
+  }
+
+  const auth = requestOptionsFor(account);
+  const conditions = rule.conditions.filter((c) => c.value?.trim());
+  const ruleActions = rule.actions || {};
+  const label = canonicalizeLabelKeyword(ruleActions.label);
+  const target = ruleActions.fileinto || '';
+  const report = () => onProgress?.({ ...progress });
+
+  try {
+    const bodyMatches = new Map<string, Set<string>>();
+    for (const condition of conditions) {
+      const key = condition.value.trim().toLowerCase();
+      if (condition.field === 'body' && !bodyMatches.has(key)) {
+        bodyMatches.set(key, await inboxBodyMatches(condition.value.trim(), auth, signal));
+      }
+    }
+
+    // Scan everything before changing anything: moving messages out of the
+    // Inbox while paging through it would shift later pages and skip mail.
+    const seen = new Set<string>();
+    const matched: ExistingMessage[] = [];
+    for (let page = 1; ; page += 1) {
+      if (signal?.aborted) throw cancelledError();
+      const messages = await fetchInboxPage(page, auth, signal);
+      let added = 0;
+      for (const message of messages) {
+        const apiId = getMessageApiId(message as never);
+        if (apiId == null || seen.has(String(apiId))) continue;
+        seen.add(String(apiId));
+        added += 1;
+        if (ruleMatches(message, conditions, rule.match, bodyMatches)) {
+          matched.push(normalizeMessageForCache(message as never, EXISTING_FOLDER, account));
+        }
+      }
+      progress.scanned = seen.size;
+      progress.matched = matched.length;
+      report();
+      if (messages.length < EXISTING_PAGE_SIZE || !added) break;
+    }
+
+    const isSeen = (m: ExistingMessage) =>
+      m.is_unread === false ||
+      (Array.isArray(m.flags) && m.flags.some((f) => String(f).toLowerCase() === '\\seen'));
+    const isStarred = (m: ExistingMessage) =>
+      Boolean(m.is_starred) ||
+      (Array.isArray(m.flags) && m.flags.some((f) => String(f).toLowerCase() === '\\flagged'));
+
+    // Checked before every change: the mailbox actions act on whichever
+    // account is active when they run.
+    const switched = new Error('You switched accounts, so the rest was not changed.');
+    const stillThisAccount = () => {
+      if (signal?.aborted) throw cancelledError();
+      if (!activeAccount()) throw switched;
+    };
+
+    for (let offset = 0; offset < matched.length; offset += EXISTING_CONCURRENCY) {
+      stillThisAccount();
+      const chunk = matched.slice(offset, offset + EXISTING_CONCURRENCY);
+      const changed = new Set<ExistingMessage>();
+      await Promise.all(
+        chunk.map(async (message) => {
+          // Each action only sets, never toggles, so a message already read or
+          // starred is left as it is. The row is updated to match, so the move
+          // below carries the new state (a message marked read here is not
+          // counted as unread in its new folder).
+          if (ruleActions.markRead && !isSeen(message)) {
+            stillThisAccount();
+            await actions.markRead(message);
+            const flags = Array.isArray(message.flags) ? (message.flags as string[]) : [];
+            Object.assign(message, { is_unread: false, flags: [...flags, '\\Seen'] });
+            changed.add(message);
+          }
+          if (ruleActions.star && !isStarred(message)) {
+            stillThisAccount();
+            await actions.star(message);
+            const flags = Array.isArray(message.flags) ? (message.flags as string[]) : [];
+            Object.assign(message, { is_starred: true, flags: [...flags, '\\Flagged'] });
+            changed.add(message);
+          }
+          const labels = Array.isArray(message.labels) ? (message.labels as string[]) : [];
+          if (label && !labels.map((l) => canonicalizeLabelKeyword(l)).includes(label)) {
+            stillThisAccount();
+            await actions.addLabel(message, label);
+            message.labels = [...labels, label];
+            changed.add(message);
+          }
+        }),
+      );
+      if (target) {
+        stillThisAccount();
+        // A move that fails is queued and retried, like a move made by hand.
+        await actions.move(chunk, target);
+        for (const message of chunk) changed.add(message);
+      }
+      progress.updated += changed.size;
+      report();
+    }
+  } catch (err) {
+    if (isAbort(err, signal)) return finish({ cancelled: true });
+    return finish({ error: errorMessage(err) });
+  }
+
+  return finish();
 }
 
 /** Auth for one account, so a request keeps its account across a switch. */

@@ -138,10 +138,9 @@ test.describe('New mail from the WebSocket', () => {
     await expect
       .poll(() => page.evaluate(() => window.__shownNotifications))
       .toEqual([
-        expect.objectContaining({
-          title: 'Alice Sender',
-          body: 'Quarterly report\nNumbers attached',
-        }),
+        // Sender and subject, without the preview, unless the user chose
+        // more under Privacy & Security > Notification privacy.
+        expect.objectContaining({ title: 'Alice Sender', body: 'Quarterly report' }),
       ]);
     await expect(page.getByText('New email from Alice Sender')).toHaveCount(0);
   });
@@ -181,5 +180,152 @@ test.describe('New mail from the WebSocket', () => {
 
     await expect(page.getByText('New email from Alice Sender: Quarterly report')).toBeVisible();
     expect(await page.evaluate(() => window.__shownNotifications)).toEqual([]);
+  });
+});
+
+// Privacy & Security > Notification privacy (issue #113): how much of a new
+// email its notification shows. App Lock is off here, so the "While unlocked"
+// choice applies to every notification.
+test.describe('Notification privacy', () => {
+  let sockets;
+
+  const choose = (page, value) =>
+    page.addInitScript((level) => {
+      try {
+        localStorage.setItem('webmail_notification_preview_unlocked', level);
+      } catch {
+        // sandboxed email frame
+      }
+    }, value);
+
+  test.beforeEach(async ({ page }) => {
+    sockets = [];
+    await page.routeWebSocket(/\/v1\/ws/, (ws) => {
+      sockets.push(ws);
+    });
+    await page.addInitScript(() => {
+      window.__appFocused = true;
+      Document.prototype.hasFocus = () => window.__appFocused;
+    });
+    await setupAuthenticatedMailbox(page);
+  });
+
+  async function deliverInBackground(page) {
+    await page.goto('/mailbox#INBOX');
+    await expect(page.locator('[data-conversation-row]').first()).toBeVisible({ timeout: 15_000 });
+    await expect.poll(() => sockets.length, { timeout: 15_000 }).toBeGreaterThan(0);
+    await page.evaluate(() => {
+      window.__appFocused = false;
+    });
+    const frame = JSON.stringify({
+      event: 'newMessage',
+      mailbox: 'INBOX',
+      message: {
+        uid: '9201',
+        id: '9201',
+        from: { text: 'Alice Sender <alice@example.org>' },
+        subject: 'Quarterly report',
+        snippet: 'Numbers attached',
+      },
+    });
+    for (const ws of sockets) ws.send(frame);
+  }
+
+  test('shows the preview when the user chose it', async ({ page, context, baseURL }) => {
+    await context.grantPermissions(['notifications'], { origin: baseURL });
+    await recordNotifications(page);
+    await choose(page, 'full');
+    await deliverInBackground(page);
+
+    await expect
+      .poll(() => page.evaluate(() => window.__shownNotifications))
+      .toEqual([
+        expect.objectContaining({
+          title: 'Alice Sender',
+          body: 'Quarterly report\nNumbers attached',
+        }),
+      ]);
+  });
+
+  test('names neither sender nor subject when the user chose nothing', async ({
+    page,
+    context,
+    baseURL,
+  }) => {
+    await context.grantPermissions(['notifications'], { origin: baseURL });
+    await recordNotifications(page);
+    await choose(page, 'none');
+    await deliverInBackground(page);
+
+    await expect
+      .poll(() => page.evaluate(() => window.__shownNotifications))
+      .toEqual([expect.objectContaining({ title: 'New email', body: '' })]);
+    const shown = JSON.stringify(await page.evaluate(() => window.__shownNotifications));
+    expect(shown).not.toMatch(/Alice|Quarterly|Numbers/);
+  });
+
+  test('while App Lock has the app locked, says only that new mail arrived', async ({ page }) => {
+    test.setTimeout(120_000);
+    await page.goto('/mailbox/settings#privacy');
+    await page.getByRole('button', { name: 'Enable App Lock' }).click();
+    await page.getByPlaceholder(/Enter \d-digit PIN/).fill('135790');
+    await page.getByPlaceholder('Confirm PIN').fill('135790');
+    await page.getByRole('button', { name: 'Set PIN & Enable' }).click();
+    await expect(page.getByText('App lock enabled successfully')).toBeVisible({ timeout: 30_000 });
+    // With App Lock on, the card explains when each choice applies.
+    await expect(page.getByTestId('notification-privacy')).toContainText(
+      'When App Lock has locked the app, or the app is closed.',
+    );
+
+    await page.goto('/mailbox#INBOX');
+    await expect(page.locator('[data-conversation-row]').first()).toBeVisible({ timeout: 15_000 });
+    await expect.poll(() => sockets.length, { timeout: 15_000 }).toBeGreaterThan(0);
+    await page.evaluate(() => window.dispatchEvent(new CustomEvent('fe:lock-app')));
+    await expect(page.getByText('Enter your PIN to unlock')).toBeVisible();
+
+    const frame = JSON.stringify({
+      event: 'newMessage',
+      mailbox: 'INBOX',
+      message: {
+        uid: '9301',
+        id: '9301',
+        from: { text: 'Alice Sender <alice@example.org>' },
+        subject: 'Quarterly report',
+      },
+    });
+    for (const ws of sockets) ws.send(frame);
+
+    await expect(page.getByText('New email', { exact: true })).toBeVisible();
+    await expect(page.getByText(/Alice Sender|Quarterly report/)).toHaveCount(0);
+  });
+
+  test('the Privacy & Security card saves each choice and shows an example', async ({ page }) => {
+    await page.goto('/mailbox/settings#privacy');
+    const card = page.getByTestId('notification-privacy');
+    await expect(card).toBeVisible({ timeout: 15_000 });
+
+    // The defaults the issue asks for, with App Lock off.
+    await expect(card.locator('#notification_preview_unlocked-select')).toHaveText(
+      'Sender and subject',
+    );
+    await expect(card.locator('#notification_preview_locked-select')).toHaveText(
+      'Nothing, just "New email"',
+    );
+    await expect(card).toContainText('Takes effect when you turn on App Lock above.');
+
+    await card.locator('#notification_preview_unlocked-select').click();
+    await page.getByRole('option', { name: 'Sender only' }).click();
+    await expect(card.getByTestId('notification_preview_unlocked-example')).toHaveText(
+      'Alex Rivera',
+    );
+    await expect(page.getByText('While unlocked: Sender only')).toBeVisible();
+    expect(
+      await page.evaluate(() => localStorage.getItem('webmail_notification_preview_unlocked')),
+    ).toBe('sender');
+
+    await page.reload();
+    await expect(
+      page.getByTestId('notification-privacy').locator('#notification_preview_unlocked-select'),
+    ).toHaveText('Sender only');
   });
 });

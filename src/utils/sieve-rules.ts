@@ -14,6 +14,7 @@
  * builder — the UI shows it read-only so the builder cannot silently destroy
  * hand-written rules.
  */
+import { normalizeEmail } from './address';
 
 export type ConditionField = 'from' | 'to' | 'cc' | 'subject' | 'body' | 'any';
 export type ConditionOp = 'contains' | 'is' | 'not_contains';
@@ -111,8 +112,29 @@ function conditionTest(condition: FilterCondition): string | null {
   if (!headers.length) return null;
   const headerList =
     headers.length === 1 ? quoted(headers[0]) : `[${headers.map(quoted).join(', ')}]`;
-  const test = `header ${matchType} ${headerList} ${quoted(value)}`;
+  const address = exactConditionAddress(condition);
+  const test = address
+    ? `address :is ${headerList} ${quoted(address)}`
+    : `header ${matchType} ${headerList} ${quoted(value)}`;
   return condition.op === 'not_contains' ? `not ${test}` : test;
+}
+
+/**
+ * The bare address an "is exactly" condition on From, To, Cc or any of them
+ * compares, or '' when the condition is not one.
+ *
+ * A header test compares the whole header, so `From is exactly
+ * alice@example.com` missed `From: Alice <alice@example.com>`. These conditions
+ * compare the address alone, both in the Sieve script (`address :is`) and when
+ * a rule is applied to existing mail. A value without an @ (a display name)
+ * keeps the header comparison.
+ */
+export function exactConditionAddress(condition: FilterCondition): string {
+  if (condition.op !== 'is' || condition.field === 'subject' || condition.field === 'body') {
+    return '';
+  }
+  const address = normalizeEmail((condition.value || '').trim());
+  return /^[^\s@]+@[^\s@]+$/.test(address) ? address : '';
 }
 
 /**

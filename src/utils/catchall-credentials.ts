@@ -15,7 +15,17 @@ import { Local } from './storage.js';
 export interface CatchallCredential {
   domain: string;
   password: string;
+  /**
+   * Addresses on the domain sent from before, or added in Settings, newest
+   * first: the compose From menu offers them so they need not be typed again.
+   */
+  addresses: string[];
 }
+
+/** How many From addresses are kept per domain. */
+export const CATCHALL_ADDRESS_LIMIT = 20;
+
+const LOCAL_PART_PATTERN = /^[^\s@<>(),;:"[\]\\]+$/;
 
 export const CATCHALL_CREDENTIALS_KEY = 'catchall_credentials';
 
@@ -34,6 +44,23 @@ export const normalizeCatchallDomain = (input: string | null | undefined): strin
   const at = value.lastIndexOf('@');
   const domain = (at >= 0 ? value.slice(at + 1) : value).replace(/\.$/, '');
   return DOMAIN_PATTERN.test(domain) ? domain : '';
+};
+
+/**
+ * A lowercase address on `domain` (or on any domain when none is given), or
+ * '' when the input is not one. Accepts just the part before the @ when a
+ * domain is given.
+ */
+export const normalizeCatchallAddress = (input: unknown, domain?: string): string => {
+  const value = String(input ?? '')
+    .trim()
+    .toLowerCase();
+  const at = value.lastIndexOf('@');
+  const local = at >= 0 ? value.slice(0, at) : value;
+  const host = at >= 0 ? normalizeCatchallDomain(value.slice(at + 1)) : domain || '';
+  if (!local || !host || !LOCAL_PART_PATTERN.test(local) || local.length > 64) return '';
+  if (domain && host !== normalizeCatchallDomain(domain)) return '';
+  return `${local}@${host}`;
 };
 
 const domainOf = (address: string | null | undefined): string => {
@@ -57,7 +84,12 @@ export const listCatchallCredentials = (): CatchallCredential[] => {
     const password = typeof entry?.password === 'string' ? entry.password : '';
     if (!domain || !password || seen.has(domain)) continue;
     seen.add(domain);
-    out.push({ domain, password });
+    const addresses: string[] = [];
+    for (const value of Array.isArray(entry?.addresses) ? entry.addresses : []) {
+      const address = normalizeCatchallAddress(value, domain);
+      if (address && !addresses.includes(address)) addresses.push(address);
+    }
+    out.push({ domain, password, addresses: addresses.slice(0, CATCHALL_ADDRESS_LIMIT) });
   }
   return out.sort((a, b) => a.domain.localeCompare(b.domain));
 };
@@ -76,8 +108,11 @@ export const saveCatchallCredential = (
   const domain = normalizeCatchallDomain(domainInput);
   if (!domain) return { ok: false, error: 'Enter a domain name, like example.com' };
   if (!password) return { ok: false, error: 'Enter the catch-all password' };
-  const rest = listCatchallCredentials().filter((entry) => entry.domain !== domain);
-  if (!write([...rest, { domain, password }])) {
+  const list = listCatchallCredentials();
+  // A new password for a saved domain keeps the addresses already remembered.
+  const addresses = list.find((entry) => entry.domain === domain)?.addresses || [];
+  const rest = list.filter((entry) => entry.domain !== domain);
+  if (!write([...rest, { domain, password, addresses }])) {
     return { ok: false, error: 'Could not save the password on this device' };
   }
   return { ok: true, domain };
@@ -117,3 +152,48 @@ export const buildCatchallAuthHeader = (address: string | null | undefined): str
     return '';
   }
 };
+
+/** The remembered From addresses for one domain, or for every domain. */
+export const listCatchallAddresses = (domainInput?: string): string[] => {
+  const domain = domainInput ? normalizeCatchallDomain(domainInput) : '';
+  return listCatchallCredentials()
+    .filter((entry) => !domain || entry.domain === domain)
+    .flatMap((entry) => entry.addresses);
+};
+
+const updateAddresses = (
+  address: string,
+  change: (addresses: string[], normalized: string) => string[],
+): boolean => {
+  const credential = getCatchallCredentialFor(address);
+  if (!credential) return false;
+  const normalized = normalizeCatchallAddress(address, credential.domain);
+  if (!normalized) return false;
+  const list = listCatchallCredentials();
+  const next = list.map((entry) =>
+    entry.domain === credential.domain
+      ? {
+          ...entry,
+          addresses: change(entry.addresses, normalized).slice(0, CATCHALL_ADDRESS_LIMIT),
+        }
+      : entry,
+  );
+  return write(next);
+};
+
+/**
+ * Remembers an address sent from with a catch-all password, newest first,
+ * so the From menu offers it next time. Nothing happens for an address
+ * whose domain has no saved password.
+ */
+export const rememberCatchallAddress = (address: string): boolean =>
+  updateAddresses(address, (addresses, normalized) => [
+    normalized,
+    ...addresses.filter((entry) => entry !== normalized),
+  ]);
+
+/** Forgets one remembered From address. */
+export const forgetCatchallAddress = (address: string): boolean =>
+  updateAddresses(address, (addresses, normalized) =>
+    addresses.filter((entry) => entry !== normalized),
+  );

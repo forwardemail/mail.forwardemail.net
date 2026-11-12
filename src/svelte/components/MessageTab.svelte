@@ -49,7 +49,12 @@
   import { closeTab } from '../../stores/tabStore';
   import { normalizeEmail, extractAddressList, recipientsToList } from '../../utils/address.ts';
   import { extractRecipientsField } from '../../utils/sync-helpers';
-  import { getEffectiveSettingValue, localSettingsVersion } from '../../stores/settingsStore';
+  import {
+    getEffectiveSettingValue,
+    getMessageFormat,
+    localSettingsVersion,
+    messageViewFor,
+  } from '../../stores/settingsStore';
   import {
     buildReplyQuotedBody,
     buildForwardQuotedBody,
@@ -123,11 +128,12 @@
     loadImages();
   };
 
-  // Plain-text view setting — reactive to localSettingsVersion bumps so the
-  // user can toggle the setting without re-opening the message.
-  const viewPlainText = $derived.by(() => {
+  // Settings > Appearance > Message format, reactive to localSettingsVersion
+  // so a change shows without re-opening the message.
+  let textPart = $state('');
+  const view = $derived.by(() => {
     void $localSettingsVersion;
-    return Boolean(getEffectiveSettingValue('view_plain_text'));
+    return messageViewFor(getMessageFormat(), body ? textPart : '');
   });
 
   // Metadata from body load
@@ -190,10 +196,17 @@
             attachmentList = [];
           }
         },
-        onBody: (html: string) => {
+        onBody: (html: string, extras?: { textPart?: string }) => {
+          textPart = extras?.textPart || '';
           body = processQuotedContent(html, { collapseByDefault: true });
           loading = false;
         },
+        onTextPart:
+          getMessageFormat() === 'html'
+            ? undefined
+            : (found: string) => {
+                textPart = found;
+              },
         onAttachments: (atts: Attachment[]) => {
           attachmentList = atts || [];
         },
@@ -536,7 +549,7 @@
         {/if}
 
         <!-- Blocked Images Warning -->
-        {#if hasBlockedImages && blockedImageCount > 0 && !showAllImages}
+        {#if hasBlockedImages && blockedImageCount > 0 && !showAllImages && !view.plainText}
           <div
             class="flex items-center gap-2 p-3 mb-4 bg-state-caution/10 border border-state-caution/25 text-sm"
           >
@@ -571,7 +584,8 @@
             <EmailIframe
               html={body}
               {messageId}
-              plainText={viewPlainText}
+              plainText={view.plainText}
+              text={view.text}
               onLinkClick={handleLinkClick}
             />
           </div>

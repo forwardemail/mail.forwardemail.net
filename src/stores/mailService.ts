@@ -29,7 +29,7 @@ import {
 import { getCachedAttachmentBlob, cacheAttachmentBlob } from '../utils/attachment-cache.js';
 import { isTauri } from '../utils/platform.js';
 import { isMemoryConstrained } from '../utils/memory-profile';
-import { slimBodyMeta, slimCachedAttachments } from '../workers/sync-pure';
+import { apiTextPart, slimBodyMeta, slimCachedAttachments } from '../workers/sync-pure';
 import type { Message, Attachment, PerfTracer, PgpKey, PgpSignatureCheck } from '../types';
 import { messages } from './messageStore';
 import { writable } from 'svelte/store';
@@ -48,9 +48,16 @@ import {
   cachedBodyNeedsResanitize,
 } from './mail-service-helpers';
 
+/** Delivered with a body: the sender's own plain-text part, when it has one. */
+export interface BodyExtras {
+  textPart?: string;
+  /** The cached raw message, for a body cached before textPart was recorded. */
+  raw?: unknown;
+}
+
 export interface MessageDetailCallbacks {
   onLoading?: (loading: boolean) => void;
-  onBody?: (html: string) => void;
+  onBody?: (html: string, extras?: BodyExtras) => void;
   onAttachments?: (attachments: Attachment[]) => void;
   onError?: (error: Error) => void;
   onMeta?: (meta: unknown) => void;
@@ -59,6 +66,12 @@ export interface MessageDetailCallbacks {
   perf?: PerfTracer;
   signal?: AbortSignal;
   allowPgpPrompt?: boolean;
+  /**
+   * The sender's plain-text part of a body cached before it was recorded,
+   * found in the cached raw message after the body was delivered. Pass it
+   * only when the reader may show that part (a plain-text message format).
+   */
+  onTextPart?: (textPart: string) => void;
 }
 
 export interface ImageStatus {
@@ -86,7 +99,7 @@ interface PgpContext {
   message: Message;
   signal?: AbortSignal;
   onPgpStatus?: (status: PgpStatus) => void;
-  onBody?: (html: string) => void;
+  onBody?: (html: string, extras?: BodyExtras) => void;
   onImageStatus?: (status: ImageStatus) => void;
   onAttachments?: (attachments: Attachment[]) => void;
   onMeta?: (meta: unknown) => void;
@@ -96,6 +109,7 @@ interface DecryptResult {
   success: boolean;
   body?: string;
   textContent?: string;
+  textPart?: string;
   attachments?: Attachment[];
   rawBody?: string;
   reason?: string;
@@ -115,6 +129,7 @@ interface PassphraseModalRef {
 
 interface CachedBody {
   body?: string;
+  textPart?: string;
   raw?: string;
   meta?: unknown;
   attachments?: Attachment[];
@@ -850,7 +865,10 @@ async function handleCachedPgpRaw(
           remoteImagesBlockedByDefault(),
         );
         const hydrated = applyInlineAttachments(display.html, freshCache.attachments || []);
-        onBody?.(`<div class="fe-message-canvas">${hydrated}</div>`);
+        onBody?.(`<div class="fe-message-canvas">${hydrated}</div>`, {
+          textPart: freshCache.textPart,
+          raw: freshCache.raw,
+        });
         onImageStatus?.({
           hasBlockedImages: display.hasBlockedImages,
           trackingPixelCount: display.trackingPixelCount,
@@ -893,7 +911,9 @@ async function handleCachedPgpRaw(
         bytes: parsed.body?.length || 0,
       });
     }
-    onBody?.(`<div class="fe-message-canvas">${sanitized.html}</div>`);
+    onBody?.(`<div class="fe-message-canvas">${sanitized.html}</div>`, {
+      textPart: parsed.textPart,
+    });
     onImageStatus?.({
       hasBlockedImages: sanitized.hasBlockedImages,
       trackingPixelCount: sanitized.trackingPixelCount,
@@ -910,7 +930,7 @@ async function handleCachedPgpRaw(
       meta,
       account,
       sanitized,
-      { pgpDecrypted: true, keysVersion },
+      { pgpDecrypted: true, keysVersion, textPart: parsed.textPart || '' },
     );
 
     tracer.stage('cache_write', { cached: true });
@@ -959,6 +979,7 @@ export const mailService = {
       perf,
       signal,
       allowPgpPrompt = true,
+      onTextPart,
     } = callbacks;
 
     if (!message) {
@@ -989,9 +1010,25 @@ export const mailService = {
     const imagesAllowed =
       !remoteImagesBlockedByDefault() || isTrustedImageSender(message.from, account);
     const onBody = rawOnBody
-      ? (html: string): void => {
-          rawOnBody(imagesAllowed ? restoreBlockedImages(html) : html);
+      ? (html: string, extras?: BodyExtras): void => {
+          const shown = imagesAllowed ? restoreBlockedImages(html) : html;
+          const known = typeof extras?.textPart === 'string';
+          rawOnBody(shown, { textPart: known ? extras?.textPart : '' });
           onLoading?.(false);
+          // A body cached before its plain-text part was recorded: when the
+          // reader may show that part, find it in the cached raw message.
+          // Never from a PGP message, whose raw form is the ciphertext.
+          const raw = typeof extras?.raw === 'string' ? extras.raw : '';
+          if (known || !onTextPart || !raw || raw.includes('-----BEGIN PGP MESSAGE-----')) {
+            return;
+          }
+          requestParsing({ raw, existingAttachments: [] })
+            .then((parsed: { success?: boolean; textPart?: unknown }) => {
+              const textPart = parsed?.success ? parsed.textPart : '';
+              if (signal?.aborted || typeof textPart !== 'string' || !textPart) return;
+              onTextPart(textPart);
+            })
+            .catch(() => {});
         }
       : undefined;
     const onImageStatus = rawOnImageStatus
@@ -1080,7 +1117,10 @@ export const mailService = {
             },
           ).catch(() => {});
           const hydrated = applyInlineAttachments(sanitized.html, cached.attachments || []);
-          onBody?.(`<div class="fe-message-canvas">${hydrated}</div>`);
+          onBody?.(`<div class="fe-message-canvas">${hydrated}</div>`, {
+            textPart: cached.textPart,
+            raw: cached.raw,
+          });
           hasRenderedBody = true;
           onPgpStatus?.({ locked: false });
           onImageStatus?.({
@@ -1100,7 +1140,10 @@ export const mailService = {
         tracer.stage('cache_hit', { fresh: true, cacheAge: 0 });
 
         const hydrated = applyInlineAttachments(cached.body, cached.attachments || []);
-        onBody?.(`<div class="fe-message-canvas">${hydrated}</div>`);
+        onBody?.(`<div class="fe-message-canvas">${hydrated}</div>`, {
+          textPart: cached.textPart,
+          raw: cached.raw,
+        });
         hasRenderedBody = true;
         onImageStatus?.({
           hasBlockedImages:
@@ -1154,7 +1197,10 @@ export const mailService = {
             );
             const hydrated = applyInlineAttachments(display.html, freshCached.attachments || []);
 
-            onBody?.(`<div class="fe-message-canvas">${hydrated}</div>`);
+            onBody?.(`<div class="fe-message-canvas">${hydrated}</div>`, {
+              textPart: freshCached.textPart,
+              raw: freshCached.raw,
+            });
             onImageStatus?.({
               hasBlockedImages: display.hasBlockedImages,
               trackingPixelCount: display.trackingPixelCount,
@@ -1191,6 +1237,7 @@ export const mailService = {
       const fetchPromise = (async () => {
         let workerResult: {
           body?: string;
+          textPart?: string;
           attachments?: Attachment[];
           meta?: Record<string, unknown>;
           pgpLocked?: boolean;
@@ -1244,6 +1291,7 @@ export const mailService = {
       let detailRes: unknown;
       let workerResult: {
         body?: string;
+        textPart?: string;
         attachments?: Attachment[];
         meta?: Record<string, unknown>;
         pgpLocked?: boolean;
@@ -1282,7 +1330,10 @@ export const mailService = {
             bytes: hydrated?.length || 0,
           });
         }
-        onBody?.(`<div class="fe-message-canvas">${sanitized.html}</div>`);
+        onBody?.(`<div class="fe-message-canvas">${sanitized.html}</div>`, {
+          textPart: workerResult.textPart,
+          raw: workerResult.raw,
+        });
         onImageStatus?.({
           hasBlockedImages: sanitized.hasBlockedImages,
           trackingPixelCount: sanitized.trackingPixelCount,
@@ -1305,6 +1356,7 @@ export const mailService = {
               (workerResult as { pgpDecrypted?: boolean }).pgpDecrypted,
             ),
             keysVersion: keysVersionAtLoad,
+            textPart: typeof workerResult.textPart === 'string' ? workerResult.textPart : undefined,
           },
         ).catch(() => {});
         if (!workerMeta?.nodemailer) {
@@ -1436,7 +1488,9 @@ export const mailService = {
               bytes: parsed.body?.length || 0,
             });
           }
-          onBody?.(`<div class="fe-message-canvas">${sanitized.html}</div>`);
+          onBody?.(`<div class="fe-message-canvas">${sanitized.html}</div>`, {
+            textPart: parsed.textPart,
+          });
           onImageStatus?.({
             hasBlockedImages: sanitized.hasBlockedImages,
             trackingPixelCount: sanitized.trackingPixelCount,
@@ -1454,7 +1508,7 @@ export const mailService = {
             result,
             account,
             sanitized,
-            { pgpDecrypted: true, keysVersion },
+            { pgpDecrypted: true, keysVersion, textPart: parsed.textPart || '' },
           ).catch((err) => console.warn('[mailService] Body cache write failed', err));
           tracer.stage('cache_write', { cached: true });
         } else {
@@ -1498,7 +1552,9 @@ export const mailService = {
               bytes: parsed.body?.length || 0,
             });
           }
-          onBody?.(`<div class="fe-message-canvas">${sanitized.html}</div>`);
+          onBody?.(`<div class="fe-message-canvas">${sanitized.html}</div>`, {
+            textPart: parsed.textPart,
+          });
           onImageStatus?.({
             hasBlockedImages: sanitized.hasBlockedImages,
             trackingPixelCount: sanitized.trackingPixelCount,
@@ -1514,7 +1570,7 @@ export const mailService = {
             result,
             account,
             sanitized,
-            { leanAttachments: true },
+            { leanAttachments: true, textPart: parsed.textPart || '' },
           ).catch((err) => console.warn('[mailService] Body cache write failed', err));
           tracer.stage('cache_write', { cached: true });
         } else {
@@ -1529,7 +1585,9 @@ export const mailService = {
               bytes: inlinedBody?.length || 0,
             });
           }
-          onBody?.(`<div class="fe-message-canvas">${sanitized.html}</div>`);
+          onBody?.(`<div class="fe-message-canvas">${sanitized.html}</div>`, {
+            textPart: apiTextPart(result),
+          });
           onImageStatus?.({
             hasBlockedImages: sanitized.hasBlockedImages,
             trackingPixelCount: sanitized.trackingPixelCount,
@@ -1545,7 +1603,7 @@ export const mailService = {
             result,
             account,
             sanitized,
-            { leanAttachments: true },
+            { leanAttachments: true, textPart: apiTextPart(result) },
           ).catch((err) => console.warn('[mailService] Body cache write failed', err));
           tracer.stage('cache_write', { cached: true });
         }
@@ -1572,7 +1630,10 @@ export const mailService = {
           );
           const hydrated = applyInlineAttachments(display.html, cached.attachments || []);
 
-          onBody?.(`<div class="fe-message-canvas">${hydrated}</div>`);
+          onBody?.(`<div class="fe-message-canvas">${hydrated}</div>`, {
+            textPart: cached.textPart,
+            raw: cached.raw,
+          });
           onImageStatus?.({
             hasBlockedImages: display.hasBlockedImages,
             trackingPixelCount: display.trackingPixelCount,
@@ -1604,7 +1665,7 @@ export const mailService = {
   }: {
     message: Message;
     folder: string;
-    onBody?: (html: string) => void;
+    onBody?: (html: string, extras?: BodyExtras) => void;
     onAttachments?: (attachments: Attachment[]) => void;
     onError?: (error: Error) => void;
     onMeta?: (meta: unknown) => void;
@@ -1695,7 +1756,7 @@ export const mailService = {
       const attachments = sanitizeAttachments(mappedAttachments);
 
       const sanitized = sanitizeHtml(rawBody as string);
-      onBody?.(sanitized.html);
+      onBody?.(sanitized.html, { textPart: apiTextPart(result) });
       onImageStatus?.({
         hasBlockedImages: sanitized.hasBlockedImages,
         trackingPixelCount: sanitized.trackingPixelCount,
@@ -1711,7 +1772,7 @@ export const mailService = {
         result,
         account,
         undefined,
-        { leanAttachments: true },
+        { leanAttachments: true, textPart: apiTextPart(result) },
       );
     } catch (error: unknown) {
       if ((error as { name?: string })?.name === 'AbortError') {
@@ -1919,11 +1980,19 @@ async function cacheMessageContent(
   // with the saved keys (invalidatePgpCachedBodies). keysVersion: the keys it
   // was decrypted with (getPgpKeysVersion() then); if they changed since, the
   // plaintext is not cached, or removing them would leave it behind.
+  // textPart: the sender's own plain-text part ('' for none). Left out, the
+  // one already cached is kept (re-sanitizing a cached body does not know it).
   {
     leanAttachments = false,
     pgpDecrypted = false,
     keysVersion,
-  }: { leanAttachments?: boolean; pgpDecrypted?: boolean; keysVersion?: number } = {},
+    textPart,
+  }: {
+    leanAttachments?: boolean;
+    pgpDecrypted?: boolean;
+    keysVersion?: number;
+    textPart?: string;
+  } = {},
 ): Promise<void> {
   const messageId = getMessageApiId(message);
   if (!messageId || !renderedBody) return;
@@ -1961,6 +2030,20 @@ async function cacheMessageContent(
       : rawBodyForCache || renderedBody;
   const normalizedText = textContent || extractTextContent(renderedBody);
 
+  let keptTextPart = textPart;
+  if (keptTextPart === undefined) {
+    try {
+      const previous = (await db.messageBodies.get([resolvedAccount, messageId])) as
+        | { textPart?: string }
+        | undefined;
+      // Still unknown when the cached copy predates textPart (left out, not
+      // '', so the reader can work it out from the raw message).
+      keptTextPart = typeof previous?.textPart === 'string' ? previous.textPart : undefined;
+    } catch {
+      keptTextPart = undefined;
+    }
+  }
+
   const record = {
     id: messageId,
     account: resolvedAccount,
@@ -1968,6 +2051,7 @@ async function cacheMessageContent(
     body: sanitized.html,
     raw: rawOriginal,
     textContent: normalizedText,
+    textPart: keptTextPart,
     attachments: safeAttachments,
     meta,
     // The attachment list is worked out (see the sync worker's persistBody)
@@ -2299,6 +2383,7 @@ async function decryptInWorker(
         success: true,
         body: result.body,
         textContent: result.textContent,
+        textPart: typeof result.textPart === 'string' ? result.textPart : '',
         attachments: result.attachments,
         subject: typeof result.subject === 'string' ? result.subject : undefined,
         signed: Boolean(result.signed),

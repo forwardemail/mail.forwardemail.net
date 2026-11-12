@@ -118,6 +118,9 @@
     loadProfileImage,
     effectiveTheme,
     getEffectiveSettingValue,
+    getMessageFormat,
+    isTerminalClient,
+    messageViewFor,
     setSettingValue,
     localSettingsVersion,
   } from '../stores/settingsStore';
@@ -647,12 +650,36 @@
   const selectedIdSet = $derived(new Set(($selectedConversationIds || []) as string[]));
 
   let messageBody = chooseStore(source.state?.messageBody, mailboxView?.messageBody, '');
-  // Read view_plain_text reactively — re-evaluates when localSettingsVersion
-  // bumps so toggling the setting re-renders open messages without reload.
-  const viewPlainText = $derived.by(() => {
+  // Settings > Appearance > Message format, read reactively: re-evaluates when
+  // localSettingsVersion bumps, so a change re-renders open messages.
+  const messageFormat = $derived.by(() => {
     void $localSettingsVersion;
-    return Boolean(getEffectiveSettingValue('view_plain_text'));
+    return getMessageFormat();
   });
+  // The open message's own plain-text part, kept with its id so a body that
+  // is cleared or replaced elsewhere never shows another message's text.
+  let messageTextPart = $state<{ id: string; text: string }>({ id: '', text: '' });
+  // "Show formatting" / "Show plain text" for one message. Switching another
+  // message replaces it.
+  let formatOverride = $state<{ id: string; format: 'html' | 'text' } | null>(null);
+  const readerFormat = $derived.by(() => {
+    const id = String($selectedMessage?.id ?? '');
+    if (!isTerminalClient() && formatOverride && formatOverride.id === id) {
+      return formatOverride.format;
+    }
+    return messageFormat;
+  });
+  const readerView = $derived.by(() => {
+    const id = String($selectedMessage?.id ?? '');
+    const text = messageTextPart.id === id && $messageBody ? messageTextPart.text : '';
+    return messageViewFor(readerFormat, text);
+  });
+  const showReaderFormatting = () => {
+    formatOverride = { id: String($selectedMessage?.id ?? ''), format: 'html' };
+  };
+  const showReaderPlainText = () => {
+    formatOverride = { id: String($selectedMessage?.id ?? ''), format: 'text' };
+  };
   let attachments = chooseStore(source.state?.attachments, mailboxView?.attachments, []);
   let parsedInvite = $state<ParsedInvite | null>(null);
   let inviteToken = 0;
@@ -1187,7 +1214,7 @@
 
     try {
       await mailService.loadMessageDetail(msg, {
-        onBody: (body) => {
+        onBody: (body, extras) => {
           if ((Local.get('email') || 'default') !== loadAccount) return;
           // Process quoted content for collapsible display
           const processedBody = processQuotedContent(body, { collapseByDefault: true });
@@ -1195,6 +1222,7 @@
             withThreadBody(map, msg.id, {
               ...(map.get(msg.id) || {}),
               body: processedBody,
+              textPart: extras?.textPart || '',
               loading: false,
             }),
           );
@@ -1204,6 +1232,15 @@
             if (container) initQuoteToggles(container);
           });
         },
+        onTextPart:
+          messageFormat === 'html'
+            ? undefined
+            : (textPart) => {
+                if ((Local.get('email') || 'default') !== loadAccount) return;
+                threadMessageBodies.update((map) =>
+                  withThreadBody(map, msg.id, { ...(map.get(msg.id) || {}), textPart }),
+                );
+              },
         onAttachments: (atts) => {
           if ((Local.get('email') || 'default') !== loadAccount) return;
           threadMessageBodies.update((map) =>
@@ -5665,7 +5702,7 @@
             }
           }
         },
-        onBody: (body) => {
+        onBody: (body, extras) => {
           const isActive = isActiveLoad();
           if (!isActive) {
             return;
@@ -5684,9 +5721,21 @@
           hasBlockedImages.set(false);
           trackingPixelCount.set(0);
           blockedImageCount.set(0);
+          messageTextPart = { id: String(msg.id), text: extras?.textPart || '' };
           source.state?.messageBody?.set?.(processedBody);
           // Quote toggles are now handled inside EmailIframe via postMessage
         },
+        onTextPart:
+          messageFormat === 'html'
+            ? undefined
+            : (textPart) => {
+                if (
+                  !isActiveLoad() ||
+                  (get(selectedMessage) as { id?: unknown } | null)?.id !== msg.id
+                )
+                  return;
+                messageTextPart = { id: String(msg.id), text: textPart };
+              },
         onImageStatus: (status) => {
           if (!isActiveLoad()) return;
           hasBlockedImages.set(status.hasBlockedImages || false);
@@ -6600,6 +6649,43 @@
     }
   };
 </script>
+
+{#snippet messageFormatBar()}
+  <!-- How the open message is shown, and a switch for this message only.
+       Plain text never loads images, so the blocked-images bar is not shown
+       with it. The terminal always shows plain text. -->
+  {#if readerView.plainText && !isTerminalClient()}
+    <div
+      class="mb-4 flex flex-wrap items-center gap-3 border border-border bg-muted/40 p-3 text-sm"
+      class:invisible={!$messageBody}
+      data-testid="message-format-bar"
+    >
+      <span class="flex-1 text-muted-foreground">Shown as plain text.</span>
+      <button
+        type="button"
+        class="inline-flex items-center justify-center px-3 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground"
+        onclick={showReaderFormatting}
+      >
+        Show formatting
+      </button>
+    </div>
+  {:else if formatOverride?.format === 'html' && formatOverride.id === String($selectedMessage?.id ?? '')}
+    <div
+      class="mb-4 flex flex-wrap items-center gap-3 border border-border bg-muted/40 p-3 text-sm"
+      class:invisible={!$messageBody}
+      data-testid="message-format-bar"
+    >
+      <span class="flex-1 text-muted-foreground">Shown with formatting.</span>
+      <button
+        type="button"
+        class="inline-flex items-center justify-center px-3 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground"
+        onclick={showReaderPlainText}
+      >
+        Show plain text
+      </button>
+    </div>
+  {/if}
+{/snippet}
 
 <Tooltip.Provider>
   {#if isActive}
@@ -9914,7 +10000,8 @@
                               {#if !readerIsSentFolder && !readerIsDraftFolder}
                                 <SenderWarningBanner message={$selectedMessage} />
                               {/if}
-                              {#if $hasBlockedImages}
+                              {@render messageFormatBar()}
+                              {#if $hasBlockedImages && !readerView.plainText}
                                 <div
                                   class="flex items-center gap-3 p-3 mb-4 bg-state-caution/10 border border-state-caution/20 text-sm"
                                   class:invisible={!$messageBody}
@@ -9975,7 +10062,8 @@
                               <EmailIframe
                                 html={$messageBody}
                                 messageId={$selectedMessage?.id || $selectedMessage?.uid || ''}
-                                plainText={viewPlainText}
+                                plainText={readerView.plainText}
+                                text={readerView.text}
                                 onLinkClick={handleIframeLinkClick}
                                 onFormSubmit={handleIframeFormSubmit}
                                 onSwipe={handleIframeSwipe}
@@ -9998,7 +10086,9 @@
                             <EmailIframe
                               html={cachedBody.body}
                               messageId={message?.id || message?.uid || ''}
-                              plainText={viewPlainText}
+                              plainText={messageViewFor(messageFormat, cachedBody.textPart)
+                                .plainText}
+                              text={messageViewFor(messageFormat, cachedBody.textPart).text}
                               onLinkClick={handleIframeLinkClick}
                               onFormSubmit={handleIframeFormSubmit}
                               onSwipe={handleIframeSwipe}
@@ -10200,7 +10290,8 @@
                       {#if !readerIsSentFolder && !readerIsDraftFolder}
                         <SenderWarningBanner message={$selectedMessage} />
                       {/if}
-                      {#if $hasBlockedImages}
+                      {@render messageFormatBar()}
+                      {#if $hasBlockedImages && !readerView.plainText}
                         <div
                           class="flex items-center gap-3 p-3 mb-4 bg-state-caution/10 border border-state-caution/20 text-sm"
                           class:invisible={!$messageBody}
@@ -10267,7 +10358,8 @@
                       <EmailIframe
                         html={$messageBody}
                         messageId={$selectedMessage?.id || $selectedMessage?.uid || ''}
-                        plainText={viewPlainText}
+                        plainText={readerView.plainText}
+                        text={readerView.text}
                         onLinkClick={handleIframeLinkClick}
                         onFormSubmit={handleIframeFormSubmit}
                         onSwipe={handleIframeSwipe}

@@ -31,3 +31,11 @@ export function incrementBadge(delta: number): Promise<void>;
 export function initBadgeFromStore(): Promise<void>;
 export function connectNotifications(wsClient: NotificationEventSource): () => void;
 export function connectMultiAccountNotifications(wsManager: NotificationEventSource): () => void;
+export function notificationPreviewLevel(): 'full' | 'sender_subject' | 'sender' | 'none';
+export function newMailWording(
+  displayName: string,
+  subject: string,
+  snippet: string,
+  level?: 'full' | 'sender_subject' | 'sender' | 'none',
+): { showSender: boolean; title: string; body: string; from: string; about: string };
+export function shareNotificationPreview(): void;

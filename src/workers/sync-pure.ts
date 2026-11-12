@@ -261,6 +261,26 @@ function withoutBodyCopies(record: Record<string, unknown>): Record<string, unkn
   return out;
 }
 
+/**
+ * The sender's own plain-text part from an API message detail without the
+ * raw message, or '' when that cannot be told. The API's parser makes a text
+ * version of an HTML message itself, so only a message with no HTML counts.
+ * Bodies read from the raw message (the usual path) know for sure; see
+ * hasPlainTextPart in the sync worker.
+ */
+export function apiTextPart(result: unknown): string {
+  const r = (result || {}) as Record<string, unknown>;
+  const nodemailer = (r.nodemailer || {}) as Record<string, unknown>;
+  const hasHtml = [r.html, r.Html, nodemailer.html].some(
+    (value) => typeof value === 'string' && value.trim(),
+  );
+  if (hasHtml) return '';
+  for (const value of [r.Plain, r.text, nodemailer.text]) {
+    if (typeof value === 'string' && value.trim()) return value;
+  }
+  return '';
+}
+
 export function slimBodyMeta(meta: unknown): unknown {
   if (!meta || typeof meta !== 'object' || Array.isArray(meta)) return meta;
   const out = withoutBodyCopies(meta as Record<string, unknown>);

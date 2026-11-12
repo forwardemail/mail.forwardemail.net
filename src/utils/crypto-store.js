@@ -164,6 +164,13 @@ function clearSessionDek() {
 const NOTIFY_BRIDGE_TIMEOUT_MS = 2000;
 
 function notifyDbCryptoBridge() {
+  // Every lock and unlock comes through here. Notification wording follows the
+  // lock (notification-manager.js), so tell listeners it changed.
+  try {
+    globalThis.dispatchEvent?.(new CustomEvent('fe:lock-state-changed'));
+  } catch {
+    // No DOM (worker or test context) — nothing is listening anyway.
+  }
   const sync = import('./db-crypto-bridge.js')
     .then((bridge) => bridge.syncDbCryptoState())
     .catch((err) => {

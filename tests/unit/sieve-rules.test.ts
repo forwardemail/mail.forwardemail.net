@@ -146,14 +146,42 @@ describe('rulesToSieve', () => {
     expect(out).toContain('if not header :contains "subject" "spam" {');
   });
 
-  it('uses :is for an exact match', () => {
+  it('compares the bare address for an exact From match', () => {
+    // A header test compares the whole header, so "Alice <a@b.com>" never
+    // equalled "a@b.com" and the rule silently never fired.
     const out = rulesToSieve([
       rule({
-        conditions: [{ field: 'from', op: 'is', value: 'a@b.com' }],
+        conditions: [{ field: 'from', op: 'is', value: ' A@B.com ' }],
         actions: { star: true },
       }),
     ]);
-    expect(out).toContain('header :is "from" "a@b.com"');
+    expect(out).toContain('if address :is "from" "a@b.com" {');
+    expect(out).not.toContain('header :is');
+  });
+
+  it('takes the address out of a pasted "Name <address>" for an exact match', () => {
+    const out = rulesToSieve([
+      rule({
+        conditions: [{ field: 'any', op: 'is', value: 'Team <team@example.com>' }],
+        actions: { star: true },
+      }),
+    ]);
+    expect(out).toContain('address :is ["from", "to", "cc"] "team@example.com"');
+  });
+
+  it('keeps the header comparison for an exact match on a name or a subject', () => {
+    const out = rulesToSieve([
+      rule({
+        match: 'any',
+        conditions: [
+          { field: 'from', op: 'is', value: 'Alice' },
+          { field: 'subject', op: 'is', value: 'a@b.com' },
+        ],
+        actions: { star: true },
+      }),
+    ]);
+    expect(out).toContain('header :is "from" "Alice"');
+    expect(out).toContain('header :is "subject" "a@b.com"');
   });
 
   it('expands the "any" field across from, to and cc', () => {

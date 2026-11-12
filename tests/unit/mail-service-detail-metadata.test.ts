@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   cachePut: vi.fn(),
   remoteRequest: vi.fn(),
   sendSyncRequest: vi.fn(),
+  requestParsing: vi.fn(),
 }));
 
 vi.mock('../../src/utils/db.js', () => ({
@@ -40,7 +41,7 @@ vi.mock('../../src/utils/sync-worker-client.js', () => ({
   refreshSyncWorkerPgpKeys: vi.fn(),
   requestPgpDecryption: vi.fn(),
   unlockPgpKey: vi.fn(),
-  requestParsing: vi.fn(),
+  requestParsing: mocks.requestParsing,
 }));
 
 vi.mock('../../src/utils/perf-logger.ts', () => ({
@@ -55,6 +56,7 @@ vi.mock('../../src/utils/logger.ts', () => ({
 }));
 
 import { mailService } from '../../src/stores/mailService';
+import { requestParsing } from '../../src/utils/sync-worker-client.js';
 
 const message = {
   id: 'message-123',
@@ -91,7 +93,7 @@ describe('sync worker detail metadata contract', () => {
   it('persists and returns parsed metadata for network and cached body results', () => {
     expect({
       acceptsMeta: workerSource.includes(
-        'const persistBody = async (body, textContent, attachments = [], meta = null) => {',
+        "const persistBody = async (body, textContent, attachments = [], meta = null, textPart = '') => {",
       ),
       // A phone caches and returns the lean copy (keptMeta, see slimBodyMeta)
       cachesMeta:
@@ -108,7 +110,7 @@ describe('sync worker detail metadata contract', () => {
           workerSource,
         ),
       forwardsApiResult: workerSource.includes(
-        'return await persistBody(body, textContent, attachments, result);',
+        'return await persistBody(body, textContent, attachments, result, textPart);',
       ),
       encryptedResponseReturnsMeta: /pgpLocked:\s*true,\s+raw,\s+meta:\s*result\s*[,}]/.test(
         workerSource,
@@ -149,7 +151,9 @@ describe('mailService worker detail metadata delivery', () => {
 
     await mailService.loadMessageDetail(message as never, { onBody, onMeta });
 
-    expect(onBody).toHaveBeenCalledWith(expect.stringContaining('cached test message'));
+    expect(onBody).toHaveBeenCalledWith(expect.stringContaining('cached test message'), {
+      textPart: '',
+    });
     expect(onMeta).toHaveBeenCalledWith(detailMeta);
     expect(mocks.sendSyncRequest).not.toHaveBeenCalled();
     expect(mocks.remoteRequest).not.toHaveBeenCalled();
@@ -166,7 +170,7 @@ describe('mailService worker detail metadata delivery', () => {
 
     await mailService.loadMessageDetail(message as never, { onBody, onMeta });
 
-    expect(onBody).toHaveBeenCalledWith(expect.stringContaining('test message'));
+    expect(onBody).toHaveBeenCalledWith(expect.stringContaining('test message'), { textPart: '' });
     expect(onMeta).toHaveBeenCalledWith(detailMeta);
     expect(mocks.cachePut).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -220,5 +224,39 @@ describe('mailService worker detail metadata delivery', () => {
     expect(mocks.sendSyncRequest).toHaveBeenCalledTimes(1);
     expect(firstOnMeta).toHaveBeenCalledWith(detailMeta);
     expect(secondOnMeta).toHaveBeenCalledWith(detailMeta);
+  });
+
+  // Bodies cached before the plain-text part was recorded have no textPart.
+  describe('a body cached before its plain-text part was recorded', () => {
+    const oldCache = (raw: string) => ({
+      id: 'message-123',
+      account: 'reader@example.com',
+      body: '<p>cached test message</p>',
+      raw,
+      attachments: [],
+      meta: detailMeta,
+      trackingPixelCount: 0,
+      blockedRemoteImageCount: 0,
+    });
+
+    it('finds the part in the cached raw message when the reader asks', async () => {
+      mocks.cachedBody = oldCache('MIME-Version: 1.0\r\n...');
+      mocks.requestParsing.mockResolvedValue({ success: true, textPart: 'plain version' });
+      const onTextPart = vi.fn();
+      await mailService.loadMessageDetail(message as never, { onBody: vi.fn(), onTextPart });
+      await vi.waitFor(() => expect(onTextPart).toHaveBeenCalledWith('plain version'));
+      expect(mocks.remoteRequest).not.toHaveBeenCalled();
+    });
+
+    it('does not parse when the reader shows formatting, or for PGP', async () => {
+      mocks.cachedBody = oldCache('MIME-Version: 1.0\r\n...');
+      await mailService.loadMessageDetail(message as never, { onBody: vi.fn() });
+      mocks.cachedBody = oldCache('-----BEGIN PGP MESSAGE-----\nabc');
+      const onTextPart = vi.fn();
+      await mailService.loadMessageDetail(message as never, { onBody: vi.fn(), onTextPart });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(requestParsing).not.toHaveBeenCalled();
+      expect(onTextPart).not.toHaveBeenCalled();
+    });
   });
 });

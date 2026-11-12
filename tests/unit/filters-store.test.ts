@@ -330,3 +330,199 @@ describe('deleteAllFilters', () => {
     expect(hoisted.remoteRequest).not.toHaveBeenCalled();
   });
 });
+
+const { Local } = await import('../../src/utils/storage');
+const { applyFilterToExisting, existingFilterUnsupportedReason } =
+  await import('../../src/stores/filtersStore');
+const { resetLightweightSupportForTests } = await import('../../src/utils/api-capabilities');
+
+describe('applyFilterToExisting', () => {
+  const row = (id: string, extra: Record<string, unknown> = {}) => ({
+    id,
+    subject: `Message ${id}`,
+    from: [{ name: 'Alice', address: 'alice@example.com' }],
+    to: [{ address: 'me@example.com' }],
+    flags: [],
+    labels: [],
+    ...extra,
+  });
+
+  const fakeActions = () => ({
+    markRead: vi.fn(async () => {}),
+    star: vi.fn(async () => {}),
+    addLabel: vi.fn(async () => {}),
+    move: vi.fn(async () => {}),
+  });
+
+  /** Serves `rows` as Inbox pages and records each list request's params. */
+  const serveInbox = (rows: Record<string, unknown>[]) => {
+    const calls: Record<string, unknown>[] = [];
+    hoisted.remoteRequest.mockImplementation(
+      async (_name: string, params: Record<string, unknown>) => {
+        calls.push(params);
+        const page = Number(params.page) || 1;
+        const limit = Number(params.limit) || 100;
+        return rows.slice((page - 1) * limit, page * limit);
+      },
+    );
+    return calls;
+  };
+
+  beforeEach(() => {
+    Local.set('email', 'me@example.com');
+    resetLightweightSupportForTests();
+  });
+
+  it('scans only the Inbox', async () => {
+    const calls = serveInbox([row('1')]);
+    const rule = createRule({
+      conditions: [{ field: 'from', op: 'contains', value: 'alice' }],
+      actions: { star: true },
+    });
+    await applyFilterToExisting(rule, { account: 'me@example.com', actions: fakeActions() });
+    expect(calls.length).toBeGreaterThan(0);
+    for (const params of calls) expect(params.folder).toBe('INBOX');
+  });
+
+  it('matches "is exactly" on the bare address, not the display string', async () => {
+    serveInbox([
+      row('1'),
+      row('2', { from: [{ name: 'Bob', address: 'bob@example.com' }] }),
+      row('3', { from: 'Alice Smith <ALICE@example.com>' }),
+    ]);
+    const actions = fakeActions();
+    const rule = createRule({
+      conditions: [{ field: 'from', op: 'is', value: 'alice@example.com' }],
+      actions: { star: true },
+    });
+    const result = await applyFilterToExisting(rule, { account: 'me@example.com', actions });
+    expect(result).toMatchObject({ matched: 2, cancelled: false });
+    expect(actions.star.mock.calls.map(([m]) => (m as { id: string }).id).sort()).toEqual([
+      '1',
+      '3',
+    ]);
+  });
+
+  it('only sets state: read and starred messages are not toggled back', async () => {
+    serveInbox([
+      row('1', { flags: ['\\Seen', '\\Flagged'], labels: ['work'] }),
+      row('2', { flags: [] }),
+    ]);
+    const actions = fakeActions();
+    const rule = createRule({
+      conditions: [{ field: 'from', op: 'contains', value: 'alice' }],
+      actions: { markRead: true, star: true, label: 'Work' },
+    });
+    await applyFilterToExisting(rule, { account: 'me@example.com', actions });
+    expect(actions.markRead.mock.calls.map(([m]) => (m as { id: string }).id)).toEqual(['2']);
+    expect(actions.star.mock.calls.map(([m]) => (m as { id: string }).id)).toEqual(['2']);
+    // Labels go through contextLabel's "add", which leaves an existing label alone.
+    expect(actions.addLabel).toHaveBeenCalledWith(expect.objectContaining({ id: '2' }), 'work');
+  });
+
+  it('moves through the mailbox action after scanning, with the new flags', async () => {
+    const rows = Array.from({ length: 150 }, (_, i) => row(String(i + 1)));
+    serveInbox(rows);
+    const actions = fakeActions();
+    const progress: unknown[] = [];
+    const rule = createRule({
+      conditions: [{ field: 'to', op: 'is', value: 'me@example.com' }],
+      actions: { markRead: true, fileinto: 'Archive' },
+    });
+    const result = await applyFilterToExisting(rule, {
+      account: 'me@example.com',
+      actions,
+      onProgress: (p) => progress.push(p),
+    });
+    expect(result).toMatchObject({ scanned: 150, matched: 150, updated: 150 });
+    const moved = actions.move.mock.calls.flatMap(([list]) => list as { is_unread: boolean }[]);
+    expect(moved).toHaveLength(150);
+    expect(moved.every((m) => m.is_unread === false)).toBe(true);
+    expect(actions.move.mock.calls.every(([, folder]) => folder === 'Archive')).toBe(true);
+    expect(progress[0]).toMatchObject({ scanned: 100, matched: 100, updated: 0 });
+    expect(progress.at(-1)).toMatchObject({ updated: 150 });
+  });
+
+  it('stops when cancelled and keeps what was already changed', async () => {
+    serveInbox(Array.from({ length: 20 }, (_, i) => row(String(i + 1))));
+    const controller = new AbortController();
+    const actions = fakeActions();
+    // Cancelled while the second batch of four is being changed
+    actions.star.mockImplementation(async () => {
+      if (actions.star.mock.calls.length === 5) controller.abort();
+    });
+    const rule = createRule({
+      conditions: [{ field: 'from', op: 'contains', value: 'alice' }],
+      actions: { star: true },
+    });
+    const result = await applyFilterToExisting(rule, {
+      account: 'me@example.com',
+      actions,
+      signal: controller.signal,
+    });
+    expect(result.cancelled).toBe(true);
+    expect(result.updated).toBe(4);
+    expect(actions.star.mock.calls.length).toBeLessThan(20);
+  });
+
+  it('stops when the account is switched mid-run', async () => {
+    serveInbox(Array.from({ length: 12 }, (_, i) => row(String(i + 1))));
+    const actions = fakeActions();
+    actions.star.mockImplementation(async () => {
+      Local.set('email', 'other@example.com');
+    });
+    const rule = createRule({
+      conditions: [{ field: 'from', op: 'contains', value: 'alice' }],
+      actions: { star: true },
+    });
+    const result = await applyFilterToExisting(rule, { account: 'me@example.com', actions });
+    expect(result.error).toMatch(/switched accounts/);
+    expect(actions.star.mock.calls.length).toBeLessThan(12);
+  });
+
+  it('counts only messages it changed, and skips a filter that is off', async () => {
+    serveInbox([row('1', { flags: ['\\Flagged'] }), row('2')]);
+    const rule = createRule({
+      conditions: [{ field: 'from', op: 'contains', value: 'alice' }],
+      actions: { star: true },
+    });
+    const result = await applyFilterToExisting(rule, {
+      account: 'me@example.com',
+      actions: fakeActions(),
+    });
+    expect(result).toMatchObject({ matched: 2, updated: 1 });
+    expect(existingFilterUnsupportedReason({ ...rule, enabled: false })).toMatch(/Turn this/);
+  });
+
+  it('refuses to run for an account that is not the active one', async () => {
+    serveInbox([row('1')]);
+    const actions = fakeActions();
+    const rule = createRule({
+      conditions: [{ field: 'from', op: 'contains', value: 'alice' }],
+      actions: { star: true },
+    });
+    const result = await applyFilterToExisting(rule, { account: 'other@example.com', actions });
+    expect(result.error).toBeTruthy();
+    expect(hoisted.remoteRequest).not.toHaveBeenCalled();
+    expect(actions.star).not.toHaveBeenCalled();
+  });
+
+  it('explains the rules it cannot apply to existing mail', () => {
+    const base = { conditions: [{ field: 'from' as const, op: 'contains' as const, value: 'a' }] };
+    expect(
+      existingFilterUnsupportedReason(createRule({ ...base, actions: { delete: true } })),
+    ).toMatch(/new mail only/);
+    expect(
+      existingFilterUnsupportedReason(
+        createRule({
+          conditions: [{ field: 'body', op: 'is', value: 'x' }],
+          actions: { star: true },
+        }),
+      ),
+    ).toMatch(/contains/);
+    expect(existingFilterUnsupportedReason(createRule({ ...base, actions: {} }))).toMatch(/Choose/);
+    expect(existingFilterUnsupportedReason(createRule({ ...base, actions: { star: true } }))).toBe(
+      '',
+    );
+  });
+});

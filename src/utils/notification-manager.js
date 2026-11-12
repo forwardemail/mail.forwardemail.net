@@ -44,6 +44,70 @@ import {
   normalizeUidList,
 } from './realtime-payload.js';
 import { openNotificationTarget } from './notification-open.ts';
+import { isLockEnabled, isVaultLocked } from './crypto-store.js';
+import { SETTINGS_REGISTRY } from '../stores/settingsRegistry.ts';
+import { sharePushPreviewWithServiceWorker } from './web-push.js';
+
+// ── What a new-mail alert may show ─────────────────────────────────────────
+// Settings > Privacy & Security, one level for while App Lock has the app
+// locked and one for the rest of the time (unlocked, or no App Lock).
+
+function savedPreview(id) {
+  const def = SETTINGS_REGISTRY[id];
+  return def.localParse(Local.get(def.localKey) ?? def.defaultValue);
+}
+
+/** The level that applies right now: 'full', 'sender_subject', 'sender' or 'none'. */
+export function notificationPreviewLevel() {
+  return savedPreview(
+    isVaultLocked() ? 'notification_preview_locked' : 'notification_preview_unlocked',
+  );
+}
+
+/**
+ * A folder, calendar or contact alert's text, left out when the level is
+ * 'none' (its title already says what kind of change it is).
+ */
+function detailText(text) {
+  return notificationPreviewLevel() === 'none' ? '' : text;
+}
+
+/**
+ * The parts of a new-mail alert the level allows. `from` and `about` are
+ * the phrases a toast adds after "New email".
+ */
+export function newMailWording(displayName, subject, snippet, level = notificationPreviewLevel()) {
+  const showSender = level !== 'none';
+  const showSubject = level === 'full' || level === 'sender_subject';
+  return {
+    showSender,
+    title: showSender ? displayName : 'New email',
+    body: !showSubject ? '' : level === 'full' && snippet ? `${subject}\n${snippet}` : subject,
+    from: showSender ? ` from ${displayName}` : '',
+    about: showSubject ? `: ${subject}` : '',
+  };
+}
+
+/**
+ * The browser's service worker draws Web Push alerts with no page to ask, so
+ * it is told the levels and the lock state whenever either changes.
+ */
+export function shareNotificationPreview() {
+  sharePushPreviewWithServiceWorker({
+    unlocked: savedPreview('notification_preview_unlocked'),
+    locked: savedPreview('notification_preview_locked'),
+    lockEnabled: isLockEnabled(),
+    lockedNow: isVaultLocked(),
+  });
+}
+
+let previewSharingInstalled = false;
+function installPreviewSharing() {
+  if (previewSharingInstalled || typeof window === 'undefined') return;
+  previewSharingInstalled = true;
+  shareNotificationPreview();
+  window.addEventListener('fe:lock-state-changed', shareNotificationPreview);
+}
 
 // ── In-app toast reference ─────────────────────────────────────────────────
 // Set from main.ts via setNotificationToasts() — same pattern as
@@ -558,10 +622,14 @@ function flushMissedMessages() {
   const missed = missedMessages;
   missedMessages = [];
   const latest = missed[missed.length - 1];
+  // Worded for the lock state the user returns to, not the one it arrived in.
+  const { from, about } = newMailWording(latest.displayName, latest.subject, '');
   const message =
     missed.length === 1
-      ? `New email from ${latest.displayName}: ${latest.subject}`
-      : `${missed.length} new emails while you were away. Latest from ${latest.displayName}: ${latest.subject}`;
+      ? `New email${from}${about}`
+      : from
+        ? `${missed.length} new emails while you were away. Latest${from}${about}`
+        : `${missed.length} new emails while you were away.`;
   _toasts.show(message, 'info', 10000, {
     label: 'View',
     callback() {
@@ -1131,9 +1199,11 @@ async function _handleNewMessageInner(
     // Foreground: in-app toast only — no OS notification interruption.
     // Mail for another signed-in account says which account it is for, since
     // the list on screen will not show it.
-    const toastText = otherAccount
-      ? `New email for ${sanitizePlain(openAccount, MAX_TITLE_LEN)} from ${displayName}: ${safeSubject}`
-      : `New email from ${displayName}: ${safeSubject}`;
+    const wording = newMailWording(displayName, safeSubject, '');
+    const toastText =
+      otherAccount && wording.showSender
+        ? `New email for ${sanitizePlain(openAccount, MAX_TITLE_LEN)}${wording.from}${wording.about}`
+        : `New email${wording.from}${wording.about}`;
     _toasts?.show?.(toastText, 'info', 5000, {
       label: 'View',
       callback() {
@@ -1176,10 +1246,12 @@ async function _handleNewMessageInner(
     }
 
     // Background: show OS notification (no toast — user won't see it).
-    // Gmail-style format: sender name as title, subject plus preview as body.
+    // Sender as title, subject plus preview as body, cut down to what the
+    // notification privacy setting allows.
+    const wording = newMailWording(displayName, safeSubject, safeSnippet);
     const shown = await showNotification({
-      title: displayName,
-      body: safeSnippet ? `${safeSubject}\n${safeSnippet}` : safeSubject,
+      title: wording.title,
+      body: wording.body,
       tag: safeTag,
       channelId: 'new-mail',
       data: openTarget,
@@ -1241,7 +1313,7 @@ function handleMailboxCreated(data, { suppressVisual = false } = {}) {
   if (suppressVisual) return;
   showNotification({
     title: 'Folder Created',
-    body: `New folder: ${path}`,
+    body: detailText(`New folder: ${path}`),
     tag: sanitize(`mailbox-created-${path}`, MAX_TAG_LEN),
     data: { path: '#folders', account: data?._account || Local.get('email') || '' },
   });
@@ -1253,7 +1325,7 @@ function handleMailboxDeleted(data, { suppressVisual = false } = {}) {
   if (suppressVisual) return;
   showNotification({
     title: 'Folder Deleted',
-    body: `Folder removed: ${path}`,
+    body: detailText(`Folder removed: ${path}`),
     tag: sanitize(`mailbox-deleted-${path}`, MAX_TAG_LEN),
     data: { path: '#folders', account: data?._account || Local.get('email') || '' },
   });
@@ -1266,7 +1338,7 @@ function handleMailboxRenamed(data, { suppressVisual = false } = {}) {
   if (suppressVisual) return;
   showNotification({
     title: 'Folder Renamed',
-    body: `"${oldPath}" -> "${newPath}"`,
+    body: detailText(`"${oldPath}" -> "${newPath}"`),
     tag: sanitize(`mailbox-renamed-${newPath}`, MAX_TAG_LEN),
     data: { path: '#folders', account: data?._account || Local.get('email') || '' },
   });
@@ -1284,7 +1356,7 @@ function handleCalendarEventCreated(data, { suppressVisual = false } = {}) {
   if (suppressVisual) return;
   showNotification({
     title: `Calendar ${label} Created`,
-    body: summary,
+    body: detailText(summary),
     tag: sanitize(`cal-event-${itemId || Date.now()}`, MAX_TAG_LEN),
     data: buildCalendarNotificationData(data, isTask),
   });
@@ -1299,7 +1371,7 @@ function handleCalendarEventUpdated(data, { suppressVisual = false } = {}) {
   if (suppressVisual) return;
   showNotification({
     title: `Calendar ${label} Updated`,
-    body: summary,
+    body: detailText(summary),
     tag: sanitize(`cal-event-update-${itemId || Date.now()}`, MAX_TAG_LEN),
     data: buildCalendarNotificationData(data, isTask),
   });
@@ -1312,7 +1384,7 @@ function handleContactCreated(data, { suppressVisual = false } = {}) {
   if (suppressVisual) return;
   showNotification({
     title: 'Contact Added',
-    body: name,
+    body: detailText(name),
     tag: sanitize(`contact-${contactId || Date.now()}`, MAX_TAG_LEN),
     data: buildContactNotificationData(data),
   });
@@ -1325,7 +1397,7 @@ function handleContactUpdated(data, { suppressVisual = false } = {}) {
   if (suppressVisual) return;
   showNotification({
     title: 'Contact Updated',
-    body: name,
+    body: detailText(name),
     tag: sanitize(`contact-update-${contactId || Date.now()}`, MAX_TAG_LEN),
     data: buildContactNotificationData(data),
   });
@@ -1554,6 +1626,7 @@ export function connectNotifications(wsClient) {
   }
 
   const unsubs = [];
+  installPreviewSharing();
   loadSystemPushAlertCheck();
   trackNativeWindowFocus();
   const coalescer = createRealtimeEventCoalescer({
@@ -1604,6 +1677,7 @@ export function connectMultiAccountNotifications(wsManager) {
   }
 
   const unsubs = [];
+  installPreviewSharing();
   loadSystemPushAlertCheck();
   trackNativeWindowFocus();
   const coalescer = createRealtimeEventCoalescer({

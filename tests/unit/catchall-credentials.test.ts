@@ -1,7 +1,12 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
+  CATCHALL_ADDRESS_LIMIT,
   CATCHALL_CREDENTIALS_KEY,
   buildCatchallAuthHeader,
+  forgetCatchallAddress,
+  listCatchallAddresses,
+  normalizeCatchallAddress,
+  rememberCatchallAddress,
   getCatchallCredentialFor,
   listCatchallDomains,
   normalizeCatchallDomain,
@@ -77,5 +82,61 @@ describe('buildCatchallAuthHeader', () => {
     expect(buildCatchallAuthHeader('a@mail.example.com')).toBe('');
     expect(buildCatchallAuthHeader('a@notexample.com')).toBe('');
     expect(buildCatchallAuthHeader('example.com')).toBe('');
+  });
+});
+
+describe('remembered catch-all From addresses', () => {
+  beforeEach(() => {
+    saveCatchallCredential('example.com', 'secret');
+  });
+
+  it('keeps the newest first, once each, in any letter case', () => {
+    rememberCatchallAddress('Sales@Example.com');
+    rememberCatchallAddress('contact@example.com');
+    rememberCatchallAddress('SALES@example.com');
+    expect(listCatchallAddresses('example.com')).toEqual([
+      'sales@example.com',
+      'contact@example.com',
+    ]);
+  });
+
+  it('only remembers addresses on a domain with a saved password', () => {
+    expect(rememberCatchallAddress('someone@other.test')).toBe(false);
+    expect(listCatchallAddresses()).toEqual([]);
+  });
+
+  it('survives a new password for the domain, and goes with the domain', () => {
+    rememberCatchallAddress('contact@example.com');
+    saveCatchallCredential('example.com', 'rotated');
+    expect(listCatchallAddresses('example.com')).toEqual(['contact@example.com']);
+    removeCatchallCredential('example.com');
+    expect(listCatchallAddresses()).toEqual([]);
+  });
+
+  it('forgets one address and keeps the rest', () => {
+    rememberCatchallAddress('a@example.com');
+    rememberCatchallAddress('b@example.com');
+    forgetCatchallAddress('A@example.com');
+    expect(listCatchallAddresses('example.com')).toEqual(['b@example.com']);
+  });
+
+  it(`keeps at most ${CATCHALL_ADDRESS_LIMIT}`, () => {
+    for (let i = 0; i < CATCHALL_ADDRESS_LIMIT + 5; i += 1) {
+      rememberCatchallAddress(`a${i}@example.com`);
+    }
+    const kept = listCatchallAddresses('example.com');
+    expect(kept).toHaveLength(CATCHALL_ADDRESS_LIMIT);
+    expect(kept[0]).toBe(`a${CATCHALL_ADDRESS_LIMIT + 4}@example.com`);
+  });
+
+  it('normalizes a typed address, or the part before the @', () => {
+    expect(normalizeCatchallAddress('Contact', 'example.com')).toBe('contact@example.com');
+    expect(normalizeCatchallAddress(' Contact@Example.com ', 'example.com')).toBe(
+      'contact@example.com',
+    );
+    expect(normalizeCatchallAddress('contact@other.test', 'example.com')).toBe('');
+    for (const bad of ['', 'two words', 'a,b', '<x>', '@example.com']) {
+      expect(normalizeCatchallAddress(bad, 'example.com')).toBe('');
+    }
   });
 });

@@ -13,11 +13,16 @@
   import * as Card from '$lib/components/ui/card';
   import Plus from '@lucide/svelte/icons/plus';
   import Trash2 from '@lucide/svelte/icons/trash-2';
+  import X from '@lucide/svelte/icons/x';
   import {
-    listCatchallDomains,
+    forgetCatchallAddress,
+    listCatchallCredentials,
+    normalizeCatchallAddress,
     normalizeCatchallDomain,
+    rememberCatchallAddress,
     removeCatchallCredential,
     saveCatchallCredential,
+    type CatchallCredential,
   } from '../../utils/catchall-credentials';
 
   interface Props {
@@ -26,7 +31,39 @@
 
   const { onToast }: Props = $props();
 
-  let domains = $state<string[]>(listCatchallDomains());
+  // Domains with their remembered From addresses. The passwords are never
+  // shown; only the domain and the addresses are read here.
+  const readSaved = () =>
+    listCatchallCredentials().map(({ domain, addresses }: CatchallCredential) => ({
+      domain,
+      addresses,
+    }));
+  let saved = $state(readSaved());
+  // The "add a From address" field of each domain, by domain
+  let newAddress = $state<Record<string, string>>({});
+  let addressError = $state<Record<string, string>>({});
+
+  const addAddress = (domain: string) => {
+    const address = normalizeCatchallAddress(newAddress[domain] || '', domain);
+    if (!address) {
+      addressError = {
+        ...addressError,
+        [domain]: `Enter an address on ${domain}, like contact or contact@${domain}`,
+      };
+      return;
+    }
+    rememberCatchallAddress(address);
+    saved = readSaved();
+    newAddress = { ...newAddress, [domain]: '' };
+    addressError = { ...addressError, [domain]: '' };
+    onToast?.(`${address} is now in the From menu`, 'success');
+  };
+
+  const forgetAddress = (address: string) => {
+    forgetCatchallAddress(address);
+    saved = readSaved();
+    onToast?.(`Removed ${address} from the From menu`, 'success');
+  };
   let showAdd = $state(false);
   let addDomain = $state('');
   let addPassword = $state('');
@@ -48,7 +85,7 @@
       addError = result.error;
       return;
     }
-    domains = listCatchallDomains();
+    saved = readSaved();
     showAdd = false;
     addPassword = '';
     onToast?.(`You can now send from any address @${result.domain}`, 'success');
@@ -57,7 +94,7 @@
   const remove = (domain: string) => {
     if (!confirm(`Remove the catch-all password for ${domain}?`)) return;
     removeCatchallCredential(domain);
-    domains = listCatchallDomains();
+    saved = readSaved();
     onToast?.(`Removed the catch-all password for ${domain}`, 'success');
   };
 </script>
@@ -71,17 +108,72 @@
     </Card.Description>
   </Card.Header>
   <Card.Content class="space-y-3">
-    {#each domains as domain (domain)}
-      <div class="flex items-center justify-between gap-2 border border-border px-3 py-2">
-        <span class="truncate font-mono text-sm">*@{domain}</span>
-        <Button
-          variant="ghost"
-          size="icon"
-          aria-label={`Remove the catch-all password for ${domain}`}
-          onclick={() => remove(domain)}
+    {#each saved as entry (entry.domain)}
+      <div class="space-y-2 border border-border px-3 py-2" data-testid="catchall-domain">
+        <div class="flex items-center justify-between gap-2">
+          <span class="truncate font-mono text-sm">*@{entry.domain}</span>
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label={`Remove the catch-all password for ${entry.domain}`}
+            onclick={() => remove(entry.domain)}
+          >
+            <Trash2 class="h-4 w-4" />
+          </Button>
+        </div>
+        {#if entry.addresses.length}
+          <ul class="space-y-1" aria-label={`From addresses for ${entry.domain}`}>
+            {#each entry.addresses as address (address)}
+              <li class="flex items-center justify-between gap-2 pl-2 text-sm">
+                <span class="truncate">{address}</span>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label={`Remove ${address} from the From menu`}
+                  onclick={() => forgetAddress(address)}
+                >
+                  <X class="h-4 w-4" />
+                </Button>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+        <form
+          class="flex items-start gap-2"
+          onsubmit={(event) => {
+            event.preventDefault();
+            addAddress(entry.domain);
+          }}
         >
-          <Trash2 class="h-4 w-4" />
-        </Button>
+          <div class="min-w-0 flex-1 space-y-1">
+            <Input
+              aria-label={`Add a From address on ${entry.domain}`}
+              placeholder={`contact@${entry.domain}`}
+              inputmode="email"
+              autocomplete="off"
+              autocapitalize="off"
+              spellcheck="false"
+              value={newAddress[entry.domain] || ''}
+              oninput={(event) => {
+                newAddress = {
+                  ...newAddress,
+                  [entry.domain]: (event.currentTarget as HTMLInputElement).value,
+                };
+                addressError = { ...addressError, [entry.domain]: '' };
+              }}
+            />
+            {#if addressError[entry.domain]}
+              <p class="text-sm text-destructive" role="alert">{addressError[entry.domain]}</p>
+            {/if}
+          </div>
+          <Button
+            type="submit"
+            variant="outline"
+            disabled={!(newAddress[entry.domain] || '').trim()}
+          >
+            Add
+          </Button>
+        </form>
       </div>
     {/each}
 
@@ -135,9 +227,10 @@
 
     <p class="text-sm text-muted-foreground">
       Generate one in your domain's Advanced Settings under Catch-all passwords. Then pick
-      <strong>Other address</strong> in the From menu when composing. The password can only send mail,
-      and a copy of each message goes to the Sent folder of the account you're using. Saved on this device
-      only, and protected by App Lock.
+      <strong>Other address</strong> in the From menu when composing. Addresses you send from are added
+      to the From menu, and a reply to mail sent to one of them is sent from it. The password can only
+      send mail, and a copy of each message goes to the Sent folder of the account you're using. Saved
+      on this device only, and protected by App Lock.
     </p>
   </Card.Content>
 </Card.Root>

@@ -67,7 +67,8 @@ describe('blockSender', () => {
     const script = managed()!;
     expect(script.is_active).toBe(true);
     expect(script.content).toContain('header :contains "from" "<spammer@example.com>"');
-    expect(script.content).toContain('header :is "from" "spammer@example.com"');
+    // The bare address, so "Spammer <spammer@example.com>" is caught too.
+    expect(script.content).toContain('address :is "from" "spammer@example.com"');
     expect(script.content).toContain('fileinto :create "Junk"');
 
     const [rule] = sieveToRules(script.content)!;
