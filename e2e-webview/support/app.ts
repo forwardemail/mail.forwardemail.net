@@ -28,7 +28,7 @@ const OPEN_APP_TIMEOUT_MS = 45_000;
 // took minutes; a page silent for this long is taken as wedged.
 const WEDGE_PROBE_MS = 20_000;
 
-type Probe<T> = { wedged: true } | { wedged: false; value?: T };
+type Probe<T> = { wedged: true } | { wedged: false; value?: T; error?: unknown };
 
 /**
  * Run a script in the page, giving up after WEDGE_PROBE_MS of silence. A page
@@ -51,7 +51,7 @@ export async function probePage<T, A extends unknown[]>(
     (error: unknown): Probe<T> =>
       /script execution timed out/i.test(String((error as { message?: string })?.message || error))
         ? { wedged: true }
-        : { wedged: false },
+        : { wedged: false, error },
   );
   const silent = new Promise<Probe<T>>((resolve) => {
     timer = setTimeout(() => resolve({ wedged: true }), WEDGE_PROBE_MS);
@@ -92,19 +92,64 @@ export async function relaunchIfWedged(browser: WebdriverIO.Browser): Promise<bo
 // it would only restart a slow cold boot (Windows Defender scan).
 const sessionsWithApp = new Set<string>();
 
+/** The page stopped answering while the app was being opened. */
+class PageWedgedError extends Error {
+  constructor(step: string) {
+    super(`the page stopped answering scripts (${step})`);
+    this.name = 'PageWedgedError';
+  }
+}
+
+const isScriptTimeout = (error: unknown) =>
+  /script execution timed out/i.test(String((error as { message?: string })?.message || error));
+
+// Loading the app runs a script too, so a wedged page never finishes it: the
+// driver gives up after 30s and webdriverio retries. A load still pending
+// after this long is taken as a wedge.
+const LOAD_WEDGE_MS = 35_000;
+
+async function loadApp(browser: WebdriverIO.Browser): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const loaded = browser.url(appUrl()).then(
+    () => true,
+    (error: unknown) => {
+      if (isScriptTimeout(error)) return false;
+      throw error;
+    },
+  );
+  const silent = new Promise<boolean>((resolve) => {
+    timer = setTimeout(() => resolve(false), LOAD_WEDGE_MS);
+  });
+  const done = await Promise.race([loaded, silent]);
+  clearTimeout(timer);
+  if (!done) throw new PageWedgedError('loading the app');
+}
+
 export async function openApp(browser: WebdriverIO.Browser): Promise<void> {
   if (relaunching) await relaunching;
   if (sessionsWithApp.has(browser.sessionId)) await relaunchIfWedged(browser);
-  const deadline = Date.now() + OPEN_APP_TIMEOUT_MS;
+  // A page can also wedge while it loads, in a session that has never had a
+  // working one (macos-x64, theme-toggle): it is replaced once here. Before,
+  // the script timeouts went straight up to the hook, its retry opened the
+  // same wedged page, and both attempts of the test ran out their hooks.
+  let relaunched = false;
+  let deadline = Date.now() + OPEN_APP_TIMEOUT_MS;
   let lastError: unknown;
   while (Date.now() < deadline) {
     try {
-      await browser.url(appUrl());
+      await loadApp(browser);
       await waitForFrontendReady(browser, Math.max(1_000, deadline - Date.now()));
       await ensureUsableViewport(browser);
       sessionsWithApp.add(browser.sessionId);
       return;
     } catch (error) {
+      if (error instanceof PageWedgedError && !relaunched) {
+        console.warn(`[openApp] ${error.message}; relaunching the app`);
+        relaunched = true;
+        await relaunchApp(browser);
+        deadline = Date.now() + OPEN_APP_TIMEOUT_MS;
+        continue;
+      }
       if (!isScriptUnavailable(error)) throw error;
       lastError = error;
       await new Promise((r) => setTimeout(r, 1_000));
@@ -201,10 +246,16 @@ export async function waitForFrontendReady(
 ): Promise<void> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
-    const ready = (await browser.execute(
+    // Probed, so a page that stops answering is noticed in WEDGE_PROBE_MS
+    // rather than after the driver's retried 30s script timeouts.
+    const probe = await probePage(
+      browser,
       () => document.readyState === 'complete' && document.body?.children.length > 0,
-    )) as boolean;
-    if (ready) return;
+    );
+    if (probe.wedged) throw new PageWedgedError('waiting for the frontend');
+    // (an unready page's "unsupported type" goes to openApp, which retries)
+    if (probe.error) throw probe.error;
+    if (probe.value === true) return;
     await new Promise((r) => setTimeout(r, 250));
   }
   throw new Error(`frontend did not finish loading within ${timeoutMs}ms`);
