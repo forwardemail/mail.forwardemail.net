@@ -1,38 +1,63 @@
 import { currentPath } from './state.js';
-import { openApp } from './app.js';
+import { openApp, probePage, relaunchApp } from './app.js';
+
+const TRY_DEMO = '[data-testid="try-demo-btn"]';
+
+/**
+ * Wait for the Try Demo button with in-page probes, which notice a wedged
+ * page within WEDGE_PROBE_MS (see probePage) instead of after minutes.
+ */
+async function waitForTryDemo(
+  browser: WebdriverIO.Browser,
+  timeoutMs: number,
+): Promise<'found' | 'absent' | 'wedged'> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const probe = await probePage(
+      browser,
+      (sel: string) => Boolean(document.querySelector(sel)),
+      TRY_DEMO,
+    );
+    if (probe.wedged) return 'wedged';
+    if (probe.value === true) return 'found';
+    if (Date.now() >= deadline) return 'absent';
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+}
 
 export async function activateDemo(browser: WebdriverIO.Browser): Promise<void> {
-  let tryDemo = await browser.$('[data-testid="try-demo-btn"]');
   // 30s, not 15s: on the slowest gating runners the login screen's cold-start
   // render (especially after a spec's clearStorage + double openApp reload,
   // with the WebView offscreen) has intermittently crossed 15s, flaking
   // activateDemo before the app even painted the button.
-  try {
-    await tryDemo.waitForExist({ timeout: 30_000 });
-  } catch {
-    // Two distinct failures land here and only one is a bug. On the
-    // software-GL Linux runner, WebKitGTK occasionally wedges so hard on one
-    // cold start that even WebDriver's findElements script times out (the
-    // "Script execution timed out" warnings) - no selector timeout can see a
-    // button on a page whose event loop is stuck. One relaunch un-wedges that
-    // case (openApp starts a new app instance when the page does not answer). A genuinely missing button fails the second wait on a healthy
-    // page, so the gate keeps its teeth. The diagnostics say which case it
-    // was: a wedged page reports nothing, a healthy page missing the button
-    // reports its actual path and paint state.
-    const diag = await browser
-      .execute(() => ({
+  const state = await waitForTryDemo(browser, 30_000);
+  if (state !== 'found') {
+    // Two distinct failures land here and only one is a bug. A WebKit page
+    // can wedge on a cold start (software-GL Linux, macos-x64) so hard that
+    // every script times out, and no selector timeout can see a button on a
+    // page whose event loop is stuck. That page is replaced by a new app
+    // instance straight away: waiting for it to answer first used up the
+    // whole hook timeout on macos-x64, and the test's retry then raced the
+    // relaunch. A genuinely missing button fails the second wait on a
+    // healthy page, so the gate keeps its teeth. The diagnostics say which
+    // case it was.
+    if (state === 'wedged') {
+      console.warn('[activateDemo] the page stopped answering scripts; relaunching the app once.');
+      await relaunchApp(browser);
+    } else {
+      const diag = await probePage(browser, () => ({
         path: location.pathname,
         readyState: document.readyState,
         bodyChildren: document.body?.children.length ?? 0,
-      }))
-      .catch(() => 'page unresponsive (execute timed out)');
-    console.warn(
-      `[activateDemo] try-demo-btn absent after 30s; diagnostics: ${JSON.stringify(diag)}. Relaunching the app once.`,
-    );
+      }));
+      console.warn(
+        `[activateDemo] try-demo-btn absent after 30s; diagnostics: ${JSON.stringify(diag)}. Reloading the app once.`,
+      );
+    }
     await openApp(browser);
-    tryDemo = await browser.$('[data-testid="try-demo-btn"]');
-    await tryDemo.waitForExist({ timeout: 30_000 });
+    await (await browser.$(TRY_DEMO)).waitForExist({ timeout: 30_000 });
   }
+  const tryDemo = await browser.$(TRY_DEMO);
 
   // Click via the native DOM rather than WDIO's actionability click.
   // On the macOS-arm64 CI runner the app window spawns very short

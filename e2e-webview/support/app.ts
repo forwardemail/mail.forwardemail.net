@@ -28,27 +28,62 @@ const OPEN_APP_TIMEOUT_MS = 45_000;
 // took minutes; a page silent for this long is taken as wedged.
 const WEDGE_PROBE_MS = 20_000;
 
-export async function relaunchIfWedged(browser: WebdriverIO.Browser): Promise<boolean> {
+type Probe<T> = { wedged: true } | { wedged: false; value?: T };
+
+/**
+ * Run a script in the page, giving up after WEDGE_PROBE_MS of silence. A page
+ * that answers, even with an error other than a script timeout, is not
+ * wedged. Use this instead of waitForExist and friends wherever a wedged page
+ * must be noticed quickly: their findElements calls each wait out the
+ * driver's 30s script timeout and are retried, so on a wedged page a 30s
+ * waitForExist took about two and a half minutes (macos-x64).
+ */
+export async function probePage<T, A extends unknown[]>(
+  browser: WebdriverIO.Browser,
+  script: (...args: A) => T,
+  ...args: A
+): Promise<Probe<T>> {
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const answered = browser
-    .execute(() => true)
-    .then(
-      () => true,
-      (error: unknown) =>
-        !/script execution timed out/i.test(
-          String((error as { message?: string })?.message || error),
-        ),
-    );
-  const silent = new Promise<boolean>((resolve) => {
-    timer = setTimeout(() => resolve(false), WEDGE_PROBE_MS);
+  const answered = (
+    browser.execute(script as never, ...(args as unknown as never[])) as Promise<T>
+  ).then(
+    (value): Probe<T> => ({ wedged: false, value }),
+    (error: unknown): Probe<T> =>
+      /script execution timed out/i.test(String((error as { message?: string })?.message || error))
+        ? { wedged: true }
+        : { wedged: false },
+  );
+  const silent = new Promise<Probe<T>>((resolve) => {
+    timer = setTimeout(() => resolve({ wedged: true }), WEDGE_PROBE_MS);
   });
-  const responsive = await Promise.race([answered, silent]);
+  const result = await Promise.race([answered, silent]);
   clearTimeout(timer);
-  if (responsive) return false;
+  return result;
+}
+
+// A relaunch in progress. A beforeEach that overruns its hook timeout keeps
+// running after vitest starts the retry, so the retry's first command could
+// reach the session the relaunch was replacing and fail with "Session ... not
+// found" (macos-x64, both failed specs). openApp waits for it instead.
+let relaunching: Promise<void> | null = null;
+
+/** Replace the app with a new instance, in a new session on the same browser. */
+export async function relaunchApp(browser: WebdriverIO.Browser): Promise<void> {
+  relaunching ??= (async () => {
+    // (the wedged app goes first, see stopApp)
+    await stopApp();
+    await browser.reloadSession();
+  })().finally(() => {
+    relaunching = null;
+  });
+  await relaunching;
+}
+
+export async function relaunchIfWedged(browser: WebdriverIO.Browser): Promise<boolean> {
+  const probe = await probePage(browser, () => true);
+  if (!probe.wedged) return false;
   console.warn('[openApp] the page stopped answering scripts; relaunching the app');
-  // (the wedged app goes first, see stopApp)
-  await stopApp();
-  await browser.reloadSession();
+  await relaunchApp(browser);
   return true;
 }
 
@@ -58,6 +93,7 @@ export async function relaunchIfWedged(browser: WebdriverIO.Browser): Promise<bo
 const sessionsWithApp = new Set<string>();
 
 export async function openApp(browser: WebdriverIO.Browser): Promise<void> {
+  if (relaunching) await relaunching;
   if (sessionsWithApp.has(browser.sessionId)) await relaunchIfWedged(browser);
   const deadline = Date.now() + OPEN_APP_TIMEOUT_MS;
   let lastError: unknown;
