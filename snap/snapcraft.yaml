@@ -78,8 +78,14 @@ parts:
       # the same Node major the GitHub workflows pin and put it first on PATH.
       node_version=22.14.0
       case "$(uname -m)" in
-        x86_64) node_arch=x64 ;;
-        aarch64) node_arch=arm64 ;;
+        x86_64)
+          node_arch=x64
+          node_sha256=69b09dba5c8dcb05c4e4273a4340db1005abeafe3927efda2bc5b249e80437ec
+          ;;
+        aarch64)
+          node_arch=arm64
+          node_sha256=08bfbf538bad0e8cbb0269f0173cca28d705874a67a22f60b57d99dc99e30050
+          ;;
         *) echo "unsupported build architecture: $(uname -m)" >&2; exit 1 ;;
       esac
       node_home="$CRAFT_PART_BUILD/.node"
@@ -90,6 +96,9 @@ parts:
       # "succeed" on empty input.
       curl --proto '=https' --tlsv1.2 -fsSL -o "$node_tarball" \
         "https://nodejs.org/dist/v${node_version}/node-v${node_version}-linux-${node_arch}.tar.xz"
+      # (from https://nodejs.org/dist/v22.14.0/SHASUMS256.txt; update both
+      # with node_version)
+      echo "${node_sha256}  ${node_tarball}" | sha256sum --check -
       tar -xJf "$node_tarball" -C "$node_home" --strip-components=1
       rm -f "$node_tarball"
       export PATH="$node_home/bin:$PATH"

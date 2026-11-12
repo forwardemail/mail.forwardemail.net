@@ -18,6 +18,8 @@ GitHub Actions provides `GITHUB_TOKEN` automatically. Do not create it manually.
 
 > **Current state (verified 2026-09-13):** every signing and deployment secret is stored as a **repository** secret; the `release` environment holds only a duplicate `IOS_PROVISIONING_PROFILE_BASE64`. Jobs that declare `environment: release` still resolve repository secrets, so releases work, but environment protection rules (required reviewers, branch restrictions) protect nothing until the values are moved. Migrate by re-adding each value with `gh secret set NAME --env release` and then deleting the repository copy; secret values cannot be copied through the API, so this needs the original material.
 
+`release.yml` passes secrets to the workflows it calls by name, and each of those declares what it receives under `on.workflow_call.secrets`. A secret that a called workflow starts to read needs both: one that is not passed is an empty string there, without an error.
+
 ## Quick reference
 
 ### Desktop signing and updater secrets

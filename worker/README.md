@@ -32,7 +32,8 @@ pnpm tail
 worker/
 ├── wrangler.toml      # Cloudflare Worker config
 ├── src/index.js       # Worker logic
-└── package.json       # Wrangler dependency
+├── package.json       # Wrangler dependency
+└── pnpm-lock.yaml     # The Wrangler version that deploys (updated by Dependabot)
 ```
 
 ## Portability

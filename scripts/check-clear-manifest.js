@@ -18,7 +18,7 @@
  * to stdout.
  */
 
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -38,26 +38,24 @@ try {
 const triggers = config.triggers || {};
 const baseRef = process.argv[2] || 'origin/main';
 
-// Get changed files
-let changedFiles;
-try {
-  changedFiles = execSync(`git diff --name-only --diff-filter=ACDMRT ${baseRef}...HEAD`, {
+// Get changed files. The base ref is the name of a branch, which can hold
+// almost any character, so git is run directly instead of through a shell.
+const diffNames = (...revisions) =>
+  execFileSync('git', ['diff', '--name-only', '--diff-filter=ACDMRT', ...revisions], {
     cwd: root,
     encoding: 'utf8',
   })
     .trim()
     .split('\n')
     .filter(Boolean);
+
+let changedFiles;
+try {
+  changedFiles = diffNames(`${baseRef}...HEAD`);
 } catch {
   // If the diff fails (e.g., shallow clone), try without the merge-base syntax
   try {
-    changedFiles = execSync(`git diff --name-only --diff-filter=ACDMRT ${baseRef} HEAD`, {
-      cwd: root,
-      encoding: 'utf8',
-    })
-      .trim()
-      .split('\n')
-      .filter(Boolean);
+    changedFiles = diffNames(baseRef, 'HEAD');
   } catch {
     console.log('Could not determine changed files — skipping check');
     process.exit(0);

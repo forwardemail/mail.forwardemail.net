@@ -90,6 +90,7 @@ There is no analytics, telemetry or crash reporting SDK. The app contacts:
     - It sends no cookies, no referrer and only the RFC 8058 body, one request at a time.
     - It sends only to an https URL on a public host name: never an IP address, a local name such as `router.local`, or a port other than 443 (`isOneClickUrl`).
     - It sends only when a top-level window of the app asks, never a message's frame.
+    - These checks are on the URL in the header. A redirect by the list's server is followed, to any address: a `no-cors` request cannot refuse redirects (the Fetch standard fails it before it is sent), and without `no-cors` the app could not tell a request that was sent from one that failed. The request stays blind, with the fixed body above and no credentials, which any web page can also send.
   - Otherwise, or when that request could not be sent, an email target is preferred. The request goes from the user's account and is not saved to Sent.
   - An https target opens in the system browser. The desktop and mobile apps have no service worker, so they use the email or the page.
 - **Block sender.** This adds a rule to the app's managed Sieve script that files the sender's mail into Junk (`blockSender` in `filtersStore.ts`).
@@ -295,7 +296,7 @@ All OpenPGP work runs in the sync worker with openpgp.js v6.
 - **Secrets.** Signing secrets are scoped to the `release` environment.
 - **Tags and builds.** Release tags must be semver. Release workflows do not cancel in progress.
 - **Android keystore.** The main Android job overwrites the decoded keystore with random data before deleting it.
-- **Checksums and provenance.** Releases attach `SHA256SUMS.txt` when there are artifacts, and SLSA build provenance attestations.
+- **Checksums and provenance.** Releases attach `SHA256SUMS.txt` when there are artifacts, its minisign signature `SHA256SUMS.txt.sig`, and SLSA build provenance attestations. The terminal client's updater installs a release only when that signature verifies against the key built into it (the desktop updater's key) and the signed file names that release, so the signed files of an earlier release are not accepted for a later one. The job that signs the list first checks the attestation of each terminal client build (`gh attestation verify`, signed by `release-cli.yml`), and signs nothing when one fails.
 - **Dependencies.** Dependency advisories come from Dependabot. There is no in-workflow audit gate.
 
 | Platform | Signing                                   |

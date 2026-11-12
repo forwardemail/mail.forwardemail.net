@@ -58,8 +58,12 @@ describe('release gating contracts', () => {
       expect(jobBlock(releaseWorkflow, job)).not.toMatch(inheritLine);
     }
     expect(jobBlock(desktopWorkflow, 'e2e-webview-gate')).not.toMatch(inheritLine);
-    // The builds still need the signing set, so the rule is targeted, not blanket.
-    expect(jobBlock(releaseWorkflow, 'build-desktop')).toMatch(inheritLine);
+    // The builds still need the signing set, and get it by name: each called
+    // workflow receives the secrets it declares and no others.
+    expect(releaseWorkflow).not.toMatch(inheritLine);
+    expect(jobBlock(releaseWorkflow, 'build-desktop')).toContain(
+      'TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}',
+    );
   });
 
   it('keeps secrets and untrusted text out of rendered commands', () => {
@@ -109,11 +113,11 @@ describe('release asset upload resilience', () => {
       expect(workflow, `${name} still uploads directly`).not.toContain('uploads.github.com');
       expect(workflow).toContain('uses: ./.github/actions/upload-release-asset');
     }
-    // Snap, APK, AAB, Google-free APK, IPA, checksums.
+    // Snap, APK, AAB, Google-free APK, IPA, checksums and their signature.
     const uses = [desktopWorkflow, mobileWorkflow, releaseWorkflow]
       .join('\n')
       .match(/uses: \.\/\.github\/actions\/upload-release-asset/g);
-    expect(uses).toHaveLength(6);
+    expect(uses).toHaveLength(7);
     // The only remaining direct upload is the draft-to-published migration
     // loop, which carries its own retry.
     const migration = jobBlock(releaseWorkflow, 'publish');

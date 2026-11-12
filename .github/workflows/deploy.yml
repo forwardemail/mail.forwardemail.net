@@ -39,10 +39,18 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: pnpm
+          # No `cache: pnpm`: a cache can be written by any job that runs on
+          # main, and this job deploys what it installs.
+          package-manager-cache: false
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      # Wrangler comes from worker/pnpm-lock.yaml and is installed here,
+      # before any step that holds a credential, without install scripts.
+      - name: Install Worker dependencies
+        working-directory: worker
+        run: pnpm install --frozen-lockfile --ignore-scripts
 
       - name: Build
         env:
@@ -82,8 +90,7 @@ jobs:
           sed -i -E "s/^bucket_name = \".*\"/bucket_name = \"${R2_BUCKET}\"/" worker/wrangler.toml
           grep -q "bucket_name = \"${R2_BUCKET}\"" worker/wrangler.toml
           cd worker
-          pnpm install --no-frozen-lockfile
-          npx wrangler deploy
+          pnpm exec wrangler deploy
 
       - name: Purge Cloudflare Cache
         env:

@@ -14,6 +14,40 @@ on:
         description: 'Existing GitHub Release ID to upload artifacts to'
         required: false
         type: string
+    # (named one by one: release.yml passes these and nothing else, so a
+    # secret this workflow starts to read has to be added here and there;
+    # one that is not passed is an empty string, without an error)
+    secrets:
+      ANDROID_KEYSTORE_BASE64:
+        required: false
+      ANDROID_KEYSTORE_PASSWORD:
+        required: false
+      ANDROID_KEY_ALIAS:
+        required: false
+      ANDROID_KEY_PASSWORD:
+        required: false
+      APPLE_CERTIFICATE:
+        required: false
+      APPLE_CERTIFICATE_PASSWORD:
+        required: false
+      APPLE_TEAM_ID:
+        required: false
+      APP_STORE_CONNECT_API_KEY:
+        required: false
+      APP_STORE_CONNECT_ISSUER_ID:
+        required: false
+      APP_STORE_CONNECT_KEY_ID:
+        required: false
+      GOOGLE_PLAY_SERVICE_ACCOUNT:
+        required: false
+      GOOGLE_SERVICES_JSON_BASE64:
+        required: false
+      IOS_CERTIFICATE_BASE64:
+        required: false
+      IOS_CERTIFICATE_PASSWORD:
+        required: false
+      IOS_PROVISIONING_PROFILE_BASE64:
+        required: false
   workflow_dispatch:
     inputs:
       tag:
@@ -42,7 +76,13 @@ env:
   # repository variable is true (scripts/web-inspector-args.cjs). The Android
   # build script reads it directly; the iOS step passes the flag below.
   WEB_INSPECTOR: ${{ vars.WEB_INSPECTOR }}
+  # The version as it was passed in. Scripts read it from here: text
+  # interpolated into a script would run as part of it.
+  RELEASE_VERSION: ${{ inputs.version || inputs.tag || github.ref_name }}
 
+# No job here restores a build cache (the Rust target directory): a cache can
+# be written by any job that runs on main, and what is restored would be
+# compiled into a signed release. See release-desktop.yml.
 jobs:
   android:
     runs-on: ubuntu-22.04
@@ -53,6 +93,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # Fail before installing any toolchain when the single dual-provider
       # release cannot be built. VAPID_PUBLIC_KEY is public configuration, but
@@ -82,14 +124,10 @@ jobs:
           fi
 
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable (pinned 2026-05-12; bump periodically to track new Rust releases)
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
+          toolchain: stable
           targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android,i686-linux-android
-
-      - name: Rust cache
-        uses: swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
-        with:
-          workspaces: src-tauri -> target
 
       - name: Install Linux dependencies
         run: |
@@ -125,6 +163,7 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
 
       - name: Setup pnpm
         uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
@@ -225,8 +264,12 @@ jobs:
       - name: Rename APK with version
         id: artifacts
         run: |
-          VERSION="${{ inputs.version || inputs.tag || github.ref_name }}"
-          VERSION="${VERSION#v}"
+          VERSION="${RELEASE_VERSION#v}"
+          # (it becomes part of file names and of what this step hands on)
+          if [[ ! "$VERSION" =~ ^[A-Za-z0-9._+-]+$ ]]; then
+            echo "::error::Invalid release version"
+            exit 1
+          fi
           APK_DIR="src-tauri/gen/android/app/build/outputs/apk"
           AAB_DIR="src-tauri/gen/android/app/build/outputs/bundle"
           # A release publishes exactly one APK (arm64-v8a + armeabi-v7a) and
@@ -362,6 +405,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Preflight F-Droid Android release configuration
         shell: bash
@@ -385,14 +430,10 @@ jobs:
           fi
 
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
+          toolchain: stable
           targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android,i686-linux-android
-
-      - name: Rust cache
-        uses: swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
-        with:
-          workspaces: src-tauri -> target
 
       - name: Install Linux dependencies
         run: |
@@ -422,6 +463,7 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
 
       - name: Setup pnpm
         uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
@@ -462,8 +504,12 @@ jobs:
         id: apk
         run: |
           set -euo pipefail
-          VERSION="${{ inputs.version || inputs.tag || github.ref_name }}"
-          VERSION="${VERSION#v}"
+          VERSION="${RELEASE_VERSION#v}"
+          # (it becomes part of file names and of what this step hands on)
+          if [[ ! "$VERSION" =~ ^[A-Za-z0-9._+-]+$ ]]; then
+            echo "::error::Invalid release version"
+            exit 1
+          fi
           mapfile -t APKS < <(find src-tauri/gen/android/app/build/outputs/apk -name '*.apk' -type f)
           if [ ${#APKS[@]} -ne 1 ]; then
             echo "::error::Expected exactly one Google-free APK; found ${#APKS[@]}"
@@ -505,6 +551,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # Skip gracefully (exit 0) when required iOS secrets aren't configured,
       # so a missing secret never blocks the desktop/android release pipeline.
@@ -551,7 +599,7 @@ jobs:
 
       - name: Select Xcode 26+ toolchain
         if: steps.check.outputs.enabled == 'true'
-        uses: maxim-lobanov/setup-xcode@1242409711ff5721add51979e9e11e23ebb7e5a4 # v1
+        uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1.7.0
         with:
           xcode-version: latest-stable
 
@@ -563,27 +611,17 @@ jobs:
 
       - name: Install Rust stable
         if: steps.check.outputs.enabled == 'true'
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable (pinned 2026-05-12; bump periodically to track new Rust releases)
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
+          toolchain: stable
           targets: aarch64-apple-ios
-
-      - name: Rust cache
-        if: steps.check.outputs.enabled == 'true'
-        uses: swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
-        with:
-          workspaces: src-tauri -> target
-          # Bump this prefix whenever IPHONEOS_DEPLOYMENT_TARGET changes.
-          # tauri-utils's build.rs doesn't emit `rerun-if-env-changed` for
-          # IPHONEOS_DEPLOYMENT_TARGET, so cargo will happily re-use cached
-          # .swift.o files compiled against the old target, and the final
-          # `ld` step will fail against the current iOS SDK (see ios15 fix).
-          prefix-key: v2-ios16
 
       - name: Setup Node.js
         if: steps.check.outputs.enabled == 'true'
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
 
       - name: Setup pnpm
         if: steps.check.outputs.enabled == 'true'
@@ -719,8 +757,12 @@ jobs:
         if: steps.check.outputs.enabled == 'true'
         run: |
           set -euo pipefail
-          VERSION="${{ inputs.version || inputs.tag || github.ref_name }}"
-          VERSION="${VERSION#v}"
+          VERSION="${RELEASE_VERSION#v}"
+          # (it becomes part of file names and of what this step hands on)
+          if [[ ! "$VERSION" =~ ^[A-Za-z0-9._+-]+$ ]]; then
+            echo "::error::Invalid release version"
+            exit 1
+          fi
           IPA=$(find src-tauri/gen/apple/build -name '*.ipa' -type f | head -n 1)
           if [ -z "$IPA" ]; then
             echo "::error::No IPA produced under src-tauri/gen/apple/build"

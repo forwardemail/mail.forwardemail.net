@@ -40,6 +40,12 @@ runs:
         set -euo pipefail
         TAG="${TAG_IN#v}"
         TAG="v${TAG}"
+        # The tag becomes part of the jq filters below and of this step's
+        # outputs, so it may hold nothing that either would read as syntax.
+        if [[ ! "$TAG" =~ ^[A-Za-z0-9._+-]+$ ]]; then
+          echo "::error::Invalid release tag"
+          exit 1
+        fi
         published_id=$(gh api "repos/${GH_REPO}/releases" --paginate \
           --jq "[.[] | select(.tag_name==\"$TAG\" and .draft==false)] | first // empty | .id")
         if [ -n "$published_id" ]; then

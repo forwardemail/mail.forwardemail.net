@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, createPublicKey, verify } from 'node:crypto';
 import { gunzipSync } from 'node:zlib';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -9,17 +9,28 @@ import path from 'node:path';
  *
  * Standalone binaries replace themselves with the matching asset of the
  * latest GitHub release (gzipped), after checking it against the release's
- * SHA256SUMS.txt. Installs from the npm registry update through the package
- * manager that installed them (npm, pnpm, Yarn or Bun). A background check
- * runs at most once a day on launch; binaries apply what it finds and report
- * it when the session ends, package installs report that an update is
- * available.
+ * SHA256SUMS.txt, and that file against its signature (SHA256SUMS.txt.sig)
+ * by the key below and against the version it names. Installs from the npm
+ * registry update through the package manager that installed them (npm, pnpm,
+ * Yarn or Bun). A background check runs at most once a day on launch;
+ * binaries apply what it finds and report it when the session ends, package
+ * installs report that an update is available.
  */
 
 export const REPOSITORY = 'forwardemail/mail.forwardemail.net';
 export const PACKAGE = 'forwardemail';
 const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const USER_AGENT = 'forwardemail-cli';
+
+/**
+ * The minisign public key release checksums are signed with: the key the
+ * desktop app's updater trusts (plugins.updater.pubkey in
+ * src-tauri/tauri.conf.json). A checksum only shows the download is the file
+ * the release lists; the signature shows the list is ours, so a release
+ * published by someone else is not installed.
+ */
+export const UPDATE_PUBLIC_KEY =
+  'dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDdCRjY2OTc5RDA0RkI0MUQKUldRZHRFL1FlV24yZTV4ZThJeERhR3hTUXJRdUNqU0dRbXJrTjBjN2VycldUMXpWOG5pb3Q2SUEK';
 
 export type InstallKind = 'binary' | 'npm' | 'source';
 
@@ -162,9 +173,26 @@ export function assetName(platform = process.platform, arch = process.arch): str
 }
 
 function parseVersion(version: string) {
-  const [core, pre = ''] = version.replace(/^v/, '').split('-', 2);
+  // (build metadata, after "+", does not count)
+  const [core, ...pre] = version.replace(/^v/, '').replace(/\+.*$/, '').split('-');
   const parts = core.split('.').map((n) => Number.parseInt(n, 10) || 0);
-  return { parts: [parts[0] ?? 0, parts[1] ?? 0, parts[2] ?? 0], pre };
+  return { parts: [parts[0] ?? 0, parts[1] ?? 0, parts[2] ?? 0], pre: pre.join('-') };
+}
+
+// Prerelease identifiers ("beta.10"): numbers by value and before words,
+// words in ASCII order, and fewer identifiers before more. As text,
+// "beta.9" would come after "beta.10".
+function comparePrerelease(a: string, b: string): number {
+  const x = a.split('.');
+  const y = b.split('.');
+  const number = /^\d+$/;
+  for (let i = 0; i < Math.min(x.length, y.length); i++) {
+    if (number.test(x[i]) !== number.test(y[i])) return number.test(x[i]) ? -1 : 1;
+    const [p, q] = number.test(x[i]) ? [Number(x[i]), Number(y[i])] : [x[i], y[i]];
+    if (p < q) return -1;
+    if (p > q) return 1;
+  }
+  return Math.sign(x.length - y.length);
 }
 
 /** Semver precedence: 1 when a is newer, -1 when older, 0 when equal. */
@@ -177,7 +205,7 @@ export function compareVersions(a: string, b: string): number {
   if (x.pre === y.pre) return 0;
   if (!x.pre) return 1;
   if (!y.pre) return -1;
-  return x.pre > y.pre ? 1 : -1;
+  return comparePrerelease(x.pre, y.pre);
 }
 
 export async function fetchLatestRelease(
@@ -216,6 +244,69 @@ export function parseChecksums(text: string): Map<string, string> {
   return sums;
 }
 
+// A minisign key or signature, as text (`tauri signer` writes them base64-encoded)
+function minisignLines(value: string): string[] {
+  const text = value.includes('untrusted comment:')
+    ? value
+    : Buffer.from(value.trim(), 'base64').toString('utf8');
+  return text.split(/\r?\n/);
+}
+
+const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
+
+/**
+ * Whether `signature` (a minisign signature file) is a signature of `data`
+ * by `publicKey` (a minisign public key). Both of its signatures are checked:
+ * the one of the data, and the one that covers the trusted comment.
+ */
+export function verifySignature(
+  data: Buffer,
+  signature: string,
+  publicKey: string = UPDATE_PUBLIC_KEY,
+): boolean {
+  try {
+    const key = Buffer.from(minisignLines(publicKey)[1] ?? '', 'base64');
+    const [, signatureLine = '', commentLine = '', globalLine = ''] = minisignLines(signature);
+    const signed = Buffer.from(signatureLine, 'base64');
+    const global = Buffer.from(globalLine, 'base64');
+    const prefix = 'trusted comment: ';
+    if (
+      key.length !== 42 ||
+      key.subarray(0, 2).toString('latin1') !== 'Ed' ||
+      signed.length !== 74 ||
+      global.length !== 64 ||
+      !commentLine.startsWith(prefix) ||
+      // (signed by another key)
+      !key.subarray(2, 10).equals(signed.subarray(2, 10))
+    )
+      return false;
+
+    // "ED": the BLAKE2b-512 hash of the data is signed, which is what
+    // `tauri signer` writes. ("Ed" signs the data itself. These two letters
+    // are not signed, so with both accepted a signature of a file would
+    // also pass for the 64 bytes of that file's hash.)
+    if (signed.subarray(0, 2).toString('latin1') !== 'ED') return false;
+    const message = createHash('blake2b512').update(data).digest();
+    const publicKeyObject = createPublicKey({
+      key: Buffer.concat([ED25519_SPKI_PREFIX, key.subarray(10)]),
+      format: 'der',
+      type: 'spki',
+    });
+    const dataSignature = signed.subarray(10);
+    return (
+      verify(null, message, publicKeyObject, dataSignature) &&
+      verify(
+        null,
+        Buffer.concat([dataSignature, Buffer.from(commentLine.slice(prefix.length), 'utf8')]),
+        publicKeyObject,
+        global,
+      )
+    );
+  } catch {
+    return false;
+  }
+}
+
 async function download(url: string, fetchImpl: typeof fetch, signal?: AbortSignal) {
   const response = await fetchImpl(url, {
     headers: { 'user-agent': USER_AGENT },
@@ -227,13 +318,20 @@ async function download(url: string, fetchImpl: typeof fetch, signal?: AbortSign
 }
 
 /**
- * Downloads this platform's binary from a release, verifies its checksum and
- * swaps it in for the running executable. The running process keeps its
- * open copy; the new version starts next time.
+ * Downloads this platform's binary from a release, verifies the signature of
+ * the release's checksums, that they are the checksums of that release and
+ * the binary's checksum, and swaps it in for the running executable. The
+ * running process keeps its open copy; the new version starts next time.
  */
 export async function installBinary(
   release: Release,
-  options: { target?: string; fetchImpl?: typeof fetch; signal?: AbortSignal } = {},
+  options: {
+    target?: string;
+    fetchImpl?: typeof fetch;
+    signal?: AbortSignal;
+    /** The key the checksums must be signed with (default: ours) */
+    publicKey?: string;
+  } = {},
 ): Promise<string> {
   const fetchImpl = options.fetchImpl ?? fetch;
   const target = options.target ?? process.execPath;
@@ -241,11 +339,24 @@ export async function installBinary(
   const asset = release.assets.find((item) => item.name === name);
   const sumsAsset = release.assets.find((item) => item.name === 'SHA256SUMS.txt');
   if (!asset) throw new Error(`Release ${release.tag} has no ${name} yet`);
+  const signatureAsset = release.assets.find((item) => item.name === 'SHA256SUMS.txt.sig');
   if (!sumsAsset) throw new Error(`Release ${release.tag} has no SHA256SUMS.txt yet`);
+  if (!signatureAsset) throw new Error(`Release ${release.tag} has no SHA256SUMS.txt.sig yet`);
 
-  const expected = parseChecksums(
-    (await download(sumsAsset.url, fetchImpl, options.signal)).toString('utf8'),
-  ).get(name);
+  const sums = await download(sumsAsset.url, fetchImpl, options.signal);
+  const signature = await download(signatureAsset.url, fetchImpl, options.signal);
+  if (!verifySignature(sums, signature.toString('utf8'), options.publicKey)) {
+    throw new Error(`SHA256SUMS.txt in ${release.tag} is not signed by Forward Email`);
+  }
+  // The list ends with its release ("# version: 1.2.3", written by the
+  // release workflow before it signs). Without this, the signed files of an
+  // earlier release, attached to a later one, would install the earlier build.
+  const listed = sums.toString('utf8').match(/(?:^|\n)# version: (\S+)\n?$/)?.[1];
+  if (listed !== release.version) {
+    throw new Error(`SHA256SUMS.txt in ${release.tag} is not the list of that release`);
+  }
+
+  const expected = parseChecksums(sums.toString('utf8')).get(name);
   if (!expected) throw new Error(`SHA256SUMS.txt in ${release.tag} does not list ${name}`);
 
   const compressed = await download(asset.url, fetchImpl, options.signal);
@@ -422,6 +533,7 @@ export async function backgroundUpdate(options: {
   install?: InstallKind;
   now?: number;
   fetchImpl?: typeof fetch;
+  publicKey?: string;
 }): Promise<string | null> {
   const now = options.now ?? Date.now();
   const install = options.install ?? detectInstall();
@@ -452,7 +564,11 @@ export async function backgroundUpdate(options: {
 
     if (install === 'binary') {
       try {
-        await installBinary(release, { fetchImpl: options.fetchImpl, signal: controller.signal });
+        await installBinary(release, {
+          fetchImpl: options.fetchImpl,
+          signal: controller.signal,
+          publicKey: options.publicKey,
+        });
       } catch (error) {
         // Say so rather than stay on the old version without a word (an
         // executable installed system-wide cannot be replaced, for one).
@@ -494,6 +610,7 @@ export async function checkForTerminalUpdate(options: {
   install?: InstallKind;
   fetchImpl?: typeof fetch;
   target?: string;
+  publicKey?: string;
 }): Promise<UpdateCheck> {
   const install = options.install ?? detectInstall();
   const current = options.version;
@@ -539,6 +656,7 @@ export async function checkForTerminalUpdate(options: {
         fetchImpl: options.fetchImpl,
         target: options.target,
         signal: AbortSignal.timeout(5 * 60_000),
+        publicKey: options.publicKey,
       });
     } catch (error) {
       return {

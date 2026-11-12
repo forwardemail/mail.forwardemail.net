@@ -1332,7 +1332,9 @@
     const timer = setTimeout(() => {
       if (abort) abort.abort();
     }, ONE_CLICK_TIMEOUT_MS);
-    // (an opaque response: one the list's server received resolves)
+    // (an opaque response: one the list's server received resolves. A
+    // redirect by that server is followed: `redirect: 'error'` or 'manual'
+    // makes a no-cors request fail before it is sent, see docs/SECURITY.md)
     const sent = fetch(url, {
       method: 'POST',
       mode: 'no-cors',

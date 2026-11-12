@@ -2,7 +2,7 @@
  * The self-updater against a real HTTP server standing in for GitHub:
  * release lookup, checksum verification and swapping the executable.
  */
-import { createHash } from 'node:crypto';
+import { createHash, generateKeyPairSync, sign } from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
@@ -19,10 +19,41 @@ import {
   detectPackageManager,
   installBinary,
   parseChecksums,
+  UPDATE_PUBLIC_KEY,
   updatePackageInstall,
+  verifySignature,
 } from '../../src/cli/update';
 
 const sha256 = (data) => createHash('sha256').update(data).digest('hex');
+
+// A minisign key pair, and signatures in the file format `tauri signer sign`
+// writes (which the release workflow signs SHA256SUMS.txt with).
+function signingKey() {
+  const { publicKey, privateKey } = generateKeyPairSync('ed25519');
+  const id = Buffer.from('0102030405060708', 'hex');
+  const raw = publicKey.export({ format: 'der', type: 'spki' }).subarray(-32);
+  return {
+    publicKey: Buffer.from(
+      `untrusted comment: minisign public key\n${Buffer.concat([Buffer.from('Ed'), id, raw]).toString('base64')}\n`,
+    ).toString('base64'),
+    sign(data) {
+      const signature = sign(null, createHash('blake2b512').update(data).digest(), privateKey);
+      const comment = 'timestamp:1\tfile:SHA256SUMS.txt';
+      const global = sign(null, Buffer.concat([signature, Buffer.from(comment)]), privateKey);
+      return Buffer.from(
+        [
+          'untrusted comment: signature from tauri secret key',
+          Buffer.concat([Buffer.from('ED'), id, signature]).toString('base64'),
+          `trusted comment: ${comment}`,
+          global.toString('base64'),
+          '',
+        ].join('\n'),
+      ).toString('base64');
+    },
+  };
+}
+
+const KEY = signingKey();
 
 let server;
 let base;
@@ -50,15 +81,24 @@ afterEach(async () => {
 });
 
 // Serves a release whose binary for this machine contains `contents`, with a
-// SHA256SUMS.txt that lists `listedHash` (the right one unless overridden).
-function publish(version, contents, { listedHash } = {}) {
+// SHA256SUMS.txt that lists `listedHash` (the right one unless overridden)
+// and ends with `ending` (the line that names the release unless overridden),
+// signed by `signedBy` (the key the tests trust unless overridden, or not
+// signed at all for null).
+function publish(
+  version,
+  contents,
+  { listedHash, signedBy = KEY, ending = `# version: ${version}\n` } = {},
+) {
   const name = `${assetName()}.gz`;
   const gz = gzipSync(Buffer.from(contents));
+  const sums = `${listedHash ?? sha256(gz)}  ${name}\n${'0'.repeat(64)}  other-file.gz\n${ending}`;
+  const signed = signedBy
+    ? [{ name: 'SHA256SUMS.txt.sig', url: `${base}/download/SHA256SUMS.txt.sig` }]
+    : [];
   routes.set(`/download/${name}`, gz);
-  routes.set(
-    '/download/SHA256SUMS.txt',
-    `${listedHash ?? sha256(gz)}  ${name}\n${'0'.repeat(64)}  other-file.gz\n`,
-  );
+  routes.set('/download/SHA256SUMS.txt', sums);
+  if (signedBy) routes.set('/download/SHA256SUMS.txt.sig', signedBy.sign(Buffer.from(sums)));
   routes.set(
     '/api/latest',
     JSON.stringify({
@@ -67,6 +107,7 @@ function publish(version, contents, { listedHash } = {}) {
       assets: [
         { name, browser_download_url: `${base}/download/${name}` },
         { name: 'SHA256SUMS.txt', browser_download_url: `${base}/download/SHA256SUMS.txt` },
+        ...signed.map((asset) => ({ name: asset.name, browser_download_url: asset.url })),
       ],
     }),
   );
@@ -77,6 +118,7 @@ function publish(version, contents, { listedHash } = {}) {
     assets: [
       { name, url: `${base}/download/${name}` },
       { name: 'SHA256SUMS.txt', url: `${base}/download/SHA256SUMS.txt` },
+      ...signed,
     ],
   };
 }
@@ -99,11 +141,63 @@ describe('versions', () => {
     expect(compareVersions('0.14.9', '0.14.10')).toBe(-1);
   });
 
+  it('orders prereleases by their identifiers, numbers by value', () => {
+    expect(compareVersions('1.2.0-beta.10', '1.2.0-beta.9')).toBe(1);
+    expect(compareVersions('1.2.0-beta.9', '1.2.0-beta.10')).toBe(-1);
+    expect(compareVersions('1.2.0-rc.1', '1.2.0-beta.11')).toBe(1);
+    expect(compareVersions('1.2.0-alpha', '1.2.0-alpha.1')).toBe(-1);
+    expect(compareVersions('1.2.0-alpha.1', '1.2.0-alpha.beta')).toBe(-1);
+    expect(compareVersions('1.2.0-beta.2', '1.2.0-beta.2')).toBe(0);
+    expect(compareVersions('1.2.0-beta.1+build.9', '1.2.0-beta.2')).toBe(-1);
+    expect(compareVersions('1.2.0+build.2', '1.2.0+build.1')).toBe(0);
+  });
+
   it('reads sha256sum output', () => {
     const sums = parseChecksums(`${'a'.repeat(64)}  one.gz\n${'B'.repeat(64)} *two.gz\n\nnoise\n`);
     expect(sums.get('one.gz')).toBe('a'.repeat(64));
     expect(sums.get('two.gz')).toBe('b'.repeat(64));
     expect(sums.size).toBe(2);
+  });
+});
+
+describe('verifySignature', () => {
+  // made with `tauri signer generate` and `tauri signer sign` (a key for this test only)
+  const publicKey =
+    'dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDJFQ0JGMDBFOUE1MzFDQUMKUldTc0hGT2FEdkRMTHVDeXNNS3ZUUVdQWGVhYmd6UWRRdGY0aVJhZGFTbEp6bDZmR0x4MDUvWEgK';
+  const signature =
+    'dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTc0hGT2FEdkRMTG1xNmRYUHpaMlVySW0yU0pIOXd6SENGTHRJNnBURmRsRzYzcFNRNC9Eb0NSTCtBTStCdnR1elJIR1dUeFVPeE13Szhwb3pqMUpQVzQyUG9QNktLd0FFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MzM3NzY5CWZpbGU6U0hBMjU2U1VNUy50eHQKT1lKcVpFM1RZbEl1VW1Pd3Y3UTdsaVQ3MEJxS1RmSlZvdzRqaTFwSGVhdUZreUwyblVtUUhPNWVZdkRjMy91cVI2ZzZ0RDV4TUxvaEdTY3FOWVFsQVE9PQo=';
+
+  it('accepts a signature made by tauri signer, and only for the signed file', () => {
+    expect(verifySignature(Buffer.from('abc  file\n'), signature, publicKey)).toBe(true);
+    expect(verifySignature(Buffer.from('abd  file\n'), signature, publicKey)).toBe(false);
+    expect(verifySignature(Buffer.from('abc  file\n'), signature)).toBe(false);
+    expect(verifySignature(Buffer.from('abc  file\n'), '', publicKey)).toBe(false);
+  });
+
+  it('does not accept a signature whose trusted comment was changed', () => {
+    const lines = Buffer.from(signature, 'base64').toString('utf8').split('\n');
+    lines[2] = lines[2].replace('SHA256SUMS.txt', 'SHA256SUMS.tx_');
+    expect(verifySignature(Buffer.from('abc  file\n'), lines.join('\n'), publicKey)).toBe(false);
+  });
+
+  it('does not accept the hash of a signed file in place of the file', () => {
+    const data = Buffer.from('abc  file\n');
+    const lines = Buffer.from(KEY.sign(data), 'base64').toString('utf8').split('\n');
+    // (relabelled from "the hash of the data is signed" to "the data is signed")
+    const signed = Buffer.from(lines[1], 'base64');
+    signed.write('Ed', 0, 'latin1');
+    lines[1] = signed.toString('base64');
+    const hash = createHash('blake2b512').update(data).digest();
+
+    expect(verifySignature(data, KEY.sign(data), KEY.publicKey)).toBe(true);
+    expect(verifySignature(hash, lines.join('\n'), KEY.publicKey)).toBe(false);
+  });
+
+  it('trusts the key the desktop updater trusts', () => {
+    const config = JSON.parse(
+      fs.readFileSync(path.join(process.cwd(), 'src-tauri', 'tauri.conf.json'), 'utf8'),
+    );
+    expect(UPDATE_PUBLIC_KEY).toBe(config.plugins.updater.pubkey);
   });
 });
 
@@ -113,7 +207,7 @@ describe('installBinary', () => {
     fs.writeFileSync(target, 'old build', { mode: 0o755 });
     const release = publish('9.9.9', 'new build');
 
-    await installBinary(release, { target });
+    await installBinary(release, { target, publicKey: KEY.publicKey });
 
     expect(fs.readFileSync(target, 'utf8')).toBe('new build');
     if (process.platform === 'win32') {
@@ -132,7 +226,61 @@ describe('installBinary', () => {
     fs.writeFileSync(target, 'old build', { mode: 0o755 });
     const release = publish('9.9.9', 'tampered build', { listedHash: 'f'.repeat(64) });
 
-    await expect(installBinary(release, { target })).rejects.toThrow(/Checksum mismatch/);
+    await expect(installBinary(release, { target, publicKey: KEY.publicKey })).rejects.toThrow(
+      /Checksum mismatch/,
+    );
+    expect(fs.readFileSync(target, 'utf8')).toBe('old build');
+    expect(fs.readdirSync(dir)).toEqual(['forwardemail']);
+  });
+
+  it('refuses a release whose checksums are not signed by the trusted key', async () => {
+    const target = path.join(dir, 'forwardemail');
+    fs.writeFileSync(target, 'old build', { mode: 0o755 });
+    const install = (release, publicKey = KEY.publicKey) =>
+      installBinary(release, { target, publicKey });
+
+    // (not signed at all)
+    await expect(install(publish('9.9.9', 'new build', { signedBy: null }))).rejects.toThrow(
+      /has no SHA256SUMS\.txt\.sig/,
+    );
+    // (signed by someone else)
+    await expect(
+      install(publish('9.9.9', 'new build', { signedBy: signingKey() })),
+    ).rejects.toThrow(/not signed by Forward Email/);
+    // (a signed list, changed afterwards to list another build)
+    const release = publish('9.9.9', 'new build');
+    const gz = gzipSync(Buffer.from('another build'));
+    routes.set(`/download/${assetName()}.gz`, gz);
+    routes.set('/download/SHA256SUMS.txt', `${sha256(gz)}  ${assetName()}.gz\n`);
+    await expect(install(release)).rejects.toThrow(/not signed by Forward Email/);
+    // (signed by the key the test trusts, which is not the one built in)
+    await expect(installBinary(publish('9.9.9', 'new build'), { target })).rejects.toThrow(
+      /not signed by Forward Email/,
+    );
+
+    expect(fs.readFileSync(target, 'utf8')).toBe('old build');
+    expect(fs.readdirSync(dir)).toEqual(['forwardemail']);
+  });
+
+  it('refuses the signed files of another release', async () => {
+    const target = path.join(dir, 'forwardemail');
+    fs.writeFileSync(target, 'old build', { mode: 0o755 });
+    const install = (release) => installBinary(release, { target, publicKey: KEY.publicKey });
+
+    // (the assets of an earlier release, attached to a later one)
+    const earlier = publish('1.0.0', 'an earlier build');
+    await expect(install({ ...earlier, tag: 'v9.9.9', version: '9.9.9' })).rejects.toThrow(
+      /not the list of that release/,
+    );
+    // (a signed list that names no release)
+    await expect(install(publish('9.9.9', 'new build', { ending: '' }))).rejects.toThrow(
+      /not the list of that release/,
+    );
+    // (a signed list that ends with the name of another release)
+    await expect(
+      install(publish('9.9.9', 'new build', { ending: '# version: 9.9.9\n# version: 1.0.0\n' })),
+    ).rejects.toThrow(/not the list of that release/);
+
     expect(fs.readFileSync(target, 'utf8')).toBe('old build');
     expect(fs.readdirSync(dir)).toEqual(['forwardemail']);
   });
@@ -159,6 +307,7 @@ describe('backgroundUpdate', () => {
         stateFile,
         install: 'binary',
         fetchImpl: localFetch,
+        publicKey: KEY.publicKey,
       });
       expect(message).toContain('updated to 9.9.9');
       expect(fs.readFileSync(target, 'utf8')).toBe('new build');
@@ -175,6 +324,7 @@ describe('backgroundUpdate', () => {
           stateFile,
           install: 'binary',
           fetchImpl: localFetch,
+          publicKey: KEY.publicKey,
         }),
       ).toBeNull();
     } finally {
@@ -190,6 +340,7 @@ describe('backgroundUpdate', () => {
       stateFile,
       install: 'npm',
       fetchImpl: localFetch,
+      publicKey: KEY.publicKey,
     });
     expect(message).toBe(
       'Forward Email 9.9.9 is available (you have 1.0.0). Update with: forwardemail update',
@@ -202,6 +353,7 @@ describe('backgroundUpdate', () => {
         stateFile,
         install: 'npm',
         fetchImpl: localFetch,
+        publicKey: KEY.publicKey,
       }),
     ).toContain('9.9.9 is available');
   });
@@ -214,6 +366,7 @@ describe('backgroundUpdate', () => {
         stateFile: path.join(dir, 'a.json'),
         install: 'binary',
         fetchImpl: localFetch,
+        publicKey: KEY.publicKey,
       }),
     ).toBeNull();
 
@@ -224,6 +377,7 @@ describe('backgroundUpdate', () => {
         stateFile: path.join(dir, 'b.json'),
         install: 'binary',
         fetchImpl: localFetch,
+        publicKey: KEY.publicKey,
       }),
     ).toBeNull();
   });
@@ -242,6 +396,7 @@ describe('backgroundUpdate', () => {
         stateFile,
         install: 'binary',
         fetchImpl: localFetch,
+        publicKey: KEY.publicKey,
       });
       expect(message).toContain('Forward Email 9.9.9 is available (you have 1.0.0)');
       expect(message).toContain('installing it failed');
@@ -254,6 +409,7 @@ describe('backgroundUpdate', () => {
           stateFile,
           install: 'binary',
           fetchImpl: localFetch,
+          publicKey: KEY.publicKey,
         }),
       ).toBe('Forward Email 9.9.9 is available (you have 1.0.0). Update with: forwardemail update');
     } finally {
@@ -452,6 +608,7 @@ describe("Settings' Check for Updates in the terminal client", () => {
       version: '1.0.0',
       install: 'binary',
       fetchImpl: localFetch,
+      publicKey: KEY.publicKey,
       target,
       stateFile,
     });
@@ -498,6 +655,7 @@ describe("Settings' Check for Updates in the terminal client", () => {
       version: '1.0.0',
       install: 'npm',
       fetchImpl: localFetch,
+      publicKey: KEY.publicKey,
     });
     expect(result.message).toBe(
       'v9.9.9 is available (you have v1.0.0). Quit and run: forwardemail update',
@@ -510,6 +668,7 @@ describe("Settings' Check for Updates in the terminal client", () => {
       version: '1.0.0',
       install: 'binary',
       fetchImpl: localFetch,
+      publicKey: KEY.publicKey,
     });
     expect(current).toMatchObject({
       upToDate: true,
@@ -521,6 +680,7 @@ describe("Settings' Check for Updates in the terminal client", () => {
       version: '1.0.0',
       install: 'binary',
       fetchImpl: localFetch,
+      publicKey: KEY.publicKey,
     });
     expect(offline).toMatchObject({
       upToDate: false,

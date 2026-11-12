@@ -98,6 +98,8 @@ jobs:
       - name: Checkout
         if: steps.gate.outputs.skip != 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install Linux dependencies
         if: steps.gate.outputs.skip != 'true' && runner.os == 'Linux'
@@ -148,13 +150,14 @@ jobs:
 
       - name: Install Rust toolchain
         if: steps.gate.outputs.skip != 'true'
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
+          toolchain: stable
           targets: ${{ matrix.target }}
 
       - name: Rust cache
         if: steps.gate.outputs.skip != 'true'
-        uses: swatinem/rust-cache@v2
+        uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         continue-on-error: true
         with:
           workspaces: src-tauri -> target

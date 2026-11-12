@@ -22,6 +22,38 @@ on:
         type: boolean
         default: false
         description: 'Skip the internal e2e-webview gate. release.yml sets this true because it already runs the e2e-webview gate once for both desktop and mobile; without it the full 5-platform suite runs twice per release. Standalone desktop-v* / dispatch runs leave it false so they stay self-gated.'
+    # (named one by one: release.yml passes these and nothing else, so a
+    # secret this workflow starts to read has to be added here and there;
+    # one that is not passed is an empty string, without an error)
+    secrets:
+      APPLE_CERTIFICATE:
+        required: false
+      APPLE_CERTIFICATE_PASSWORD:
+        required: false
+      APPLE_ID:
+        required: false
+      APPLE_PASSWORD:
+        required: false
+      APPLE_SIGNING_IDENTITY:
+        required: false
+      APPLE_TEAM_ID:
+        required: false
+      ESIGNER_CREDENTIAL_ID:
+        required: false
+      ESIGNER_PASSWORD:
+        required: false
+      ESIGNER_TOTP_SECRET:
+        required: false
+      ESIGNER_USERNAME:
+        required: false
+      MACOS_PROVISIONING_PROFILE_BASE64:
+        required: false
+      SNAPCRAFT_STORE_CREDENTIALS:
+        required: false
+      TAURI_SIGNING_PRIVATE_KEY:
+        required: false
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD:
+        required: false
   workflow_dispatch:
     inputs:
       tag:
@@ -86,16 +118,20 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable (pinned 2026-05-12; bump periodically to track new Rust releases)
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
+          toolchain: stable
           targets: ${{ matrix.target }}
 
-      - name: Rust cache
-        uses: swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
-        with:
-          workspaces: src-tauri -> target
+      # No build caches (Rust target directory, bundler tools) in this job. A
+      # cache can be written by any job that runs on main, and what is
+      # restored here would be compiled into, or run while signing, the
+      # release. A cache saved by a tag's run is also only visible to that
+      # tag, so one release never reused the cache of another.
 
       - name: Install Linux dependencies
         if: matrix.platform == 'ubuntu-22.04' || matrix.platform == 'ubuntu-22.04-arm'
@@ -115,27 +151,13 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
 
       - name: Setup pnpm
         uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-
-      # The Windows bundler downloads WiX and NSIS from GitHub releases at
-      # bundle time, after the Rust build has already finished. A dropped
-      # connection there ("failed to bundle project `io: Peer disconnected`")
-      # throws away the whole build. Caching the tool dir means only a cache
-      # miss is exposed to that. The bundler re-downloads anything missing or
-      # hash-mismatched, so a stale restore is self-correcting.
-      - name: Cache Tauri bundler tools (WiX + NSIS)
-        if: runner.os == 'Windows'
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~\AppData\Local\tauri
-          key: tauri-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}
-          restore-keys: |
-            tauri-tools-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Sync version from package.json to tauri.conf.json + Cargo.toml
         # Safeguard: `np`/`pnpm version` should run this via the package.json
@@ -147,12 +169,17 @@ jobs:
       - name: Resolve release metadata
         id: release_meta
         shell: bash
+        env:
+          # Read from the environment: text interpolated into the script
+          # below would run as part of it.
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
-          if [ -n "${{ inputs.version }}" ]; then
-            TAG_NAME="v${{ inputs.version }}"
-            RELEASE_NAME="Forward Email v${{ inputs.version }}"
+          if [ -n "$INPUT_VERSION" ]; then
+            TAG_NAME="v${INPUT_VERSION}"
+            RELEASE_NAME="Forward Email v${INPUT_VERSION}"
           else
-            RAW_TAG="${{ github.event.inputs.tag || github.ref_name }}"
+            RAW_TAG="$INPUT_TAG"
             if [[ "$RAW_TAG" == desktop-v* ]]; then
               DISPLAY_VERSION="${RAW_TAG#desktop-v}"
               TAG_NAME="$RAW_TAG"
@@ -165,6 +192,10 @@ jobs:
               TAG_NAME="v$RAW_TAG"
               RELEASE_NAME="Forward Email v${RAW_TAG}"
             fi
+          fi
+          if [[ ! "$TAG_NAME" =~ ^[A-Za-z0-9._+-]+$ ]]; then
+            echo "::error::Invalid release tag"
+            exit 1
           fi
           echo "tag_name=$TAG_NAME" >> "$GITHUB_OUTPUT"
           echo "release_name=$RELEASE_NAME" >> "$GITHUB_OUTPUT"
@@ -576,29 +607,38 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Resolve release metadata
         id: release_meta
         shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
-          if [ -n "${{ inputs.version }}" ]; then
-            TAG_NAME="v${{ inputs.version }}"
+          if [ -n "$INPUT_VERSION" ]; then
+            TAG_NAME="v${INPUT_VERSION}"
           else
-            RAW_TAG="${{ github.event.inputs.tag || github.ref_name }}"
+            RAW_TAG="$INPUT_TAG"
             case "$RAW_TAG" in
               desktop-v*|v*) TAG_NAME="$RAW_TAG" ;;
               *)             TAG_NAME="v$RAW_TAG" ;;
             esac
+          fi
+          if [[ ! "$TAG_NAME" =~ ^[A-Za-z0-9._+-]+$ ]]; then
+            echo "::error::Invalid release tag"
+            exit 1
           fi
           echo "tag_name=$TAG_NAME" >> "$GITHUB_OUTPUT"
 
       - name: Promote draft to published
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.release_meta.outputs.tag_name }}
         shell: bash
         run: |
           set -euo pipefail
-          TAG="${{ steps.release_meta.outputs.tag_name }}"
           echo "Promoting $TAG from draft to published…"
           # `gh release edit` is idempotent — if the release is already
           # published this is a no-op rather than an error, which is the

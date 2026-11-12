@@ -13,13 +13,11 @@ on:
         required: true
         type: string
 
-# Minimal permissions — contents:write for release management; id-token +
-# attestations:write so called workflows can publish SLSA build-provenance
-# attestations to the Sigstore transparency log via actions/attest-build-provenance.
-permissions:
-  contents: write
-  id-token: write
-  attestations: write
+# No permissions by default: each job declares what it needs. Only the three
+# build jobs get attestations: write (with id-token: write), which the
+# workflows they call need to publish SLSA build-provenance attestations (and
+# the CLI to npm). The F-Droid job has id-token: write for GitHub Pages.
+permissions: {}
 
 concurrency:
   group: release-${{ github.ref }}
@@ -29,6 +27,8 @@ jobs:
   # ── 1. Create the GitHub Release ────────────────────────────────────────
   create-release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     outputs:
       release_id: ${{ steps.resolve.outputs.release_id }}
       upload_url: ${{ steps.resolve.outputs.upload_url }}
@@ -43,13 +43,19 @@ jobs:
 
       - name: Extract and validate version
         id: version
+        env:
+          # Read from the environment: text interpolated into the script
+          # below would run as part of it.
+          INPUT_VERSION: ${{ github.event.inputs.version }}
         run: |
-          VERSION="${{ github.event.inputs.version || '' }}"
+          VERSION="$INPUT_VERSION"
           if [ -z "$VERSION" ]; then
             VERSION="${GITHUB_REF#refs/tags/v}"
           fi
-          # Validate semver format (major.minor.patch with optional pre-release)
-          if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$'; then
+          # Validate semver format (major.minor.patch with optional pre-release).
+          # The whole value has to match: grep matches line by line, so a
+          # second line would pass and be written as a step output of its own.
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
             echo "Error: tag does not match semver format: $VERSION"
             exit 1
           fi
@@ -67,8 +73,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
-          TAG="v${{ steps.version.outputs.version }}"
+          TAG="v${VERSION}"
 
           # Fetch all releases for this tag (including drafts).
           # gh api /releases/tags/{tag} does NOT return drafts, so we
@@ -142,6 +149,8 @@ jobs:
   # don't ship a broken frontend to desktop or mobile.
   e2e-webview:
     needs: create-release
+    permissions:
+      contents: read
     uses: ./.github/workflows/e2e-webview.yml
     with:
       # Bypass the chore(release): skip guard inside e2e-webview.yml — without
@@ -178,7 +187,7 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION || '26' }}
-          cache: pnpm
+          package-manager-cache: false
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
       - name: Lint
@@ -205,6 +214,10 @@ jobs:
       && needs.create-release.result == 'success'
       && needs.e2e-webview.result == 'success'
       && needs.ci-gate.result == 'success' }}
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     uses: ./.github/workflows/release-desktop.yml
     with:
       version: ${{ needs.create-release.outputs.version }}
@@ -214,7 +227,21 @@ jobs:
       # gates mobile), so skip release-desktop.yml's internal gate to avoid
       # running the full 5-platform suite a second time per release.
       skip_e2e_gate: true
-    secrets: inherit
+    secrets:
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+      APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      ESIGNER_CREDENTIAL_ID: ${{ secrets.ESIGNER_CREDENTIAL_ID }}
+      ESIGNER_PASSWORD: ${{ secrets.ESIGNER_PASSWORD }}
+      ESIGNER_TOTP_SECRET: ${{ secrets.ESIGNER_TOTP_SECRET }}
+      ESIGNER_USERNAME: ${{ secrets.ESIGNER_USERNAME }}
+      MACOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.MACOS_PROVISIONING_PROFILE_BASE64 }}
+      SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
   # ── 2b. Build Mobile (Android APK/AAB + iOS IPA) ───────────────────────
   # Reusable workflow runs android + ios as sibling jobs. iOS is secret-gated
@@ -227,11 +254,30 @@ jobs:
       && needs.create-release.result == 'success'
       && needs.e2e-webview.result == 'success'
       && needs.ci-gate.result == 'success' }}
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     uses: ./.github/workflows/release-mobile.yml
     with:
       version: ${{ needs.create-release.outputs.version }}
       release_id: ${{ needs.create-release.outputs.release_id }}
-    secrets: inherit
+    secrets:
+      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APP_STORE_CONNECT_API_KEY: ${{ secrets.APP_STORE_CONNECT_API_KEY }}
+      APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+      APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+      GOOGLE_PLAY_SERVICE_ACCOUNT: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT }}
+      GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
+      IOS_CERTIFICATE_BASE64: ${{ secrets.IOS_CERTIFICATE_BASE64 }}
+      IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+      IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
 
   # ── 2c. Build the terminal client (forwardemail CLI) ──────────────────
   # Standalone executables and the one-line installers go onto the release,
@@ -243,10 +289,19 @@ jobs:
       && needs.create-release.result == 'success'
       && needs.e2e-webview.result == 'success'
       && needs.ci-gate.result == 'success' }}
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     uses: ./.github/workflows/release-cli.yml
     with:
       version: ${{ needs.create-release.outputs.version }}
-    secrets: inherit
+    secrets:
+      ESIGNER_CREDENTIAL_ID: ${{ secrets.ESIGNER_CREDENTIAL_ID }}
+      ESIGNER_PASSWORD: ${{ secrets.ESIGNER_PASSWORD }}
+      ESIGNER_TOTP_SECRET: ${{ secrets.ESIGNER_TOTP_SECRET }}
+      ESIGNER_USERNAME: ${{ secrets.ESIGNER_USERNAME }}
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   # ── 3. Generate checksums (best-effort) ────────────────────────────────
   # Resolves the target release fresh here — build-desktop/build-mobile
@@ -259,16 +314,27 @@ jobs:
     needs: [create-release, build-desktop, build-mobile, build-cli]
     if: always() && needs.build-desktop.result == 'success'
     runs-on: ubuntu-latest
+    # (the signing key of the "Sign checksums" step is a secret of this
+    # environment, as for the desktop bundles)
+    environment: release
+    permissions:
+      contents: write
+      # (to read the build attestations of the terminal client, below)
+      attestations: read
     steps:
       # The upload step below is a local composite action, and a local action
       # only exists on the runner once the repository is checked out. Without
       # this, every release since v0.14.0 failed here with "Can't find
       # action.yml" after the checksums were already computed. The assets
       # themselves come from the API, so only the actions directory is needed.
+      # (package.json, pnpm-lock.yaml and patches/ are for the signer below;
+      # files at the top of the repository come with a sparse checkout)
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          sparse-checkout: .github/actions
+          sparse-checkout: |
+            .github/actions
+            patches
 
       - name: Resolve release ID (prefer published over draft)
         id: resolve_release
@@ -302,7 +368,7 @@ jobs:
           RELEASE_ID: ${{ steps.resolve_release.outputs.release_id }}
         run: |
           echo "=== Release id=${RELEASE_ID} assets ==="
-          gh api "repos/${GH_REPO}/releases/${RELEASE_ID}/assets" \
+          gh api --paginate "repos/${GH_REPO}/releases/${RELEASE_ID}/assets?per_page=100" \
             --jq '.[].name' || echo "Failed to list assets"
 
       - name: Download release assets
@@ -315,9 +381,12 @@ jobs:
           mkdir -p artifacts
           cd artifacts
           # Hash every published asset, including updater signatures and
-          # latest.json. Exclude only a checksum file left by a rerun.
-          gh api "repos/${GH_REPO}/releases/${RELEASE_ID}/assets" \
-            --jq '.[] | select(.name != "SHA256SUMS.txt") | [.id, .name] | @tsv' | \
+          # latest.json. Exclude only a checksum file (and its signature)
+          # left by a rerun. Every page of the list is read: one request
+          # returns 30 assets, and a release has more (the Windows terminal
+          # builds and the installers were never in the checksums).
+          gh api --paginate "repos/${GH_REPO}/releases/${RELEASE_ID}/assets?per_page=100" \
+            --jq '.[] | select(.name != "SHA256SUMS.txt" and .name != "SHA256SUMS.txt.sig") | [.id, .name] | @tsv' | \
             while IFS=$'\t' read -r asset_id asset_name; do
               [ -z "$asset_id" ] && continue
               echo "→ $asset_name"
@@ -330,29 +399,106 @@ jobs:
           echo "=== Downloaded files ==="
           ls -la .
 
+      # This job signs the list of whatever is attached to the release, and
+      # any job that can write to the release can attach or replace a file.
+      # The terminal client installs what the signed list names, so its
+      # builds have to be the ones release-cli.yml made: that workflow
+      # attests each of them, and a build without that attestation stops the
+      # job before anything is listed or signed.
+      - name: Verify the terminal client builds
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          cd artifacts
+          shopt -s nullglob
+          for file in forwardemail-*.gz; do
+            gh attestation verify "$file" --repo "$GH_REPO" \
+              --signer-workflow "${GH_REPO}/.github/workflows/release-cli.yml"
+          done
+
       - name: Generate SHA-256 checksums
         id: sums
+        env:
+          VERSION: ${{ needs.create-release.outputs.version }}
         run: |
           cd artifacts
           shopt -s nullglob
           files=( * )
           if [ ${#files[@]} -gt 0 ]; then
             sha256sum -- "${files[@]}" | LC_ALL=C sort > SHA256SUMS.txt
+            # The release this list belongs to. The terminal client only
+            # accepts the list of the release it updates to
+            # (src/cli/update.ts), so a signed list from an earlier release
+            # cannot be attached to a later one. It is the last line. GNU
+            # sha256sum --check and shasum --check skip lines that begin
+            # with "#".
+            echo "# version: ${VERSION}" >> SHA256SUMS.txt
             echo "=== SHA256SUMS.txt ==="
             cat SHA256SUMS.txt
-            echo "=== File count: $(wc -l < SHA256SUMS.txt) ==="
+            echo "=== File count: ${#files[@]} ==="
             echo "generated=true" >> "$GITHUB_OUTPUT"
           else
             echo "No artifacts found to checksum — skipping (release will publish without SHA256SUMS.txt)"
             echo "generated=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Upload checksums to release
+      # The terminal client only installs an update whose SHA256SUMS.txt is
+      # signed by the key the desktop updater trusts (src/cli/update.ts): a
+      # checksum alone does not show who published the release. Signed with
+      # the same tool and key as the desktop bundles: the Tauri CLI from
+      # pnpm-lock.yaml, installed before the step that holds the key. Without
+      # the signature, terminal clients stay on the version they have, so a
+      # missing key fails the job. The checksums are uploaded all the same
+      # (the installers need them), and after the signing step, so that on a
+      # re-run the new list and its signature replace the old ones together.
+      - name: Setup pnpm
         if: steps.sums.outputs.generated == 'true'
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          run_install: false
+
+      - name: Setup Node
+        if: steps.sums.outputs.generated == 'true'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '26'
+          package-manager-cache: false
+
+      - name: Install the signer
+        if: steps.sums.outputs.generated == 'true'
+        run: pnpm install --frozen-lockfile
+
+      - name: Sign checksums
+        if: steps.sums.outputs.generated == 'true'
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY is not set, so SHA256SUMS.txt cannot be signed and terminal clients will not update to this release"
+            exit 1
+          fi
+          pnpm exec tauri signer sign artifacts/SHA256SUMS.txt
+          test -s artifacts/SHA256SUMS.txt.sig
+
+      - name: Upload checksums to release
+        if: ${{ !cancelled() && steps.sums.outputs.generated == 'true' }}
         uses: ./.github/actions/upload-release-asset
         with:
           release-id: ${{ steps.resolve_release.outputs.release_id }}
           path: artifacts/SHA256SUMS.txt
+          content-type: text/plain
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload checksums signature to release
+        if: steps.sums.outputs.generated == 'true'
+        uses: ./.github/actions/upload-release-asset
+        with:
+          release-id: ${{ steps.resolve_release.outputs.release_id }}
+          path: artifacts/SHA256SUMS.txt.sig
           content-type: text/plain
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -366,6 +512,8 @@ jobs:
     needs: [create-release, build-desktop, build-mobile, checksums]
     if: always() && needs.build-desktop.result == 'success' && needs.create-release.outputs.release_draft == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Publish release (consolidate onto pre-existing published if needed)
         env:
@@ -380,14 +528,16 @@ jobs:
 
           if [ -n "$OTHER_PUBLISHED" ]; then
             echo "Published release id=$OTHER_PUBLISHED already exists for $TAG; consolidating"
-            draft_assets=$(gh api "repos/${GH_REPO}/releases/${RELEASE_ID}/assets" \
-              --jq '.[] | [.id, .name] | @tsv' || true)
+            # (no "|| true": a listing that failed, or stopped after a page,
+            # must not reach the line below that deletes the draft)
+            draft_assets=$(gh api --paginate "repos/${GH_REPO}/releases/${RELEASE_ID}/assets?per_page=100" \
+              --jq '.[] | [.id, .name] | @tsv')
             if [ -n "$draft_assets" ]; then
               echo "Migrating stray draft assets onto the published release"
               while IFS=$'\t' read -r aid aname; do
                 [ -z "$aid" ] && continue
                 echo "  → $aname"
-                existing=$(gh api "repos/${GH_REPO}/releases/${OTHER_PUBLISHED}/assets" \
+                existing=$(gh api --paginate "repos/${GH_REPO}/releases/${OTHER_PUBLISHED}/assets?per_page=100" \
                   --jq ".[] | select(.name==\"$aname\") | .id" | head -n 1)
                 [ -n "$existing" ] && gh api -X DELETE "repos/${GH_REPO}/releases/assets/${existing}" || true
                 gh api -H "Accept: application/octet-stream" \
@@ -403,7 +553,7 @@ jobs:
                     break
                   fi
                   echo "::warning::Upload of ${aname} failed on attempt ${attempt}; retrying"
-                  stale=$(gh api "repos/${GH_REPO}/releases/${OTHER_PUBLISHED}/assets" \
+                  stale=$(gh api --paginate "repos/${GH_REPO}/releases/${OTHER_PUBLISHED}/assets?per_page=100" \
                     --jq ".[] | select(.name==\"$aname\") | .id" | head -n 1)
                   [ -z "$stale" ] || gh api -X DELETE "repos/${GH_REPO}/releases/assets/${stale}" || true
                   sleep $(( attempt * attempt * 5 ))
@@ -471,7 +621,9 @@ jobs:
     uses: ./.github/workflows/publish-fdroid-repo.yml
     with:
       tag: v${{ needs.create-release.outputs.version }}
-    secrets: inherit
+    secrets:
+      FDROID_KEYSTORE_BASE64: ${{ secrets.FDROID_KEYSTORE_BASE64 }}
+      FDROID_KEYSTORE_PASSWORD: ${{ secrets.FDROID_KEYSTORE_PASSWORD }}
 
   # ── 4c. Open/update the first-party Homebrew tap pull request ──────────
   # The source release is created with GITHUB_TOKEN, so invoke this reusable
@@ -484,10 +636,13 @@ jobs:
       && needs.build-desktop.result == 'success'
       && (needs.publish.result == 'success' || needs.publish.result == 'skipped')
       && vars.PUBLISH_HOMEBREW_TAP == 'true'
+    permissions:
+      contents: read
     uses: ./.github/workflows/publish-homebrew-tap.yml
     with:
       tag: v${{ needs.create-release.outputs.version }}
-    secrets: inherit
+    secrets:
+      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
 
   # ── 5. Deploy web app ─────────────────────────────────────────────────
   # Inline deploy because GITHUB_TOKEN events don't trigger other workflows,
@@ -530,10 +685,18 @@ jobs:
           # Wrangler 4.87+ requires Node 22+ (see "Deploy Worker" step
           # below). Keep aligned with deploy.yml's NODE_VERSION env.
           node-version: '26'
-          cache: pnpm
+          # No `cache: pnpm`: a cache can be written by any job that runs on
+          # main, and this job deploys what it installs.
+          package-manager-cache: false
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      # Wrangler comes from worker/pnpm-lock.yaml and is installed here,
+      # before any step that holds a credential, without install scripts.
+      - name: Install Worker dependencies
+        working-directory: worker
+        run: pnpm install --frozen-lockfile --ignore-scripts
 
       - name: Build
         env:
@@ -570,8 +733,7 @@ jobs:
           sed -i -E "s/^bucket_name = \".*\"/bucket_name = \"${R2_BUCKET}\"/" worker/wrangler.toml
           grep -q "bucket_name = \"${R2_BUCKET}\"" worker/wrangler.toml
           cd worker
-          pnpm install --no-frozen-lockfile
-          npx wrangler deploy
+          pnpm exec wrangler deploy
 
       - name: Purge Cloudflare Cache
         env:
@@ -592,6 +754,9 @@ jobs:
   release-screenshots:
     needs: [create-release, deploy]
     if: always() && needs.deploy.result == 'success'
+    # (commits the refreshed gallery to main)
+    permissions:
+      contents: write
     uses: ./.github/workflows/readme-screenshots.yml
     with:
       base_url: 'https://mail.forwardemail.net'
@@ -609,6 +774,7 @@ jobs:
     needs: [create-release, deploy, release-screenshots]
     if: always() && needs.deploy.result == 'success'
     runs-on: ubuntu-latest
+    permissions: {}
     env:
       MATRIX_TOKEN: ${{ secrets.MATRIX_TOKEN }}
     steps:
@@ -663,6 +829,9 @@ jobs:
       - release-screenshots
     if: always()
     runs-on: ubuntu-latest
+    # (the last step marks the release Latest when that was missed)
+    permissions:
+      contents: write
     steps:
       - name: Summarize and assert
         env:

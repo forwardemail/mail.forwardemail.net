@@ -57,7 +57,7 @@ runs:
 
         delete_existing() {
           local ids
-          ids=$(gh api "repos/${GH_REPO}/releases/${RELEASE_ID}/assets?per_page=100" \
+          ids=$(gh api --paginate "repos/${GH_REPO}/releases/${RELEASE_ID}/assets?per_page=100" \
             --jq ".[] | select(.name==\"$name\") | .id" || true)
           for id in $ids; do
             echo "Removing existing asset $name (id $id)"
@@ -67,7 +67,7 @@ runs:
 
         verify() {
           local remote
-          remote=$(gh api "repos/${GH_REPO}/releases/${RELEASE_ID}/assets?per_page=100" \
+          remote=$(gh api --paginate "repos/${GH_REPO}/releases/${RELEASE_ID}/assets?per_page=100" \
             --jq ".[] | select(.name==\"$name\") | .size" | head -n 1 || true)
           [ "$remote" = "$size" ]
         }
