@@ -36,6 +36,19 @@
   </screenshots>
   <!-- scripts/sync-version.cjs prepends a release entry on every version bump. -->
   <releases>
+    <release version="1.0.11" date="2026-11-12">
+      <description>
+        <p>New</p>
+        <ul>
+          <li>Message format, catch-all From, filters on existing mail, notification privacy</li>
+        </ul>
+        <p>Fixes</p>
+        <ul>
+          <li>Sent recipients in compose, keyboard-safe dialogs, form validation</li>
+          <li>Relaunch a wedged app quickly, and never race the retry</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.0.10" date="2026-11-08">
       <description>
         <p>Fixes</p>

@@ -6,6 +6,17 @@ release notes are taken from here. To change what a commit says, add a
 `Release-note: <text>` line to its message (or `Release-note: none` to leave
 it out).
 
+## 1.0.11 (2026-11-12)
+
+### New
+
+- Message format, catch-all From, filters on existing mail, notification privacy
+
+### Fixes
+
+- Sent recipients in compose, keyboard-safe dialogs, form validation
+- Relaunch a wedged app quickly, and never race the retry
+
 ## 1.0.10 (2026-11-08)
 
 ### Fixes
