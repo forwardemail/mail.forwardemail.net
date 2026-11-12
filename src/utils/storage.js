@@ -85,6 +85,7 @@ const getCachedAccountIds = async () => {
 const META_EXACT_KEY_PREFIXES = [
   'mutation_queue_',
   'contacts_v2_',
+  'recent_recipients_v1_',
   'calendars_',
   'calendar_prefs_',
 ];

@@ -856,6 +856,7 @@ async function queryWhere(
       // Decrypted rows cut down to the requested fields, so a scan that needs
       // a few fields of many rows (the reply index) does not clone whole
       // records to the main thread. Unlike summaries, these are opened.
+      if (options.reverse) collection = collection.reverse();
       if (options.offset) collection = collection.offset(options.offset);
       if (options.limit) collection = collection.limit(options.limit);
       const stored = (await collection.toArray()) as Array<Record<string, unknown>>;

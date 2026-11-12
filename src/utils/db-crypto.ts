@@ -112,6 +112,7 @@ const PLAINTEXT_FIELDS: Record<string, Set<string>> = {
 export const SENSITIVE_META_KEY_PREFIXES = [
   'mutation_queue_',
   'contacts_',
+  'recent_recipients_v1_',
   'att_blob_',
   'att_cache_manifest',
   'saved_search_',

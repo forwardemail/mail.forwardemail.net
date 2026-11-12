@@ -49,7 +49,7 @@ export default defineConfig({
             use: { ...devices['Desktop Firefox'] },
             // Firefox only runs smoke + web-adapter suites — the legacy
             // desktop specs use selectors we haven't validated cross-browser.
-            testMatch: [/smoke\//, /adapters\/web\//],
+            testMatch: [/smoke\//, /adapters\/web\//, /compose-recipient-suggestions\.spec/],
           },
         ]
       : []),
@@ -58,7 +58,7 @@ export default defineConfig({
           {
             name: 'web-webkit',
             use: { ...devices['Desktop Safari'] },
-            testMatch: [/smoke\//, /adapters\/web\//],
+            testMatch: [/smoke\//, /adapters\/web\//, /compose-recipient-suggestions\.spec/],
           },
         ]
       : []),
@@ -74,6 +74,7 @@ export default defineConfig({
         /mobile-stability\.spec/,
         /mobile-list-position\.spec/,
         /mobile-reader-history\.spec/,
+        /compose-recipient-suggestions\.spec/,
         /adapters\/web\//,
       ],
     },
@@ -85,7 +86,7 @@ export default defineConfig({
       // mobile-android-web (Pixel 7, Chromium) already covers mobile viewport
       // for the mailbox flow. Dedicated iOS mailbox coverage needs a proper
       // investigation of the WebKit-specific gaps and is tracked separately.
-      testMatch: [/smoke\//, /adapters\/web\//],
+      testMatch: [/smoke\//, /adapters\/web\//, /compose-recipient-suggestions\.spec/],
       testIgnore: [/mailbox\.spec/],
     },
   ],

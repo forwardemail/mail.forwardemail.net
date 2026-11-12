@@ -1,6 +1,6 @@
 <script lang="ts">
   import { isEdgeSwipeStart } from '../utils/mobile-edge-swipe';
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount, onDestroy, tick } from 'svelte';
   import { get, type Readable, type Unsubscriber } from 'svelte/store';
   import { downloadFile } from '../utils/download';
   import { pickFiles } from '../utils/file-picker';
@@ -21,7 +21,8 @@
   import { Remote } from '../utils/remote';
   import { isDemoBlockedError } from '../utils/demo-mode';
   import { db } from '../utils/db';
-  import { normalizeEmail } from '../utils/address';
+  import { isValidEmail, normalizeEmail, recipientsToList } from '../utils/address';
+  import { getContacts, getRecentRecipients, mergeRecipientSources } from '../utils/contact-cache';
   import { queueEmail } from '../utils/outbox-service';
   import { refreshTaskReminders } from '../utils/task-reminders';
   import { DARK_SURFACE, LIGHT_SURFACE } from '../utils/dark-surface';
@@ -481,16 +482,113 @@
       .map((e) => e.trim())
       .filter(Boolean);
 
+  let attendeeError = $state('');
+  // People to suggest as attendees: Contacts and everyone mail was sent to,
+  // the people written to most first. Shown by the browser's own list
+  // (<datalist>), which stays clear of the on-screen keyboard.
+  let attendeeOptions = $state<{ email: string; name: string }[]>([]);
+  let attendeeOptionsLoadedAt = 0;
+
+  const loadAttendeeOptions = async () => {
+    if (Date.now() - attendeeOptionsLoadedAt < 60_000) return;
+    attendeeOptionsLoadedAt = Date.now();
+    try {
+      let sentFolder: string | null = null;
+      try {
+        const { mailboxStore } = await import('../stores/mailboxStore');
+        sentFolder = (mailboxStore.actions.getSentFolderPath?.() as string) || null;
+      } catch {
+        sentFolder = null;
+      }
+      const [contacts, recents] = await Promise.all([
+        getContacts().catch(() => []),
+        getRecentRecipients({ sentFolder }).catch(() => []),
+      ]);
+      attendeeOptions = (
+        mergeRecipientSources(contacts, recents) as {
+          email: string;
+          name: string;
+          count: number;
+          isContact: boolean;
+        }[]
+      )
+        .sort((a, b) => b.count - a.count || Number(b.isContact) - Number(a.isContact))
+        .slice(0, 500)
+        .map(({ email, name }) => ({ email, name }));
+    } catch {
+      attendeeOptionsLoadedAt = 0;
+    }
+  };
+
+  // A draft belongs to the dialog it was typed in: Save adds it, so one left
+  // from a cancelled dialog must not reach the next event.
+  $effect(() => {
+    if (!newEventModal) newAttendeeDraft = '';
+    if (!editEventModal) editAttendeeDraft = '';
+    if (newEventModal || editEventModal) void loadAttendeeOptions();
+    else attendeeError = '';
+  });
+
+  // Shows the attendee field (under More details) with its message.
+  const showAttendeeProblem = async (id: string) => {
+    optionalFieldsExpanded = true;
+    await tick();
+    document.getElementById(id)?.focus();
+  };
+
+  // Splits typed or pasted text into addresses: "a@x.com b@y.com",
+  // "a@x.com; b@y.com" and "Jane Doe <jane@x.com>" all work.
+  const splitAttendeeInput = (text: string) => {
+    const valid: string[] = [];
+    const invalid: string[] = [];
+    for (const part of recipientsToList((text || '').replace(/;/g, ','))) {
+      const value = String(part).trim();
+      const words = value.includes('<') ? [value] : value.split(/\s+/);
+      for (const word of words.filter(Boolean)) {
+        if (isValidEmail(word)) valid.push(normalizeEmail(word));
+        else invalid.push(word);
+      }
+    }
+    return { valid, invalid };
+  };
+
+  // Adds what was typed to an attendee list (once each, in any letter case).
+  // Anything that is not an address stays in the field with a message.
+  const addAttendees = (draft: string, current: string) => {
+    const { valid, invalid } = splitAttendeeInput(draft);
+    const list = parseAttendeeList(current);
+    const seen = new Set(list.map((email) => normalizeEmail(email)));
+    for (const email of valid) {
+      if (seen.has(email)) continue;
+      seen.add(email);
+      list.push(email);
+    }
+    attendeeError = invalid.length
+      ? `Not an email address: ${invalid.join(', ')}. Fix it or remove it to save.`
+      : '';
+    return { attendees: list.join(', '), remaining: invalid.join(', ') };
+  };
+
+  /** Adds the typed attendees; false when something typed is not an address. */
   const addAttendeeToNewEvent = () => {
-    const trimmed = newAttendeeDraft.trim();
-    if (!trimmed) return;
-    const list = parseAttendeeList(newEvent.attendees);
-    if (!list.includes(trimmed)) {
-      list.push(trimmed);
-      newEvent.attendees = list.join(', ');
+    if (!newAttendeeDraft.trim()) return true;
+    const result = addAttendees(newAttendeeDraft, newEvent.attendees);
+    if (result.attendees !== newEvent.attendees) {
+      newEvent.attendees = result.attendees;
       modalDirty = true;
     }
-    newAttendeeDraft = '';
+    newAttendeeDraft = result.remaining;
+    return !result.remaining;
+  };
+
+  // A comma or semicolon ends an address as it is typed, on keyboards that
+  // send no key names for them (Android).
+  const onAttendeeInput = (which: 'new' | 'edit', event: Event) => {
+    attendeeError = '';
+    const value = (event.target as HTMLInputElement)?.value || '';
+    if (!/[,;]\s*$/.test(value)) return;
+    if (which === 'new') addAttendeeToNewEvent();
+    else addAttendeeToEditEvent();
   };
 
   const removeAttendeeFromNewEvent = (email: string) => {
@@ -500,14 +598,11 @@
   };
 
   const addAttendeeToEditEvent = () => {
-    const trimmed = editAttendeeDraft.trim();
-    if (!trimmed) return;
-    const list = parseAttendeeList(editEvent.attendees);
-    if (!list.includes(trimmed)) {
-      list.push(trimmed);
-      editEvent.attendees = list.join(', ');
-    }
-    editAttendeeDraft = '';
+    if (!editAttendeeDraft.trim()) return true;
+    const result = addAttendees(editAttendeeDraft, editEvent.attendees);
+    editEvent.attendees = result.attendees;
+    editAttendeeDraft = result.remaining;
+    return !result.remaining;
   };
 
   const removeAttendeeFromEditEvent = (email: string) => {
@@ -2812,6 +2907,10 @@
   }>({ open: false, action: null });
 
   const promptRecurrenceEdit = (action: 'save' | 'delete') => {
+    if (action === 'save' && editEvent.componentType !== 'VTODO' && !addAttendeeToEditEvent()) {
+      void showAttendeeProblem('edit-event-attendee-input');
+      return;
+    }
     if (!isEditingRecurringEvent) {
       if (action === 'save' && isCustomRecurrence) return;
       if (action === 'save') updateEvent();
@@ -2878,6 +2977,12 @@
 
   const attemptSaveNewEvent = () => {
     titleError = '';
+    // An attendee typed but not added yet is added now, not dropped.
+    // Tasks have no attendees.
+    if (newEvent.componentType !== 'VTODO' && !addAttendeeToNewEvent()) {
+      void showAttendeeProblem('new-event-attendee-input');
+      return;
+    }
     if (!newEvent.title?.trim()) {
       titleError = 'Title is required.';
       const input = document.getElementById('event-title') as HTMLInputElement | null;
@@ -4509,6 +4614,12 @@
       <span>Privacy: Your calendar data is stored privately and never shared.</span>
     </div>
   </div>
+  <datalist id="attendee-suggestions">
+    {#each attendeeOptions as option (option.email)}
+      <option value={option.email} label={option.name || option.email}></option>
+    {/each}
+  </datalist>
+
   <Dialog.Root bind:open={newEventModal}>
     <Dialog.Content
       class="sm:max-w-[520px] overflow-x-hidden [&>*]:min-w-0"
@@ -4903,11 +5014,20 @@
                 <div class="flex gap-2">
                   <Input
                     id="new-event-attendee-input"
-                    type="email"
+                    type="text"
+                    inputmode="email"
+                    autocapitalize="off"
+                    autocorrect="off"
+                    spellcheck="false"
+                    autocomplete="off"
+                    list="attendee-suggestions"
                     placeholder="email@example.com"
+                    aria-invalid={attendeeError ? 'true' : undefined}
+                    aria-describedby={attendeeError ? 'new-event-attendee-input-error' : undefined}
                     bind:value={newAttendeeDraft}
+                    oninput={(e) => onAttendeeInput('new', e)}
                     onkeydown={(e) => {
-                      if (e.key === 'Enter') {
+                      if (e.key === 'Enter' && !e.isComposing) {
                         e.preventDefault();
                         addAttendeeToNewEvent();
                       }
@@ -4925,6 +5045,15 @@
                     <Plus class="h-4 w-4" />
                   </Button>
                 </div>
+                {#if attendeeError}
+                  <p
+                    id="new-event-attendee-input-error"
+                    class="text-sm text-destructive"
+                    role="alert"
+                  >
+                    {attendeeError}
+                  </p>
+                {/if}
                 {#each parseAttendeeList(newEvent.attendees) as email (email)}
                   <div class="flex items-center justify-between border border-border p-2">
                     <div class="flex min-w-0 items-center gap-2">
@@ -5328,11 +5457,20 @@
                 <div class="flex gap-2">
                   <Input
                     id="edit-event-attendee-input"
-                    type="email"
+                    type="text"
+                    inputmode="email"
+                    autocapitalize="off"
+                    autocorrect="off"
+                    spellcheck="false"
+                    autocomplete="off"
+                    list="attendee-suggestions"
                     placeholder="email@example.com"
+                    aria-invalid={attendeeError ? 'true' : undefined}
+                    aria-describedby={attendeeError ? 'edit-event-attendee-input-error' : undefined}
                     bind:value={editAttendeeDraft}
+                    oninput={(e) => onAttendeeInput('edit', e)}
                     onkeydown={(e) => {
-                      if (e.key === 'Enter') {
+                      if (e.key === 'Enter' && !e.isComposing) {
                         e.preventDefault();
                         addAttendeeToEditEvent();
                       }
@@ -5350,6 +5488,15 @@
                     <Plus class="h-4 w-4" />
                   </Button>
                 </div>
+                {#if attendeeError}
+                  <p
+                    id="edit-event-attendee-input-error"
+                    class="text-sm text-destructive"
+                    role="alert"
+                  >
+                    {attendeeError}
+                  </p>
+                {/if}
                 {#each parseAttendeeList(editEvent.attendees) as email (email)}
                   <div class="flex items-center justify-between border border-border p-2">
                     <div class="flex min-w-0 items-center gap-2">

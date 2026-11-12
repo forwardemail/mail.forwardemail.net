@@ -60,7 +60,7 @@ test.describe('CardDAV contacts with multiple email addresses', () => {
 
     const suggestion = page
       .locator('.contact-suggestions')
-      .getByRole('button', { name: /Tino Kremer.*info@tinokremer\.nl/i });
+      .getByRole('option', { name: /Tino Kremer.*info@tinokremer\.nl/i });
     await expect(suggestion).toBeVisible();
     await suggestion.click();
 
@@ -93,7 +93,7 @@ test.describe('CardDAV contacts with multiple email addresses', () => {
     await expect(
       page
         .locator('.contact-suggestions')
-        .getByRole('button', { name: /Tino Kremer.*info@tinokremer\.nl/i }),
+        .getByRole('option', { name: /Tino Kremer.*info@tinokremer\.nl/i }),
     ).toBeVisible();
   });
 });

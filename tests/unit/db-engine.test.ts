@@ -97,6 +97,26 @@ describe('db-engine executeOperation', () => {
     expect(rows).toEqual([{ id: 's1', in_reply_to: '<x>' }]);
   });
 
+  it('query in fields mode honours reverse with limit (newest rows first)', async () => {
+    await run('bulkPut', 'messages', {
+      records: [1, 2, 3, 4].map((n) => ({ account: 'a', id: `s${n}`, folder: 'Sent', date: n })),
+    });
+    const rows = (await run('query', 'messages', {
+      index: '[account+folder+date]',
+      where: {
+        op: 'between',
+        lower: ['a', 'Sent', Dexie.minKey],
+        upper: ['a', 'Sent', Dexie.maxKey],
+        includeLower: true,
+        includeUpper: true,
+      },
+      queryMode: 'fields',
+      fields: ['id'],
+      options: { reverse: true, limit: 2 },
+    })) as Row[];
+    expect(rows).toEqual([{ id: 's4' }, { id: 's3' }]);
+  });
+
   it('queryEquals resolves the [account+folder] compound index', async () => {
     await run('bulkPut', 'messages', {
       records: [

@@ -218,3 +218,75 @@ export function __resetViewportGuardForTests(): void {
   repairWindowStart = 0;
   repairsInWindow = 0;
 }
+
+// ---------------------------------------------------------------------------
+// Keyboard-aware viewport
+//
+// iOS, and Android Chrome and WebView from 108 on, leave the layout viewport
+// full height when the on-screen keyboard opens; only the visual viewport
+// shrinks. Anything fixed to the layout viewport (dialogs) then sits partly
+// under the keyboard, Save button included. These variables carry the part
+// of the screen left above the keyboard, for layout to use:
+//   --fe-vv-top     the visual viewport's top within the layout viewport
+//   --fe-vv-height  its height
+// A field that gains focus, or stays focused while the keyboard resizes the
+// view, is kept in sight inside its dialog.
+// ---------------------------------------------------------------------------
+
+let keyboardViewportInstalled = false;
+
+function takesText(el: Element | null): el is HTMLElement {
+  if (!el) return false;
+  if (el instanceof HTMLTextAreaElement) return true;
+  if ((el as HTMLElement).isContentEditable) return true;
+  return (
+    el instanceof HTMLInputElement &&
+    !['checkbox', 'radio', 'range', 'button', 'submit', 'reset', 'file', 'color'].includes(el.type)
+  );
+}
+
+export function installKeyboardViewport(): void {
+  if (!hasWindow() || keyboardViewportInstalled || !window.visualViewport) return;
+  keyboardViewportInstalled = true;
+  const viewport = window.visualViewport;
+  const root = document.documentElement;
+  let frame = 0;
+  let settle: ReturnType<typeof setTimeout> | undefined;
+
+  const keepFocusedFieldInView = () => {
+    const el = document.activeElement;
+    if (!takesText(el)) return;
+    // Only inside dialogs: other screens handle their own scrolling, and the
+    // composer places its own fields and suggestions.
+    if (!el.closest('[data-slot="dialog-content"]')) return;
+    const rect = el.getBoundingClientRect();
+    const top = viewport.offsetTop;
+    const bottom = viewport.offsetTop + viewport.height;
+    if (rect.top < top || rect.bottom > bottom) el.scrollIntoView({ block: 'nearest' });
+  };
+
+  const update = () => {
+    cancelAnimationFrame(frame);
+    frame = requestAnimationFrame(() => {
+      root.style.setProperty('--fe-vv-top', `${Math.max(0, viewport.offsetTop)}px`);
+      root.style.setProperty('--fe-vv-height', `${viewport.height}px`);
+      keepFocusedFieldInView();
+    });
+    // Dialogs animate their size and position, so look again once they and
+    // the keyboard have settled.
+    clearTimeout(settle);
+    settle = setTimeout(keepFocusedFieldInView, 350);
+  };
+
+  viewport.addEventListener('resize', update, { passive: true });
+  viewport.addEventListener('scroll', update, { passive: true });
+  // The keyboard opens a moment after focus; the resize above covers that,
+  // and this covers a field focused while the keyboard is already up.
+  document.addEventListener('focusin', update);
+  update();
+}
+
+/** Test helper: forget the keyboard viewport install. */
+export function __resetKeyboardViewportForTests(): void {
+  keyboardViewportInstalled = false;
+}

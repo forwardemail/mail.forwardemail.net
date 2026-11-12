@@ -9,6 +9,7 @@
   import { Remote } from '../utils/remote';
   import { isDemoBlockedError } from '../utils/demo-mode';
   import { Local } from '../utils/storage';
+  import { isValidEmail } from '../utils/address';
   import {
     removeContactFromCache,
     upsertContactInCache,
@@ -951,10 +952,23 @@
     importMenuOpen = false;
   };
 
+  // A contact needs a name or an address, and an address must be one. The
+  // field's type="email" is not checked by the browser outside a <form>.
+  const contactProblem = (name: string, email: string) => {
+    if (!name && !email) return 'Add a name or an email address.';
+    if (email && !isValidEmail(email)) return `Not an email address: ${email}`;
+    return '';
+  };
+
   const saveInline = async () => {
     if (!draft) return;
     const name = (draft.name || '').trim();
     const email = (draft.email || '').trim();
+    error = contactProblem(name, email);
+    if (error) {
+      document.getElementById(email ? 'contact-email' : 'contact-name')?.focus();
+      return;
+    }
     loading = true;
     error = '';
     try {
@@ -1072,11 +1086,15 @@
   };
 
   const saveModal = async () => {
+    const name = (modalContact.name || '').trim();
+    const email = (modalContact.email || '').trim();
+    modalError = contactProblem(name, email);
+    if (modalError) {
+      document.getElementById(email ? 'modal-email' : 'modal-name')?.focus();
+      return;
+    }
     modalSaving = true;
-    modalError = '';
     try {
-      const name = (modalContact.name || '').trim();
-      const email = (modalContact.email || '').trim();
       const contactData: Contact = {
         id: modalContact.id,
         name,

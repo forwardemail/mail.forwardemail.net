@@ -18,6 +18,7 @@ import { cacheManager } from '../utils/cache-manager';
 import { normalizeSubject, parseReferences } from '../utils/threading';
 import { formatFriendlyDate } from '../utils/date';
 import { normalizeMessageForCache, getMessageApiId } from '../utils/sync-helpers';
+import { cacheSentRecipients } from '../utils/contact-cache';
 import { assertAccountScoped } from '../utils/account-scope';
 import { getSyncSettings } from '../utils/sync-settings';
 import {
@@ -83,7 +84,7 @@ import { warn } from '../utils/logger.ts';
 import { folderMessageCache } from './folder-message-cache';
 import { isOnline } from '../utils/network-status';
 import { getAuthHeader, getAuthHeaderForAccount } from '../utils/auth';
-import { noteLightweightListResponse, lightweightListSupported } from '../utils/api-capabilities';
+import { noteLightweightListResponse } from '../utils/api-capabilities';
 import { listFreshness } from '../utils/list-freshness';
 import {
   isValidDexieKeyFallback,
@@ -548,34 +549,24 @@ const createMailboxStore = () => {
           ? await sentRange.pickFields(REPLY_INDEX_FIELDS)
           : await sentRange.toArray();
 
-      // If no sent messages in IDB, bootstrap from API so the reply index
-      // works even if the user has never opened the Sent folder.
+      // If no sent messages in IDB, fill the cache from the server so the
+      // reply index works even if the user has never opened the Sent folder.
+      // Shared with compose autocomplete, which caches the same folder.
       if (!sentMessages.length) {
-        try {
-          // These records are persisted to db.messages, so they must carry
-          // recipients. Gate lightweight on this server returning address
-          // fields, otherwise the reply index is seeded from empty envelopes.
-          const authHeader = getAuthHeaderForAccount(account as string);
-          if (!authHeader) throw new Error(`No credentials available for ${account}`);
-          const res = await Remote.request(
-            'MessageList',
-            {
-              folder: sentFolder,
-              limit: 200,
-              ...(lightweightListSupported() ? { lightweight: true } : {}),
-            },
-            { method: 'GET', pathOverride: '/v1/messages', authHeader },
-          );
-          const items = Array.isArray(res) ? res : res?.data || res?.messages || [];
-          if (items.length) {
-            const normalized = items.map((m) =>
-              normalizeMessageForCache(m, sentFolder as string, account as string),
-            );
-            await db.messages.bulkPut(normalized).catch(() => {});
-            sentMessages = normalized;
-          }
-        } catch (fetchErr) {
-          warn('[replies] Failed to bootstrap sent messages from API', fetchErr);
+        const added = await cacheSentRecipients({
+          account: account as string,
+          sentFolder,
+          force: true,
+          skipIds: getPendingDeleteIds().map(String),
+        });
+        if (added) {
+          const refilled = db.messages
+            .where('[account+folder+date]')
+            .between([account, sentFolder, since], [account, sentFolder, Dexie.maxKey], true, true);
+          sentMessages =
+            typeof refilled.pickFields === 'function'
+              ? await refilled.pickFields(REPLY_INDEX_FIELDS)
+              : await refilled.toArray();
         }
       }
 
@@ -2090,6 +2081,14 @@ const createMailboxStore = () => {
 
       if (folder === getSentFolderPath()) {
         refreshReplyTargets({ account, force: true }).catch(() => {});
+      } else if (account === (Local.get('email') || 'default')) {
+        // Keep Sent cached for compose autocomplete even if it is never
+        // opened. After the list has loaded, so it never delays it.
+        cacheSentRecipients({
+          account,
+          sentFolder: getSentFolderPath(),
+          skipIds: getPendingDeleteIds().map(String),
+        }).catch(() => {});
       }
 
       // Check quota and evict if needed (async, non-blocking)

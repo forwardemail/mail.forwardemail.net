@@ -84,7 +84,13 @@
   import { i18n } from '../utils/i18n';
   import { Remote } from '../utils/remote';
   import { isDemoBlockedError, isDemoMode, showDemoBlockedToast } from '../utils/demo-mode';
-  import { getContacts, mergeRecentAddresses } from '../utils/contact-cache';
+  import {
+    getContacts,
+    getRecentRecipients,
+    mergeRecentAddresses,
+    mergeRecipientSources,
+    searchRecipients,
+  } from '../utils/contact-cache';
   import { Accounts, Local } from '../utils/storage';
   import { db } from '../utils/db';
   import { getMessageApiId } from '../utils/sync-helpers';
@@ -350,14 +356,27 @@
   // when it can find a key over WKD, but that is invisible and cannot be
   // forced; this is the override, and it uses only keys the user pinned.
   let encryptEnabled = $state(false);
+  // The chips plus whatever is still typed in the field, so an address typed
+  // and sent without leaving the field is not dropped.
+  const withPendingRecipients = (list: string[], input: string) => {
+    const seen = new Set<string>();
+    return [...list, ...splitRecipientTokens(input)].filter((entry) => {
+      const key = normalizeEmail(entry) || entry;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  };
   // Bcc is left out on purpose: an encrypted send refuses it (see pgp-send),
   // so counting it here would show a green banner for a send that will fail.
-  const encryptRecipients = $derived([
-    ...(toList.length ? toList : parseRecipients(toInput)),
-    ...(ccList.length ? ccList : parseRecipients(ccInput)),
-  ]);
+  // Only full addresses count: a name still being typed is not a recipient yet.
+  const encryptRecipients = $derived(
+    [...withPendingRecipients(toList, toInput), ...withPendingRecipients(ccList, ccInput)].filter(
+      (entry) => isValidEmail(entry),
+    ),
+  );
   const encryptHasBcc = $derived(
-    (bccList.length ? bccList : parseRecipients(bccInput)).some((a) => String(a).trim()),
+    withPendingRecipients(bccList, bccInput).some((a) => String(a).trim()),
   );
   const encryptCoverage = $derived(recipientKeyCoverage(encryptRecipients));
   const encryptReady = $derived(encryptCoverage.allCovered && !encryptHasBcc);
@@ -490,7 +509,16 @@
   );
 
   let focusedField = $state('to');
-  let contactOptions = $state<unknown[]>([]);
+  interface RecipientOption {
+    email: string;
+    name: string;
+    company: string;
+    count: number;
+    lastUsed: number;
+    isContact: boolean;
+  }
+  const RECIPIENT_OPTIONS_TTL_MS = 60 * 1000;
+  let contactOptions = $state<RecipientOption[]>([]);
   let editorView = $state<Editor | null>(null);
 
   const ImageWithSize = Image.extend({
@@ -684,13 +712,16 @@
   let ccList = $state<string[]>([]);
   let bccList = $state<string[]>([]);
   let showAddressBook = $state<'to' | 'cc' | 'bcc' | 'replyTo' | null>(null);
-  let recipientSuggestions = $state<unknown[]>([]);
+  let recipientSuggestions = $state<RecipientOption[]>([]);
   let recipientSuggestionField = $state<string | null>(null);
   let recipientSuggestionQuery = $state('');
   let recipientSuggestionIndex = $state(-1);
+  let recipientSuggestionChosen = false;
   let contactOptionsLoaded = $state(false);
-  let contactOptionsLoading = $state(false);
-  let contactOptionsLoadPromise: Promise<unknown> | null = null;
+  let contactOptionsLoadedAt = 0;
+  let contactOptionsAccount = '';
+  let suggestionRefreshPending = false;
+  let contactOptionsLoadPromise: Promise<RecipientOption[]> | null = null;
   let currentDraftId = $state<string | null>(null);
   let currentDraftServerId = $state<string | null>(null);
   let currentDraftSyncedAt = $state<number | null>(null);
@@ -831,9 +862,9 @@
   };
 
   const validateEmailContent = () => {
-    const toRecipients = toList.length ? toList : parseRecipients(toInput);
-    const ccRecipients = ccList.length ? ccList : parseRecipients(ccInput);
-    const bccRecipients = bccList.length ? bccList : parseRecipients(bccInput);
+    const toRecipients = withPendingRecipients(toList, toInput);
+    const ccRecipients = withPendingRecipients(ccList, ccInput);
+    const bccRecipients = withPendingRecipients(bccList, bccInput);
     if (!toRecipients.length && !ccRecipients.length && !bccRecipients.length) {
       return { valid: false, error: 'Please add at least one recipient.' };
     }
@@ -871,7 +902,7 @@
     const sendAt = getScheduledTimestamp();
     if (!sendAt) return null;
     const scheduledDate = new Date(sendAt);
-    const toRecipients = toList.length ? toList : parseRecipients(toInput);
+    const toRecipients = withPendingRecipients(toList, toInput);
     return {
       date: scheduledDate.toLocaleDateString(i18n.getFormattingLocale(), {
         weekday: 'long',
@@ -920,26 +951,9 @@
   const getMaxScheduleDateString = () =>
     toDateInputValue(new Date(Date.now() + MAX_SCHEDULE_LEAD_MS));
 
-  const normalizeContact = (contact: unknown) => {
-    if (!contact) return null;
-    if (typeof contact === 'string') {
-      const email = contact.trim();
-      return email ? { email, name: '', company: '' } : null;
-    }
-    const c = contact as Record<string, unknown>;
-    const email = ((c.email || c.address || c.value || c.text || '') as string).trim();
-    const name = ((c.name || c.full_name || c.FullName || '') as string).trim();
-    const company = ((c.company || c.Company || '') as string).trim();
-    return email ? { email, name, company } : null;
-  };
-
-  const normalizeContactList = (list: unknown[]) =>
-    Array.isArray(list) ? list.map(normalizeContact).filter(Boolean) : [];
-
   const splitRecipientTokens = (value: string) => {
     if (!value) return [];
-    const segments = value
-      .split(/[,;]/)
+    const segments = splitOutsideQuotes(value)
       .map((s) => s.trim())
       .filter(Boolean);
     const results: string[] = [];
@@ -950,10 +964,10 @@
         results.push(angleMatch[1].trim());
         continue;
       }
-      // Find an email anywhere in the segment
-      const emailMatch = seg.match(/([^\s<>]+@[^\s<>]+\.[^\s<>]+)/);
-      if (emailMatch) {
-        results.push(emailMatch[1].trim());
+      // Every email in the segment ("a@x.com b@y.com" pasted on one line)
+      const emails = seg.match(/[^\s<>]+@[^\s<>]+\.[^\s<>]+/g);
+      if (emails) {
+        results.push(...emails);
         continue;
       }
       // No email found — keep raw tokens (space-split) for validation later
@@ -963,149 +977,173 @@
     return results;
   };
 
+  const setRecipientInput = (field: string, value: string) => {
+    if (field === 'to') toInput = value;
+    else if (field === 'cc') ccInput = value;
+    else if (field === 'bcc') bccInput = value;
+    else if (field === 'replyTo') replyTo = value;
+  };
+
+  // Adds addresses to a recipient field, skipping any it already has in any
+  // letter case.
+  const addRecipients = (field: string, emails: string[]) => {
+    const seen = new Set(getRecipientList(field).map((entry) => normalizeEmail(entry)));
+    const added = emails
+      .map((email) => email.trim())
+      .filter((email) => {
+        const key = normalizeEmail(email);
+        if (!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    if (!added.length) return;
+    if (field === 'to') toList = [...toList, ...added];
+    else if (field === 'cc') ccList = [...ccList, ...added];
+    else if (field === 'bcc') bccList = [...bccList, ...added];
+    markDraftDirty();
+  };
+
+  const showInvalidRecipients = (invalid: string[]) => {
+    if (!invalid.length) return;
+    toasts?.show?.(
+      `Invalid email${invalid.length > 1 ? 's' : ''}: ${invalid.join(', ')}`,
+      'warning',
+    );
+  };
+
+  // Turns finished entries into chips as they are typed or pasted. A comma or
+  // semicolon ends an entry; a name before it becomes the best suggestion for
+  // that name. A space ends only full addresses ("a@x.com b@y.com" pasted), so
+  // a name can be typed with spaces to search for it, and a word the phone
+  // keyboard completes with a trailing space stays a search.
+  // Splits on commas and semicolons that are not inside a quoted name or
+  // <address>, so a pasted "Doe, Jane" <jane@x.com> stays one entry. The last
+  // part is returned as typed, untrimmed.
+  const splitOutsideQuotes = (value: string) => {
+    const parts: string[] = [];
+    let current = '';
+    let quoted = false;
+    let angle = false;
+    for (const char of value) {
+      if (char === '"') quoted = !quoted;
+      else if (!quoted && char === '<') angle = true;
+      else if (!quoted && char === '>') angle = false;
+      if (!quoted && !angle && (char === ',' || char === ';')) {
+        parts.push(current);
+        current = '';
+      } else {
+        current += char;
+      }
+    }
+    parts.push(current);
+    return parts;
+  };
+
   const handleRecipientDelimitedInput = (field: string, rawValue: string) => {
-    if (!rawValue || !/[,\s]/.test(rawValue)) {
+    if (!rawValue || !/[,;\s]/.test(rawValue)) {
       return { handled: false, remaining: rawValue || '' };
     }
-    const endsWithDelimiter = /[,\s]$/.test(rawValue);
-    const tokens = splitRecipientTokens(rawValue);
-    if (!tokens.length) return { handled: false, remaining: '' };
+    const segments = splitOutsideQuotes(rawValue);
+    let remaining = segments.pop() ?? '';
+    const committed: string[] = [];
+    const invalid: string[] = [];
+    // A name ended with a comma as it is typed becomes that person, but only
+    // when exactly one person matches. Pasted text is never guessed at.
+    const typedOne = segments.filter((segment) => segment.trim()).length === 1;
+    for (const segment of segments) {
+      const text = segment.trim();
+      if (!text) continue;
+      const emails = splitRecipientTokens(text).filter((token) => isValidEmail(token));
+      if (emails.length) {
+        committed.push(...emails);
+        continue;
+      }
+      const matches = typedOne
+        ? searchRecipients(contactOptions, text, {
+            exclude: [...getRecipientList(field), ...committed],
+            limit: 2,
+          })
+        : [];
+      if (matches.length === 1) committed.push(matches[0].email);
+      else invalid.push(text);
+    }
+    if (/<[^<>\s]+@[^<>\s]+>\s*$/.test(remaining) && isValidEmail(remaining.trim())) {
+      committed.push(...splitRecipientTokens(remaining));
+      remaining = '';
+    } else {
+      const words = remaining.split(/\s+/);
+      const typing = /\s$/.test(remaining) ? '' : (words.pop() ?? '');
+      const done = words.filter(Boolean);
+      if (done.length && done.every((word) => isValidEmail(word))) {
+        committed.push(...done);
+        remaining = typing;
+      }
+    }
+    if (!committed.length && !invalid.length) {
+      return { handled: false, remaining: rawValue };
+    }
     if (field === 'replyTo') {
-      replyTo = tokens[0] || '';
-      if (replyTo) markDraftDirty();
+      if (!committed.length) return { handled: false, remaining: rawValue };
+      replyTo = committed[0];
+      markDraftDirty();
       clearRecipientSuggestions();
       subjectInputEl?.focus();
       return { handled: true, remaining: '' };
     }
-    const tokensToAdd = endsWithDelimiter ? tokens : tokens.slice(0, -1);
-    const remaining = endsWithDelimiter ? '' : tokens[tokens.length - 1] || '';
-    if (!tokensToAdd.length) {
-      return { handled: false, remaining };
-    }
-    const listRef = field === 'to' ? toList : field === 'cc' ? ccList : bccList;
-    const existing = new Set(listRef);
-    tokensToAdd.forEach((token) => existing.add(token));
-    const updated = Array.from(existing);
-    if (field === 'to') {
-      toList = updated;
-      toInput = remaining;
-    } else if (field === 'cc') {
-      ccList = updated;
-      ccInput = remaining;
-    } else {
-      bccList = updated;
-      bccInput = remaining;
-    }
-    markDraftDirty();
-    clearRecipientSuggestions();
+    addRecipients(field, committed);
+    // Text that is not an address and matches no one stays in the field to be fixed.
+    remaining = [...invalid, remaining.trim()].filter(Boolean).join(', ');
+    setRecipientInput(field, remaining);
+    showInvalidRecipients(invalid);
+    if (remaining) updateRecipientSuggestions(field, remaining);
+    else clearRecipientSuggestions();
     return { handled: true, remaining };
   };
 
-  const parseVCardBasics = (content: string) => {
-    if (!content) return { emails: [] as string[], name: '', company: '' };
-    const parsed: { emails: string[]; name?: string; company?: string } = { emails: [] };
-    const rawLines = content.split(/\r?\n/);
-    const lines: string[] = [];
-    for (const line of rawLines) {
-      if (!line) continue;
-      if (/^[ \t]/.test(line) && lines.length) {
-        lines[lines.length - 1] += line.trimStart();
-      } else {
-        lines.push(line);
-      }
+  const resolveSentFolder = async (): Promise<string | null> => {
+    if (nativeWindow) return nativeSentFolder;
+    try {
+      const { mailboxStore } = await import('../stores/mailboxStore');
+      return (mailboxStore.actions.getSentFolderPath?.() as string) || null;
+    } catch {
+      return null;
     }
-    const unescapeText = (value: string) =>
-      value.replace(/\\n/gi, '\n').replace(/\\,/g, ',').replace(/\\;/g, ';').replace(/\\\\/g, '\\');
-    for (const line of lines) {
-      const colonIndex = line.indexOf(':');
-      if (colonIndex === -1) continue;
-      const keyPart = line.slice(0, colonIndex);
-      const value = unescapeText(line.slice(colonIndex + 1));
-      // Strip vCard property group prefixes (e.g. "item1.EMAIL" → "EMAIL").
-      // iOS/macOS Contacts generates grouped properties like item1.TEL, item2.EMAIL, etc.
-      const rawKey = keyPart.split(';')[0].toUpperCase();
-      const key = rawKey.includes('.') ? rawKey.split('.').pop()! : rawKey;
-      if (key === 'FN' && !parsed.name) {
-        parsed.name = value;
-      } else if (key === 'N' && !parsed.name) {
-        const [last, first, additional, prefix, suffix] = value.split(';');
-        const parts = [prefix, first, additional, last, suffix].filter(Boolean);
-        if (parts.length) parsed.name = parts.join(' ').replace(/\s+/g, ' ').trim();
-      } else if (key === 'EMAIL' && value) {
-        parsed.emails.push(value);
-      } else if (key === 'ORG' && !parsed.company) {
-        // ORG may have semicolon-separated parts (company;department;...)
-        parsed.company = value.split(';')[0].trim();
-      }
-    }
-    return parsed;
   };
 
-  const normalizeContactApiItem = (contact: unknown) => {
-    if (!contact) return null;
-    const c = contact as Record<string, unknown>;
-    const vcard = parseVCardBasics((c.content as string) || '');
-    const email =
-      (c.emails as { value?: string }[])?.[0]?.value ||
-      (c.Emails as { value?: string }[])?.[0]?.value ||
-      (c.email as string) ||
-      (c.address as string) ||
-      vcard.emails?.[0] ||
-      '';
-    const name = (c.full_name || c.name || c.FullName || vcard.name || '') as string;
-    const company = ((c.company || c.Company || vcard.company || '') as string).trim();
-    const trimmedEmail = (email || '').trim();
-    if (!trimmedEmail) return null;
-    return { email: trimmedEmail, name: (name || '').trim(), company };
-  };
-
-  const loadContactOptions = async () => {
-    if (contactOptionsLoaded) return contactOptions;
+  // The address book and everyone mail was sent to, for recipient autocomplete.
+  // Reloaded when older than RECIPIENT_OPTIONS_TTL_MS, so contacts saved and
+  // mail sent since compose was first opened show up without a reload.
+  const loadContactOptions = async ({ force = false } = {}) => {
+    const account = Local.get('email') || 'default';
+    const fresh =
+      contactOptionsAccount === account &&
+      Date.now() - contactOptionsLoadedAt < RECIPIENT_OPTIONS_TTL_MS;
+    // Another account's people are never suggested, not even while loading.
+    if (contactOptionsAccount !== account) contactOptions = [];
+    if (contactOptionsLoaded && fresh && !force) return contactOptions;
     if (contactOptionsLoadPromise) return contactOptionsLoadPromise;
-    contactOptionsLoading = true;
     contactOptionsLoadPromise = (async () => {
       try {
-        // Use the contact cache — returns IDB-cached contacts instantly,
-        // refreshes from API in the background if stale.
-        const cached = await getContacts();
-        if (cached.length) {
-          contactOptions = cached as unknown[];
-          contactOptionsLoaded = true;
-          return contactOptions;
-        }
-        // Fallback to direct API call if cache was empty
-        const res = await Remote.request('Contacts', { limit: 500 });
-        const list = Array.isArray(res)
-          ? res
-          : (res as Record<string, unknown>)?.Result ||
-            (res as Record<string, unknown>)?.contacts ||
-            [];
-        const mapped = (list || []).map(normalizeContactApiItem).filter(Boolean);
-        mapped.sort((a, b) => {
-          const nameA = (
-            (a as { name?: string; email?: string }).name ||
-            (a as { email?: string }).email ||
-            ''
-          ).toLowerCase();
-          const nameB = (
-            (b as { name?: string; email?: string }).name ||
-            (b as { email?: string }).email ||
-            ''
-          ).toLowerCase();
-          return nameA.localeCompare(nameB);
-        });
-        contactOptions = mapped as unknown[];
-        contactOptionsLoaded = true;
-        return contactOptions;
-      } catch (err) {
-        console.warn('[Compose] Failed to load contacts for autocomplete:', err);
-        contactOptionsLoaded = true;
-        contactOptions = [];
-        return contactOptions;
+        const [contacts, recents] = await Promise.all([
+          getContacts().catch((err: unknown) => {
+            console.warn('[Compose] Failed to load contacts for autocomplete:', err);
+            return [];
+          }),
+          resolveSentFolder()
+            .then((sentFolder) => getRecentRecipients({ sentFolder }))
+            .catch((err: unknown) => {
+              console.warn('[Compose] Failed to load sent recipients for autocomplete:', err);
+              return [];
+            }),
+        ]);
+        contactOptions = mergeRecipientSources(contacts, recents) as RecipientOption[];
       } finally {
-        contactOptionsLoading = false;
+        contactOptionsLoaded = true;
+        contactOptionsLoadedAt = Date.now();
+        contactOptionsAccount = account;
         contactOptionsLoadPromise = null;
       }
+      return contactOptions;
     })();
     return contactOptionsLoadPromise;
   };
@@ -1130,7 +1168,9 @@
     recipientSuggestionField = null;
     recipientSuggestionQuery = '';
     recipientSuggestionIndex = -1;
+    recipientSuggestionChosen = false;
     showAddressBook = null;
+    suggestionPlacement.field = null;
   };
 
   const updateRecipientSuggestions = (field: string, rawValue?: string) => {
@@ -1139,50 +1179,33 @@
       clearRecipientSuggestions();
       return;
     }
-    if (!contactOptionsLoaded) {
-      // The address book may still be loading (Compose starts the load when
-      // it opens). Refresh once it arrives, as long as the person is still
-      // typing in this field and has not moved to another one.
-      void loadContactOptions().then(() => {
-        const current = (getRecipientInputValue(field) ?? '').trim();
-        if (!current) return;
-        if (showAddressBook && showAddressBook !== field) return;
-        updateRecipientSuggestions(field, current);
-      });
+    if (!contactOptionsLoaded || contactOptionsLoadPromise) {
+      // The lists are still loading (or refreshing). Show them once they
+      // arrive, if the person is still in this field.
+      if (!suggestionRefreshPending) {
+        suggestionRefreshPending = true;
+        void loadContactOptions().then(() => {
+          suggestionRefreshPending = false;
+          const input = composeRoot?.querySelector(`[data-recipient-field="${field}"] input`);
+          if (!input || input !== document.activeElement) return;
+          const current = (getRecipientInputValue(field) ?? '').trim();
+          if (current) updateRecipientSuggestions(field, current);
+        });
+      }
       if (!contactOptions.length) return;
     }
-    const contacts = normalizeContactList(contactOptions);
-    if (!contacts.length) {
+    recipientSuggestions = searchRecipients(contactOptions, query, {
+      exclude: getRecipientList(field),
+    }) as RecipientOption[];
+    if (!recipientSuggestions.length) {
       clearRecipientSuggestions();
       return;
     }
-    const queryLower = query.toLowerCase();
-    const existing = new Set(getRecipientList(field).map((entry) => entry.toLowerCase()));
-    const seen = new Set<string>();
-    recipientSuggestions = contacts
-      .filter((contact) => {
-        const c = contact as { email: string; name: string; company?: string };
-        const email = (c.email || '').trim();
-        if (!email) return false;
-        const emailLower = email.toLowerCase();
-        if (existing.has(emailLower) || seen.has(emailLower)) return false;
-        const nameLower = (c.name || '').toLowerCase();
-        const companyLower = (c.company || '').toLowerCase();
-        const matches =
-          emailLower.includes(queryLower) ||
-          nameLower.includes(queryLower) ||
-          companyLower.includes(queryLower);
-        if (!matches) return false;
-        seen.add(emailLower);
-        return true;
-      })
-      .slice(0, 8);
     const suggestionsChanged =
       recipientSuggestionField !== field || recipientSuggestionQuery !== query;
-    if (!recipientSuggestions.length) {
-      recipientSuggestionIndex = -1;
-    } else if (suggestionsChanged || recipientSuggestionIndex < 0) {
+    if (suggestionsChanged || recipientSuggestionIndex < 0) {
       recipientSuggestionIndex = 0;
+      recipientSuggestionChosen = false;
     } else if (recipientSuggestionIndex > recipientSuggestions.length - 1) {
       recipientSuggestionIndex = recipientSuggestions.length - 1;
     }
@@ -1197,21 +1220,32 @@
     recipientSuggestions.length > 0;
 
   const handleRecipientSuggestionKeydown = (field: string, event: KeyboardEvent) => {
+    // Keys pressed while an input method is composing text belong to it.
+    if (event.isComposing || event.keyCode === 229) return true;
     if (!hasRecipientSuggestions(field)) return true;
     const lastIndex = recipientSuggestions.length - 1;
     if (event.key === 'ArrowDown') {
       event.preventDefault();
+      recipientSuggestionChosen = true;
       recipientSuggestionIndex =
         recipientSuggestionIndex < lastIndex ? recipientSuggestionIndex + 1 : 0;
       return false;
     }
     if (event.key === 'ArrowUp') {
       event.preventDefault();
+      recipientSuggestionChosen = true;
       recipientSuggestionIndex =
         recipientSuggestionIndex > 0 ? recipientSuggestionIndex - 1 : lastIndex;
       return false;
     }
-    if (event.key === 'Enter') {
+    // Tab only where the list is shown; Reply-To has none.
+    const tabPicks = event.key === 'Tab' && !event.shiftKey && field !== 'replyTo';
+    if (event.key === 'Enter' || tabPicks) {
+      // A full address typed out is meant as typed, unless a suggestion was
+      // picked with the arrow keys.
+      if (!recipientSuggestionChosen && isValidEmail(getRecipientInputValue(field).trim())) {
+        return true;
+      }
       const selectedIndex = recipientSuggestionIndex >= 0 ? recipientSuggestionIndex : 0;
       const selectedSuggestion = recipientSuggestions[selectedIndex];
       if (selectedSuggestion) {
@@ -1228,23 +1262,16 @@
     return true;
   };
 
-  const applyRecipientSuggestion = (field: string, contact: unknown) => {
-    const c = contact as { email: string; name: string };
-    const email = c?.email || '';
+  const applyRecipientSuggestion = (field: string, contact: RecipientOption) => {
+    const email = contact?.email || '';
     if (!email) return;
-    if (field === 'to') {
-      if (!toList.includes(email)) toList = [...toList, email];
-      toInput = '';
-    } else if (field === 'cc') {
-      if (!ccList.includes(email)) ccList = [...ccList, email];
-      ccInput = '';
-    } else if (field === 'bcc') {
-      if (!bccList.includes(email)) bccList = [...bccList, email];
-      bccInput = '';
-    } else if (field === 'replyTo') {
+    if (field === 'replyTo') {
       replyTo = email;
+      markDraftDirty();
+    } else {
+      addRecipients(field, [email]);
+      setRecipientInput(field, '');
     }
-    markDraftDirty();
     clearRecipientSuggestions();
   };
 
@@ -1269,16 +1296,10 @@
     }
   };
 
-  const parseRecipients = (value: string) =>
-    (value || '')
-      .split(/[,;]/)
-      .map((r) => r.trim())
-      .filter(Boolean);
-
   const onRecipientFocus = (field: string) => {
     focusedField = field;
     lastFocusedField = field;
-    loadContactOptions();
+    void loadContactOptions();
     updateRecipientSuggestions(field);
   };
 
@@ -1292,94 +1313,54 @@
     markDraftDirty();
   };
 
+  // Leaving a field turns finished addresses into chips. Anything else stays
+  // typed in the field with a warning, rather than being thrown away.
   const handleRecipientBlur = (field: string) => {
     setTimeout(() => {
-      if (!document.activeElement?.closest('.contact-suggestions')) {
-        clearRecipientSuggestions();
+      // Focus came back (a suggestion was tapped, or the window regained
+      // focus): nothing to commit yet.
+      if (
+        composeRoot?.querySelector(`[data-recipient-field="${field}"] input`) ===
+        document.activeElement
+      ) {
+        return;
       }
-      // Get the current input value for this field
-      const inputValue = field === 'to' ? toInput : field === 'cc' ? ccInput : bccInput;
-      if (inputValue.trim()) {
-        const tokens = splitRecipientTokens(inputValue);
-        const validTokens: string[] = [];
-        const invalidTokens: string[] = [];
-
-        tokens.forEach((token) => {
-          if (isValidEmail(token)) {
-            validTokens.push(token);
-          } else {
-            invalidTokens.push(token);
-          }
-        });
-
-        // Add valid tokens to the recipient list
-        if (validTokens.length) {
-          if (field === 'to') {
-            const existing = new Set(toList);
-            validTokens.forEach((t) => existing.add(t));
-            toList = Array.from(existing);
-          } else if (field === 'cc') {
-            const existing = new Set(ccList);
-            validTokens.forEach((t) => existing.add(t));
-            ccList = Array.from(existing);
-          } else if (field === 'bcc') {
-            const existing = new Set(bccList);
-            validTokens.forEach((t) => existing.add(t));
-            bccList = Array.from(existing);
-          }
-          markDraftDirty();
-        }
-
-        // Clear the input field
-        if (field === 'to') toInput = '';
-        else if (field === 'cc') ccInput = '';
-        else if (field === 'bcc') bccInput = '';
-
-        // Show warning for invalid tokens
-        if (invalidTokens.length) {
-          toasts?.show?.(
-            `Invalid email${invalidTokens.length > 1 ? 's' : ''}: ${invalidTokens.join(', ')}`,
-            'warning',
-          );
-        }
+      if (showAddressBook === field) clearRecipientSuggestions();
+      const inputValue = getRecipientInputValue(field);
+      if (!inputValue.trim() || field === 'replyTo') return;
+      const valid: string[] = [];
+      const invalid: string[] = [];
+      for (const token of splitRecipientTokens(inputValue)) {
+        (isValidEmail(token) ? valid : invalid).push(token);
       }
+      addRecipients(field, valid);
+      setRecipientInput(field, invalid.join(', '));
+      showInvalidRecipients(invalid);
     }, 150);
   };
 
   const handleRecipientKeydown = (field: string, event: KeyboardEvent) => {
     if (!handleRecipientSuggestionKeydown(field, event)) return;
-    // Convert input to chip on Enter, Tab, Space, or Comma
-    if (event.key === 'Enter' || event.key === 'Tab' || event.key === ' ' || event.key === ',') {
-      const inputValue = getRecipientInputValue(field).trim().replace(/,$/, ''); // Remove trailing comma
-      if (inputValue) {
-        event.preventDefault();
-        // Validate the email before adding
-        if (!isValidEmail(inputValue)) {
-          toasts?.show?.(`Invalid email: ${inputValue}`, 'warning');
-          return;
+    // Enter or Tab adds what was typed. Space and comma are handled as the
+    // text changes (handleRecipientDelimitedInput), the same way on every
+    // keyboard: Android keyboards do not send key names for them.
+    if (event.key === 'Enter' || event.key === 'Tab') {
+      const inputValue = getRecipientInputValue(field).trim().replace(/[,;]$/, '');
+      if (!inputValue) return;
+      if (!isValidEmail(inputValue)) {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          showInvalidRecipients([inputValue]);
         }
-        if (field === 'to') {
-          if (!toList.includes(inputValue)) toList = [...toList, inputValue];
-          toInput = '';
-        } else if (field === 'cc') {
-          if (!ccList.includes(inputValue)) ccList = [...ccList, inputValue];
-          ccInput = '';
-        } else if (field === 'bcc') {
-          if (!bccList.includes(inputValue)) bccList = [...bccList, inputValue];
-          bccInput = '';
-        }
-        markDraftDirty();
-        clearRecipientSuggestions();
-      } else if (event.key === 'Tab') {
-        // Allow Tab to move focus when input is empty
         return;
       }
+      event.preventDefault();
+      addRecipients(field, splitRecipientTokens(inputValue));
+      setRecipientInput(field, '');
+      clearRecipientSuggestions();
     } else if (event.key === 'Backspace' && !getRecipientInputValue(field)) {
       const list = getRecipientList(field);
-      if (list.length) {
-        const last = list[list.length - 1];
-        removeRecipient(field, last);
-      }
+      if (list.length) removeRecipient(field, list[list.length - 1]);
     }
   };
 
@@ -1518,6 +1499,114 @@
   };
 
   let composeRoot = $state<HTMLElement | null>(null);
+
+  // Where the recipient suggestions open. The list is position: fixed, so
+  // nothing that scrolls or clips (the compose body, the desktop panel) can
+  // cut it off. It is kept inside the visual viewport, which is what is left
+  // above the on-screen keyboard (on iOS the layout viewport does not shrink
+  // for it), and opens upward when there is more room above the field.
+  const SUGGESTIONS_MAX_HEIGHT = 264;
+  const SUGGESTIONS_MIN_HEIGHT = 120;
+  const SUGGESTIONS_MIN_ROW = 44;
+  const SUGGESTIONS_GAP = 4;
+  let composeScrollEl = $state<HTMLElement | undefined>();
+  let suggestionPlacement = $state<{
+    field: string | null;
+    above: boolean;
+    top: number;
+    left: number;
+    width: number;
+    maxHeight: number;
+  }>({ field: null, above: false, top: 0, left: 0, width: 0, maxHeight: SUGGESTIONS_MAX_HEIGHT });
+
+  const placeRecipientSuggestions = () => {
+    const field = showAddressBook;
+    const wrapper = field
+      ? composeRoot?.querySelector<HTMLElement>(`[data-recipient-field="${field}"]`)
+      : null;
+    if (!field || !wrapper) return;
+    const viewport = window.visualViewport;
+    const viewTop = viewport ? viewport.offsetTop : 0;
+    const viewBottom = viewport ? viewport.offsetTop + viewport.height : window.innerHeight;
+    const scroller = composeScrollEl;
+    const scrollBy = (delta: number) => {
+      if (!scroller || !delta) return;
+      scroller.scrollTop += delta;
+    };
+    let rect = wrapper.getBoundingClientRect();
+    // The field itself went under the keyboard: bring it back into view.
+    if (rect.bottom > viewBottom) {
+      scrollBy(rect.bottom - viewBottom);
+      rect = wrapper.getBoundingClientRect();
+    }
+    // Room on neither side (a phone on its side with the keyboard up): move
+    // the field to the top of the compose body to free the space under it.
+    const bodyTop = Math.max(viewTop, scroller?.getBoundingClientRect().top ?? viewTop);
+    if (
+      viewBottom - rect.bottom < SUGGESTIONS_MIN_HEIGHT &&
+      rect.top - viewTop < SUGGESTIONS_MIN_HEIGHT &&
+      rect.top > bodyTop
+    ) {
+      scrollBy(rect.top - bodyTop);
+      rect = wrapper.getBoundingClientRect();
+    }
+    const below = viewBottom - rect.bottom - SUGGESTIONS_GAP * 2;
+    const aboveRoom = rect.top - viewTop - SUGGESTIONS_GAP * 2;
+    const above = below < SUGGESTIONS_MIN_HEIGHT && aboveRoom > below;
+    const maxHeight = Math.floor(
+      Math.max(SUGGESTIONS_MIN_ROW, Math.min(SUGGESTIONS_MAX_HEIGHT, above ? aboveRoom : below)),
+    );
+    const list = document.getElementById(`compose-${field}-suggestions`);
+    const height = Math.min(maxHeight, list?.scrollHeight || maxHeight);
+    const left = Math.max(0, rect.left);
+    suggestionPlacement = {
+      field,
+      above,
+      top: Math.round(above ? rect.top - SUGGESTIONS_GAP - height : rect.bottom + SUGGESTIONS_GAP),
+      left: Math.round(left),
+      width: Math.round(Math.min(rect.right, window.innerWidth) - left),
+      maxHeight,
+    };
+  };
+
+  $effect(() => {
+    if (!showAddressBook || !recipientSuggestions.length) return;
+    const scrollEl = composeScrollEl;
+    let frame = 0;
+    const schedule = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(placeRecipientSuggestions);
+    };
+    schedule();
+    const viewport = window.visualViewport;
+    viewport?.addEventListener('resize', schedule);
+    viewport?.addEventListener('scroll', schedule);
+    window.addEventListener('resize', schedule);
+    scrollEl?.addEventListener('scroll', schedule, { passive: true });
+    return () => {
+      cancelAnimationFrame(frame);
+      viewport?.removeEventListener('resize', schedule);
+      viewport?.removeEventListener('scroll', schedule);
+      window.removeEventListener('resize', schedule);
+      scrollEl?.removeEventListener('scroll', schedule);
+    };
+  });
+
+  // Keep the highlighted suggestion in view while arrowing through the list.
+  $effect(() => {
+    const field = showAddressBook;
+    const index = recipientSuggestionIndex;
+    if (!field || index < 0) return;
+    // Scrolls only the list; scrollIntoView would also move the compose body.
+    const option = document.getElementById(`compose-${field}-suggestion-${index}`);
+    const list = option?.parentElement;
+    if (!option || !list) return;
+    if (option.offsetTop < list.scrollTop) {
+      list.scrollTop = option.offsetTop;
+    } else if (option.offsetTop + option.offsetHeight > list.scrollTop + list.clientHeight) {
+      list.scrollTop = option.offsetTop + option.offsetHeight - list.clientHeight;
+    }
+  });
 
   const setVisible = (val: boolean) => {
     // Let go of the focused field before compose leaves the page. Removing a
@@ -2602,9 +2691,9 @@
 
   const buildPayload = () => {
     // Convert $state proxy arrays to plain arrays for worker serialization
-    const toRecipients = [...(toList.length ? toList : parseRecipients(toInput))];
-    const ccRecipients = [...(ccList.length ? ccList : parseRecipients(ccInput))];
-    const bccRecipients = [...(bccList.length ? bccList : parseRecipients(bccInput))];
+    const toRecipients = [...withPendingRecipients(toList, toInput)];
+    const ccRecipients = [...withPendingRecipients(ccList, ccInput)];
+    const bccRecipients = [...withPendingRecipients(bccList, bccInput)];
     if (!toRecipients.length && !ccRecipients.length && !bccRecipients.length) {
       error = 'Please add at least one recipient.';
       return null;
@@ -2734,6 +2823,7 @@
       const { serverScheduled } = await scheduleEmail(payload, sendAt, {
         sendAs: sendAsAccount,
       });
+      rememberRecipients(payload);
       const msgIdToDelete = sourceMessageId;
       const serverDraftIdToDelete = currentDraftServerId;
       if (currentDraftId) {
@@ -2807,6 +2897,19 @@
     if (proceed) {
       proceedWithSend();
     }
+  };
+
+  // Once a send is accepted (sent, queued or scheduled), suggest these people
+  // right away next time, before the Sent folder syncs.
+  const rememberRecipients = (payload: Record<string, unknown>) => {
+    const addresses = ['to', 'cc', 'bcc'].flatMap((key) =>
+      Array.isArray(payload[key]) ? (payload[key] as string[]) : [],
+    );
+    mergeRecentAddresses(addresses)
+      .then(() => {
+        contactOptionsLoadedAt = 0;
+      })
+      .catch(() => {});
   };
 
   const getUndoSendDelay = () => Number(getEffectiveSettingValue('undo_send_delay')) || 0;
@@ -2888,6 +2991,7 @@
       try {
         const sendAt = Date.now() + undoWindowMs;
         const queued = await queueEmail(payload, { sendAt, sendAs: sendAsAccount });
+        rememberRecipients(payload);
         const msgIdToDelete = sourceMessageId;
         const serverDraftIdToDelete = currentDraftServerId;
         if (currentDraftId) {
@@ -2928,6 +3032,7 @@
     if (!isOnline) {
       try {
         await queueEmail(payload, { sendAs: sendAsAccount });
+        rememberRecipients(payload);
         const msgIdToDelete = sourceMessageId;
         const serverDraftIdToDelete = currentDraftServerId;
         if (currentDraftId) {
@@ -3046,14 +3151,9 @@
         if (serverDraftIdToDelete && serverDraftIdToDelete !== msgIdToDelete) {
           await deleteSourceMessage(serverDraftIdToDelete);
         }
-        // Cache recipient addresses for offline autocomplete
-        mergeRecentAddresses([
-          ...toList.map((e) => ({ email: e })),
-          ...ccList.map((e) => ({ email: e })),
-          ...bccList.map((e) => ({ email: e })),
-        ]).catch(() => {});
       }
       success = 'Message sent';
+      rememberRecipients(payload);
       if (!nativeWindow) toasts?.show?.('Message sent', 'success');
       setVisible(false);
       const shouldArchive = archiveAfterSend;
@@ -3097,6 +3197,7 @@
       if (e.message?.includes('network') || e.message?.includes('fetch') || e.status === 0) {
         try {
           await queueEmail(payload, { sendAs: sendAsAccount });
+          rememberRecipients(payload);
           const msgIdToDelete = sourceMessageId;
           const serverDraftIdToDelete = currentDraftServerId;
           if (currentDraftId) {
@@ -3406,7 +3507,10 @@
   const reply = (options: Record<string, unknown> = {}) => open(options);
   const forward = (options: Record<string, unknown> = {}) => open(options);
   const setContacts = (list: unknown[] = []) => {
-    contacts = list as { email: string; name?: string }[];
+    contactOptions = mergeRecipientSources(
+      list as RecipientOption[],
+      contactOptions,
+    ) as RecipientOption[];
   };
   const setToList = (list: unknown[] = []) => {
     toList = list as string[];
@@ -3508,6 +3612,53 @@
     for (const att of thumbnails.keys()) releaseAttachmentThumbnail(att);
   });
 </script>
+
+{#snippet recipientSuggestionList(field: 'to' | 'cc' | 'bcc')}
+  {#if showAddressBook === field && recipientSuggestions.length}
+    <!-- mousedown is cancelled so the field keeps focus (and the phone keeps
+         its keyboard) while a suggestion is tapped; Safari does not focus
+         buttons, so without it the field blurred and the list closed before
+         the tap landed. -->
+    <div
+      class="contact-suggestions fixed z-50 overflow-y-auto overscroll-contain border border-border bg-popover text-popover-foreground shadow-lg"
+      class:invisible={suggestionPlacement.field !== field}
+      style:top="{suggestionPlacement.top}px"
+      style:left="{suggestionPlacement.left}px"
+      style:width="{suggestionPlacement.width}px"
+      style:max-height="{suggestionPlacement.maxHeight}px"
+      id="compose-{field}-suggestions"
+      role="listbox"
+      aria-label="Suggested recipients"
+      data-testid="recipient-suggestions"
+      data-placement={suggestionPlacement.above ? 'above' : 'below'}
+      onmousedown={(event) => event.preventDefault()}
+    >
+      {#each recipientSuggestions as contact, idx (contact.email)}
+        <button
+          type="button"
+          id="compose-{field}-suggestion-{idx}"
+          role="option"
+          aria-selected={recipientSuggestionIndex === idx}
+          tabindex="-1"
+          class="flex min-h-11 w-full flex-col justify-center px-3 py-2 text-left text-sm md:min-h-0"
+          class:bg-accent={recipientSuggestionIndex === idx}
+          data-testid="recipient-suggestion"
+          onmouseenter={() => (recipientSuggestionIndex = idx)}
+          onclick={() => applyRecipientSuggestion(field, contact)}
+        >
+          <span class="truncate"
+            >{contact.name || contact.email}{#if contact.name && contact.company}<span
+                class="text-muted-foreground">{' '}&mdash; {contact.company}</span
+              >{/if}</span
+          >
+          {#if contact.name}
+            <span class="truncate text-xs text-muted-foreground">{contact.email}</span>
+          {/if}
+        </button>
+      {/each}
+    </div>
+  {/if}
+{/snippet}
 
 <Tooltip.Provider>
   {#if visible && !minimized}
@@ -3811,7 +3962,10 @@
         </div>
       </header>
 
-      <div class="flex-1 overflow-y-auto p-0 md:p-4 flex flex-col gap-3">
+      <div
+        class="flex-1 overflow-y-auto p-0 md:p-4 flex flex-col gap-3"
+        bind:this={composeScrollEl}
+      >
         <div class="space-y-2 shrink-0">
           <div
             class="flex items-center gap-2 min-h-[44px] md:min-h-[38px] px-3 py-1 border border-input bg-background shadow-xs text-base md:text-sm"
@@ -3898,7 +4052,7 @@
               </DropdownMenu.Content>
             </DropdownMenu.Root>
           </div>
-          <div class="relative">
+          <div class="relative" data-recipient-field="to">
             <div
               class="flex flex-wrap items-center gap-1.5 min-h-[44px] md:min-h-[38px] px-3 py-2 md:py-1.5 border border-input bg-background shadow-xs transition-[color,box-shadow] outline-none focus-within:border-ring focus-within:ring-ring/50 focus-within:ring-[3px]"
             >
@@ -3916,7 +4070,20 @@
                 </Badge>
               {/each}
               <input
-                type="email"
+                type="text"
+                inputmode="email"
+                autocapitalize="off"
+                autocorrect="off"
+                spellcheck="false"
+                enterkeyhint="next"
+                role="combobox"
+                aria-autocomplete="list"
+                aria-expanded={showAddressBook === 'to' && recipientSuggestions.length > 0}
+                aria-controls="compose-to-suggestions"
+                aria-activedescendant={showAddressBook === 'to' && recipientSuggestionIndex >= 0
+                  ? `compose-to-suggestion-${recipientSuggestionIndex}`
+                  : undefined}
+                aria-label="To"
                 class="flex-1 min-w-[120px] bg-transparent border-0 outline-none focus:outline-none focus-visible:outline-none text-base md:text-sm placeholder:text-muted-foreground"
                 placeholder={toList.length ? '' : 'To'}
                 autocomplete="off"
@@ -3950,39 +4117,11 @@
                 {/if}
               </div>
             </div>
-            {#if showAddressBook === 'to' && recipientSuggestions.length}
-              <div
-                class="contact-suggestions absolute top-full left-0 right-0 mt-1 border border-border bg-popover shadow-lg z-10 max-h-[200px] overflow-y-auto"
-              >
-                {#each recipientSuggestions as contact, idx}
-                  <button
-                    type="button"
-                    class="w-full px-3 py-2 text-left text-sm flex flex-col"
-                    class:bg-accent={recipientSuggestionIndex === idx}
-                    onmouseenter={() => (recipientSuggestionIndex = idx)}
-                    onclick={() => applyRecipientSuggestion('to', contact)}
-                  >
-                    <span
-                      >{(contact as { name?: string; email: string }).name ||
-                        (contact as { email: string })
-                          .email}{#if (contact as { name?: string; company?: string }).name && (contact as { company?: string }).company}<span
-                          class="text-muted-foreground"
-                          >{' '}&mdash; {(contact as { company: string }).company}</span
-                        >{/if}</span
-                    >
-                    {#if (contact as { name?: string }).name}
-                      <span class="text-xs text-muted-foreground"
-                        >{(contact as { email: string }).email}</span
-                      >
-                    {/if}
-                  </button>
-                {/each}
-              </div>
-            {/if}
+            {@render recipientSuggestionList('to')}
           </div>
 
           {#if showCc}
-            <div class="relative">
+            <div class="relative" data-recipient-field="cc">
               <div
                 class="flex flex-wrap items-center gap-1.5 min-h-[44px] md:min-h-[38px] px-3 py-2 md:py-1.5 border border-input bg-background shadow-xs transition-[color,box-shadow] outline-none focus-within:border-ring focus-within:ring-ring/50 focus-within:ring-[3px]"
               >
@@ -4002,7 +4141,20 @@
                   </Badge>
                 {/each}
                 <input
-                  type="email"
+                  type="text"
+                  inputmode="email"
+                  autocapitalize="off"
+                  autocorrect="off"
+                  spellcheck="false"
+                  enterkeyhint="next"
+                  role="combobox"
+                  aria-autocomplete="list"
+                  aria-expanded={showAddressBook === 'cc' && recipientSuggestions.length > 0}
+                  aria-controls="compose-cc-suggestions"
+                  aria-activedescendant={showAddressBook === 'cc' && recipientSuggestionIndex >= 0
+                    ? `compose-cc-suggestion-${recipientSuggestionIndex}`
+                    : undefined}
+                  aria-label="Cc"
                   class="flex-1 min-w-[120px] bg-transparent border-0 outline-none focus:outline-none focus-visible:outline-none text-base md:text-sm placeholder:text-muted-foreground"
                   placeholder={ccList.length ? '' : 'Cc'}
                   autocomplete="off"
@@ -4014,40 +4166,12 @@
                   bind:this={ccInputEl}
                 />
               </div>
-              {#if showAddressBook === 'cc' && recipientSuggestions.length}
-                <div
-                  class="contact-suggestions absolute top-full left-0 right-0 mt-1 border border-border bg-popover shadow-lg z-10 max-h-[200px] overflow-y-auto"
-                >
-                  {#each recipientSuggestions as contact, idx}
-                    <button
-                      type="button"
-                      class="w-full px-3 py-2 text-left text-sm flex flex-col"
-                      class:bg-accent={recipientSuggestionIndex === idx}
-                      onmouseenter={() => (recipientSuggestionIndex = idx)}
-                      onclick={() => applyRecipientSuggestion('cc', contact)}
-                    >
-                      <span
-                        >{(contact as { name?: string; email: string }).name ||
-                          (contact as { email: string })
-                            .email}{#if (contact as { name?: string; company?: string }).name && (contact as { company?: string }).company}<span
-                            class="text-muted-foreground"
-                            >{' '}&mdash; {(contact as { company: string }).company}</span
-                          >{/if}</span
-                      >
-                      {#if (contact as { name?: string }).name}
-                        <span class="text-xs text-muted-foreground"
-                          >{(contact as { email: string }).email}</span
-                        >
-                      {/if}
-                    </button>
-                  {/each}
-                </div>
-              {/if}
+              {@render recipientSuggestionList('cc')}
             </div>
           {/if}
 
           {#if showBcc}
-            <div class="relative">
+            <div class="relative" data-recipient-field="bcc">
               <div
                 class="flex flex-wrap items-center gap-1.5 min-h-[44px] md:min-h-[38px] px-3 py-2 md:py-1.5 border border-input bg-background shadow-xs transition-[color,box-shadow] outline-none focus-within:border-ring focus-within:ring-ring/50 focus-within:ring-[3px]"
               >
@@ -4067,7 +4191,20 @@
                   </Badge>
                 {/each}
                 <input
-                  type="email"
+                  type="text"
+                  inputmode="email"
+                  autocapitalize="off"
+                  autocorrect="off"
+                  spellcheck="false"
+                  enterkeyhint="next"
+                  role="combobox"
+                  aria-autocomplete="list"
+                  aria-expanded={showAddressBook === 'bcc' && recipientSuggestions.length > 0}
+                  aria-controls="compose-bcc-suggestions"
+                  aria-activedescendant={showAddressBook === 'bcc' && recipientSuggestionIndex >= 0
+                    ? `compose-bcc-suggestion-${recipientSuggestionIndex}`
+                    : undefined}
+                  aria-label="Bcc"
                   class="flex-1 min-w-[120px] bg-transparent border-0 outline-none focus:outline-none focus-visible:outline-none text-base md:text-sm placeholder:text-muted-foreground"
                   placeholder={bccList.length ? '' : 'Bcc'}
                   autocomplete="off"
@@ -4079,35 +4216,7 @@
                   bind:this={bccInputEl}
                 />
               </div>
-              {#if showAddressBook === 'bcc' && recipientSuggestions.length}
-                <div
-                  class="contact-suggestions absolute top-full left-0 right-0 mt-1 border border-border bg-popover shadow-lg z-10 max-h-[200px] overflow-y-auto"
-                >
-                  {#each recipientSuggestions as contact, idx}
-                    <button
-                      type="button"
-                      class="w-full px-3 py-2 text-left text-sm flex flex-col"
-                      class:bg-accent={recipientSuggestionIndex === idx}
-                      onmouseenter={() => (recipientSuggestionIndex = idx)}
-                      onclick={() => applyRecipientSuggestion('bcc', contact)}
-                    >
-                      <span
-                        >{(contact as { name?: string; email: string }).name ||
-                          (contact as { email: string })
-                            .email}{#if (contact as { name?: string; company?: string }).name && (contact as { company?: string }).company}<span
-                            class="text-muted-foreground"
-                            >{' '}&mdash; {(contact as { company: string }).company}</span
-                          >{/if}</span
-                      >
-                      {#if (contact as { name?: string }).name}
-                        <span class="text-xs text-muted-foreground"
-                          >{(contact as { email: string }).email}</span
-                        >
-                      {/if}
-                    </button>
-                  {/each}
-                </div>
-              {/if}
+              {@render recipientSuggestionList('bcc')}
             </div>
           {/if}
 

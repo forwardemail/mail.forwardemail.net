@@ -59,7 +59,7 @@ import {
 } from './utils/platform.js';
 import { initOsTextScale } from './utils/os-text-scale';
 import { checkClearManifest } from './utils/clear-manifest';
-import { installViewportGuard } from './utils/viewport-guard';
+import { installKeyboardViewport, installViewportGuard } from './utils/viewport-guard';
 import { openComposeWindow, initComposeWindowListener } from './utils/compose-window';
 import {
   isLockEnabled,
@@ -2310,6 +2310,13 @@ async function bootstrap() {
     installViewportGuard();
   } catch {
     /* the native side repairs the viewport as well */
+  }
+
+  // Keep dialogs above the on-screen keyboard (see installKeyboardViewport).
+  try {
+    installKeyboardViewport();
+  } catch {
+    /* dialogs fall back to the full layout viewport */
   }
 
   // Theme and density come from localStorage synchronously. Applying them
