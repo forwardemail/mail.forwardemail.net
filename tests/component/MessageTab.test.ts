@@ -42,6 +42,9 @@ vi.mock('../../src/stores/tabStore', () => ({ closeTab: mocks.closeTab }));
 vi.mock('../../src/stores/settingsStore', () => ({
   getEffectiveSettingValue: vi.fn((id: string) => mocks.settings[id] ?? null),
   localSettingsVersion: writable(0),
+  // Settings > Appearance > Message format: formatted, as by default
+  getMessageFormat: vi.fn(() => 'html'),
+  messageViewFor: vi.fn(() => ({ plainText: false })),
 }));
 vi.mock('../../src/utils/compose-window', () => ({ openComposeWindow: vi.fn() }));
 vi.mock('../../src/utils/storage.js', () => ({ Local: { get: vi.fn(() => null) } }));
