@@ -792,6 +792,44 @@
     return to12Hour(newTime24);
   };
 
+  // The date an event ends on when it starts at startTime on date and lasts
+  // minutes: the next day once it runs past midnight. Without it an event
+  // made after 11 PM (11:30 PM to 12:30 AM) ended "before" it started, and
+  // Save refused it.
+  const endDateAfter = (
+    date: string,
+    startTime: string,
+    startMeridiem: string,
+    minutes: number,
+  ) => {
+    const start24 = to24Hour(startTime, startMeridiem);
+    const [y, mo, d] = (date || '').split('-').map(Number);
+    if (!start24 || !y) return date;
+    const [h, m] = start24.split(':').map(Number);
+    const days = Math.floor((h * 60 + m + minutes) / (24 * 60));
+    return days ? formatDateTimeLocal(new Date(y, mo - 1, d + days)).split('T')[0] : date;
+  };
+
+  // Keep a single-day or overnight event's end date in step with a new end
+  // time. A recurring event's End date is its repeat-until, and a longer span
+  // the user chose is left alone.
+  const syncEndDate = (
+    target: {
+      date: string;
+      endDate: string;
+      startTime: string;
+      startMeridiem: string;
+      recurrence?: RecurrenceSpec;
+    },
+    minutes: number,
+  ) => {
+    const mode = target.recurrence?.mode;
+    if (mode && mode !== 'none' && mode !== 'custom') return;
+    const overnight = endDateAfter(target.date, '11:59', 'PM', 1);
+    if (target.endDate && target.endDate !== target.date && target.endDate !== overnight) return;
+    target.endDate = endDateAfter(target.date, target.startTime, target.startMeridiem, minutes);
+  };
+
   const roundTime = (date: Date, intervalMins = 30) => {
     const minutes = date.getMinutes();
     const rounded = Math.round(minutes / intervalMins) * intervalMins;
@@ -1006,6 +1044,7 @@
       const newEnd = addMinutesToTime(parsed.startTime, startMeridiem, lastDurationMinutes || 60);
       nextEvent.endTime = newEnd.time;
       nextEvent.endMeridiem = newEnd.meridiem;
+      syncEndDate(nextEvent, lastDurationMinutes || 60);
       updated = true;
     }
 
@@ -2745,7 +2784,7 @@
     const timePart = startLocal.split('T')[1];
 
     const endDate = new Date(roundedStart.getTime() + 60 * 60000);
-    const endTimePart = formatDateTimeLocal(endDate).split('T')[1];
+    const [endDatePart, endTimePart] = formatDateTimeLocal(endDate).split('T');
     const startSplit = to12Hour(timePart);
     const endSplit = to12Hour(endTimePart);
     const componentType = opts.componentType || 'VEVENT';
@@ -2754,7 +2793,7 @@
       calendarId: getCalendarId(calendar),
       title: '',
       date: datePart,
-      endDate: datePart,
+      endDate: endDatePart,
       startTime: startSplit.time,
       startMeridiem: startSplit.meridiem,
       endTime: endSplit.time,
@@ -2800,13 +2839,18 @@
     );
     newEvent.endTime = newEnd.time;
     newEvent.endMeridiem = newEnd.meridiem;
+    syncEndDate(newEvent, lastDurationMinutes || 60);
     modalDirty = true;
   };
 
   const handleEndTimeChange = () => {
     if (!newEvent.startTime || !newEvent.endTime) return;
 
+    // An end time before the start is taken as a mistake and reset, unless
+    // the event already ends the next day (it runs past midnight).
+    const overnight = newEvent.endDate === endDateAfter(newEvent.date, '11:59', 'PM', 1);
     if (
+      !overnight &&
       !isEndAfterStart(
         newEvent.startTime,
         newEvent.startMeridiem,
@@ -2829,6 +2873,7 @@
         newEvent.endMeridiem,
       );
     }
+    syncEndDate(newEvent, lastDurationMinutes || 60);
     modalDirty = true;
   };
 
@@ -3002,14 +3047,14 @@
     const datePart = startLocal.split('T')[0];
     const timePart = startLocal.split('T')[1];
     const endDate = new Date(startDate.getTime() + 60 * 60000);
-    const endTimePart = formatDateTimeLocal(endDate).split('T')[1];
+    const [endDatePart, endTimePart] = formatDateTimeLocal(endDate).split('T');
     const startSplit = to12Hour(timePart);
     const endSplit = to12Hour(endTimePart);
     newEvent = {
       calendarId: getCalendarId(calendar),
       title: email ? `Meeting with ${email}` : 'New event',
       date: datePart,
-      endDate: datePart,
+      endDate: endDatePart,
       startTime: startSplit.time,
       startMeridiem: startSplit.meridiem,
       endTime: endSplit.time,

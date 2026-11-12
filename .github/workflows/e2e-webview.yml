@@ -241,7 +241,8 @@ jobs:
           # is the GTK4/webkitgtk-6.0 equivalent and harmless on GTK3.
           NO_AT_BRIDGE: '1'
           GTK_A11Y: none
-        run: xvfb-run --auto-servernum -- pnpm test
+        # test:ci runs failed spec files once more before failing (scripts/run-ci.mjs)
+        run: xvfb-run --auto-servernum -- pnpm test:ci
 
       - name: Run E2E tests (macOS / Windows)
         id: test-other
@@ -251,7 +252,8 @@ jobs:
         shell: bash
         env:
           TAURI_TARGET: ${{ matrix.target }}
-        run: pnpm test
+        # test:ci runs failed spec files once more before failing (scripts/run-ci.mjs)
+        run: pnpm test:ci
 
       - name: Upload test reports
         if: always() && steps.gate.outputs.skip != 'true'

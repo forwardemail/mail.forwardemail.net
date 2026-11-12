@@ -6,6 +6,7 @@
   "description": "Cross-platform native WebView E2E tests via Vitest + raw webdriverio + tauri-plugin-webdriver",
   "scripts": {
     "test": "vitest run",
+    "test:ci": "node scripts/run-ci.mjs",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

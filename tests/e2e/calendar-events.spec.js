@@ -186,3 +186,41 @@ test.describe('Event Editing', () => {
     await expect(confirmModal).not.toBeVisible();
   });
 });
+
+// An event made after 11 PM defaults to 11:30 PM - 12:30 AM. Its end date has
+// to be the next day, or Save refuses it as ending before it starts.
+test.describe('Events past midnight', () => {
+  test.use({ timezoneId: 'UTC', serviceWorkers: 'block' });
+
+  async function openLateAtNight(page, posts) {
+    await page.clock.install({ time: new Date('2026-11-12T23:10:00.000Z') });
+    await setupAuthenticatedSession(page);
+    await page.routeWebSocket(/\/v1\/ws/, () => {});
+    await mockApi(page);
+    await page.route('**/v1/calendar-events**', (route) => {
+      if (route.request().method() === 'POST') posts.push(route.request().postData() || '');
+      return route.fallback();
+    });
+    await page.goto('/calendar');
+    await expect(page.getByTestId('calendar-ready')).toBeVisible({ timeout: 15_000 });
+    return openNewEventModal(page);
+  }
+
+  test('a new event at 11:30 PM ends at 12:30 AM the next day and saves', async ({ page }) => {
+    const posts = [];
+    const modal = await openLateAtNight(page, posts);
+    await expect(modal.getByLabel('End date')).toHaveValue('2026-11-13');
+    await modal.getByLabel('Title').fill('Late call');
+    await modal.getByRole('button', { name: 'Save', exact: true }).click();
+    await expect.poll(() => posts.length).toBe(1);
+    await expect(modal).toBeHidden();
+  });
+
+  test('moving the end back before midnight ends it the same day', async ({ page }) => {
+    const posts = [];
+    const modal = await openLateAtNight(page, posts);
+    // Start time, then end time
+    await modal.locator('input[type="time"]').nth(1).fill('23:45');
+    await expect(modal.getByLabel('End date')).toHaveValue('2026-11-12');
+  });
+});
