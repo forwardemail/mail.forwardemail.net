@@ -28,10 +28,20 @@
 import { createClipboardWriter, type ClipboardOptions } from './system-clipboard';
 import type { AnyRecord } from './types';
 
+// The control characters a terminal acts on, all but tab and line feed.
+// eslint-disable-next-line no-control-regex
+const CONTROLS = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g;
+
+/**
+ * The selected text, without control characters. TermDOM never draws them,
+ * so a message can hold ones the reader does not see, and a copy that kept
+ * them could end the bracketed paste of the terminal it is pasted into
+ * (ESC [ 201 ~) and have the rest run as typed.
+ */
 function textOf(selection: AnyRecord | null | undefined): string {
   if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return '';
   try {
-    return String(selection.toString());
+    return String(selection.toString()).replace(CONTROLS, '');
   } catch {
     return '';
   }

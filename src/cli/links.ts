@@ -117,6 +117,9 @@ export function installLinks(win: AnyRecord, downloadsDir: () => string = getDow
       return;
     }
     if (url.origin === win.location.origin || !/^https?:$/.test(url.protocol)) return;
+    // TermDOM follows a link with no target of its own, and history.ts opens
+    // it from there. Opening it here as well opened every such link twice.
+    if (/^(_self)?$/i.test(anchor.getAttribute('target') ?? '')) return;
     // Listeners the app adds to window run after this one; give them the
     // chance to handle the click first, as a browser's default action would.
     queueMicrotask(() => {

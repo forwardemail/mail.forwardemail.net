@@ -7,6 +7,7 @@
 import { TermDOM } from '@b9g/termdom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { installHistory } from '../../src/cli/history';
+import { installLinks } from '../../src/cli/links';
 import { openInBrowser } from '../../src/cli/open-url';
 
 vi.mock('../../src/cli/open-url', () => ({ openInBrowser: vi.fn(() => true) }));
@@ -63,6 +64,20 @@ describe('page loads', () => {
     const { win, reload } = start();
     win.location.href = 'https://forwardemail.net/en/faq';
     expect(openInBrowser).toHaveBeenCalledWith('https://forwardemail.net/en/faq');
+    expect(reload).not.toHaveBeenCalled();
+    expect(win.location.href).toBe('https://mail.forwardemail.net/mailbox');
+  });
+
+  it('opens a clicked link to another site once, with or without a target', async () => {
+    const { win, reload } = start();
+    installLinks(win);
+    for (const target of ['', ' target="_blank"']) {
+      vi.mocked(openInBrowser).mockClear();
+      win.document.body.innerHTML = `<a href="https://forwardemail.net/en/faq"${target}>FAQ</a>`;
+      win.document.querySelector('a').click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(vi.mocked(openInBrowser).mock.calls).toEqual([['https://forwardemail.net/en/faq']]);
+    }
     expect(reload).not.toHaveBeenCalled();
     expect(win.location.href).toBe('https://mail.forwardemail.net/mailbox');
   });

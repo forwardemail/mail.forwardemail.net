@@ -710,4 +710,37 @@ describe('navigator.clipboard in the terminal', () => {
       await term.dispose();
     }
   });
+
+  it('leaves out the control characters a message hides in the text that is copied', async () => {
+    const { term, type, written, calls } = terminal();
+    installFrames(term.window);
+    await term.attach();
+    try {
+      const loaded = new Promise((resolve) =>
+        term.window.addEventListener('message', (event) => {
+          if (event.data?.type === 'height') resolve();
+        }),
+      );
+      // The end of a bracketed paste, a clipboard sequence and a C1 control,
+      // none of which the terminal shows.
+      const hidden = '\u001b[201~\u001b]52;c;eA==\u0007\u009b31m\u0000\u007f';
+      const frame = term.document.createElement('iframe');
+      frame.srcdoc = `<!DOCTYPE html><html><body><pre>echo one${hidden}\n\techo two</pre></body></html>`;
+      term.document.body.append(frame);
+      await loaded;
+
+      const doc = frame.contentDocument;
+      frame.contentWindow.getSelection().selectAllChildren(doc.querySelector('pre'));
+      await tick();
+      type('\u0003');
+      await tick(150);
+      const copied = 'echo one[201~]52;c;eA==31m\n\techo two';
+      expect(calls.map((call) => call.input.toString('utf8'))).toEqual([copied]);
+      expect(written).toEqual([osc52(copied)]);
+      // The copy went through, so the selection is cleared as after any other.
+      expect(frame.contentWindow.getSelection().toString()).toBe('');
+    } finally {
+      await term.dispose();
+    }
+  });
 });
