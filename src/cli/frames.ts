@@ -13,6 +13,18 @@
 import { convertStylesheet } from './px-to-cells.js';
 import type { AnyRecord } from './types';
 
+/**
+ * What a document here may load or run, as TermDOM's csp option: nothing.
+ * The terminal draws no picture, sound or font, so a request for one would
+ * only tell its server that the message was opened, and where from. TermDOM
+ * checks every load against this before it is made, the message frames'
+ * included, whatever the frame's own policy allows (remote images turned on).
+ * It runs no program for an <embed> and no handler attribute either way;
+ * the last two directives say so for good.
+ */
+export const DOCUMENT_POLICY =
+  "img-src 'none'; media-src 'none'; font-src 'none'; object-src 'none'; script-src-attr 'none'";
+
 const wiredDocuments = new WeakSet<object>();
 
 function withSameOrigin(value: unknown) {

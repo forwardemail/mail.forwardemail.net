@@ -11,7 +11,7 @@ import { TermDOM } from '@b9g/termdom';
 import createDOMPurify from 'dompurify';
 import { describe, expect, it, vi } from 'vitest';
 import { installDomFixes } from '../../src/cli/dom-fixes';
-import { installFrames } from '../../src/cli/frames';
+import { DOCUMENT_POLICY, installFrames } from '../../src/cli/frames';
 import { createImageConstructor } from '../../src/cli/images';
 import { bytesFor, displayCombo, installHints } from '../../src/cli/hints';
 import { installClipboard } from '../../src/cli/clipboard';
@@ -31,6 +31,7 @@ import {
 } from '../../src/cli/px-to-cells.js';
 import { thumbPlacement } from '../../src/cli/scrollbars';
 import { createStorage } from '../../src/cli/storage';
+import { buildIframeSrcdoc } from '../../src/utils/iframe-srcdoc';
 import { createPgpModal } from '../../src/utils/pgp-key-prompt';
 import { wrappedRows } from '../../src/cli/textareas';
 import { createAppWindow, installGeometry } from '../../src/cli/viewport';
@@ -326,6 +327,50 @@ describe('message frames', () => {
       type: 'link',
       payload: { url: 'javascript:globalThis.__feFrameHandlerRan = true', isMailto: false },
     });
+  });
+});
+
+describe('what a message may load', () => {
+  // A message as the app frames it with remote images turned on, where the
+  // frame's own policy lets pictures load from anywhere.
+  const message =
+    '<p>Hello</p>' +
+    '<img src="https://tracker.example/open.gif?id=1" width="200" height="50" alt="logo">' +
+    '<img srcset="https://tracker.example/wide.png 2x" alt="wide">' +
+    '<img src="http://127.0.0.1:9/status" width="200" height="50" alt="local">';
+
+  async function requestsFor(options) {
+    const term = new TermDOM({ transport: quietTransport(), ...options });
+    const win = term.window;
+    installFrames(win);
+    const requests = [];
+    term.addEventListener('fetch', (event) => {
+      requests.push(event.request.url);
+      event.respondWith(new Response(null, { status: 404 }));
+    });
+    const messages = [];
+    win.addEventListener('message', (event) => messages.push(event.data));
+
+    const frame = term.document.createElement('iframe');
+    frame.setAttribute('sandbox', 'allow-popups');
+    term.document.body.append(frame);
+    frame.srcdoc = buildIframeSrcdoc(message, false, false, 'token');
+    await vi.waitFor(() => expect(messages.map((item) => item.type)).toContain('height'));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const shown = frame.contentDocument.body.textContent;
+    await term.dispose();
+    return { requests, shown };
+  }
+
+  it('asks no server for a picture, under the policy the client sets', async () => {
+    const { requests, shown } = await requestsFor({ images: 'none', csp: DOCUMENT_POLICY });
+    expect(requests).toEqual([]);
+    expect(shown).toContain('Hello');
+  });
+
+  it('holds with the policy alone, whatever the images option does in a frame', async () => {
+    const { requests } = await requestsFor({ csp: DOCUMENT_POLICY });
+    expect(requests).toEqual([]);
   });
 });
 
