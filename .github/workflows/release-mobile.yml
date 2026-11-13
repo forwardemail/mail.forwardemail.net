@@ -141,7 +141,7 @@ jobs:
             libgtk-3-dev
 
       - name: Setup Java
-        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
         with:
           distribution: temurin
           java-version: 17
@@ -160,13 +160,13 @@ jobs:
         run: sdkmanager "ndk;27.0.12077973"
 
       - name: Setup Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -254,7 +254,7 @@ jobs:
       # the AAB; this one is for symbolicating tombstones from the sideloaded
       # APK (ndk-stack / llvm-symbolizer).
       - name: Upload native debug symbols
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: android-native-debug-symbols
           path: src-tauri/gen/android/app/build/outputs/native-debug-symbols/**/native-debug-symbols.zip
@@ -441,7 +441,7 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev libgtk-3-dev
 
       - name: Setup Java
-        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
         with:
           distribution: temurin
           java-version: 17
@@ -460,13 +460,13 @@ jobs:
         run: sdkmanager "ndk;27.0.12077973"
 
       - name: Setup Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -618,14 +618,14 @@ jobs:
 
       - name: Setup Node.js
         if: steps.check.outputs.enabled == 'true'
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
 
       - name: Setup pnpm
         if: steps.check.outputs.enabled == 'true'
-        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
 
       - name: Install dependencies
         if: steps.check.outputs.enabled == 'true'
@@ -633,7 +633,7 @@ jobs:
 
       - name: Import iOS distribution certificate
         if: steps.check.outputs.enabled == 'true'
-        uses: apple-actions/import-codesign-certs@5142e029c445c10ffc7149d172e540235a065466 # v7.0.0
+        uses: apple-actions/import-codesign-certs@288b8ec97b82c66b6f2a6baaf7acc8dfbcbe331c # v7.2.0
         with:
           p12-file-base64: ${{ secrets.IOS_CERTIFICATE_BASE64 || secrets.APPLE_CERTIFICATE }}
           p12-password: ${{ secrets.IOS_CERTIFICATE_PASSWORD || secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -746,7 +746,7 @@ jobs:
       # they are for diagnostics and must not fail the release.
       - name: Upload iOS dSYMs
         if: steps.check.outputs.enabled == 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ios-dsyms
           path: src-tauri/gen/apple/build/forwardemail-desktop_iOS.xcarchive/dSYMs
