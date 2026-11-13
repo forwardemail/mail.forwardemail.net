@@ -212,7 +212,9 @@ export async function startApp({
   installFocus(env.window);
   __forwardemailLoadApp();
   if (hints) installHints(env.window, { columns: () => process.stdout.columns || 80 });
-  if (demo && !resume.url) pressWhenReady(env.document, '[data-testid="try-demo-btn"]');
+  // (A reload drops --demo, so this is a first start, or a test that starts
+  // the demo at a given URL: the demo is entered from the sign-in page.)
+  if (demo) pressWhenReady(env.document, '[data-testid="try-demo-btn"]');
   installDevHooks(env);
   return env;
 }

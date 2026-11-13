@@ -14,5 +14,12 @@ export default defineConfig({
     // Each interactive test drives a full client; running them side by side
     // only makes them compete for the CPU.
     fileParallelism: false,
+    // One line per test as it finishes. The default reporter prints a file
+    // only when the whole file is done, so on CI a stuck run showed nothing
+    // until the job was cancelled.
+    reporters: ['verbose'],
+    // A client that does not answer makes every interactive test wait out
+    // its timeouts (about an hour for the suite); stop after a few instead.
+    bail: 5,
   },
 });

@@ -540,9 +540,12 @@ describe.runIf(canRunInteractive)('in a terminal', () => {
     await session.waitFor((text) => FORMATTING.test(text), { label: 'the formatting toolbar' });
     // Once the compose window has put the caret at the top, as it does.
     await new Promise((resolve) => setTimeout(resolve, 1500));
-    const attribution = session.locate('wrote:');
-    const line = session.screen().split('\n')[attribution.row - 1];
-    session.clickAt(line.indexOf('On ') + 1, attribution.row);
+    // The attribution ("On <date>, <sender> wrote:") wraps onto a second
+    // line when the date and sender are long, so look up from "wrote:".
+    const lines = session.screen().split('\n');
+    let row = session.locate('wrote:').row - 1;
+    while (row > 0 && !lines[row].includes('On ')) row -= 1;
+    session.clickAt(lines[row].indexOf('On ') + 1, row + 1);
     await new Promise((resolve) => setTimeout(resolve, 500));
     session.type('XYZ');
     await session.waitFor('XYZOn ');
@@ -909,15 +912,14 @@ describe.runIf(canRunInteractive)('in a terminal', () => {
   });
 
   it('opens the message a notification points at', async () => {
-    const home = tempHome();
-    session = startTerminal({ home, args: ['--demo'] });
-    await session.waitFor('Welcome to Forward Email!');
-    await session.stop();
-    // The demo account stays signed in; a notification's target opens once
-    // the app is ready, the way a click on one or its toast's View does.
+    // A notification's target in the URL (as a web notification opens a new
+    // window) opens once the app is ready: here after entering the demo from
+    // the sign-in page, the way a click on a notification or its toast's
+    // View waits for the account.
     const target = encodeURIComponent(JSON.stringify({ folder: 'INBOX', messageId: 'demo-2' }));
     session = startTerminal({
-      home,
+      home: tempHome(),
+      args: ['--demo'],
       env: {
         FORWARDEMAIL_RESUME: JSON.stringify({
           url: `https://mail.forwardemail.net/mailbox?fe_notify=${target}`,

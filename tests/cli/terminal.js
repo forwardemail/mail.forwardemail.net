@@ -49,6 +49,8 @@ export function startTerminal({
     ...(keepScrollback ? { scrollback: 1000 } : {}),
   });
   const command = [process.execPath, CLI, ...args].map(quote).join(' ');
+  // The client creates this once it has finished starting (src/cli/app.ts).
+  const readyFile = path.join(home ?? os.tmpdir(), `ready-${process.pid}-${Date.now()}`);
   // Lines a shell printed before the client started.
   const printed = shellLines.map((line) => `echo ${quote(line)}; `).join('');
   const child = spawn(
@@ -61,11 +63,46 @@ export function startTerminal({
         COLORTERM: 'truecolor',
         FORWARDEMAIL_HOME: home,
         FORWARDEMAIL_NO_UPDATE_CHECK: '1',
+        FORWARDEMAIL_READY_FILE: readyFile,
         ...env,
       },
       stdio: ['pipe', 'pipe', 'pipe'],
     },
   );
+  // Input from the test (keys, clicks, the wheel) is held until the client
+  // has finished starting and has stopped redrawing for a moment. Its first
+  // screen is up before that, and a key or click sent while it was still
+  // starting or redrawing could be dropped: tests failed at random on a slow
+  // machine, each then waiting out its timeouts (an hour-long CI run).
+  // Answers to the client's own queries are not held (term.onData below).
+  const READY_LIMIT_MS = 30_000;
+  const QUIET_MS = 300;
+  const startedAt = Date.now();
+  let lastOutputAt = startedAt;
+  const heldInput = [];
+  // Ready once the file is there and the screen has been still for a moment,
+  // and from then on, even while the client redraws (a blinking caret). A
+  // client that reloads (a new process) removes the file until it has
+  // started again.
+  let settled = false;
+  const isReady = () => {
+    if (Date.now() - startedAt > READY_LIMIT_MS) return true;
+    if (!fs.existsSync(readyFile)) return (settled = false);
+    settled ||= Date.now() - lastOutputAt > QUIET_MS;
+    return settled;
+  };
+  // `input` is the bytes to send, or a function that works them out when
+  // they are sent (a click finds its text on the screen as it is then).
+  const write = (input) => child.stdin.write(typeof input === 'function' ? input() : input);
+  const send = (input) => {
+    if (heldInput.length || !isReady()) heldInput.push(input);
+    else write(input);
+  };
+  const flush = setInterval(() => {
+    if (exited) return clearInterval(flush);
+    if (!heldInput.length || !isReady()) return;
+    for (const input of heldInput.splice(0)) write(input);
+  }, 50);
   let exited = null;
   child.on('exit', (code, signal) => {
     exited = { code, signal };
@@ -88,7 +125,10 @@ export function startTerminal({
   let held = '';
   // Everything the client wrote, as the terminal received it.
   const received = [];
-  child.stdout.on('data', (data) => received.push(data));
+  child.stdout.on('data', (data) => {
+    received.push(data);
+    lastOutputAt = Date.now();
+  });
   child.stdout.on('data', (data) => {
     if (!keepScrollback) return term.write(data);
     let text = held + decoder.write(data);
@@ -149,7 +189,17 @@ export function startTerminal({
           : -1;
     if (row === -1) throw new Error(`"${text}" is not on screen\n${screen()}`);
     const col = lines[row].indexOf(text) + 1;
-    child.stdin.write(`\u001b[<0;${col};${row + 1}M\u001b[<0;${col};${row + 1}m`);
+    const at = (c, r) => `\u001b[<0;${c};${r}M\u001b[<0;${c};${r}m`;
+    // Where the text is when the click is sent: the client can still move
+    // things while input is held (see send).
+    send(() => {
+      try {
+        const now = locate(text, onRow);
+        return at(now.col, now.row);
+      } catch {
+        return at(col, row + 1);
+      }
+    });
   };
 
   // Where `text` is: 1-based column and row of its first cell.
@@ -165,18 +215,17 @@ export function startTerminal({
     return { col: lines[row].indexOf(text) + 1, row: row + 1 };
   };
   // A left click on a cell, by its 1-based column and row.
-  const clickAt = (col, row) =>
-    child.stdin.write(`\u001b[<0;${col};${row}M\u001b[<0;${col};${row}m`);
+  const clickAt = (col, row) => send(`\u001b[<0;${col};${row}M\u001b[<0;${col};${row}m`);
   // The pointer moved over a cell, with no button held.
-  const hover = (col, row) => child.stdin.write(`\u001b[<35;${col};${row}M`);
+  const hover = (col, row) => send(`\u001b[<35;${col};${row}M`);
   // A left-button drag from one cell to another.
   const drag = async (from, to) => {
     const pause = () => new Promise((resolve) => setTimeout(resolve, 150));
-    child.stdin.write(`\u001b[<0;${from.col};${from.row}M`);
+    send(`\u001b[<0;${from.col};${from.row}M`);
     await pause();
-    child.stdin.write(`\u001b[<32;${to.col};${to.row}M`);
+    send(`\u001b[<32;${to.col};${to.row}M`);
     await pause();
-    child.stdin.write(`\u001b[<0;${to.col};${to.row}m`);
+    send(`\u001b[<0;${to.col};${to.row}m`);
   };
 
   // The colors of the first cell of the first occurrence of `text`, as
@@ -215,8 +264,12 @@ export function startTerminal({
     scrolledOff: () => term.buffer.active.baseY,
     // Turns the mouse wheel over a cell, by its 1-based column and row.
     wheel: (col, row, direction, times = 1) =>
-      child.stdin.write(`\u001b[<${direction === 'down' ? 65 : 64};${col};${row}M`.repeat(times)),
-    type: (keys) => child.stdin.write(keys),
+      send(`\u001b[<${direction === 'down' ? 65 : 64};${col};${row}M`.repeat(times)),
+    type: (keys) => send(keys),
+    // Resolves once the client has finished starting (see send).
+    whenReady: async () => {
+      while (!isReady() && !exited) await new Promise((resolve) => setTimeout(resolve, 50));
+    },
     async stop() {
       if (!exited) child.kill('SIGKILL');
       await exit;

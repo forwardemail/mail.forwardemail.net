@@ -1700,7 +1700,6 @@ routeStore.subscribe((route) => {
     if (!_backgroundServicesStarted) {
       _backgroundServicesStarted = true;
       startAutoMetadataSync();
-      initKeyboardShortcuts();
       startOutboxProcessor();
       syncPendingDrafts();
       initMutationQueue();
@@ -1749,7 +1748,11 @@ routeStore.subscribe((route) => {
   }
 });
 
+let _keyboardShortcutsStarted = false;
+
 function initKeyboardShortcuts() {
+  if (_keyboardShortcutsStarted) return;
+  _keyboardShortcutsStarted = true;
   const handleRouteChange = (route) => {
     updateShortcutState(route);
   };
@@ -2256,6 +2259,13 @@ async function bootstrap() {
   if (!root) {
     return;
   }
+
+  // Shortcuts are registered before anything is awaited. The mailbox can be
+  // on screen before bootstrap finishes (the demo account, a cached list),
+  // and a key pressed then did nothing: on a slow machine the first arrow
+  // keys in the terminal client were lost. They are only enabled on the
+  // mailbox (updateShortcutState), so the sign-in page is unaffected.
+  initKeyboardShortcuts();
 
   // A web notification opened in a new window carries its target in the URL.
   // Read it before anything below rewrites the URL (the sign-in and App Lock
@@ -2782,6 +2792,8 @@ async function bootstrap() {
     // Mark bootstrap complete so routeStore.subscribe can mount components
     // on subsequent route changes (e.g. navigating to calendar/contacts).
     _bootstrapComplete = true;
+    // The terminal client's tests wait for this before typing (src/cli/app.ts).
+    globalThis.dispatchEvent(new CustomEvent('fe:bootstrap-complete'));
 
     // Mount Calendar and Contacts lazily on first authenticated route.
     //
@@ -2830,7 +2842,6 @@ async function bootstrap() {
     if (liveMailboxMode && !_backgroundServicesStarted) {
       _backgroundServicesStarted = true;
       startAutoMetadataSync();
-      initKeyboardShortcuts();
 
       // Start outbox processor for offline email queue with retry
       startOutboxProcessor();
