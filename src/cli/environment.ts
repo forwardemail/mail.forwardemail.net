@@ -6,7 +6,7 @@ import { FileReader } from './file-reader';
 import { createImageConstructor } from './images';
 import { createStorage } from './storage';
 import { installCentering } from './center';
-import { installAnimations, installDomFixes, installEditingFixes } from './dom-fixes';
+import { installDomFixes, installEditingFixes } from './dom-fixes';
 import { installFocusNavigation } from './focus-navigation';
 import { installFrames } from './frames';
 import { installHistory } from './history';
@@ -156,6 +156,11 @@ export function installEnvironment(options: EnvironmentOptions) {
     html: options.html,
     url: options.url ?? 'https://mail.forwardemail.net/',
     transport: options.transport,
+    images: 'none',
+    // TermDOM asks the terminal whether it shows 24-bit color, and terminals
+    // built on xterm.js (VS Code's, among others) give no answer it reads,
+    // so they would be drawn in 256 colors. COLORTERM is how they say so.
+    colorDepth: /^(truecolor|24bit)$/i.test(process.env.COLORTERM ?? '') ? 'rgb' : 'auto',
   });
   const win = term.window as unknown as Record<string, unknown>;
   const g = globalThis as unknown as Record<string, unknown>;
@@ -201,6 +206,8 @@ export function installEnvironment(options: EnvironmentOptions) {
     localStorage,
     sessionStorage,
     caches: undefined,
+    crypto: globalThis.crypto,
+    performance: globalThis.performance,
     Worker: ThreadWorker,
     // Pictures cannot be drawn, so preloads report a failed load (images.ts).
     Image: createImageConstructor(win),
@@ -245,7 +252,6 @@ export function installEnvironment(options: EnvironmentOptions) {
   installCentering(win);
   installDomFixes(win);
   installEditingFixes(win);
-  installAnimations(win);
   installGeometry(win);
   installFrames(win);
   installTextareaSizing(win);

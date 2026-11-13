@@ -88,10 +88,14 @@ describe('system notifier', () => {
     expect(unavailableReason({ PATH: '' }, 'linux')).toBe('no desktop session');
     expect(unavailableReason(desktop, 'linux')).toBe('notify-send is not installed');
     expect(unavailableReason({ FORWARDEMAIL_NOTIFICATIONS: '0' }, 'darwin')).toBe('turned off');
-    expect(unavailableReason({}, 'darwin')).toBeNull();
+    expect(unavailableReason({}, 'darwin', 'x64')).toBeNull();
     expect(unavailableReason({ SSH_TTY: '/dev/pts/1' }, 'win32')).toBe('remote session');
     expect(
-      unavailableReason({ SSH_TTY: '/dev/pts/1', FORWARDEMAIL_NOTIFICATIONS: '1' }, 'darwin'),
+      unavailableReason(
+        { SSH_TTY: '/dev/pts/1', FORWARDEMAIL_NOTIFICATIONS: '1' },
+        'darwin',
+        'x64',
+      ),
     ).toBeNull();
     expect(
       createSystemNotifier({ dataDir: dir, version: '1.0.0', env: {}, platform: 'linux' }),
@@ -202,6 +206,7 @@ describe('clicking a system notification', () => {
         version: '1.0.0',
         env: { __CFBundleIdentifier: 'com.googlecode.iterm2' },
         platform: 'darwin',
+        arch: 'x64',
         programs,
       });
       let clicked = 0;

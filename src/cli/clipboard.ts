@@ -28,53 +28,47 @@
 import { createClipboardWriter, type ClipboardOptions } from './system-clipboard';
 import type { AnyRecord } from './types';
 
-const TEXT_NODE = 3;
+function textOf(selection: AnyRecord | null | undefined): string {
+  if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return '';
+  try {
+    return String(selection.toString());
+  } catch {
+    return '';
+  }
+}
 
-function textNodesIn(root: AnyRecord, out: AnyRecord[] = []): AnyRecord[] {
-  for (const child of Array.from((root.shadowRoot ?? root).childNodes as AnyRecord[])) {
-    if (child.nodeType === TEXT_NODE) out.push(child);
-    else textNodesIn(child, out);
+/**
+ * The window's selection and those of the same-origin frames in it, where a
+ * message body is selected (frames.ts). Each document has its own, as in a
+ * browser.
+ */
+function selections(win: AnyRecord, out: AnyRecord[] = []): AnyRecord[] {
+  const selection = win.getSelection?.();
+  if (selection) out.push(selection);
+  for (const frame of Array.from(
+    (win.document?.querySelectorAll?.('iframe') ?? []) as AnyRecord[],
+  )) {
+    try {
+      const child = frame.contentWindow;
+      if (child?.document) selections(child, out);
+    } catch {
+      // a cross-origin frame
+    }
   }
   return out;
 }
 
-/**
- * The selected text. Selection.toString() leaves out text in shadow trees,
- * where message bodies are drawn (frames.ts), so that is read here.
- */
+function findSelection(win: AnyRecord): { selection: AnyRecord; text: string } | null {
+  for (const selection of selections(win)) {
+    const text = textOf(selection);
+    if (text.trim()) return { selection, text };
+  }
+  return null;
+}
+
+/** The selected text, in the app or in a message frame. */
 export function selectedText(win: AnyRecord): string {
-  const selection = win.getSelection?.();
-  if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return '';
-  try {
-    const text = String(selection.toString());
-    if (text) return text;
-  } catch {
-    // read below
-  }
-  const { anchorNode, anchorOffset, focusNode, focusOffset } = selection;
-  if (!anchorNode || !focusNode) return '';
-  if (anchorNode === focusNode && anchorNode.nodeType === TEXT_NODE) {
-    const [start, end] = [anchorOffset, focusOffset].sort((a, b) => a - b);
-    return String(anchorNode.nodeValue ?? '').slice(start, end);
-  }
-  const root = anchorNode.getRootNode?.();
-  if (!root || root !== focusNode.getRootNode?.()) return '';
-  const nodes = textNodesIn(root);
-  let from = nodes.indexOf(anchorNode);
-  let to = nodes.indexOf(focusNode);
-  let fromOffset = anchorOffset;
-  let toOffset = focusOffset;
-  if (from === -1 || to === -1) return '';
-  if (from > to) {
-    [from, to] = [to, from];
-    [fromOffset, toOffset] = [toOffset, fromOffset];
-  }
-  let text = '';
-  for (let i = from; i <= to; i++) {
-    const value = String(nodes[i].nodeValue ?? '');
-    text += value.slice(i === from ? fromOffset : 0, i === to ? toOffset : value.length);
-  }
-  return text;
+  return findSelection(win)?.text ?? '';
 }
 
 /**
@@ -157,8 +151,9 @@ export function installClipboard(
   // quitting, so a second press leaves. A failed copy keeps the selection for
   // another try.
   const copy = (): boolean => {
-    const text = selectedText(win);
-    if (!text.trim()) return false;
+    const found = findSelection(win);
+    if (!found) return false;
+    const { selection, text } = found;
     if (copying) return true;
     copying = true;
     copyText(text)
@@ -167,9 +162,9 @@ export function installClipboard(
       })
       .then(
         () => {
-          if (selectedText(win) === text) {
+          if (textOf(selection) === text) {
             try {
-              win.getSelection?.()?.removeAllRanges?.();
+              selection.removeAllRanges?.();
             } catch {
               // no selection to clear
             }
@@ -199,8 +194,15 @@ export function installClipboard(
   // The clickable "Ctrl+C Copy" hint (hints.ts) asks for the copy here.
   win.addEventListener('fe-terminal-copy', () => void copy());
 
-  // Keep the hint in step with what is selected.
-  document.addEventListener('selectionchange', refresh);
-  win.addEventListener('mouseup', refresh, true);
-  win.addEventListener('keyup', refresh, true);
+  // Keep the hint in step with what is selected, here and in message frames,
+  // whose documents send their own events (frames.ts).
+  const watch = (target: AnyRecord) => {
+    target.addEventListener('selectionchange', refresh);
+    target.addEventListener('mouseup', refresh, true);
+    target.addEventListener('keyup', refresh, true);
+  };
+  watch(document);
+  win.addEventListener('fe-frame-document', (event: AnyRecord) => {
+    if (event.detail?.document) watch(event.detail.document);
+  });
 }

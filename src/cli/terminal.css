@@ -29,10 +29,9 @@ iframe {
   display: none !important;
 }
 
-/* A message body is laid out inside its frame (see frames.ts). */
+/* TermDOM draws a message body from its frame's own document (frames.ts). */
 .fe-email-iframe {
   display: block !important;
-  height: auto !important;
   border-style: none !important;
 }
 
@@ -171,6 +170,18 @@ button.border::after,
 a.border::after {
   content: ']';
   margin-inline-start: 1ch;
+}
+
+/* A checkbox reads [ ] or [✓], as wide as its brackets and mark. */
+[data-slot='checkbox'] {
+  width: auto !important;
+}
+button[data-slot='checkbox']::before,
+button[data-slot='checkbox']::after {
+  margin-inline: 0;
+}
+[data-slot='checkbox-indicator'] {
+  width: 1ch;
 }
 
 /* Message list rows: no minimum height, no vertical padding. */

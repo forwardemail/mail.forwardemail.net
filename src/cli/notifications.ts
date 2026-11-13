@@ -173,12 +173,13 @@ export function createSystemNotifier(options: {
   version: string;
   env?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
+  arch?: string;
   /** Where the notifier programs are; found by the client otherwise. */
   programs?: string;
 }): Notifier | null {
   const env = options.env ?? process.env;
   const platform = options.platform ?? process.platform;
-  if (unavailableReason(env, platform) !== null) return null;
+  if (unavailableReason(env, platform, options.arch) !== null) return null;
 
   // Found, and for a standalone executable written out, on first use.
   let dir: string | null | undefined;
