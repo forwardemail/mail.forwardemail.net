@@ -26,7 +26,7 @@ function escapeForPreText(text: string): string {
 function linkifyEscapedText(escapedText: string): string {
   // Operate on already-escaped text so we don't introduce new HTML
   return escapedText.replace(
-    /(https?:\/\/[^\s<>"']+|mailto:[^\s<>"']+)/g,
+    /(?:https?:\/\/|mailto:)(?:(?!&(?:lt|gt);)[^\s<>"'])+/g,
     (url) => `<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`,
   );
 }
