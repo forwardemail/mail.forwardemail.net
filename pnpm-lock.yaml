@@ -219,8 +219,8 @@ importers:
         version: 1.0.10
     devDependencies:
       '@b9g/termdom':
-        specifier: 0.2.6
-        version: 0.2.6
+        specifier: 0.2.7
+        version: 0.2.7
       '@commitlint/cli':
         specifier: ^20.5.3
         version: 20.5.3(@types/node@26.4.0)(conventional-commits-parser@6.4.0)(typescript@5.9.3)
@@ -397,8 +397,8 @@ packages:
   '@asamuzakjp/css-color@3.2.0':
     resolution: {integrity: sha512-K1A6z8tS3XsmCMM86xoWdn7Fkdn9m6RSVtocUrJYIwZnFVkng/PvkEoWtOWmP+Scc6saYWHWZYbndEEXxl24jw==}
 
-  '@b9g/termdom@0.2.6':
-    resolution: {integrity: sha512-0KQ4rt10SolIj088IST4a5v3H07IQ0sOiEwE+Ovrh76PEVUjy1mwazI0uBqiPjp8U9jZTpLVDtsSp47GBYQUtQ==}
+  '@b9g/termdom@0.2.7':
+    resolution: {integrity: sha512-36lK+jphQ3gXy3cGThWDTir4JIzZFRxYr2HjHo6iRbEUfsPf+PvTSLvRIy8ABUC6crqmU5WuNcCNGprrBMTucg==}
     engines: {node: '>=20.19.0'}
     peerDependencies:
       node-pty: ^1.1.0
@@ -6465,7 +6465,7 @@ snapshots:
       '@csstools/css-tokenizer': 3.0.4
       lru-cache: 10.4.3
 
-  '@b9g/termdom@0.2.6':
+  '@b9g/termdom@0.2.7':
     dependencies:
       css-tree: 3.2.1
       parse5: 8.1.0

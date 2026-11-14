@@ -128,7 +128,7 @@
     "tauri-plugin-remote-push-api": "1.0.10"
   },
   "devDependencies": {
-    "@b9g/termdom": "0.2.6",
+    "@b9g/termdom": "0.2.7",
     "@commitlint/cli": "^20.5.3",
     "@commitlint/config-conventional": "^20.5.3",
     "@eslint/js": "^9.39.5",
