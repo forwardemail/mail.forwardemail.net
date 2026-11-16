@@ -11,7 +11,7 @@
   "devDependencies": {
     "@types/node": "^22.10.0",
     "typescript": "^5.7.2",
-    "undici": "^6.21.3",
+    "undici": "^8.12.4",
     "vitest": "^3.2.4",
     "webdriverio": "^9.5.5"
   }
