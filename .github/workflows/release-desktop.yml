@@ -148,13 +148,13 @@ jobs:
             xdg-utils
 
       - name: Setup Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -321,7 +321,7 @@ jobs:
       # See docs/SECRETS.md#windows-code-signing-secrets.
       - name: Setup Java (CodeSignTool)
         if: runner.os == 'Windows'
-        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
         with:
           distribution: temurin
           java-version: 21
@@ -355,7 +355,7 @@ jobs:
         # a few times a month; without retries one of those failed the whole
         # 25-minute row (v0.13.9, run 35251791779). v1 renames the updater
         # .app.tar.gz assets and is a separate, deliberate upgrade.
-        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Tauri updater signing key (generates .sig files for auto-update)
