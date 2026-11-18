@@ -84,6 +84,8 @@ const ALLOWED_COMMANDS = new Set([
   'clear_logs',
   'renderer_heartbeat',
   'renderer_watchdog_status',
+  'get_global_shortcut',
+  'set_global_shortcut',
 ]);
 
 export async function invoke(cmd, args) {

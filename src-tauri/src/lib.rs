@@ -7,6 +7,8 @@ mod browser_override;
 #[cfg(desktop)]
 mod device_key;
 mod diagnostics;
+#[cfg(desktop)]
+mod global_shortcut;
 mod redaction;
 mod renderer_watchdog;
 
@@ -1295,6 +1297,10 @@ pub fn run() {
             is_default_mailto_handler,
             #[cfg(desktop)]
             set_default_mailto_handler,
+            #[cfg(desktop)]
+            global_shortcut::get_global_shortcut,
+            #[cfg(desktop)]
+            global_shortcut::set_global_shortcut,
             renderer_watchdog::renderer_heartbeat,
             renderer_watchdog::renderer_watchdog_status,
             #[cfg(target_os = "macos")]
@@ -1388,27 +1394,12 @@ pub fn run() {
                 #[cfg(not(feature = "webdriver"))]
                 renderer_watchdog::start(app.handle().clone());
 
-                // Register global shortcut: Cmd+Shift+M (macOS) / Ctrl+Shift+M (others)
-                use tauri_plugin_global_shortcut::{
-                    Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState,
-                };
-
-                #[cfg(target_os = "macos")]
-                let modifiers = Modifiers::SUPER | Modifiers::SHIFT;
-                #[cfg(not(target_os = "macos"))]
-                let modifiers = Modifiers::CONTROL | Modifiers::SHIFT;
-
-                let shortcut = Shortcut::new(Some(modifiers), Code::KeyM);
-                let handle = app.handle().clone();
-                app.global_shortcut()
-                    .on_shortcut(shortcut, move |_app, _shortcut, event| {
-                        if event.state == ShortcutState::Pressed {
-                            if let Some(window) = handle.get_webview_window("main") {
-                                let _ = window.show();
-                                let _ = window.set_focus();
-                            }
-                        }
-                    })?;
+                // Open or focus the app from any other program. The combo is a
+                // setting (Command+Shift+M / Ctrl+Shift+M until the user
+                // changes or disables it) and a failure to register it, for
+                // example because Chrome already owns Command+Shift+M, must
+                // not prevent the app from starting.
+                app.manage(global_shortcut::install(app.handle()));
             }
 
             // Forward Android back button to the frontend
