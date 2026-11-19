@@ -442,10 +442,16 @@ async function setupDesktopKeepAlive() {
 
     const win = getCurrentWindow();
 
-    // Intercept window close to hide instead of quit (keep in tray)
+    // Intercept window close to hide instead of quit (keep in tray).
+    // A pending undo-send keeps running: hiding is not undo and not quit.
     await win.onCloseRequested(async (event) => {
       event.preventDefault();
       await win.hide();
+      try {
+        globalThis.__fePendingSendHidden?.();
+      } catch {
+        // The queue re-arms itself on a timer either way.
+      }
     });
   } catch (err) {
     console.warn('[background-service] Desktop keep-alive setup failed:', err);
