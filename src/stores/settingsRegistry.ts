@@ -262,8 +262,9 @@ export const SETTINGS_REGISTRY: Record<string, SettingDefinition> = {
     localSerialize: (value) => serializeBoolean(Boolean(value)),
   },
   // Undo-send window in milliseconds. 0 = off (send immediately). When set,
-  // Compose queues to the outbox with sendAt = now + this, and the main
-  // window shows an Undo toast for the duration.
+  // Send stores the message with this deadline and the main window's
+  // pending-send queue submits it when the deadline passes, even if the
+  // compose window has closed or a webview timer was suspended.
   undo_send_delay: {
     id: 'undo_send_delay',
     portable: true,

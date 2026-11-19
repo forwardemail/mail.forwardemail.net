@@ -1,5 +1,7 @@
 use serde::Serialize;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{Emitter, Listener, Manager};
 
 #[cfg(desktop)]
@@ -42,6 +44,75 @@ struct DeepLinkPayload {
 struct SingleInstancePayload {
     args: Vec<String>,
     cwd: String,
+}
+
+/// Set once a quit has already asked the webview to flush undo-sends, so the
+/// exit that follows is not held again.
+static QUIT_FLUSH_STARTED: AtomicBool = AtomicBool::new(false);
+
+fn unix_now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX))
+        .unwrap_or(0)
+}
+
+/// Run the main window's pending-send flush. `reason` is a JS string literal
+/// ("quit") or empty. The webview may be hidden; eval still runs, unlike a
+/// suspended DOM timer.
+fn eval_flush_pending_sends(app: &tauri::AppHandle, reason: &str) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let script = format!("void globalThis.__feFlushPendingSends?.({reason:?})");
+    if let Err(err) = window.eval(script) {
+        log::warn!("[pending-send] could not flush from native: {err}");
+    }
+}
+
+/// Wake the webview when an undo-send comes due. WKWebView suspends
+/// setTimeout while the window is hidden or the app is in the background;
+/// this sleep happens on a thread outside the webview.
+#[tauri::command]
+fn arm_pending_send_wake(app: tauri::AppHandle, due_at_ms: u64) -> Result<(), String> {
+    let now = unix_now_ms();
+    if due_at_ms > now.saturating_add(120_000) {
+        return Err("pending send is too far in the future".into());
+    }
+    if due_at_ms <= now {
+        eval_flush_pending_sends(&app, "");
+        return Ok(());
+    }
+    let delay = due_at_ms - now;
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(delay));
+        eval_flush_pending_sends(&app, "");
+    });
+    Ok(())
+}
+
+/// The page calls this after a quit flush finishes so the process can exit
+/// without waiting out the native timeout.
+#[tauri::command]
+fn complete_pending_send_flush(app: tauri::AppHandle) {
+    app.exit(0);
+}
+
+/// Quit should send anything still inside its undo window, not drop it.
+/// The page flushes, then calls `complete_pending_send_flush`. If the
+/// webview never answers, exit anyway — the queue is also on disk and the
+/// next launch submits whatever is overdue.
+fn hold_quit_for_pending_sends(app: &tauri::AppHandle, api: tauri::ExitRequestApi) {
+    if QUIT_FLUSH_STARTED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    api.prevent_exit();
+    eval_flush_pending_sends(app, "quit");
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(8));
+        app.exit(0);
+    });
 }
 
 /// Holds deep-link URLs until the frontend drains them with
@@ -1291,6 +1362,8 @@ pub fn run() {
             open_url_in_browser,
             #[cfg(target_os = "macos")]
             macos_disable_close_animation,
+            arm_pending_send_wake,
+            complete_pending_send_flush,
             #[cfg(desktop)]
             is_default_mailto_handler,
             #[cfg(desktop)]
@@ -1547,22 +1620,25 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("error while building Forward Email")
-        .run(|_app_handle, _event| {
+        .run(|app_handle, event| match event {
+            tauri::RunEvent::ExitRequested { api, .. } => {
+                hold_quit_for_pending_sends(app_handle, api);
+            }
             // macOS: re-show the main window when the dock icon is clicked
             // and no windows are visible (e.g. after closing with the red ✕).
             #[cfg(target_os = "macos")]
-            if let tauri::RunEvent::Reopen {
+            tauri::RunEvent::Reopen {
                 has_visible_windows,
                 ..
-            } = _event
-            {
+            } => {
                 if !has_visible_windows {
-                    if let Some(window) = _app_handle.get_webview_window("main") {
+                    if let Some(window) = app_handle.get_webview_window("main") {
                         let _ = window.show();
                         let _ = window.set_focus();
                     }
                 }
             }
+            _ => {}
         });
 }
 
