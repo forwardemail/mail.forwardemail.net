@@ -99,7 +99,7 @@
     "@tiptap/extension-table-header": "^2.27.2",
     "@tiptap/extension-table-row": "^2.27.2",
     "@tiptap/extension-text-style": "^2.27.2",
-    "@tiptap/extension-underline": "^2.27.2",
+    "@tiptap/extension-underline": "^2.27.3",
     "@tiptap/starter-kit": "^2.27.2",
     "bits-ui": "^2.19.0",
     "clsx": "^2.1.1",
