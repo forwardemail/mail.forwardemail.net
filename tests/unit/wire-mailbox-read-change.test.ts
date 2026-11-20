@@ -8,7 +8,28 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { flagChangeBody } from '../../src/utils/message-changes';
+
+// The change goes out through the account's mail backend. The backend is the
+// real one here, over a stubbed transport, so the request it builds and the
+// credentials it picks are part of what is tested.
+const transport = vi.hoisted(() => {
+  const ALICE = 'alice@example.com';
+  return {
+    ALICE,
+    ALICE_AUTH: `Basic ${Buffer.from(`${ALICE}:alice-alias-pass`).toString('base64')}`,
+    request: vi.fn(),
+  };
+});
+
+vi.mock('../../src/utils/remote', () => ({
+  Remote: { request: (...args: unknown[]) => transport.request(...args) },
+}));
+vi.mock('../../src/utils/auth', () => ({
+  getAuthHeaderForAccount: (account: string) =>
+    account === transport.ALICE ? transport.ALICE_AUTH : '',
+}));
+
+import { requireMailBackend } from '../../src/backends';
 
 const source = readFileSync(path.resolve(__dirname, '../../src/svelte/Mailbox.svelte'), 'utf8');
 
@@ -30,11 +51,10 @@ const arrowFunctionSource = (name: string) => {
   throw new Error(`${name} has no closing brace`);
 };
 
-const ALICE = 'alice@example.com';
-const ALICE_AUTH = `Basic ${Buffer.from(`${ALICE}:alice-alias-pass`).toString('base64')}`;
+const { ALICE, ALICE_AUTH } = transport;
 
 const deps = {
-  request: vi.fn(),
+  request: transport.request,
   supersede: vi.fn(),
   recoverReadChange: vi.fn(),
   settleUnreadChange: vi.fn(),
@@ -47,9 +67,7 @@ const buildSendReadChange = () => {
   const scope = {
     getMessageApiId: (msg: { id?: string }) => msg?.id ?? null,
     supersedeQueuedMutations: deps.supersede,
-    Remote: { request: deps.request },
-    flagChangeBody,
-    getAuthHeaderForAccount: (account: string) => (account === ALICE ? ALICE_AUTH : ''),
+    requireMailBackend,
     recoverReadChange: deps.recoverReadChange,
     db: {
       messages: { where: () => ({ equals: () => ({ modify: deps.modify }) }) },
@@ -98,6 +116,7 @@ describe('sendReadChange in Mailbox.svelte', () => {
     const result = await sendReadChange({ previous, updated, account: ALICE, label: 'markRead' });
 
     expect(result).toEqual({ ok: true });
+    expect(deps.request.mock.calls[0][1]).toEqual({ flags: ['\\Seen'], flags_add: ['\\Seen'] });
     expect(deps.request.mock.calls[0][2].authHeader).toBe(ALICE_AUTH);
     expect(deps.settleUnreadChange).toHaveBeenCalledWith('66f1c0ffee5ad1e000a1b2c3', ALICE);
   });
@@ -119,6 +138,27 @@ describe('sendReadChange in Mailbox.svelte', () => {
 
     expect(result).toEqual({ failed: true });
     expect(deps.recoverReadChange).toHaveBeenCalledTimes(1);
+    expect(deps.settleUnreadChange).not.toHaveBeenCalled();
+  });
+});
+
+describe('sendReadChange for an account with no credentials', () => {
+  // Sent without that account's header, the request went out with the
+  // credentials of whichever account was on screen.
+  it('sends nothing and leaves the change to be queued', async () => {
+    const sendReadChange = buildSendReadChange();
+
+    const result = await sendReadChange({
+      previous,
+      updated,
+      account: 'signed-out@example.com',
+      label: 'markRead',
+    });
+
+    expect(result).toEqual({ failed: true });
+    expect(deps.request).not.toHaveBeenCalled();
+    expect(deps.recoverReadChange).toHaveBeenCalledTimes(1);
+    expect(deps.recoverReadChange.mock.calls[0][0].err?.status).toBeUndefined();
     expect(deps.settleUnreadChange).not.toHaveBeenCalled();
   });
 });

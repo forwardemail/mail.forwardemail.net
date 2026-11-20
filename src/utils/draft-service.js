@@ -5,6 +5,10 @@ import { sendSyncTask } from './sync-worker-client';
 import { getEffectiveSettingValue } from '../stores/settingsStore';
 import { isDemoMode } from './demo-mode';
 import { isOnline } from './network-status';
+import { getMailBackend } from '../backends';
+import { ImapBackend } from '../backends/imap';
+import { imapSettingsFor } from '../backends/imap-account';
+import { buildMimeMessage } from './mime-message';
 
 const AUTOSAVE_INTERVAL = 30000; // 30 seconds
 const AUTOSAVE_DEBOUNCE = 3000; // 3 seconds after last keystroke (matches Gmail)
@@ -81,6 +85,81 @@ function withDraftLock(account, id, fn) {
     if (draftChains.get(key) === tail) draftChains.delete(key);
   });
   return run;
+}
+
+// A compose window may not use the mail engine, so it cannot save a draft to
+// a custom IMAP server itself. It writes the draft to the database, which
+// both windows share, and asks the main window to save it (compose-main.ts
+// sets this up; utils/compose-window.ts answers).
+let draftRelay = null;
+
+/**
+ * Compose window only.
+ * @param {{accounts: string[], save: (account: string, id: string) => Promise<void>,
+ *   remove: (account: string, messageId: string) => void} | null} relay
+ */
+export function setDraftRelay(relay) {
+  draftRelay = relay
+    ? {
+        ...relay,
+        accounts: new Set((relay.accounts || []).map((a) => String(a).trim().toLowerCase())),
+      }
+    : null;
+}
+
+/** True in a compose window, for an account whose drafts the main window saves. */
+export function draftsGoThroughMainWindow(account) {
+  return Boolean(
+    draftRelay?.accounts.has(
+      String(account || '')
+        .trim()
+        .toLowerCase(),
+    ),
+  );
+}
+
+/** Ask the main window to remove a draft message from the server. Not waited for. */
+export function removeDraftMessageThroughMainWindow(account, messageId) {
+  if (messageId) draftRelay?.remove(account, String(messageId));
+}
+
+async function saveThroughMainWindow(account, draft) {
+  let failure = null;
+  try {
+    await draftRelay.save(account, draft.id);
+  } catch (err) {
+    failure = err;
+  }
+  // The main window wrote what happened onto the draft, the server id
+  // included. With no answer the row is left alone: writing it here could
+  // undo an id the main window is about to store.
+  const stored = failure?.unanswered ? null : await db.drafts.get([account, draft.id]);
+  if (stored) return stored;
+  return {
+    ...draft,
+    syncStatus: 'pending',
+    lastError: failure?.message || 'Draft sync failed',
+  };
+}
+
+/**
+ * Main window: save a draft a compose window wrote to the database. The
+ * compose window holds that draft's place in the save order while it waits.
+ */
+export async function saveDraftForComposeWindow(account, id) {
+  if (!imapSettingsFor(account)) throw new Error('This account is not on a custom mail server');
+  const draft = await db.drafts.get([account, id]);
+  if (!draft) throw new Error('The draft is no longer on this device');
+  try {
+    return await syncDraftToServer(draft);
+  } catch (err) {
+    await db.drafts.put({
+      ...draft,
+      syncStatus: 'pending',
+      lastError: err?.message || 'Draft sync failed',
+    });
+    throw err;
+  }
 }
 
 /**
@@ -161,6 +240,7 @@ async function saveDraftNow(account, id, draftData, options) {
   }
 
   if (sync && typeof navigator !== 'undefined' && isOnline()) {
+    if (draftsGoThroughMainWindow(account)) return saveThroughMainWindow(account, draft);
     try {
       const synced = await syncDraftToServer(draft);
       return synced;
@@ -322,10 +402,39 @@ function buildDraftPayload(draft) {
   return payload;
 }
 
+/**
+ * Save a draft to the Drafts folder of an account on a custom IMAP server.
+ * Returns the saved copy's id, or null when the server could not be asked
+ * for it (the next save then cannot remove this copy, so it is kept).
+ */
+async function saveDraftOverImap(account, draft, payload) {
+  const backend = getMailBackend(account);
+  if (!(backend instanceof ImapBackend)) {
+    throw new Error('This account is not connected to its mail server');
+  }
+  // A new Message-ID for each save: it is how the saved copy is found again,
+  // and it must not find the copy this save replaces.
+  const built = buildMimeMessage(
+    { ...payload, from: payload.from || account, messageId: undefined },
+    { draft: true },
+  );
+  // The copy with the Bcc line. A draft keeps everything typed so far.
+  return backend.saveDraft(built.sentCopy, {
+    previousId: draft.serverId || null,
+    folder: payload.folder,
+  });
+}
+
 async function syncDraftToServer(draft) {
   const payload = buildDraftPayload(draft);
   let response;
-  if (draft.serverId) {
+  const account = draft.account || getAccount();
+  if (imapSettingsFor(account)) {
+    const savedId = await saveDraftOverImap(account, draft, payload);
+    response = { id: savedId };
+    // The copy saved before is gone from the server either way.
+    if (!savedId) draft = { ...draft, serverId: null };
+  } else if (draft.serverId) {
     response = await Remote.request('MessageUpdate', payload, {
       method: 'PUT',
       pathOverride: `/v1/messages/${encodeURIComponent(draft.serverId)}`,
@@ -360,9 +469,35 @@ async function syncDraftToServer(draft) {
   return synced;
 }
 
+/**
+ * Send this account's unsaved drafts from this window. The sync worker does
+ * it for a Forward Email account, but the worker cannot reach a custom IMAP
+ * server (only the main window may use the mail engine).
+ */
+async function syncPendingDraftsHere(account) {
+  const drafts = await db.drafts.where('account').equals(account).toArray();
+  for (const draft of drafts) {
+    if (!draft || draft.syncStatus === 'synced' || !draftHasContent(draft)) continue;
+    try {
+      await syncDraftToServer(draft);
+    } catch (err) {
+      await db.drafts.put({
+        ...draft,
+        syncStatus: 'pending',
+        lastError: err?.message || 'Draft sync failed',
+        updatedAt: Date.now(),
+      });
+    }
+  }
+}
+
 export async function syncPendingDrafts() {
   const account = getAccount();
   try {
+    if (imapSettingsFor(account)) {
+      await runAsSync(account, () => syncPendingDraftsHere(account));
+      return;
+    }
     await runAsSync(account, () => sendSyncTask({ type: 'drafts', account }));
   } catch {
     // ignore sync scheduling failures

@@ -12,6 +12,7 @@
   import { searchStore } from '../stores/searchStore';
   import { getPendingDeleteIds, getPendingFlagMutations } from '../stores/mailboxStore';
   import { Remote } from '../utils/remote';
+  import { requireMailBackend } from '../backends';
   import { isDemoBlockedError, isDemoMode, showDemoBlockedToast } from '../utils/demo-mode';
   import { evaluateEdgeSwipe, isEdgeSwipeStart } from '../utils/mobile-edge-swipe';
   import { db } from '../utils/db';
@@ -256,6 +257,7 @@
     openMessageTab,
   } from '../stores/tabStore';
   import { isTauriDesktop } from '../utils/platform.js';
+  import { capabilitiesFor } from '../backends/capabilities';
   import {
     messageMatchesHint,
     takeNotificationMessageHint,
@@ -764,6 +766,12 @@
   let hasNextPage = chooseStore(source.state?.hasNextPage, mailboxView?.hasNextPage, false);
   let accounts = storeToStore(mailboxView?.accounts, []);
   let currentAccount = storeToStore(mailboxView?.currentAccount, '');
+  // What this account's server offers. An account on a custom IMAP server has
+  // mail only, so the links to Contacts, Calendar and Tasks are left out.
+  const accountCapabilities = $derived(capabilitiesFor($currentAccount || Local.get('email')));
+  // The storage meter links to Forward Email billing, except in store builds
+  // and for an account whose storage is on its own mail server.
+  const noBillingLink = $derived(hidePurchaseLinks || !accountCapabilities.storagePlan);
   let accountMenuOpen = storeToStore(mailboxView?.accountMenuOpen, false);
   let sidebarOpen = chooseWritableStore(source.state?.sidebarOpen, mailboxView?.sidebarOpen, true);
   let mobileReader = storeToStore(mailboxView?.mobileReader, false);
@@ -2442,13 +2450,20 @@
     // Reuse the standard move and delete flows so selection advance and
     // demo-mode preflight behave exactly like a normal move or delete.
     if (spamFolderPath && !shouldDeleteReportedSpam()) {
-      await moveReaderTo(spamFolderPath, {
-        successToast: `Reported to ${address} and moved to ${spamFolderName}`,
-      });
+      await moveReaderTo(spamFolderPath, { successToast: spamReportedText(address, false) });
       return;
     }
     await deleteSelected();
-    showToast(`Reported to ${address} and deleted`, 'success');
+    showToast(spamReportedText(address, true), 'success');
+  };
+
+  // With no report address (a custom mail server, unless one is set) the
+  // message is only moved or deleted, and the toast must not claim more.
+  const spamReportedText = (address, deleted) => {
+    const outcome = deleted ? 'deleted' : `moved to ${spamFolderName}`;
+    return address
+      ? `Reported to ${address} and ${outcome}`
+      : `${outcome.charAt(0).toUpperCase()}${outcome.slice(1)}`;
   };
 
   // The parsed message the API returned for the open message, once loaded
@@ -2716,14 +2731,10 @@
       const account = Local.get('email') || '';
       const openById = async () => {
         try {
-          const res = await Remote.request(
-            'Message',
-            {},
-            {
-              method: 'GET',
-              pathOverride: `/v1/messages/${encodeURIComponent(messageId)}?folder=${encodeURIComponent(folder)}&raw=false`,
-            },
-          );
+          const res = await requireMailBackend(account || 'default').requestMessage(messageId, {
+            folder: folder,
+            raw: false,
+          });
           const raw = res?.Result || res;
           if (!raw || typeof raw !== 'object' || !isActive) return;
           // Still the same account and nothing else was opened meanwhile.
@@ -4694,18 +4705,10 @@
       await supersedeQueuedMutations({ account, messageIds: [apiId], type: 'toggleRead' }).catch(
         () => [],
       );
-      await Remote.request(
-        'MessageUpdate',
-        flagChangeBody(
-          updated.flags,
-          updated.is_unread ? { remove: ['\\Seen'] } : { add: ['\\Seen'] },
-        ),
-        {
-          method: 'PUT',
-          pathOverride: `/v1/messages/${encodeURIComponent(apiId)}`,
-          authHeader: getAuthHeaderForAccount(account) || undefined,
-        },
-      );
+      await requireMailBackend(account).changeFlags(apiId, {
+        flags: Array.isArray(updated.flags) ? updated.flags : [],
+        ...(updated.is_unread ? { remove: ['\\Seen'] } : { add: ['\\Seen'] }),
+      });
     } catch (err) {
       // A message the server no longer has needs no count kept for it
       const gone = err?.status === 404 || /not (found|exist)/i.test(err?.message || '');
@@ -5091,12 +5094,12 @@
       if (spamFolderPath && !shouldDeleteReportedSpam()) {
         const moved = await moveTargets(targets, spamFolderPath);
         if (moved?.blocked) return;
-        showToast(`Reported to ${result.address} and moved to ${spamFolderName}`, 'success');
+        showToast(spamReportedText(result.address, false), 'success');
         return;
       }
       const delRes = await deleteMessages(targets);
       if (delRes?.blocked) return;
-      showToast(`Reported to ${result.address} and deleted`, 'success');
+      showToast(spamReportedText(result.address, true), 'success');
     } catch (err) {
       showMutationError(err, 'Failed to report spam');
     }
@@ -6839,36 +6842,42 @@
             {/if}
             {#if showHeaderShortcuts}
               <div class="inline-flex items-center gap-1.5">
-                <button
-                  class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground active:bg-accent"
-                  type="button"
-                  data-tooltip="Contacts"
-                  data-tooltip-position="bottom"
-                  aria-label="Contacts"
-                  onclick={() => navigate('/contacts')}
-                >
-                  <BookUser class="h-4.5 w-4.5" />
-                </button>
-                <button
-                  class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground active:bg-accent"
-                  type="button"
-                  data-tooltip="Calendar"
-                  data-tooltip-position="bottom"
-                  aria-label="Calendar"
-                  onclick={() => navigate('/calendar')}
-                >
-                  <CalendarIcon class="h-4.5 w-4.5" />
-                </button>
-                <button
-                  class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground active:bg-accent"
-                  type="button"
-                  data-tooltip="Tasks"
-                  data-tooltip-position="bottom"
-                  aria-label="Tasks"
-                  onclick={() => navigate('/calendar#tasks')}
-                >
-                  <ListTodo class="h-4.5 w-4.5" />
-                </button>
+                {#if accountCapabilities.contacts}
+                  <button
+                    class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground active:bg-accent"
+                    type="button"
+                    data-tooltip="Contacts"
+                    data-tooltip-position="bottom"
+                    aria-label="Contacts"
+                    onclick={() => navigate('/contacts')}
+                  >
+                    <BookUser class="h-4.5 w-4.5" />
+                  </button>
+                {/if}
+                {#if accountCapabilities.calendar}
+                  <button
+                    class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground active:bg-accent"
+                    type="button"
+                    data-tooltip="Calendar"
+                    data-tooltip-position="bottom"
+                    aria-label="Calendar"
+                    onclick={() => navigate('/calendar')}
+                  >
+                    <CalendarIcon class="h-4.5 w-4.5" />
+                  </button>
+                {/if}
+                {#if accountCapabilities.calendar}
+                  <button
+                    class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground active:bg-accent"
+                    type="button"
+                    data-tooltip="Tasks"
+                    data-tooltip-position="bottom"
+                    aria-label="Tasks"
+                    onclick={() => navigate('/calendar#tasks')}
+                  >
+                    <ListTodo class="h-4.5 w-4.5" />
+                  </button>
+                {/if}
                 <button
                   class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground active:bg-accent"
                   type="button"
@@ -7205,39 +7214,45 @@
                     <FolderPlus class="h-4 w-4" />
                     <span>New Folder</span>
                   </button>
-                  <button
-                    type="button"
-                    class="flex items-center gap-2 px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-                    onclick={() => {
-                      closeDrawer();
-                      navigate('/contacts');
-                    }}
-                  >
-                    <BookUser class="h-4 w-4" />
-                    <span>Contacts</span>
-                  </button>
-                  <button
-                    type="button"
-                    class="flex items-center gap-2 px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-                    onclick={() => {
-                      closeDrawer();
-                      navigate('/calendar');
-                    }}
-                  >
-                    <CalendarIcon class="h-4 w-4" />
-                    <span>Calendar</span>
-                  </button>
-                  <button
-                    type="button"
-                    class="flex items-center gap-2 px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-                    onclick={() => {
-                      closeDrawer();
-                      navigate('/calendar#tasks');
-                    }}
-                  >
-                    <ListTodo class="h-4 w-4" />
-                    <span>Tasks</span>
-                  </button>
+                  {#if accountCapabilities.contacts}
+                    <button
+                      type="button"
+                      class="flex items-center gap-2 px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                      onclick={() => {
+                        closeDrawer();
+                        navigate('/contacts');
+                      }}
+                    >
+                      <BookUser class="h-4 w-4" />
+                      <span>Contacts</span>
+                    </button>
+                  {/if}
+                  {#if accountCapabilities.calendar}
+                    <button
+                      type="button"
+                      class="flex items-center gap-2 px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                      onclick={() => {
+                        closeDrawer();
+                        navigate('/calendar');
+                      }}
+                    >
+                      <CalendarIcon class="h-4 w-4" />
+                      <span>Calendar</span>
+                    </button>
+                  {/if}
+                  {#if accountCapabilities.calendar}
+                    <button
+                      type="button"
+                      class="flex items-center gap-2 px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                      onclick={() => {
+                        closeDrawer();
+                        navigate('/calendar#tasks');
+                      }}
+                    >
+                      <ListTodo class="h-4 w-4" />
+                      <span>Tasks</span>
+                    </button>
+                  {/if}
                   <button
                     type="button"
                     class="flex items-center gap-2 px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
@@ -7267,12 +7282,12 @@
             {#if $storageTotal > 0}
               <!-- App Store and Google Play builds show the meter without the billing link. -->
               <svelte:element
-                this={hidePurchaseLinks ? 'div' : 'a'}
-                href={hidePurchaseLinks ? undefined : 'https://forwardemail.net/my-account/billing'}
-                target={hidePurchaseLinks ? undefined : '_blank'}
-                rel={hidePurchaseLinks ? undefined : 'noopener noreferrer'}
-                class={`block px-3 pb-3 mx-2 mb-2 ${hidePurchaseLinks ? '' : 'hover:bg-accent/50 transition-colors'}`}
-                title={hidePurchaseLinks ? undefined : 'Manage billing and storage'}
+                this={noBillingLink ? 'div' : 'a'}
+                href={noBillingLink ? undefined : 'https://forwardemail.net/my-account/billing'}
+                target={noBillingLink ? undefined : '_blank'}
+                rel={noBillingLink ? undefined : 'noopener noreferrer'}
+                class={`block px-3 pb-3 mx-2 mb-2 ${noBillingLink ? '' : 'hover:bg-accent/50 transition-colors'}`}
+                title={noBillingLink ? undefined : 'Manage billing and storage'}
                 data-testid="sidebar-storage"
               >
                 <div class="flex items-center justify-between text-xs text-muted-foreground mb-1">
@@ -10349,6 +10364,7 @@
                         <div class="mb-4" class:invisible={!$messageBody}>
                           <CalendarInviteCard
                             invite={parsedInvite}
+                            calendar={accountCapabilities.calendar}
                             sender={normalizeEmail(
                               extractAddressList($selectedMessage, 'from')[0] || '',
                             )}

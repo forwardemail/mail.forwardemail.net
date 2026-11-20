@@ -370,6 +370,7 @@ describe('applyFilterToExisting', () => {
 
   beforeEach(() => {
     Local.set('email', 'me@example.com');
+    Local.set('alias_auth', 'me@example.com:correct-horse');
     resetLightweightSupportForTests();
   });
 

@@ -130,6 +130,9 @@ describe('buildInnerMime', () => {
     });
     expect(out).toContain('Content-ID: <logo>');
     expect(out).toContain('Content-Disposition: inline');
+    // With the body, not among the attachments (RFC 2387).
+    expect(out).toMatch(/^Content-Type: multipart\/related; boundary="[^"]+"; type="text\/html"/);
+    expect(out).not.toContain('multipart/mixed');
   });
 
   it('ignores attachments with no content rather than emitting an empty part', () => {

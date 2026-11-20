@@ -18,6 +18,7 @@
 
 import { writable, get } from 'svelte/store';
 import { config } from '../config';
+import { anyForwardEmailAccount } from '../backends/imap-account';
 
 // ── Configuration ─────────────────────────────────────────────────────────
 const PROBE_TIMEOUT_MS = 5000; // Max time to wait for connectivity probe
@@ -81,6 +82,18 @@ async function probeConnectivity() {
 export async function checkConnectivity({ force = false } = {}) {
   // Fast path: browser says online — trust it (false positives for "online" are rare)
   if (navigator.onLine) {
+    _lastProbeResult = true;
+    _lastProbeTime = Date.now();
+    onlineStatus.set(true);
+    _stopRetryTimer();
+    return true;
+  }
+
+  // Every account is on a custom mail server: Forward Email is not asked.
+  // The browser's "offline" is wrong too often to act on by itself, so the
+  // app carries on, and a server that cannot be reached fails the request
+  // that needed it (which is queued and retried like any other failure).
+  if (!anyForwardEmailAccount()) {
     _lastProbeResult = true;
     _lastProbeTime = Date.now();
     onlineStatus.set(true);

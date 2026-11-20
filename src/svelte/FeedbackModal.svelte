@@ -11,7 +11,7 @@
   import CheckIcon from '@lucide/svelte/icons/check';
   import CopyIcon from '@lucide/svelte/icons/copy';
   import { Local } from '../utils/storage';
-  import { Remote } from '../utils/remote';
+  import { customServerSender, FEEDBACK_ADDRESS, sendFeedback } from '../utils/feedback-send';
   import { isDemoBlockedError } from '../utils/demo-mode';
   import { isOnline } from '../utils/network-status';
   import { isTauri } from '../utils/platform';
@@ -57,6 +57,10 @@
   const correlationId = generateCorrelationId();
 
   let systemInfo = $state<SystemInfo>({});
+  // Set for an account on a custom mail server: the report is an email from
+  // this address, sent through the account's own outgoing server.
+  const customSender = customServerSender();
+  let sentThrough = $state<'api' | 'outbox' | null>(null);
   let jsErrors = $state<LogEntry[]>([]);
   let networkErrors = $state<LogEntry[]>([]);
   let nativeLogs = $state<string>('');
@@ -209,21 +213,7 @@
       const emailSubject = buildEmailSubject(payload, subject);
       const emailBody = buildEmailBody(payload);
 
-      const aliasAuth = Local.get('alias_auth') || '';
-      const aliasEmail = aliasAuth.includes(':') ? aliasAuth.split(':')[0] : aliasAuth;
-      const from = aliasEmail || Local.get('email') || 'webmail-feedback@forwardemail.net';
-
-      await Remote.request(
-        'Emails',
-        {
-          from,
-          to: ['support@forwardemail.net'],
-          subject: emailSubject,
-          text: emailBody,
-          has_attachment: false,
-        },
-        { method: 'POST' },
-      );
+      sentThrough = await sendFeedback(emailSubject, emailBody);
 
       submitSuccess = true;
       setTimeout(onClose, 5000);
@@ -268,7 +258,12 @@
             Reference: <code class="font-mono">{correlationId}</code>
           </p>
           <p class="mt-2 text-muted-foreground">
-            We've received your message and will get back to you soon.
+            {#if sentThrough === 'outbox'}
+              Your message is being sent from {customSender} through your own outgoing server. A copy
+              is kept in your Sent folder.
+            {:else}
+              We've received your message and will get back to you soon.
+            {/if}
           </p>
         </div>
       {:else}
@@ -419,6 +414,13 @@
                 ></pre>
             {/if}
           </details>
+
+          {#if customSender}
+            <p class="text-xs text-muted-foreground">
+              Sending this emails the report from {customSender} to {FEEDBACK_ADDRESS} through your own
+              outgoing server. Nothing is sent to Forward Email unless you press Send Feedback.
+            </p>
+          {/if}
 
           {#if submitError}
             <Alert.Root variant="destructive">

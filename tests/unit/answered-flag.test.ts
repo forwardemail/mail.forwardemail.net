@@ -13,10 +13,18 @@ const h = vi.hoisted(() => ({
   rows: new Map<string, Record<string, unknown>>(),
   request: vi.fn(),
   queue: vi.fn(),
+  aliasAuth: 'me@example.com:alias-pass' as string | null,
 }));
 
+// The account on screen is signed in: its alias password is in storage, as it
+// is for any account that can change its mail.
+const ALIAS_AUTH = 'me@example.com:alias-pass';
+const AUTH_HEADER = `Basic ${btoa(ALIAS_AUTH)}`;
 vi.mock('../../src/utils/storage', () => ({
-  Local: { get: (key: string) => (key === 'email' ? h.active : null) },
+  Local: {
+    get: (key: string) => (key === 'email' ? h.active : key === 'alias_auth' ? h.aliasAuth : null),
+  },
+  Accounts: { getAll: () => [{ email: 'me@example.com' }] },
 }));
 vi.mock('../../src/utils/remote', () => ({
   Remote: { request: (...args: unknown[]) => h.request(...args) },
@@ -54,6 +62,7 @@ const httpError = (status: number) => Object.assign(new Error(`HTTP ${status}`),
 beforeEach(() => {
   h.online = true;
   h.active = 'me@example.com';
+  h.aliasAuth = ALIAS_AUTH;
   h.rows.clear();
   h.request.mockReset().mockResolvedValue({});
   h.queue.mockReset().mockResolvedValue({});
@@ -68,7 +77,7 @@ describe('markOriginalAnswered', () => {
     expect(h.request).toHaveBeenCalledWith(
       'MessageUpdate',
       { flags: ['\\Seen', '\\Answered'], flags_add: ['\\Answered'] },
-      { method: 'PUT', pathOverride: '/v1/messages/m1' },
+      { method: 'PUT', pathOverride: '/v1/messages/m1', authHeader: AUTH_HEADER },
     );
   });
 
@@ -137,6 +146,19 @@ describe('markOriginalAnswered', () => {
       'addFlags',
       { messageId: 'm7', flags: ['\\Answered'], add: ['\\Answered'] },
       { account: 'other@example.com' },
+    );
+  });
+
+  // Locked or signed out: there is nothing to send it with. It used to go out
+  // with no header of its own, so with whatever credentials the session had.
+  it('queues the change, unsent, while the account has no credentials', async () => {
+    h.aliasAuth = null;
+    await markOriginalAnswered('m8');
+    expect(h.request).not.toHaveBeenCalled();
+    expect(h.queue).toHaveBeenCalledWith(
+      'addFlags',
+      { messageId: 'm8', flags: null, add: ['\\Answered'] },
+      { account: 'me@example.com' },
     );
   });
 

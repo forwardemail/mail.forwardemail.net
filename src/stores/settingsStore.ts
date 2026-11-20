@@ -26,6 +26,7 @@ import {
 import { warn } from '../utils/logger.ts';
 import { canonicalizeLabelKeyword } from '../utils/labels.js';
 import { getAuthHeader, getAuthHeaderForAccount } from '../utils/auth';
+import { capabilitiesFor } from '../backends/capabilities';
 import {
   DEFAULT_REMOTE_SETTINGS,
   describeLabelError,
@@ -674,6 +675,18 @@ export async function fetchSettings(): Promise<RemoteSettings> {
       settingsLabels.set(cachedLabels);
     }
 
+    // An account on a custom IMAP server has nowhere to keep settings but
+    // this device, so the cached copy is the whole truth. With none yet, the
+    // defaults replace whatever the previous account left in the stores.
+    if (!capabilitiesFor(account).settingsSync) {
+      if (isStillActive(account)) {
+        if (!cached) applySettings({} as RemoteSettings);
+        if (!cachedLabels.length) settingsLabels.set([]);
+        settingsSynced.set(true);
+      }
+      return get(remoteSettings);
+    }
+
     // Fetch account data which includes settings
     const response = await fetchAccountData(account === 'default' ? {} : { account });
 
@@ -754,13 +767,16 @@ export async function updateSettings(changes: SettingsChanges): Promise<boolean>
   const updatedLabels = get(settingsLabels);
 
   try {
-    // Convert to API payload (nested settings + label_settings map)
-    const payload = buildAccountUpdatePayload(changes);
-    await Remote.request(
-      'AccountUpdate',
-      payload,
-      authHeader ? { method: 'PUT', authHeader } : { method: 'PUT' },
-    );
+    // Saved on this device only for an account whose server keeps no settings.
+    if (capabilitiesFor(account).settingsSync) {
+      // Convert to API payload (nested settings + label_settings map)
+      const payload = buildAccountUpdatePayload(changes);
+      await Remote.request(
+        'AccountUpdate',
+        payload,
+        authHeader ? { method: 'PUT', authHeader } : { method: 'PUT' },
+      );
+    }
     await cacheSettings(account, updatedSettings);
     if (changes.labels) {
       await cacheLabels(account, updatedLabels);
@@ -873,6 +889,13 @@ export async function fetchLabelsWithSource(
       settingsLabels.set(cached);
     }
 
+    // A custom IMAP server keeps no label list, so the one on this device is
+    // the list, empty or not.
+    if (!capabilitiesFor(account).settingsSync) {
+      settingsLabels.set(includeHidden ? cached : cached.filter((l) => !l.hidden));
+      return { labels: get(settingsLabels), authoritative: true };
+    }
+
     // Fetch account data which includes settings.labels
     const response = await fetchAccountData({ force });
     const responseObj = (response || {}) as AccountResponse;
@@ -961,12 +984,7 @@ export async function createLabel(label: LabelCreateInput): Promise<LabelResult>
     // Optimistic update
     settingsLabels.set(updatedLabels);
 
-    // Send updated labels array to API
-    await Remote.request(
-      'AccountUpdate',
-      { settings: { label_settings: labelsArrayToMap(updatedLabels) } },
-      { method: 'PUT', demoAction: 'Create label' },
-    );
+    await saveLabelList(account, updatedLabels, 'Create label');
 
     // Keep remoteSettings.labels in sync for consumers that rely on it
     remoteSettings.update((current) => ({ ...current, labels: updatedLabels }));
@@ -989,6 +1007,20 @@ export async function createLabel(label: LabelCreateInput): Promise<LabelResult>
       status,
     };
   }
+}
+
+/**
+ * Send the whole label list to the server. An account whose server keeps no
+ * settings (a custom IMAP server) has its label names and colours on this
+ * device only, where the caller caches them next.
+ */
+async function saveLabelList(account: string, labels: Label[], demoAction: string): Promise<void> {
+  if (!capabilitiesFor(account).settingsSync) return;
+  await Remote.request(
+    'AccountUpdate',
+    { settings: { label_settings: labelsArrayToMap(labels) } },
+    { method: 'PUT', demoAction },
+  );
 }
 
 /**
@@ -1035,12 +1067,7 @@ export async function updateLabel(keyword: string, updates: Partial<Label>): Pro
     // Optimistic update
     settingsLabels.set(updatedLabels);
 
-    // Send updated labels array to API
-    await Remote.request(
-      'AccountUpdate',
-      { settings: { label_settings: labelsArrayToMap(updatedLabels) } },
-      { method: 'PUT', demoAction: 'Update label' },
-    );
+    await saveLabelList(account, updatedLabels, 'Update label');
 
     remoteSettings.update((current) => ({ ...current, labels: updatedLabels }));
 
@@ -1089,12 +1116,7 @@ export async function deleteLabel(keyword: string): Promise<LabelResult> {
     // Optimistic update
     settingsLabels.set(updatedLabels);
 
-    // Send updated labels array to API
-    await Remote.request(
-      'AccountUpdate',
-      { settings: { label_settings: labelsArrayToMap(updatedLabels) } },
-      { method: 'PUT', demoAction: 'Delete label' },
-    );
+    await saveLabelList(account, updatedLabels, 'Delete label');
 
     remoteSettings.update((current) => ({ ...current, labels: updatedLabels }));
 

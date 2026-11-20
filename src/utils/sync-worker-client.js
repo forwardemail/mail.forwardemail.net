@@ -10,6 +10,8 @@ import { warn } from './logger.ts';
 import { isDemoMode } from './demo-mode';
 import { withDeadline } from './with-deadline';
 import { isMemoryConstrained } from './memory-profile';
+import { backendKindForAccount, getMailBackend } from '../backends';
+import { RELAY_METHODS, toRelayedError } from '../backends/relay-reads';
 
 let worker = null;
 let workerReady = false;
@@ -44,8 +46,36 @@ function getPgpPayload() {
   }
 }
 
+// The worker cannot call the Rust mail engine, so for an account whose
+// backend lives in this window it asks here. Only the read methods are
+// answered, and only on the backend of the account the worker named.
+async function answerBackendRequest(target, data) {
+  const reply = (body) => {
+    try {
+      target?.postMessage({ type: 'backendResponse', id: data.id, ...body });
+    } catch (err) {
+      warn('[sync-worker-client] could not answer a backend request', err);
+    }
+  };
+  try {
+    if (!RELAY_METHODS.includes(data.method)) throw new Error('Unknown backend request');
+    const backend = getMailBackend(String(data.account || ''));
+    if (!backend || !backend.isReady() || typeof backend[data.method] !== 'function') {
+      throw new Error(`No credentials for account ${data.account || '(none)'}`);
+    }
+    const args = Array.isArray(data.args) ? data.args : [];
+    reply({ result: await backend[data.method](...args) });
+  } catch (err) {
+    reply({ error: toRelayedError(err) });
+  }
+}
+
 function handleMessage(event) {
   const data = event?.data || {};
+  if (data.type === 'backendRequest') {
+    void answerBackendRequest(event?.target || worker, data);
+    return;
+  }
   if (data.type === 'taskComplete') {
     pendingTasks.resolve(data.taskId, data);
     taskCompleteHandlers.forEach((handler) => {
@@ -168,8 +198,14 @@ export async function ensureSyncWorkerReady() {
     worker.onerror = handleWorkerError;
   }
 
-  const authHeader = getAuthHeader({ allowApiKey: true });
-  if (!authHeader) {
+  // An account on a custom IMAP server has no API header. The worker reads
+  // its mail by asking this window (answerBackendRequest).
+  const kind = backendKindForAccount(activeAccount);
+  const authHeader = kind === 'imap' ? '' : getAuthHeader({ allowApiKey: true });
+  if (kind === 'imap') {
+    const backend = getMailBackend(activeAccount);
+    if (!backend || !backend.isReady()) throw new Error('Missing credentials for sync worker');
+  } else if (!authHeader) {
     throw new Error('Missing auth header for sync worker');
   }
   // Send the account this header belongs to. The worker files credentials per
@@ -181,6 +217,7 @@ export async function ensureSyncWorkerReady() {
       apiBase: config.apiBase,
       account: activeAccount,
       authHeader,
+      kind,
       memoryConstrained: isMemoryConstrained,
     },
   });

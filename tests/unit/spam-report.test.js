@@ -23,6 +23,25 @@ describe('resolveSpamReportAddress', () => {
   it('uses a valid configured address', () => {
     expect(resolveSpamReportAddress(' spam@example.com ')).toBe('spam@example.com');
   });
+
+  // Forward Email does not host this account's mail, so none of it goes
+  // there unless the user asked for that.
+  describe('for an account on a custom mail server', () => {
+    const custom = { customServer: true };
+
+    it('reports nowhere when no address is set', () => {
+      expect(resolveSpamReportAddress('', custom)).toBe('');
+      expect(resolveSpamReportAddress(undefined, custom)).toBe('');
+      expect(resolveSpamReportAddress('not-an-email', custom)).toBe('');
+    });
+
+    it('uses the address the user set, whatever it is', () => {
+      expect(resolveSpamReportAddress('abuse@myhost.example', custom)).toBe('abuse@myhost.example');
+      expect(resolveSpamReportAddress(DEFAULT_SPAM_REPORT_ADDRESS, custom)).toBe(
+        DEFAULT_SPAM_REPORT_ADDRESS,
+      );
+    });
+  });
 });
 
 describe('isValidReportAddress', () => {
@@ -75,7 +94,7 @@ describe('buildSpamReportEmail', () => {
   it('attaches the raw message as original.eml when available', () => {
     const eml = 'From: spam@example.com\r\nSubject: You won a prize\r\n\r\nClick here';
     const payload = buildSpamReportEmail({
-      reportAddress: '',
+      reportAddress: DEFAULT_SPAM_REPORT_ADDRESS,
       fromAddress: 'me@example.com',
       message,
       eml,
@@ -115,7 +134,7 @@ describe('buildSpamReportEmail', () => {
 
   it('never saves a copy to the Sent folder', () => {
     const payload = buildSpamReportEmail({
-      reportAddress: '',
+      reportAddress: DEFAULT_SPAM_REPORT_ADDRESS,
       fromAddress: 'me@example.com',
       message: {},
       eml: 'raw',
@@ -123,5 +142,16 @@ describe('buildSpamReportEmail', () => {
     });
     expect(payload.save_sent).toBe(false);
     expect(payload.subject).toBe('Fwd: (No subject)');
+  });
+
+  it('refuses to build a report with nowhere to send it', () => {
+    expect(() =>
+      buildSpamReportEmail({
+        reportAddress: '',
+        fromAddress: 'me@example.com',
+        message,
+        eml: 'raw',
+      }),
+    ).toThrow('No address to send the spam report to');
   });
 });

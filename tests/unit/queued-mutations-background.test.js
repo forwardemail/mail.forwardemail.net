@@ -76,7 +76,7 @@ const expected = {
   'https://api.test/v1/messages/m5': { flags_add: ['\\Answered'] },
 };
 
-function seed(indexedDB, name, stores) {
+function seed(indexedDB, name, stores, entries = queue()) {
   return new Promise((resolvePromise, reject) => {
     const req = indexedDB.open(name, 1);
     req.onupgradeneeded = () => {
@@ -88,7 +88,7 @@ function seed(indexedDB, name, stores) {
       const tx = db.transaction('meta', 'readwrite');
       tx.objectStore('meta').put({
         key: 'mutation_queue_me@example.com',
-        value: queue(),
+        value: entries,
         updatedAt: Date.now(),
       });
       tx.oncomplete = () => {
@@ -109,54 +109,104 @@ function sentBodies(fetch) {
   );
 }
 
-describe('queued changes sent in the background', () => {
-  it('desktop background sync (sync-core.js)', async () => {
-    const indexedDB = new IDBFactory();
-    await seed(indexedDB, DB_NAME, [['meta', 'key']]);
-    const fetch = vi.fn(async () => ({ ok: true }));
-    const core = createSyncCore({ postMessage: vi.fn(async () => {}), fetch, indexedDB });
+function readQueue(indexedDB, name) {
+  return new Promise((resolvePromise, reject) => {
+    const req = indexedDB.open(name);
+    req.onsuccess = () => {
+      const db = req.result;
+      const get = db.transaction('meta').objectStore('meta').get('mutation_queue_me@example.com');
+      get.onsuccess = () => {
+        db.close();
+        resolvePromise(get.result?.value);
+      };
 
-    await core.processMutations();
+      get.onerror = () => reject(get.error);
+    };
 
-    expect(sentBodies(fetch)).toEqual(expected);
+    req.onerror = () => reject(req.error);
   });
+}
 
-  it('service worker background sync (sw-sync.js)', async () => {
-    const indexedDB = new IDBFactory();
-    await seed(indexedDB, 'webmail-cache-v1', [
+async function runDesktop(entries) {
+  const indexedDB = new IDBFactory();
+  await seed(indexedDB, DB_NAME, [['meta', 'key']], entries);
+  const fetch = vi.fn(async () => ({ ok: true }));
+  const core = createSyncCore({ postMessage: vi.fn(async () => {}), fetch, indexedDB });
+
+  await core.processMutations();
+
+  return { fetch, left: await readQueue(indexedDB, DB_NAME) };
+}
+
+async function runServiceWorker(entries) {
+  const indexedDB = new IDBFactory();
+  await seed(
+    indexedDB,
+    'webmail-cache-v1',
+    [
       ['syncManifests', ['account', 'folder']],
       ['meta', 'key'],
-    ]);
-    const fetch = vi.fn(async () => ({ ok: true }));
-    const handlers = {};
-    const self = {
-      addEventListener: (type, handler) => {
-        handlers[type] = handler;
-      },
-      location: { origin: 'https://mail.example.com' },
-      registration: { scope: 'https://mail.example.com/' },
-      clients: { matchAll: vi.fn(async () => []) },
-    };
-    vm.runInNewContext(readFileSync(resolve(process.cwd(), 'public/sw-sync.js'), 'utf8'), {
-      self,
-      URL,
-      console,
-      setTimeout,
-      clearTimeout,
-      AbortController,
-      fetch,
-      indexedDB,
-    });
+    ],
+    entries,
+  );
+  const fetch = vi.fn(async () => ({ ok: true }));
+  const handlers = {};
+  const self = {
+    addEventListener: (type, handler) => {
+      handlers[type] = handler;
+    },
+    location: { origin: 'https://mail.example.com' },
+    registration: { scope: 'https://mail.example.com/' },
+    clients: { matchAll: vi.fn(async () => []) },
+  };
+  vm.runInNewContext(readFileSync(resolve(process.cwd(), 'public/sw-sync.js'), 'utf8'), {
+    self,
+    URL,
+    console,
+    setTimeout,
+    clearTimeout,
+    AbortController,
+    fetch,
+    indexedDB,
+  });
 
-    let done;
-    handlers.sync({
-      tag: 'mutation-queue',
-      waitUntil: (promise) => {
-        done = promise;
-      },
-    });
-    await done;
+  let done;
+  handlers.sync({
+    tag: 'mutation-queue',
+    waitUntil: (promise) => {
+      done = promise;
+    },
+  });
+  await done;
+
+  return { fetch, left: await readQueue(indexedDB, 'webmail-cache-v1') };
+}
+
+// Both of these replay over the Forward Email REST API with the URL and
+// header stored on the entry. A change for an account on another kind of
+// server must not go there: it is left for the tab, which sends it through
+// that account's own backend.
+const otherServer = () => [
+  { ...queue()[0], id: 'i1', backend: 'imap' },
+  { ...queue()[1], id: 'f1', backend: 'forwardemail' },
+];
+
+describe.each([
+  ['desktop background sync (sync-core.js)', runDesktop],
+  ['service worker background sync (sw-sync.js)', runServiceWorker],
+])('queued changes sent in the background: %s', (_name, run) => {
+  it('sends what changed next to the whole list, and no folder', async () => {
+    const { fetch, left } = await run(queue());
 
     expect(sentBodies(fetch)).toEqual(expected);
+    expect(left).toEqual([]);
+  });
+
+  it('leaves a change for another kind of server queued and unsent', async () => {
+    const { fetch, left } = await run(otherServer());
+
+    expect(fetch.mock.calls.map(([url]) => url)).toEqual(['https://api.test/v1/messages/m2']);
+    expect(left.map((m) => m.id)).toEqual(['i1']);
+    expect(left[0]).toMatchObject({ status: 'pending', retryCount: 0 });
   });
 });

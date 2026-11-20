@@ -83,6 +83,7 @@
   import { isTauriDesktop, isTouchPrimary } from '../utils/platform';
   import { i18n } from '../utils/i18n';
   import { Remote } from '../utils/remote';
+  import { requireMailBackend } from '../backends';
   import { isDemoBlockedError, isDemoMode, showDemoBlockedToast } from '../utils/demo-mode';
   import {
     getContacts,
@@ -112,6 +113,7 @@
   } from '../utils/catchall-credentials';
   import { getAuthHeaderForAccount } from '../utils/auth';
   import { MAX_SCHEDULE_LEAD_MS, queueEmail, scheduleEmail } from '../utils/outbox-service';
+  import { sendsThroughOutbox, transportFor } from '../backends/smtp-account';
   import {
     saveSentCopy,
     buildOptimisticSentSource,
@@ -120,6 +122,8 @@
   import { parseMailto, mailtoToPrefill } from '../utils/mailto';
   import {
     saveDraft,
+    draftsGoThroughMainWindow,
+    removeDraftMessageThroughMainWindow,
     getDraft,
     deleteDraft,
     listDrafts,
@@ -285,7 +289,9 @@
     sendableAccounts = listSendableAccounts(
       accounts.map((acct) => ({ email: acct?.email, name: getProfileNameFor(acct?.email || '') })),
       activeAccount(),
-      (email) => Boolean(getAuthHeaderForAccount(email)),
+      // An account that sends through its own outgoing server needs no API
+      // credentials to be offered.
+      (email) => Boolean(getAuthHeaderForAccount(email)) || transportFor(email) === 'smtp',
     );
     catchallDomains = listCatchallDomains();
     catchallAddresses = listCatchallAddresses();
@@ -338,6 +344,8 @@
 
   /** Request options that authenticate as the From address. Null when its credentials are gone. */
   const sendAsRequestOptions = (): { authHeader?: string } | null => {
+    // Sent by the main window's outbox through the account's own server.
+    if (sendsThroughOutbox(sendAsAccount || activeAccount())) return {};
     const sender = resolveSenderAuth(sendAsAccount, activeAccount());
     return sender ? senderRequestOptions(sender) : null;
   };
@@ -2002,14 +2010,13 @@
 
     // Delete from server (404 means already gone — treat as success)
     try {
-      await Remote.request(
-        'MessageDelete',
-        {},
-        {
-          method: 'DELETE',
-          pathOverride: `/v1/messages/${encodeURIComponent(String(apiId))}?permanent=1`,
-        },
-      );
+      if (draftsGoThroughMainWindow(account)) {
+        // A compose window may not use the mail engine. The main window
+        // removes the draft from the custom IMAP server.
+        removeDraftMessageThroughMainWindow(account, String(apiId));
+      } else {
+        await requireMailBackend(account).deleteMessage(String(apiId), { permanent: true });
+      }
     } catch (err) {
       const status = (err as { status?: number })?.status;
       if (status !== 404) {
@@ -3042,9 +3049,17 @@
       return;
     }
 
-    if (!isOnline) {
+    // An account with its own outgoing server is sent by the main window's
+    // outbox: only that window may use the mail engine, and the outbox
+    // already files the Sent copy and retries. So the message is queued here
+    // as it is offline, and the main window is told to send it now.
+    const sendFromOutbox = isOnline && sendsThroughOutbox(sendAsAccount || activeAccount());
+    if (!isOnline || sendFromOutbox) {
       try {
-        await queueEmail(payload, { sendAs: sendAsAccount });
+        const queued = await queueEmail(payload, {
+          sendAs: sendAsAccount,
+          skipProcess: sendFromOutbox,
+        });
         rememberRecipients(payload);
         const msgIdToDelete = sourceMessageId;
         const serverDraftIdToDelete = currentDraftServerId;
@@ -3062,17 +3077,23 @@
         if (serverDraftIdToDelete && serverDraftIdToDelete !== msgIdToDelete) {
           await deleteSourceMessage(serverDraftIdToDelete);
         }
-        if (!nativeWindow) toasts?.show?.('Message queued - will send when online', 'info');
+        if (!nativeWindow && !sendFromOutbox) {
+          toasts?.show?.('Message queued - will send when online', 'info');
+        }
         setVisible(false);
         const shouldArchive = archiveAfterSend;
         reset();
         onSent?.({
           ...replyContextFor(payload),
           queued: true,
+          // The outbox says "Message sent" itself once the server has it.
+          sendNow: sendFromOutbox,
+          outboxId: queued.id,
           archive: shouldArchive,
-          toast: nativeWindow
-            ? { message: 'Message queued - will send when online', type: 'info' }
-            : undefined,
+          toast:
+            nativeWindow && !sendFromOutbox
+              ? { message: 'Message queued - will send when online', type: 'info' }
+              : undefined,
         });
         if (nativeWindow) closeNativeWindow();
       } catch (err) {

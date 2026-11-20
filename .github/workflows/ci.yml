@@ -251,3 +251,76 @@ jobs:
           else
             gitleaks detect --source . --verbose --log-opts="${BASE}..HEAD"
           fi
+
+  # The Rust mail engine (custom IMAP and SMTP servers, src-tauri/src/mail).
+  # First its own tests, with the server played by a script. Then the same
+  # functions the app calls, against ImapKit: an in-memory IMAP server that is
+  # strict about the RFCs, with an SMTP listener, started by the test script.
+  mail-engine:
+    if: ${{ !startsWith(github.event.head_commit.message, 'chore(release):') }}
+    name: mail engine
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The engine is a module of the desktop app's crate, so the crate's
+      # system libraries are needed to compile it.
+      - name: Install Linux dependencies
+        run: |
+          for i in 1 2 3; do
+            if sudo apt-get update; then break; fi
+            sleep $((i*5))
+          done
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libgtk-3-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        continue-on-error: true
+        with:
+          workspaces: src-tauri -> target
+          shared-key: mail-engine-v1
+          cache-bin: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          run_install: false
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The crate embeds the built web app and will not compile without the
+      # folder. These tests never load a page, so an empty one will do.
+      - name: Stand in for the web build
+        run: |
+          mkdir -p dist
+          [ -f dist/index.html ] || echo '<!doctype html><title>test</title>' > dist/index.html
+
+      - name: Mail engine tests
+        working-directory: src-tauri
+        run: cargo test --lib mail
+
+      - name: Mail engine tests against a real server
+        run: pnpm test:mail-engine

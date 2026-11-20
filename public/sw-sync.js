@@ -835,6 +835,9 @@
     // The header was stored with the entry for its own account. Without one,
     // leave the entry for a tab, which reads that account's credentials.
     if (!apiBase || !authHeader) return { result: 'skip' };
+    // This replays over the REST API. A change queued for another kind of
+    // server is left for the tab, which sends it through that account's backend.
+    if (mutation.backend && mutation.backend !== 'forwardemail') return { result: 'skip' };
 
     const base = apiBase.endsWith('/') ? apiBase.slice(0, -1) : apiBase;
     const headers = {

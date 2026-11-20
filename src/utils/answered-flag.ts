@@ -18,10 +18,8 @@
 import { markMessageAnsweredInStore } from '../stores/messageStore';
 import { db } from './db';
 import { Local } from './storage';
-import { Remote } from './remote';
-import { getAuthHeaderForAccount } from './auth';
+import { requireMailBackend } from '../backends';
 import { isActiveAccount } from './account-scope.ts';
-import { addFlagsBody } from './message-changes';
 import { queueMutation } from './mutation-queue';
 import { isOnline } from './network-status';
 import { warn } from './logger.ts';
@@ -89,10 +87,9 @@ export async function markOriginalAnswered(
       return;
     }
     try {
-      await Remote.request('MessageUpdate', addFlagsBody(flags, [ANSWERED]), {
-        method: 'PUT',
-        pathOverride: `/v1/messages/${encodeURIComponent(id)}`,
-        authHeader: getAuthHeaderForAccount(owner) || undefined,
+      await requireMailBackend(owner).changeFlags(id, {
+        flags: Array.isArray(flags) ? flags : null,
+        add: [ANSWERED],
       });
     } catch (error) {
       if (!canRetry(error)) {

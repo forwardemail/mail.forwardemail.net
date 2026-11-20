@@ -41,3 +41,19 @@ export function interceptDemoRequest(
   params?: Record<string, unknown>,
   options?: DemoRequestOptions,
 ): DemoInterceptResult;
+
+export function demoBlockedError(): Error & DemoBlockedError;
+
+/** The demo mailbox, for the demo mail backend (src/backends/demo.ts). */
+export const demoMail: {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  folders(): Array<Record<string, any>>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  folder(id: unknown): Record<string, any>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  messages(query?: Record<string, unknown>): Array<Record<string, any>>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  message(id: unknown, folder?: string): Record<string, any> | null;
+  setRead(id: unknown, read?: boolean): void;
+  block(label?: string): never;
+};

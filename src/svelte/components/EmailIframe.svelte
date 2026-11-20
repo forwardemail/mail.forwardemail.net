@@ -149,6 +149,9 @@
   // painted height while the content keeps its unscaled layout height.
   function measureIframeHeight(): number {
     if (!iframeRef) return 0;
+    // An opaque frame has no document the app can read, and WebKit logs a
+    // sandbox violation for every attempt. Its height comes by message.
+    if (!sameOriginFrame) return 0;
     try {
       const doc = iframeRef.contentDocument;
       if (!doc) return 0;
@@ -436,7 +439,7 @@
   let attachedDoc: Document | null = null;
 
   const attachIframeTouchListeners = () => {
-    if (!iframeRef) return;
+    if (!iframeRef || !sameOriginFrame) return;
     try {
       const doc = iframeRef.contentDocument;
       if (!doc || doc === attachedDoc) return;

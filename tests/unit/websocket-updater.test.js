@@ -260,6 +260,38 @@ describe('createInboxUpdater', () => {
     updater.destroy();
   });
 
+  // start() runs once for the life of the app. Starting on a custom IMAP
+  // account used to skip the socket set-up for good, so a Forward Email
+  // account opened afterwards got a socket nobody listened to.
+  it('listens for socket events when the app starts on a custom IMAP account', () => {
+    vi.mocked(Local.get).mockImplementation((key) => (key === 'email' ? 'me@example.org' : null));
+    vi.mocked(Accounts.getAll).mockReturnValue([
+      {
+        email: 'me@example.org',
+        kind: 'imap',
+        imap: {
+          host: 'imap.example.org',
+          port: 993,
+          security: 'tls',
+          username: 'me@example.org',
+          password: 'app-password',
+        },
+      },
+    ]);
+    const updater = createInboxUpdater();
+    updater.start();
+    try {
+      expect(mockMgrReconcile).toHaveBeenCalled();
+      expect(mgrEventHandlers.get('newMessage')?.length).toBeGreaterThan(0);
+      // Every account is on a custom server, so Forward Email's release
+      // socket stays closed. The desktop updater asks GitHub by itself.
+      expect(mockReleaseConnect).not.toHaveBeenCalled();
+    } finally {
+      updater.destroy();
+      vi.mocked(Accounts.getAll).mockReturnValue([]);
+    }
+  });
+
   it('always starts the release watcher outside demo mode', () => {
     vi.mocked(Local.get).mockReturnValue(null);
     const updater = createInboxUpdater();

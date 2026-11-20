@@ -30,7 +30,6 @@ import {
   hasFromValue,
   hasMeaningfulDraft,
   buildDraftPayload,
-  parseResultList,
   isPgpContent,
   isPgpLockedStatus,
   slimBodyMeta,
@@ -39,12 +38,16 @@ import {
   worklistFromHeaders,
   backfillBatchDone,
   createBodyFailureMemo,
+  advanceModseq,
   honoredSinceModseq,
   metadataPassDone,
   type CachedBodyStatus,
 } from './sync-pure.ts';
 import { createCircuitBreaker, parseRetryAfterMs } from '../utils/circuit-breaker.js';
 import { assertAccountScoped } from '../utils/account-scope.ts';
+import { createForwardEmailReads } from '../backends/forward-email-reads';
+import { createRelayReads, fromRelayedError, type RelayMethod } from '../backends/relay-reads';
+import { leanPartOf } from '../backends/imap-mapping';
 
 // ============================================================================
 // Database Client via MessageChannel
@@ -223,6 +226,46 @@ let pgpPassphrases = {};
 let searchPort = null;
 
 const authFor = (account: string): string => authHeaders.get(account) || '';
+
+// Accounts whose mail is read through the main window (a custom IMAP
+// server). They have no API header.
+const relayedAccounts = new Set<string>();
+
+// Whether the worker has what it needs to read this account's mail.
+const canServe = (account: string): boolean =>
+  relayedAccounts.has(account) || Boolean(apiBase && authFor(account));
+
+const RELAY_TIMEOUT_MS = 120_000;
+let relayRequestId = 0;
+const relayPending = new Map<
+  number,
+  {
+    resolve: (value: unknown) => void;
+    reject: (err: Error) => void;
+    timer: ReturnType<typeof setTimeout>;
+  }
+>();
+
+function relayToMain(account: string, method: RelayMethod, args: unknown[]): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    const id = ++relayRequestId;
+    const timer = setTimeout(() => {
+      relayPending.delete(id);
+      reject(new Error('The mail server request timed out'));
+    }, RELAY_TIMEOUT_MS);
+    relayPending.set(id, { resolve, reject, timer });
+    self.postMessage({ type: 'backendRequest', id, account, method, args });
+  });
+}
+
+function handleRelayResponse(data: { id?: number; result?: unknown; error?: never }) {
+  const pending = relayPending.get(Number(data.id));
+  if (!pending) return;
+  relayPending.delete(Number(data.id));
+  clearTimeout(pending.timer);
+  if (data.error) pending.reject(fromRelayedError(data.error));
+  else pending.resolve(data.result);
+}
 
 // A task naming an account we hold no credentials for is a stale task from a
 // previous session (its account was switched away and its auth evicted). Fail
@@ -474,31 +517,20 @@ async function writeMessages(
 // API Operations
 // ============================================================================
 
-// `account` is required, not optional: it selects the credentials this list is
-// fetched with, so it must be the same account the caller will file the results
-// under. Never default it to a "current" account.
-async function fetchMessageList(account, params = {}) {
-  const url = new URL(`${apiBase.replace(/\/$/, '')}/v1/messages`);
-  Object.entries(params).forEach(([k, v]) => {
-    if (v !== undefined && v !== null && v !== '') url.searchParams.set(k, v);
+// Where an account's mail is read from. The account is required, not
+// optional: it selects the credentials, so it must be the same account the
+// caller files the results under. Never default it to a "current" account.
+const readsFor = (account: string) =>
+  relayedAccounts.has(account)
+    ? createRelayReads((method, args) => relayToMain(account, method, args))
+    : forwardEmailReadsFor(account);
+
+const forwardEmailReadsFor = (account: string) =>
+  createForwardEmailReads({
+    apiBase: () => apiBase,
+    authHeader: () => requireAuth(account),
+    fetch: fetchWithTimeout,
   });
-  const res = await fetchWithTimeout(url.toString(), {
-    method: 'GET',
-    headers: {
-      Accept: 'application/json',
-      Authorization: requireAuth(account),
-      'Content-Type': 'application/json',
-    },
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(text || res.statusText || 'Request failed');
-  }
-  if (res.status === 204) {
-    return { __noContent: true };
-  }
-  return res.json();
-}
 
 async function runMetadataTask(task, postProgress) {
   const account = accountKey(task.account);
@@ -522,6 +554,7 @@ async function runMetadataTask(task, postProgress) {
   // Every page of this pass asks for the same window; lastModSeq moves as
   // pages arrive and is only saved for the next pass.
   const sinceModSeq = lastModSeq;
+  let passToken = null;
   let page = 1;
   let totalFetched = 0;
   let totalInserted = 0;
@@ -542,9 +575,8 @@ async function runMetadataTask(task, postProgress) {
       attachments: false,
     };
 
-    const res = await fetchMessageList(account, params);
-    const rawList = parseResultList(res);
-    if (!Array.isArray(rawList) || !rawList.length) break;
+    const { rows: rawList } = await readsFor(account).listMessages(params);
+    if (!rawList.length) break;
 
     const normalized = rawList
       .map((item) => normalizeMessageForCache(item, folder, account))
@@ -568,14 +600,10 @@ async function runMetadataTask(task, postProgress) {
       // The id is a server ObjectId, not a UID: Math.max on it gave NaN.
       const uid = Number(item.uid);
       if (Number.isSafeInteger(uid) && uid > lastUID) lastUID = uid;
-      if (item.modseq) {
-        const modSeqNum = Number(item.modseq);
-        if (Number.isFinite(modSeqNum)) {
-          lastModSeq = Math.max(lastModSeq || 0, modSeqNum);
-        } else {
-          lastModSeq = item.modseq;
-        }
-      }
+      ({ saved: lastModSeq, passToken } = advanceModseq(
+        { saved: lastModSeq, passToken },
+        item.modseq,
+      ));
     });
 
     manifest = await updateManifest(account, folder, {
@@ -813,29 +841,8 @@ async function fetchListPage(
   account: string,
   params: Record<string, unknown>,
 ): Promise<{ list: unknown[]; total: number | null }> {
-  const url = new URL(`${apiBase.replace(/\/$/, '')}/v1/messages`);
-  Object.entries(params).forEach(([k, v]) => {
-    if (v !== undefined && v !== null && v !== '') url.searchParams.set(k, String(v));
-  });
-  const res = await fetchWithTimeout(url.toString(), {
-    method: 'GET',
-    headers: {
-      Accept: 'application/json',
-      Authorization: requireAuth(account),
-      'Content-Type': 'application/json',
-    },
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(text || res.statusText || 'Request failed');
-  }
-  const header = res.headers?.get?.('X-Item-Count');
-  const headerTotal =
-    header === null || header === undefined || header === '' ? NaN : Number(header);
-  const total = Number.isFinite(headerTotal) && headerTotal >= 0 ? headerTotal : null;
-  if (res.status === 204) return { list: [], total };
-  const list = parseResultList(await res.json());
-  return { list: Array.isArray(list) ? list : [], total };
+  const { rows, total } = await readsFor(account).listMessages(params);
+  return { list: rows, total };
 }
 
 async function runBackfillTask(task, postProgress) {
@@ -848,7 +855,7 @@ async function runBackfillTask(task, postProgress) {
   // thrown/zero-progress batch as transient and re-queues, so an unconfigured
   // worker (e.g. a backfill that runs before the init message lands, common in
   // dev) would spin "Syncing <folder>" forever with no network activity.
-  if (!apiBase || !authFor(account)) {
+  if (!canServe(account)) {
     return { done: true, reason: 'not_configured' };
   }
 
@@ -1196,22 +1203,15 @@ async function pruneUnlisted(account: string, folder: string, pendingDeleteIds: 
   let authRejected = false;
   for (const [i, id] of batch.entries()) {
     if (skip.has(id)) continue;
-    let res;
+    let check;
     try {
-      const url = new URL(`${apiBase.replace(/\/$/, '')}/v1/messages/${encodeURIComponent(id)}`);
-      url.searchParams.set('raw', 'false');
-      url.searchParams.set('nodemailer', 'false');
-      url.searchParams.set('attachments', 'false');
-      res = await fetchWithTimeout(url.toString(), {
-        method: 'GET',
-        headers: { Accept: 'application/json', Authorization: requireAuth(account) },
-      });
+      check = await readsFor(account).checkMessage(id);
     } catch (err) {
       console.warn('[sync.worker] prune check failed for', id, err);
       if (isPassWideFailure(err)) break;
       continue;
     }
-    if (res.status === 401 || res.status === 403) {
+    if (check.state === 'rejected') {
       // Each try counts as a failed sign-in on the server. Keep the unchecked
       // ids queued for after sign-in.
       queue.ids.unshift(...batch.slice(i));
@@ -1220,14 +1220,14 @@ async function pruneUnlisted(account: string, folder: string, pendingDeleteIds: 
       break;
     }
     checked += 1;
-    if (res.status === 404) {
+    if (check.state === 'gone') {
       gone.push(id);
       continue;
     }
-    if (!res.ok) continue;
+    // An answer that could not be read keeps the row.
+    if (check.state !== 'found' || !check.detail) continue;
     try {
-      const detail = await res.json();
-      const record = normalizeMessageForCache(detail?.Result || detail, folder, account);
+      const record = normalizeMessageForCache(check.detail, folder, account);
       if (record?.id === id && record.folder && record.folder !== folder) {
         // Moved by another client: follow it rather than dropping it.
         await db.messages.update([account, id], {
@@ -1299,17 +1299,14 @@ async function runHealFromFieldPass(account, folder, limit = 25) {
 
 async function refetchAndExtractFrom(msg, account) {
   if (!msg?.id) return '';
-  const url = new URL(`${apiBase.replace(/\/$/, '')}/v1/messages/${encodeURIComponent(msg.id)}`);
-  if (msg.folder) url.searchParams.set('folder', msg.folder);
-  const res = await fetchWithTimeout(url.toString(), {
-    method: 'GET',
-    headers: {
-      Accept: 'application/json',
-      Authorization: requireAuth(account),
-    },
-  });
-  if (!res.ok) return '';
-  const detail = await res.json();
+  let detail;
+  try {
+    detail = await readsFor(account).getMessage(msg.id, msg.folder ? { folder: msg.folder } : {});
+  } catch (err) {
+    // The server refused or lost this one message: nothing to repair it from.
+    if ((err as { status?: number })?.status) return '';
+    throw err;
+  }
   if (!detail || typeof detail !== 'object') return '';
   const candidate = extractFromField(detail);
   return hasFromValue(candidate) ? candidate : '';
@@ -1581,6 +1578,23 @@ async function parseRawMessage(raw, existingAttachments = []) {
           }),
           contentType: 'message/rfc822',
         });
+      } else if (leanPartOf(att.content)) {
+        // Left on the server when the message was fetched without its large
+        // attachments (an account on a custom IMAP server). Listed with what
+        // is needed to fetch it when it is opened, and no content.
+        const part = leanPartOf(att.content);
+        parentAttachments.push({
+          name: att.filename || 'attachment',
+          filename: att.filename || 'attachment',
+          // The size on the server is the encoded one; base64 adds a third.
+          size: part.encoding === 'base64' ? Math.floor((part.size * 3) / 4) : part.size,
+          contentId: att.contentId || undefined,
+          disposition: (att.disposition || '').toLowerCase(),
+          contentType: att.mimeType || att.contentType || 'application/octet-stream',
+          partId: part.section,
+          partEncoding: part.encoding,
+          needsDownload: true,
+        });
       } else {
         parentAttachments.push({
           name: att.filename || 'attachment',
@@ -1818,29 +1832,8 @@ async function fetchAndCacheBodyWithOptions(account, folder, msg, options = {}) 
     return;
   }
 
-  const downloadDetail = async () => {
-    const url = new URL(
-      `${apiBase.replace(/\/$/, '')}/v1/messages/${encodeURIComponent(apiId)}?folder=${encodeURIComponent(folder || '')}&raw=true`,
-    );
-
-    const res = await fetchWithTimeout(url.toString(), {
-      method: 'GET',
-      headers: {
-        Accept: 'application/json',
-        Authorization: requireAuth(account),
-        'Content-Type': 'application/json',
-      },
-    });
-    if (!res.ok) {
-      const text = await res.text();
-      // The status tells an API outage from a message the server will never return.
-      throw Object.assign(new Error(text || res.statusText || 'Request failed'), {
-        status: res.status,
-      });
-    }
-    const json = await res.json();
-    return json?.Result || json;
-  };
+  const downloadDetail = () =>
+    readsFor(account).getMessage(apiId, { folder: folder || '', raw: true });
 
   const requestPromise = (async () => {
     // A locked PGP copy is decrypted where it is: the ciphertext is the same.
@@ -2441,7 +2434,7 @@ async function handleTask(taskId, task) {
       task?.type === 'encryptMessage' ||
       task?.type === 'signMessage' ||
       task?.type === 'verifySigned';
-    if (!apiBase || (!isLocalOnlyTask && !authFor(accountKey(task?.account)))) {
+    if (!apiBase || (!isLocalOnlyTask && !canServe(accountKey(task?.account)))) {
       throw new Error('Worker not initialized');
     }
     if (!task?.type) throw new Error('Missing task type');
@@ -2498,24 +2491,7 @@ async function handleTask(taskId, task) {
 }
 
 async function fetchFolders(account) {
-  const url = new URL(`${apiBase.replace(/\/$/, '')}/v1/folders`);
-  // Request max folders to avoid pagination truncation (API default is 25)
-  url.searchParams.set('limit', '100');
-  const res = await fetchWithTimeout(url.toString(), {
-    method: 'GET',
-    headers: {
-      Accept: 'application/json',
-      Authorization: requireAuth(account),
-      'Content-Type': 'application/json',
-    },
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(text || res.statusText || 'Request failed');
-  }
-  const json = await res.json();
-  const raw = json?.Result || json || [];
-  const list = Array.isArray(raw) ? raw : raw.Items || raw.items || [];
+  const list = await readsFor(account).listFolders();
 
   if (dbPort) {
     // Replace the account's folders in one transaction so a failure between
@@ -2566,12 +2542,11 @@ async function fetchMessagePage(payload = {}) {
     ...(payload.has_attachments || payload.has_attachment ? { has_attachments: true } : {}),
   };
 
-  const res = await fetchMessageList(account, params);
-  if (res?.__noContent) {
+  const page = await readsFor(account).listMessages(params);
+  if (page.notModified) {
     return { messages: null, hasNextPage: false, noContent: true };
   }
-  const rawList = parseResultList(res);
-  const list = Array.isArray(rawList) ? rawList : [];
+  const list = page.rows;
   if (!list.length) {
     return { messages: [], hasNextPage: false };
   }
@@ -2820,7 +2795,7 @@ async function handleRequest(requestId, action, payload) {
   try {
     // unlockPgpKey is local-only; every other action fetches as payload.account.
     const isLocalOnlyAction = action === 'unlockPgpKey';
-    if (!apiBase || (!isLocalOnlyAction && !authFor(accountKey(payload?.account)))) {
+    if (!apiBase || (!isLocalOnlyAction && !canServe(accountKey(payload?.account)))) {
       throw new Error('Worker not initialized');
     }
     let result = null;
@@ -3112,6 +3087,13 @@ self.onmessage = (event) => {
     // A -> B -> A also reuses A's entry rather than racing a re-init.
     if (header) authHeaders.set(account, header);
     else authHeaders.delete(account);
+    if (data.config?.kind === 'imap') relayedAccounts.add(account);
+    else relayedAccounts.delete(account);
+    return;
+  }
+
+  if (data.type === 'backendResponse') {
+    handleRelayResponse(data);
     return;
   }
 
@@ -3119,6 +3101,7 @@ self.onmessage = (event) => {
   // fails instead of running under whoever is active now.
   if (data.type === 'revokeAuth') {
     authHeaders.delete(accountKey(data.account));
+    relayedAccounts.delete(accountKey(data.account));
     return;
   }
   if (data.type === 'task') {

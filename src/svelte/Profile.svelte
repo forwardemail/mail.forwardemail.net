@@ -16,6 +16,7 @@
   import Camera from '@lucide/svelte/icons/camera';
   import { pickFiles } from '../utils/file-picker';
   import { isTauriDesktop } from '../utils/platform.js';
+  import { capabilitiesFor } from '../backends/capabilities';
   import {
     accounts,
     currentAccount,
@@ -52,6 +53,8 @@
   let nameUnsub: Unsubscriber | null = null;
   let imageUnsub: Unsubscriber | null = null;
 
+  // An account on a custom IMAP server has mail only.
+  const accountCapabilities = $derived(capabilitiesFor($currentAccount));
   let nameValue = $state('');
   let photoValue = $state('');
   let photoError = $state('');
@@ -346,30 +349,36 @@
           <Card.Title>Quick links</Card.Title>
         </Card.Header>
         <Card.Content class="flex flex-col gap-1">
-          <button
-            type="button"
-            class="flex w-full items-center gap-3 px-3 py-2 text-left text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-            onclick={() => navigate('/contacts')}
-          >
-            <BookUser class="h-4 w-4" />
-            Contacts
-          </button>
-          <button
-            type="button"
-            class="flex w-full items-center gap-3 px-3 py-2 text-left text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-            onclick={() => navigate('/calendar')}
-          >
-            <CalendarIcon class="h-4 w-4" />
-            Calendar
-          </button>
-          <button
-            type="button"
-            class="flex w-full items-center gap-3 px-3 py-2 text-left text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-            onclick={() => navigate('/calendar#tasks')}
-          >
-            <ListTodo class="h-4 w-4" />
-            Tasks
-          </button>
+          {#if accountCapabilities.contacts}
+            <button
+              type="button"
+              class="flex w-full items-center gap-3 px-3 py-2 text-left text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              onclick={() => navigate('/contacts')}
+            >
+              <BookUser class="h-4 w-4" />
+              Contacts
+            </button>
+          {/if}
+          {#if accountCapabilities.calendar}
+            <button
+              type="button"
+              class="flex w-full items-center gap-3 px-3 py-2 text-left text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              onclick={() => navigate('/calendar')}
+            >
+              <CalendarIcon class="h-4 w-4" />
+              Calendar
+            </button>
+          {/if}
+          {#if accountCapabilities.calendar}
+            <button
+              type="button"
+              class="flex w-full items-center gap-3 px-3 py-2 text-left text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              onclick={() => navigate('/calendar#tasks')}
+            >
+              <ListTodo class="h-4 w-4" />
+              Tasks
+            </button>
+          {/if}
           <button
             type="button"
             class="flex w-full items-center gap-3 px-3 py-2 text-left text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"

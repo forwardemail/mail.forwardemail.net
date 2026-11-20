@@ -311,6 +311,9 @@ importers:
       husky:
         specifier: ^9.1.7
         version: 9.1.7
+      imapkit:
+        specifier: 5.3.2
+        version: 5.3.2(smtp-server@3.21.6)
       jsdom:
         specifier: ^25.0.1
         version: 25.0.1
@@ -338,6 +341,9 @@ importers:
       rollup-plugin-visualizer:
         specifier: ^5.14.0
         version: 5.14.0(rollup@4.63.1)
+      smtp-server:
+        specifier: 3.21.6
+        version: 3.21.6
       svelte-check:
         specifier: ^4.7.6
         version: 4.7.6(picomatch@4.0.7)(svelte@5.57.0(@typescript-eslint/types@8.69.0))(typescript@5.9.3)
@@ -3785,6 +3791,20 @@ packages:
   image-ssim@0.2.0:
     resolution: {integrity: sha512-W7+sO6/yhxy83L0G7xR8YAc5Z5QFtYEXXRV6EaE8tuYBZJnA3gVgp3q7X7muhLZVodeb9UfvjSbwt9VJwjIYAg==}
 
+  imap-handler@1.4.0:
+    resolution: {integrity: sha512-/Vsz6s9pHmoy8rRkyVu1TnodNmBHOVBudme8wHLZPCmtR/cJmbLmhYhJTi+qK7ZlFTQyIG/yFlh9wqvnigGkpg==}
+    engines: {node: '>=20.0.0'}
+
+  imapkit@5.3.2:
+    resolution: {integrity: sha512-uMN6P8N8PNfa1pPuoKSrC5ryDFUe8epbDGpNReap5EAPo+arjWF91xvZJAP386rmPg9+8v85eFOR/z4IehsuTw==}
+    engines: {node: '>=20.0.0'}
+    hasBin: true
+    peerDependencies:
+      smtp-server: ^3.19.17
+    peerDependenciesMeta:
+      smtp-server:
+        optional: true
+
   immediate@3.0.6:
     resolution: {integrity: sha512-XXOFtyqDjNDAQxVfYxuF7g9Il/IbWmmlQg2MYKOH8ExIT1qg6xc4zyS3HaEEATgs1btfzxq15ciUiY7gjSXRGQ==}
 
@@ -4709,6 +4729,10 @@ packages:
     resolution: {integrity: sha512-YHs7BmmcsdAI5Ozuf8JZo6PT0mv2GIWC9vMfvUC3dp65M8hn7Ux8CPL+2oBI7juNuj9d0ndhTcznq2ODBps9cQ==}
     engines: {node: '>=18'}
 
+  nodemailer@10.6.0:
+    resolution: {integrity: sha512-jWanL7D9GD3jvUDYKmoC5rWTiG8MnBgnN2yV68bgMKip1zUJhiSTyz7Eg+18y8sk5OvdVDzws5nZK5arSI4f5Q==}
+    engines: {node: '>=20.0.0'}
+
   normalize-package-data@2.5.0:
     resolution: {integrity: sha512-/5CMN3T0R4XTj4DcGaexo+roZSdSFW/0AOOTROrjxzCG1wrWXEsGbRKevjlIL+ZDE4sZlJr5ED4YW0yqmkK+eA==}
 
@@ -5542,6 +5566,10 @@ packages:
 
   smob@1.6.2:
     resolution: {integrity: sha512-RQsvleCbF8cVHEv+xuDGaA4pOizFqJ0GgjtMSRo6oP8pnN7WsigHgVGey6aILRBKv4W2YOMHLqbKdnB6hpB9fw==}
+    engines: {node: '>=20.0.0'}
+
+  smtp-server@3.21.6:
+    resolution: {integrity: sha512-QlCb8T8eS6qpiehMRdrDrKUwg4CBCQBSzfNEUQudQUau3xfRUp93X19oOuvjKyryFuEYh1cPEdYhYa09XuePvg==}
     engines: {node: '>=20.0.0'}
 
   socks-proxy-agent@8.0.5:
@@ -10106,6 +10134,14 @@ snapshots:
 
   image-ssim@0.2.0: {}
 
+  imap-handler@1.4.0: {}
+
+  imapkit@5.3.2(smtp-server@3.21.6):
+    dependencies:
+      imap-handler: 1.4.0
+    optionalDependencies:
+      smtp-server: 3.21.6
+
   immediate@3.0.6: {}
 
   import-fresh@3.3.1:
@@ -11016,6 +11052,8 @@ snapshots:
     optional: true
 
   node-releases@2.0.54: {}
+
+  nodemailer@10.6.0: {}
 
   normalize-package-data@2.5.0:
     dependencies:
@@ -11978,6 +12016,11 @@ snapshots:
   smart-buffer@4.2.0: {}
 
   smob@1.6.2: {}
+
+  smtp-server@3.21.6:
+    dependencies:
+      nodemailer: 10.6.0
+      punycode.js: 2.3.1
 
   socks-proxy-agent@8.0.5:
     dependencies:

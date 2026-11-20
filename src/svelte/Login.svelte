@@ -9,9 +9,18 @@
   import Play from '@lucide/svelte/icons/play';
   import QrCodeIcon from '@lucide/svelte/icons/qr-code';
   import ScanPairingCode from './components/ScanPairingCode.svelte';
-  import { isTauriMobile } from '../utils/platform.js';
+  import { isTauriMobile, isTauriDesktop } from '../utils/platform.js';
   import { shouldHidePurchaseLinks } from '../utils/store-policy.js';
-  import { signInWithAliasPassword } from '../utils/alias-sign-in';
+  import { signInWithAliasPassword, signInWithImap, signInWithOAuth } from '../utils/alias-sign-in';
+  import { listOAuthProviders, OAUTH_SERVERS, type OAuthProvider } from '../backends/oauth';
+  import { probeOpaqueFrameSupport } from '../utils/frame-isolation-probe';
+  import { imapSignInErrorText } from '../backends/imap-errors';
+  import { mailEngineEnabled } from '../backends/engine-bridge';
+  import {
+    findMailSettings,
+    suggestionSourceText,
+    type MailSuggestion,
+  } from '../backends/autoconfig';
   import { Local, Accounts } from '../utils/storage';
   import { activateDemoMode, isDemoMode } from '../utils/demo-mode';
   import { DEMO_EMAIL, DEMO_ALIAS_AUTH } from '../utils/demo-data';
@@ -51,6 +60,121 @@
   };
   let email = $state(getInitialEmail());
   let password = $state('');
+
+  // Signing in to a custom IMAP server. Desktop only, and only where the
+  // email frame is isolated from the app: the mail engine can open network
+  // connections, so it is not offered where an email could reach it.
+  let customServer = $state(false);
+  let customServerAllowed = $state<boolean | null>(isTauriDesktop ? null : false);
+  let imapHost = $state('');
+  let imapPort = $state('993');
+  let imapSecurity = $state<'tls' | 'starttls'>('tls');
+  let imapUsername = $state('');
+  let imapAllowLocal = $state(false);
+
+  // Sign-in through a provider's own page (Gmail, Microsoft 365). Offered
+  // under the same rule as a custom server, and only for the providers this
+  // build was given a client id for.
+  let oauthProviders = $state<OAuthProvider[]>([]);
+  let oauthWaiting = $state<OAuthProvider | null>(null);
+
+  // A build that has the engine switched off offers nothing and says nothing
+  // about it. The note about the operating system is for a build that has it.
+  let engineEnabled = $state(false);
+
+  if (isTauriDesktop) {
+    mailEngineEnabled()
+      .then(async (enabled) => {
+        engineEnabled = enabled;
+        if (!enabled) {
+          customServerAllowed = false;
+          return;
+        }
+        const supported = await probeOpaqueFrameSupport();
+        customServerAllowed = supported;
+        if (supported) oauthProviders = await listOAuthProviders();
+      })
+      .catch(() => {
+        customServerAllowed = false;
+      });
+  }
+
+  const handleOAuth = async (provider: OAuthProvider) => {
+    if (submitRequest || oauthWaiting) return;
+    oauthWaiting = provider;
+    submitError = '';
+    submitErrorAdditional = '';
+    try {
+      await signInWithOAuth(provider, { staySignedIn: signMe });
+      onSuccess?.('/mailbox');
+    } catch (error) {
+      submitError = imapSignInErrorText(error);
+    } finally {
+      oauthWaiting = null;
+    }
+  };
+
+  // Settings looked up for the typed address. The lookup runs only when the
+  // user asks for it, because it tells Thunderbird's directory the domain.
+  let lookupBusy = $state(false);
+  let lookupNote = $state('');
+  let lookupHint = $state('');
+  let suggestion = $state<{ email: string; found: MailSuggestion } | null>(null);
+
+  const handleFindSettings = async () => {
+    const address = (email || '').trim();
+    if (lookupBusy || submitRequest) return;
+    lookupBusy = true;
+    lookupNote = '';
+    lookupHint = '';
+    suggestion = null;
+    try {
+      const found = await findMailSettings(address);
+      if (!found?.imap) {
+        lookupNote = 'No settings are published for this address. Enter them below.';
+        return;
+      }
+      imapHost = found.imap.host;
+      imapPort = String(found.imap.port);
+      imapSecurity = found.imap.security;
+      imapUsername =
+        found.imap.username && found.imap.username.toLowerCase() !== address.toLowerCase()
+          ? found.imap.username
+          : '';
+      suggestion = { email: address, found };
+      lookupNote = suggestionSourceText(found, address);
+      if (found.signInWith) {
+        const label = OAUTH_SERVERS[found.signInWith].label;
+        lookupHint = oauthProviders.includes(found.signInWith)
+          ? `${label} signs in through its own page. Use "Sign in with ${label}" below.`
+          : `${label} usually refuses your normal password here. Use an app password if your account has one.`;
+      }
+    } catch (error) {
+      // The engine's own words: not a full address, or too many lookups.
+      lookupNote =
+        (error as Error)?.message || 'The lookup could not be run. Enter the settings below.';
+    } finally {
+      lookupBusy = false;
+    }
+  };
+
+  // The outgoing server that came with the settings in the form, as long as
+  // the user has not pointed the form at a different address or server.
+  const suggestedSmtpFor = (address: string) => {
+    if (!suggestion?.found.smtp || !suggestion.found.imap) return undefined;
+    if (suggestion.email.toLowerCase() !== address.toLowerCase()) return undefined;
+    if (suggestion.found.imap.host !== imapHost.trim().toLowerCase()) return undefined;
+    return suggestion.found.smtp;
+  };
+
+  const setImapSecurity = (value: string) => {
+    const next = value === 'starttls' ? 'starttls' : 'tls';
+    // Follow the usual port for the choice unless the user typed their own.
+    if (imapPort === '993' || imapPort === '143' || !imapPort) {
+      imapPort = next === 'tls' ? '993' : '143';
+    }
+    imapSecurity = next;
+  };
 
   // Guard to prevent multiple event listener attachments
   let loginEffectInitialized = false;
@@ -149,7 +273,9 @@
     if (!Array.isArray(accounts) || accounts.length === 0) return false;
 
     // At least one account must have usable credentials
-    const hasCredentials = accounts.some((a) => a.aliasAuth || a.apiKey);
+    const hasCredentials = accounts.some(
+      (a) => a.aliasAuth || a.apiKey || (a.kind === 'imap' && a.imap),
+    );
     if (hasCredentials) return true;
 
     // Also check the shared credential keys (single-account legacy path)
@@ -229,7 +355,22 @@
     submitErrorAdditional = '';
 
     try {
-      await signInWithAliasPassword(trimmedEmail, password, { staySignedIn: signMe });
+      if (customServer) {
+        await signInWithImap(
+          trimmedEmail,
+          {
+            host: imapHost.trim(),
+            port: Number(imapPort),
+            security: imapSecurity,
+            username: imapUsername.trim() || trimmedEmail,
+            password,
+            allowLocal: imapAllowLocal,
+          },
+          { staySignedIn: signMe, suggestedSmtp: suggestedSmtpFor(trimmedEmail) },
+        );
+      } else {
+        await signInWithAliasPassword(trimmedEmail, password, { staySignedIn: signMe });
+      }
 
       // Clear form fields after successful login
       email = '';
@@ -243,7 +384,9 @@
         loginAttempts = 0;
         submitError = `Too many failed attempts. Please try again in ${LOGIN_LOCKOUT_MS / 1000} seconds.`;
       } else {
-        if ((error as { status?: number })?.status === 408) {
+        if (customServer) {
+          submitError = imapSignInErrorText(error);
+        } else if ((error as { status?: number })?.status === 408) {
           submitError =
             'Sign in timed out while loading folders for this mailbox. Please try again.';
         } else {
@@ -310,9 +453,127 @@
           />
         </div>
 
-        <p class="text-center text-xs text-muted-foreground">
-          Use your alias email and generated password to sign in.
-        </p>
+        {#if customServer}
+          <div class="grid gap-2" data-testid="imap-settings">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              data-testid="imap-find-settings"
+              disabled={lookupBusy || submitRequest || !(email || '').includes('@')}
+              onclick={handleFindSettings}
+            >
+              {lookupBusy ? 'Looking…' : 'Find settings for this address'}
+            </Button>
+            <p class="text-xs text-muted-foreground" data-testid="imap-lookup-note">
+              {lookupNote ||
+                "Asks your mail domain and Thunderbird's public directory. The directory is sent your domain only, not your address."}
+            </p>
+            {#if lookupHint}
+              <p class="text-xs text-foreground" data-testid="imap-lookup-hint">{lookupHint}</p>
+            {/if}
+            <Label for="imap-host" class="text-xs text-muted-foreground">IMAP server</Label>
+            <Input
+              id="imap-host"
+              type="text"
+              placeholder="imap.example.com"
+              autocomplete="off"
+              autocapitalize="off"
+              spellcheck={false}
+              bind:value={imapHost}
+              required
+            />
+            <div class="grid grid-cols-2 gap-2">
+              <div class="grid gap-1">
+                <Label for="imap-security" class="text-xs text-muted-foreground">Security</Label>
+                <select
+                  id="imap-security"
+                  class="h-9 rounded-md border border-input bg-background px-2 text-sm"
+                  value={imapSecurity}
+                  onchange={(e) => setImapSecurity((e.currentTarget as HTMLSelectElement).value)}
+                >
+                  <option value="tls">SSL/TLS</option>
+                  <option value="starttls">STARTTLS</option>
+                </select>
+              </div>
+              <div class="grid gap-1">
+                <Label for="imap-port" class="text-xs text-muted-foreground">Port</Label>
+                <Input
+                  id="imap-port"
+                  type="text"
+                  inputmode="numeric"
+                  autocomplete="off"
+                  bind:value={imapPort}
+                  required
+                />
+              </div>
+            </div>
+            <Label for="imap-username" class="text-xs text-muted-foreground">
+              Username (leave empty to use the email address)
+            </Label>
+            <Input
+              id="imap-username"
+              type="text"
+              placeholder={email || 'you@example.com'}
+              autocomplete="off"
+              autocapitalize="off"
+              spellcheck={false}
+              bind:value={imapUsername}
+            />
+            <div class="flex items-center gap-2">
+              <Checkbox id="imap-local" bind:checked={imapAllowLocal} />
+              <Label for="imap-local" class="cursor-pointer text-xs text-muted-foreground">
+                This server is on my own network
+              </Label>
+            </div>
+          </div>
+          <p class="text-center text-xs text-muted-foreground">
+            Mail only. Contacts, calendar and filters need a Forward Email account.
+          </p>
+        {:else}
+          <p class="text-center text-xs text-muted-foreground">
+            Use your alias email and generated password to sign in.
+          </p>
+        {/if}
+
+        {#if customServerAllowed}
+          <p class="text-center text-xs">
+            <button
+              type="button"
+              class="text-fg-link underline-offset-4 hover:underline"
+              data-testid="custom-imap-toggle"
+              onclick={() => {
+                customServer = !customServer;
+                submitError = '';
+                submitErrorAdditional = '';
+              }}
+            >
+              {customServer ? 'Sign in with Forward Email instead' : 'Use a custom IMAP server'}
+            </button>
+          </p>
+        {:else if isTauriDesktop && engineEnabled && customServerAllowed === false}
+          <p class="text-center text-xs text-muted-foreground">
+            Custom IMAP servers need a newer version of this operating system.
+          </p>
+        {/if}
+
+        {#if oauthProviders.length}
+          <div class="grid gap-2" data-testid="oauth-sign-in">
+            {#each oauthProviders as provider (provider)}
+              <Button
+                type="button"
+                variant="outline"
+                class="w-full"
+                disabled={submitRequest || oauthWaiting !== null}
+                onclick={() => handleOAuth(provider)}
+              >
+                {oauthWaiting === provider
+                  ? 'Finish signing in in your browser…'
+                  : `Sign in with ${OAUTH_SERVERS[provider].label}`}
+              </Button>
+            {/each}
+          </div>
+        {/if}
 
         <div class="flex items-center gap-2">
           <Checkbox id="stay-signed" bind:checked={signMe} />

@@ -39,14 +39,17 @@ vi.mock('../../src/utils/db.js', () => ({
 vi.mock('../../src/utils/storage.js', () => ({
   Local: { get: (key: string) => (key === 'email' ? 'me@x.test' : null) },
 }));
-vi.mock('../../src/utils/remote.js', () => ({
-  Remote: {
-    request: vi.fn(async () => {
+// The account's server, which answers a message request with its attachments.
+vi.mock('../../src/backends', () => {
+  const server = {
+    requestMessage: vi.fn(async () => {
       if (env.offline) throw new TypeError('Failed to fetch');
       return { Result: { id: 'm1', nodemailer: { attachments: env.serverAttachments } } };
     }),
-  },
-}));
+  };
+  return { getMailBackend: () => server, requireMailBackend: () => server };
+});
+vi.mock('../../src/backends/imap', () => ({ ImapBackend: class ImapBackend {} }));
 vi.mock('../../src/utils/sync-worker-client.js', () => ({
   sendSyncRequest: vi.fn(),
   refreshSyncWorkerPgpKeys: vi.fn(),

@@ -247,6 +247,63 @@ export function exitDemoAndRedirect({ openSignUp = !shouldHidePurchaseLinks() } 
 }
 
 /**
+ * The error a blocked demo action ends with. Callers take their failure path
+ * and show nothing more: the toast was the feedback.
+ */
+export function demoBlockedError() {
+  const err = new Error('This action is not available in the demo');
+  err.name = 'DemoBlockedError';
+  err.code = 'DEMO_ACTION_BLOCKED';
+  err.isDemo = true;
+  return err;
+}
+
+/**
+ * The demo mailbox, for the demo mail backend (src/backends/demo.ts). The
+ * request interceptor below answers mail requests from the same functions.
+ */
+export const demoMail = {
+  folders() {
+    return recomputeFolderCounts(generateFolders());
+  },
+
+  folder(id) {
+    const folders = recomputeFolderCounts(generateFolders());
+    return folders.find((f) => f.id === id || f.path === id) || folders[0];
+  },
+
+  /** A folder page, or the matches when the query is a search. */
+  messages(query = {}) {
+    if (isSearchRequest(query)) return searchDemoMessages(query);
+    return folderPage(query);
+  },
+
+  message(id, folder) {
+    const page = folderPage({ folder });
+    return page.find((m) => m.id === id) || page[0] || null;
+  },
+
+  /** Remembered for this session, so a list fetched again shows it. */
+  setRead(id, read = true) {
+    if (!id) return;
+    if (read) _readMessageIds.add(id);
+    else _readMessageIds.delete(id);
+  },
+
+  /** Show the "not in the demo" toast and throw the blocked error. */
+  block(label) {
+    showDemoBlockedToast(label);
+    throw demoBlockedError();
+  },
+};
+
+function folderPage(params) {
+  const folder = params?.folder || params?.mailbox || params?.path || 'INBOX';
+  const page = Number(params?.page) || 1;
+  return applyReadState(generateMessages(folder, page));
+}
+
+/**
  * Intercept a Remote.request() call in demo mode.
  * Returns { handled: true, result: ... } if we handled it,
  * or { handled: false } if the real API should be called.
@@ -277,9 +334,7 @@ export function interceptDemoRequest(action, params = {}, options = {}) {
     const flags = params?.flags || params?.addFlags || [];
     const isFlagUpdate = Array.isArray(flags) && flags.length > 0;
     if (isFlagUpdate) {
-      if (flags.includes('\\Seen') && params?.id) {
-        _readMessageIds.add(params.id);
-      }
+      if (flags.includes('\\Seen')) demoMail.setRead(params?.id);
       return { handled: true, result: { ok: true, demo: true } };
     }
     if (params?.folder) {
@@ -318,39 +373,23 @@ export function interceptDemoRequest(action, params = {}, options = {}) {
 
 function getDemoData(action, params) {
   switch (action) {
-    case 'Folders': {
-      const rawFolders = generateFolders();
-      // Recompute unseen counts based on tracked read state
-      return recomputeFolderCounts(rawFolders);
-    }
+    case 'Folders':
+      return demoMail.folders();
 
-    case 'FolderGet': {
-      const folders = recomputeFolderCounts(generateFolders());
-      const id = params?.id || params?.path;
-      return folders.find((f) => f.id === id || f.path === id) || folders[0];
-    }
+    case 'FolderGet':
+      return demoMail.folder(params?.id || params?.path);
 
+    // A search lands on MessageList too (searchStore.serverSearch hits
+    // /v1/messages with search/from/to/subject params). Demo messages live
+    // only in this module: they are never indexed or persisted, so this is
+    // the one place a demo search can be answered.
     case 'MessageList':
-    case 'Message': {
-      // A search lands here too (searchStore.serverSearch hits /v1/messages
-      // with search/from/to/subject params). Demo messages live only in this
-      // module: they are never indexed or persisted, so this is the one place
-      // a demo search can be answered.
-      if (action === 'MessageList' && isSearchRequest(params)) {
-        return searchDemoMessages(params);
-      }
-      const folder = params?.folder || params?.mailbox || params?.path || 'INBOX';
-      const page = Number(params?.page) || 1;
-      const messages = applyReadState(generateMessages(folder, page));
-      if (action === 'Message' && params?.id) {
-        return messages.find((m) => m.id === params.id) || messages[0] || null;
-      }
+      // Returned as a plain array, which is one of the shapes mailboxStore
+      // reads: res?.Result?.List || res?.Result || res || []
+      return demoMail.messages(params);
 
-      // Return in the format expected by mailboxStore.ts:
-      // source === 'main' path reads: res?.Result?.List || res?.Result || res || []
-      // So we return the array directly so `res || []` gives the array.
-      return messages;
-    }
+    case 'Message':
+      return params?.id ? demoMail.message(params.id, params?.folder) : demoMail.messages(params);
 
     case 'Contacts':
       return generateContacts();

@@ -37,6 +37,8 @@ import { isDemoMode } from './demo-mode.js';
 import { fetchLabels } from '../stores/settingsStore';
 import { getWebSocketManager, destroyWebSocketManager } from './websocket-manager.js';
 import { listFreshness } from './list-freshness';
+import { anyForwardEmailAccount, imapSettingsFor } from '../backends/imap-account';
+import { INBOX_CHANGED_EVENT } from '../backends/imap-watch';
 import { createRealtimeEventCoalescer } from './realtime-event-coalescer.js';
 import {
   MAX_REALTIME_UIDS,
@@ -115,6 +117,7 @@ function createWebSocketUpdater() {
   const folderRefreshes = new Map();
   let visibilityHandler = null;
   let forceReconnectHandler = null;
+  let inboxChangedHandler = null;
   let lastSettingsSync = 0;
   let lastCaldavResync = 0;
   // Freshness tokens from the last visibility reloads, for the active account
@@ -679,12 +682,21 @@ function createWebSocketUpdater() {
       const demoMode = isDemoMode();
       const email = Local.get('email');
       const aliasAuth = Local.get('alias_auth') || '';
-      const hasCredentials = isNonEmptyString(email) && isNonEmptyString(aliasAuth);
+      // An account on a custom IMAP server has no socket of its own, but the
+      // socket manager is still set up for it: start() runs once, and a
+      // Forward Email account the user adds or switches to later needs its
+      // events handled. For the IMAP account itself the mail engine watches
+      // the inbox (backends/imap-watch.ts) and the poll covers the rest.
+      const hasCredentials =
+        isNonEmptyString(email) && (isNonEmptyString(aliasAuth) || Boolean(imapSettingsFor(email)));
 
       // Demo mode is intentionally offline and backed by local fake data.
       // stop() keeps the watcher alive on purpose, so a later start() must
       // reuse it rather than open a second socket next to the first.
-      if (!demoMode && !releaseWatcher) {
+      // Not opened when every account is on a custom mail server: the socket
+      // is Forward Email's. The desktop app still checks for updates itself
+      // (updater-bridge.js asks GitHub).
+      if (!demoMode && !releaseWatcher && anyForwardEmailAccount()) {
         releaseWatcher = createReleaseWatcher();
         releaseWatcher.on(WS_EVENTS.NEW_RELEASE, (data) => {
           if (data && typeof data === 'object') {
@@ -863,6 +875,20 @@ function createWebSocketUpdater() {
         startFallbackPoll();
       }
 
+      inboxChangedHandler = (event) => {
+        if (destroyed || !started) return;
+        const account = event?.detail?.account;
+        if (!isNonEmptyString(account)) return;
+        // Another signed-in account's inbox: it is read when it is opened.
+        if (!sameAccount(Local.get('email') || 'default', account)) return;
+        const folders = get(mailboxStore.state.folders) || [];
+        const inbox = folders.find((f) => f.path?.toUpperCase?.() === 'INBOX');
+        refreshFolderOnServer(account, inbox, 'INBOX');
+        // The unread badge comes from the folder list.
+        mailboxStore.actions.loadFolders?.({ force: true })?.catch?.(() => {});
+      };
+      globalThis.addEventListener(INBOX_CHANGED_EVENT, inboxChangedHandler);
+
       // When the app becomes visible: refresh messages, reconnect WS if needed,
       // and re-sync labels/settings.
       visibilityHandler = () => {
@@ -967,6 +993,10 @@ function createWebSocketUpdater() {
       if (forceReconnectHandler) {
         globalThis.removeEventListener('fe:force-reconnect', forceReconnectHandler);
         forceReconnectHandler = null;
+      }
+      if (inboxChangedHandler) {
+        globalThis.removeEventListener(INBOX_CHANGED_EVENT, inboxChangedHandler);
+        inboxChangedHandler = null;
       }
 
       // Unsubscribe all event listeners

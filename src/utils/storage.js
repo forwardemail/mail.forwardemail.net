@@ -824,6 +824,23 @@ export const Accounts = {
         addedAt: existingIndex >= 0 ? accounts[existingIndex].addedAt : Date.now(),
         lastActive: Date.now(),
       };
+      // An account on a custom IMAP server keeps its server settings on the
+      // record (src/backends/imap-account.ts). Signing in again with a
+      // Forward Email password replaces them, so one address is never both.
+      if (credentials.kind === 'imap' && credentials.imap) {
+        accountData.kind = 'imap';
+        accountData.imap = credentials.imap;
+        accountData.apiKey = null;
+        accountData.aliasAuth = null;
+        // Signed in through the provider's page (src/backends/oauth.ts).
+        // Signing in again with a password drops it.
+        if (credentials.oauth) accountData.oauth = credentials.oauth;
+      }
+
+      // A custom outgoing server (src/backends/smtp-account.ts) belongs to the
+      // address, so signing in again keeps it.
+      const smtp = credentials.smtp || (existingIndex >= 0 ? accounts[existingIndex].smtp : null);
+      if (smtp) accountData.smtp = smtp;
 
       if (existingIndex >= 0) {
         accounts[existingIndex] = accountData;
@@ -861,6 +878,55 @@ export const Accounts = {
       return true;
     } catch (error) {
       console.error('Failed to add account:', error);
+      return false;
+    }
+  },
+
+  /**
+   * Save or clear an account's custom outgoing server.
+   * @param {string} email - Account email
+   * @param {Object|null} smtp - Server settings, or null to go back to none
+   * @returns {boolean} False when the account is not found or the vault is locked
+   */
+  setSmtp(email, smtp) {
+    return this.setField(email, 'smtp', smtp);
+  },
+
+  /**
+   * Save the sign-in of an account that uses its provider's sign-in page.
+   * @param {string} email - Account email
+   * @param {Object|null} oauth - { provider, refreshToken }
+   * @returns {boolean} False when the account is not found or the vault is locked
+   */
+  setOAuth(email, oauth) {
+    return this.setField(email, 'oauth', oauth);
+  },
+
+  /** Set or clear one field of a stored account record. */
+  setField(email, field, value) {
+    try {
+      const target = normalizeEmail(email);
+      const stores = [];
+      if (hasLocalStorage) stores.push([localStorage, ACCOUNTS_KEY]);
+      if (hasSessionStorage) stores.push([sessionStorage, SESSION_ACCOUNTS_KEY]);
+      for (const [storage, storageKey] of stores) {
+        const accounts = readAccountsList(storage, storageKey);
+        if (accounts === null) {
+          warn('Cannot modify accounts while the vault is locked');
+          return false;
+        }
+        const index = accounts.findIndex((a) => normalizeEmail(a.email) === target);
+        if (index < 0) continue;
+        const next = { ...accounts[index] };
+        if (value) next[field] = value;
+        else delete next[field];
+        accounts[index] = next;
+        writeAccountsList(storage, storageKey, accounts);
+        return true;
+      }
+      return false;
+    } catch (error) {
+      console.error('Failed to save the account:', error);
       return false;
     }
   },

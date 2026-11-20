@@ -513,10 +513,54 @@ export function createBodyFailureMemo() {
 // Whether the server filtered a page by since_modseq. Older API releases
 // ignore the parameter and list the folder newest first; then some rows are
 // at or below the MODSEQ asked for.
+//
+// An IMAP account's token is `<uidValidity>:<change counter>` (changeToken in
+// backends/imap.ts). Its rows carry the folder's token as it is now, so a
+// listing of changes is one where every row is in the same folder generation
+// and ahead of the token asked for. The counter is compared as a big
+// integer: it does not fit a number.
+const FOLDER_TOKEN = /^(\d+):(\d+)$/;
+
+/** True for a token that is not a plain number (an IMAP folder token). */
+export function isFolderToken(modseq: unknown): modseq is string {
+  return typeof modseq === 'string' && FOLDER_TOKEN.test(modseq);
+}
+
+/**
+ * What a metadata pass saves as "read up to here" after one more row.
+ *
+ * A server MODSEQ is per message, so the highest seen is kept. An IMAP folder
+ * token says how far the whole folder had changed when its page was read, so
+ * the first one of the pass is kept: a change made while later pages were
+ * read is then asked for again next time, where keeping the last would skip
+ * it for good.
+ */
+export function advanceModseq(
+  state: { saved: unknown; passToken: string | null },
+  rowModseq: unknown,
+): { saved: unknown; passToken: string | null } {
+  if (isFolderToken(rowModseq)) {
+    return state.passToken ? state : { saved: rowModseq, passToken: rowModseq };
+  }
+  if (!rowModseq) return state;
+  const number = Number(rowModseq);
+  return {
+    saved: Number.isFinite(number) ? Math.max(Number(state.saved) || 0, number) : rowModseq,
+    passToken: state.passToken,
+  };
+}
+
 export function honoredSinceModseq(
   sinceModSeq: unknown,
   rows: Array<{ modseq?: unknown }>,
 ): boolean {
+  const asked = FOLDER_TOKEN.exec(typeof sinceModSeq === 'string' ? sinceModSeq : '');
+  if (asked) {
+    return rows.every((row) => {
+      const got = FOLDER_TOKEN.exec(typeof row?.modseq === 'string' ? row.modseq : '');
+      return Boolean(got) && got[1] === asked[1] && BigInt(got[2]) > BigInt(asked[2]);
+    });
+  }
   const since = Number(sinceModSeq);
   if (sinceModSeq == null || sinceModSeq === '' || !Number.isFinite(since)) return false;
   return rows.every((row) => {

@@ -14,6 +14,7 @@
   import { Local } from '../../utils/storage';
   import { db } from '../../utils/db';
   import { queueEmail } from '../../utils/outbox-service';
+  import { downloadFile } from '../../utils/download';
   import {
     normalizeIcsForCalendar,
     buildReplyIcs,
@@ -29,9 +30,13 @@
     // address of the message the invite came with
     sender?: string;
     onAdded?: () => void;
+    // False for an account with no calendar here (a custom mail server). The
+    // card then shows the event and the RSVP buttons, and offers the event
+    // as a file for the user's own calendar app. It asks no server anything.
+    calendar?: boolean;
   }
 
-  let { invite, sender = '', onAdded }: Props = $props();
+  let { invite, sender = '', onAdded, calendar = true }: Props = $props();
 
   let saving = $state(false);
   let added = $state(false);
@@ -161,7 +166,15 @@
     return getCalId(preferred || list[0]);
   };
 
+  const saveIcs = () => {
+    const name = (invite.summary || 'invite').replace(/[^a-z0-9]/gi, '_') || 'invite';
+    if (!downloadFile(invite.raw, `${name}.ics`, 'text/calendar')) {
+      error = 'Could not save the event file.';
+    }
+  };
+
   onMount(async () => {
+    if (!calendar) return;
     try {
       const all = await db.meta.get(`calendar_events_${accountKey()}_all`);
       const events = (all?.value as Array<Record<string, unknown>>) || [];
@@ -487,7 +500,11 @@
 
   <Card.Footer class="flex flex-col gap-3 pt-3">
     {#if isCancel}
-      {#if removed}
+      {#if !calendar}
+        <span class="text-xs text-muted-foreground">
+          This invitation was cancelled by the organizer.
+        </span>
+      {:else if removed}
         <div class="flex w-full items-center gap-2 text-sm text-muted-foreground">
           <CheckCircle2 class="h-4 w-4" />
           Removed from your calendar
@@ -508,7 +525,12 @@
       {/if}
     {:else}
       <div class="flex w-full flex-wrap items-center gap-2">
-        {#if added}
+        {#if !calendar}
+          <Button variant="outline" onclick={saveIcs} class="flex-1 sm:flex-none">
+            Save event file (.ics)
+          </Button>
+          <span class="text-xs text-muted-foreground">Open it in your calendar app to add it.</span>
+        {:else if added}
           <span class="flex items-center gap-2 text-sm text-state-success">
             <CheckCircle2 class="h-4 w-4" />
             {cachedEventMatch ? 'Updated on your calendar' : 'Added to your calendar'}

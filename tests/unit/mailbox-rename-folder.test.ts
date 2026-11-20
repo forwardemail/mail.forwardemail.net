@@ -49,10 +49,9 @@ vi.mock('../../src/utils/db', () => {
   };
 });
 vi.mock('../../src/stores/mailboxActions', () => ({ selectedConversation: writable(null) }));
-// no credentials: the folder reload after the rename stops right away
 vi.mock('../../src/utils/auth', () => ({
-  getAuthHeader: vi.fn(() => null),
-  getAuthHeaderForAccount: vi.fn(() => null),
+  getAuthHeader: vi.fn(() => 'Basic bWVAdGVzdC5jb206cGFzcw=='),
+  getAuthHeaderForAccount: vi.fn(() => 'Basic bWVAdGVzdC5jb206cGFzcw=='),
 }));
 vi.mock('../../src/utils/storage', () => ({
   Local: { get: vi.fn(() => 'me@test.com'), set: vi.fn(), remove: vi.fn() },
@@ -108,7 +107,11 @@ describe('renameFolder', () => {
     expect(h.remoteRequest).toHaveBeenCalledWith(
       'FolderUpdate',
       { path: 'Jobs' },
-      expect.objectContaining({ method: 'PUT', pathOverride: '/v1/folders/f1' }),
+      expect.objectContaining({
+        method: 'PUT',
+        pathOverride: '/v1/folders/f1',
+        authHeader: 'Basic bWVAdGVzdC5jb206cGFzcw==',
+      }),
     );
 
     expect(h.modified.filter(([table]) => table === 'messages')).toEqual([

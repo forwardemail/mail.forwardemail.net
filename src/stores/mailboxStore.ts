@@ -8,7 +8,11 @@ import { withDeadline } from '../utils/with-deadline';
 // without failing; waiting on it then held the list on its loading skeleton
 // for good. Past this deadline the cache is skipped and the network used.
 const CACHE_READ_DEADLINE_MS = 4000;
-import { Remote } from '../utils/remote';
+import { DemoBackend, getMailBackend, requireMailBackend } from '../backends';
+import { parseImapMessageId } from '../backends/imap-mapping';
+import type { IdRemap } from '../backends/types';
+import { ensureInboxWatch } from '../backends/imap-watch';
+import { capabilitiesFor } from '../backends/capabilities';
 import { hasMorePages } from '../utils/pagination.js';
 import { isDemoBlockedError, isDemoMode } from '../utils/demo-mode';
 import { db } from '../utils/db';
@@ -34,7 +38,6 @@ import { decodeMimeHeader } from '../utils/mime-utils.js';
 import { validateFolderName } from '../utils/folder-validation.ts';
 import { detectJunkFolder } from '../utils/junk-folder';
 import { queueMutation, getQueuedMessageIds, mutationQueueCount } from '../utils/mutation-queue';
-import { flagChangeBody } from '../utils/message-changes';
 import { hasServerLabels } from '../workers/sync-pure';
 import { nextCandidate } from '../svelte/mailbox/utils/mailbox-helpers.js';
 import { selectedConversation } from './mailboxActions';
@@ -83,7 +86,7 @@ import { normalizeLayoutMode } from './settingsRegistry';
 import { warn } from '../utils/logger.ts';
 import { folderMessageCache } from './folder-message-cache';
 import { isOnline } from '../utils/network-status';
-import { getAuthHeader, getAuthHeaderForAccount } from '../utils/auth';
+import { getAuthHeader } from '../utils/auth';
 import { noteLightweightListResponse } from '../utils/api-capabilities';
 import { listFreshness } from '../utils/list-freshness';
 import {
@@ -354,6 +357,24 @@ const invalidateFolderInMemCache = (account, folder) => {
     if (key.startsWith(prefix)) {
       folderMessageCache.delete(key);
     }
+  }
+};
+
+/**
+ * The demo refuses anything that would change the mailbox, with a toast.
+ * Asked before the optimistic update so there is nothing to put back. True
+ * when the demo refused; false outside the demo.
+ */
+const demoRefuses = async (act: (demo: DemoBackend) => Promise<unknown>): Promise<boolean> => {
+  if (!isDemoMode()) return false;
+  const backend = getMailBackend(activeAccountName());
+  if (!(backend instanceof DemoBackend)) return false;
+  try {
+    await act(backend);
+    return false;
+  } catch (err) {
+    if (isDemoBlockedError(err)) return true;
+    throw err;
   }
 };
 
@@ -872,8 +893,8 @@ const createMailboxStore = () => {
   };
 
   const reconcileFolderUnread = async (account: string, path: string, serverCount: number) => {
-    const authHeader = getAuthHeaderForAccount(account);
-    if (!authHeader) return;
+    const backend = getMailBackend(account);
+    if (!backend || !backend.isReady()) return;
     const touched = new Set<string>();
     flagChangeWatchers.add(touched);
     // Rows sync writes after this point may hold mail that arrived after the
@@ -884,8 +905,7 @@ const createMailboxStore = () => {
       const serverUnread = new Set<string>();
       const pages = Math.max(1, Math.ceil(serverCount / RECONCILE_PAGE_SIZE));
       for (let page = 1; page <= pages + 1; page += 1) {
-        const res = await Remote.request(
-          'MessageList',
+        const res = await backend.requestMessageList(
           {
             folder: path,
             is_unread: true,
@@ -896,7 +916,7 @@ const createMailboxStore = () => {
             raw: false,
             attachments: false,
           },
-          { method: 'GET', pathOverride: '/v1/messages', timeout: 60_000, authHeader },
+          { timeout: 60_000 },
         );
         // Anything but a list (an empty 204, an error page) says nothing
         // about which messages are unread.
@@ -1031,12 +1051,15 @@ const createMailboxStore = () => {
     // Settings.svelte is always mounted and its currentAccount subscription
     // calls loadFolders() — without this guard it triggers sync-worker and
     // Remote.request errors because auth headers are missing.
-    const hasAuth = !!getAuthHeader({ allowApiKey: true });
+    // An IMAP account has no Forward Email header; its backend being ready is
+    // what says it can load.
+    const account = Local.get('email') || 'default';
+    const hasAuth =
+      !!getAuthHeader({ allowApiKey: true }) || getMailBackend(account)?.isReady() === true;
     if (!hasAuth) {
       return;
     }
 
-    const account = Local.get('email') || 'default';
     const { force = false } = options;
     const state = folderLoadState.get(account) || { promise: null, lastFetchAt: 0 };
     if (state.promise) {
@@ -1046,17 +1069,15 @@ const createMailboxStore = () => {
       return state.promise;
     }
 
-    // Demo mode fast-path: serve folders straight from the synchronous demo
-    // interceptor (Remote.request → getDemoData). Demo has no real IndexedDB
+    // Demo mode fast-path: serve folders straight from the demo backend's
+    // generated data. Demo has no real IndexedDB
     // cache and the sync worker isn't demo-aware, so touching either only
     // risks a worker stall (DB_WORKER_INIT_TIMEOUT, seen on slow CI) — the
     // exact failure that left the demo sidebar with zero folders while
     // messages still rendered. Keep demo fully in-memory and worker-independent.
     if (isDemoMode()) {
       const demoPromise = (async () => {
-        const res = await Remote.request('Folders', {}, { method: 'GET' });
-        const raw = res?.Result || res || [];
-        const list = Array.isArray(raw) ? raw : raw.Items || raw.items || [];
+        const list = await requireMailBackend(Local.get('email') || '').listFolders();
         const mapped = buildFolderList(list, { fetchedAt: Date.now() });
         folders.set(mapped);
         const currentFolder = get(selectedFolder);
@@ -1109,20 +1130,9 @@ const createMailboxStore = () => {
           // for. A switch rejects the worker request above, and without its
           // own credentials this fetched the new account's folders and cached
           // them as this one's.
-          const authHeader = getAuthHeaderForAccount(account);
-          if (!authHeader) throw new Error('account_switched');
-          const res = await Remote.request(
-            'Folders',
-            {},
-            {
-              method: 'GET',
-              pathOverride: '/v1/folders?limit=100',
-              timeout: 120_000,
-              authHeader,
-            },
-          );
-          const raw = res?.Result || res || [];
-          list = Array.isArray(raw) ? raw : raw.Items || raw.items || [];
+          const backend = getMailBackend(account);
+          if (!backend || !backend.isReady()) throw new Error('account_switched');
+          list = await backend.listFolders();
 
           // Use transaction for atomic folder cache update (fallback path only).
           // Persisting to cache is best-effort: if the db worker is down the
@@ -1153,6 +1163,12 @@ const createMailboxStore = () => {
 
         folders.set(mapped);
         unreadDeltas.covered(account, fetchedAt);
+        // An account on a custom IMAP server hears about new mail from the
+        // mail engine. Asked for on every folder load: the engine keeps one
+        // watcher per account and this starts it again after a restart.
+        if (getMailBackend(account)?.kind === 'imap') {
+          void ensureInboxWatch(account).catch((err) => warn('inbox watch failed', err));
+        }
 
         // Always set default folder to INBOX if no folder is selected
         const currentFolder = get(selectedFolder);
@@ -1638,13 +1654,8 @@ const createMailboxStore = () => {
       // whatever alias was active at send time, so an account switch during
       // the worker attempt fetched the new account's page and cached it under
       // the old one.
-      const authHeader = getAuthHeaderForAccount(account);
-      if (!authHeader) throw new Error(`No credentials available for ${account}`);
-      const res = await Remote.request('MessageList', params, {
-        method: 'GET',
-        pathOverride: '/v1/messages',
+      const res = await requireMailBackend(account).requestMessageList(params, {
         timeout: 60_000,
-        authHeader,
       });
 
       return { source: 'main', res };
@@ -2960,15 +2971,8 @@ const createMailboxStore = () => {
     // Permanent delete, already in trash, or trash folder not found - use DELETE API
     const apiId = getMessageApiId(msg);
     if (!apiId) return;
-    if (isDemoMode()) {
-      try {
-        let path = `/v1/messages/${encodeURIComponent(apiId)}`;
-        if (permanent) path += '?permanent=1';
-        await Remote.request('MessageDelete', {}, { method: 'DELETE', pathOverride: path });
-      } catch (err) {
-        if (isDemoBlockedError(err)) return { success: false, blocked: true };
-        throw err;
-      }
+    if (await demoRefuses((demo) => demo.deleteMessage())) {
+      return { success: false, blocked: true };
     }
 
     const account = Local.get('email') || 'default';
@@ -3025,16 +3029,9 @@ const createMailboxStore = () => {
     }
 
     try {
-      let path = `/v1/messages/${encodeURIComponent(apiId)}`;
-      if (permanent) path += '?permanent=1';
-      await Remote.request(
-        'MessageDelete',
-        {},
-        {
-          method: 'DELETE',
-          pathOverride: path,
-          authHeader: getAuthHeaderForAccount(account) || undefined,
-        },
+      await applyIdRemap(
+        account,
+        await requireMailBackend(account).deleteMessage(apiId, { permanent: Boolean(permanent) }),
       );
       settleUnreadChange(recordId, account);
       settlePendingDeletes([msg.id]);
@@ -3103,19 +3100,8 @@ const createMailboxStore = () => {
 
     if (!validMessages.length) return { success: 0, failed: 0 };
 
-    if (isDemoMode()) {
-      const apiId = getMessageApiId(validMessages[0]);
-      if (apiId == null) return { success: 0, failed: validMessages.length };
-      let path = `/v1/messages/${encodeURIComponent(apiId)}`;
-      if (permanent) path += '?permanent=1';
-      try {
-        await Remote.request('MessageDelete', {}, { method: 'DELETE', pathOverride: path });
-      } catch (err) {
-        if (isDemoBlockedError(err)) {
-          return { success: 0, failed: validMessages.length, blocked: true };
-        }
-        throw err;
-      }
+    if (await demoRefuses((demo) => demo.deleteMessage())) {
+      return { success: 0, failed: validMessages.length, blocked: true };
     }
 
     // Optimistic UI update - remove all messages at once, before any await,
@@ -3155,12 +3141,10 @@ const createMailboxStore = () => {
       }
     }
 
-    // Sent as the account the messages belong to, even if the user switches
-    // accounts while a long bulk delete is still running.
-    const accountAuth = getAuthHeaderForAccount(account) || undefined;
-
+    // Sent through the backend of the account the messages belong to, even if
+    // the user switches accounts while a long bulk delete is still running.
     // Process API calls in parallel
-    const CONCURRENCY = 8;
+    const CONCURRENCY = capabilitiesFor(account).changesAtOnce;
     const results = [];
     const successfulDeletes = [];
     const queuedDeletes = [];
@@ -3170,12 +3154,11 @@ const createMailboxStore = () => {
       const chunkResults = await Promise.allSettled(
         chunk.map(async (msg) => {
           const apiId = getMessageApiId(msg);
-          let path = `/v1/messages/${encodeURIComponent(apiId)}`;
-          if (permanent) path += '?permanent=1';
-          await Remote.request(
-            'MessageDelete',
-            {},
-            { method: 'DELETE', pathOverride: path, authHeader: accountAuth },
+          await applyIdRemap(
+            account,
+            await requireMailBackend(account).deleteMessage(apiId, {
+              permanent: Boolean(permanent),
+            }),
           );
           return msg;
         }),
@@ -3243,6 +3226,74 @@ const createMailboxStore = () => {
     };
   };
 
+  /**
+   * Give cached messages the ids the server now knows them by.
+   *
+   * On an IMAP server a message's id names its folder and its number there,
+   * so a move changes it. The row was already moved to the new folder under
+   * its old id (the optimistic update). Left like that, the next sync adds
+   * the message again under the new id and the list shows it twice until the
+   * old row is found to be gone. An empty map (the Forward Email API, whose
+   * ids never change) does nothing.
+   */
+  const applyIdRemap = async (account: string, remap: IdRemap | void) => {
+    const changes = Object.entries(remap || {}).filter(([from, to]) => from && to && from !== to);
+    if (!changes.length) return;
+    for (const [oldId, newId] of changes) {
+      const ref = parseImapMessageId(newId);
+      const patch = { id: newId, ...(ref ? { uid: ref.uid, folder: ref.folder } : {}) };
+      try {
+        const row = await db.messages.get([account, oldId]);
+        if (row) {
+          // A sync that ran first already stored it under the new id; its
+          // copy is the newer one.
+          const synced = await db.messages.get([account, newId]);
+          const next = { ...row, ...synced, ...patch, account, updatedAt: Date.now() };
+          await db.messages.put(next);
+          await db.messages.where('[account+id]').equals([account, oldId]).delete();
+          await searchStore.actions.removeFromIndex([oldId]).catch(() => {});
+          await searchStore.actions.indexMessages([next]).catch(() => {});
+        }
+        const body = await db.messageBodies.get([account, oldId]);
+        if (body) {
+          await db.messageBodies.put({
+            ...body,
+            id: newId,
+            ...(ref ? { folder: ref.folder } : {}),
+            updatedAt: Date.now(),
+          });
+          await db.messageBodies.where('[account+id]').equals([account, oldId]).delete();
+        }
+      } catch (err) {
+        // The cache is corrected by the next sync either way.
+        warn('applyIdRemap cache update failed', err);
+      }
+      if (ref) invalidateFolderInMemCache(account, ref.folder);
+    }
+    if ((Local.get('email') || 'default') !== account) return;
+    const renamed = new Map(changes);
+    const rename = (m) => {
+      const next = m?.id != null ? renamed.get(String(m.id)) : undefined;
+      if (!next) return m;
+      const ref = parseImapMessageId(next);
+      return { ...m, id: next, ...(ref ? { uid: ref.uid, folder: ref.folder } : {}) };
+    };
+    const list = get(messages) || [];
+    if (list.some((m) => renamed.has(String(m?.id)))) {
+      const taken = new Set(list.map((m) => String(m?.id)));
+      // Where a sync already listed the new id, the old row is the duplicate.
+      messages.set(
+        list
+          .filter((m) => !(renamed.has(String(m?.id)) && taken.has(renamed.get(String(m.id)))))
+          .map(rename),
+      );
+    }
+    const selected = get(selectedMessage);
+    if (selected?.id != null && renamed.has(String(selected.id))) {
+      selectedMessage.set(rename(selected));
+    }
+  };
+
   const moveMessage = async (
     msg,
     targetOverride,
@@ -3269,21 +3320,8 @@ const createMailboxStore = () => {
       }
     }
 
-    if (isDemoMode()) {
-      try {
-        await Remote.request(
-          'MessageUpdate',
-          { folder: target },
-          {
-            method: 'PUT',
-            pathOverride: `/v1/messages/${encodeURIComponent(apiId)}`,
-            demoAction,
-          },
-        );
-      } catch (err) {
-        if (isDemoBlockedError(err)) return { success: false, blocked: true };
-        throw err;
-      }
+    if (await demoRefuses((demo) => demo.moveMessage(apiId, target, { label: demoAction }))) {
+      return { success: false, blocked: true };
     }
 
     const account = Local.get('email') || 'default';
@@ -3387,15 +3425,7 @@ const createMailboxStore = () => {
     }
 
     try {
-      await Remote.request(
-        'MessageUpdate',
-        { folder: target },
-        {
-          method: 'PUT',
-          pathOverride: `/v1/messages/${encodeURIComponent(apiId)}`,
-          authHeader: getAuthHeaderForAccount(account) || undefined,
-        },
-      );
+      await applyIdRemap(account, await requireMailBackend(account).moveMessage(apiId, target));
       settleUnreadChange(recordId, account);
       settlePendingDeletes([msg.id]);
       result.success = true;
@@ -3451,25 +3481,12 @@ const createMailboxStore = () => {
 
     if (!validMessages.length) return { success: 0, failed: 0 };
 
-    if (isDemoMode()) {
-      const apiId = getMessageApiId(validMessages[0]);
-      if (apiId == null) return { success: 0, failed: validMessages.length };
-      try {
-        await Remote.request(
-          'MessageUpdate',
-          { folder: target },
-          {
-            method: 'PUT',
-            pathOverride: `/v1/messages/${encodeURIComponent(apiId)}`,
-            demoAction,
-          },
-        );
-      } catch (err) {
-        if (isDemoBlockedError(err)) {
-          return { success: 0, failed: validMessages.length, blocked: true };
-        }
-        throw err;
-      }
+    if (
+      await demoRefuses((demo) =>
+        demo.moveMessage(getMessageApiId(validMessages[0]), target, { label: demoAction }),
+      )
+    ) {
+      return { success: 0, failed: validMessages.length, blocked: true };
     }
 
     // Optimistic UI update - remove all messages at once
@@ -3507,30 +3524,25 @@ const createMailboxStore = () => {
       }
     }
 
-    // Sent as the account the messages belong to, even if the user switches
-    // accounts while a long bulk move is still running.
-    const accountAuth = getAuthHeaderForAccount(account) || undefined;
-
+    // Sent through the backend of the account the messages belong to, even if
+    // the user switches accounts while a long bulk move is still running.
     // Process API calls in parallel with concurrency limit
-    const CONCURRENCY = 8;
+    const CONCURRENCY = capabilitiesFor(account).changesAtOnce;
     const results = [];
     const successfulMoves = [];
     const queuedMoves = [];
+    // New ids from a server where a move changes them (IMAP). Applied after
+    // the cached rows are moved below: renamed first, those rows would not be
+    // found under the ids this function still holds, and the source folder
+    // would keep a stale copy of each message.
+    const remaps = [];
 
     for (let i = 0; i < validMessages.length; i += CONCURRENCY) {
       const chunk = validMessages.slice(i, i + CONCURRENCY);
       const chunkResults = await Promise.allSettled(
         chunk.map(async (msg) => {
           const apiId = getMessageApiId(msg);
-          await Remote.request(
-            'MessageUpdate',
-            { folder: target },
-            {
-              method: 'PUT',
-              pathOverride: `/v1/messages/${encodeURIComponent(apiId)}`,
-              authHeader: accountAuth,
-            },
-          );
+          remaps.push(await requireMailBackend(account).moveMessage(apiId, target));
           return msg;
         }),
       );
@@ -3587,7 +3599,9 @@ const createMailboxStore = () => {
           folder: target,
           // The source UID means another message in the target (see moveMessage).
           uid: null,
-          labels: existingMessages[idx]?.labels ?? msg.labels ?? [],
+          // A copy: the row on screen is a reactive object, which the
+          // database worker cannot be sent.
+          labels: Array.from(existingMessages[idx]?.labels ?? msg.labels ?? []),
           updatedAt: Date.now(),
         }));
 
@@ -3606,6 +3620,8 @@ const createMailboxStore = () => {
       } catch (err) {
         console.error('bulkMoveMessages DB update failed', err);
       }
+
+      for (const remap of remaps) await applyIdRemap(account, remap);
 
       // Recount sidebar folder badges now that db.messages has the moved
       // messages under the target folder. Without this the target folder
@@ -3861,11 +3877,7 @@ const createMailboxStore = () => {
 
     folderOperationInProgress.set(true);
     try {
-      await Remote.request(
-        'FolderCreate',
-        { path },
-        { method: 'POST', pathOverride: '/v1/folders' },
-      );
+      await requireMailBackend(Local.get('email') || 'default').createFolder(String(path));
 
       // Reload folders to get updated list
       await loadFolders({ force: true });
@@ -3913,11 +3925,7 @@ const createMailboxStore = () => {
         throw new Error('Folder not found');
       }
 
-      await Remote.request(
-        'FolderUpdate',
-        { path: newPath },
-        { method: 'PUT', pathOverride: `/v1/folders/${encodeURIComponent(folder.id)}` },
-      );
+      await requireMailBackend(account).renameFolder(folder.id, newPath);
 
       // Update IndexedDB cache. The folders inside it are renamed with it
       // (the server does that, as IMAP requires), so their cached folders and
@@ -3982,11 +3990,7 @@ const createMailboxStore = () => {
 
     folderOperationInProgress.set(true);
     try {
-      await Remote.request(
-        'FolderDelete',
-        {},
-        { method: 'DELETE', pathOverride: `/v1/folders/${encodeURIComponent(folder.id)}` },
-      );
+      await requireMailBackend(account).deleteFolder(folder.id);
 
       // Purge cached messages only after the server confirms, so a failed
       // delete has nothing to restore beyond the folder list.
@@ -4021,10 +4025,10 @@ const createMailboxStore = () => {
     // Demo mode is IndexedDB-free (WebKitGTK stalls IndexedDB under tauri://,
     // even on the main thread). Mark off the in-memory store instead of reading
     // db.messages — the folder being marked is the selected, rendered one, so
-    // messagesStore holds its messages. Demo MessageUpdate is served by the
-    // synchronous interceptor (tracks read state for re-fetches); the optimistic
+    // messagesStore holds its messages. The demo backend remembers what was
+    // read (so a list fetched again shows it); the optimistic
     // pending-flag mutation flips the rows. Folder badge counts come from the
-    // demo Folders interceptor on the next folder load.
+    // demo backend on the next folder load.
     if (isDemoMode()) {
       const storeMessages = get(messages) || [];
       const unread = storeMessages.filter((m) => m.is_unread === true);
@@ -4034,10 +4038,9 @@ const createMailboxStore = () => {
         const nextFlags = flags.includes('\\Seen') ? flags : [...flags, '\\Seen'];
         const apiId = getMessageApiId(m);
         if (apiId) {
-          Remote.request('MessageUpdate', flagChangeBody(nextFlags, { add: ['\\Seen'] }), {
-            method: 'PUT',
-            pathOverride: `/v1/messages/${encodeURIComponent(apiId)}`,
-          }).catch(() => {});
+          getMailBackend(account)
+            ?.changeFlags(apiId, { flags: nextFlags, add: ['\\Seen'] })
+            .catch(() => {});
         }
         if (m.id) {
           addPendingFlagMutation(m.id, { is_unread: false, is_unread_index: 0, flags: nextFlags });
@@ -4047,7 +4050,12 @@ const createMailboxStore = () => {
       return { success: true, count: unread.length };
     }
 
-    const authHeader = getAuthHeaderForAccount(account);
+    // Whether this account can reach its server at all right now. Asked of
+    // the backend, not of the Forward Email credentials: an account on a
+    // custom IMAP server has none, and every change was queued instead of
+    // sent.
+    const canSend = Boolean(getMailBackend(account)?.isReady());
+    const atOnce = capabilitiesFor(account).changesAtOnce;
     const seen = new Set<string>();
     let marked = 0;
 
@@ -4075,15 +4083,14 @@ const createMailboxStore = () => {
         folder: folderPath,
         account,
       };
-      if (!isOnline() || !authHeader) {
+      if (!isOnline() || !canSend) {
         await queueMutation('toggleRead', payload, { account }).catch(() => {});
         return;
       }
       try {
-        await Remote.request('MessageUpdate', flagChangeBody(nextFlags, { add: ['\\Seen'] }), {
-          method: 'PUT',
-          pathOverride: `/v1/messages/${encodeURIComponent(apiId)}`,
-          authHeader,
+        await requireMailBackend(account).changeFlags(apiId, {
+          flags: nextFlags,
+          add: ['\\Seen'],
         });
         unreadDeltas.settle(account, id);
       } catch (err) {
@@ -4119,8 +4126,8 @@ const createMailboxStore = () => {
 
     // A few requests at a time, as the bulk move and delete paths do.
     const markAll = async (list: Array<Record<string, unknown>>) => {
-      for (let i = 0; i < list.length; i += 8) {
-        await Promise.all(list.slice(i, i + 8).map((msg) => markOne(msg)));
+      for (let i = 0; i < list.length; i += atOnce) {
+        await Promise.all(list.slice(i, i + atOnce).map((msg) => markOne(msg)));
       }
     };
 
@@ -4134,15 +4141,14 @@ const createMailboxStore = () => {
 
       // And every unread message the server has, cached or not. Each pass
       // reads the first page again: what was just marked drops out of it.
-      if (isOnline() && authHeader) {
+      if (isOnline() && canSend) {
         const folder = (get(folders) || []).find((f) => sameFolderPath(f.path, folderPath));
         const expected = Number.isFinite(folder?.serverCount) ? Number(folder.serverCount) : 0;
         const maxPasses = Math.ceil(expected / RECONCILE_PAGE_SIZE) + 5;
         for (let pass = 0; pass < maxPasses; pass += 1) {
           let list: Array<Record<string, unknown>>;
           try {
-            const res = await Remote.request(
-              'MessageList',
+            const res = await requireMailBackend(account).requestMessageList(
               {
                 folder: folderPath,
                 is_unread: true,
@@ -4153,7 +4159,7 @@ const createMailboxStore = () => {
                 raw: false,
                 attachments: false,
               },
-              { method: 'GET', pathOverride: '/v1/messages', timeout: 60_000, authHeader },
+              { timeout: 60_000 },
             );
             list = extractMessageList('main', res);
           } catch (err) {
@@ -4218,8 +4224,8 @@ const createMailboxStore = () => {
    */
   const enumerateFolderMessages = async (folderPath: string, account: string) => {
     const PAGE_SIZE = 250;
-    const authHeader = getAuthHeaderForAccount(account);
-    if (!authHeader) throw new Error('account_switched');
+    const backend = getMailBackend(account);
+    if (!backend || !backend.isReady()) throw new Error('account_switched');
     const cached = await db.messages
       .where('[account+folder]')
       .equals([account, folderPath])
@@ -4230,8 +4236,7 @@ const createMailboxStore = () => {
       cached: cached || [],
       pageSize: PAGE_SIZE,
       fetchPage: async (page) => {
-        const res = await Remote.request(
-          'MessageList',
+        const res = await backend.requestMessageList(
           // Only ids and flags are needed: lightweight keeps the server from
           // rebuilding and parsing every message of every page of the folder.
           {
@@ -4242,7 +4247,7 @@ const createMailboxStore = () => {
             raw: false,
             attachments: false,
           },
-          { method: 'GET', pathOverride: '/v1/messages', timeout: 60_000, authHeader },
+          { timeout: 60_000 },
         );
         return extractMessageList('main', res);
       },
@@ -4276,10 +4281,12 @@ const createMailboxStore = () => {
 
       // Delete from server in parallel batches, as the account this started
       // for even if another is switched to meanwhile.
-      const authHeader = getAuthHeaderForAccount(account);
-      if (!authHeader) return { success: false, count: 0, error: 'Account changed' };
+      const backend = getMailBackend(account);
+      if (!backend || !backend.isReady()) {
+        return { success: false, count: 0, error: 'Account changed' };
+      }
       for (const msg of folderMessages) noteUnreadMove(account, msg, null);
-      const CONCURRENCY = 8;
+      const CONCURRENCY = capabilitiesFor(account).changesAtOnce;
       let successCount = 0;
       let failCount = 0;
 
@@ -4289,15 +4296,7 @@ const createMailboxStore = () => {
           chunk.map(async (msg) => {
             const apiId = getMessageApiId(msg);
             if (!apiId) throw new Error('No API ID');
-            await Remote.request(
-              'MessageDelete',
-              {},
-              {
-                method: 'DELETE',
-                pathOverride: `/v1/messages/${encodeURIComponent(apiId)}?permanent=1`,
-                authHeader,
-              },
-            );
+            await backend.deleteMessage(apiId, { permanent: true });
             return msg.id;
           }),
         );
@@ -4503,6 +4502,7 @@ const createMailboxStore = () => {
       addPendingDeletes,
       projectRows,
       revertFailedMutation,
+      applyIdRemap,
     },
   };
 };

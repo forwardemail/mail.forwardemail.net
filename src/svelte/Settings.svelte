@@ -142,6 +142,9 @@
   import LabelModal from './components/LabelModal.svelte';
   import GetStartedCard from './components/GetStartedCard.svelte';
   import CatchallPasswordsCard from './components/CatchallPasswordsCard.svelte';
+  import OutgoingServerCard from './components/OutgoingServerCard.svelte';
+  import { capabilitiesFor } from '../backends/capabilities';
+  import { imapSettingsFor } from '../backends/imap-account';
   import PushNotificationSettings from './components/PushNotificationSettings.svelte';
   import { hasWebPushKey } from '../utils/web-push.js';
   import NewMailNotificationSettings from './components/NewMailNotificationSettings.svelte';
@@ -917,10 +920,12 @@
       getEffectiveSettingValue('block_remote_images', { account: currentAcct }),
     );
     trustedImageSenders = readTrustedImageSenders(currentAcct);
+    // No default for an account on a custom mail server: nothing of it goes
+    // to Forward Email unless the user types that address in.
     spamReportAddress =
       String(
         getEffectiveSettingValue('spam_report_address', { account: currentAcct }) || '',
-      ).trim() || DEFAULT_SPAM_REPORT_ADDRESS;
+      ).trim() || (imapSettingsFor(currentAcct) ? '' : DEFAULT_SPAM_REPORT_ADDRESS);
     spamReportDelete =
       getEffectiveSettingValue('spam_report_delete', { account: currentAcct }) === true;
     notifyAppUpdates = getEffectiveSettingValue('notify_app_updates') !== false;
@@ -1414,16 +1419,22 @@
 
   const saveSpamReportAddress = async () => {
     const trimmed = spamReportAddress.trim();
-    if (!isValidReportAddress(trimmed)) {
+    // On a custom mail server an empty address is a real choice: report to nobody.
+    const none = onCustomServer && !trimmed;
+    if (!none && !isValidReportAddress(trimmed)) {
       toasts?.show?.('Enter a valid email address for spam reports', 'error');
       return;
     }
     try {
       // Store the default as empty so future default changes apply automatically.
-      const stored = trimmed === DEFAULT_SPAM_REPORT_ADDRESS ? '' : trimmed;
+      // A custom mail server has no default, so its address is stored as typed.
+      const stored = !onCustomServer && trimmed === DEFAULT_SPAM_REPORT_ADDRESS ? '' : trimmed;
       await setSettingValue('spam_report_address', stored, { account: getAccountId() });
       spamReportAddress = trimmed;
-      toasts?.show?.(`Spam reports will be sent to ${trimmed}`, 'success');
+      toasts?.show?.(
+        none ? 'Spam will not be reported to anyone' : `Spam reports will be sent to ${trimmed}`,
+        'success',
+      );
     } catch (err) {
       showMutationError(err, 'Failed to save spam report address');
     }
@@ -1444,7 +1455,7 @@
   };
 
   const resetSpamReportAddress = async () => {
-    spamReportAddress = DEFAULT_SPAM_REPORT_ADDRESS;
+    spamReportAddress = onCustomServer ? '' : DEFAULT_SPAM_REPORT_ADDRESS;
     await saveSpamReportAddress();
   };
 
@@ -2277,8 +2288,9 @@
     }
   };
 
-  const sections = [
+  const allSections = [
     { id: 'general', label: 'General' },
+    { id: 'server', label: 'Mail Server' },
     { id: 'appearance', label: 'Appearance' },
     { id: 'privacy', label: 'Privacy & Security' },
     { id: 'folders', label: 'Folders & Labels' },
@@ -2289,7 +2301,77 @@
     { id: 'shortcuts', label: 'Keyboard Shortcuts' },
     { id: 'help', label: 'About & Help' },
   ];
+
+  // What this account's server offers. An account on a custom IMAP server has
+  // no filters, calendar, storage quota or push service to configure.
+  const accountCapabilities = $derived(capabilitiesFor($currentAccount || aliasEmail));
+  // The account's own mail server, when it is not Forward Email's. Everything
+  // about that server is gathered in one section, and the cards that only
+  // mean something for a Forward Email account are left out.
+  const customServer = $derived(imapSettingsFor($currentAccount || aliasEmail));
+  const onCustomServer = $derived(Boolean(customServer));
+  const sections = $derived(
+    allSections.filter(
+      (sec) =>
+        (sec.id !== 'server' || onCustomServer) &&
+        (sec.id !== 'filters' || accountCapabilities.filters) &&
+        (sec.id !== 'calendar' || accountCapabilities.calendar),
+    ),
+  );
+  // A link or an account switch can land on a section this account lacks.
+  $effect(() => {
+    if (!sections.some((sec) => sec.id === section)) section = 'general';
+  });
 </script>
+
+{#snippet spamReportingCard()}
+  <Card.Root>
+    <Card.Header>
+      <Card.Title>Spam reporting</Card.Title>
+      <Card.Description>
+        {onCustomServer
+          ? 'What the Report spam action does with a message.'
+          : 'Where the Report spam action sends reported emails.'}
+      </Card.Description>
+    </Card.Header>
+    <Card.Content class="space-y-4">
+      <div class="flex gap-2">
+        <Input
+          type="email"
+          placeholder={onCustomServer
+            ? 'No address: report to nobody'
+            : DEFAULT_SPAM_REPORT_ADDRESS}
+          bind:value={spamReportAddress}
+        />
+        <Button variant="ghost" onclick={saveSpamReportAddress}>Save</Button>
+        {#if onCustomServer ? spamReportAddress.trim() : spamReportAddress.trim() !== DEFAULT_SPAM_REPORT_ADDRESS}
+          <Button variant="ghost" onclick={resetSpamReportAddress}>
+            {onCustomServer ? 'Clear' : 'Reset'}
+          </Button>
+        {/if}
+      </div>
+      {#if onCustomServer}
+        <p class="text-sm text-muted-foreground">
+          Choosing <strong>Report spam</strong> on a message moves it to your {junkFolderLabel}
+          folder, which is what most mail servers learn from. Nothing is sent to Forward Email or anyone
+          else. If your mail provider has an address for spam reports, enter it here and the original
+          email is also forwarded there through your own outgoing server, with no copy kept in Sent.
+        </p>
+      {:else}
+        <p class="text-sm text-muted-foreground">
+          Choosing <strong>Report spam</strong> on a message forwards the original email (including
+          full headers) as an attachment to this address, then moves the message to your {junkFolderLabel}
+          folder. Reports go to {DEFAULT_SPAM_REPORT_ADDRESS} by default, which helps Forward Email improve
+          spam detection for everyone. No copy is kept in your Sent folder.
+        </p>
+      {/if}
+      <label class="flex items-center gap-3">
+        <Checkbox bind:checked={spamReportDelete} onCheckedChange={toggleSpamReportDelete} />
+        <span>Delete reported messages instead of moving them to {junkFolderLabel}</span>
+      </label>
+    </Card.Content>
+  </Card.Root>
+{/snippet}
 
 <div
   class="flex h-14 items-center gap-3 px-4"
@@ -2440,10 +2522,19 @@
           </Card.Content>
         </Card.Root>
 
-        <CatchallPasswordsCard onToast={(message, type) => toasts?.show?.(message, type)} />
+        {#if !onCustomServer}
+          <CatchallPasswordsCard onToast={(message, type) => toasts?.show?.(message, type)} />
+        {/if}
+
+        {#if $currentAccount && !onCustomServer}
+          <OutgoingServerCard
+            account={$currentAccount}
+            onToast={(message, type) => toasts?.show?.(message, type)}
+          />
+        {/if}
 
         <div bind:this={notificationsAnchor} class="scroll-mt-4 space-y-6">
-          {#if isTauriMobile || isTauriMacOS || (!isTauri && hasWebPushKey())}
+          {#if accountCapabilities.serverPush && (isTauriMobile || isTauriMacOS || (!isTauri && hasWebPushKey()))}
             <PushNotificationSettings {toasts} {openExternal} />
           {/if}
 
@@ -2469,29 +2560,31 @@
           </Card.Root>
         </div>
 
-        <!-- In-app account deletion (App Store 5.1.1(v) / Google Play). Distinct
+        {#if !onCustomServer}
+          <!-- In-app account deletion (App Store 5.1.1(v) / Google Play). Distinct
              from "Sign out", which only removes the account from this device. -->
-        <Card.Root>
-          <Card.Header>
-            <Card.Title class="flex items-center gap-2">
-              <AlertTriangle class="h-5 w-5 text-destructive" />
-              Delete account
-            </Card.Title>
-          </Card.Header>
-          <Card.Content>
-            <p class="mb-4 text-sm text-muted-foreground">
-              Permanently delete your Forward Email account and all of its data. This opens your
-              account settings on forwardemail.net to confirm and complete deletion. This is
-              different from signing out and cannot be undone.
-            </p>
-            <Button variant="destructive" onclick={() => openExternal(ACCOUNT_DELETE_URL)}>
-              <ExternalLink class="mr-2 h-4 w-4" />
-              Delete account
-            </Button>
-          </Card.Content>
-        </Card.Root>
+          <Card.Root>
+            <Card.Header>
+              <Card.Title class="flex items-center gap-2">
+                <AlertTriangle class="h-5 w-5 text-destructive" />
+                Delete account
+              </Card.Title>
+            </Card.Header>
+            <Card.Content>
+              <p class="mb-4 text-sm text-muted-foreground">
+                Permanently delete your Forward Email account and all of its data. This opens your
+                account settings on forwardemail.net to confirm and complete deletion. This is
+                different from signing out and cannot be undone.
+              </p>
+              <Button variant="destructive" onclick={() => openExternal(ACCOUNT_DELETE_URL)}>
+                <ExternalLink class="mr-2 h-4 w-4" />
+                Delete account
+              </Button>
+            </Card.Content>
+          </Card.Root>
+        {/if}
 
-        {#if storageTotalValue > 0}
+        {#if accountCapabilities.quota && storageTotalValue > 0}
           <Card.Root>
             <Card.Header>
               <Card.Title>Storage</Card.Title>
@@ -2512,8 +2605,9 @@
                   {formatStorageValue(storageUsedValue)} of {formatStorageValue(storageTotalValue)}
                 </div>
               </div>
-              <!-- App Store and Google Play builds may not link to outside purchases. -->
-              {#if !hidePurchaseLinks}
+              <!-- App Store and Google Play builds may not link to outside purchases.
+                   A custom mail server's storage is not Forward Email's to sell. -->
+              {#if !hidePurchaseLinks && accountCapabilities.storagePlan}
                 <Button
                   variant="outline"
                   class="mt-4"
@@ -3112,6 +3206,21 @@
               <Button onclick={() => (pairingScannerOpen = true)}>Scan a code</Button>
             </Card.Content>
           </Card.Root>
+        {:else if !isTauriMobile && onCustomServer}
+          <!-- Pairing hands an account to the phone apps, which cannot use a
+               custom mail server yet. Its keys and settings alone would land
+               on a phone with no account to go with them. -->
+          <Card.Root>
+            <Card.Header>
+              <Card.Title>Sync to another device</Card.Title>
+            </Card.Header>
+            <Card.Content>
+              <p class="text-sm text-muted-foreground">
+                Not available for an account on a custom mail server yet. The phone apps can only
+                sign in to Forward Email accounts.
+              </p>
+            </Card.Content>
+          </Card.Root>
         {:else if !isTauriMobile}
           <DeviceSyncCard account={aliasEmail || Local.get('email') || ''} />
         {/if}
@@ -3184,38 +3293,54 @@
           </Card.Content>
         </Card.Root>
 
-        <Card.Root>
-          <Card.Header>
-            <Card.Title>Spam reporting</Card.Title>
-            <Card.Description>Where the Report spam action sends reported emails.</Card.Description>
-          </Card.Header>
-          <Card.Content class="space-y-4">
-            <div class="flex gap-2">
-              <Input
-                type="email"
-                placeholder={DEFAULT_SPAM_REPORT_ADDRESS}
-                bind:value={spamReportAddress}
-              />
-              <Button variant="ghost" onclick={saveSpamReportAddress}>Save</Button>
-              {#if spamReportAddress.trim() !== DEFAULT_SPAM_REPORT_ADDRESS}
-                <Button variant="ghost" onclick={resetSpamReportAddress}>Reset</Button>
-              {/if}
-            </div>
-            <p class="text-sm text-muted-foreground">
-              Choosing <strong>Report spam</strong> on a message forwards the original email
-              (including full headers) as an attachment to this address, then moves the message to
-              your {junkFolderLabel} folder. Reports go to {DEFAULT_SPAM_REPORT_ADDRESS} by default, which
-              helps Forward Email improve spam detection for everyone. No copy is kept in your Sent folder.
-            </p>
-            <label class="flex items-center gap-3">
-              <Checkbox bind:checked={spamReportDelete} onCheckedChange={toggleSpamReportDelete} />
-              <span>Delete reported messages instead of moving them to {junkFolderLabel}</span>
-            </label>
-          </Card.Content>
-        </Card.Root>
+        {#if !onCustomServer}
+          {@render spamReportingCard()}
+        {/if}
       {/if}
 
-      {#if section === 'filters'}
+      {#if section === 'server' && customServer}
+        <Card.Root>
+          <Card.Header>
+            <Card.Title>Incoming mail (IMAP)</Card.Title>
+            <Card.Description>
+              This account's mail is read from its own server. Nothing from it is stored on or sent
+              to Forward Email.
+            </Card.Description>
+          </Card.Header>
+          <Card.Content>
+            <dl class="grid grid-cols-[auto_1fr] gap-x-6 gap-y-2 text-sm">
+              <dt class="text-muted-foreground">Server</dt>
+              <dd class="break-all">{customServer.host}</dd>
+              <dt class="text-muted-foreground">Port</dt>
+              <dd>{customServer.port}</dd>
+              <dt class="text-muted-foreground">Security</dt>
+              <dd>{customServer.security === 'starttls' ? 'STARTTLS' : 'TLS'}</dd>
+              <dt class="text-muted-foreground">Username</dt>
+              <dd class="break-all">{customServer.username}</dd>
+              <dt class="text-muted-foreground">Sign-in</dt>
+              <dd>
+                {customServer.auth === 'xoauth2' ? "The provider's sign-in page" : 'Password'}
+              </dd>
+            </dl>
+            <p class="mt-4 text-sm text-muted-foreground">
+              To change these, sign out of this account under General and sign in again. Settings
+              and labels for this account are kept on this device. Contacts, Calendar and Filters
+              are not available for it.
+            </p>
+          </Card.Content>
+        </Card.Root>
+
+        {#if $currentAccount}
+          <OutgoingServerCard
+            account={$currentAccount}
+            onToast={(message, type) => toasts?.show?.(message, type)}
+          />
+        {/if}
+
+        {@render spamReportingCard()}
+      {/if}
+
+      {#if section === 'filters' && accountCapabilities.filters}
         <FiltersSettings
           visible={$active}
           account={activeEmail || Local.get('email') || ''}
@@ -3494,7 +3619,7 @@
         </Card.Root>
       {/if}
 
-      {#if section === 'calendar'}
+      {#if section === 'calendar' && accountCapabilities.calendar}
         <Card.Root>
           <Card.Header>
             <Card.Title>Week</Card.Title>
@@ -3714,45 +3839,55 @@
           </Card.Content>
         </Card.Root>
 
-        <Card.Root>
-          <Card.Header>
-            <Card.Title>Mailbox Storage</Card.Title>
-            <Card.Description>Server-side storage used by this alias.</Card.Description>
-          </Card.Header>
-          <Card.Content class="space-y-4">
-            {#if storageTotalValue > 0}
-              <div class="space-y-2 text-sm">
-                <div>
-                  <strong>Used:</strong>
-                  {formatStorageValue(storageUsedValue)} / {formatStorageValue(storageTotalValue)} ({storagePercentValue()}%)
+        {#if accountCapabilities.quota}
+          <Card.Root>
+            <Card.Header>
+              <Card.Title>Mailbox Storage</Card.Title>
+              <Card.Description>
+                {onCustomServer
+                  ? 'Storage used on your mail server.'
+                  : 'Server-side storage used by this alias.'}
+              </Card.Description>
+            </Card.Header>
+            <Card.Content class="space-y-4">
+              {#if storageTotalValue > 0}
+                <div class="space-y-2 text-sm">
+                  <div>
+                    <strong>Used:</strong>
+                    {formatStorageValue(storageUsedValue)} / {formatStorageValue(storageTotalValue)} ({storagePercentValue()}%)
+                  </div>
+                  <div>
+                    <strong>Available:</strong>
+                    {formatStorageValue(storageTotalValue - storageUsedValue)}
+                  </div>
                 </div>
-                <div>
-                  <strong>Available:</strong>
-                  {formatStorageValue(storageTotalValue - storageUsedValue)}
+                <div class="h-2 w-full overflow-hidden bg-secondary">
+                  <div
+                    class="h-full bg-primary transition-all"
+                    style="width: {storagePercentValue()}%"
+                  ></div>
                 </div>
-              </div>
-              <div class="h-2 w-full overflow-hidden bg-secondary">
-                <div
-                  class="h-full bg-primary transition-all"
-                  style="width: {storagePercentValue()}%"
-                ></div>
-              </div>
-              {#if storagePercentValue() > 90}
-                <Alert.Root variant="destructive">
-                  <AlertTriangle class="h-4 w-4" />
-                  <!-- App Store and Google Play builds may not suggest buying more. -->
-                  <Alert.Description
-                    >{hidePurchaseLinks
-                      ? 'Mailbox storage almost full. Delete emails or empty Trash to free up space.'
-                      : 'Mailbox storage almost full! Consider upgrading your plan.'}</Alert.Description
-                  >
-                </Alert.Root>
+                {#if storagePercentValue() > 90}
+                  <Alert.Root variant="destructive">
+                    <AlertTriangle class="h-4 w-4" />
+                    <!-- App Store and Google Play builds may not suggest buying more. -->
+                    <Alert.Description
+                      >{hidePurchaseLinks || !accountCapabilities.storagePlan
+                        ? 'Mailbox storage almost full. Delete emails or empty Trash to free up space.'
+                        : 'Mailbox storage almost full! Consider upgrading your plan.'}</Alert.Description
+                    >
+                  </Alert.Root>
+                {/if}
+              {:else}
+                <p class="text-sm text-muted-foreground">
+                  {onCustomServer
+                    ? 'Your mail server does not report a storage limit.'
+                    : 'Storage information unavailable'}
+                </p>
               {/if}
-            {:else}
-              <p class="text-sm text-muted-foreground">Storage information unavailable</p>
-            {/if}
-          </Card.Content>
-        </Card.Root>
+            </Card.Content>
+          </Card.Root>
+        {/if}
 
         <Card.Root>
           <Card.Header>

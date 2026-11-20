@@ -48,6 +48,30 @@ describe('network-status', () => {
     });
   });
 
+  // With every account on a custom mail server, Forward Email is never the
+  // thing to ask whether the network is up.
+  describe('when no account is a Forward Email account', () => {
+    it('does not ask the Forward Email API, and does not take "offline" on trust', async () => {
+      vi.resetModules();
+      vi.doMock('../../src/backends/imap-account', () => ({ anyForwardEmailAccount: () => false }));
+      const custom = await import('../../src/utils/network-status');
+      try {
+        Object.defineProperty(Navigator.prototype, 'onLine', {
+          get: () => false,
+          configurable: true,
+        });
+        globalThis.fetch = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
+
+        expect(await custom.checkConnectivity({ force: true })).toBe(true);
+        expect(globalThis.fetch).not.toHaveBeenCalled();
+        expect(custom.isOnline()).toBe(true);
+      } finally {
+        custom.destroyNetworkStatus();
+        vi.doUnmock('../../src/backends/imap-account');
+      }
+    });
+  });
+
   describe('checkConnectivity()', () => {
     it('returns true immediately when navigator.onLine is true', async () => {
       Object.defineProperty(Navigator.prototype, 'onLine', {

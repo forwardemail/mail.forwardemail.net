@@ -1,8 +1,8 @@
 import { writable, derived, get } from 'svelte/store';
 import Dexie from 'dexie';
 import type { Message, PgpSignatureCheck } from '../types';
-import { Remote } from '../utils/remote';
 import { Local, Session, Accounts } from '../utils/storage';
+import { imapSettingsFor } from '../backends/imap-account';
 import { withDeadline } from '../utils/with-deadline';
 import { db } from '../utils/db';
 import { mailboxStore } from './mailboxStore';
@@ -59,9 +59,16 @@ import {
   queueMutation,
   supersedeQueuedMutations,
 } from '../utils/mutation-queue';
-import { getAuthHeaderForAccount } from '../utils/auth';
 import { getCatchallCredentialFor, listCatchallAddresses } from '../utils/catchall-credentials';
-import { flagChangeBody, labelChangeBody } from '../utils/message-changes';
+import {
+  getMailBackend,
+  requireMailBackend,
+  resetMailBackend,
+  type MailBackend,
+} from '../backends';
+import { closeMailAccount } from '../backends/imap-engine';
+import { closeSmtpAccount } from '../backends/smtp-engine';
+import { forgetAccessToken } from '../backends/oauth';
 import { config } from '../config';
 import { createInboxUpdater } from '../utils/websocket-updater';
 import { getWebSocketManager } from '../utils/websocket-manager.js';
@@ -531,18 +538,15 @@ const isMessageGone = (err) => err?.status === 404 || /not (found|exist)/i.test(
 // message still waiting in the offline queue would be sent after this one and
 // undo it, so that entry is dropped first. When the account has no usable
 // credentials right now the change is queued instead and this returns false.
-const sendMessageUpdate = async ({ account, apiId, type, body, payload }) => {
+// `send` makes the change on the account's mail backend.
+const sendMessageUpdate = async ({ account, apiId, type, send, payload }) => {
   await supersedeQueuedMutations({ account, messageIds: [apiId], type }).catch(() => []);
-  const authHeader = getAuthHeaderForAccount(account);
-  if (!authHeader) {
+  const backend = getMailBackend(account);
+  if (!backend || !backend.isReady()) {
     await queueMutation(type, payload, { account });
     return false;
   }
-  await Remote.request('MessageUpdate', body, {
-    method: 'PUT',
-    pathOverride: `/v1/messages/${encodeURIComponent(apiId)}`,
-    authHeader,
-  });
+  await send(backend);
   return true;
 };
 
@@ -621,7 +625,11 @@ export const toggleRead = async (msg) => {
       account,
       apiId,
       type: 'toggleRead',
-      body: flagChangeBody(newFlags, isUnread ? { add: ['\\Seen'] } : { remove: ['\\Seen'] }),
+      send: (backend: MailBackend) =>
+        backend.changeFlags(apiId, {
+          flags: newFlags,
+          ...(isUnread ? { add: ['\\Seen'] } : { remove: ['\\Seen'] }),
+        }),
       payload: mutationPayload,
     });
     // The server has the change, so the next unread count includes it
@@ -716,10 +724,11 @@ export const toggleStar = async (msg) => {
       account,
       apiId,
       type: 'toggleStar',
-      body: flagChangeBody(
-        Array.from(newFlags),
-        isStarred ? { remove: ['\\Flagged'] } : { add: ['\\Flagged'] },
-      ),
+      send: (backend: MailBackend) =>
+        backend.changeFlags(apiId, {
+          flags: newFlagsArr,
+          ...(isStarred ? { remove: ['\\Flagged'] } : { add: ['\\Flagged'] }),
+        }),
       payload: mutationPayload,
     });
   } catch (err) {
@@ -964,13 +973,9 @@ const showDelayedNotice = (message, delayMs = 600) => {
  * the caller decides what to keep out of it.
  */
 const fetchMessageDetail = async (msgId, folder) => {
-  const detailRes = await Remote.request(
-    'Message',
-    {},
-    {
-      method: 'GET',
-      pathOverride: `/v1/messages/${encodeURIComponent(msgId)}?folder=${encodeURIComponent(folder || '')}&raw=false`,
-    },
+  const detailRes = await requireMailBackend(Local.get('email') || 'default').requestMessage(
+    msgId,
+    { folder: folder || '', raw: false },
   );
   return detailRes?.Result || detailRes;
 };
@@ -1485,7 +1490,8 @@ export const contextLabel = async (msgOrLabel, labelMaybe, options = {}) => {
       account,
       apiId,
       type: 'label',
-      body: labelChangeBody(nextLabels, currentLabels),
+      send: (backend: MailBackend) =>
+        backend.changeLabels(apiId, { labels: nextLabels, previous: currentLabels }),
       payload: mutationPayload,
     });
     if (!silent) {
@@ -1716,11 +1722,7 @@ export const loadLabels = async (options = {}) => {
           const folder = folderList[idx];
           if (!folder?.id) continue;
           try {
-            const detail = await Remote.request(
-              'FolderGet',
-              {},
-              { method: 'GET', pathOverride: `/v1/folders/${encodeURIComponent(folder.id)}` },
-            );
+            const detail = await requireMailBackend(initialAccount).getFolder(folder.id);
             details[idx] = { folder, flags: detail?.flags || detail?.Flags || [] };
           } catch (err) {
             warn('loadLabels folder detail failed', err);
@@ -2086,21 +2088,41 @@ export const seedStorageStats = (requestedAccount?: string | null) => {
   storageTotal.set(0);
 };
 
+const customServerStorage = async (account: string) => {
+  // Only the IMAP backend can say; asked for by what it offers, not its class.
+  const backend = getMailBackend(account) as
+    | (MailBackend & { storage?: () => Promise<{ used: number; total: number } | null> })
+    | null;
+  return backend?.isReady() && typeof backend.storage === 'function' ? backend.storage() : null;
+};
+
 export const updateStorageStats = async (requestedAccount, { force = false } = {}) => {
   const account = requestedAccount || Local.get('email') || 'default';
   try {
+    // An account on a custom mail server asks that server (the IMAP QUOTA
+    // extension). It has no Forward Email account to ask.
+    const onCustomServer = Boolean(imapSettingsFor(account));
+    const custom = onCustomServer ? await customServerStorage(account) : null;
     // Get storage from Account endpoint (same as old MailboxView)
-    const res = await fetchAccountData({ force });
+    const res = onCustomServer ? null : await fetchAccountData({ force });
     // Verify account hasn't switched while the request was in-flight
     const activeNow = Local.get('email') || 'default';
     if (activeNow !== account) return;
-    const used = res?.storage_used || res?.storage_used_by_aliases || 0;
+    const used = custom?.used || res?.storage_used || res?.storage_used_by_aliases || 0;
     const total =
+      custom?.total ||
       res?.storage_quota ||
       res?.max_quota_per_alias ||
       res?.max_quota ||
       res?.max_quota_per_aliases ||
       0;
+    if (onCustomServer && !total) {
+      // The server sets no limit (or stopped saying): no meter, and no
+      // figure left over from when it did.
+      storageUsed.set(0);
+      storageTotal.set(0);
+      Local.remove?.(`${STORAGE_STATS_PREFIX}${account}`);
+    }
     if (total) {
       storageUsed.set(used);
       storageTotal.set(total);
@@ -2327,6 +2349,12 @@ export const signOut = async () => {
     // finish under their own identity; a signed-out account's header must be
     // dropped explicitly or it stays usable for the worker's lifetime.
     revokeSyncWorkerAuth(currentEmail);
+    // An account on a custom mail server: close its connection, which also
+    // drops its password from the mail engine's memory.
+    void closeMailAccount(currentEmail);
+    void closeSmtpAccount(currentEmail);
+    forgetAccessToken(currentEmail);
+    resetMailBackend(currentEmail);
     // Search workers write their index on a debounce and on flush. Make them
     // forget this account first, or a later write puts back the index that
     // Accounts.remove() deletes.
@@ -2855,16 +2883,11 @@ const fetchRawOriginal = async (msg) => {
   if (!apiId) return null;
   const folder = msg?.folder_path || msg?.folder || msg?.path || '';
   try {
-    const res = await Remote.request(
-      'Message',
-      {},
-      {
-        method: 'GET',
-        pathOverride: `/v1/messages/${encodeURIComponent(apiId)}?folder=${encodeURIComponent(folder || '')}&raw=true`,
-        // Server returns raw RFC822 text (message/rfc822), not JSON
-        responseAs: 'text',
-      },
-    );
+    const res = await requireMailBackend(Local.get('email') || 'default').requestMessage(apiId, {
+      folder: folder || '',
+      raw: true,
+      responseAs: 'text',
+    });
     return res?.Result || res || null;
   } catch (err) {
     warn('[viewOriginal] raw fetch failed', err);
@@ -2915,16 +2938,11 @@ const fetchEmlOriginal = async (msg) => {
   if (!apiId) return null;
   const folder = msg?.folder_path || msg?.folder || msg?.path || '';
   try {
-    const res = await Remote.request(
-      'Message',
-      {},
-      {
-        method: 'GET',
-        pathOverride: `/v1/messages/${encodeURIComponent(apiId)}?folder=${encodeURIComponent(folder || '')}&eml=true`,
-        // Server returns raw RFC822 text (message/rfc822), not JSON
-        responseAs: 'text',
-      },
-    );
+    const res = await requireMailBackend(Local.get('email') || 'default').requestMessage(apiId, {
+      folder: folder || '',
+      eml: true,
+      responseAs: 'text',
+    });
     return res?.Result || res || null;
   } catch (err) {
     warn('[downloadOriginal] eml fetch failed', err);
@@ -3018,8 +3036,14 @@ export const downloadOriginal = async (msg) => {
   }
 };
 
+/**
+ * Where Report spam sends the message, or '' when it is sent nowhere (an
+ * account on a custom mail server with no address set).
+ */
 export const getSpamReportAddress = () =>
-  resolveSpamReportAddress(getEffectiveSettingValue('spam_report_address'));
+  resolveSpamReportAddress(getEffectiveSettingValue('spam_report_address'), {
+    customServer: Boolean(imapSettingsFor(Local.get('email'))),
+  });
 
 /** Reported spam moves to Junk unless the user opted to delete it instead. */
 export const shouldDeleteReportedSpam = () =>
@@ -3038,6 +3062,8 @@ export const reportSpamMessage = async (msg) => {
   if (!target) return null;
 
   const address = getSpamReportAddress();
+  // Nowhere to report to: the caller still moves the message to Junk.
+  if (!address) return { address: null };
 
   // Prefer the raw RFC822 source so the report keeps full headers.
   const content = await getMessageContent(target).catch(() => null);

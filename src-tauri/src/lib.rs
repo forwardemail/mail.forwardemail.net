@@ -7,6 +7,8 @@ mod browser_override;
 #[cfg(desktop)]
 mod device_key;
 mod diagnostics;
+#[cfg(desktop)]
+mod mail;
 mod redaction;
 mod renderer_watchdog;
 
@@ -1295,6 +1297,56 @@ pub fn run() {
             is_default_mailto_handler,
             #[cfg(desktop)]
             set_default_mailto_handler,
+            #[cfg(desktop)]
+            mail::mail_enabled,
+            #[cfg(desktop)]
+            mail::mail_autoconfig,
+            #[cfg(desktop)]
+            mail::mail_test,
+            #[cfg(desktop)]
+            mail::mail_open,
+            #[cfg(desktop)]
+            mail::mail_close,
+            #[cfg(desktop)]
+            mail::imap_folders,
+            #[cfg(desktop)]
+            mail::imap_rows,
+            mail::imap_rows_for,
+            mail::imap_search,
+            mail::mail_watch,
+            mail::oauth_providers,
+            mail::oauth_sign_in,
+            mail::oauth_refresh,
+            #[cfg(desktop)]
+            mail::imap_row,
+            #[cfg(desktop)]
+            mail::imap_raw,
+            mail::imap_message,
+            mail::imap_part,
+            #[cfg(desktop)]
+            mail::imap_storage,
+            #[cfg(desktop)]
+            mail::imap_changes,
+            #[cfg(desktop)]
+            mail::imap_delete,
+            #[cfg(desktop)]
+            mail::imap_store_many,
+            #[cfg(desktop)]
+            mail::imap_move_many,
+            #[cfg(desktop)]
+            mail::imap_delete_many,
+            #[cfg(desktop)]
+            mail::imap_append,
+            #[cfg(desktop)]
+            mail::imap_create_folder,
+            #[cfg(desktop)]
+            mail::imap_rename_folder,
+            #[cfg(desktop)]
+            mail::imap_delete_folder,
+            mail::smtp_test,
+            mail::smtp_open,
+            mail::smtp_close,
+            mail::smtp_send,
             renderer_watchdog::renderer_heartbeat,
             renderer_watchdog::renderer_watchdog_status,
             #[cfg(target_os = "macos")]
@@ -1310,6 +1362,7 @@ pub fn run() {
             // Set up native menu bar and tray icon on desktop
             #[cfg(desktop)]
             {
+                app.manage(mail::MailState::default());
                 let menu = setup_menu(app)?;
                 app.set_menu(menu)?;
 

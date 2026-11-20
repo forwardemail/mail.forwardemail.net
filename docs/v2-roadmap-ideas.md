@@ -4,6 +4,8 @@ Ideas for after the current release line, with enough context to pick one up. Th
 
 ## 1. Backend interface: open protocols (IMAP, SMTP, CalDAV, CardDAV, JMAP)
 
+> The mail part of this section (IMAP and SMTP) now has a full design in [Custom IMAP and SMTP Servers: Architecture](custom-imap-smtp-architecture.md). Where the two disagree, that document is the current one.
+
 **Goal.** Let a user connect any standards-based mail server, not only the Forward Email API. The app is open source, and supporting the open protocols is what makes it a client people can use with their own servers. It is also the foundation for agent mode (section 2).
 
 **Where the code is today.**

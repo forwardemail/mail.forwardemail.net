@@ -74,6 +74,19 @@ function safeParamValue(value: string): string {
 }
 
 /**
+ * The filename parameter of Content-Disposition. A name that is not plain
+ * ASCII is written the RFC 2231 way, so no header line carries raw UTF-8.
+ */
+function filenameParam(filename: string): string {
+  if (/^[\x20-\x7E]*$/.test(filename)) return `filename="${filename}"`;
+  const encoded = encodeURIComponent(filename).replace(
+    /['()*]/g,
+    (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+  return `filename*=UTF-8''${encoded}`;
+}
+
+/**
  * Encode a header value per RFC 2047 when it is not plain ASCII.
  *
  * Without this, an accented name or an emoji subject would be emitted as raw
@@ -168,32 +181,69 @@ export function buildInnerMime(parts: MessageParts): string {
     return hasHtml ? htmlPart() : textPart();
   };
 
-  if (!attachments.length) return bodySection();
-
-  const mixed = makeBoundary('mix');
-  const chunks: string[] = [`Content-Type: multipart/mixed; boundary="${mixed}"`, '', `--${mixed}`];
-  chunks.push(bodySection());
-
-  for (const att of attachments) {
+  const cidOf = (att: MimeAttachment) => stripHeaderControls(att.cid || '').replace(/[<>\s]/g, '');
+  const attachmentPart = (att: MimeAttachment): string => {
     const filename = safeParamValue(att.filename || att.name || '') || 'attachment';
     const type = safeContentType(att.contentType);
-    const cid = stripHeaderControls(att.cid || '').replace(/[<>\s]/g, '');
-    chunks.push(`--${mixed}`);
-    chunks.push(
-      [
-        `Content-Type: ${type}; name="${filename}"`,
-        'Content-Transfer-Encoding: base64',
-        cid ? `Content-ID: <${cid}>` : null,
-        `Content-Disposition: ${cid ? 'inline' : 'attachment'}; filename="${filename}"`,
-        '',
-        wrapBase64(att.content || ''),
-      ]
-        .filter((line) => line !== null)
-        .join(CRLF),
+    const cid = cidOf(att);
+    return [
+      `Content-Type: ${type}; name="${encodeHeaderValue(filename)}"`,
+      'Content-Transfer-Encoding: base64',
+      cid ? `Content-ID: <${cid}>` : null,
+      `Content-Disposition: ${cid ? 'inline' : 'attachment'}; ${filenameParam(filename)}`,
+      '',
+      wrapBase64(att.content || ''),
+    ]
+      .filter((line) => line !== null)
+      .join(CRLF);
+  };
+  const multipart = (subtype: string, label: string, sections: string[], param = ''): string => {
+    const boundary = makeBoundary(label);
+    const chunks = [`Content-Type: multipart/${subtype}; boundary="${boundary}"${param}`, ''];
+    for (const section of sections) chunks.push(`--${boundary}`, section);
+    chunks.push(`--${boundary}--`);
+    return chunks.join(CRLF);
+  };
+
+  // A picture the HTML shows by its Content-ID travels with the body in a
+  // multipart/related part (RFC 2387). Left among the attachments, Gmail and
+  // Outlook list it as a file as well, and some clients do not draw it at
+  // all. A part with a Content-ID the HTML never names stays an attachment:
+  // inside multipart/related a client is free to hide it.
+  const html = hasHtml ? String(parts.html).toLowerCase() : '';
+  const shownInBody = (att: MimeAttachment): boolean => {
+    const cid = cidOf(att).toLowerCase();
+    if (!cid || !html) return false;
+    // The whole id, not the start of a longer one.
+    return [cid, encodeURIComponent(cid).toLowerCase()].some((name) => {
+      for (
+        let at = html.indexOf(`cid:${name}`);
+        at >= 0;
+        at = html.indexOf(`cid:${name}`, at + 1)
+      ) {
+        const next = html[at + 4 + name.length];
+        if (next === undefined || /["'\s)>&]/.test(next)) return true;
+      }
+      return false;
+    });
+  };
+  const embedded = attachments.filter(shownInBody);
+  const attached = attachments.filter((att) => !shownInBody(att));
+
+  let body = bodySection();
+  if (embedded.length) {
+    // The start part is the first one, which is the default, so only the
+    // type parameter is needed.
+    const rootType = hasText ? 'multipart/alternative' : 'text/html';
+    body = multipart(
+      'related',
+      'rel',
+      [body, ...embedded.map(attachmentPart)],
+      `; type="${rootType}"`,
     );
   }
-  chunks.push(`--${mixed}--`);
-  return chunks.join(CRLF);
+  if (!attached.length) return body;
+  return multipart('mixed', 'mix', [body, ...attached.map(attachmentPart)]);
 }
 
 /**

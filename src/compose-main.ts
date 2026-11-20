@@ -27,6 +27,8 @@ import { installPasteNormalizer } from './utils/paste-normalizer';
 import { installRuntimeErrorNotifier } from './utils/runtime-error-notifier';
 import { initDbCryptoBridge, setExternalIdbKey } from './utils/db-crypto-bridge.js';
 import { listenForComposeLockState } from './utils/compose-crypto-sync';
+import { setOutboxSenders } from './backends/smtp-account';
+import { setDraftRelay } from './utils/draft-service';
 import {
   isLockEnabled,
   isUnlocked,
@@ -178,6 +180,58 @@ if (composeRoot) {
   installRuntimeErrorNotifier(toasts);
 }
 
+// Long enough for a draft with attachments to upload on a slow line.
+const DRAFT_SAVE_WAIT_MS = 60_000;
+const draftSaves = new Map<string, (error: string | null) => void>();
+let draftAnswers: Promise<unknown> | null = null;
+
+/**
+ * Ask the main window to save a draft this window wrote to the database, and
+ * wait for it to say how that went. Only the main window may use the mail
+ * engine (see utils/draft-service.js, setDraftRelay).
+ */
+async function saveDraftInMainWindow(account: string, id: string): Promise<void> {
+  const { listen, emit } = await import('@tauri-apps/api/event');
+  const { getCurrentWindow } = await import('@tauri-apps/api/window');
+  draftAnswers ||= listen('compose:draft-saved', (event: { payload: unknown }) => {
+    const { requestId, error } = (event.payload || {}) as { requestId?: string; error?: string };
+    const settle = requestId ? draftSaves.get(requestId) : null;
+    if (settle) settle(error || null);
+  });
+  await draftAnswers;
+  const requestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const answer = new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      draftSaves.delete(requestId);
+      reject(
+        Object.assign(new Error('The main window did not answer. The draft is on this device.'), {
+          unanswered: true,
+        }),
+      );
+    }, DRAFT_SAVE_WAIT_MS);
+    draftSaves.set(requestId, (error) => {
+      clearTimeout(timer);
+      draftSaves.delete(requestId);
+      if (error) reject(new Error(error));
+      else resolve();
+    });
+  });
+  await emit('compose:save-draft', { label: getCurrentWindow().label, requestId, account, id });
+  await answer;
+}
+
+function removeDraftInMainWindow(account: string, id: string): void {
+  void (async () => {
+    try {
+      const { emit } = await import('@tauri-apps/api/event');
+      const { getCurrentWindow } = await import('@tauri-apps/api/window');
+      await emit('compose:remove-draft', { label: getCurrentWindow().label, account, id });
+    } catch {
+      // The draft stays on the server and can be deleted from Drafts.
+    }
+  })();
+}
+
 /**
  * Set up Tauri event handshake with the main window.
  *
@@ -200,14 +254,36 @@ async function initFromTauriEvent() {
       if (initialized) return;
       initialized = true;
 
-      const { action, prefill, auth, sentFolder, undoSendDelay, idbKey } = event.payload as {
+      const {
+        action,
+        prefill,
+        auth,
+        sentFolder,
+        undoSendDelay,
+        idbKey,
+        outboxSenders,
+        engineAccounts,
+      } = event.payload as {
         action?: string;
         prefill?: Record<string, unknown>;
         auth?: Record<string, string>;
         sentFolder?: string;
         undoSendDelay?: string;
         idbKey?: string;
+        outboxSenders?: string[];
+        engineAccounts?: string[];
       };
+
+      setOutboxSenders(outboxSenders);
+      setDraftRelay(
+        Array.isArray(engineAccounts) && engineAccounts.length
+          ? {
+              accounts: engineAccounts,
+              save: saveDraftInMainWindow,
+              remove: removeDraftInMainWindow,
+            }
+          : null,
+      );
 
       // App Lock: the main window may pass its IDB subkey so drafts and the
       // outbox written here are sealed like everywhere else. Without it this

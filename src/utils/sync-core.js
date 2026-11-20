@@ -338,6 +338,9 @@ export function createSyncCore({ postMessage, fetch, indexedDB }) {
     }
     // The tab sends these with the account's current credentials.
     if (!apiBase || !authHeader) return { result: 'skip' };
+    // This replays over the REST API. A change queued for another kind of
+    // server is left for the tab, which sends it through that account's backend.
+    if (mutation.backend && mutation.backend !== 'forwardemail') return { result: 'skip' };
 
     const base = apiBase.endsWith('/') ? apiBase.slice(0, -1) : apiBase;
     const headers = {

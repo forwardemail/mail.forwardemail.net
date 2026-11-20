@@ -15,6 +15,7 @@
  */
 import { get, writable, type Writable } from 'svelte/store';
 import { Remote } from '../utils/remote';
+import { requireMailBackend } from '../backends';
 import { Local } from '../utils/storage';
 import { getAuthHeaderForAccount } from '../utils/auth';
 import { canonicalizeLabelKeyword } from '../utils/labels';
@@ -245,13 +246,12 @@ const isAbort = (err: unknown, signal?: AbortSignal) =>
 /** One Inbox page, lightweight when the server keeps addresses on those. */
 async function fetchInboxPage(
   page: number,
-  auth: { authHeader?: string },
+  account: string,
   signal: AbortSignal | undefined,
   extra: Record<string, unknown> = {},
 ): Promise<ExistingMessage[]> {
   const request = (lightweight: boolean) =>
-    Remote.request(
-      'MessageList',
+    requireMailBackend(account).requestMessageList(
       {
         folder: EXISTING_FOLDER,
         page,
@@ -261,7 +261,7 @@ async function fetchInboxPage(
         ...(lightweight ? { lightweight: true, include_body: 0 } : {}),
         ...extra,
       },
-      { ...auth, method: 'GET', pathOverride: '/v1/messages', timeout: 60_000, signal },
+      { timeout: 60_000, signal },
     );
   const lightweight = lightweightListSupported();
   let messages = asArray<ExistingMessage>(await request(lightweight));
@@ -276,13 +276,13 @@ async function fetchInboxPage(
 /** Ids of Inbox messages whose body contains the value (server-side search). */
 async function inboxBodyMatches(
   value: string,
-  auth: { authHeader?: string },
+  account: string,
   signal: AbortSignal | undefined,
 ): Promise<Set<string>> {
   const matches = new Set<string>();
   for (let page = 1; ; page += 1) {
     if (signal?.aborted) throw cancelledError();
-    const messages = await fetchInboxPage(page, auth, signal, { body: value });
+    const messages = await fetchInboxPage(page, account, signal, { body: value });
     let added = 0;
     for (const message of messages) {
       const apiId = getMessageApiId(message as never);
@@ -322,7 +322,6 @@ export async function applyFilterToExisting(
     return finish({ error: 'Switch to this account to apply the filter to its mail.' });
   }
 
-  const auth = requestOptionsFor(account);
   const conditions = rule.conditions.filter((c) => c.value?.trim());
   const ruleActions = rule.actions || {};
   const label = canonicalizeLabelKeyword(ruleActions.label);
@@ -334,7 +333,7 @@ export async function applyFilterToExisting(
     for (const condition of conditions) {
       const key = condition.value.trim().toLowerCase();
       if (condition.field === 'body' && !bodyMatches.has(key)) {
-        bodyMatches.set(key, await inboxBodyMatches(condition.value.trim(), auth, signal));
+        bodyMatches.set(key, await inboxBodyMatches(condition.value.trim(), account, signal));
       }
     }
 
@@ -344,7 +343,7 @@ export async function applyFilterToExisting(
     const matched: ExistingMessage[] = [];
     for (let page = 1; ; page += 1) {
       if (signal?.aborted) throw cancelledError();
-      const messages = await fetchInboxPage(page, auth, signal);
+      const messages = await fetchInboxPage(page, account, signal);
       let added = 0;
       for (const message of messages) {
         const apiId = getMessageApiId(message as never);

@@ -14,9 +14,12 @@ vi.mock('../../src/utils/remote', () => ({
 
 // Mock demo-mode
 let _demoMode = false;
+const mockDemoMessages = vi.fn();
 vi.mock('../../src/utils/demo-mode', () => ({
   isDemoMode: () => _demoMode,
   interceptDemoRequest: () => ({ handled: false }),
+  // The demo mailbox the demo backend searches.
+  demoMail: { messages: (...args) => mockDemoMessages(...args) },
 }));
 
 // Mock storage
@@ -180,11 +183,11 @@ describe('Server-side search integration', () => {
     });
 
     it('runs the server search in demo mode without caching the hits', async () => {
-      // Demo messages are neither indexed nor persisted, so the request (which
-      // the demo interceptor answers from memory) is the only search source.
-      // Demo mode is IndexedDB-free, so the hits must not be cached either.
+      // Demo messages are neither indexed nor persisted, so the demo backend
+      // (which answers from memory) is the only search source. Demo mode is
+      // IndexedDB-free, so the hits must not be cached either.
       _demoMode = true;
-      mockRequest.mockResolvedValue([
+      mockDemoMessages.mockReturnValue([
         {
           id: 'demo-1',
           subject: 'Invoice #2024-0892',
@@ -196,9 +199,12 @@ describe('Server-side search integration', () => {
 
       const results = await searchStore.actions.search('invoice', { folder: 'INBOX' });
 
-      expect(mockRequest).toHaveBeenCalledTimes(1);
+      expect(mockDemoMessages).toHaveBeenCalledTimes(1);
+      expect(mockDemoMessages.mock.calls[0][0]).toMatchObject({ search: 'invoice' });
       expect(results.map((r) => r.id)).toEqual(['demo-1']);
       expect(mockBulkPut).not.toHaveBeenCalled();
+      // The demo never asks a server.
+      expect(mockRequest).not.toHaveBeenCalled();
     });
 
     it('caches server hits outside demo mode', async () => {

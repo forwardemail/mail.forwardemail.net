@@ -1,4 +1,5 @@
-import { Remote } from '../utils/remote.js';
+import { getMailBackend, requireMailBackend } from '../backends';
+import { ImapBackend } from '../backends/imap';
 import Dexie from 'dexie';
 import { db } from '../utils/db.js';
 import { filterDownloadableAttachments } from '../utils/attachment-flags';
@@ -1274,14 +1275,9 @@ export const mailService = {
         tracer.stage('network_start', {
           reason: workerResult?.pgpLocked ? 'pgp_locked' : 'worker_miss',
         });
-        const detailRes = await Remote.request(
-          'Message',
-          {},
-          {
-            method: 'GET',
-            pathOverride: `/v1/messages/${encodeURIComponent(messageId)}?folder=${encodeURIComponent(folder || '')}&raw=true`,
-            signal: compositeSignal,
-          },
+        const detailRes = await requireMailBackend(Local.get('email') || 'default').requestMessage(
+          messageId,
+          { folder: folder || '', raw: true, signal: compositeSignal },
         );
         tracer.stage('network_end');
         return { source: 'main', detailRes, workerResult };
@@ -1678,14 +1674,9 @@ export const mailService = {
     if (!messageId) return;
     try {
       abortIfNeeded(signal);
-      const detailRes = await Remote.request(
-        'Message',
-        {},
-        {
-          method: 'GET',
-          pathOverride: `/v1/messages/${encodeURIComponent(messageId)}?folder=${encodeURIComponent(folder || '')}&raw=false`,
-          signal,
-        },
+      const detailRes = await requireMailBackend(Local.get('email') || 'default').requestMessage(
+        messageId,
+        { folder: folder || '', raw: false, signal },
       );
       const result = ((detailRes as { Result?: unknown })?.Result || detailRes) as Record<
         string,
@@ -1874,15 +1865,30 @@ export const mailService = {
       // Reading the cached content failed, fall through to API call
     }
 
+    // An attachment the mail engine left on the server when it fetched a
+    // large message (see leanPartOf): fetch that one part.
+    try {
+      const backend = getMailBackend(account);
+      const section = cachedHit?.match?.partId;
+      const encoding = cachedHit?.match?.partEncoding;
+      if (
+        backend instanceof ImapBackend &&
+        typeof section === 'string' &&
+        typeof encoding === 'string'
+      ) {
+        const bytes = await backend.getPart(messageId, section, encoding);
+        triggerDownloadBytes(bytes, filename, contentType);
+        return;
+      }
+    } catch {
+      // The part could not be fetched on its own; the whole message is next.
+    }
+
     // Fall back to API call if not found in cache
     try {
-      const detailRes = await Remote.request(
-        'Message',
-        {},
-        {
-          method: 'GET',
-          pathOverride: `/v1/messages/${encodeURIComponent(messageId)}?folder=${encodeURIComponent(folder || '')}&raw=false`,
-        },
+      const detailRes = await requireMailBackend(Local.get('email') || 'default').requestMessage(
+        messageId,
+        { folder: folder || '', raw: false },
       );
       const result = ((detailRes as { Result?: unknown })?.Result || detailRes) as Record<
         string,

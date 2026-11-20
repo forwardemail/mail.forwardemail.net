@@ -3,8 +3,10 @@ import { config } from '../config.js';
 import { buildApiKeyAuthHeader, getAuthHeader } from './auth.ts';
 import { logApiError } from './error-logger.ts';
 import { logPerfEvent } from './perf-logger.ts';
-import { interceptDemoRequest, isDemoMode } from './demo-mode';
+import { demoBlockedError, interceptDemoRequest, isDemoMode } from './demo-mode';
 import { createCircuitBreaker, parseRetryAfterMs } from './circuit-breaker.js';
+import { Local } from './storage';
+import { imapSettingsFor } from '../backends/imap-account';
 
 // Action-specific timeouts for better performance
 const TIMEOUT_BY_ACTION = {
@@ -127,15 +129,26 @@ export const Remote = {
       if (demo.handled) {
         // Write actions return { blocked: true } — throw so callers
         // enter their error path.  The demo toast was already shown.
-        if (demo.result?.blocked) {
-          const err = new Error('This action is not available in the demo');
-          err.name = 'DemoBlockedError';
-          err.code = 'DEMO_ACTION_BLOCKED';
-          err.isDemo = true;
-          throw err;
-        }
+        if (demo.result?.blocked) throw demoBlockedError();
         return demo.result;
       }
+    }
+
+    // The active account is on a custom IMAP server, so it has no Forward
+    // Email credentials. A request that would use the active account's
+    // (contacts, calendar, settings sync) has nowhere to go: fail it here,
+    // before the circuit breaker or the sign-out counting can see it.
+    if (
+      !options.skipAuth &&
+      !options.authHeader &&
+      !options.apiKey &&
+      this.shouldAuthorize(action) &&
+      imapSettingsFor(Local.get('email'))
+    ) {
+      const err = new Error('This is not available for an account on a custom mail server');
+      err.name = 'UnsupportedForAccountError';
+      err.code = 'UNSUPPORTED_FOR_ACCOUNT';
+      throw err;
     }
 
     const { path, method: defaultMethod } = this.getEndpoint(action);

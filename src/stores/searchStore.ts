@@ -10,7 +10,7 @@ import { SearchWorkerClient } from '../utils/search-worker-client';
 import { connectSearchWorker } from '../utils/sync-controller';
 import { indexProgress } from './mailboxActions';
 import { resolveSearchBodyIndexing } from '../utils/search-body-indexing.js';
-import { Remote } from '../utils/remote';
+import { requireMailBackend } from '../backends';
 import { extractFromField, extractRecipientsField } from '../utils/sync-helpers';
 import { isDemoMode } from '../utils/demo-mode';
 import type { Message, SearchStats, SearchResult } from '../types';
@@ -490,11 +490,10 @@ const serverSearch = async (
   if (!params) return [];
 
   try {
-    const response = await Remote.request('MessageList', params, {
-      method: 'GET',
-      pathOverride: '/v1/messages',
-      perfLabel: 'search.server',
-    });
+    const response = await requireMailBackend(Local.get('email') || 'default').requestMessageList(
+      params,
+      { perfLabel: 'search.server' },
+    );
 
     // The API returns an array of message objects (or an object with a
     // data/messages array depending on the endpoint version).

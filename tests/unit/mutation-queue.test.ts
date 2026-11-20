@@ -2,15 +2,23 @@ import { beforeEach, describe, expect, it, vi, afterEach } from 'vitest';
 import { get } from 'svelte/store';
 
 // --- hoisted mocks ----------------------------------------------------------
-const { metaGetMock, metaPutMock, localGetMock, remoteRequestMock, isOnlineMock, warnMock } =
-  vi.hoisted(() => ({
-    metaGetMock: vi.fn(),
-    metaPutMock: vi.fn(),
-    localGetMock: vi.fn(),
-    remoteRequestMock: vi.fn(),
-    isOnlineMock: vi.fn(),
-    warnMock: vi.fn(),
-  }));
+const {
+  metaGetMock,
+  metaPutMock,
+  localGetMock,
+  accountsGetAllMock,
+  remoteRequestMock,
+  isOnlineMock,
+  warnMock,
+} = vi.hoisted(() => ({
+  metaGetMock: vi.fn(),
+  accountsGetAllMock: vi.fn(),
+  metaPutMock: vi.fn(),
+  localGetMock: vi.fn(),
+  remoteRequestMock: vi.fn(),
+  isOnlineMock: vi.fn(),
+  warnMock: vi.fn(),
+}));
 
 vi.mock('../../src/utils/db', () => ({
   db: {
@@ -23,6 +31,7 @@ vi.mock('../../src/utils/db', () => ({
 
 vi.mock('../../src/utils/storage', () => ({
   Local: { get: (...args: unknown[]) => localGetMock(...args) },
+  Accounts: { getAll: (...args: unknown[]) => accountsGetAllMock(...args) },
 }));
 
 vi.mock('../../src/utils/remote', () => ({
@@ -50,6 +59,7 @@ vi.mock('../../src/utils/network-status', () => ({
 
 vi.mock('../../src/utils/platform.js', () => ({
   isTauri: false,
+  isTauriDesktop: false,
   swReadyWithTimeout: vi.fn().mockResolvedValue(null),
 }));
 
@@ -73,6 +83,7 @@ describe('mutation-queue', () => {
 
     localGetMock.mockImplementation((key: string) => (key === 'email' ? 'user@example.com' : null));
     isOnlineMock.mockReturnValue(true);
+    accountsGetAllMock.mockReturnValue([{ email: 'user@example.com' }]);
 
     metaGetMock.mockImplementation(async (key: string) => metaStore.get(key) ?? null);
     metaPutMock.mockImplementation(
@@ -128,6 +139,54 @@ describe('mutation-queue', () => {
     expect(metaStore.get('mutation_queue_other@example.com')?.value).toHaveLength(1);
     expect(metaStore.get('mutation_queue_user@example.com')).toBeUndefined();
     expect(remoteRequestMock).not.toHaveBeenCalled();
+  });
+
+  it('records which kind of server a queued change is for', async () => {
+    isOnlineMock.mockReturnValue(false);
+    const mutation = await queueModule.queueMutation('move', {
+      messageId: 'm1',
+      targetFolder: 'Archive',
+    });
+
+    expect(mutation.backend).toBe('forwardemail');
+  });
+
+  // The REST API is the wrong server for an account of another kind: sending
+  // there would act on a Forward Email mailbox of the same address, or fail
+  // five times and undo the user's change.
+  it('keeps a change queued, unsent, for an account this build has no backend for', async () => {
+    accountsGetAllMock.mockReturnValue([{ email: 'user@example.com', kind: 'imap' }]);
+
+    const mutation = await queueModule.queueMutation('move', {
+      messageId: 'INBOX:1:7',
+      targetFolder: 'Archive',
+    });
+    await drainMicrotasks();
+
+    expect(mutation.backend).toBe('imap');
+    // Only the REST API can be replayed by the service worker, so only a
+    // Forward Email record carries an address and a header.
+    expect(mutation).not.toHaveProperty('authHeader');
+    expect(mutation).not.toHaveProperty('apiBase');
+    expect(remoteRequestMock).not.toHaveBeenCalled();
+    const queued = metaStore.get('mutation_queue_user@example.com')?.value as Array<{
+      status: string;
+      retryCount: number;
+    }>;
+    expect(queued).toHaveLength(1);
+    expect(queued[0]).toMatchObject({ status: 'pending', retryCount: 0 });
+  });
+
+  it('keeps a change queued while its account has no credentials', async () => {
+    const auth = await import('../../src/utils/auth');
+    vi.mocked(auth.getAuthHeaderForAccount).mockReturnValue('');
+
+    await queueModule.queueMutation('move', { messageId: 'm1', targetFolder: 'Archive' });
+    await drainMicrotasks();
+    vi.mocked(auth.getAuthHeaderForAccount).mockReturnValue('Bearer test-token');
+
+    expect(remoteRequestMock).not.toHaveBeenCalled();
+    expect(metaStore.get('mutation_queue_user@example.com')?.value).toHaveLength(1);
   });
 
   it('drains the queue immediately when online and executes in order', async () => {
@@ -212,6 +271,47 @@ describe('mutation-queue', () => {
       { labels: ['work'], labels_add: ['work'], labels_remove: ['urgent'] },
       expect.objectContaining({ method: 'PUT', pathOverride: '/v1/messages/m1' }),
     );
+  });
+
+  // On an IMAP server the move gives the message a new id. The star was
+  // queued while offline against the old one.
+  it('sends a change queued behind a move to the id the move gave the message', async () => {
+    const backends = await import('../../src/backends');
+    const moveMessage = vi.fn().mockResolvedValue({ 'imap-7-12-SU5CT1g': 'imap-40-3-QXJjaGl2ZQ' });
+    const changeFlags = vi.fn().mockResolvedValue(undefined);
+    const backend = { isReady: () => true, moveMessage, changeFlags };
+    const spy = vi.spyOn(backends, 'getMailBackend').mockReturnValue(backend as never);
+    const remapped: unknown[] = [];
+    const onRemap = (event: Event) => remapped.push((event as CustomEvent).detail);
+    globalThis.addEventListener('mailbox-ids-remapped', onRemap);
+
+    isOnlineMock.mockReturnValue(false);
+    await queueModule.queueMutation('move', {
+      messageId: 'imap-7-12-SU5CT1g',
+      targetFolder: 'Archive',
+      sourceFolder: 'INBOX',
+    });
+    await queueModule.queueMutation('toggleStar', {
+      messageId: 'imap-7-12-SU5CT1g',
+      isStarred: false,
+      flags: [],
+      folder: 'Archive',
+    });
+    isOnlineMock.mockReturnValue(true);
+    await queueModule.processMutationQueue();
+    await drainMicrotasks();
+
+    expect(moveMessage).toHaveBeenCalledWith('imap-7-12-SU5CT1g', 'Archive');
+    expect(changeFlags.mock.calls[0][0]).toBe('imap-40-3-QXJjaGl2ZQ');
+    expect(remapped).toEqual([
+      {
+        account: 'user@example.com',
+        remap: { 'imap-7-12-SU5CT1g': 'imap-40-3-QXJjaGl2ZQ' },
+      },
+    ]);
+
+    globalThis.removeEventListener('mailbox-ids-remapped', onRemap);
+    spy.mockRestore();
   });
 
   it('retries transient failures with exponential backoff', async () => {

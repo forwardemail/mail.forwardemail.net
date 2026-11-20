@@ -2,6 +2,7 @@ import Dexie from 'dexie';
 import { db } from './db';
 import { Local } from './storage';
 import { Remote } from './remote';
+import { requireMailBackend } from '../backends';
 import { getAuthHeaderForAccount } from './auth';
 import { warn } from './logger.ts';
 import { isOnline } from './network-status';
@@ -416,22 +417,12 @@ function readCachedSent(account, sentFolder, fields = SENT_FIELDS) {
 // this server keeps address fields on lightweight lists: these rows are
 // cached and must carry recipients.
 async function fetchSentPage(account, sentFolder, page) {
-  // With no stored header the active account's credentials are used (and demo
-  // mode answers), so that is only allowed for the active account.
-  const authHeader = getAuthHeaderForAccount(account);
-  if (!authHeader && account !== getAccount()) {
-    throw new Error('No credentials available for this account');
-  }
-  const res = await Remote.request(
-    'MessageList',
-    {
-      folder: sentFolder,
-      page,
-      limit: SENT_PAGE_SIZE,
-      ...(lightweightListSupported() ? { lightweight: true } : {}),
-    },
-    { method: 'GET', pathOverride: '/v1/messages', ...(authHeader ? { authHeader } : {}) },
-  );
+  const res = await requireMailBackend(account).requestMessageList({
+    folder: sentFolder,
+    page,
+    limit: SENT_PAGE_SIZE,
+    ...(lightweightListSupported() ? { lightweight: true } : {}),
+  });
   const list = Array.isArray(res)
     ? res
     : res?.data || res?.messages || res?.Result?.List || res?.Result || [];

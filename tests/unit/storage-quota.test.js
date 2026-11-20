@@ -37,10 +37,13 @@ vi.mock('../../src/utils/storage', () => ({
   Local: {
     get: vi.fn().mockReturnValue('test@example.com'),
     set: vi.fn(),
+    remove: vi.fn(),
   },
   Session: { get: vi.fn(), set: vi.fn() },
-  Accounts: { get: vi.fn(), set: vi.fn(), remove: vi.fn() },
+  Accounts: { get: vi.fn(), set: vi.fn(), remove: vi.fn(), getAll: () => mockAccounts },
 }));
+// The signed-in accounts. Empty means a Forward Email account, as before.
+let mockAccounts = [];
 
 // Track fetchAccountData calls
 let mockFetchAccountData = vi.fn().mockResolvedValue({});
@@ -138,6 +141,9 @@ vi.mock('../../src/stores/searchStore', () => ({
 
 // Now import the stores and function under test
 import { updateStorageStats, storageUsed, storageTotal } from '../../src/stores/mailboxActions.ts';
+import { setMailEngineForTests } from '../../src/backends/imap-engine';
+import { resetMailBackendsForTests } from '../../src/backends';
+import { Local } from '../../src/utils/storage';
 
 describe('updateStorageStats', () => {
   beforeEach(() => {
@@ -269,5 +275,86 @@ describe('updateStorageStats', () => {
 
     // storage_quota should take precedence
     expect(get(storageTotal)).toBe(1_000_000);
+  });
+});
+
+// An account on a custom mail server has no Forward Email account to ask.
+// Its storage comes from the server's own quota, when the server has one.
+describe('updateStorageStats for an account on a custom mail server', () => {
+  const ME = 'test@example.com';
+  let engineCalls = [];
+  const serve = (storage) => {
+    engineCalls = [];
+    resetMailBackendsForTests();
+    setMailEngineForTests(async (cmd) => {
+      engineCalls.push(cmd);
+      if (cmd === 'mail_open') return 'h';
+      if (cmd === 'imap_storage') return storage;
+      return null;
+    });
+  };
+
+  beforeEach(() => {
+    storageUsed.set(0);
+    storageTotal.set(0);
+    mockFetchAccountData = vi.fn().mockResolvedValue({ storage_used: 1, storage_quota: 2 });
+    vi.mocked(Local.set).mockClear();
+    vi.mocked(Local.remove).mockClear();
+    mockAccounts = [
+      {
+        email: ME,
+        kind: 'imap',
+        imap: { host: 'imap.example.com', port: 993, security: 'tls', username: ME, password: 'x' },
+      },
+    ];
+    return () => {
+      mockAccounts = [];
+      setMailEngineForTests(null);
+      resetMailBackendsForTests();
+    };
+  });
+
+  it('shows what the mail server reports, and asks Forward Email nothing', async () => {
+    serve({ used: 2_097_152, total: 10_485_760 });
+
+    await updateStorageStats(ME);
+
+    expect(get(storageUsed)).toBe(2_097_152);
+    expect(get(storageTotal)).toBe(10_485_760);
+    expect(engineCalls).toContain('imap_storage');
+    expect(mockFetchAccountData).not.toHaveBeenCalled();
+    expect(Local.set).toHaveBeenCalledWith(
+      `storage_stats_${ME}`,
+      JSON.stringify({ used: 2_097_152, total: 10_485_760 }),
+    );
+  });
+
+  it('shows no meter when the server sets no limit, and drops an old figure', async () => {
+    storageUsed.set(5);
+    storageTotal.set(10);
+    serve(null);
+
+    await updateStorageStats(ME);
+
+    expect(get(storageTotal)).toBe(0);
+    expect(get(storageUsed)).toBe(0);
+    expect(Local.remove).toHaveBeenCalledWith(`storage_stats_${ME}`);
+    expect(mockFetchAccountData).not.toHaveBeenCalled();
+  });
+
+  it('keeps the last figure when the server cannot be reached', async () => {
+    storageUsed.set(5);
+    storageTotal.set(10);
+    engineCalls = [];
+    resetMailBackendsForTests();
+    setMailEngineForTests(async (cmd) => {
+      if (cmd === 'mail_open') return 'h';
+      throw { kind: 'network', message: 'Could not connect' };
+    });
+
+    await updateStorageStats(ME);
+
+    expect(get(storageTotal)).toBe(10);
+    expect(get(storageUsed)).toBe(5);
   });
 });

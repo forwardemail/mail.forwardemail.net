@@ -10,12 +10,14 @@ import 'fake-indexeddb/auto';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { executeOperation } from '../../src/utils/db-engine';
 
-const { demoModeMock, isOnlineMock, localGetMock, remoteRequestMock } = vi.hoisted(() => ({
-  demoModeMock: vi.fn(),
-  isOnlineMock: vi.fn(),
-  localGetMock: vi.fn(),
-  remoteRequestMock: vi.fn(),
-}));
+const { demoMessagesMock, demoModeMock, isOnlineMock, localGetMock, remoteRequestMock } =
+  vi.hoisted(() => ({
+    demoMessagesMock: vi.fn(),
+    demoModeMock: vi.fn(),
+    isOnlineMock: vi.fn(),
+    localGetMock: vi.fn(),
+    remoteRequestMock: vi.fn(),
+  }));
 
 // The db client API the app uses, backed by the real engine.
 vi.mock('../../src/utils/db', async () => {
@@ -70,6 +72,8 @@ vi.mock('../../src/utils/remote', () => ({
 
 vi.mock('../../src/utils/demo-mode', () => ({
   isDemoMode: (...args) => demoModeMock(...args),
+  // The demo mailbox the demo backend reads from.
+  demoMail: { messages: (...args) => demoMessagesMock(...args) },
 }));
 
 vi.mock('../../src/utils/network-status', () => ({
@@ -274,12 +278,14 @@ describe('recipient suggestions', () => {
     it('does not cache demo messages', async () => {
       demoModeMock.mockReturnValue(true);
       const folder = nextSentFolder();
-      remoteRequestMock.mockResolvedValue([{ id: 'd1', to: 'demo@example.com', date: 1 }]);
+      demoMessagesMock.mockReturnValue([{ id: 'd1', to: 'demo@example.com', date: 1 }]);
 
       expect((await getRecentRecipients({ sentFolder: folder })).map((r) => r.email)).toEqual([
         'demo@example.com',
       ]);
       expect(await run('toArray', 'messages')).toEqual([]);
+      // The demo never asks a server.
+      expect(remoteRequestMock).not.toHaveBeenCalled();
     });
 
     it('does not call the server while offline', async () => {

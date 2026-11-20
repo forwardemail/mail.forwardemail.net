@@ -63,9 +63,11 @@ describe('friendly demo mailbox mutation contract', () => {
     const demo = readSource('src/utils/demo-mode.js');
 
     expect(demo).toContain('options?.demoAction || getFriendlyActionName(action)');
-    expect(store).toContain("demoAction: 'Create label'");
-    expect(store).toContain("demoAction: 'Update label'");
-    expect(store).toContain("demoAction: 'Delete label'");
+    // Every label save goes through one helper, which hands the wording on.
+    expect(store).toContain("{ method: 'PUT', demoAction }");
+    expect(store).toContain("saveLabelList(account, updatedLabels, 'Create label')");
+    expect(store).toContain("saveLabelList(account, updatedLabels, 'Update label')");
+    expect(store).toContain("saveLabelList(account, updatedLabels, 'Delete label')");
   });
 
   it('preflights delete and archive intent before optimistic mailbox updates', () => {
@@ -74,10 +76,10 @@ describe('friendly demo mailbox mutation contract', () => {
 
     expect(store).toContain("demoAction: 'Delete message'");
     expect(store).toContain("demoAction: 'Archive'");
-    expect(store).toContain('if (isDemoMode())');
-    expect(store).toContain(
-      'if (isDemoBlockedError(err)) return { success: false, blocked: true };',
-    );
+    // Asked of the demo backend before anything on screen changes.
+    expect(store).toContain('if (await demoRefuses((demo) => demo.deleteMessage())) {');
+    expect(store).toContain('demo.moveMessage(apiId, target, { label: demoAction })');
+    expect(store).toContain('return { success: false, blocked: true };');
     expect(store).toContain('return { success: 0, failed: validMessages.length, blocked: true };');
     expect(mailbox).toContain('if (!isDemoMode()) {');
     expect(mailbox).toContain('if (result?.blocked) return result;');

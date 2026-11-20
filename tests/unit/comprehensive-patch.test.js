@@ -1102,11 +1102,8 @@ describe('Large mailbox bootstrap timeout regressions', () => {
     );
   });
 
-  it('should use longer fallback timeouts when bootstrapping folders and messages', () => {
-    expect(mailboxStoreSrc).toMatch(/Remote\.request\([\s\S]*'Folders'[\s\S]*timeout:\s*120_000/);
-    expect(mailboxStoreSrc).toMatch(
-      /Remote\.request\('MessageList', params, \{[\s\S]*timeout:\s*60_000/,
-    );
+  it('should use a longer fallback timeout when bootstrapping messages', () => {
+    expect(mailboxStoreSrc).toMatch(/requestMessageList\(params, \{[\s\S]*timeout:\s*60_000/);
   });
 });
 

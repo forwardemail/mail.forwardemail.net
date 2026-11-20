@@ -4,7 +4,10 @@ import { isActiveAccount } from './account-scope.ts';
 import { Remote, getRequestTimeout } from './remote';
 import { missingSenderMessage, resolveSenderAuth, senderRequestOptions } from './send-as';
 import { writable } from 'svelte/store';
-import { saveSentCopy } from './sent-copy.js';
+import { resolveSentFolderForAccount, saveSentCopy } from './sent-copy.js';
+import { imapSettingsFor } from '../backends/imap-account';
+import { MISSING_OUTGOING_SERVER, transportFor } from '../backends/smtp-account';
+import { appendSentCopy, sendThroughSmtp } from '../backends/smtp-send';
 import { warn } from './logger.ts';
 import { isDemoMode, showDemoBlockedToast } from './demo-mode';
 import { isOnline } from './network-status';
@@ -127,6 +130,19 @@ function requestOptionsFor(item) {
   return sender ? senderRequestOptions(sender) : null;
 }
 
+/**
+ * The account a queued item goes out as, and so whose server sends it: the
+ * Forward Email API, or that account's own outgoing server
+ * (src/backends/smtp-account.ts).
+ */
+function sendingAccountFor(item) {
+  return item?.sendAs || item?.account || getAccount();
+}
+
+function transportForItem(item) {
+  return transportFor(sendingAccountFor(item));
+}
+
 /** True for an address that would send with a catch-all password. */
 function sendsWithCatchall(sendAs, account) {
   return resolveSenderAuth(sendAs, account)?.kind === 'catchall';
@@ -235,7 +251,13 @@ export async function scheduleEmail(emailData, sendAt, { sendAs = null } = {}) {
 
   // A catch-all login can only send: it cannot read the scheduled email back
   // or cancel it, so it stays here and sends at its time while the app runs.
-  if (!isOnline() || sendsWithCatchall(sendAs, getAccount())) {
+  // An account with its own outgoing server has nothing to hold the message
+  // for it either: an SMTP server sends what it is given straight away.
+  if (
+    !isOnline() ||
+    sendsWithCatchall(sendAs, getAccount()) ||
+    transportFor(sendAs || getAccount()) !== 'forwardemail'
+  ) {
     return { record: await queueEmail(emailData, { sendAt, sendAs }), serverScheduled: false };
   }
 
@@ -349,8 +371,16 @@ async function updateOutboxCount() {
  * Save a copy of sent message to Sent folder (client-side workaround)
  * Similar to saveSentCopy in Compose.svelte
  */
-async function saveSentCopyToFolder(emailPayload, account, requestOptions = {}) {
-  return saveSentCopy(emailPayload, account || getAccount(), null, null, requestOptions);
+async function saveSentCopyToFolder(emailPayload, account, requestOptions = {}, built = null) {
+  const target = account || getAccount();
+  // An account on a custom IMAP server keeps its Sent copy on that server.
+  // `built` is the message exactly as it was sent, when it went out by SMTP.
+  if (imapSettingsFor(target)) {
+    const folder = await resolveSentFolderForAccount(target);
+    await appendSentCopy(target, folder, emailPayload, built);
+    return null;
+  }
+  return saveSentCopy(emailPayload, target, null, null, requestOptions);
 }
 
 /**
@@ -365,7 +395,7 @@ function isServerScheduled(item) {
  * Everything that has to happen locally once an email has actually gone out:
  * file the Sent copy, and flag the message it was a reply to.
  */
-async function recordSentSideEffects(item, account) {
+async function recordSentSideEffects(item, account, built = null) {
   // Save copy to Sent folder (client-side workaround). Skipped when the
   // payload opts out, e.g. spam reports that would put spam back in Sent.
   // The copy belongs in the Sent folder of the account it went out as. A
@@ -373,12 +403,18 @@ async function recordSentSideEffects(item, account) {
   // copy goes to the Sent folder of the account it was composed in.
   if (item.emailData?.save_sent !== false) {
     try {
-      const sender = senderFor(item);
-      if (!sender) throw new Error(missingSenderMessage(item.sendAs));
-      if (sender.kind === 'account') {
-        await saveSentCopyToFolder(item.emailData, item.sendAs, senderRequestOptions(sender));
+      if (transportForItem(item) !== 'forwardemail') {
+        // Sent through the sending account's own server: the copy is that
+        // account's, and needs none of the API credentials checked below.
+        await saveSentCopyToFolder(item.emailData, sendingAccountFor(item), {}, built);
       } else {
-        await saveSentCopyToFolder(item.emailData, account);
+        const sender = senderFor(item);
+        if (!sender) throw new Error(missingSenderMessage(item.sendAs));
+        if (sender.kind === 'account') {
+          await saveSentCopyToFolder(item.emailData, item.sendAs, senderRequestOptions(sender));
+        } else {
+          await saveSentCopyToFolder(item.emailData, account);
+        }
       }
     } catch (sentErr) {
       console.error('[Outbox] Failed to save sent copy:', sentErr);
@@ -408,6 +444,10 @@ async function markOutboxSent(item, account) {
         detail: {
           id: item.id,
           subject: item?.emailData?.subject || '(No subject)',
+          // Whose Sent folder the copy went to. A custom mail server sends no
+          // event for it, so the main window reads that folder again.
+          account: sendingAccountFor(item),
+          savedSent: item?.emailData?.save_sent !== false,
         },
       }),
     );
@@ -518,7 +558,22 @@ async function sendOutboxItem(queuedItem) {
   // Sending as another signed-in account, or with a catch-all password, needs
   // those credentials. Without them (App Lock, signed out, password removed)
   // wait rather than fail: unlocking or saving the password brings them back.
-  const requestOptions = requestOptionsFor(item);
+  //
+  // An account with its own outgoing server sends through that instead, with
+  // the password saved with the server.
+  const transport = transportForItem(item);
+  if (transport === 'none') {
+    // An account on a custom IMAP server with no outgoing server. Retrying
+    // cannot help; saving one in Settings and pressing Retry does.
+    const message = MISSING_OUTGOING_SERVER(sendingAccountFor(item));
+    await db.outbox.update([account, item.id], {
+      status: 'failed',
+      lastError: message,
+      updatedAt: now,
+    });
+    return { success: false, error: message };
+  }
+  const requestOptions = transport === 'smtp' ? {} : requestOptionsFor(item);
   if (!requestOptions) {
     await db.outbox.update([account, item.id], {
       lastError: missingSenderMessage(item.sendAs),
@@ -553,9 +608,16 @@ async function sendOutboxItem(queuedItem) {
   try {
     const payload = buildSendPayload(item.emailData, item.sendAt);
 
-    await Remote.request('Emails', payload, { ...requestOptions, method: 'POST' });
+    let built = null;
+    if (transport === 'smtp') {
+      // The Date header is the moment it is sent. A date held for a scheduled
+      // send is only how the API is told when; here the outbox did the waiting.
+      built = await sendThroughSmtp(sendingAccountFor(item), { ...payload, date: undefined });
+    } else {
+      await Remote.request('Emails', payload, { ...requestOptions, method: 'POST' });
+    }
 
-    await recordSentSideEffects(item, account);
+    await recordSentSideEffects(item, account, built);
     await markOutboxSent(item, account);
 
     return { success: true };
@@ -629,8 +691,14 @@ const UNCONFIRMED_SEND_MESSAGE =
 // still sending is not mistaken for an abandoned one (a larger message is
 // given longer to send, see `getRequestTimeout`)
 const STALE_SENDING_MARGIN_MS = 90 * 1000;
+// An SMTP send has no single timeout: connecting, handing the message over
+// and waiting for the server to accept it each have their own, and a server
+// may scan a large message for minutes before it answers.
+const SMTP_SEND_MAX_MS = 12 * 60 * 1000;
 const getStaleSendingMs = (item) =>
-  getRequestTimeout('Emails', item?.emailData) + STALE_SENDING_MARGIN_MS;
+  (transportForItem(item) === 'forwardemail'
+    ? getRequestTimeout('Emails', item?.emailData)
+    : SMTP_SEND_MAX_MS) + STALE_SENDING_MARGIN_MS;
 
 /**
  * 4xx responses that mean the request itself is unacceptable. Auth failures,

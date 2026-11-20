@@ -52,7 +52,7 @@ tauri-plugin-fs = "2.5.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Already in the tree via tauri; used directly for the renderer watchdog timer.
-tokio = { version = "1", features = ["time"] }
+tokio = { version = "1", features = ["time", "net", "sync", "io-util"] }
 log = "0.4"
 regex = "1"
 time = { version = "0.3", features = ["macros", "formatting"] }
@@ -68,6 +68,22 @@ tauri-plugin-webdriver = { version = "0.2.1", optional = true }
 # (src/device_key.rs). The Linux backend is the pure-Rust Secret Service
 # client, so no libdbus headers are needed to build.
 keyring = { version = "3.6", features = ["apple-native", "windows-native", "async-secret-service", "tokio", "crypto-rust"] }
+# Mail engine for accounts on a custom IMAP/SMTP server (src/mail). Desktop
+# only. rustls with the operating system's certificate store, as the updater
+# already uses, so there is no OpenSSL to ship.
+async-imap = { version = "0.12", default-features = false, features = ["runtime-tokio"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+rustls-platform-verifier = "0.6"
+futures-util = "0.3"
+utf7-imap = "0.3"
+base64 = "0.22"
+# Already in the tree through rustls. Random values and SHA-256 for the OAuth
+# sign-in (src/mail/oauth.rs).
+ring = "0.17"
+# Finding a mail server from an address (src/mail/autoconfig.rs): MX and SRV
+# records through the system's resolver, and the Thunderbird settings format.
+hickory-resolver = { version = "0.26", default-features = false, features = ["tokio", "system-config"] }
+quick-xml = "0.37"
 
 # Mobile-only: native haptic feedback (iOS Taptic Engine + Android vibrator).
 # navigator.vibrate is a no-op inside the iOS WKWebView, so iOS gets no haptics

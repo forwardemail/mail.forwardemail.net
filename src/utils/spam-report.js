@@ -16,10 +16,15 @@ export const isValidReportAddress = (value) => EMAIL_RE.test(String(value || '')
 /**
  * Returns the configured report address, falling back to the default when
  * the stored value is empty or not a plausible email address.
+ *
+ * An account on a custom mail server has no default: Forward Email does not
+ * host its mail, and none of it is sent there unless the user typed that
+ * address in. With nothing set the answer is '' and no report goes out.
  */
-export const resolveSpamReportAddress = (raw) => {
+export const resolveSpamReportAddress = (raw, { customServer = false } = {}) => {
   const value = String(raw || '').trim();
-  return isValidReportAddress(value) ? value : DEFAULT_SPAM_REPORT_ADDRESS;
+  if (isValidReportAddress(value)) return value;
+  return customServer ? '' : DEFAULT_SPAM_REPORT_ADDRESS;
 };
 
 /**
@@ -66,7 +71,10 @@ export const buildSpamReportEmail = ({
   eml,
   fallbackText,
 }) => {
-  const address = resolveSpamReportAddress(reportAddress);
+  // The caller decided where the report goes. Nothing here falls back to an
+  // address the user did not choose.
+  const address = String(reportAddress || '').trim();
+  if (!isValidReportAddress(address)) throw new Error('No address to send the spam report to');
   const subject = message?.subject || '(No subject)';
   const sender = formatAddressForReport(message?.from);
   const date = message?.date || message?.received_at || message?.receivedAt || '';

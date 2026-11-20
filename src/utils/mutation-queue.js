@@ -1,14 +1,12 @@
 import { db } from './db';
 import { Local } from './storage';
-import { Remote } from './remote';
-import { getAuthHeaderForAccount } from './auth';
-import { config } from '../config';
+import { backendKindForAccount, getMailBackend } from '../backends/index.ts';
 import { writable } from 'svelte/store';
 import { warn } from './logger.ts';
 import { isOnline } from './network-status';
 import { swReadyWithTimeout, isTauri } from './platform.js';
 import { exponentialBackoff } from './backoff.js';
-import { addFlagsBody, labelChangeBody, queuedToggleBody } from './message-changes.ts';
+import { queuedToggleBody } from './message-changes.ts';
 import {
   MUTATION_MAX_RETRIES,
   MUTATION_RUN_LOCK,
@@ -133,13 +131,14 @@ async function writeQueue(account, queue) {
 export async function queueMutation(type, payload, { account: forAccount } = {}) {
   const account = forAccount || getAccount();
 
-  // Store auth info so the SW can process mutations when the tab is closed.
-  // It is the queue's account's, so the SW never sends it as another one.
-  let authHeader = '';
+  // The record holds the account and the operation. A backend whose changes
+  // the service worker can send with the app closed adds what that needs (for
+  // the REST API, the address and the queue's account's own header).
+  let replay = null;
   try {
-    authHeader = getAuthHeaderForAccount(account);
+    replay = getMailBackend(account)?.backgroundReplay() ?? null;
   } catch {
-    // Auth not available — SW will skip if header is missing
+    // No credentials right now. The app sends it once they are back.
   }
 
   const mutation = {
@@ -149,8 +148,11 @@ export async function queueMutation(type, payload, { account: forAccount } = {})
     status: 'pending',
     retryCount: 0,
     createdAt: Date.now(),
-    apiBase: config.apiBase || '',
-    authHeader,
+    // Which kind of server the change is for. The service worker and the
+    // desktop processor replay over the REST API, so they leave any other
+    // kind for the tab.
+    backend: backendKindForAccount(account),
+    ...(replay || {}),
   };
   await withQueueLock(async () => {
     const queue = await readQueue(account);
@@ -191,9 +193,9 @@ function registerBackgroundSync() {
 }
 
 /**
- * Execute a single mutation against the API, as the account it was queued
- * for. Reading the active account at send time sent a change queued for one
- * account with another's credentials after a switch.
+ * Execute a single mutation through the mail backend of the account it was
+ * queued for. Reading the active account at send time sent a change queued
+ * for one account with another's credentials after a switch.
  * Returns an outcome for settleMutation (see sync-core.js); a failed request
  * throws, and a 404 counts as done there.
  */
@@ -204,55 +206,87 @@ async function executeMutation(mutation, queueAccount) {
     warn('[mutation-queue] Dropping a queued change with no account', mutation.id);
     return { result: 'drop' };
   }
-  let authHeader = '';
-  try {
-    authHeader = getAuthHeaderForAccount(account);
-  } catch {
-    authHeader = '';
-  }
-  // Signed out or locked: wait for the credentials rather than fail
-  if (!authHeader) return { result: 'skip' };
-  const path = `/v1/messages/${encodeURIComponent(payload.messageId)}`;
-  const put = (body) =>
-    Remote.request('MessageUpdate', body, { method: 'PUT', pathOverride: path, authHeader });
+  const backend = getMailBackend(account);
+  // No backend for this kind of account in this build, or signed out or
+  // locked: wait rather than fail
+  if (!backend || !backend.isReady()) return { result: 'skip' };
+  const id = currentId(account, payload.messageId);
 
   switch (type) {
     // isUnread and isStarred are the state before the toggle (see
     // queuedToggleBody): a queued "mark as read" was sent as "mark as unread"
     case 'toggleRead':
-    case 'toggleStar':
-      await put(queuedToggleBody(type, payload));
+    case 'toggleStar': {
+      const change = queuedToggleBody(type, payload);
+      await backend.changeFlags(id, {
+        flags: change.flags,
+        add: change.flags_add,
+        remove: change.flags_remove,
+      });
       return { result: 'done' };
+    }
 
     // Flags only ever added (\Answered on the message a reply answered), so a
-    // change that keeps failing has nothing to undo.
+    // change that keeps failing has nothing to undo. Without the message's
+    // flags only the addition is sent.
     case 'addFlags':
-      await put(addFlagsBody(payload.flags, payload.add));
+      await backend.changeFlags(id, {
+        flags: Array.isArray(payload.flags) ? payload.flags : null,
+        add: payload.add,
+      });
       return { result: 'done' };
 
     case 'move':
-      await put({ folder: payload.targetFolder });
+      noteIdRemap(account, await backend.moveMessage(id, payload.targetFolder));
       return { result: 'done' };
 
     case 'delete':
-      await Remote.request(
-        'MessageDelete',
-        {},
-        {
-          method: 'DELETE',
-          pathOverride: payload.permanent ? `${path}?permanent=1` : path,
-          authHeader,
-        },
+      noteIdRemap(
+        account,
+        await backend.deleteMessage(id, { permanent: Boolean(payload.permanent) }),
       );
       return { result: 'done' };
 
     case 'label':
-      await put(labelChangeBody(payload.labels, payload.previousLabels));
+      await backend.changeLabels(id, {
+        labels: payload.labels,
+        previous: payload.previousLabels,
+      });
       return { result: 'done' };
 
     default:
       warn('[mutation-queue] Unknown mutation type:', type);
       return { result: 'drop' };
+  }
+}
+
+// On an IMAP server a moved message has a new id. A change queued behind the
+// move (move to Archive, then star, both made offline) still names the old
+// one, so the ids this session has seen change are followed here.
+const movedIds = new Map();
+const movedKey = (account, id) => `${account}\u0000${id}`;
+
+function currentId(account, id) {
+  let current = String(id);
+  for (let hops = 0; hops < 8 && movedIds.has(movedKey(account, current)); hops += 1) {
+    current = movedIds.get(movedKey(account, current));
+  }
+  return current;
+}
+
+function noteIdRemap(account, remap) {
+  const changes = Object.entries(remap || {}).filter(([from, to]) => from && to && from !== to);
+  if (!changes.length) return;
+  for (const [from, to] of changes) movedIds.set(movedKey(account, from), to);
+  // The cached rows are renamed where the stores live (main.ts).
+  try {
+    globalThis.dispatchEvent?.(
+      new CustomEvent('mailbox-ids-remapped', {
+        detail: { account, remap: Object.fromEntries(changes) },
+      }),
+    );
+  } catch {
+    // No window to tell (a test, a worker); the next sync corrects the rows.
   }
 }
 

@@ -17,6 +17,8 @@ import { Local } from './storage';
 import { folders as foldersStore } from '../stores/folderStore';
 import { resolveSentFolder } from './sent-folder';
 import { getIdbKeyForComposeWindow } from './crypto-store.js';
+import { listOutboxSenders } from '../backends/smtp-account';
+import { listImapAccounts } from '../backends/imap-account';
 
 let composeCounter = 0;
 
@@ -29,6 +31,8 @@ const pendingInits = new Map<
     auth: Record<string, string>;
     sentFolder: string;
     undoSendDelay: string;
+    outboxSenders: string[];
+    engineAccounts: string[];
   }
 >();
 
@@ -99,10 +103,56 @@ export async function initComposeWindowListener() {
         ...(idbKey ? { idbKey } : {}),
       });
     });
+
+    // A compose window may not use the mail engine, so for an account on a
+    // custom IMAP server it asks this window to save or remove its draft.
+    // The draft itself is read from the database, never from the event.
+    listen('compose:save-draft', async (event) => {
+      const { label, requestId, account, id } = (event.payload || {}) as DraftRequest;
+      if (!isComposeLabel(label) || !account || !id) return;
+      let error: string | null = null;
+      try {
+        const { saveDraftForComposeWindow } = await import('./draft-service');
+        await saveDraftForComposeWindow(account, id);
+      } catch (err) {
+        error = (err as Error)?.message || 'Draft sync failed';
+      }
+      emitTo(label, 'compose:draft-saved', { requestId, error }).catch(() => {});
+    });
+    listen('compose:remove-draft', async (event) => {
+      const { label, account, id } = (event.payload || {}) as DraftRequest;
+      if (!isComposeLabel(label) || !account || !id) return;
+      try {
+        const [{ getMailBackend }, { ImapBackend }, { db }] = await Promise.all([
+          import('../backends'),
+          import('../backends/imap'),
+          import('./db'),
+        ]);
+        const backend = getMailBackend(account);
+        if (!(backend instanceof ImapBackend)) return;
+        await backend.removeDraft(id);
+        await db.messages.where('[account+id]').equals([account, id]).delete();
+      } catch (err) {
+        // 404: already gone.
+        if ((err as { status?: number })?.status !== 404) {
+          console.warn('[compose-window] could not remove a draft for a compose window', err);
+        }
+      }
+    });
   } catch {
     // Not in Tauri — no-op
   }
 }
+
+interface DraftRequest {
+  label?: string;
+  requestId?: string;
+  account?: string;
+  id?: string;
+}
+
+const isComposeLabel = (label: unknown): label is string =>
+  typeof label === 'string' && /^compose-\d+-\d+$/.test(label);
 
 /**
  * Open a new compose window. Returns the window label.
@@ -128,6 +178,12 @@ export async function openComposeWindow(options?: ComposeWindowOptions): Promise
       // read this device setting itself. Pass it through so undo-send behaves
       // the same in a separate window as it does inline.
       undoSendDelay: Local.get('undo_send_delay') || '0',
+      // Accounts whose mail goes out through their own server. The compose
+      // window queues their messages for this window to send, and cannot
+      // always read the account list to know which they are.
+      outboxSenders: listOutboxSenders(),
+      // Accounts on a custom IMAP server: this window saves their drafts.
+      engineAccounts: listImapAccounts(),
     });
 
     // Defer WebviewWindow creation off the current AppKit event tick.

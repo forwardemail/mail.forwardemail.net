@@ -30,7 +30,7 @@ import {
 import { setBadgeCount as tauriBadge } from './tauri-bridge.js';
 import { isDemoMode } from './demo-mode.js';
 import { updateFaviconBadge } from './favicon-badge.js';
-import { Remote } from './remote.js';
+import { requireMailBackend } from '../backends';
 import { decodeMimeHeader } from './mime-utils.js';
 import { extractFromField, extractRecipientsField } from './sync-helpers.ts';
 import { extractEmail } from './address.ts';
@@ -864,11 +864,11 @@ function scheduleSenderReconcile({ id, mailbox, messageId, account }) {
         // Deliberately NOT lightweight: resolving the sender is the entire
         // point of this request, and lightweight responses may omit From
         // (see api-capabilities). Ten messages is a cheap enough full fetch.
-        const res = await Remote.request(
-          'MessageList',
-          { folder: mailbox, page: 1, limit: 10 },
-          { method: 'GET', pathOverride: '/v1/messages' },
-        );
+        const res = await requireMailBackend(Local.get('email') || 'default').requestMessageList({
+          folder: mailbox,
+          page: 1,
+          limit: 10,
+        });
         const match = findMessageInList(res, { id, messageId });
         if (!match) continue;
         const from = extractFromField(match);
@@ -994,6 +994,16 @@ async function handleNewMessage(
   }
 }
 
+/**
+ * Announce a message that arrived for an account with no WebSocket (a custom
+ * IMAP server, see backends/imap-watch.ts). `data` is shaped like the
+ * WebSocket's new-message event, so the same rules decide whether and how it
+ * is shown.
+ */
+export function announceNewMail(data, { otherAccount = false } = {}) {
+  return handleNewMessage(data, { source: 'imap', otherAccount });
+}
+
 // `otherAccount` marks a delivery for a signed-in account that is not the one
 // on screen. It still gets a notice, but nothing that reads or changes the
 // active account's state: the badge, the visible list and the folder lookups
@@ -1102,11 +1112,11 @@ async function _handleNewMessageInner(
     try {
       // Deliberately NOT lightweight: this fetch exists only to recover the
       // sender, which lightweight responses may omit (see api-capabilities).
-      const res = await Remote.request(
-        'MessageList',
-        { folder: mailbox, page: 1, limit: 5 },
-        { method: 'GET', pathOverride: '/v1/messages' },
-      );
+      const res = await requireMailBackend(Local.get('email') || 'default').requestMessageList({
+        folder: mailbox,
+        page: 1,
+        limit: 5,
+      });
       const match = findMessageInList(res, {
         id: msg?.id ?? msg?.Uid ?? msg?.uid ?? uid,
         messageId: msg?.message_id || msg?.MessageId || msg?.['Message-ID'] || null,

@@ -464,6 +464,13 @@ function lock() {
   }
   // Drop the engine's key so sensitive writes fail closed while locked.
   notifyDbCryptoBridge();
+  // The mail engine holds the passwords of accounts on custom servers, and
+  // open connections signed in with them. Whoever owns it lets go of both.
+  try {
+    globalThis.dispatchEvent?.(new CustomEvent('fe:vault-locked'));
+  } catch {
+    // No window (a worker, a test).
+  }
 }
 
 /**

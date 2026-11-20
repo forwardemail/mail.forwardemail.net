@@ -2,6 +2,7 @@ import './polyfills';
 import * as mailboxActions from './stores/mailboxActions';
 import { createStarfield } from './utils/starfield';
 import { Local, Accounts, reconcileOrphanedAccountData } from './utils/storage';
+import { imapSettingsFor } from './backends/imap-account';
 import { keyboardShortcuts, TAB_SHORTCUTS } from './utils/keyboard-shortcuts';
 import { i18n } from './utils/i18n';
 import { createToastHost } from './svelte/toastsHost';
@@ -85,6 +86,11 @@ import {
   lockIfDue as lockAppIfDue,
 } from './utils/inactivity-timer.js';
 import { startOutboxProcessor, processOutbox, cancelQueuedSend } from './utils/outbox-service';
+import { capabilitiesFor } from './backends/capabilities';
+import { closeAllMailAccounts } from './backends/imap-engine';
+import { closeAllSmtpAccounts } from './backends/smtp-engine';
+import { sentNeedsReadingAgain } from './backends/smtp-send';
+import { forgetAllAccessTokens } from './backends/oauth';
 import { repliedMessageToArchive, type RepliedMessageTarget } from './utils/answered-flag';
 import { isActiveAccount } from './utils/account-scope';
 import { initMutationQueue, processMutationQueue } from './utils/mutation-queue';
@@ -264,7 +270,13 @@ const PROTECTED_ROUTES = new Set(['mailbox', 'settings', 'profile', 'calendar', 
 // API key. Recognising fewer credential shapes here than the API layer does
 // stranded such an account on the login screen right after a successful pair.
 const hasReadableCredentials = () =>
-  Boolean(Local.get('authToken') || Local.get('alias_auth') || Local.get('api_key'));
+  Boolean(
+    Local.get('authToken') ||
+    Local.get('alias_auth') ||
+    Local.get('api_key') ||
+    // An account on a custom IMAP server signs in with its server settings.
+    imapSettingsFor(Local.get('email')),
+  );
 
 // A locked vault cannot answer "is this session signed in?", and treating that
 // silence as a no is what made an app-locked phone look signed out after it
@@ -437,8 +449,13 @@ const toasts = toastsRoot
     };
 
 globalThis.addEventListener('outbox-sent', (event) => {
-  const subject = event?.detail?.subject;
+  const detail = (event as CustomEvent)?.detail || {};
+  const subject = detail.subject;
   toasts.show(`Message sent${subject ? `: ${subject}` : ''}`, 'success');
+  // A custom IMAP server does not say that the Sent copy arrived.
+  if (sentNeedsReadingAgain(detail, Local.get('email'))) {
+    void refreshSentFolderAfterSend();
+  }
 });
 
 globalThis.addEventListener('mutation-queue-failed', () => {
@@ -452,6 +469,12 @@ globalThis.addEventListener('mailbox-mutation-permanently-failed', (event) => {
   mailboxStore.actions.revertFailedMutation(event.detail);
 });
 
+// A queued move reached an IMAP server, which gave the message a new id.
+globalThis.addEventListener('mailbox-ids-remapped', (event) => {
+  const detail = (event as CustomEvent).detail || {};
+  void mailboxStore.actions.applyIdRemap?.(detail.account, detail.remap);
+});
+
 // Decides whether an auth failure is real or just the vault being locked.
 // Shared by the failure handlers and the mobile resume gate so both agree on
 // when the app can authenticate at all.
@@ -459,6 +482,15 @@ const authRecoveryPolicy = createAuthRecoveryPolicy({
   isLockEnabled,
   isVaultConfigured,
   isUnlocked,
+});
+
+// App Lock seals the saved passwords. The mail engine keeps its own copy of
+// each custom server's password, and connections signed in with it, so those
+// go too. Unlocking signs in again the first time an account is used.
+globalThis.addEventListener('fe:vault-locked', () => {
+  void closeAllMailAccounts();
+  void closeAllSmtpAccounts();
+  forgetAllAccessTokens();
 });
 
 // Manual lock button — dispatched from Mailbox.svelte sidebar
@@ -1030,6 +1062,7 @@ if (composeRoot) {
           const result = (rawResult || {}) as {
             archive?: boolean;
             queued?: boolean;
+            sendNow?: boolean;
             sentCopy?: unknown;
           } & UndoSendResult;
           // Undo-send owns its own archive + eventual Sent refresh (deferred
@@ -1038,6 +1071,8 @@ if (composeRoot) {
             handleUndoSend(result);
             return;
           }
+          // Queued for an account's own outgoing server: send it now.
+          if (result?.sendNow) void processOutbox();
           if (result?.archive) {
             archiveRepliedMessage(result).catch((error) => {
               console.error('[Compose] Failed to archive after send:', error);
@@ -1244,6 +1279,20 @@ viewModel.navigate = (path, options) => {
     history.replaceState({ route: 'login' }, '', '/');
     routeStore.set('login');
     return;
+  }
+
+  // An account on a custom IMAP server has no calendar or contacts. Their
+  // links are hidden for it, but a shortcut, a notification or an old link
+  // can still ask for the page, which would only show a failed request.
+  if (targetRoute === 'calendar' || targetRoute === 'contacts') {
+    const offered = capabilitiesFor(Local.get('email'));
+    if (targetRoute === 'calendar' ? !offered.calendar : !offered.contacts) {
+      toasts?.show?.(
+        `${targetRoute === 'calendar' ? 'Calendar' : 'Contacts'} needs a Forward Email account.`,
+        'info',
+      );
+      return;
+    }
   }
 
   const useReplace = options?.replace === true;
@@ -1466,6 +1515,7 @@ if (isTauriDesktop) {
         | {
             archive?: boolean;
             queued?: boolean;
+            sendNow?: boolean;
             draftId?: string;
             serverDraftId?: string;
             sourceMessageId?: string;
@@ -1495,6 +1545,10 @@ if (isTauriDesktop) {
         handleUndoSend(result);
         return;
       }
+
+      // Queued for an account's own outgoing server. The compose window may
+      // not use the mail engine, so the send happens here.
+      if (result?.sendNow) void processOutbox();
 
       // Show the send/queued/scheduled toast HERE, in the main window. The
       // native compose window suppresses it on purpose: that window closes
@@ -1531,23 +1585,13 @@ if (isTauriDesktop) {
 
       if (idsToDelete.size > 0) {
         try {
-          const { Remote } = await import('./utils/remote');
+          const { requireMailBackend } = await import('./backends');
           const { db } = await import('./utils/db');
-          const { getAuthHeaderForAccount } = await import('./utils/auth');
           const account = ownerAccount;
-          const authHeader = getAuthHeaderForAccount(account) || undefined;
           for (const id of idsToDelete) {
             // Server delete (404 = already gone)
             try {
-              await Remote.request(
-                'MessageDelete',
-                {},
-                {
-                  method: 'DELETE',
-                  pathOverride: `/v1/messages/${encodeURIComponent(id)}?permanent=1`,
-                  authHeader,
-                },
-              );
+              await requireMailBackend(account).deleteMessage(id, { permanent: true });
             } catch (error) {
               const status = (error as { status?: number })?.status;
               if (status !== 404) {
