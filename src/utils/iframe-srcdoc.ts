@@ -180,6 +180,14 @@ function getResetStyles(): string {
       color: #2563eb;
     }
 
+    /* A link shows the hand pointer wherever the pointer is over it, also
+     * over an image or a styled block inside it and whatever the email's own
+     * CSS says. The desktop webview does not always pick it on its own. */
+    a[href],
+    a[href] * {
+      cursor: pointer !important;
+    }
+
     pre, code {
       max-width: 100%;
       white-space: pre-wrap;

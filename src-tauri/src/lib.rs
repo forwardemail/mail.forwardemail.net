@@ -1098,6 +1098,34 @@ fn push_pending_deep_links(queue: &mut Vec<String>, urls: Vec<String>) {
 // ── App Entry Point ──────────────────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+/// Turns on "Check Spelling While Typing" for the webviews unless the user
+/// has chosen for themselves.
+///
+/// WKWebView takes the setting from the app's own user defaults
+/// (`WebContinuousSpellCheckingEnabled`) and treats a missing value as off,
+/// so without this nothing is underlined until someone finds the toggle in
+/// the right-click menu, and a reset of the app's preferences turns it off
+/// again. `registerDefaults:` only supplies the value used when none is
+/// stored: a choice made from that menu is stored and still wins.
+#[cfg(target_os = "macos")]
+fn macos_enable_spellcheck_by_default() {
+    use objc2::runtime::AnyObject;
+    use objc2::{class, msg_send};
+    use objc2_foundation::NSString;
+
+    let key = NSString::from_str("WebContinuousSpellCheckingEnabled");
+    unsafe {
+        let defaults: *mut AnyObject = msg_send![class!(NSUserDefaults), standardUserDefaults];
+        if defaults.is_null() {
+            return;
+        }
+        let yes: *mut AnyObject = msg_send![class!(NSNumber), numberWithBool: true];
+        let registered: *mut AnyObject =
+            msg_send![class!(NSDictionary), dictionaryWithObject: yes, forKey: &*key];
+        let _: () = msg_send![defaults, registerDefaults: registered];
+    }
+}
+
 pub fn run() {
     // Leave a breadcrumb before any panic aborts the process — e.g. an objc2
     // none_fail SIGABRT from a nil NSOpenPanel. tauri-plugin-log captures
@@ -1119,6 +1147,10 @@ pub fn run() {
         log::error!("PANIC at {}: {}", location, message);
         default_panic_hook(info);
     }));
+
+    // Before the first webview exists: WebKit reads the setting once.
+    #[cfg(target_os = "macos")]
+    macos_enable_spellcheck_by_default();
 
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default();

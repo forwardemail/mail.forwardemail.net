@@ -834,7 +834,30 @@
   const layoutModeValue = $derived($layoutModeStore || 'full');
   const isProductivityLayout = $derived(layoutModeValue === 'full');
   let lastLayoutMode = $state('full');
-  let verticalSplit = $state(0.45);
+  // Share of the list + reader width the message list takes in the classic
+  // layout. Saved so it is the same after a restart or an app update.
+  const VERTICAL_SPLIT_KEY = 'fe:reader-split';
+  const VERTICAL_SPLIT_MIN = 0.25;
+  const VERTICAL_SPLIT_MAX = 0.75;
+  const VERTICAL_SPLIT_DEFAULT = 0.45;
+  const clampVerticalSplit = (value: number) =>
+    Math.min(VERTICAL_SPLIT_MAX, Math.max(VERTICAL_SPLIT_MIN, value));
+  const readSavedVerticalSplit = () => {
+    try {
+      const saved = Number(localStorage.getItem(VERTICAL_SPLIT_KEY));
+      return saved > 0 ? clampVerticalSplit(saved) : VERTICAL_SPLIT_DEFAULT;
+    } catch {
+      return VERTICAL_SPLIT_DEFAULT;
+    }
+  };
+  const saveVerticalSplit = () => {
+    try {
+      localStorage.setItem(VERTICAL_SPLIT_KEY, verticalSplit.toFixed(3));
+    } catch {
+      // Storage can be full or blocked; the width then lasts for this session.
+    }
+  };
+  let verticalSplit = $state(readSavedVerticalSplit());
   let resizingVertical = $state(false);
   let messagesPaneEl: HTMLElement | null = $state(null);
   let readerPaneEl: HTMLElement | null = $state(null);
@@ -876,12 +899,13 @@
     if (total <= 0) return;
     const offset = Math.min(Math.max(event.clientX - messagesRect.left, 0), total);
     const ratio = offset / total;
-    verticalSplit = Math.min(0.75, Math.max(0.25, ratio));
+    verticalSplit = clampVerticalSplit(ratio);
   };
 
   const stopVerticalResize = () => {
     if (!resizingVertical) return;
     resizingVertical = false;
+    saveVerticalSplit();
     window.removeEventListener('mousemove', onVerticalResize);
     window.removeEventListener('mouseup', stopVerticalResize);
     window.removeEventListener('mouseleave', stopVerticalResize);
@@ -895,6 +919,7 @@
   let contextMenuConversation = $state<unknown>(null);
   let contextMenuFlipX = $state(false);
   let contextMenuFlipY = $state(false);
+  let contextMenuEl: HTMLElement | null = $state(null);
   let contextMoveOpen = $state(false);
   let contextLabelOpen = $state(false);
   let contextSubmenusEnabled = $state(true);
@@ -4915,18 +4940,32 @@
     const { clientX = 0, clientY = 0 } = event || {};
     const vw = typeof window !== 'undefined' ? window.innerWidth : 0;
     const vh = typeof window !== 'undefined' ? window.innerHeight : 0;
-    contextMenuFlipX = clientX + menuW > vw;
-    contextMenuFlipY = clientY + menuH > vh;
-    contextMenuX = contextMenuFlipX ? Math.max(padding, clientX - menuW) : clientX;
-    contextMenuY = contextMenuFlipY ? Math.max(padding, clientY - menuH) : clientY;
+    // Placed from an estimated size first, then from the real one below.
+    const placeContextMenu = (width: number, height: number) => {
+      contextMenuFlipX = clientX + width > vw - padding;
+      contextMenuFlipY = clientY + height > vh - padding;
+      contextMenuX = contextMenuFlipX ? Math.max(padding, clientX - width) : clientX;
+      // Opens upward from the pointer when there is no room below it, and is
+      // kept on screen when there is no room above either.
+      contextMenuY = contextMenuFlipY
+        ? Math.max(padding, Math.min(clientY - height, vh - padding - height))
+        : clientY;
+    };
+    placeContextMenu(menuW, menuH);
     contextMenuVisible = true;
     contextMoveOpen = false;
     contextLabelOpen = false;
     contextMenuIsMobile = isMobileViewport();
     contextSubmenusEnabled = true;
-    contextSubmenuFlipX = contextMenuX + menuW + submenuW > vw;
     contextSubmenuMaxHeight = Math.max(160, vh - padding * 2);
     contextSubmenuShiftY = 0;
+    // The menu's height depends on the folder and the message (Archive,
+    // Report spam and others come and go), so measure it once it is in the
+    // page. This runs before the next paint, so the menu does not jump.
+    await tick();
+    const rect = contextMenuEl?.getBoundingClientRect();
+    if (rect?.height) placeContextMenu(rect.width, rect.height);
+    contextSubmenuFlipX = contextMenuX + (rect?.width || menuW) + submenuW > vw;
   };
 
   const closeContextMenu = () => {
@@ -8679,7 +8718,8 @@
             ></div>
             <div
               class={`fixed z-[100] min-w-[200px] border border-border bg-popover p-1 shadow-lg touch-manipulation ${contextMenuFlipX ? 'origin-top-right' : 'origin-top-left'} ${contextMenuFlipY ? 'origin-bottom' : 'origin-top'} ${contextMenuIsMobile ? 'max-h-[70vh] overflow-y-auto overscroll-contain' : ''}`}
-              style={`top:${contextMenuY}px; left:${contextMenuX}px; ${contextMenuFlipX ? 'transform: translateX(-100%);' : ''} ${contextMenuFlipY ? 'transform: translateY(-100%);' : ''}`}
+              style={`top:${contextMenuY}px; left:${contextMenuX}px;`}
+              bind:this={contextMenuEl}
               role="menu"
               tabindex="0"
               data-context-menu
@@ -8889,10 +8929,12 @@
               onmousedown={startVerticalResize}
               onkeydown={(e) => {
                 if (e.key === 'ArrowLeft') {
-                  verticalSplit = Math.max(0.25, verticalSplit - 0.02);
+                  verticalSplit = clampVerticalSplit(verticalSplit - 0.02);
+                  saveVerticalSplit();
                   e.preventDefault();
                 } else if (e.key === 'ArrowRight') {
-                  verticalSplit = Math.min(0.75, verticalSplit + 0.02);
+                  verticalSplit = clampVerticalSplit(verticalSplit + 0.02);
+                  saveVerticalSplit();
                   e.preventDefault();
                 }
               }}
@@ -9047,8 +9089,12 @@
                 {/if}
               {:else if $selectedMessage}
                 {#if isProductivityLayout || $mobileReader}
+                  <!-- The subject header below pins to the same edge at the same
+                       z-index and comes later, so it painted over this bar's
+                       tooltips and Move menu, which hang below the bar. The
+                       bar goes on top while the pointer or focus is in it. -->
                   <div
-                    class="fe-reader-toolbar sticky top-0 z-20 bg-[var(--color-panel)] flex items-center gap-2 p-2 border-b border-border"
+                    class="fe-reader-toolbar sticky top-0 z-20 hover:z-30 focus-within:z-30 bg-[var(--color-panel)] flex items-center gap-2 p-2 border-b border-border"
                     style="padding-top: max(0.5rem, env(safe-area-inset-top, 0px))"
                   >
                     <button
