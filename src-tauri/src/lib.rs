@@ -1095,9 +1095,6 @@ fn push_pending_deep_links(queue: &mut Vec<String>, urls: Vec<String>) {
     }
 }
 
-// ── App Entry Point ──────────────────────────────────────────────────────────
-
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
 /// Turns on "Check Spelling While Typing" for the webviews unless the user
 /// has chosen for themselves.
 ///
@@ -1126,6 +1123,13 @@ fn macos_enable_spellcheck_by_default() {
     }
 }
 
+// ── App Entry Point ──────────────────────────────────────────────────────────
+
+// Keep this attribute on the line directly above `pub fn run()`. It exports the
+// symbols the Android and iOS shells start the app through. With anything
+// between the two, the attribute lands on that item instead, the mobile
+// library builds without those symbols and every mobile release build fails.
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Leave a breadcrumb before any panic aborts the process — e.g. an objc2
     // none_fail SIGABRT from a nil NSOpenPanel. tauri-plugin-log captures
