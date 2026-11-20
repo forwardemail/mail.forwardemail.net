@@ -6,6 +6,12 @@ release notes are taken from here. To change what a commit says, add a
 `Release-note: <text>` line to its message (or `Release-note: none` to leave
 it out).
 
+## 1.0.13 (2026-11-20)
+
+### Fixes
+
+- Put the mobile entry point back on run() _(Android, iOS)_
+
 ## 1.0.12 (2026-11-20)
 
 ### Fixes
