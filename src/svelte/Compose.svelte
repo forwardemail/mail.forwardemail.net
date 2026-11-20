@@ -68,7 +68,6 @@
   import TableRow from '@tiptap/extension-table-row';
   import TableCell from '@tiptap/extension-table-cell';
   import TableHeader from '@tiptap/extension-table-header';
-  import { extractTextContent } from '../utils/mime-utils.js';
   import { attachmentThumbnail, releaseAttachmentThumbnail } from '../utils/attachment-thumbnail';
   import {
     htmlToPlainText,
@@ -2748,8 +2747,18 @@
     if (isPlainText) {
       payload.text = body;
     } else {
-      payload.html = expandRawQuotes(body);
-      const textContent = extractTextContent(body);
+      // What the editor holds is what is sent. `body` only follows it once
+      // something is typed, so a draft opened and sent as it was went out as
+      // the HTML it was opened with, the reader's wrapper included.
+      const html = editorView ? editorView.getHTML() : body;
+      // An empty paragraph is a blank line in the editor and nothing at all
+      // in a mail client, where an empty <p> has no height.
+      payload.html = expandRawQuotes(html).replace(/<p([^>]*)><\/p>/g, '<p$1><br></p>');
+      // The text part keeps the paragraphs and line breaks. It is what a
+      // text-only client shows, what many clients quote in a reply, and what
+      // the Sent copy shows until the server's copy arrives; with the tags
+      // only stripped it was the whole message on one line.
+      const textContent = htmlToPlainText(html);
       if (textContent) payload.text = textContent;
     }
     if (attachments.length) {
