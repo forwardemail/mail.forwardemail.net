@@ -105,6 +105,24 @@ const renderedLines = (page, html) =>
     return lines;
   }, html);
 
+// How far apart a mail client with no stylesheet of its own draws the
+// paragraphs: the gap from the bottom of each to the top of the next, and the
+// height of each. The app's own pages reset paragraph margins, so this is
+// measured on a bare page.
+async function paragraphLayout(page, html) {
+  const bare = await page.context().newPage();
+  await bare.setContent(`<!doctype html><html><body>${html}</body></html>`);
+  const layout = await bare.evaluate(() => {
+    const boxes = [...document.querySelectorAll('body > p')].map((p) => p.getBoundingClientRect());
+    return {
+      gaps: boxes.slice(1).map((box, i) => Math.round(box.top - boxes[i].bottom)),
+      heights: boxes.map((box) => Math.round(box.height)),
+    };
+  });
+  await bare.close();
+  return layout;
+}
+
 test.describe('Sent message formatting', () => {
   test.beforeEach(({ page }, testInfo) => {
     void page;
@@ -125,6 +143,14 @@ test.describe('Sent message formatting', () => {
       expect(body.html).not.toMatch(/<p[^>]*><\/p>/);
       // A blank line is a paragraph holding a line break, which has height.
       expect(body.html.match(/<p[^>]*><br><\/p>/g)).toHaveLength(3);
+      // In a mail client each paragraph sits right under the one before it
+      // and a blank one is exactly one line tall, as in the editor. With the
+      // client's own paragraph margins a typed blank line arrived as three.
+      const { gaps, heights } = await paragraphLayout(page, body.html);
+      expect(gaps).toHaveLength(8);
+      expect(new Set(gaps)).toEqual(new Set([0]));
+      expect(new Set(heights).size).toBe(1);
+      expect(heights[0]).toBeGreaterThan(10);
     });
   }
 

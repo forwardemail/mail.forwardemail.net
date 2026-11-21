@@ -74,7 +74,7 @@
     sanitizeQuotedHtml,
     stripUntrustedRawQuotes,
   } from '../utils/sanitize.js';
-  import { hasRichFormatting, TextDirection } from '../utils/compose-format';
+  import { editorHtmlForSending, hasRichFormatting, TextDirection } from '../utils/compose-format';
   import { buildEncryptedPayload, buildSignedPayload } from '../utils/pgp-send';
   import { readPgpKeys } from '../utils/pgp-local';
   import { recipientKeyCoverage } from '../utils/pgp-recipients';
@@ -2751,9 +2751,8 @@
       // something is typed, so a draft opened and sent as it was went out as
       // the HTML it was opened with, the reader's wrapper included.
       const html = editorView ? editorView.getHTML() : body;
-      // An empty paragraph is a blank line in the editor and nothing at all
-      // in a mail client, where an empty <p> has no height.
-      payload.html = expandRawQuotes(html).replace(/<p([^>]*)><\/p>/g, '<p$1><br></p>');
+      // Paragraphs are sent spaced the way the editor shows them.
+      payload.html = expandRawQuotes(editorHtmlForSending(html));
       // The text part keeps the paragraphs and line breaks. It is what a
       // text-only client shows, what many clients quote in a reply, and what
       // the Sent copy shows until the server's copy arrives; with the tags
