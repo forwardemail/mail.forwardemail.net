@@ -36,6 +36,14 @@
   </screenshots>
   <!-- scripts/sync-version.cjs prepends a release entry on every version bump. -->
   <releases>
+    <release version="1.0.14" date="2026-11-21">
+      <description>
+        <p>Fixes</p>
+        <ul>
+          <li>Sent messages keep the spacing they had in the composer</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.0.13" date="2026-11-20">
       <description>
         <p>Bug fixes and performance improvements.</p>

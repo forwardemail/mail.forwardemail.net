@@ -6,6 +6,12 @@ release notes are taken from here. To change what a commit says, add a
 `Release-note: <text>` line to its message (or `Release-note: none` to leave
 it out).
 
+## 1.0.14 (2026-11-21)
+
+### Fixes
+
+- Sent messages keep the spacing they had in the composer
+
 ## 1.0.13 (2026-11-20)
 
 ### Fixes
