@@ -214,6 +214,10 @@ let unlockedPgpKeys = [];
 // keys were unlocked must not leave it encrypted for good, and one encrypted
 // to a key we do not have must not be retried on every pass.
 let pgpKeysVersion = 0;
+// Whether plaintext this worker decrypts may be written to IndexedDB and the
+// search index: only while App Lock encrypts the database at rest (sent with
+// the keys; src/utils/pgp-plaintext-policy.ts). Off until told otherwise.
+let persistPgpPlaintext = false;
 const pgpLockedTried = new Map<string, number>();
 const lockedTriedWithCurrentKeys = (account: string, id: string) =>
   pgpLockedTried.get(`${account}::${id}`) === pgpKeysVersion;
@@ -1702,7 +1706,10 @@ async function fetchAndCacheBodyWithOptions(account, folder, msg, options = {}) 
     // encrypted, so there is nothing to download them from later.
     const keptAttachments =
       memoryConstrained && !pgpInfo ? slimCachedAttachments(attachments) : attachments;
-    if (dbPort && !keysChangedSinceDecrypt()) {
+    // Decrypted plaintext is cached only while App Lock encrypts it on disk;
+    // the reader keeps it in memory otherwise (pgp-session-cache.ts).
+    const keepPlaintext = !pgpInfo || persistPgpPlaintext;
+    if (dbPort && keepPlaintext && !keysChangedSinceDecrypt()) {
       await cacheWrite(
         () =>
           db.messageBodies.put({
@@ -1740,8 +1747,8 @@ async function fetchAndCacheBodyWithOptions(account, folder, msg, options = {}) 
           snippet: msg.snippet,
           date: msg.date || msg.dateMs,
           labels: msg.labels || msg.labelIds || msg.label_ids || [],
-          body,
-          textContent,
+          body: keepPlaintext ? body : '',
+          textContent: keepPlaintext ? textContent : '',
         },
       ],
     });
@@ -1861,7 +1868,12 @@ async function fetchAndCacheBodyWithOptions(account, folder, msg, options = {}) 
       if (isPgp) {
         decryptedWithKeys = pgpKeysVersion;
         const decrypted = await decryptPgp(raw);
-        if (!decrypted) {
+        // Decrypted, but the plaintext may not be cached (no App Lock): cache
+        // the ciphertext as if it had not decrypted, so later passes neither
+        // download nor decrypt it again. The reader decrypts on open and keeps
+        // the result in memory (pgp-session-cache.ts).
+        const cipherOnly = Boolean(decrypted) && !persistPgpPlaintext;
+        if (!decrypted || cipherOnly) {
           pgpLockedTried.set(`${account}::${apiId}`, pgpKeysVersion);
           // Keep the ciphertext so later passes do not download it again. The
           // reader decrypts from `raw` (handleCachedPgpRaw), and changing PGP
@@ -1885,8 +1897,11 @@ async function fetchAndCacheBodyWithOptions(account, folder, msg, options = {}) 
               'caching locked PGP body',
             );
           }
-          // Return raw data so main thread can attempt PGP decryption without re-fetching
-          return { id: apiId, folder, pgpLocked: true, raw, meta: result };
+          // Return raw data so main thread can attempt PGP decryption without
+          // re-fetching. A reader that asked gets the plaintext just decrypted.
+          if (!decrypted) {
+            return { id: apiId, folder, pgpLocked: true, raw, meta: result };
+          }
         }
         const parsed = await parseRawMessage(decrypted);
         if (parsed) {
@@ -1905,7 +1920,7 @@ async function fetchAndCacheBodyWithOptions(account, folder, msg, options = {}) 
             pgpInfo = { encrypted: true };
             if (typeof parsed.subject === 'string' && parsed.subject.trim()) {
               pgpInfo.subject = parsed.subject;
-              if (parsed.subject !== msg?.subject) {
+              if (parsed.subject !== msg?.subject && persistPgpPlaintext) {
                 changes.subject = parsed.subject;
                 // The server's subject (a placeholder), put back when the
                 // keys are removed (forgetPgpPlaintext)
@@ -1923,6 +1938,10 @@ async function fetchAndCacheBodyWithOptions(account, folder, msg, options = {}) 
           } catch {
             // Best effort; the interactive decrypt path persists the same info.
           }
+        }
+        // Badge recorded; a background pass keeps no plaintext (see cipherOnly)
+        if (cipherOnly && !returnPayload) {
+          return { id: apiId, folder, pgpLocked: true, raw, meta: result };
         }
       } else {
         const parsed = await parseRawMessage(raw);
@@ -3130,6 +3149,7 @@ self.onmessage = (event) => {
     return;
   }
   if (data.type === 'pgpKeys') {
+    persistPgpPlaintext = data.persistPgpPlaintext === true;
     pgpKeysReady = updatePgpKeys(
       data.keys || [],
       data.passphrases || {},

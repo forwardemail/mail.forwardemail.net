@@ -148,6 +148,7 @@ const ACCOUNT_LOCAL_KEY_PREFIXES = [
   'pgp_passphrases_',
   'pgp_recipients_',
   'remote_images_trusted_',
+  'pgp_plaintext_purged_',
   'signature_',
   'signature_html_',
   'signature_enabled_',

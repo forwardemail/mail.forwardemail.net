@@ -1,4 +1,5 @@
 import { config } from '../config.js';
+import { pgpPlaintextMayPersist } from './pgp-plaintext-policy';
 import SyncWorker from '../workers/sync.worker.ts?worker&inline';
 import { Local } from './storage.js';
 import { readRecipientKeys } from './pgp-recipients';
@@ -38,9 +39,14 @@ function getPgpPayload() {
     const passphrases = rawPass ? JSON.parse(rawPass) : {};
     // Pinned contact keys, which the worker checks signatures against
     const contactKeys = readRecipientKeys(currentAcct).map((k) => k.armored);
-    return { keys: Array.isArray(keys) ? keys : [], passphrases: passphrases || {}, contactKeys };
+    return {
+      keys: Array.isArray(keys) ? keys : [],
+      passphrases: passphrases || {},
+      contactKeys,
+      persistPgpPlaintext: pgpPlaintextMayPersist(),
+    };
   } catch {
-    return { keys: [], passphrases: {}, contactKeys: [] };
+    return { keys: [], passphrases: {}, contactKeys: [], persistPgpPlaintext: false };
   }
 }
 
@@ -193,6 +199,12 @@ export async function ensureSyncWorkerReady() {
 
   // Connect to db worker
   await connectToDbWorker();
+
+  // Decrypted PGP plaintext saved before it was kept off disk without App
+  // Lock (imported late: the purge uses the stores, which import this file).
+  void import('../stores/pgpPlaintextPurge')
+    .then((m) => m.purgePgpPlaintextIfNeeded(activeAccount))
+    .catch(() => {});
 
   workerReady = true;
   return worker;
