@@ -77,6 +77,8 @@
   import { editorHtmlForSending, hasRichFormatting, TextDirection } from '../utils/compose-format';
   import { buildEncryptedPayload, buildSignedPayload } from '../utils/pgp-send';
   import { readPgpKeys } from '../utils/pgp-local';
+  import { pinRetriesText, systemGpgEnabled, type AskPin } from '../utils/pgp-system-gpg';
+  import PassphraseModal from './PassphraseModal.svelte';
   import { recipientKeyCoverage } from '../utils/pgp-recipients';
   import { pickFiles } from '../utils/file-picker';
   import { isTauriDesktop, isTouchPrimary } from '../utils/platform';
@@ -401,8 +403,37 @@
   // well, so this only matters while encryption is off. Offered only when the
   // account has a private key.
   let signEnabled = $state(false);
-  const accountHasSigningKey = () => readPgpKeys(activeAccount() || undefined).length > 0;
+  // A key held by the app, or a YubiKey / smartcard through the system gpg
+  // (desktop, turned on in Settings).
+  const accountHasSigningKey = () =>
+    readPgpKeys(activeAccount() || undefined).length > 0 ||
+    systemGpgEnabled(activeAccount() || 'default');
   let hasSigningKey = $state(accountHasSigningKey());
+  // The YubiKey PIN, when gpg-agent's own pinentry cannot run. Compose has its
+  // own dialog: on desktop it is a separate window without the main one's.
+  type PinDialog = {
+    open: (
+      name?: string,
+      options?: Record<string, unknown>,
+    ) => Promise<{ passphrase: string; remember: boolean }>;
+  };
+  let pinDialog: PinDialog | null = null;
+  const askCardPin: AskPin = async ({ retries, error: pinError }) => {
+    if (!pinDialog) return null;
+    try {
+      const res = await pinDialog.open('', {
+        title: 'Unlock your YubiKey',
+        description: `Enter the PIN of your YubiKey or smartcard to sign this message. Touch the key afterwards if it blinks.${pinRetriesText(retries)}`,
+        label: 'PIN',
+        submitLabel: 'Sign',
+        allowRemember: false,
+        error: pinError,
+      });
+      return res?.passphrase || null;
+    } catch {
+      return null;
+    }
+  };
   const toggleSign = () => {
     signEnabled = !signEnabled;
   };
@@ -2953,20 +2984,23 @@
     // protects whichever path happened to check it and the rest go out in the
     // clear under a banner that says otherwise.
     if (encryptEnabled) {
-      const encrypted = await buildEncryptedPayload({
-        from: payload.from as string,
-        to: payload.to as string[],
-        cc: payload.cc as string[],
-        bcc: payload.bcc as string[],
-        subject: payload.subject as string,
-        text: payload.text as string,
-        html: payload.html as string,
-        attachments: payload.attachments as { filename?: string }[],
-        replyTo: payload.reply_to as string,
-        inReplyTo: payload.inReplyTo as string,
-        references: payload.references as string,
-        messageId: payload.messageId as string,
-      });
+      const encrypted = await buildEncryptedPayload(
+        {
+          from: payload.from as string,
+          to: payload.to as string[],
+          cc: payload.cc as string[],
+          bcc: payload.bcc as string[],
+          subject: payload.subject as string,
+          text: payload.text as string,
+          html: payload.html as string,
+          attachments: payload.attachments as { filename?: string }[],
+          replyTo: payload.reply_to as string,
+          inReplyTo: payload.inReplyTo as string,
+          references: payload.references as string,
+          messageId: payload.messageId as string,
+        },
+        { askPin: askCardPin },
+      );
       if (!encrypted.ok) {
         error = encrypted.message || 'Could not encrypt this message.';
         toasts?.show?.(error, 'error');
@@ -2978,20 +3012,23 @@
       for (const key of ['html', 'text', 'attachments', 'has_attachment']) delete payload[key];
       payload.raw = encrypted.payload?.raw;
     } else if (signEnabled) {
-      const signed = await buildSignedPayload({
-        from: payload.from as string,
-        to: payload.to as string[],
-        cc: payload.cc as string[],
-        bcc: payload.bcc as string[],
-        subject: payload.subject as string,
-        text: payload.text as string,
-        html: payload.html as string,
-        attachments: payload.attachments as { filename?: string }[],
-        replyTo: payload.reply_to as string,
-        inReplyTo: payload.inReplyTo as string,
-        references: payload.references as string,
-        messageId: payload.messageId as string,
-      });
+      const signed = await buildSignedPayload(
+        {
+          from: payload.from as string,
+          to: payload.to as string[],
+          cc: payload.cc as string[],
+          bcc: payload.bcc as string[],
+          subject: payload.subject as string,
+          text: payload.text as string,
+          html: payload.html as string,
+          attachments: payload.attachments as { filename?: string }[],
+          replyTo: payload.reply_to as string,
+          inReplyTo: payload.inReplyTo as string,
+          references: payload.references as string,
+          messageId: payload.messageId as string,
+        },
+        { askPin: askCardPin },
+      );
       if (!signed.ok) {
         error = signed.message || 'Could not sign this message.';
         toasts?.show?.(error, 'error');
@@ -5105,6 +5142,10 @@
     </div>
   {/if}
 </Tooltip.Provider>
+
+{#if isTauriDesktop}
+  <PassphraseModal registerApi={(api) => (pinDialog = api)} />
+{/if}
 
 <style>
   /* TipTap editor styles */

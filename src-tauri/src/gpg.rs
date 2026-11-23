@@ -1,4 +1,4 @@
-//! Decrypt through the system GnuPG, for keys the app cannot hold.
+//! Decrypt and sign through the system GnuPG, for keys the app cannot hold.
 //!
 //! A private key on a hardware token (a YubiKey or another OpenPGP card)
 //! never leaves the token, so openpgp.js in the webview cannot use it. The
@@ -12,8 +12,15 @@
 //! GUI app: "Inappropriate ioctl for device"), the frontend asks for the PIN
 //! itself and calls again with it, and gpg gets it through loopback pinentry.
 //!
-//! Only decryption is exposed, and the frontend chooses nothing but the
-//! ciphertext and the PIN: no arguments, no key ids, no other gpg operation.
+//! Two operations are exposed, decrypting and signing (alone, or with
+//! encryption to the recipients' keys for an encrypted send). The frontend
+//! passes data, the sender's address, recipient public keys and the PIN, never
+//! gpg arguments.
+//!
+//! Plaintext never goes to a file: gpg reads the loopback PIN from the first
+//! line of stdin before the message that follows it. Recipient public keys
+//! are written to private temporary files for `--recipient-file`, so they are
+//! used without being imported into the user's keyring.
 
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -62,6 +69,15 @@ impl GpgError {
             message: message.into(),
         }
     }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GpgSignResult {
+    /// A detached signature, or with recipients an encrypted and signed message.
+    pub armored: String,
+    /// The RFC 3156 micalg for the hash gpg used, e.g. "pgp-sha512".
+    pub micalg: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -149,9 +165,8 @@ fn classify_failure(stderr: &str) -> GpgError {
     let lower = stderr.to_lowercase();
     let last_message = stderr
         .lines()
-        .filter(|l| !l.starts_with("[GNUPG:] ") && !l.trim().is_empty())
-        .last()
-        .unwrap_or("decryption failed")
+        .rfind(|l| !l.starts_with("[GNUPG:] ") && !l.trim().is_empty())
+        .unwrap_or("gpg failed")
         .trim()
         .to_string();
 
@@ -173,7 +188,11 @@ fn classify_failure(stderr: &str) -> GpgError {
         return GpgError::new("no_card", last_message);
     }
     // SC_OP_FAILURE 2 is a wrong PIN; BAD_PASSPHRASE is the loopback form.
-    if status("SC_OP_FAILURE 2") || status("BAD_PASSPHRASE") || lower.contains("bad pin") {
+    if status("SC_OP_FAILURE 2")
+        || status("BAD_PASSPHRASE")
+        || lower.contains("bad pin")
+        || lower.contains("bad passphrase")
+    {
         return GpgError::new("bad_pin", last_message);
     }
     if lower.contains("inappropriate ioctl")
@@ -189,11 +208,11 @@ fn classify_failure(stderr: &str) -> GpgError {
     GpgError::new("failed", last_message)
 }
 
-/// Ciphertext in a private temporary file, for loopback mode, where stdin
-/// carries the PIN. It is ciphertext, so nothing readable touches the disk.
-struct TempCiphertext(PathBuf);
+/// A private temporary file, removed on drop. Only ever ciphertext or a
+/// public key, so nothing readable touches the disk.
+struct TempFile(PathBuf);
 
-impl TempCiphertext {
+impl TempFile {
     fn create(data: &[u8]) -> Result<Self, GpgError> {
         use std::io::Write;
         let n = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -221,7 +240,7 @@ impl TempCiphertext {
     }
 }
 
-impl Drop for TempCiphertext {
+impl Drop for TempFile {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.0);
     }
@@ -267,11 +286,7 @@ pub async fn gpg_decrypt(
     if !armored.contains("-----BEGIN PGP MESSAGE-----") {
         return Err(GpgError::new("invalid_input", "No PGP armor block"));
     }
-    if let Some(pin) = &pin {
-        if pin.is_empty() || pin.len() > 127 || pin.contains(['\n', '\r', '\0']) {
-            return Err(GpgError::new("invalid_input", "Invalid PIN"));
-        }
-    }
+    check_pin(&pin)?;
     let gpg = find_gpg().ok_or_else(|| {
         GpgError::new("unavailable", "GnuPG (gpg) was not found on this computer")
     })?;
@@ -288,7 +303,7 @@ pub async fn gpg_decrypt(
             run_gpg(&gpg, &args, armored.into_bytes(), TIMEOUT).await?
         }
         Some(pin) => {
-            let file = TempCiphertext::create(armored.as_bytes())?;
+            let file = TempFile::create(armored.as_bytes())?;
             let path = file.0.to_string_lossy().into_owned();
             let mut args = base.to_vec();
             args.extend([
@@ -337,9 +352,158 @@ pub async fn gpg_decrypt(
     })
 }
 
+/// Most recipients (and the sender's own key) a message is encrypted to.
+const MAX_RECIPIENTS: usize = 100;
+const MAX_KEY_SIZE: usize = 1024 * 1024;
+
+fn check_pin(pin: &Option<String>) -> Result<(), GpgError> {
+    if let Some(pin) = pin {
+        if pin.is_empty() || pin.len() > 127 || pin.contains(['\n', '\r', '\0']) {
+            return Err(GpgError::new("invalid_input", "Invalid PIN"));
+        }
+    }
+    Ok(())
+}
+
+/// A bare email address, safe to put in `<...>` as a gpg user id.
+fn valid_signer(signer: &str) -> bool {
+    signer.len() <= 254
+        && signer.contains('@')
+        && !signer.starts_with('-')
+        && !signer
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || matches!(c, '<' | '>'))
+}
+
+/// The micalg for an OpenPGP hash algorithm id (RFC 4880 9.4, RFC 3156 5).
+fn micalg(hash_id: &str) -> Option<String> {
+    let name = match hash_id {
+        "1" => "md5",
+        "2" => "sha1",
+        "3" => "ripemd160",
+        "8" => "sha256",
+        "9" => "sha384",
+        "10" => "sha512",
+        "11" => "sha224",
+        _ => return None,
+    };
+    Some(format!("pgp-{name}"))
+}
+
+/// Sign `data` as `signer`: a detached signature, or with `recipient_keys`
+/// (armored public keys) a message encrypted to them and signed.
+///
+/// The key is the one in the user's GnuPG keyring for `signer`, else gpg's
+/// default key, as the app picks its own keys. The PIN is asked for the same
+/// two ways as for decryption.
+#[tauri::command]
+pub async fn gpg_sign(
+    data: String,
+    signer: String,
+    recipient_keys: Vec<String>,
+    pin: Option<String>,
+) -> Result<GpgSignResult, GpgError> {
+    if data.is_empty() || data.len() > MAX_INPUT {
+        return Err(GpgError::new(
+            "invalid_input",
+            "Nothing to sign, or too large",
+        ));
+    }
+    let signer = signer.trim().to_lowercase();
+    if !valid_signer(&signer) {
+        return Err(GpgError::new("invalid_input", "Invalid sender address"));
+    }
+    if recipient_keys.len() > MAX_RECIPIENTS
+        || recipient_keys
+            .iter()
+            .any(|k| k.len() > MAX_KEY_SIZE || !k.contains("-----BEGIN PGP PUBLIC KEY BLOCK-----"))
+    {
+        return Err(GpgError::new("invalid_input", "Invalid recipient key"));
+    }
+    check_pin(&pin)?;
+    let gpg = find_gpg().ok_or_else(|| {
+        GpgError::new("unavailable", "GnuPG (gpg) was not found on this computer")
+    })?;
+    let encrypt = !recipient_keys.is_empty();
+    let user_id = format!("<{signer}>");
+
+    let _guard = GPG_LOCK.lock().await;
+
+    let has_key = run_gpg(
+        &gpg,
+        &["--list-secret-keys", "--with-colons", "--", &user_id],
+        Vec::new(),
+        CARD_STATUS_TIMEOUT,
+    )
+    .await
+    .map(|o| {
+        o.status.success()
+            && String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .any(|l| l.starts_with("sec:"))
+    })
+    .unwrap_or(false);
+
+    let key_files = recipient_keys
+        .iter()
+        .map(|k| TempFile::create(k.as_bytes()))
+        .collect::<Result<Vec<_>, _>>()?;
+    let key_paths: Vec<String> = key_files
+        .iter()
+        .map(|f| f.0.to_string_lossy().into_owned())
+        .collect();
+
+    let mut args: Vec<&str> = vec!["--no-auto-key-retrieve", "--status-fd", "2", "--armor"];
+    if has_key {
+        args.extend(["--local-user", user_id.as_str()]);
+    }
+    if pin.is_some() {
+        args.extend(["--pinentry-mode", "loopback", "--passphrase-fd", "0"]);
+    }
+    if encrypt {
+        args.extend(["--encrypt", "--sign"]);
+        for path in &key_paths {
+            args.extend(["--recipient-file", path.as_str()]);
+        }
+    } else {
+        args.push("--detach-sign");
+    }
+
+    // gpg reads the PIN's line from stdin before the data after it.
+    let mut input = match &pin {
+        Some(pin) => format!("{pin}\n").into_bytes(),
+        None => Vec::new(),
+    };
+    input.extend_from_slice(data.as_bytes());
+    let output = run_gpg(&gpg, &args, input, TIMEOUT).await?;
+    drop(key_files);
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let mut hash = None;
+    let mut encrypted = false;
+    for status in stderr.lines().filter_map(|l| l.strip_prefix("[GNUPG:] ")) {
+        let fields: Vec<&str> = status.split(' ').collect();
+        match fields.first().copied() {
+            // SIG_CREATED <type> <pk_algo> <hash_algo> <class> <time> <fpr>
+            Some("SIG_CREATED") => hash = fields.get(3).and_then(|h| micalg(h)).or(hash),
+            Some("END_ENCRYPTION") => encrypted = true,
+            _ => {}
+        }
+    }
+    let signed = stderr.contains("[GNUPG:] SIG_CREATED ");
+    if !output.status.success() || !signed || (encrypt && !encrypted) || output.stdout.is_empty() {
+        return Err(classify_failure(&stderr));
+    }
+
+    Ok(GpgSignResult {
+        armored: String::from_utf8_lossy(&output.stdout).into_owned(),
+        micalg: hash,
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{classify_failure, uid_email};
+    use super::{classify_failure, micalg, uid_email, valid_signer};
 
     #[test]
     fn email_from_user_id() {
@@ -367,5 +531,28 @@ mod tests {
         let err = classify_failure(no_key);
         assert_eq!(err.code, "no_secret_key");
         assert_eq!(err.message, "gpg: decryption failed: No secret key");
+
+        let bad_pass = "[GNUPG:] BEGIN_SIGNING H10\ngpg: signing failed: Bad passphrase\n";
+        assert_eq!(classify_failure(bad_pass).code, "bad_pin");
+
+        let no_signer = "[GNUPG:] INV_SGNR 9 a@b.c\ngpg: signing failed: No secret key\n";
+        assert_eq!(classify_failure(no_signer).code, "no_secret_key");
+    }
+
+    #[test]
+    fn signer_is_a_bare_address() {
+        assert!(valid_signer("jane@example.com"));
+        assert!(!valid_signer("--batch@x"));
+        assert!(!valid_signer("jane"));
+        assert!(!valid_signer("a b@example.com"));
+        assert!(!valid_signer("a>@example.com"));
+        assert!(!valid_signer("a@example.com\n"));
+    }
+
+    #[test]
+    fn micalg_from_hash_id() {
+        assert_eq!(micalg("8").as_deref(), Some("pgp-sha256"));
+        assert_eq!(micalg("10").as_deref(), Some("pgp-sha512"));
+        assert_eq!(micalg("99"), None);
     }
 }

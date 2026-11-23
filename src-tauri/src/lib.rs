@@ -1330,6 +1330,8 @@ pub fn run() {
             #[cfg(desktop)]
             gpg::gpg_decrypt,
             #[cfg(desktop)]
+            gpg::gpg_sign,
+            #[cfg(desktop)]
             toggle_window_visibility,
             #[cfg(desktop)]
             open_url_in_browser,

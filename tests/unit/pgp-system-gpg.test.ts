@@ -197,3 +197,66 @@ describe('decryptWithSystemGpg', () => {
     expect(res.signature).toEqual({ status: 'verified', signers: ['a@b.c'] });
   });
 });
+
+describe('signWithSystemGpg', () => {
+  it('passes the data, signer and recipient keys to gpg', async () => {
+    hoisted.invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === 'gpg_available') return true;
+      if (cmd === 'gpg_sign') return { armored: 'SIG', micalg: 'pgp-sha256' };
+      throw new Error(`unexpected ${cmd}`);
+    });
+    const { signWithSystemGpg } = await load();
+    const res = await signWithSystemGpg({ data: 'body', signer: 'a@x.com', recipientKeys: ['K'] });
+    expect(res).toEqual({ success: true, armored: 'SIG', micalg: 'pgp-sha256' });
+    expect(hoisted.invoke).toHaveBeenCalledWith('gpg_sign', {
+      data: 'body',
+      signer: 'a@x.com',
+      recipientKeys: ['K'],
+      pin: null,
+    });
+  });
+
+  it('asks for the PIN when the pinentry cannot run, as for decryption', async () => {
+    let left = 3;
+    hoisted.invoke.mockImplementation(async (cmd: string, args?: { pin?: string | null }) => {
+      if (cmd === 'gpg_available') return true;
+      if (cmd === 'gpg_card_info') return { present: true, pinRetries: left };
+      if (cmd === 'gpg_sign') {
+        if (!args?.pin) throw { code: 'pinentry', message: 'Inappropriate ioctl for device' };
+        if (args.pin !== '123456') {
+          left -= 1;
+          throw { code: 'bad_pin', message: 'Bad PIN' };
+        }
+        return { armored: 'SIG', micalg: null };
+      }
+      throw new Error(`unexpected ${cmd}`);
+    });
+    const askPin = vi.fn().mockResolvedValueOnce('000000').mockResolvedValueOnce('123456');
+    const { signWithSystemGpg } = await load();
+    const res = await signWithSystemGpg({ data: 'body', signer: 'a@x.com', askPin });
+    expect(res).toEqual({ success: true, armored: 'SIG', micalg: undefined });
+    expect(askPin).toHaveBeenLastCalledWith({
+      retries: 2,
+      error: 'Wrong PIN. 2 tries left before the card blocks the PIN.',
+    });
+  });
+
+  it('names the address when the keyring has no key for it', async () => {
+    hoisted.invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === 'gpg_available') return true;
+      throw { code: 'no_secret_key', message: 'signing failed: No secret key' };
+    });
+    const { signWithSystemGpg } = await load();
+    const res = await signWithSystemGpg({ data: 'body', signer: 'a@x.com' });
+    expect(res.reason).toBe('no_secret_key');
+    expect(res.message).toContain('a@x.com');
+  });
+
+  it('does nothing outside the desktop app', async () => {
+    hoisted.desktop = false;
+    const { signWithSystemGpg } = await load();
+    const res = await signWithSystemGpg({ data: 'body', signer: 'a@x.com' });
+    expect(res.reason).toBe('unavailable');
+    expect(hoisted.invoke).not.toHaveBeenCalled();
+  });
+});

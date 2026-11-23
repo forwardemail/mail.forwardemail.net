@@ -1,6 +1,6 @@
 /**
- * Decrypt with the system GnuPG (desktop app only), for a key on a hardware
- * token such as a YubiKey.
+ * Decrypt and sign with the system GnuPG (desktop app only), for a key on a
+ * hardware token such as a YubiKey.
  *
  * Such a key never leaves the token, so the worker's openpgp.js cannot use
  * it. The desktop app can hand the message to the local `gpg`
@@ -146,6 +146,78 @@ function retriesText(retries: number | null): string {
     : ` ${retries} tries left before the card blocks the PIN.`;
 }
 
+type PinOutcome<T> = { ok: true; value: T } | { ok: false; result: SystemGpgResult };
+
+/**
+ * Run a gpg operation that may need the card PIN: first with gpg-agent's own
+ * pinentry, then, when that cannot run here, with a PIN from `askPin`, asked
+ * again after a wrong one with the tries left.
+ */
+async function withCardPin<T>(
+  invoke: Invoke,
+  run: (pin: string | null) => Promise<T>,
+  askPin?: AskPin,
+): Promise<PinOutcome<T>> {
+  try {
+    return { ok: true, value: await run(null) };
+  } catch (err) {
+    const gpgErr = asGpgError(err);
+    if (gpgErr.code !== 'pinentry') return { ok: false, result: failure(gpgErr) };
+
+    // gpg-agent's pinentry could not run here. Ask for the PIN ourselves,
+    // after checking a card is there to ask it for.
+    const card = await cardInfo(invoke);
+    if (!card.present) return { ok: false, result: failure({ code: 'no_card', message: '' }) };
+    if (card.pinRetries === 0) {
+      return {
+        ok: false,
+        result: {
+          success: false,
+          reason: 'pin_blocked',
+          message: 'The card PIN is blocked. Unblock it with your admin PIN or reset code.',
+        },
+      };
+    }
+    if (!askPin) return { ok: false, result: failure(gpgErr) };
+
+    let retries = card.pinRetries;
+    let error: string | undefined;
+    for (;;) {
+      const pin = await askPin({ retries, error });
+      if (!pin) {
+        return {
+          ok: false,
+          result: { success: false, reason: 'cancelled', message: 'PIN entry cancelled.' },
+        };
+      }
+      try {
+        return { ok: true, value: await run(pin) };
+      } catch (retryErr) {
+        const e = asGpgError(retryErr);
+        if (e.code !== 'bad_pin') return { ok: false, result: failure(e) };
+        retries = (await cardInfo(invoke)).pinRetries;
+        if (retries === 0) {
+          return {
+            ok: false,
+            result: {
+              success: false,
+              reason: 'pin_blocked',
+              message: 'Wrong PIN. The card PIN is now blocked.',
+            },
+          };
+        }
+        error = `Wrong PIN.${retriesText(retries)}`;
+      }
+    }
+  }
+}
+
+const NOT_FOUND: SystemGpgResult = {
+  success: false,
+  reason: 'unavailable',
+  message: 'GnuPG (gpg) was not found on this computer.',
+};
+
 /**
  * Decrypt `raw` (inline armor or a whole PGP/MIME message) with the system
  * gpg. The token may wait for a PIN or a touch, so background work passes
@@ -156,13 +228,7 @@ export async function decryptWithSystemGpg(
   { allowPrompt = true, askPin }: { allowPrompt?: boolean; askPin?: AskPin } = {},
 ): Promise<SystemGpgResult> {
   if (!allowPrompt) return { success: false, reason: 'prompt_not_allowed' };
-  if (!raw || !(await systemGpgAvailable())) {
-    return {
-      success: false,
-      reason: 'unavailable',
-      message: 'GnuPG (gpg) was not found on this computer.',
-    };
-  }
+  if (!raw || !(await systemGpgAvailable())) return NOT_FOUND;
 
   const found = await requestPgpBlock(raw).catch(() => null);
   if (!found?.success || !found.block) {
@@ -170,53 +236,15 @@ export async function decryptWithSystemGpg(
   }
 
   const invoke = await getInvoke();
-  let res: GpgDecryptResponse | null = null;
-  try {
-    res = await invoke<GpgDecryptResponse>('gpg_decrypt', { armored: found.block, pin: null });
-  } catch (err) {
-    const gpgErr = asGpgError(err);
-    if (gpgErr.code !== 'pinentry') return failure(gpgErr);
-
-    // gpg-agent's pinentry could not run here. Ask for the PIN ourselves,
-    // after checking a card is there to ask it for.
-    const card = await cardInfo(invoke);
-    if (!card.present) return failure({ code: 'no_card', message: '' });
-    if (card.pinRetries === 0) {
-      return {
-        success: false,
-        reason: 'pin_blocked',
-        message: 'The card PIN is blocked. Unblock it with your admin PIN or reset code.',
-      };
-    }
-    if (!askPin) return failure(gpgErr);
-
-    let retries = card.pinRetries;
-    let error: string | undefined;
-    for (;;) {
-      const pin = await askPin({ retries, error });
-      if (!pin) {
-        return { success: false, reason: 'cancelled', message: 'PIN entry cancelled.' };
-      }
-      try {
-        res = await invoke<GpgDecryptResponse>('gpg_decrypt', { armored: found.block, pin });
-        break;
-      } catch (retryErr) {
-        const e = asGpgError(retryErr);
-        if (e.code !== 'bad_pin') return failure(e);
-        retries = (await cardInfo(invoke)).pinRetries;
-        if (retries === 0) {
-          return {
-            success: false,
-            reason: 'pin_blocked',
-            message: 'Wrong PIN. The card PIN is now blocked.',
-          };
-        }
-        error = `Wrong PIN.${retriesText(retries)}`;
-      }
-    }
-  }
-
+  const outcome = await withCardPin(
+    invoke,
+    (pin) => invoke<GpgDecryptResponse>('gpg_decrypt', { armored: found.block, pin }),
+    askPin,
+  );
+  if (!outcome.ok) return outcome.result;
+  const res = outcome.value;
   if (!res) return failure({ code: 'failed', message: 'gpg returned nothing' });
+
   const { signed, signature } = signatureFromGpg(res);
   const parsed = await requestParseDecrypted({ plaintext: res.plaintext, signed, signature });
   if (!parsed?.success) {
@@ -232,6 +260,62 @@ export async function decryptWithSystemGpg(
     signed,
     signature,
   };
+}
+
+export interface SystemGpgSignResult {
+  success: boolean;
+  /** A detached signature, or with recipient keys the encrypted message. */
+  armored?: string;
+  /** RFC 3156 micalg for a detached signature, e.g. "pgp-sha512". */
+  micalg?: string;
+  reason?: string;
+  message?: string;
+}
+
+/**
+ * Sign an outgoing message with the system gpg, as `signer` (the From
+ * address; gpg's default key when the keyring has none for it). With
+ * `recipientKeys` (armored public keys) the message is also encrypted to
+ * them, in one OpenPGP message, as the app does with its own keys.
+ */
+export async function signWithSystemGpg({
+  data,
+  signer,
+  recipientKeys = [],
+  askPin,
+}: {
+  data: string;
+  signer: string;
+  recipientKeys?: string[];
+  askPin?: AskPin;
+}): Promise<SystemGpgSignResult> {
+  if (!data || !(await systemGpgAvailable())) return NOT_FOUND;
+  const invoke = await getInvoke();
+  const outcome = await withCardPin(
+    invoke,
+    (pin) =>
+      invoke<{ armored: string; micalg: string | null }>('gpg_sign', {
+        data,
+        signer,
+        recipientKeys,
+        pin,
+      }),
+    askPin,
+  );
+  if (!outcome.ok) {
+    const { reason, message } = outcome.result;
+    if (reason === 'no_secret_key') {
+      return {
+        success: false,
+        reason,
+        message: `No secret key in your GnuPG keyring or YubiKey to sign as ${signer}.`,
+      };
+    }
+    return { success: false, reason, message };
+  }
+  const res = outcome.value;
+  if (!res?.armored) return { success: false, reason: 'failed', message: 'gpg returned nothing' };
+  return { success: true, armored: res.armored, micalg: res.micalg || undefined };
 }
 
 export { retriesText as pinRetriesText };
