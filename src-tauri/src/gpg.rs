@@ -12,8 +12,9 @@
 //! GUI app: "Inappropriate ioctl for device"), the frontend asks for the PIN
 //! itself and calls again with it, and gpg gets it through loopback pinentry.
 //!
-//! Two operations are exposed, decrypting and signing (alone, or with
-//! encryption to the recipients' keys for an encrypted send). The frontend
+//! Three operations are exposed: decrypting, signing (alone, or with
+//! encryption to the recipients' keys for an encrypted send), and checking
+//! the signature on a signed-only message against the keyring. The frontend
 //! passes data, the sender's address, recipient public keys and the PIN, never
 //! gpg arguments.
 //!
@@ -321,25 +322,8 @@ pub async fn gpg_decrypt(
     };
 
     let stderr = String::from_utf8_lossy(&output.stderr);
-    let mut decrypted_ok = false;
-    let mut signature_status: Option<&str> = None;
-    let mut signer = None;
-    for status in stderr.lines().filter_map(|l| l.strip_prefix("[GNUPG:] ")) {
-        let mut parts = status.splitn(3, ' ');
-        match parts.next().unwrap_or("") {
-            "DECRYPTION_OKAY" => decrypted_ok = true,
-            "GOODSIG" => {
-                signature_status.get_or_insert("verified");
-                signer = parts.nth(1).and_then(uid_email);
-            }
-            "BADSIG" => signature_status = Some("invalid"),
-            "REVKEYSIG" => signature_status = Some("revoked"),
-            "EXPSIG" | "EXPKEYSIG" | "ERRSIG" => {
-                signature_status.get_or_insert("unverified");
-            }
-            _ => {}
-        }
-    }
+    let decrypted_ok = stderr.contains("[GNUPG:] DECRYPTION_OKAY");
+    let (signature_status, signer) = signature_from_status(&stderr);
 
     if !decrypted_ok || output.stdout.is_empty() {
         return Err(classify_failure(&stderr));
@@ -348,6 +332,81 @@ pub async fn gpg_decrypt(
     Ok(GpgDecryptResult {
         plaintext: String::from_utf8_lossy(&output.stdout).into_owned(),
         signature_status: signature_status.map(str::to_string),
+        signer,
+    })
+}
+
+/// The signature gpg reported in its status lines: "verified" | "invalid" |
+/// "revoked" | "unverified" (no key, or an expired one), and the signer's
+/// address when gpg found the key.
+fn signature_from_status(stderr: &str) -> (Option<&'static str>, Option<String>) {
+    let mut status_out: Option<&'static str> = None;
+    let mut signer = None;
+    for status in stderr.lines().filter_map(|l| l.strip_prefix("[GNUPG:] ")) {
+        let mut parts = status.splitn(3, ' ');
+        match parts.next().unwrap_or("") {
+            "GOODSIG" => {
+                status_out.get_or_insert("verified");
+                signer = parts.nth(1).and_then(uid_email);
+            }
+            "BADSIG" => status_out = Some("invalid"),
+            "REVKEYSIG" => status_out = Some("revoked"),
+            "EXPSIG" | "EXPKEYSIG" | "ERRSIG" => {
+                status_out.get_or_insert("unverified");
+            }
+            _ => {}
+        }
+    }
+    (status_out, signer)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GpgVerifyResult {
+    /// "verified" | "invalid" | "revoked" | "unverified", or None if gpg
+    /// found no signature.
+    pub signature_status: Option<String>,
+    pub signer: Option<String>,
+}
+
+/// Check a detached signature (a signed-only RFC 3156 message) against the
+/// user's GnuPG keyring. The signed part goes to gpg on stdin; the signature
+/// alone goes through a temporary file. No PIN: verifying needs no secret.
+#[tauri::command]
+pub async fn gpg_verify(signed: String, signature: String) -> Result<GpgVerifyResult, GpgError> {
+    if signed.is_empty() || signed.len() > MAX_INPUT || signature.len() > MAX_KEY_SIZE {
+        return Err(GpgError::new(
+            "invalid_input",
+            "Nothing to check, or too large",
+        ));
+    }
+    if !signature.contains("-----BEGIN PGP SIGNATURE-----") {
+        return Err(GpgError::new("invalid_input", "No PGP signature"));
+    }
+    let gpg = find_gpg().ok_or_else(|| {
+        GpgError::new("unavailable", "GnuPG (gpg) was not found on this computer")
+    })?;
+    let sig_file = TempFile::create(signature.as_bytes())?;
+    let sig_path = sig_file.0.to_string_lossy().into_owned();
+    let output = run_gpg(
+        &gpg,
+        &[
+            "--no-auto-key-retrieve",
+            "--status-fd",
+            "2",
+            "--verify",
+            sig_path.as_str(),
+            "-",
+        ],
+        signed.into_bytes(),
+        CARD_STATUS_TIMEOUT,
+    )
+    .await?;
+    drop(sig_file);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let (status, signer) = signature_from_status(&stderr);
+    Ok(GpgVerifyResult {
+        signature_status: status.map(str::to_string),
         signer,
     })
 }
@@ -390,11 +449,79 @@ fn micalg(hash_id: &str) -> Option<String> {
     Some(format!("pgp-{name}"))
 }
 
+/// The key to sign with, from `--list-secret-keys --with-colons --fingerprint`
+/// for the sender's address: its primary fingerprint.
+///
+/// Several keys can carry one address (an old key, a laptop key, the one on
+/// the token), and `--local-user <address>` takes the first, usable or not.
+/// So only keys that can sign right now count: a signing (sub)key whose secret
+/// is here or on a card, not expired or revoked, under a primary that is not
+/// either. Card keys come first, as the user turned this on for a token, then
+/// the newest.
+fn pick_signing_key(colons: &str, now: u64) -> Option<String> {
+    struct Candidate {
+        fpr: String,
+        usable: bool,
+        on_card: bool,
+        created: u64,
+        dead: bool,
+    }
+    let alive = |f: &[&str]| {
+        !matches!(f.get(1).copied(), Some("r" | "e" | "d" | "i" | "n"))
+            && f.get(6)
+                .and_then(|e| e.parse::<u64>().ok())
+                .is_none_or(|e| e > now)
+    };
+    // Field 15: "#" no secret here, "+" secret here, else a card serial.
+    let secret = |f: &[&str]| match f.get(14).copied() {
+        Some("#") | None => None,
+        Some("+") => Some(false),
+        Some(_) => Some(true),
+    };
+    let can_sign = |f: &[&str]| f.get(11).is_some_and(|c| c.contains('s'));
+
+    let mut keys: Vec<Candidate> = Vec::new();
+    let mut want_fpr = false;
+    for line in colons.lines() {
+        let f: Vec<&str> = line.split(':').collect();
+        match f[0] {
+            "sec" => {
+                keys.push(Candidate {
+                    fpr: String::new(),
+                    usable: false,
+                    on_card: false,
+                    created: f.get(5).and_then(|c| c.parse().ok()).unwrap_or(0),
+                    dead: !alive(&f),
+                });
+                want_fpr = true;
+            }
+            "ssb" => want_fpr = false,
+            "fpr" if want_fpr => {
+                if let Some(k) = keys.last_mut() {
+                    k.fpr = f.get(9).unwrap_or(&"").to_string();
+                }
+                want_fpr = false;
+            }
+            _ => {}
+        }
+        if matches!(f[0], "sec" | "ssb") && can_sign(&f) && alive(&f) {
+            if let (Some(k), Some(card)) = (keys.last_mut(), secret(&f)) {
+                k.usable = true;
+                k.on_card |= card;
+            }
+        }
+    }
+    keys.into_iter()
+        .filter(|k| k.usable && !k.dead && !k.fpr.is_empty())
+        .max_by_key(|k| (k.on_card, k.created))
+        .map(|k| k.fpr)
+}
+
 /// Sign `data` as `signer`: a detached signature, or with `recipient_keys`
 /// (armored public keys) a message encrypted to them and signed.
 ///
-/// The key is the one in the user's GnuPG keyring for `signer`, else gpg's
-/// default key, as the app picks its own keys. The PIN is asked for the same
+/// The key is a usable one in the user's GnuPG keyring for `signer`
+/// (pick_signing_key), else gpg's default key, as the app picks its own keys. The PIN is asked for the same
 /// two ways as for decryption.
 #[tauri::command]
 pub async fn gpg_sign(
@@ -429,20 +556,26 @@ pub async fn gpg_sign(
 
     let _guard = GPG_LOCK.lock().await;
 
-    let has_key = run_gpg(
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let signing_key = run_gpg(
         &gpg,
-        &["--list-secret-keys", "--with-colons", "--", &user_id],
+        &[
+            "--list-secret-keys",
+            "--with-colons",
+            "--fingerprint",
+            "--",
+            &user_id,
+        ],
         Vec::new(),
         CARD_STATUS_TIMEOUT,
     )
     .await
-    .map(|o| {
-        o.status.success()
-            && String::from_utf8_lossy(&o.stdout)
-                .lines()
-                .any(|l| l.starts_with("sec:"))
-    })
-    .unwrap_or(false);
+    .ok()
+    .filter(|o| o.status.success())
+    .and_then(|o| pick_signing_key(&String::from_utf8_lossy(&o.stdout), now));
 
     let key_files = recipient_keys
         .iter()
@@ -454,8 +587,8 @@ pub async fn gpg_sign(
         .collect();
 
     let mut args: Vec<&str> = vec!["--no-auto-key-retrieve", "--status-fd", "2", "--armor"];
-    if has_key {
-        args.extend(["--local-user", user_id.as_str()]);
+    if let Some(fpr) = &signing_key {
+        args.extend(["--local-user", fpr.as_str()]);
     }
     if pin.is_some() {
         args.extend(["--pinentry-mode", "loopback", "--passphrase-fd", "0"]);
@@ -503,7 +636,9 @@ pub async fn gpg_sign(
 
 #[cfg(test)]
 mod tests {
-    use super::{classify_failure, micalg, uid_email, valid_signer};
+    use super::{
+        classify_failure, micalg, pick_signing_key, signature_from_status, uid_email, valid_signer,
+    };
 
     #[test]
     fn email_from_user_id() {
@@ -547,6 +682,57 @@ mod tests {
         assert!(!valid_signer("a b@example.com"));
         assert!(!valid_signer("a>@example.com"));
         assert!(!valid_signer("a@example.com\n"));
+    }
+
+    #[test]
+    fn picks_a_key_that_can_sign() {
+        // An old key (primary offline, card signing subkey expired), a key
+        // on disk, and the current key with its signing subkey on a card.
+        let colons = "\
+sec:-:4096:1:OLD:1400000000:::-:::scESC:::#:::23::0:
+fpr:::::::::OLDFPR:
+uid:-::::1400000000::H::Me <me@x.com>::::::::::0:
+ssb:-:4096:1:OLDE:1400000000::::::e:::D2760001240102000006038292910000:::23:
+fpr:::::::::OLDEFPR:
+ssb:e:4096:1:OLDS:1400000000:1529181910:::::s:::D2760001240102000006038292910000:::23:
+fpr:::::::::OLDSFPR:
+sec:u:4096:1:DISK:1450000000:::u:::scESC:::+:::23::0:
+fpr:::::::::DISKFPR:
+uid:u::::1450000000::H::Me (laptop) <me@x.com>::::::::::0:
+sec:u:255:22:CARD:1600000000:::u:::cESCA:::#:::ed25519:::0:
+fpr:::::::::CARDFPR:
+uid:u::::1600000000::H::Me <me@x.com>::::::::::0:
+ssb:u:255:22:CARDS:1600000000::::::s:::D2760001240100000006371904260000:::ed25519::
+fpr:::::::::CARDSFPR:
+ssb:u:255:18:CARDE:1600000000::::::e:::D2760001240100000006371904260000:::cv25519::
+fpr:::::::::CARDEFPR:
+";
+        let now = 1_800_000_000;
+        assert_eq!(pick_signing_key(colons, now).as_deref(), Some("CARDFPR"));
+
+        // Without the card key, the key on disk, never the expired one
+        let no_card: String = colons.split("sec:u:255").next().unwrap().to_string();
+        assert_eq!(pick_signing_key(&no_card, now).as_deref(), Some("DISKFPR"));
+
+        let only_old: String = colons.split("sec:u:4096").next().unwrap().to_string();
+        assert_eq!(pick_signing_key(&only_old, now), None);
+
+        let revoked = colons.replace("sec:u:255", "sec:r:255");
+        assert_eq!(pick_signing_key(&revoked, now).as_deref(), Some("DISKFPR"));
+    }
+
+    #[test]
+    fn reads_signature_status() {
+        let good = "[GNUPG:] NEWSIG\n[GNUPG:] GOODSIG 671519AACAB1E443 Me <Me@X.com>\n[GNUPG:] VALIDSIG ...\n";
+        assert_eq!(
+            signature_from_status(good),
+            (Some("verified"), Some("me@x.com".into()))
+        );
+        let bad = "[GNUPG:] BADSIG 671519AACAB1E443 Me <me@x.com>\n";
+        assert_eq!(signature_from_status(bad).0, Some("invalid"));
+        let no_key = "[GNUPG:] ERRSIG 671519AACAB1E443 22 10 00 1795444922 9 -\n[GNUPG:] NO_PUBKEY 671519AACAB1E443\n";
+        assert_eq!(signature_from_status(no_key), (Some("unverified"), None));
+        assert_eq!(signature_from_status("gpg: no signature found\n").0, None);
     }
 
     #[test]

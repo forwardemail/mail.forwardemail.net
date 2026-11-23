@@ -29,8 +29,13 @@
 
       // Commands that transfer file data need a higher limit.
       // Email attachments can be up to 25 MB (~33 MB in base64).
-      // gpg_decrypt carries an encrypted message, attachments included.
-      var LARGE_PAYLOAD_COMMANDS = { save_attachment: true, gpg_decrypt: true, gpg_sign: true };
+      // The gpg commands carry a whole message, attachments included.
+      var LARGE_PAYLOAD_COMMANDS = {
+        save_attachment: true,
+        gpg_decrypt: true,
+        gpg_sign: true,
+        gpg_verify: true,
+      };
       var LARGE_PAYLOAD_MAX = 50 * 1024 * 1024; // 50 MB
 
       window.__TAURI_ISOLATION_HOOK__ = function (payload) {

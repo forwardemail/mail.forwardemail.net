@@ -17,6 +17,9 @@ const hoisted = vi.hoisted(() => {
     accountsGetAll: vi.fn(() => []),
     accountsSetActive: vi.fn(() => true),
     remoteRequest: vi.fn(),
+    requestPgpSignatureCheck: vi.fn(),
+    gpgEnabled: false,
+    verifyWithSystemGpg: vi.fn(),
     queueMutation: vi.fn().mockResolvedValue({}),
     isOnline: vi.fn(() => true),
     warn: vi.fn(),
@@ -130,6 +133,12 @@ vi.mock('../../src/utils/sync-controller', () => ({
 
 vi.mock('../../src/utils/sync-worker-client.js', () => ({
   resetSyncWorkerReady: (...a: unknown[]) => hoisted.resetSyncWorkerReady(...a),
+  requestPgpSignatureCheck: (...a: unknown[]) => hoisted.requestPgpSignatureCheck(...a),
+}));
+
+vi.mock('../../src/utils/pgp-system-gpg', () => ({
+  systemGpgEnabled: () => hoisted.gpgEnabled,
+  verifyWithSystemGpg: (...a: unknown[]) => hoisted.verifyWithSystemGpg(...a),
 }));
 
 vi.mock('../../src/utils/websocket-updater', () => ({
@@ -381,6 +390,7 @@ import {
   accountMenuOpen,
   downloadOriginal,
   viewOriginal,
+  verifySignedMessage,
 } from '../../src/stores/mailboxActions.ts';
 import { downloadFile } from '../../src/utils/download';
 import { mailboxStore } from '../../src/stores/mailboxStore';
@@ -1741,5 +1751,75 @@ describe('the original message when its body was never cached', () => {
     // One message, not a warning about the cache as well.
     expect(toasts.show).toHaveBeenCalledTimes(1);
     open.mockRestore();
+  });
+});
+
+describe('verifySignedMessage', () => {
+  const SIGNED_RAW = [
+    'From: a@x.com',
+    'Content-Type: multipart/signed; micalg="pgp-sha512"; protocol="application/pgp-signature"; boundary="b"',
+    '',
+    '--b',
+    'Content-Type: text/plain',
+    '',
+    'hello',
+    '',
+    '--b',
+    'Content-Type: application/pgp-signature',
+    '',
+    '-----BEGIN PGP SIGNATURE-----',
+    'sig',
+    '-----END PGP SIGNATURE-----',
+    '',
+    '--b--',
+    '',
+  ].join('\r\n');
+  const msg = { id: 'm1', folder: 'INBOX' } as never;
+
+  beforeEach(() => {
+    hoisted.gpgEnabled = false;
+    hoisted.messagesModify.mockResolvedValue(1);
+    hoisted.requestPgpSignatureCheck.mockResolvedValue({
+      success: true,
+      signature: { status: 'unverified', signers: [] },
+    });
+  });
+
+  it('reads the source out of the JSON the API answers raw=true with', async () => {
+    hoisted.remoteRequest.mockResolvedValue(JSON.stringify({ id: 'm1', raw: SIGNED_RAW }));
+    const res = await verifySignedMessage(msg);
+    expect(res).toEqual({ status: 'unverified', signers: [] });
+    expect(hoisted.requestPgpSignatureCheck).toHaveBeenCalledWith({ raw: SIGNED_RAW });
+  });
+
+  it('still takes a plain RFC 822 answer', async () => {
+    hoisted.remoteRequest.mockResolvedValue(SIGNED_RAW);
+    await verifySignedMessage(msg);
+    expect(hoisted.requestPgpSignatureCheck).toHaveBeenCalledWith({ raw: SIGNED_RAW });
+  });
+
+  it("checks with the user's gpg keyring when the YubiKey option is on", async () => {
+    hoisted.gpgEnabled = true;
+    hoisted.remoteRequest.mockResolvedValue(SIGNED_RAW);
+    hoisted.verifyWithSystemGpg.mockResolvedValue({ status: 'verified', signers: ['a@x.com'] });
+    const res = await verifySignedMessage(msg);
+    expect(res).toEqual({ status: 'verified', signers: ['a@x.com'] });
+    expect(hoisted.verifyWithSystemGpg).toHaveBeenCalledWith(
+      expect.objectContaining({ signed: 'Content-Type: text/plain\r\n\r\nhello\r\n' }),
+    );
+    expect(hoisted.requestPgpSignatureCheck).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the app's keys when gpg does not know the signer", async () => {
+    hoisted.gpgEnabled = true;
+    hoisted.remoteRequest.mockResolvedValue(SIGNED_RAW);
+    hoisted.verifyWithSystemGpg.mockResolvedValue({ status: 'unverified', signers: [] });
+    hoisted.requestPgpSignatureCheck.mockResolvedValue({
+      success: true,
+      signature: { status: 'verified', signers: ['a@x.com'] },
+    });
+    const res = await verifySignedMessage(msg);
+    expect(res?.status).toBe('verified');
+    expect(hoisted.requestPgpSignatureCheck).toHaveBeenCalled();
   });
 });

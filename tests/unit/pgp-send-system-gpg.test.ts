@@ -70,12 +70,31 @@ describe('buildSignedPayload with a YubiKey', () => {
     expect(call.askPin).toBe(askPin);
     expect(call.recipientKeys).toBeUndefined();
     expect(call.data).not.toMatch(/[^\r]\n/);
+    // Ends with its own line break, so a server adding one after the inner
+    // closing boundary does not change the signed bytes
+    expect(call.data.endsWith('\r\n')).toBe(true);
+    expect(call.data.endsWith('\r\n\r\n')).toBe(false);
 
     const raw = res.payload!.raw;
     expect(raw).toContain('micalg="pgp-sha512"');
     // The signed part is exactly what gpg signed
     expect(raw).toContain(`\r\n${call.data}\r\n--`);
     expect(raw).toContain('-----BEGIN PGP SIGNATURE-----');
+  });
+
+  it('signs a multipart body through the line break after its closing boundary', async () => {
+    hoisted.signWithSystemGpg.mockResolvedValue({
+      success: true,
+      armored: SIG,
+      micalg: 'pgp-sha512',
+    });
+    const res = await buildSignedPayload({ ...input, html: '<p>hello</p>' }, { askPin });
+    const { data } = hoisted.signWithSystemGpg.mock.calls[0][0];
+    expect(data).toMatch(/--\r\n$/);
+    // As a server that rewrites the message lays it out: one line break of
+    // the part's own, then the one that belongs to the outer boundary
+    expect(res.payload!.raw).toContain(`${data}\r\n--`);
+    expect(res.payload!.raw).toMatch(/--\r\n\r\n--=?_?/);
   });
 
   it('stops the send when gpg cannot sign', async () => {

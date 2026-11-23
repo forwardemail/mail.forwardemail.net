@@ -260,3 +260,26 @@ describe('signWithSystemGpg', () => {
     expect(hoisted.invoke).not.toHaveBeenCalled();
   });
 });
+
+describe('verifyWithSystemGpg', () => {
+  it("maps gpg's result to a signature check", async () => {
+    hoisted.invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === 'gpg_available') return true;
+      if (cmd === 'gpg_verify') return { signatureStatus: 'verified', signer: 'a@x.com' };
+      throw new Error(`unexpected ${cmd}`);
+    });
+    const { verifyWithSystemGpg } = await load();
+    const res = await verifyWithSystemGpg({ signed: 'body', signature: 'SIG' });
+    expect(res).toEqual({ status: 'verified', signers: ['a@x.com'] });
+    expect(hoisted.invoke).toHaveBeenCalledWith('gpg_verify', { signed: 'body', signature: 'SIG' });
+  });
+
+  it('gives null when gpg found no signature or failed', async () => {
+    hoisted.invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === 'gpg_available') return true;
+      throw { code: 'failed', message: 'x' };
+    });
+    const { verifyWithSystemGpg } = await load();
+    expect(await verifyWithSystemGpg({ signed: 'body', signature: 'SIG' })).toBeNull();
+  });
+});

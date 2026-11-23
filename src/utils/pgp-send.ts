@@ -206,11 +206,16 @@ export async function buildSignedPayload(
     return { ok: false, reason: 'no_recipients', message: 'Add a recipient first.' };
   }
 
-  const entity = buildInnerMime({
+  // The signed part ends with a line break of its own. A multipart body
+  // otherwise ends right at its closing boundary, and servers that rewrite
+  // the message (Forward Email does, to add DKIM) put a line break there,
+  // which changes the signed bytes and breaks the signature. Other mail
+  // clients end the part this way too.
+  const entity = `${buildInnerMime({
     text: input.text,
     html: input.html,
     attachments: input.attachments,
-  });
+  }).replace(/(?:\r?\n)*$/, '')}\r\n`;
 
   let result;
   try {

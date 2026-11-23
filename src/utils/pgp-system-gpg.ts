@@ -318,4 +318,30 @@ export async function signWithSystemGpg({
   return { success: true, armored: res.armored, micalg: res.micalg || undefined };
 }
 
+/**
+ * Check a signed-only message's signature against the user's GnuPG keyring,
+ * where a token user keeps their own and their contacts' public keys. Null
+ * when gpg is not available or could not check it.
+ */
+export async function verifyWithSystemGpg({
+  signed,
+  signature,
+}: {
+  signed: string;
+  signature: string;
+}): Promise<PgpSignatureCheck | null> {
+  if (!signed || !signature || !(await systemGpgAvailable())) return null;
+  try {
+    const invoke = await getInvoke();
+    const res = await invoke<{
+      signatureStatus: PgpSignatureCheck['status'] | null;
+      signer: string | null;
+    }>('gpg_verify', { signed, signature });
+    if (!res?.signatureStatus) return null;
+    return signatureFromGpg({ plaintext: '', ...res }).signature;
+  } catch {
+    return null;
+  }
+}
+
 export { retriesText as pinRetriesText };

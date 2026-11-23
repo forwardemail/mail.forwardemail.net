@@ -1332,6 +1332,8 @@ pub fn run() {
             #[cfg(desktop)]
             gpg::gpg_sign,
             #[cfg(desktop)]
+            gpg::gpg_verify,
+            #[cfg(desktop)]
             toggle_window_visibility,
             #[cfg(desktop)]
             open_url_in_browser,

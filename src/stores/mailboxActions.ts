@@ -2861,11 +2861,22 @@ const fetchRawOriginal = async (msg) => {
       {
         method: 'GET',
         pathOverride: `/v1/messages/${encodeURIComponent(apiId)}?folder=${encodeURIComponent(folder || '')}&raw=true`,
-        // Server returns raw RFC822 text (message/rfc822), not JSON
         responseAs: 'text',
       },
     );
-    return res?.Result || res || null;
+    const body = res?.Result || res || null;
+    // The API answers raw=true with the message record as JSON, the RFC 822
+    // source in its `raw` field. Read as text, that JSON would otherwise be
+    // taken for the source itself.
+    if (typeof body === 'string' && body.trimStart().startsWith('{')) {
+      try {
+        const parsed = JSON.parse(body);
+        if (parsed && typeof parsed === 'object') return parsed;
+      } catch {
+        // not JSON after all: an RFC 822 message
+      }
+    }
+    return body;
   } catch (err) {
     warn('[viewOriginal] raw fetch failed', err);
     return null;
@@ -2889,15 +2900,30 @@ export const verifySignedMessage = async (
   const res = await fetchRawOriginal(msg);
   const raw = typeof res === 'string' ? res : res?.raw;
   if (!raw || typeof raw !== 'string') return null;
-  const { requestPgpSignatureCheck } = await import('../utils/sync-worker-client.js');
-  let result;
-  try {
-    result = await requestPgpSignatureCheck({ raw });
-  } catch {
-    return null;
+  // With the YubiKey option on, the keys are in the user's GnuPG keyring, not
+  // the app: ask gpg first, and the app's keys when gpg does not know the
+  // signer.
+  let signature: PgpSignatureCheck | null = null;
+  const { systemGpgEnabled, verifyWithSystemGpg } = await import('../utils/pgp-system-gpg');
+  if (systemGpgEnabled(account)) {
+    const { splitSignedMime } = await import('../utils/pgp-signed-parts');
+    const parts = splitSignedMime(raw);
+    if (parts) {
+      const checked = await verifyWithSystemGpg(parts);
+      if (checked && checked.status !== 'unverified') signature = checked;
+    }
   }
-  if (!result?.success || !result.signature) return null;
-  const signature = result.signature;
+  if (!signature) {
+    const { requestPgpSignatureCheck } = await import('../utils/sync-worker-client.js');
+    let result;
+    try {
+      result = await requestPgpSignatureCheck({ raw });
+    } catch {
+      return null;
+    }
+    if (!result?.success || !result.signature) return null;
+    signature = result.signature as PgpSignatureCheck;
+  }
   if ((Local.get('email') || 'default') !== account) return null;
   const apiId = getMessageApiId(msg);
   if (apiId) {
