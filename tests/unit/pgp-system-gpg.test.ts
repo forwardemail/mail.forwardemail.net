@@ -1,0 +1,199 @@
+/**
+ * Decrypting through the system gpg, for a key on a hardware token (YubiKey)
+ * the app cannot hold. gpg can show a PIN prompt, so it must never run for
+ * background work, and only the armored block may cross into Rust. When
+ * gpg-agent's pinentry cannot run, the app asks for the PIN, and a wrong PIN
+ * must say how many tries the card has left.
+ */
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const hoisted = vi.hoisted(() => ({
+  desktop: true,
+  store: new Map<string, string>(),
+  invoke: vi.fn(),
+  requestPgpBlock: vi.fn(),
+  requestParseDecrypted: vi.fn(),
+}));
+
+vi.mock('../../src/utils/platform.js', () => ({
+  get isTauriDesktop() {
+    return hoisted.desktop;
+  },
+}));
+
+vi.mock('../../src/utils/storage.js', () => ({
+  Local: {
+    get: (k: string) => hoisted.store.get(k) ?? null,
+    set: (k: string, v: string) => hoisted.store.set(k, v),
+    remove: (k: string) => hoisted.store.delete(k),
+  },
+}));
+
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: (...a: unknown[]) => hoisted.invoke(...a),
+}));
+
+vi.mock('../../src/utils/sync-worker-client.js', () => ({
+  requestPgpBlock: (...a: unknown[]) => hoisted.requestPgpBlock(...a),
+  requestParseDecrypted: (...a: unknown[]) => hoisted.requestParseDecrypted(...a),
+}));
+
+const BLOCK = '-----BEGIN PGP MESSAGE-----\nc\n-----END PGP MESSAGE-----';
+const PLAINTEXT = 'Content-Type: text/plain\r\n\r\nhi';
+
+async function load() {
+  vi.resetModules();
+  return import('../../src/utils/pgp-system-gpg');
+}
+
+/** invoke() for a token that needs the app's PIN prompt; `goodPin` opens it. */
+function cardNeedingPin({ goodPin = '123456', present = true, retries = 3 } = {}) {
+  let left = retries;
+  hoisted.invoke.mockImplementation(async (cmd: string, args?: { pin?: string | null }) => {
+    if (cmd === 'gpg_available') return true;
+    if (cmd === 'gpg_card_info') return { present, pinRetries: present ? left : null };
+    if (cmd === 'gpg_decrypt') {
+      if (!args?.pin) throw { code: 'pinentry', message: 'Inappropriate ioctl for device' };
+      if (args.pin !== goodPin) {
+        left -= 1;
+        throw { code: 'bad_pin', message: 'Bad PIN' };
+      }
+      return { plaintext: PLAINTEXT, signatureStatus: null, signer: null };
+    }
+    throw new Error(`unexpected ${cmd}`);
+  });
+}
+
+beforeEach(() => {
+  hoisted.desktop = true;
+  hoisted.store.clear();
+  hoisted.invoke.mockReset();
+  hoisted.invoke.mockImplementation(async (cmd: string) => {
+    if (cmd === 'gpg_available') return true;
+    if (cmd === 'gpg_decrypt') return { plaintext: PLAINTEXT, signatureStatus: null, signer: null };
+    throw new Error(`unexpected ${cmd}`);
+  });
+  hoisted.requestPgpBlock.mockReset();
+  hoisted.requestPgpBlock.mockResolvedValue({ success: true, block: BLOCK });
+  hoisted.requestParseDecrypted.mockReset();
+  hoisted.requestParseDecrypted.mockResolvedValue({ success: true, body: 'hi', textContent: 'hi' });
+});
+
+describe('systemGpgEnabled', () => {
+  it('is off until the user turns it on, per account', async () => {
+    const { systemGpgEnabled, setSystemGpgEnabled } = await load();
+    expect(systemGpgEnabled('a@x.com')).toBe(false);
+    setSystemGpgEnabled('a@x.com', true);
+    expect(systemGpgEnabled('a@x.com')).toBe(true);
+    expect(systemGpgEnabled('b@x.com')).toBe(false);
+    setSystemGpgEnabled('a@x.com', false);
+    expect(systemGpgEnabled('a@x.com')).toBe(false);
+  });
+
+  it('is always off outside the desktop app', async () => {
+    hoisted.desktop = false;
+    hoisted.store.set('pgp_use_system_gpg_a@x.com', 'true');
+    const { systemGpgEnabled } = await load();
+    expect(systemGpgEnabled('a@x.com')).toBe(false);
+  });
+});
+
+describe('decryptWithSystemGpg', () => {
+  it('sends only the armored block to gpg and parses the plaintext', async () => {
+    const { decryptWithSystemGpg } = await load();
+    const res = await decryptWithSystemGpg('MIME wrapper ' + BLOCK);
+    expect(res.success).toBe(true);
+    expect(res.body).toBe('hi');
+    expect(hoisted.invoke).toHaveBeenCalledWith('gpg_decrypt', { armored: BLOCK, pin: null });
+    expect(hoisted.requestParseDecrypted).toHaveBeenCalledWith({
+      plaintext: PLAINTEXT,
+      signed: false,
+      signature: null,
+    });
+  });
+
+  it('does nothing for background work, which must not raise a PIN prompt', async () => {
+    const { decryptWithSystemGpg } = await load();
+    const res = await decryptWithSystemGpg(BLOCK, { allowPrompt: false });
+    expect(res).toEqual({ success: false, reason: 'prompt_not_allowed' });
+    expect(hoisted.invoke).not.toHaveBeenCalled();
+  });
+
+  it('does nothing outside the desktop app', async () => {
+    hoisted.desktop = false;
+    const { decryptWithSystemGpg } = await load();
+    const res = await decryptWithSystemGpg(BLOCK);
+    expect(res.reason).toBe('unavailable');
+    expect(hoisted.invoke).not.toHaveBeenCalled();
+  });
+
+  it('says to insert the card when gpg reports none', async () => {
+    hoisted.invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === 'gpg_available') return true;
+      throw { code: 'no_card', message: 'Card not present' };
+    });
+    const { decryptWithSystemGpg, NO_CARD_MESSAGE } = await load();
+    const res = await decryptWithSystemGpg(BLOCK);
+    expect(res).toEqual({ success: false, reason: 'no_card', message: NO_CARD_MESSAGE });
+  });
+
+  it('asks for the PIN when the pinentry cannot run, and passes it to gpg', async () => {
+    cardNeedingPin();
+    const askPin = vi.fn().mockResolvedValue('123456');
+    const { decryptWithSystemGpg } = await load();
+    const res = await decryptWithSystemGpg(BLOCK, { askPin });
+    expect(res.success).toBe(true);
+    expect(askPin).toHaveBeenCalledWith({ retries: 3, error: undefined });
+    expect(hoisted.invoke).toHaveBeenCalledWith('gpg_decrypt', { armored: BLOCK, pin: '123456' });
+  });
+
+  it('does not ask for a PIN when no card is inserted', async () => {
+    cardNeedingPin({ present: false });
+    const askPin = vi.fn();
+    const { decryptWithSystemGpg } = await load();
+    const res = await decryptWithSystemGpg(BLOCK, { askPin });
+    expect(res.reason).toBe('no_card');
+    expect(askPin).not.toHaveBeenCalled();
+  });
+
+  it('asks again after a wrong PIN, with the tries left', async () => {
+    cardNeedingPin();
+    const askPin = vi.fn().mockResolvedValueOnce('000000').mockResolvedValueOnce('123456');
+    const { decryptWithSystemGpg } = await load();
+    const res = await decryptWithSystemGpg(BLOCK, { askPin });
+    expect(res.success).toBe(true);
+    expect(askPin).toHaveBeenLastCalledWith({
+      retries: 2,
+      error: 'Wrong PIN. 2 tries left before the card blocks the PIN.',
+    });
+  });
+
+  it('stops when the user cancels the PIN prompt', async () => {
+    cardNeedingPin();
+    const askPin = vi.fn().mockResolvedValue(null);
+    const { decryptWithSystemGpg } = await load();
+    const res = await decryptWithSystemGpg(BLOCK, { askPin });
+    expect(res.reason).toBe('cancelled');
+    expect(askPin).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops when the last wrong PIN blocks the card', async () => {
+    cardNeedingPin({ retries: 1 });
+    const askPin = vi.fn().mockResolvedValue('000000');
+    const { decryptWithSystemGpg } = await load();
+    const res = await decryptWithSystemGpg(BLOCK, { askPin });
+    expect(res.reason).toBe('pin_blocked');
+    expect(askPin).toHaveBeenCalledTimes(1);
+  });
+
+  it('carries the signature gpg reported', async () => {
+    hoisted.invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === 'gpg_available') return true;
+      return { plaintext: 'x', signatureStatus: 'verified', signer: 'a@b.c' };
+    });
+    const { decryptWithSystemGpg } = await load();
+    const res = await decryptWithSystemGpg(BLOCK);
+    expect(res.signed).toBe(true);
+    expect(res.signature).toEqual({ status: 'verified', signers: ['a@b.c'] });
+  });
+});

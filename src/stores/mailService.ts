@@ -28,6 +28,12 @@ import {
 } from '../utils/mime-utils.js';
 import { getCachedAttachmentBlob, cacheAttachmentBlob } from '../utils/attachment-cache.js';
 import { isTauri } from '../utils/platform.js';
+import {
+  decryptWithSystemGpg,
+  pinRetriesText,
+  systemGpgEnabled,
+  type AskPin,
+} from '../utils/pgp-system-gpg';
 import { isMemoryConstrained } from '../utils/memory-profile';
 import { apiTextPart, slimBodyMeta, slimCachedAttachments } from '../workers/sync-pure';
 import type { Message, Attachment, PerfTracer, PgpKey, PgpSignatureCheck } from '../types';
@@ -82,6 +88,8 @@ export interface ImageStatus {
 
 export interface PgpStatus {
   locked: boolean;
+  /** Some way to decrypt is set up (a saved key, or a YubiKey via gpg): offer Retry, not Add PGP Key. */
+  hasKeys?: boolean;
   /** Message was PGP-encrypted and successfully decrypted. */
   encrypted?: boolean;
   /** Signature packets present (see `signature` for whether they checked out). */
@@ -123,8 +131,20 @@ interface DecryptResult {
   signature?: PgpSignatureCheck | null;
 }
 
+interface PassphraseModalOptions {
+  title?: string;
+  description?: string;
+  label?: string;
+  submitLabel?: string;
+  error?: string;
+  allowRemember?: boolean;
+}
+
 interface PassphraseModalRef {
-  open?: (keyName: string) => Promise<{ passphrase?: string; remember?: boolean }>;
+  open?: (
+    keyName: string,
+    options?: PassphraseModalOptions,
+  ) => Promise<{ passphrase?: string; remember?: boolean }>;
 }
 
 interface CachedBody {
@@ -938,7 +958,9 @@ async function handleCachedPgpRaw(
     return true;
   }
   debugLog('[PGP] Cached message still locked');
-  const hasKeys = (await getStoredKeys()).length > 0;
+  // With the YubiKey option on, offer Retry (after inserting the token),
+  // not Add PGP Key.
+  const hasKeys = (await getStoredKeys()).length > 0 || systemGpgEnabled(account);
   onPgpStatus?.({ locked: true, hasKeys });
   if (allowPgpPrompt) {
     const errorMsg =
@@ -1513,7 +1535,10 @@ export const mailService = {
           tracer.stage('cache_write', { cached: true });
         } else {
           debugLog('[PGP] Unable to decrypt with current keys');
-          onPgpStatus?.({ locked: true });
+          onPgpStatus?.({
+            locked: true,
+            hasKeys: (await getStoredKeys()).length > 0 || systemGpgEnabled(account),
+          });
           // Don't cache encrypted raw — next access will re-fetch from API
           const errorMsg =
             decryptResult.message || 'PGP encrypted message. Unable to decrypt with current keys.';
@@ -2176,6 +2201,35 @@ async function showMissingKeyNotification(account?: string): Promise<void> {
   }, 60000);
 }
 
+/**
+ * Asks for a YubiKey / smartcard PIN in the passphrase dialog, for when
+ * gpg-agent's own pinentry cannot run (a terminal-only pinentry). The PIN is
+ * passed to gpg for this one decryption and never stored.
+ */
+function smartcardPinPrompt(allowPrompt: boolean): AskPin {
+  return async ({ retries, error }) => {
+    const modal = await getPassphraseModalIfAvailable(allowPrompt);
+    if (!modal?.open) return null;
+    try {
+      const res = await withTimeout(
+        modal.open('', {
+          title: 'Unlock your YubiKey',
+          description: `Enter the PIN of your YubiKey or smartcard to decrypt this message. Touch the key afterwards if it blinks.${pinRetriesText(retries)}`,
+          label: 'PIN',
+          submitLabel: 'Unlock',
+          allowRemember: false,
+          error,
+        }),
+        PASSPHRASE_MODAL_TIMEOUT,
+        'PIN modal',
+      );
+      return res?.passphrase || null;
+    } catch {
+      return null;
+    }
+  };
+}
+
 // Cache to track which keys need passphrases (to avoid repeated checks)
 const keyNeedsPassphraseCache = new Map<string, boolean>();
 
@@ -2191,8 +2245,20 @@ async function tryDecrypt(
 
   debugLog('[PGP] [WORKER] Detected PGP encrypted message, attempting to decrypt...');
 
+  // The user's key may be on a hardware token (a YubiKey) that only the
+  // system gpg can use (desktop app, opt-in per device in Settings).
+  const useSystemGpg = systemGpgEnabled(options.account || Local.get('email') || 'default');
+
   const keys = await getStoredKeys();
   if (!keys.length) {
+    if (useSystemGpg) {
+      const viaGpg = await decryptWithSystemGpg(armored, {
+        allowPrompt,
+        askPin: smartcardPinPrompt(allowPrompt),
+      });
+      if (viaGpg.success) return viaGpg;
+      return { success: false, reason: viaGpg.reason, message: viaGpg.message };
+    }
     debugWarn('[PGP] No PGP keys configured in settings');
     if (allowPrompt) {
       await showMissingKeyNotification(options.account);
@@ -2205,6 +2271,16 @@ async function tryDecrypt(
   // round trips, and the key derivation each of those ran, on every open.
   const first = await decryptInWorker(armored, options);
   if (first.success) return first;
+
+  // Before asking for passphrases: the message may be to the key on the
+  // token, which none of the app's keys would open anyway.
+  if (useSystemGpg) {
+    const viaGpg = await decryptWithSystemGpg(armored, {
+      allowPrompt,
+      askPin: smartcardPinPrompt(allowPrompt),
+    });
+    if (viaGpg.success) return viaGpg;
+  }
 
   let lastUnlockError: string | undefined;
 
