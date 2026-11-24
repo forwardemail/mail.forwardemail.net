@@ -63,7 +63,11 @@ export function toDate(value: DateInput): Date | null {
   const num = typeof value === 'number' ? value : Number(value);
   if (typeof value === 'number' || (Number.isFinite(num) && num !== 0)) {
     const ts = typeof value === 'number' ? value : num;
-    return new Date(ts < 1e12 ? ts * 1000 : ts);
+    // Seconds vs milliseconds: 1e10 is the year 2286 in seconds but only
+    // April 1970 in milliseconds, so anything at or above it is milliseconds.
+    // (The old 1e12 cutoff is September 2001 in milliseconds, which turned
+    // every older message into a date tens of thousands of years ahead.)
+    return new Date(ts > 0 && ts < 1e10 ? ts * 1000 : ts);
   }
 
   const parsed = new Date(value);
