@@ -112,7 +112,7 @@
     "hotkeys-js": "4.0.7",
     "ical.js": "2.2.1",
     "jsqr": "1.4.0",
-    "ky": "^1.14.3",
+    "ky": "^2.2.0",
     "libsodium-wrappers": "^0.8.4",
     "lucide-svelte": "^0.577.0",
     "marked": "^12.0.2",
