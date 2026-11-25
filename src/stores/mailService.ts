@@ -29,6 +29,12 @@ import {
 import { getCachedAttachmentBlob, cacheAttachmentBlob } from '../utils/attachment-cache.js';
 import { isTauri } from '../utils/platform.js';
 import { isMemoryConstrained } from '../utils/memory-profile';
+import { pgpPlaintextMayPersist } from '../utils/pgp-plaintext-policy';
+import {
+  clearSessionDecrypts,
+  getSessionDecrypt,
+  setSessionDecrypt,
+} from '../utils/pgp-session-cache';
 import { apiTextPart, slimBodyMeta, slimCachedAttachments } from '../workers/sync-pure';
 import type { Message, Attachment, PerfTracer, PgpKey, PgpSignatureCheck } from '../types';
 import { messages } from './messageStore';
@@ -718,6 +724,7 @@ export const clearMailServiceState = (): void => {
     accountAbortController = null;
   }
   inFlightRequests.clear();
+  clearSessionDecrypts();
 };
 
 /**
@@ -750,7 +757,11 @@ async function persistDecryptedEnvelope(
   if (!messageId) return;
   if (keysVersion !== undefined && keysVersion !== getPgpKeysVersion()) return;
 
+  // The real subject (protected headers) is plaintext too: kept only where
+  // the plaintext may be (pgp-plaintext-policy.ts). The reader still shows it
+  // (onPgpStatus); the list keeps the placeholder, so nothing indexes it.
   const innerSubject =
+    pgpPlaintextMayPersist() &&
     typeof decrypted.subject === 'string' &&
     decrypted.subject.trim() &&
     decrypted.subject !== message.subject
@@ -1996,6 +2007,9 @@ async function cacheMessageContent(
 ): Promise<void> {
   const messageId = getMessageApiId(message);
   if (!messageId || !renderedBody) return;
+  // Decrypted plaintext goes to disk only while App Lock encrypts it there;
+  // otherwise tryDecrypt's session cache holds it (pgp-plaintext-policy.ts).
+  if (pgpDecrypted && !pgpPlaintextMayPersist()) return;
   if (
     (pgpDecrypted || message.pgpEncrypted) &&
     keysVersion !== undefined &&
@@ -2179,7 +2193,25 @@ async function showMissingKeyNotification(account?: string): Promise<void> {
 // Cache to track which keys need passphrases (to avoid repeated checks)
 const keyNeedsPassphraseCache = new Map<string, boolean>();
 
+/**
+ * Decrypt, reusing this session's result for the same ciphertext. Without
+ * App Lock the plaintext is not cached on disk, so this is what spares a
+ * second passphrase prompt when a message is opened again.
+ */
 async function tryDecrypt(
+  armored: string,
+  options: { allowPrompt?: boolean; messageId?: string; account?: string } = {},
+): Promise<DecryptResult> {
+  if (!armored || typeof armored !== 'string') return decryptUncached(armored, options);
+  const keysVersion = getPgpKeysVersion();
+  const cached = await getSessionDecrypt<DecryptResult>(armored, keysVersion);
+  if (cached) return cached;
+  const result = await decryptUncached(armored, options);
+  if (result.success) await setSessionDecrypt(armored, keysVersion, result);
+  return result;
+}
+
+async function decryptUncached(
   armored: string,
   options: { allowPrompt?: boolean; messageId?: string; account?: string } = {},
 ): Promise<DecryptResult> {

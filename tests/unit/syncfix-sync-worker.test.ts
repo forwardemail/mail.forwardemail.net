@@ -1189,7 +1189,14 @@ describe('PGP badge', () => {
     expect(table('messageBodies').get(keyOf([ACCOUNT, id]))).toMatchObject({ pgpLocked: true });
 
     // Then the key is unlocked, and the next pass decrypts the cached copy.
-    onmessage()({ data: { type: 'pgpKeys', keys: [{ name: 'k', value: 'armored' }] } });
+    // App Lock is on, so the plaintext may be cached (encrypted at rest).
+    onmessage()({
+      data: {
+        type: 'pgpKeys',
+        keys: [{ name: 'k', value: 'armored' }],
+        persistPgpPlaintext: true,
+      },
+    });
     await new Promise((r) => setTimeout(r, 10));
     requests.length = 0;
     await runTask({ type: 'bodies', folder, limit: 10 });
@@ -1204,6 +1211,44 @@ describe('PGP badge', () => {
 
     onmessage()({ data: { type: 'pgpKeys', keys: [] } });
     await new Promise((r) => setTimeout(r, 10));
+  });
+
+  it('keeps decrypted plaintext off disk and out of search without App Lock', async () => {
+    const folder = 'PgpNoAppLock';
+    const id = oid(9203);
+    table('messages').set(keyOf([ACCOUNT, id]), {
+      id,
+      account: ACCOUNT,
+      folder,
+      date: 1,
+      subject: '...',
+    });
+    const raw =
+      'Content-Type: multipart/encrypted; protocol="application/pgp-encrypted"\r\n\r\n-----BEGIN PGP MESSAGE-----\r\nhQEMA\r\n-----END PGP MESSAGE-----\r\n';
+    detailHook = (reqId) =>
+      reqId === id ? new Response(JSON.stringify({ id, raw }), { status: 200 }) : null;
+    onmessage()({ data: { type: 'pgpKeys', keys: [{ name: 'k', value: 'armored' }] } });
+    await new Promise((r) => setTimeout(r, 10));
+    const openpgp = await import('openpgp');
+    const decrypt = vi
+      .spyOn(openpgp, 'decrypt')
+      .mockResolvedValue({ data: 'Subject: secret\r\n\r\nsecret body', signatures: [] } as never);
+    searchPortMessages.length = 0;
+    try {
+      await runTask({ type: 'bodies', folder, limit: 10 });
+      await runTask({ type: 'bodies', folder, limit: 10 });
+      const cached = table('messageBodies').get(keyOf([ACCOUNT, id]));
+      // Only the ciphertext is cached, and it is not decrypted again each pass
+      expect(cached).toMatchObject({ pgpLocked: true, body: '' });
+      expect(JSON.stringify(cached)).not.toContain('secret');
+      expect(decrypt).toHaveBeenCalledTimes(1);
+      expect(table('messages').get(keyOf([ACCOUNT, id]))?.subject).toBe('...');
+      expect(JSON.stringify(searchPortMessages)).not.toContain('secret');
+    } finally {
+      decrypt.mockRestore();
+      onmessage()({ data: { type: 'pgpKeys', keys: [] } });
+      await new Promise((r) => setTimeout(r, 10));
+    }
   });
 
   it('does not try the same keys on a locked PGP message twice', async () => {
