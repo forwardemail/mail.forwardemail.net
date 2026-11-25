@@ -5,6 +5,7 @@ import { Remote } from '../utils/remote';
 import { Local, Session, Accounts } from '../utils/storage';
 import { withDeadline } from '../utils/with-deadline';
 import { db } from '../utils/db';
+import { pgpPlaintextMayPersist } from '../utils/pgp-plaintext-policy';
 import { mailboxStore } from './mailboxStore';
 import { searchStore } from './searchStore';
 import {
@@ -1446,7 +1447,21 @@ export const contextLabel = async (msgOrLabel, labelMaybe, options = {}) => {
       .modify({ labels: nextLabels })
       .catch(() => {});
   }
-  await searchStore.actions.indexMessages([{ ...targetMsg, labels: nextLabels }]).catch(() => {});
+  // The reader puts the real subject of an encrypted message on the message
+  // it has open. Without App Lock that subject may not be kept on disk
+  // (pgp-plaintext-policy.ts), and the search index is on disk, so such a
+  // message is indexed from its stored row, which has the placeholder.
+  let toIndex: Record<string, unknown> | null = { ...targetMsg, labels: nextLabels };
+  if (targetMsg.pgpEncrypted && !pgpPlaintextMayPersist()) {
+    let stored: Record<string, unknown> | null = null;
+    try {
+      stored = (await db.messages.get([account, apiId])) || null;
+    } catch {
+      stored = null;
+    }
+    toIndex = stored ? { ...stored, labels: nextLabels } : null;
+  }
+  if (toIndex) await searchStore.actions.indexMessages([toIndex]).catch(() => {});
 
   const labelList = get(availableLabels);
   const lbl = labelList.find(

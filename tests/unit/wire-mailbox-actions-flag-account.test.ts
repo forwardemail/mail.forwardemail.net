@@ -17,6 +17,8 @@ const h = vi.hoisted(() => ({
   accounts: [] as Array<{ email: string; aliasAuth?: string }>,
   credentials: new Map<string, string>(),
   onModify: null as null | (() => void),
+  // Message rows as stored on disk, by id
+  rows: new Map<string, Record<string, unknown>>(),
   settleUnreadChange: vi.fn(),
 }));
 
@@ -144,7 +146,7 @@ vi.mock('../../src/utils/db', () => {
   });
   return {
     db: {
-      messages: { where },
+      messages: { where, get: async ([, id]: [string, string]) => h.rows.get(String(id)) },
       meta: {
         get: async (key: string) => h.meta.get(key) ?? null,
         put: async (record: { key: string; value: unknown; updatedAt: number }) => {
@@ -157,6 +159,7 @@ vi.mock('../../src/utils/db', () => {
 
 import { toggleRead, toggleStar, contextLabel } from '../../src/stores/mailboxActions';
 import { mailboxStore } from '../../src/stores/mailboxStore';
+import { searchStore } from '../../src/stores/searchStore';
 
 const ALICE = 'alice@example.com';
 const BOB = 'bob@example.com';
@@ -194,6 +197,8 @@ beforeEach(() => {
   h.active = ALICE;
   h.online = true;
   h.onModify = null;
+  h.rows.clear();
+  vi.mocked(searchStore.actions.indexMessages).mockClear();
   h.accounts = [{ email: ALICE }, { email: BOB }];
   h.credentials = new Map([
     [ALICE, ALICE_AUTH],
@@ -246,6 +251,25 @@ describe('a change made offline, then again once back online', () => {
       flags_remove: ['\\Flagged'],
     });
     expect(queued(ALICE)).toEqual([]);
+  });
+
+  it('does not put the real subject of an encrypted message into the search index', async () => {
+    // The stored row has the sender's placeholder. The reader shows the real
+    // subject on the open message, which here is not in the list (opened
+    // from search results), so the label action is handed that object.
+    const stored = inboxMessage({ subject: '...', pgpEncrypted: true });
+    h.rows.set(stored.id, stored);
+    mailboxStore.state.messages.set([]);
+    const open = { ...stored, subject: 'Offer for the Lisbon office' };
+
+    await contextLabel(open, 'Receipts', { action: 'add', silent: true });
+
+    const indexed = vi
+      .mocked(searchStore.actions.indexMessages)
+      .mock.calls.flatMap(([list]) => list as Array<Record<string, unknown>>);
+    expect(indexed).toHaveLength(1);
+    expect(indexed[0]).toMatchObject({ subject: '...', labels: ['receipts'] });
+    expect(JSON.stringify(indexed)).not.toContain('Lisbon');
   });
 
   it('drops the queued label change but keeps queued changes of another kind', async () => {
