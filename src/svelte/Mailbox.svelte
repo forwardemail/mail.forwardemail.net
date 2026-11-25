@@ -1731,12 +1731,18 @@
         ? [$selectedMessage]
         : [],
   );
+  // An encrypted message's real subject is known only to the open message
+  // (set when it is decrypted). The conversation is built from the list rows,
+  // which keep the sender's placeholder unless App Lock lets the real subject
+  // be stored, so the open message's subject comes first.
   const threadSubject = $derived(
-    $threadingEnabled && $selectedConversation
-      ? $selectedConversation.displaySubject ||
+    $selectedMessage?.pgpEncrypted && $selectedMessage.subject
+      ? $selectedMessage.subject
+      : $threadingEnabled && $selectedConversation
+        ? $selectedConversation.displaySubject ||
           $selectedConversation.subject ||
           $selectedMessage?.subject
-      : $selectedMessage?.subject,
+        : $selectedMessage?.subject,
   );
   const isThreaded = $derived(threadMessages.length > 1);
 
@@ -5874,8 +5880,21 @@
           const currentSel = (
             source.state?.selectedMessage ? get(source.state.selectedMessage) : null
           ) as (Message & Record<string, unknown>) | null;
+          // What decrypting found (onPgpStatus runs before this): the real
+          // subject and the badge flags. `msg` is the list row from before
+          // the decrypt, and building on it alone put the placeholder back.
+          const decrypted =
+            currentSel && currentSel.id === msg.id && currentSel.pgpEncrypted
+              ? {
+                  subject: currentSel.subject,
+                  pgpEncrypted: true,
+                  pgpSigned: currentSel.pgpSigned,
+                  pgpSignature: currentSel.pgpSignature,
+                }
+              : {};
           const enriched = {
             ...msg,
+            ...decrypted,
             // Keep the authoritative read-state from the store/optimistic update
             is_unread:
               currentSel && currentSel.id === msg.id ? currentSel.is_unread : msg.is_unread,
@@ -5905,6 +5924,7 @@
           const changed =
             !currentSel ||
             currentSel.id !== msg.id ||
+            currentSel.subject !== enriched.subject ||
             !currentSel.nodemailer ||
             !sameText(currentSel.from, enriched.from) ||
             !sameText(currentSel.to, enriched.to) ||

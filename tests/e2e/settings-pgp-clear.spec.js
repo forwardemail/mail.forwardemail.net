@@ -259,7 +259,9 @@ async function cachedCopy(page, id) {
 test.describe('Removing the saved keys', () => {
   test.setTimeout(120_000);
 
-  test('removes what they decrypted: the body and the protected subject', async ({
+  // App Lock is off here, as it is for most people: the cache is then not
+  // encrypted, and decrypted mail is kept in memory only.
+  test('keeps decrypted mail off disk, and nothing stays readable once the keys are gone', async ({
     page,
   }, testInfo) => {
     test.skip(isMobileProject(testInfo), 'Desktop settings layout');
@@ -279,18 +281,23 @@ test.describe('Removing the saved keys', () => {
     await page.getByRole('button', { name: 'Save key' }).click();
     await expect(page.getByText(KEY_NAME)).toBeVisible({ timeout: 15_000 });
 
-    // Read the message: decrypted, with its real subject, and cached so
+    // Read the message: decrypted on screen, with its real subject
     await page.goto('/mailbox#INBOX/msg-1');
     const reader = page.locator('.fe-reader');
     await expect(reader.frameLocator('iframe').getByText(HIDDEN_TEXT)).toBeVisible({
       timeout: 20_000,
     });
+    await expect(reader.getByText(HIDDEN_SUBJECT).first()).toBeVisible();
+
+    // The cache has the message as it came from the server: still encrypted,
+    // under the sender's placeholder subject
     await expect
       .poll(async () => (await cachedCopy(page, 'msg-1')).body || '', { timeout: 15_000 })
-      .toContain(HIDDEN_TEXT);
-    await expect
-      .poll(async () => (await cachedCopy(page, 'msg-1')).message?.subject)
-      .toBe(HIDDEN_SUBJECT);
+      .toContain('BEGIN PGP MESSAGE');
+    const onDisk = await cachedCopy(page, 'msg-1');
+    expect(onDisk.body).not.toContain(HIDDEN_TEXT);
+    expect(JSON.stringify(onDisk.message)).not.toContain(HIDDEN_SUBJECT);
+    expect(onDisk.message?.subject).toBe('...');
 
     // Remove the keys
     await openPrivacy(page);
@@ -301,12 +308,20 @@ test.describe('Removing the saved keys', () => {
       .click();
     await expect(page.getByText('Saved encryption keys cleared.')).toBeVisible();
 
-    // Nothing decrypted is left on this device
+    // The cached copy that depended on the keys is dropped
     await expect
       .poll(async () => (await cachedCopy(page, 'msg-1')).body, { timeout: 15_000 })
       .toBeNull();
     await expect.poll(async () => (await cachedCopy(page, 'msg-1')).message?.subject).toBe('...');
     // and the ordinary message is untouched
     expect((await cachedCopy(page, 'msg-2')).message?.subject).toBe('Message 0002');
+
+    // Opening it again shows nothing of what the keys decrypted
+    await page.goto('/mailbox#INBOX/msg-1');
+    await expect(reader.getByRole('button', { name: 'Add PGP Key' })).toBeVisible({
+      timeout: 20_000,
+    });
+    await expect(reader.frameLocator('iframe').getByText(HIDDEN_TEXT)).toHaveCount(0);
+    await expect(reader.getByText(HIDDEN_SUBJECT)).toHaveCount(0);
   });
 });
