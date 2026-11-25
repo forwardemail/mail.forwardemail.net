@@ -2917,15 +2917,20 @@ export const verifySignedMessage = async (
   if (!raw || typeof raw !== 'string') return null;
   // With the YubiKey option on, the keys are in the user's GnuPG keyring, not
   // the app: ask gpg first, and the app's keys when gpg does not know the
-  // signer.
+  // signer or does not trust the key.
   let signature: PgpSignatureCheck | null = null;
+  // gpg found the signature invalid. It is handed the signed part as text, so
+  // a body with bytes that are not UTF-8 no longer matches what was signed.
+  // The app's check against a key the user pinned for this sender decides.
+  let gpgSaysInvalid: PgpSignatureCheck | null = null;
   const { systemGpgEnabled, verifyWithSystemGpg } = await import('../utils/pgp-system-gpg');
   if (systemGpgEnabled(account)) {
     const { splitSignedMime } = await import('../utils/pgp-signed-parts');
     const parts = splitSignedMime(raw);
     if (parts) {
       const checked = await verifyWithSystemGpg(parts);
-      if (checked && checked.status !== 'unverified') signature = checked;
+      if (checked?.status === 'invalid') gpgSaysInvalid = checked;
+      else if (checked && checked.status !== 'unverified') signature = checked;
     }
   }
   if (!signature) {
@@ -2934,10 +2939,13 @@ export const verifySignedMessage = async (
     try {
       result = await requestPgpSignatureCheck({ raw });
     } catch {
-      return null;
+      result = null;
     }
-    if (!result?.success || !result.signature) return null;
-    signature = result.signature as PgpSignatureCheck;
+    const own =
+      result?.success && result.signature ? (result.signature as PgpSignatureCheck) : null;
+    // Only a signature the app verified itself outweighs gpg's "invalid"
+    signature = gpgSaysInvalid && own?.status !== 'verified' ? gpgSaysInvalid : own;
+    if (!signature) return null;
   }
   if ((Local.get('email') || 'default') !== account) return null;
   const apiId = getMessageApiId(msg);

@@ -1822,4 +1822,37 @@ describe('verifySignedMessage', () => {
     expect(res?.status).toBe('verified');
     expect(hoisted.requestPgpSignatureCheck).toHaveBeenCalled();
   });
+
+  it("lets the app's check of a pinned key decide when gpg calls the signature invalid", async () => {
+    // gpg gets the signed part as text. A body with Latin-1 bytes is changed
+    // on the way, so gpg reports a real signature as invalid.
+    hoisted.gpgEnabled = true;
+    hoisted.remoteRequest.mockResolvedValue(SIGNED_RAW);
+    hoisted.verifyWithSystemGpg.mockResolvedValue({ status: 'invalid', signers: [] });
+    hoisted.requestPgpSignatureCheck.mockResolvedValue({
+      success: true,
+      signature: { status: 'verified', signers: ['a@x.com'] },
+    });
+
+    const res = await verifySignedMessage(msg);
+
+    expect(res).toEqual({ status: 'verified', signers: ['a@x.com'] });
+  });
+
+  it('keeps invalid when nothing verifies the signature', async () => {
+    hoisted.gpgEnabled = true;
+    hoisted.remoteRequest.mockResolvedValue(SIGNED_RAW);
+    hoisted.verifyWithSystemGpg.mockResolvedValue({ status: 'invalid', signers: [] });
+
+    // The app does not know the signer
+    hoisted.requestPgpSignatureCheck.mockResolvedValue({
+      success: true,
+      signature: { status: 'unverified', signers: [] },
+    });
+    expect((await verifySignedMessage(msg))?.status).toBe('invalid');
+
+    // The app's own check could not run at all
+    hoisted.requestPgpSignatureCheck.mockRejectedValue(new Error('worker gone'));
+    expect((await verifySignedMessage(msg))?.status).toBe('invalid');
+  });
 });

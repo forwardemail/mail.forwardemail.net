@@ -37,6 +37,10 @@ use tokio::sync::Mutex;
 /// Matches the isolation hook's limit for large IPC payloads.
 const MAX_INPUT: usize = 50 * 1024 * 1024;
 
+/// Most plaintext gpg may write when decrypting. A small compressed message
+/// can expand to far more than its ciphertext, all of it into this process.
+const MAX_OUTPUT: usize = 200 * 1024 * 1024;
+
 /// Long enough to find the token, type the PIN and touch it.
 const TIMEOUT: Duration = Duration::from_secs(180);
 const CARD_STATUS_TIMEOUT: Duration = Duration::from_secs(15);
@@ -416,7 +420,14 @@ pub async fn gpg_decrypt(
 
     // Fetching a signer's key from a keyserver would tell the keyserver who
     // just read the message.
-    let base = ["--no-auto-key-retrieve", "--status-fd", "2"];
+    let max_output = MAX_OUTPUT.to_string();
+    let base = [
+        "--no-auto-key-retrieve",
+        "--status-fd",
+        "2",
+        "--max-output",
+        max_output.as_str(),
+    ];
 
     let _guard = GPG_LOCK.lock().await;
     let output = match pin {
@@ -444,9 +455,17 @@ pub async fn gpg_decrypt(
     };
 
     let stderr = String::from_utf8_lossy(&output.stderr);
-    let decrypted_ok = stderr.contains("[GNUPG:] DECRYPTION_OKAY");
+    let decrypted_ok = status_lines(&stderr).any(|status| status == "DECRYPTION_OKAY");
     let (signature_status, signer) = signature_from_status(&stderr);
 
+    // gpg stops at --max-output and still reports DECRYPTION_OKAY, so what it
+    // wrote is not the whole message.
+    if plaintext_over_limit(&stderr, output.stdout.len()) {
+        return Err(GpgError::new(
+            "failed",
+            "The decrypted message is too large to open here",
+        ));
+    }
     if !decrypted_ok || output.stdout.is_empty() {
         return Err(classify_failure(&stderr));
     }
@@ -458,26 +477,79 @@ pub async fn gpg_decrypt(
     })
 }
 
+/// gpg's machine-readable status lines, without their prefix. Only whole
+/// lines count: status shares stderr with gpg's log text, and a match inside
+/// a log line is not a status.
+fn status_lines(stderr: &str) -> impl Iterator<Item = &str> {
+    stderr
+        .lines()
+        .filter_map(|line| line.strip_prefix("[GNUPG:] "))
+        .map(str::trim_end)
+}
+
+/// Whether gpg cut the plaintext off at --max-output.
+fn plaintext_over_limit(stderr: &str, written: usize) -> bool {
+    written >= MAX_OUTPUT
+        || status_lines(stderr)
+            .filter_map(|status| status.strip_prefix("PLAINTEXT_LENGTH "))
+            .filter_map(|length| length.trim().parse::<u64>().ok())
+            .any(|length| length > MAX_OUTPUT as u64)
+}
+
 /// The signature gpg reported in its status lines: "verified" | "invalid" |
-/// "revoked" | "unverified" (no key, or an expired one), and the signer's
-/// address when gpg found the key.
+/// "revoked" | "unverified", and the signer's address when verified.
+///
+/// A signature that checks out (GOODSIG) is only "verified" when gpg also
+/// says the key is one the user trusts (TRUST_FULLY or TRUST_ULTIMATE). Any
+/// key can be imported into a keyring, by hand or by gpg itself, and it names
+/// whatever address its maker typed. gpg reports such a key as
+/// TRUST_UNDEFINED and warns that nothing shows it belongs to that person;
+/// that is "unverified" here, the same as a signature from an unknown key.
 fn signature_from_status(stderr: &str) -> (Option<&'static str>, Option<String>) {
     let mut status_out: Option<&'static str> = None;
     let mut signer = None;
-    for status in stderr.lines().filter_map(|l| l.strip_prefix("[GNUPG:] ")) {
+    // A good signature whose key gpg has not yet said it trusts
+    let mut good: Option<Option<String>> = None;
+    for status in status_lines(stderr) {
         let mut parts = status.splitn(3, ' ');
         match parts.next().unwrap_or("") {
-            "GOODSIG" => {
-                status_out.get_or_insert("verified");
-                signer = parts.nth(1).and_then(uid_email);
+            "NEWSIG" => {
+                if good.take().is_some() {
+                    status_out.get_or_insert("unverified");
+                }
+            }
+            "GOODSIG" => good = Some(parts.nth(1).and_then(uid_email)),
+            "TRUST_FULLY" | "TRUST_ULTIMATE" => {
+                if let Some(email) = good.take() {
+                    if status_out.is_none() || status_out == Some("unverified") {
+                        status_out = Some("verified");
+                        signer = email;
+                    }
+                }
+            }
+            "TRUST_UNDEFINED" | "TRUST_NEVER" | "TRUST_MARGINAL" => {
+                if good.take().is_some() {
+                    status_out.get_or_insert("unverified");
+                }
             }
             "BADSIG" => status_out = Some("invalid"),
-            "REVKEYSIG" => status_out = Some("revoked"),
+            "REVKEYSIG" => {
+                if status_out != Some("invalid") {
+                    status_out = Some("revoked");
+                }
+            }
             "EXPSIG" | "EXPKEYSIG" | "ERRSIG" => {
                 status_out.get_or_insert("unverified");
             }
             _ => {}
         }
+    }
+    // Good, and gpg never said whether the key is trusted
+    if good.is_some() {
+        status_out.get_or_insert("unverified");
+    }
+    if status_out != Some("verified") {
+        signer = None;
     }
     (status_out, signer)
 }
@@ -738,16 +810,19 @@ pub async fn gpg_sign(
     let stderr = String::from_utf8_lossy(&output.stderr);
     let mut hash = None;
     let mut encrypted = false;
-    for status in stderr.lines().filter_map(|l| l.strip_prefix("[GNUPG:] ")) {
+    let mut signed = false;
+    for status in status_lines(&stderr) {
         let fields: Vec<&str> = status.split(' ').collect();
         match fields.first().copied() {
             // SIG_CREATED <type> <pk_algo> <hash_algo> <class> <time> <fpr>
-            Some("SIG_CREATED") => hash = fields.get(3).and_then(|h| micalg(h)).or(hash),
+            Some("SIG_CREATED") => {
+                signed = true;
+                hash = fields.get(3).and_then(|h| micalg(h)).or(hash);
+            }
             Some("END_ENCRYPTION") => encrypted = true,
             _ => {}
         }
     }
-    let signed = stderr.contains("[GNUPG:] SIG_CREATED ");
     if !output.status.success() || !signed || (encrypt && !encrypted) || output.stdout.is_empty() {
         return Err(classify_failure(&stderr));
     }
@@ -761,8 +836,9 @@ pub async fn gpg_sign(
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_failure, ensure_allowed, micalg, pick_signing_key, read_consent,
-        signature_from_status, uid_email, valid_signer, write_consent, GPG_ALLOWED,
+        classify_failure, ensure_allowed, micalg, pick_signing_key, plaintext_over_limit,
+        read_consent, signature_from_status, status_lines, uid_email, valid_signer, write_consent,
+        GPG_ALLOWED, MAX_OUTPUT,
     };
     use std::sync::atomic::Ordering;
 
@@ -895,18 +971,93 @@ fpr:::::::::CARDEFPR:
         assert_eq!(pick_signing_key(&revoked, now).as_deref(), Some("DISKFPR"));
     }
 
+    // Status output captured from gpg 2.5 checking one detached signature,
+    // first with the signer's key only imported, then with it trusted.
+    const SIG_KEY_NOT_TRUSTED: &str = "\
+[GNUPG:] NEWSIG
+[GNUPG:] KEY_CONSIDERED 779D3511CF75ECF01E139DF7BACA5224F3CBCCC7 0
+[GNUPG:] SIG_ID fnswdm06RLGYfUBg2PZKIs7hvv4 2026-11-25 1795647583
+[GNUPG:] GOODSIG BACA5224F3CBCCC7 Ada Example <ada@example.com>
+gpg: Good signature from \"Ada Example <ada@example.com>\" [unknown]
+[GNUPG:] VALIDSIG 779D3511CF75ECF01E139DF7BACA5224F3CBCCC7 2026-11-25 1795647583 0 4 0 22 10 00 779D3511CF75ECF01E139DF7BACA5224F3CBCCC7
+[GNUPG:] TRUST_UNDEFINED 0 pgp
+gpg: WARNING: This key is not certified with a trusted signature!
+";
+    const SIG_KEY_TRUSTED: &str = "\
+[GNUPG:] NEWSIG
+[GNUPG:] KEY_CONSIDERED 779D3511CF75ECF01E139DF7BACA5224F3CBCCC7 0
+[GNUPG:] SIG_ID fnswdm06RLGYfUBg2PZKIs7hvv4 2026-11-25 1795647583
+[GNUPG:] GOODSIG BACA5224F3CBCCC7 Ada Example <ada@example.com>
+[GNUPG:] VALIDSIG 779D3511CF75ECF01E139DF7BACA5224F3CBCCC7 2026-11-25 1795647583 0 4 0 22 10 00 779D3511CF75ECF01E139DF7BACA5224F3CBCCC7
+[GNUPG:] TRUST_ULTIMATE 0 pgp
+";
+    const SIG_TAMPERED: &str = "\
+[GNUPG:] NEWSIG
+[GNUPG:] KEY_CONSIDERED 779D3511CF75ECF01E139DF7BACA5224F3CBCCC7 0
+[GNUPG:] BADSIG BACA5224F3CBCCC7 Ada Example <ada@example.com>
+[GNUPG:] FAILURE gpg-exit 33554433
+";
+
+    #[test]
+    fn a_signature_is_verified_only_with_a_key_the_user_trusts() {
+        assert_eq!(
+            signature_from_status(SIG_KEY_TRUSTED),
+            (Some("verified"), Some("ada@example.com".into()))
+        );
+        // The key is in the keyring and the signature checks out, but
+        // nothing says the key belongs to the address it names
+        assert_eq!(
+            signature_from_status(SIG_KEY_NOT_TRUSTED),
+            (Some("unverified"), None)
+        );
+        // gpg stopped before saying anything about trust
+        let cut_short = "[GNUPG:] GOODSIG BACA5224F3CBCCC7 Ada Example <ada@example.com>\n";
+        assert_eq!(signature_from_status(cut_short), (Some("unverified"), None));
+    }
+
     #[test]
     fn reads_signature_status() {
-        let good = "[GNUPG:] NEWSIG\n[GNUPG:] GOODSIG 671519AACAB1E443 Me <Me@X.com>\n[GNUPG:] VALIDSIG ...\n";
-        assert_eq!(
-            signature_from_status(good),
-            (Some("verified"), Some("me@x.com".into()))
-        );
-        let bad = "[GNUPG:] BADSIG 671519AACAB1E443 Me <me@x.com>\n";
-        assert_eq!(signature_from_status(bad).0, Some("invalid"));
+        assert_eq!(signature_from_status(SIG_TAMPERED), (Some("invalid"), None));
         let no_key = "[GNUPG:] ERRSIG 671519AACAB1E443 22 10 00 1795444922 9 -\n[GNUPG:] NO_PUBKEY 671519AACAB1E443\n";
         assert_eq!(signature_from_status(no_key), (Some("unverified"), None));
         assert_eq!(signature_from_status("gpg: no signature found\n").0, None);
+        // One bad signature is not made good by another that verifies
+        let mixed = format!("{SIG_TAMPERED}{SIG_KEY_TRUSTED}");
+        assert_eq!(signature_from_status(&mixed), (Some("invalid"), None));
+        // A trusted signature counts even next to one from an unknown key
+        let with_unknown = format!("{SIG_KEY_NOT_TRUSTED}{SIG_KEY_TRUSTED}");
+        assert_eq!(
+            signature_from_status(&with_unknown),
+            (Some("verified"), Some("ada@example.com".into()))
+        );
+    }
+
+    #[test]
+    fn status_is_read_from_whole_lines_only() {
+        // Log text that happens to contain a status keyword is not a status
+        let log = "gpg: note: [GNUPG:] DECRYPTION_OKAY\ngpg: [GNUPG:] GOODSIG AA Eve <eve@x.com>\n";
+        assert_eq!(status_lines(log).count(), 0);
+        assert_eq!(signature_from_status(log), (None, None));
+        let real = "[GNUPG:] DECRYPTION_OKAY\r\n";
+        assert!(status_lines(real).any(|status| status == "DECRYPTION_OKAY"));
+    }
+
+    #[test]
+    fn notices_plaintext_cut_off_at_the_limit() {
+        // Captured from gpg 2.5 with --max-output smaller than the message:
+        // it reports the full length, stops writing, and still says OKAY
+        let small = "[GNUPG:] PLAINTEXT 62 1795647610 zeros.bin\n[GNUPG:] PLAINTEXT_LENGTH 300000\n[GNUPG:] DECRYPTION_OKAY\n";
+        assert!(!plaintext_over_limit(small, 300_000));
+        let huge = format!(
+            "[GNUPG:] PLAINTEXT_LENGTH {}\ngpg: error writing to '-': exceeded --max-output limit\n[GNUPG:] DECRYPTION_OKAY\n",
+            MAX_OUTPUT as u64 + 1
+        );
+        assert!(plaintext_over_limit(&huge, 0));
+        // No length reported (a streamed message): the amount written tells
+        assert!(plaintext_over_limit(
+            "[GNUPG:] DECRYPTION_OKAY\n",
+            MAX_OUTPUT
+        ));
     }
 
     #[test]
