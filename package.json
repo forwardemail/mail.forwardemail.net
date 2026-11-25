@@ -130,7 +130,7 @@
   "devDependencies": {
     "@b9g/termdom": "0.2.7",
     "@commitlint/cli": "^20.5.3",
-    "@commitlint/config-conventional": "^20.5.3",
+    "@commitlint/config-conventional": "^21.2.4",
     "@eslint/js": "^9.39.5",
     "@internationalized/date": "^3.12.4",
     "@lhci/cli": "^0.15.1",
