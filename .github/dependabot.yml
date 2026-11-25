@@ -26,6 +26,15 @@ updates:
         update-types:
           - minor
           - patch
+    ignore:
+      # Tauri's JS packages have to stay on the same major.minor as their Rust
+      # crates, or `tauri build` stops with "Found version mismatched Tauri
+      # packages". They are bumped by hand together with src-tauri/Cargo.toml.
+      # Patch releases are fine and still come through.
+      - dependency-name: '@tauri-apps/*'
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
 
   # E2E webview harness (Vitest + raw webdriverio, isolated lockfile)
   - package-ecosystem: npm
@@ -48,6 +57,13 @@ updates:
         update-types:
           - minor
           - patch
+    ignore:
+      # setup/undici-dispatcher.ts installs an undici 6 Agent as the global
+      # dispatcher so webdriverio 9 can open a session under Node 23+. It has
+      # to stay on the major webdriverio itself uses.
+      - dependency-name: undici
+        update-types:
+          - version-update:semver-major
 
   # E2E mobile harness (Vitest + raw webdriverio, isolated lockfile)
   - package-ecosystem: npm
@@ -70,6 +86,13 @@ updates:
         update-types:
           - minor
           - patch
+    ignore:
+      # setup/undici-dispatcher.ts installs an undici 6 Agent as the global
+      # dispatcher so webdriverio 9 can open a session under Node 23+. It has
+      # to stay on the major webdriverio itself uses.
+      - dependency-name: undici
+        update-types:
+          - version-update:semver-major
 
   # Cloudflare Worker (Wrangler, which deploys with the Cloudflare token)
   - package-ecosystem: npm
@@ -104,9 +127,15 @@ updates:
     commit-message:
       prefix: 'ci'
     groups:
+      # Minor and patch only, so a major comes as its own pull request. The
+      # release workflows depend on how tauri-action retries uploads
+      # (tests/unit/release-gating.test.js), and a major there needs reading.
       actions:
         patterns:
           - '*'
+        update-types:
+          - minor
+          - patch
 
   # Cargo (Tauri / Rust) dependencies
   - package-ecosystem: cargo
