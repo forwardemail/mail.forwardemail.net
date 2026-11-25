@@ -23,11 +23,13 @@
 //! are written to private temporary files for `--recipient-file`, so they are
 //! used without being imported into the user's keyring.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::{Output, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
+use tauri::{AppHandle, Manager};
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use tokio::sync::Mutex;
@@ -44,6 +46,73 @@ static GPG_LOCK: Mutex<()> = Mutex::const_new(());
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+/// Whether the person at this computer agreed to let the app use GnuPG.
+///
+/// The commands below decrypt and sign with whatever secret keys gpg can
+/// reach, and gpg-agent often holds the PIN or passphrase already. The
+/// "Use a YubiKey or smartcard" setting lives in the webview, so on its own
+/// it would let any script that got to run there turn itself into a
+/// decrypt-and-sign service. This flag is kept on the native side and is only
+/// set after a native dialog the page cannot answer (`gpg_set_allowed`).
+static GPG_ALLOWED: AtomicBool = AtomicBool::new(false);
+
+/// In the app config directory, which the webview has no write access to.
+const CONSENT_FILE: &str = "gpg.json";
+
+#[derive(Serialize, Deserialize, Default)]
+struct GpgConsent {
+    allowed: bool,
+}
+
+/// Anything but a readable file that says yes is a no.
+fn read_consent(path: &Path) -> bool {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<GpgConsent>(&raw).ok())
+        .is_some_and(|consent| consent.allowed)
+}
+
+fn write_consent(path: &Path, allowed: bool) -> std::io::Result<()> {
+    if !allowed {
+        return match std::fs::remove_file(path) {
+            Err(err) if err.kind() != std::io::ErrorKind::NotFound => Err(err),
+            _ => Ok(()),
+        };
+    }
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let json = serde_json::to_string(&GpgConsent { allowed })?;
+    std::fs::write(path, json)
+}
+
+fn consent_path(app: &AppHandle) -> Option<PathBuf> {
+    match app.path().app_config_dir() {
+        Ok(dir) => Some(dir.join(CONSENT_FILE)),
+        Err(err) => {
+            log::warn!("gpg consent directory unavailable: {err}");
+            None
+        }
+    }
+}
+
+/// Read the saved answer at startup.
+pub fn load_consent(app: &AppHandle) {
+    let allowed = consent_path(app).is_some_and(|path| read_consent(&path));
+    GPG_ALLOWED.store(allowed, Ordering::SeqCst);
+}
+
+fn ensure_allowed() -> Result<(), GpgError> {
+    if GPG_ALLOWED.load(Ordering::SeqCst) {
+        Ok(())
+    } else {
+        Err(GpgError::new(
+            "not_allowed",
+            "GnuPG is not turned on for this app",
+        ))
+    }
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GpgDecryptResult {
@@ -57,8 +126,8 @@ pub struct GpgDecryptResult {
 /// A failure the frontend can act on: `code` says what to do next.
 #[derive(Serialize, Debug)]
 pub struct GpgError {
-    /// unavailable | invalid_input | no_card | pinentry | bad_pin |
-    /// no_secret_key | timeout | failed
+    /// unavailable | not_allowed | invalid_input | no_card | pinentry |
+    /// bad_pin | no_secret_key | timeout | failed
     pub code: &'static str,
     pub message: String,
 }
@@ -252,9 +321,61 @@ pub async fn gpg_available() -> bool {
     find_gpg().is_some()
 }
 
+#[tauri::command]
+pub async fn gpg_allowed() -> bool {
+    GPG_ALLOWED.load(Ordering::SeqCst)
+}
+
+/// Turn the gpg commands on or off. Turning them on asks in a native dialog,
+/// so it takes a person and not just a call from the page. Returns whether
+/// they are on afterwards.
+#[tauri::command]
+pub async fn gpg_set_allowed(app: AppHandle, allowed: bool) -> Result<bool, GpgError> {
+    let path = consent_path(&app);
+    if !allowed {
+        GPG_ALLOWED.store(false, Ordering::SeqCst);
+        if let Some(path) = path {
+            // Left behind, the file would turn this back on at the next start
+            write_consent(&path, false).map_err(|err| {
+                GpgError::new("failed", format!("Could not save the setting: {err}"))
+            })?;
+        }
+        return Ok(false);
+    }
+    if GPG_ALLOWED.load(Ordering::SeqCst) {
+        return Ok(true);
+    }
+    let agreed = app
+        .dialog()
+        .message(
+            "Forward Email will be able to decrypt and sign mail with the keys GnuPG \
+             can use on this computer, including a YubiKey or smartcard.\n\n\
+             Only allow this if you just turned on \"Use a YubiKey or smartcard\" in Settings.",
+        )
+        .title("Allow Forward Email to use GnuPG?")
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "Allow".into(),
+            "Don't Allow".into(),
+        ))
+        .blocking_show();
+    if !agreed {
+        return Ok(false);
+    }
+    GPG_ALLOWED.store(true, Ordering::SeqCst);
+    if let Some(path) = path {
+        // Not saved means asked again after a restart, which is the safe side
+        if let Err(err) = write_consent(&path, true) {
+            log::warn!("could not save gpg consent: {err}");
+        }
+    }
+    Ok(true)
+}
+
 /// Whether a card is in the reader, and how many PIN tries it has left.
 #[tauri::command]
 pub async fn gpg_card_info() -> Result<GpgCardInfo, GpgError> {
+    ensure_allowed()?;
     let gpg = find_gpg().ok_or_else(|| GpgError::new("unavailable", "gpg not found"))?;
     let _guard = GPG_LOCK.lock().await;
     let output = run_gpg(
@@ -281,6 +402,7 @@ pub async fn gpg_decrypt(
     armored: String,
     pin: Option<String>,
 ) -> Result<GpgDecryptResult, GpgError> {
+    ensure_allowed()?;
     if armored.len() > MAX_INPUT {
         return Err(GpgError::new("invalid_input", "Message too large"));
     }
@@ -374,6 +496,7 @@ pub struct GpgVerifyResult {
 /// alone goes through a temporary file. No PIN: verifying needs no secret.
 #[tauri::command]
 pub async fn gpg_verify(signed: String, signature: String) -> Result<GpgVerifyResult, GpgError> {
+    ensure_allowed()?;
     if signed.is_empty() || signed.len() > MAX_INPUT || signature.len() > MAX_KEY_SIZE {
         return Err(GpgError::new(
             "invalid_input",
@@ -530,6 +653,7 @@ pub async fn gpg_sign(
     recipient_keys: Vec<String>,
     pin: Option<String>,
 ) -> Result<GpgSignResult, GpgError> {
+    ensure_allowed()?;
     if data.is_empty() || data.len() > MAX_INPUT {
         return Err(GpgError::new(
             "invalid_input",
@@ -637,8 +761,58 @@ pub async fn gpg_sign(
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_failure, micalg, pick_signing_key, signature_from_status, uid_email, valid_signer,
+        classify_failure, ensure_allowed, micalg, pick_signing_key, read_consent,
+        signature_from_status, uid_email, valid_signer, write_consent, GPG_ALLOWED,
     };
+    use std::sync::atomic::Ordering;
+
+    fn consent_file(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "forwardemail-gpg-consent-{}-{name}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir.join("gpg.json")
+    }
+
+    #[test]
+    fn consent_is_off_until_saved_and_off_again_when_withdrawn() {
+        let path = consent_file("roundtrip");
+        assert!(!read_consent(&path));
+
+        write_consent(&path, true).unwrap();
+        assert!(read_consent(&path));
+
+        write_consent(&path, false).unwrap();
+        assert!(!read_consent(&path));
+        // Withdrawing twice is not an error
+        write_consent(&path, false).unwrap();
+    }
+
+    #[test]
+    fn a_damaged_consent_file_is_a_no() {
+        let path = consent_file("damaged");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        for raw in [
+            "",
+            "{not json",
+            "true",
+            r#"{"allowed":"yes"}"#,
+            r#"{"allowed":false}"#,
+        ] {
+            std::fs::write(&path, raw).unwrap();
+            assert!(!read_consent(&path), "{raw:?} must not allow gpg");
+        }
+    }
+
+    #[test]
+    fn commands_are_refused_until_allowed() {
+        GPG_ALLOWED.store(false, Ordering::SeqCst);
+        assert_eq!(ensure_allowed().unwrap_err().code, "not_allowed");
+        GPG_ALLOWED.store(true, Ordering::SeqCst);
+        assert!(ensure_allowed().is_ok());
+        GPG_ALLOWED.store(false, Ordering::SeqCst);
+    }
 
     #[test]
     fn email_from_user_id() {

@@ -1410,6 +1410,10 @@ pub fn run() {
             #[cfg(desktop)]
             gpg::gpg_available,
             #[cfg(desktop)]
+            gpg::gpg_allowed,
+            #[cfg(desktop)]
+            gpg::gpg_set_allowed,
+            #[cfg(desktop)]
             gpg::gpg_card_info,
             #[cfg(desktop)]
             gpg::gpg_decrypt,
@@ -1532,6 +1536,10 @@ pub fn run() {
                 // example because Chrome already owns Command+Shift+M, must
                 // not prevent the app from starting.
                 app.manage(global_shortcut::install(app.handle()));
+
+                // Whether the user agreed to let the app use GnuPG, before
+                // the page can ask for anything
+                gpg::load_consent(app.handle());
             }
 
             // Forward Android back button to the frontend

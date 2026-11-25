@@ -7,6 +7,11 @@
  * (src-tauri/src/gpg.rs), whose gpg-agent talks to the token. The user turns
  * this on per device in Settings ("Use a YubiKey or smartcard").
  *
+ * That setting is kept here in the webview, so the native side does not rely
+ * on it: its gpg commands stay off until the user agrees in a native dialog
+ * (gpg_set_allowed). Otherwise any script that got to run in this page could
+ * decrypt and sign with the keys gpg holds.
+ *
  * The PIN: gpg-agent's own pinentry is tried first (it may already hold the
  * PIN, or show a graphical prompt). When that pinentry cannot run in a GUI
  * app (a terminal-only pinentry), the caller's `askPin` asks for it and gpg
@@ -17,7 +22,7 @@
  * own decryptions.
  */
 import { isTauriDesktop } from './platform.js';
-import { Local } from './storage.js';
+import { Accounts, Local } from './storage.js';
 import { requestPgpBlock, requestParseDecrypted } from './sync-worker-client.js';
 import type { Attachment, PgpSignatureCheck } from '../types';
 
@@ -66,10 +71,50 @@ export function systemGpgEnabled(account: string): boolean {
   return Local.get(settingKey(account)) === 'true';
 }
 
-export function setSystemGpgEnabled(account: string, enabled: boolean): void {
-  if (!account) return;
-  if (enabled) Local.set(settingKey(account), 'true');
-  else Local.remove(settingKey(account));
+function accountsOnThisDevice(): string[] {
+  try {
+    const list = (Accounts?.getAll?.() || []) as Array<{ email?: string }>;
+    return list.map((entry) => entry?.email || '').filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Turn the option on or off for `account`. Turning it on asks the user in a
+ * native dialog, once per device. Returns whether it is on afterwards, which
+ * is false when they declined.
+ */
+export async function setSystemGpgEnabled(account: string, enabled: boolean): Promise<boolean> {
+  if (!account) return false;
+  if (!enabled) {
+    Local.remove(settingKey(account));
+    // The native switch is for the whole app. It stays on while another
+    // account on this device still uses the token.
+    const stillUsed = accountsOnThisDevice().some(
+      (other) => other !== account && Local.get(settingKey(other)) === 'true',
+    );
+    if (!stillUsed && isTauriDesktop) {
+      try {
+        const invoke = await getInvoke();
+        await invoke<boolean>('gpg_set_allowed', { allowed: false });
+      } catch (err) {
+        console.warn('[pgp-system-gpg] could not turn gpg off on the native side:', err);
+      }
+    }
+    return false;
+  }
+  if (!isTauriDesktop) return false;
+  let allowed = false;
+  try {
+    const invoke = await getInvoke();
+    allowed = (await invoke<boolean>('gpg_set_allowed', { allowed: true })) === true;
+  } catch {
+    allowed = false;
+  }
+  if (!allowed) return false;
+  Local.set(settingKey(account), 'true');
+  return true;
 }
 
 let available: Promise<boolean> | null = null;
@@ -125,6 +170,15 @@ function failure(err: GpgError): SystemGpgResult {
         reason: 'no_secret_key',
         message:
           'This message is not encrypted to your YubiKey, smartcard or any key in your GnuPG keyring.',
+      };
+    case 'not_allowed':
+      // The option is on here but was never confirmed on this computer (a
+      // restored profile, or the confirmation was withdrawn)
+      return {
+        success: false,
+        reason: 'not_allowed',
+        message:
+          'GnuPG is turned off for this app. In Settings, turn "Use a YubiKey or smartcard (GnuPG)" off and on again.',
       };
     default:
       return { success: false, reason: err.code, message: err.message || 'gpg could not decrypt' };

@@ -1534,8 +1534,15 @@
     }
   };
 
-  const saveUseSystemGpg = () => {
-    setSystemGpgEnabled(getAccountId(), useSystemGpg);
+  const saveUseSystemGpg = async () => {
+    const wanted = useSystemGpg;
+    // Turning it on asks in a native dialog, which the user can decline
+    const on = await setSystemGpgEnabled(getAccountId(), wanted);
+    useSystemGpg = on;
+    if (wanted && !on) {
+      toasts?.show?.('YubiKey / smartcard decryption was not turned on', 'info');
+      return;
+    }
     // As when keys are removed: what the token decrypted is not kept
     if (!useSystemGpg) void forgetDecryptedMessages(getAccountId());
     toasts?.show?.(

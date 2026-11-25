@@ -11,6 +11,9 @@ const hoisted = vi.hoisted(() => ({
   desktop: true,
   store: new Map<string, string>(),
   invoke: vi.fn(),
+  accounts: [] as Array<{ email: string }>,
+  // What the user answers in the native "Allow GnuPG?" dialog
+  userAllows: true,
   requestPgpBlock: vi.fn(),
   requestParseDecrypted: vi.fn(),
 }));
@@ -27,6 +30,7 @@ vi.mock('../../src/utils/storage.js', () => ({
     set: (k: string, v: string) => hoisted.store.set(k, v),
     remove: (k: string) => hoisted.store.delete(k),
   },
+  Accounts: { getAll: () => hoisted.accounts },
 }));
 
 vi.mock('@tauri-apps/api/core', () => ({
@@ -68,8 +72,11 @@ beforeEach(() => {
   hoisted.desktop = true;
   hoisted.store.clear();
   hoisted.invoke.mockReset();
-  hoisted.invoke.mockImplementation(async (cmd: string) => {
+  hoisted.accounts = [{ email: 'a@x.com' }, { email: 'b@x.com' }];
+  hoisted.userAllows = true;
+  hoisted.invoke.mockImplementation(async (cmd: string, args?: { allowed?: boolean }) => {
     if (cmd === 'gpg_available') return true;
+    if (cmd === 'gpg_set_allowed') return Boolean(args?.allowed) && hoisted.userAllows;
     if (cmd === 'gpg_decrypt') return { plaintext: PLAINTEXT, signatureStatus: null, signer: null };
     throw new Error(`unexpected ${cmd}`);
   });
@@ -83,11 +90,55 @@ describe('systemGpgEnabled', () => {
   it('is off until the user turns it on, per account', async () => {
     const { systemGpgEnabled, setSystemGpgEnabled } = await load();
     expect(systemGpgEnabled('a@x.com')).toBe(false);
-    setSystemGpgEnabled('a@x.com', true);
+    expect(await setSystemGpgEnabled('a@x.com', true)).toBe(true);
     expect(systemGpgEnabled('a@x.com')).toBe(true);
     expect(systemGpgEnabled('b@x.com')).toBe(false);
-    setSystemGpgEnabled('a@x.com', false);
+    expect(await setSystemGpgEnabled('a@x.com', false)).toBe(false);
     expect(systemGpgEnabled('a@x.com')).toBe(false);
+  });
+
+  it('stays off when the user declines the native confirmation', async () => {
+    hoisted.userAllows = false;
+    const { systemGpgEnabled, setSystemGpgEnabled } = await load();
+
+    expect(await setSystemGpgEnabled('a@x.com', true)).toBe(false);
+
+    expect(hoisted.invoke).toHaveBeenCalledWith('gpg_set_allowed', { allowed: true });
+    expect(systemGpgEnabled('a@x.com')).toBe(false);
+  });
+
+  it('stays off when the native side cannot be asked', async () => {
+    hoisted.invoke.mockRejectedValue(new Error('command not found'));
+    const { systemGpgEnabled, setSystemGpgEnabled } = await load();
+
+    expect(await setSystemGpgEnabled('a@x.com', true)).toBe(false);
+    expect(systemGpgEnabled('a@x.com')).toBe(false);
+  });
+
+  it('keeps gpg allowed for the app while another account still uses it', async () => {
+    const { setSystemGpgEnabled } = await load();
+    await setSystemGpgEnabled('a@x.com', true);
+    await setSystemGpgEnabled('b@x.com', true);
+    hoisted.invoke.mockClear();
+
+    await setSystemGpgEnabled('a@x.com', false);
+    expect(hoisted.invoke).not.toHaveBeenCalledWith('gpg_set_allowed', { allowed: false });
+
+    await setSystemGpgEnabled('b@x.com', false);
+    expect(hoisted.invoke).toHaveBeenCalledWith('gpg_set_allowed', { allowed: false });
+  });
+
+  it('says how to fix it when the option is on but this computer never confirmed it', async () => {
+    hoisted.invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === 'gpg_available') return true;
+      throw { code: 'not_allowed', message: 'GnuPG is not turned on for this app' };
+    });
+    const { decryptWithSystemGpg } = await load();
+
+    const result = await decryptWithSystemGpg('raw message');
+
+    expect(result).toMatchObject({ success: false, reason: 'not_allowed' });
+    expect(result.message).toMatch(/off and on again/);
   });
 
   it('is always off outside the desktop app', async () => {
