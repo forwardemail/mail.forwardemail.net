@@ -819,6 +819,83 @@ describe('processOutbox catch-all send', () => {
     expect(await getOutboxItem('held', 'me@test.com')).toMatchObject({ status: 'sent' });
   });
 
+  it('leaves a held send alone once something else has claimed it', async () => {
+    h.outbox.set('held', {
+      account: 'me@test.com',
+      id: 'held',
+      status: 'pending',
+      retryCount: 0,
+      nextRetryAt: Date.now() - 1,
+      undoHold: true,
+      emailData: email,
+    });
+    // Another tab claims the row right after this one has read it as pending
+    const { db } = await import('../../src/utils/db');
+    vi.mocked(db.outbox.get).mockImplementationOnce(async () => {
+      const seen = h.outbox.get('held');
+      h.outbox.set('held', { ...seen, status: 'sending', updatedAt: Date.now() });
+      return seen;
+    });
+
+    const result = await commitHeldSend('me@test.com', 'held');
+
+    // Putting it back to pending here is what posted the message twice
+    expect(h.remoteRequest).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ ok: false, deferred: true });
+    expect(await getOutboxItem('held', 'me@test.com')).toMatchObject({ status: 'sending' });
+  });
+
+  it('posts a held send once when the processor and the undo queue reach it together', async () => {
+    h.outbox.set('held', {
+      account: 'me@test.com',
+      id: 'held',
+      status: 'pending',
+      retryCount: 0,
+      nextRetryAt: Date.now() - 1,
+      undoHold: true,
+      emailData: email,
+    });
+    let answer: (value: unknown) => void = () => {};
+    h.remoteRequest.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        }),
+    );
+
+    const viaProcessor = processOutbox();
+    const viaQueue = commitHeldSend('me@test.com', 'held');
+    await vi.waitFor(() => expect(h.remoteRequest).toHaveBeenCalled());
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    answer({});
+    await Promise.all([viaProcessor, viaQueue]);
+
+    expect(h.remoteRequest).toHaveBeenCalledTimes(1);
+    expect(await getOutboxItem('held', 'me@test.com')).toMatchObject({ status: 'sent' });
+  });
+
+  it('stops waiting on a send that was cut off, for an account not on screen', async () => {
+    h.authHeaders.set('me@test.com', 'Basic owner-creds');
+    h.outbox.set('held', {
+      account: 'me@test.com',
+      id: 'held',
+      status: 'sending',
+      retryCount: 0,
+      undoHold: true,
+      updatedAt: Date.now() - 60 * 60 * 1000,
+      emailData: email,
+    });
+    h.activeEmail = 'other@test.com';
+
+    const result = await commitHeldSend('me@test.com', 'held');
+
+    // It may have gone out before the quit, so it is not sent again
+    expect(h.remoteRequest).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ ok: false, permanent: true });
+    expect(result.error).toMatch(/may have been sent/);
+    expect(await getOutboxItem('held', 'me@test.com')).toMatchObject({ status: 'failed' });
+  });
+
   it('keeps a scheduled catch-all send local instead of handing it to the server', async () => {
     h.catchallHeaders.set('sales@example.com', 'Basic catchall-creds');
     const sendAt = Date.now() + 60_000;

@@ -359,7 +359,33 @@ export async function getOutboxItem(id, account = getAccount()) {
  */
 export async function commitHeldSend(account, id) {
   const owner = account || getAccount();
-  const item = await db.outbox.get([owner, id]);
+  // Read and released under the item lock, the one a claim and Undo take.
+  // The status is never written back to pending here: doing that outside the
+  // lock put an item another tab or the processor had just claimed back up
+  // for a second claim, and the message was posted twice.
+  const item = await withOutboxItemLock(owner, id, async () => {
+    const current = await db.outbox.get([owner, id]);
+    if (!current) return null;
+    const now = Date.now();
+    // A send that a quit or a crash cut off. The processor only recovers
+    // these for the account on screen, and this one may belong to another.
+    if (
+      current.status === 'sending' &&
+      (current.updatedAt || 0) <= now - getStaleSendingMs(current)
+    ) {
+      const failed = { status: 'failed', lastError: UNCONFIRMED_SEND_MESSAGE, updatedAt: now };
+      await db.outbox.update([owner, id], failed);
+      return { ...current, ...failed };
+    }
+    if (!CLAIMABLE.has(current.status)) return current;
+    const due = {
+      nextRetryAt: now,
+      sendAt: current.undoHold ? null : current.sendAt || null,
+      updatedAt: now,
+    };
+    await db.outbox.update([owner, id], due);
+    return { ...current, ...due };
+  });
   if (!item) {
     return { ok: false, missing: true, permanent: true, error: 'Pending message is gone' };
   }
@@ -371,15 +397,7 @@ export async function commitHeldSend(account, id) {
     return { ok: false, deferred: true, error: 'Send already in progress', retryInMs: 5_000 };
   }
 
-  const now = Date.now();
-  await db.outbox.update([owner, id], {
-    status: 'pending',
-    nextRetryAt: now,
-    sendAt: item.undoHold ? null : item.sendAt || null,
-    updatedAt: now,
-  });
-  const fresh = await db.outbox.get([owner, id]);
-  const result = await sendOutboxItem(fresh || item);
+  const result = await sendOutboxItem(item);
   if (result.success) return { ok: true };
   if (result.deferred) {
     return { ok: false, deferred: true, error: result.error, retryInMs: 5_000 };

@@ -85,7 +85,7 @@ import {
   lockIfDue as lockAppIfDue,
 } from './utils/inactivity-timer.js';
 import { startOutboxProcessor, processOutbox, cancelQueuedSend } from './utils/outbox-service';
-import { cancelPendingSend } from './utils/pending-send';
+import { cancelPendingSend, forgetPendingSend } from './utils/pending-send';
 import {
   adoptPendingSend,
   startPendingSendController,
@@ -471,8 +471,18 @@ globalThis.addEventListener('pending-send-failed', (event) => {
   if (record?.id) dismissUndoToast(record.id);
   const subject = String(record?.subject || 'Message').slice(0, 40);
   const reason = typeof detail.error === 'string' ? detail.error.slice(0, 180) : '';
+  // While it is still being retried, saying it is in Drafts invites sending
+  // it a second time by hand.
+  if (detail.willRetry) {
+    toasts.show(
+      `"${subject}" has not been sent yet. Trying again.${reason ? ` ${reason}` : ''}`,
+      'warning',
+    );
+    return;
+  }
+  const hasDraft = Boolean(record?.draftId || record?.serverDraftId);
   toasts.show(
-    `Couldn't send "${subject}". It is still in Drafts.${reason ? ` ${reason}` : ''}`,
+    `Couldn't send "${subject}".${hasDraft ? ' It is still in Drafts.' : ''}${reason ? ` ${reason}` : ''}`,
     'error',
   );
 });
@@ -965,10 +975,21 @@ function outboxDataToPrefill(data: Record<string, unknown>): Record<string, unkn
   };
 }
 
-async function reopenComposeFromOutbox(item: { emailData?: Record<string, unknown> }) {
+async function reopenComposeFromOutbox(item: {
+  emailData?: Record<string, unknown>;
+  draftId?: string | null;
+  serverDraftId?: string | null;
+  sourceMessageId?: string | null;
+}) {
   const data = item?.emailData;
   if (!data) return;
-  const prefill = outboxDataToPrefill(data);
+  // The draft was kept (it goes only once the send is confirmed), so the
+  // composer picks it up again. Without its ids the next autosave wrote a
+  // second draft and left this one behind.
+  const prefill: Record<string, unknown> = { ...outboxDataToPrefill(data) };
+  if (item.draftId) prefill.draftId = item.draftId;
+  if (item.serverDraftId) prefill.serverDraftId = item.serverDraftId;
+  if (item.sourceMessageId) prefill.sourceMessageId = item.sourceMessageId;
   try {
     if (isTauriDesktop) {
       openComposeWindow({ action: 'open', prefill });
@@ -1001,16 +1022,30 @@ function handleUndoSend(result: UndoSendResult) {
   const undo = async () => {
     dismissUndoToast(outboxId);
     try {
-      // Taken out of the queue and the outbox only if the send has not
-      // started, so the message is never both reopened here and sent.
-      const removed = cancelPendingSend(outboxId);
+      // The outbox row decides. Removing it, under the lock a send claims it
+      // with, is what stops the message; the queue record alone does not.
+      const held = cancelPendingSend(outboxId);
       const { cancelled, item } = await cancelQueuedSend(outboxId, { account: outboxAccount });
-      if (!removed && !cancelled) {
-        toasts?.show?.('Message already sent', 'info');
+      if (cancelled) {
+        // Also when the queue had already started on it: with the row gone
+        // that attempt sends nothing, and the record must not bring it back.
+        forgetPendingSend(outboxId);
+      } else if (item || !held?.emailData) {
+        // Claimed or sent already, or removed somewhere else. Reopening the
+        // composer here would have the message both sent and back on screen.
+        if (item || !held) toasts?.show?.('Message already sent', 'info');
         return;
       }
-      const emailData = item?.emailData || removed?.emailData;
-      if (emailData) await reopenComposeFromOutbox({ emailData });
+      const source = item || held;
+      const emailData = item?.emailData || held?.emailData;
+      if (emailData) {
+        await reopenComposeFromOutbox({
+          emailData,
+          draftId: source?.draftId,
+          serverDraftId: source?.serverDraftId,
+          sourceMessageId: source?.sourceMessageId,
+        });
+      }
     } catch (err) {
       console.warn('[main] Undo send failed', err);
     }

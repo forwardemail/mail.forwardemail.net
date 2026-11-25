@@ -29,9 +29,19 @@ export interface PendingSendRecord {
   account: string;
   dueAt: number;
   subject: string;
+  /**
+   * The message, kept here only until the outbox has its own copy (queued).
+   * It covers the moment between pressing Send and that write finishing.
+   */
   emailData?: Record<string, unknown>;
   /** Set when the body was too large to keep next to the outbox copy. */
   emailDataOmitted?: boolean;
+  /**
+   * The outbox row for this send was written. From then on that row is the
+   * message: if it is gone, the send was undone or its account signed out,
+   * and it must not be put back from this record.
+   */
+  queued?: boolean;
   draftId?: string | null;
   serverDraftId?: string | null;
   sourceMessageId?: string | null;
@@ -53,6 +63,7 @@ export interface NewPendingSend {
   dueAt: number;
   subject?: string;
   emailData?: Record<string, unknown>;
+  queued?: boolean;
   draftId?: string | null;
   serverDraftId?: string | null;
   sourceMessageId?: string | null;
@@ -69,6 +80,11 @@ export interface SubmitResult {
   deferred?: boolean;
   /** The server rejected the message. Stop automatic retries. */
   permanent?: boolean;
+  /**
+   * The outbox row was removed (Undo, sign-out). Nothing is left to send and
+   * nothing went wrong: drop the record without reporting an error.
+   */
+  gone?: boolean;
   retryInMs?: number;
 }
 
@@ -79,7 +95,8 @@ export interface PendingSendQueueOptions {
   clearTimer?: (id: unknown) => void;
   submit: (record: PendingSendRecord) => Promise<SubmitResult>;
   deleteDrafts: (record: PendingSendRecord) => Promise<void>;
-  onError?: (record: PendingSendRecord, error: string) => void;
+  /** `willRetry` is false once automatic attempts have stopped. */
+  onError?: (record: PendingSendRecord, error: string, willRetry: boolean) => void;
   onCommitted?: (record: PendingSendRecord) => void;
   /** Soonest held deadline, so a native timer can wake a suspended webview. */
   onSchedule?: (dueAt: number) => void;
@@ -95,6 +112,10 @@ export interface PendingSendQueue {
   cancel(id: string): PendingSendRecord | null;
   /** Remove a record after something else (the outbox) finished it. */
   complete(id: string): void;
+  /** The outbox has the message now: stop keeping a second copy of it here. */
+  markQueued(id: string): void;
+  /** Forget every send of an account that signed out. */
+  dropAccount(account: string): void;
   list(): PendingSendRecord[];
   flushDue(): Promise<void>;
   /** Quit: every held send is due now. */
@@ -181,13 +202,32 @@ function readRecords(storage: PendingSendStorage): PendingSendRecord[] {
   }
 }
 
-function writeRecords(storage: PendingSendStorage, records: PendingSendRecord[]) {
+/**
+ * The ids storage holds right now, or null when storage cannot be read. Null
+ * and an empty set are different answers: only the second says a send was
+ * removed.
+ */
+function readStoredIds(storage: PendingSendStorage): Set<string> | null {
+  try {
+    const raw = storage.getItem(PENDING_SEND_STORAGE_KEY);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return null;
+    return new Set(parsed.map((row) => row?.id).filter((id) => typeof id === 'string'));
+  } catch {
+    return null;
+  }
+}
+
+/** Returns whether storage now holds these records. */
+function writeRecords(storage: PendingSendStorage, records: PendingSendRecord[]): boolean {
   try {
     if (!records.length) {
       storage.removeItem(PENDING_SEND_STORAGE_KEY);
-      return;
+      return true;
     }
     storage.setItem(PENDING_SEND_STORAGE_KEY, serialize(records));
+    return true;
   } catch {
     try {
       const slim = records.map((record) => ({
@@ -196,9 +236,11 @@ function writeRecords(storage: PendingSendStorage, records: PendingSendRecord[])
         emailDataOmitted: true,
       }));
       storage.setItem(PENDING_SEND_STORAGE_KEY, JSON.stringify(slim));
+      return true;
     } catch {
       // Storage can be blocked (private mode, quota). The outbox row is the
       // other copy; losing this index must not throw out of Send.
+      return false;
     }
   }
 }
@@ -210,7 +252,9 @@ function toRecord(input: NewPendingSend, now: number): PendingSendRecord {
     account: input.account || 'default',
     dueAt: input.dueAt,
     subject: input.subject || '(No subject)',
-    emailData: input.emailData,
+    // Once the outbox holds the message this record is only its deadline
+    emailData: input.queued ? undefined : input.emailData,
+    queued: Boolean(input.queued),
     draftId: input.draftId || null,
     serverDraftId: input.serverDraftId || null,
     sourceMessageId: input.sourceMessageId || null,
@@ -236,7 +280,24 @@ export function createPendingSendQueue(options: PendingSendQueueOptions): Pendin
   let flushChain: Promise<void> = Promise.resolve();
   const unlistens: Array<() => void> = [];
 
-  const persist = () => writeRecords(storage, records);
+  // False after a write that did not reach storage. Storage then says
+  // nothing about which sends were removed elsewhere.
+  let storageTrusted = true;
+
+  const persist = () => {
+    storageTrusted = writeRecords(storage, records);
+  };
+
+  // Another tab's Undo, or a sign-out, removes a send from storage. This
+  // queue may still hold it from when it loaded, and sending from that copy
+  // is how an undone message went out anyway. A send in flight is left to
+  // finish: its outbox row decides what happens to it.
+  const dropRemovedElsewhere = () => {
+    if (!storageTrusted) return;
+    const stored = readStoredIds(storage);
+    if (!stored) return;
+    records = records.filter((record) => record.phase === 'submitting' || stored.has(record.id));
+  };
 
   const schedule = () => {
     if (timer != null) {
@@ -257,7 +318,8 @@ export function createPendingSendQueue(options: PendingSendQueueOptions): Pendin
       return flushDue();
     }, delay);
     try {
-      options.onSchedule?.(next.dueAt);
+      // The time of the next attempt, which for a retry is after dueAt
+      options.onSchedule?.(wakeAt(next));
     } catch {
       // A native wake is a backstop. The JS timer and the visibility flush
       // still run when it can't be armed.
@@ -266,6 +328,7 @@ export function createPendingSendQueue(options: PendingSendQueueOptions): Pendin
 
   const flushDueNow = async () => {
     if (stopped) return;
+    dropRemovedElsewhere();
     const t = now();
     const due = records.filter(
       (record) => record.phase === 'held' && record.dueAt <= t && (record.nextAttemptAt || 0) <= t,
@@ -302,11 +365,16 @@ export function createPendingSendQueue(options: PendingSendQueueOptions): Pendin
         }
         continue;
       }
+      if (result.gone) {
+        records = records.filter((row) => row.id !== current.id);
+        persist();
+        continue;
+      }
       if (result.permanent) {
         records = records.filter((row) => row.id !== current.id);
         persist();
         try {
-          options.onError?.(current, result.error || 'Send failed');
+          options.onError?.(current, result.error || 'Send failed', false);
         } catch {
           // The caller shows the error. Swallow a listener bug.
         }
@@ -318,7 +386,7 @@ export function createPendingSendQueue(options: PendingSendQueueOptions): Pendin
       if (!result.deferred && !current.notified) {
         current.notified = true;
         try {
-          options.onError?.(current, result.error || 'Send failed');
+          options.onError?.(current, result.error || 'Send failed', true);
         } catch {
           // same as above
         }
@@ -338,7 +406,7 @@ export function createPendingSendQueue(options: PendingSendQueueOptions): Pendin
     });
   };
 
-  const listen = (target: EventTarget, type: string, fn: () => void) => {
+  const listen = (target: EventTarget, type: string, fn: (event: Event) => void) => {
     target.addEventListener(type, fn);
     unlistens.push(() => target.removeEventListener(type, fn));
   };
@@ -366,6 +434,21 @@ export function createPendingSendQueue(options: PendingSendQueueOptions): Pendin
     complete(id) {
       if (!records.some((row) => row.id === id)) return;
       records = records.filter((row) => row.id !== id);
+      persist();
+      schedule();
+    },
+    markQueued(id) {
+      const record = records.find((row) => row.id === id);
+      if (!record || (record.queued && !record.emailData)) return;
+      record.queued = true;
+      delete record.emailData;
+      delete record.emailDataOmitted;
+      persist();
+    },
+    dropAccount(account) {
+      if (!records.some((row) => row.account === account)) return;
+      // One in flight is dropped too: its outbox row is gone with the account
+      records = records.filter((row) => row.account !== account);
       persist();
       schedule();
     },
@@ -409,6 +492,11 @@ export function createPendingSendQueue(options: PendingSendQueueOptions): Pendin
         listen(view, 'pageshow', () => {
           void flushDue();
         });
+        // Another tab added, sent or undid a send
+        listen(view, 'storage', (event) => {
+          const key = (event as StorageEvent).key;
+          if (key === PENDING_SEND_STORAGE_KEY || key === null) queue.reload();
+        });
       }
       schedule();
       await flushDue();
@@ -423,6 +511,8 @@ export function createPendingSendQueue(options: PendingSendQueueOptions): Pendin
       if (attached === queue) attached = null;
     },
     reload() {
+      // Nothing to learn from a storage this queue could not write to
+      if (!storageTrusted) return;
       const incoming = readRecords(storage);
       const live = new Map(records.map((record) => [record.id, record]));
       // A submit this process already started keeps its in-memory phase.
@@ -466,6 +556,38 @@ export function forgetPendingSend(id: string, storage?: PendingSendStorage) {
   writeRecords(
     store,
     readRecords(store).filter((row) => row.id !== id),
+  );
+}
+
+/** The outbox row exists: keep only the deadline here, not the message. */
+export function markPendingSendQueued(id: string, storage?: PendingSendStorage) {
+  if (attached && !storage) {
+    attached.markQueued(id);
+    return;
+  }
+  const store = storage || defaultStorage();
+  const records = readRecords(store);
+  const record = records.find((row) => row.id === id);
+  if (!record) return;
+  record.queued = true;
+  delete record.emailData;
+  delete record.emailDataOmitted;
+  writeRecords(store, records);
+}
+
+/** An account signed out: none of its held sends may go out later. */
+export function dropPendingSendsForAccount(account: string, storage?: PendingSendStorage) {
+  if (!account) return;
+  if (attached && !storage) {
+    attached.dropAccount(account);
+    return;
+  }
+  const store = storage || defaultStorage();
+  const records = readRecords(store);
+  if (!records.some((row) => row.account === account)) return;
+  writeRecords(
+    store,
+    records.filter((row) => row.account !== account),
   );
 }
 

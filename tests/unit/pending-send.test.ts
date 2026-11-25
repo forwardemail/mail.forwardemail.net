@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   createPendingSendQueue,
+  dropPendingSendsForAccount,
+  markPendingSendQueued,
+  PENDING_SEND_STORAGE_KEY,
   type PendingSendRecord,
   type SubmitResult,
 } from '../../src/utils/pending-send';
@@ -190,6 +193,7 @@ describe('pending send queue', () => {
     expect(h.onError).toHaveBeenCalledWith(
       expect.objectContaining({ draftId: 'draft-1' }),
       'smtp down',
+      true,
     );
     expect(h.queue.list()).toHaveLength(1);
     expect(h.queue.list()[0].phase).toBe('held');
@@ -206,6 +210,7 @@ describe('pending send queue', () => {
     expect(h.onError).toHaveBeenCalledWith(
       expect.objectContaining({ draftId: 'draft-1' }),
       'bad recipient',
+      false,
     );
     expect(h.queue.list()).toEqual([]);
   });
@@ -242,5 +247,132 @@ describe('pending send queue', () => {
 
     expect(h.submit).not.toHaveBeenCalled();
     expect(h.queue.list()).toHaveLength(1);
+  });
+
+  // Two tabs each run a queue over the same localStorage.
+  function secondTab(storage: MemoryStorage, now: () => number) {
+    const submit = vi.fn(async (): Promise<SubmitResult> => ({ ok: true }));
+    const queue = createPendingSendQueue({
+      storage,
+      now,
+      setTimer: () => {},
+      clearTimer: () => {},
+      submit,
+      deleteDrafts: async () => {},
+    });
+    return { queue, submit };
+  }
+
+  it('does not send from another tab what was undone in this one', async () => {
+    const h = harness(0);
+    h.queue.enqueue(record({ dueAt: 30_000 }));
+    let clock = 0;
+    // The other tab loads while the send is still inside its undo window
+    const other = secondTab(h.storage, () => clock);
+    expect(other.queue.list()).toHaveLength(1);
+
+    h.queue.cancel('outbox_1_abc');
+    clock = 90_000;
+    await other.queue.flushDue();
+
+    expect(other.submit).not.toHaveBeenCalled();
+    expect(other.queue.list()).toEqual([]);
+  });
+
+  it('still sends when storage cannot be written or read', async () => {
+    const blocked: MemoryStorage = {
+      getItem: () => {
+        throw new Error('blocked');
+      },
+      setItem: () => {
+        throw new Error('quota');
+      },
+      removeItem: () => {},
+    };
+    const submit = vi.fn(async (): Promise<SubmitResult> => ({ ok: true }));
+    const queue = createPendingSendQueue({
+      storage: blocked,
+      now: () => 90_000,
+      setTimer: () => {},
+      clearTimer: () => {},
+      submit,
+      deleteDrafts: async () => {},
+    });
+    queue.enqueue(record({ dueAt: 30_000 }));
+
+    await queue.flushDue();
+
+    expect(submit).toHaveBeenCalledTimes(1);
+  });
+
+  it('drops a send whose outbox row is gone without calling it a failure', async () => {
+    const h = harness(90_000);
+    h.submit.mockResolvedValue({ ok: false, gone: true });
+    h.queue.enqueue(record({ dueAt: 30_000, queued: true }));
+
+    await h.queue.flushDue();
+
+    expect(h.onError).not.toHaveBeenCalled();
+    expect(h.deleteDrafts).not.toHaveBeenCalled();
+    expect(h.queue.list()).toEqual([]);
+    expect(h.storage.getItem(PENDING_SEND_STORAGE_KEY)).toBeNull();
+  });
+
+  it('keeps no copy of the message once the outbox has it', () => {
+    const h = harness(0);
+    h.queue.enqueue(record({ dueAt: 30_000, emailData: { text: 'the secret plan' } }));
+    expect(h.storage.getItem(PENDING_SEND_STORAGE_KEY)).toContain('the secret plan');
+
+    h.queue.markQueued('outbox_1_abc');
+
+    expect(h.storage.getItem(PENDING_SEND_STORAGE_KEY)).not.toContain('the secret plan');
+    expect(h.queue.list()[0]).toMatchObject({ queued: true, dueAt: 30_000, draftId: 'draft-1' });
+    expect(h.queue.list()[0].emailData).toBeUndefined();
+  });
+
+  it('strips the message from a record written without a running queue', () => {
+    // The compose window: it writes to storage and the main window runs the queue
+    const storage = memoryStorage();
+    storage.setItem(
+      PENDING_SEND_STORAGE_KEY,
+      JSON.stringify([record({ emailData: { text: 'the secret plan' } })]),
+    );
+
+    markPendingSendQueued('outbox_1_abc', storage);
+
+    const stored = JSON.parse(storage.getItem(PENDING_SEND_STORAGE_KEY) || '[]');
+    expect(stored).toHaveLength(1);
+    expect(stored[0].queued).toBe(true);
+    expect(stored[0].emailData).toBeUndefined();
+  });
+
+  it('forgets the sends of an account that signed out, and only those', async () => {
+    const h = harness(0);
+    h.queue.enqueue(record({ id: 'outbox_1_abc', account: 'gone@test.com', dueAt: 30_000 }));
+    h.queue.enqueue(record({ id: 'outbox_2_def', account: 'me@test.com', dueAt: 30_000 }));
+
+    h.queue.dropAccount('gone@test.com');
+    h.setNow(90_000);
+    await h.queue.flushDue();
+
+    expect(h.submit).toHaveBeenCalledTimes(1);
+    expect(h.submit.mock.calls[0][0]).toMatchObject({ account: 'me@test.com' });
+    expect(h.storage.getItem(PENDING_SEND_STORAGE_KEY)).toBeNull();
+  });
+
+  it('forgets a signed-out account when no queue is running', () => {
+    const storage = memoryStorage();
+    storage.setItem(
+      PENDING_SEND_STORAGE_KEY,
+      JSON.stringify([
+        record({ id: 'outbox_1_abc', account: 'gone@test.com' }),
+        record({ id: 'outbox_2_def', account: 'me@test.com' }),
+      ]),
+    );
+
+    dropPendingSendsForAccount('gone@test.com', storage);
+
+    const stored = JSON.parse(storage.getItem(PENDING_SEND_STORAGE_KEY) || '[]');
+    expect(stored.map((row: PendingSendRecord) => row.account)).toEqual(['me@test.com']);
   });
 });

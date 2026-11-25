@@ -113,7 +113,11 @@
   } from '../utils/catchall-credentials';
   import { getAuthHeaderForAccount } from '../utils/auth';
   import { MAX_SCHEDULE_LEAD_MS, queueEmail, scheduleEmail } from '../utils/outbox-service';
-  import { forgetPendingSend, persistPendingSend } from '../utils/pending-send';
+  import {
+    forgetPendingSend,
+    markPendingSendQueued,
+    persistPendingSend,
+  } from '../utils/pending-send';
   import {
     saveSentCopy,
     buildOptimisticSentSource,
@@ -3081,6 +3085,9 @@
           sourceMessageId: sourceId,
         });
         queued = true;
+        // The outbox has the message now. The record keeps the deadline only,
+        // so the message does not also sit in localStorage.
+        markPendingSendQueued(pending.id);
         rememberRecipients(payload);
         setVisible(false);
         reset();

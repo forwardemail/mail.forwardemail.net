@@ -1,5 +1,6 @@
 import { db } from './db';
 import { warn } from './logger.ts';
+import { dropPendingSendsForAccount } from './pending-send.ts';
 import {
   isSensitiveLocalKey,
   isVaultLocked,
@@ -219,6 +220,9 @@ const clearAccountCacheData = async (email) => {
     },
   );
   await clearAccountMetaData(email);
+  // Undo-sends still inside their window. Their outbox rows went above; the
+  // queue's own record would otherwise wait for the account to sign back in.
+  dropPendingSendsForAccount(email);
 };
 
 const cleanupAccountList = async (accounts) => {

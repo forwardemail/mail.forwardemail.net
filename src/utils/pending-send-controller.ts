@@ -80,6 +80,12 @@ async function discardDrafts(record: PendingSendRecord): Promise<void> {
 async function submitRecord(record: PendingSendRecord): Promise<SubmitResult> {
   const account = record.account || 'default';
   let item = await getOutboxItem(record.id, account);
+  // The row was written and is gone again: Undo removed it, or its account
+  // signed out. Putting it back from this record is how an undone message
+  // was sent anyway.
+  if (!item && record.queued) return { ok: false, gone: true };
+  // Send was pressed and the page died before the outbox write finished.
+  // This record is then the only copy of the message.
   if (!item && record.emailData) {
     item = await queueEmail(record.emailData, {
       id: record.id,
@@ -161,7 +167,8 @@ export function startPendingSendController(): Promise<void> {
       submit: submitRecord,
       deleteDrafts: discardDrafts,
       onCommitted: (record) => dispatch('pending-send-committed', record),
-      onError: (record, error) => dispatch('pending-send-failed', { record, error }),
+      onError: (record, error, willRetry) =>
+        dispatch('pending-send-failed', { record, error, willRetry }),
       onSchedule: (dueAt) => {
         void armNativeWake(dueAt);
       },
@@ -200,7 +207,19 @@ export function startPendingSendController(): Promise<void> {
 export async function adoptPendingSend(record: PendingSendRecord | null | undefined) {
   if (!record?.id) return;
   if (!queue) await startPendingSendController();
-  queue?.enqueue(record);
+  // The composer hands the record over after its outbox write. When this
+  // window can see that row, the row is the message and no second copy is
+  // kept in localStorage. A compose window with its own database is the
+  // case where the record has to carry the message.
+  let queued = Boolean(record.queued);
+  if (!queued) {
+    try {
+      queued = Boolean(await getOutboxItem(record.id, record.account || 'default'));
+    } catch {
+      queued = false;
+    }
+  }
+  queue?.enqueue({ ...record, queued });
 }
 
 export function syncPendingSends() {

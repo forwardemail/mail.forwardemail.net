@@ -11,6 +11,7 @@ mod device_key;
 mod diagnostics;
 #[cfg(desktop)]
 mod global_shortcut;
+#[cfg(desktop)]
 mod gpg;
 mod redaction;
 mod renderer_watchdog;
@@ -62,14 +63,18 @@ fn unix_now_ms() -> u64 {
 
 /// Run the main window's pending-send flush. `reason` is a JS string literal
 /// ("quit") or empty. The webview may be hidden; eval still runs, unlike a
-/// suspended DOM timer.
-fn eval_flush_pending_sends(app: &tauri::AppHandle, reason: &str) {
+/// suspended DOM timer. Returns whether the script was handed to a webview.
+fn eval_flush_pending_sends(app: &tauri::AppHandle, reason: &str) -> bool {
     let Some(window) = app.get_webview_window("main") else {
-        return;
+        return false;
     };
     let script = format!("void globalThis.__feFlushPendingSends?.({reason:?})");
-    if let Err(err) = window.eval(script) {
-        log::warn!("[pending-send] could not flush from native: {err}");
+    match window.eval(script) {
+        Ok(()) => true,
+        Err(err) => {
+            log::warn!("[pending-send] could not flush from native: {err}");
+            false
+        }
     }
 }
 
@@ -95,10 +100,13 @@ fn arm_pending_send_wake(app: tauri::AppHandle, due_at_ms: u64) -> Result<(), St
 }
 
 /// The page calls this after a quit flush finishes so the process can exit
-/// without waiting out the native timeout.
+/// without waiting out the native timeout. It only finishes a quit that is
+/// already under way: on its own it would let any window close the app.
 #[tauri::command]
 fn complete_pending_send_flush(app: tauri::AppHandle) {
-    app.exit(0);
+    if QUIT_FLUSH_STARTED.load(Ordering::SeqCst) {
+        app.exit(0);
+    }
 }
 
 /// Quit should send anything still inside its undo window, not drop it.
@@ -109,8 +117,12 @@ fn hold_quit_for_pending_sends(app: &tauri::AppHandle, api: tauri::ExitRequestAp
     if QUIT_FLUSH_STARTED.swap(true, Ordering::SeqCst) {
         return;
     }
+    // No main window, or one that would not take the script: there is nobody
+    // to flush, and holding the exit would only make quitting take 8 seconds.
+    if !eval_flush_pending_sends(app, "quit") {
+        return;
+    }
     api.prevent_exit();
-    eval_flush_pending_sends(app, "quit");
     let app = app.clone();
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_secs(8));
