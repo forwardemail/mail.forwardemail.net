@@ -12,6 +12,7 @@ import { exponentialBackoff } from './backoff.js';
 import { markOriginalAnswered } from './answered-flag.ts';
 import { isEmailAlreadyExistsError } from './message-id.ts';
 import { withNamedLock } from './sync-core.js';
+import { getAuthHeaderForAccount } from './auth';
 
 /**
  * Outbox Service
@@ -145,6 +146,10 @@ function calculateBackoff(retryCount) {
  * @param {Object} options - Queue options
  * @param {boolean} options.skipProcess - Skip immediate processing
  * @param {number} options.sendAt - Timestamp for scheduled send (optional)
+ * @param {number} options.holdUntil - Undo-send: keep the row until this time, then send it as a normal message (no future Date header)
+ * @param {boolean} options.undoHold - This row is an undo-send hold
+ * @param {string} options.id - Stable id, so the pending-send queue and this row match
+ * @param {string} options.account - Account that owns the row (default: the active one)
  * @param {string} options.serverId - Server ID for scheduled emails already submitted to server
  * @param {boolean} options.serverScheduled - The server already holds this email and will send it
  * @returns {Promise<Object>} The queued outbox record
@@ -158,27 +163,44 @@ export async function queueEmail(emailData, options = {}) {
     throw err;
   }
 
-  const account = getAccount();
+  const account = options.account || getAccount();
   const {
     skipProcess = false,
     sendAt = null,
+    holdUntil = null,
+    undoHold = false,
     serverId = null,
     serverScheduled = false,
     sendAs = null,
+    draftId = null,
+    serverDraftId = null,
+    sourceMessageId = null,
   } = options || {};
-  const id = `${OUTBOX_PREFIX}${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const id =
+    typeof options.id === 'string' && /^outbox_[A-Za-z0-9_]+$/.test(options.id)
+      ? options.id
+      : `${OUTBOX_PREFIX}${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const now = Date.now();
 
-  // If sendAt is provided and in the future, set status to 'scheduled'
-  const isScheduled = sendAt && sendAt > now;
+  // Undo-send holds the message on this device until the window ends, then
+  // posts it as a normal send. sendAt is a server-side schedule (the API
+  // delays anything with a future Date) and must not be set for a hold —
+  // a late timer would otherwise ask the server to delay the message again.
+  const holdAt = Number(holdUntil) || 0;
+  const isHeld = Boolean(undoHold) || holdAt > now;
+  const isScheduled = !isHeld && sendAt && sendAt > now;
 
   const record = {
     id,
     account,
     status: isScheduled ? 'scheduled' : 'pending',
     retryCount: 0,
-    nextRetryAt: isScheduled ? sendAt : now, // Ready to send immediately or at scheduled time
-    sendAt: sendAt || null, // Store the scheduled timestamp
+    nextRetryAt: isScheduled ? sendAt : isHeld && holdAt > now ? holdAt : now,
+    sendAt: isHeld ? null : sendAt || null,
+    undoHold: isHeld,
+    draftId: draftId || null,
+    serverDraftId: serverDraftId || null,
+    sourceMessageId: sourceMessageId || null,
     serverId: serverId || null, // Store server ID for scheduled emails
     // True once the server has accepted the email and owns its delivery. This
     // must never be re-sent, so it is tracked separately from serverId, which
@@ -195,8 +217,8 @@ export async function queueEmail(emailData, options = {}) {
   await db.outbox.put(record);
   await updateOutboxCount();
 
-  // Only trigger immediate processing if not scheduled and online
-  if (!skipProcess && !isScheduled && isOnline()) {
+  // Only trigger immediate processing if not scheduled, not held, and online
+  if (!skipProcess && !isScheduled && !isHeld && isOnline()) {
     processOutbox();
   }
 
@@ -324,9 +346,54 @@ export async function getPendingOutbox() {
 /**
  * Get a single outbox item
  */
-export async function getOutboxItem(id) {
-  const account = getAccount();
+export async function getOutboxItem(id, account = getAccount()) {
   return db.outbox.get([account, id]);
+}
+
+/**
+ * Send one undo-send hold now, even if its window has not been reached yet
+ * (quit) and even if another account is on screen. Clears sendAt so the
+ * request is not given a future Date the API would hold again.
+ *
+ * @returns {Promise<{ok: boolean, error?: string, permanent?: boolean, deferred?: boolean, missing?: boolean, retryInMs?: number}>}
+ */
+export async function commitHeldSend(account, id) {
+  const owner = account || getAccount();
+  const item = await db.outbox.get([owner, id]);
+  if (!item) {
+    return { ok: false, missing: true, permanent: true, error: 'Pending message is gone' };
+  }
+  if (item.status === 'sent') return { ok: true };
+  if (item.status === 'failed') {
+    return { ok: false, permanent: true, error: item.lastError || 'Send failed' };
+  }
+  if (item.status === 'sending') {
+    return { ok: false, deferred: true, error: 'Send already in progress', retryInMs: 5_000 };
+  }
+
+  const now = Date.now();
+  await db.outbox.update([owner, id], {
+    status: 'pending',
+    nextRetryAt: now,
+    sendAt: item.undoHold ? null : item.sendAt || null,
+    updatedAt: now,
+  });
+  const fresh = await db.outbox.get([owner, id]);
+  const result = await sendOutboxItem(fresh || item);
+  if (result.success) return { ok: true };
+  if (result.deferred) {
+    return { ok: false, deferred: true, error: result.error, retryInMs: 5_000 };
+  }
+  const after = await db.outbox.get([owner, id]);
+  if (after?.status === 'failed') {
+    return { ok: false, permanent: true, error: after.lastError || result.error || 'Send failed' };
+  }
+  const retryIn = Math.max(0, (after?.nextRetryAt || 0) - Date.now());
+  return {
+    ok: false,
+    error: result.error || after?.lastError || 'Send failed',
+    retryInMs: retryIn || 15_000,
+  };
 }
 
 /**
@@ -365,7 +432,7 @@ function isServerScheduled(item) {
  * Everything that has to happen locally once an email has actually gone out:
  * file the Sent copy, and flag the message it was a reply to.
  */
-async function recordSentSideEffects(item, account) {
+async function recordSentSideEffects(item, account, requestOptions) {
   // Save copy to Sent folder (client-side workaround). Skipped when the
   // payload opts out, e.g. spam reports that would put spam back in Sent.
   // The copy belongs in the Sent folder of the account it went out as. A
@@ -377,6 +444,10 @@ async function recordSentSideEffects(item, account) {
       if (!sender) throw new Error(missingSenderMessage(item.sendAs));
       if (sender.kind === 'account') {
         await saveSentCopyToFolder(item.emailData, item.sendAs, senderRequestOptions(sender));
+      } else if (item.undoHold && requestOptions?.authHeader) {
+        // The active session may be a different account. File the copy with
+        // the credentials the message was actually sent with.
+        await saveSentCopyToFolder(item.emailData, account, requestOptions);
       } else {
         await saveSentCopyToFolder(item.emailData, account);
       }
@@ -407,7 +478,11 @@ async function markOutboxSent(item, account) {
       new CustomEvent('outbox-sent', {
         detail: {
           id: item.id,
+          account,
           subject: item?.emailData?.subject || '(No subject)',
+          draftId: item.draftId || null,
+          serverDraftId: item.serverDraftId || null,
+          sourceMessageId: item.sourceMessageId || null,
         },
       }),
     );
@@ -511,14 +586,23 @@ async function sendOutboxItem(queuedItem) {
   // Sending authenticates as the active session, so an item belonging to
   // another account cannot be sent right now. Leave it queued rather than
   // sending it as somebody else — it drains when that account is active again.
+  // An undo-send hold is the exception: switching accounts must not drop it,
+  // and the owner's own credentials are used instead of the session.
+  let requestOptions = requestOptionsFor(item);
   if (!isActiveAccount(account)) {
-    return { success: false, deferred: true, error: 'Account not active' };
+    if (!item?.undoHold) {
+      return { success: false, deferred: true, error: 'Account not active' };
+    }
+    const header = requestOptions?.authHeader || getAuthHeaderForAccount(account);
+    if (!header) {
+      return { success: false, deferred: true, error: 'Account not active' };
+    }
+    requestOptions = { authHeader: header };
   }
 
   // Sending as another signed-in account, or with a catch-all password, needs
   // those credentials. Without them (App Lock, signed out, password removed)
   // wait rather than fail: unlocking or saving the password brings them back.
-  const requestOptions = requestOptionsFor(item);
   if (!requestOptions) {
     await db.outbox.update([account, item.id], {
       lastError: missingSenderMessage(item.sendAs),
@@ -555,7 +639,11 @@ async function sendOutboxItem(queuedItem) {
 
     await Remote.request('Emails', payload, { ...requestOptions, method: 'POST' });
 
-    await recordSentSideEffects(item, account);
+    await recordSentSideEffects(
+      item,
+      account,
+      requestOptions?.authHeader ? requestOptions : undefined,
+    );
     await markOutboxSent(item, account);
 
     return { success: true };
@@ -581,7 +669,11 @@ async function sendOutboxItem(queuedItem) {
     // envelope) from an earlier attempt whose answer never reached us. It went
     // out, so finish the send instead of reporting a failure.
     if (isEmailAlreadyExistsError(err)) {
-      await recordSentSideEffects(item, account);
+      await recordSentSideEffects(
+        item,
+        account,
+        requestOptions?.authHeader ? requestOptions : undefined,
+      );
       await markOutboxSent(item, account);
       return { success: true };
     }
@@ -954,6 +1046,7 @@ export const outboxService = {
   listOutbox,
   getOutboxItem,
   getPendingOutbox,
+  commitHeldSend,
 
   // Send operations
   processOutbox,

@@ -85,6 +85,12 @@ import {
   lockIfDue as lockAppIfDue,
 } from './utils/inactivity-timer.js';
 import { startOutboxProcessor, processOutbox, cancelQueuedSend } from './utils/outbox-service';
+import { cancelPendingSend } from './utils/pending-send';
+import {
+  adoptPendingSend,
+  startPendingSendController,
+  syncPendingSends,
+} from './utils/pending-send-controller';
 import { repliedMessageToArchive, type RepliedMessageTarget } from './utils/answered-flag';
 import { isActiveAccount } from './utils/account-scope';
 import { initMutationQueue, processMutationQueue } from './utils/mutation-queue';
@@ -439,6 +445,36 @@ const toasts = toastsRoot
 globalThis.addEventListener('outbox-sent', (event) => {
   const subject = event?.detail?.subject;
   toasts.show(`Message sent${subject ? `: ${subject}` : ''}`, 'success');
+});
+
+const undoSendToasts = new Map<string, number>();
+
+function dismissUndoToast(id: string) {
+  const toastId = undoSendToasts.get(id);
+  if (toastId != null) toasts?.dismiss?.(toastId);
+  undoSendToasts.delete(id);
+}
+
+globalThis.addEventListener('pending-send-committed', (event) => {
+  const record = (event as CustomEvent)?.detail;
+  if (!record?.id) return;
+  dismissUndoToast(record.id);
+  if (record.archive) {
+    archiveRepliedMessage(record).catch(() => {});
+  }
+  void refreshSentFolderAfterSend(undefined, { account: record.account });
+});
+
+globalThis.addEventListener('pending-send-failed', (event) => {
+  const detail = (event as CustomEvent)?.detail || {};
+  const record = detail.record;
+  if (record?.id) dismissUndoToast(record.id);
+  const subject = String(record?.subject || 'Message').slice(0, 40);
+  const reason = typeof detail.error === 'string' ? detail.error.slice(0, 180) : '';
+  toasts.show(
+    `Couldn't send "${subject}". It is still in Drafts.${reason ? ` ${reason}` : ''}`,
+    'error',
+  );
 });
 
 globalThis.addEventListener('mutation-queue-failed', () => {
@@ -857,20 +893,33 @@ const composeMailboxView = writable(null);
 // immediate metadata sync, and reload if it's currently on screen. Best-effort —
 // never let this interfere with the send result.
 // ── Undo Send ────────────────────────────────────────────────────────────
-// Compose queues the message to the outbox with a future sendAt and hands us
-// the outbox id. We show an Undo toast for the window, then trigger the actual
-// send (the outbox processor's 30s tick is only a backstop, so we fire a
-// precise timer). Undo deletes the outbox item and reopens the composer with
-// the message so nothing is lost. Lives in the main window because the compose
-// window closes on send.
-const undoSendTimers = new Map<string, ReturnType<typeof setTimeout>>();
-
+// Compose writes the message to the pending-send queue (and the outbox) the
+// moment Send is pressed, then closes. The queue lives in the main window:
+// a late timer, the window coming back, or the next launch submits anything
+// overdue. Undo removes that row and reopens the composer. The draft is
+// still there — it is deleted only after the server accepts the send.
 interface UndoSendResult extends RepliedMessageTarget {
   undoSend?: boolean;
   outboxId?: string;
   undoWindowMs?: number;
   subject?: string;
   archive?: boolean;
+  pendingSend?: {
+    id: string;
+    account: string;
+    dueAt: number;
+    subject: string;
+    emailData?: Record<string, unknown>;
+    draftId?: string | null;
+    serverDraftId?: string | null;
+    sourceMessageId?: string | null;
+    archive?: boolean;
+    replyToMessageId?: string | null;
+    replyToMessageFolder?: string | null;
+    sendAs?: string | null;
+    createdAt: number;
+    phase: 'held' | 'submitting';
+  };
 }
 
 // "Send & Archive" archives the message the reply answered, for the account
@@ -932,54 +981,47 @@ async function reopenComposeFromOutbox(item: { emailData?: Record<string, unknow
 }
 
 function handleUndoSend(result: UndoSendResult) {
-  const outboxId = result?.outboxId;
+  const outboxId = result?.outboxId || result?.pendingSend?.id;
   if (!outboxId) return;
   const windowMs = Number(result?.undoWindowMs) || 5000;
-  const subject = (result?.subject || '(No subject)').slice(0, 40);
-  // Archive the replied-to message only once we commit to sending, so an undo
-  // leaves the conversation untouched.
-  const archiveTarget = result?.archive ? result : null;
+  const subject = (result?.subject || result?.pendingSend?.subject || '(No subject)').slice(0, 40);
   // The outbox the item went into, should the user switch before undoing.
-  const outboxAccount = result?.ownerAccount || Local.get('email') || 'default';
+  const outboxAccount =
+    result?.ownerAccount || result?.pendingSend?.account || Local.get('email') || 'default';
 
-  let toastId: number | null = null;
-
-  const commitSend = () => {
-    undoSendTimers.delete(outboxId);
-    if (toastId != null) toasts?.dismiss?.(toastId);
-    processOutbox();
-    if (archiveTarget) {
-      archiveRepliedMessage(archiveTarget).catch(() => {});
-    }
-  };
+  // The compose window may not share storage with this one (WebView2). Adopt
+  // the record it handed us so this window's queue owns the deadline.
+  const pending = result?.pendingSend;
+  if (pending?.id) {
+    void adoptPendingSend({ ...pending, id: outboxId, account: pending.account || outboxAccount });
+  } else {
+    void startPendingSendController().then(() => syncPendingSends());
+  }
 
   const undo = async () => {
-    const timer = undoSendTimers.get(outboxId);
-    if (timer) {
-      clearTimeout(timer);
-      undoSendTimers.delete(outboxId);
-    }
-    if (toastId != null) toasts?.dismiss?.(toastId);
+    dismissUndoToast(outboxId);
     try {
-      // Taken out of the outbox only if the processor has not claimed it, so
-      // the message is never both reopened here and sent.
+      // Taken out of the queue and the outbox only if the send has not
+      // started, so the message is never both reopened here and sent.
+      const removed = cancelPendingSend(outboxId);
       const { cancelled, item } = await cancelQueuedSend(outboxId, { account: outboxAccount });
-      if (!cancelled || !item) {
+      if (!removed && !cancelled) {
         toasts?.show?.('Message already sent', 'info');
         return;
       }
-      await reopenComposeFromOutbox(item);
+      const emailData = item?.emailData || removed?.emailData;
+      if (emailData) await reopenComposeFromOutbox({ emailData });
     } catch (err) {
       console.warn('[main] Undo send failed', err);
     }
   };
 
-  undoSendTimers.set(outboxId, setTimeout(commitSend, windowMs));
-  toastId =
+  const toastId =
     toasts?.show?.(`Sending "${subject}"…`, 'info', {
       duration: windowMs,
       action: { label: 'Undo', callback: () => void undo() },
     }) ?? null;
+  if (toastId != null) undoSendToasts.set(outboxId, toastId);
 }
 
 async function refreshSentFolderAfterSend(
@@ -1481,6 +1523,7 @@ if (isTauriDesktop) {
             ownerAccount?: string | null;
             replyToMessageId?: string | null;
             replyToMessageFolder?: string | null;
+            pendingSend?: UndoSendResult['pendingSend'];
           }
         | undefined;
 
@@ -1701,12 +1744,14 @@ routeStore.subscribe((route) => {
       _backgroundServicesStarted = true;
       startAutoMetadataSync();
       startOutboxProcessor();
+      void startPendingSendController();
       syncPendingDrafts();
       initMutationQueue();
       globalThis.addEventListener('online', () => {
         processOutbox();
         syncPendingDrafts();
         processMutationQueue();
+        globalThis.__feFlushPendingSends?.();
       });
     }
 
@@ -2845,6 +2890,7 @@ async function bootstrap() {
 
       // Start outbox processor for offline email queue with retry
       startOutboxProcessor();
+      void startPendingSendController();
       syncPendingDrafts();
       initMutationQueue();
 
@@ -2852,6 +2898,7 @@ async function bootstrap() {
         processOutbox(); // New outbox service
         syncPendingDrafts();
         processMutationQueue();
+        globalThis.__feFlushPendingSends?.();
       });
     }
 
@@ -3029,6 +3076,11 @@ async function bootstrap() {
       // foreground/background detection, push token management)
       import('./utils/background-service.js').then(({ initBackgroundService, onResume }) => {
         initBackgroundService();
+        // Hidden webviews suspend timers. Coming back submits any undo-send
+        // whose window already elapsed; hiding the window does not cancel it.
+        onResume(() => {
+          globalThis.__feFlushPendingSends?.();
+        });
         // On mobile, sync and process queued mutations when the app resumes
         if (isTauriMobile) {
           onResume(() => {

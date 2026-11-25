@@ -75,6 +75,7 @@ import {
   getPendingOutbox,
   processOutbox,
   getOutboxItem,
+  commitHeldSend,
 } from '../../src/utils/outbox-service.js';
 
 const email = { to: ['x@y.com'], subject: 'Hi', html: '<p>hello</p>' };
@@ -777,6 +778,45 @@ describe('processOutbox catch-all send', () => {
       status: 'pending',
       lastError: expect.stringContaining('catch-all password'),
     });
+  });
+
+  it('holds an undo-send without a future Date and without sending it yet', async () => {
+    const holdUntil = Date.now() + 30_000;
+    const { id } = await queueEmail(email, { holdUntil, undoHold: true, skipProcess: true });
+
+    const item = await getOutboxItem(id);
+    expect(item).toMatchObject({
+      status: 'pending',
+      sendAt: null,
+      undoHold: true,
+      nextRetryAt: holdUntil,
+    });
+    expect(await getPendingOutbox()).toEqual([]);
+    expect(h.remoteRequest).not.toHaveBeenCalled();
+  });
+
+  it('sends an undo-hold with its own account credentials when another account is active', async () => {
+    h.authHeaders.set('me@test.com', 'Basic owner-creds');
+    h.outbox.set('held', {
+      account: 'me@test.com',
+      id: 'held',
+      status: 'pending',
+      retryCount: 0,
+      nextRetryAt: Date.now() + 30_000,
+      undoHold: true,
+      emailData: email,
+    });
+    h.activeEmail = 'other@test.com';
+
+    const result = await commitHeldSend('me@test.com', 'held');
+
+    expect(result.ok).toBe(true);
+    expect(h.remoteRequest).toHaveBeenCalledWith(
+      'Emails',
+      expect.anything(),
+      expect.objectContaining({ method: 'POST', authHeader: 'Basic owner-creds' }),
+    );
+    expect(await getOutboxItem('held', 'me@test.com')).toMatchObject({ status: 'sent' });
   });
 
   it('keeps a scheduled catch-all send local instead of handing it to the server', async () => {

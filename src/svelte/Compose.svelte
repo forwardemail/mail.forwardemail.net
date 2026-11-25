@@ -113,6 +113,7 @@
   } from '../utils/catchall-credentials';
   import { getAuthHeaderForAccount } from '../utils/auth';
   import { MAX_SCHEDULE_LEAD_MS, queueEmail, scheduleEmail } from '../utils/outbox-service';
+  import { forgetPendingSend, persistPendingSend } from '../utils/pending-send';
   import {
     saveSentCopy,
     buildOptimisticSentSource,
@@ -3039,47 +3040,73 @@
       payload.raw = signed.payload?.raw;
     }
 
-    // Undo-send: when enabled and online, hold the message in the outbox for
-    // the configured window instead of sending immediately. The main window
-    // shows the Undo toast and, when the window passes, triggers the actual
-    // send (the outbox already handles Sent copy, \Answered, and retries).
-    // Offline falls through to the normal offline-queue path below.
+    // Undo-send: when enabled and online, hold the message until the window
+    // ends instead of posting it now. The hold is written synchronously
+    // (localStorage) before any await, then into the outbox, and the main
+    // window's pending-send queue — not this component — performs the send.
+    // The draft stays until that send is confirmed. Offline falls through
+    // to the normal offline-queue path below.
     const undoWindowMs = getUndoSendDelay();
     if (isOnline && undoWindowMs > 0) {
+      const sendAt = Date.now() + undoWindowMs;
+      const draftId = currentDraftId;
+      const serverDraftId = currentDraftServerId;
+      const sourceId = sourceMessageId;
+      const shouldArchive = archiveAfterSend;
+      let pending: ReturnType<typeof persistPendingSend> | null = null;
+      let queued = false;
       try {
-        const sendAt = Date.now() + undoWindowMs;
-        const queued = await queueEmail(payload, { sendAt, sendAs: sendAsAccount });
+        pending = persistPendingSend({
+          account: activeAccount() || 'default',
+          dueAt: sendAt,
+          subject: String(payload.subject || '(No subject)'),
+          emailData: payload as Record<string, unknown>,
+          draftId,
+          serverDraftId,
+          sourceMessageId: sourceId,
+          archive: shouldArchive,
+          replyToMessageId: (payload._replyToMessageId as string) || null,
+          replyToMessageFolder: (payload._replyToMessageFolder as string) || null,
+          sendAs: sendAsAccount || null,
+        });
+        await queueEmail(payload, {
+          id: pending.id,
+          holdUntil: sendAt,
+          undoHold: true,
+          sendAs: sendAsAccount,
+          skipProcess: true,
+          account: pending.account,
+          draftId,
+          serverDraftId,
+          sourceMessageId: sourceId,
+        });
+        queued = true;
         rememberRecipients(payload);
-        const msgIdToDelete = sourceMessageId;
-        const serverDraftIdToDelete = currentDraftServerId;
-        if (currentDraftId) {
-          try {
-            await deleteDraft(currentDraftId);
-          } catch (err) {
-            console.error('[Compose] Failed to delete draft after undo-send queue:', err);
-          }
-        }
-        await deleteSourceMessage(msgIdToDelete);
-        if (serverDraftIdToDelete && serverDraftIdToDelete !== msgIdToDelete) {
-          await deleteSourceMessage(serverDraftIdToDelete);
-        }
         setVisible(false);
-        const shouldArchive = archiveAfterSend;
         reset();
         onSent?.({
           ...replyContextFor(payload),
           queued: true,
           undoSend: true,
-          outboxId: queued.id,
+          outboxId: pending.id,
           undoWindowMs,
           archive: shouldArchive,
           subject: payload.subject || '(No subject)',
+          pendingSend: pending,
+          draftId,
+          serverDraftId,
+          sourceMessageId: sourceId,
         });
         if (nativeWindow) closeNativeWindow();
       } catch (err) {
-        if (!isDemoBlockedError(err)) {
+        // Once the outbox row exists the send is real. Dropping the pending
+        // record here would still leave that row, which goes out on its own.
+        if (pending && !queued) forgetPendingSend(pending.id);
+        if (!queued && !isDemoBlockedError(err)) {
           error = 'Failed to queue message';
           toasts?.show?.(error, 'error');
+        } else if (queued) {
+          console.error('[Compose] Undo-send was queued but finishing up failed:', err);
         }
       } finally {
         sending = false;
