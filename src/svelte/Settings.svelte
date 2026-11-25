@@ -11,6 +11,7 @@
   import DeviceSyncCard from './components/DeviceSyncCard.svelte';
   import ScanPairingCode from './components/ScanPairingCode.svelte';
   import MailtoSettings from './components/MailtoSettings.svelte';
+  import GlobalShortcutSettings from './components/GlobalShortcutSettings.svelte';
   import FiltersSettings from './components/FiltersSettings.svelte';
   import SignatureEditor from './components/SignatureEditor.svelte';
   import RecipientKeysCard from './components/RecipientKeysCard.svelte';
@@ -3863,6 +3864,9 @@
       {/if}
 
       {#if section === 'shortcuts'}
+        {#if isTauriDesktop}
+          <GlobalShortcutSettings onToast={(message, type) => toasts?.show?.(message, type)} />
+        {/if}
         <Card.Root class="hidden md:block">
           <Card.Header class="flex flex-row items-start justify-between gap-4">
             <div>
