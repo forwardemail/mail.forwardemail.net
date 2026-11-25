@@ -243,8 +243,16 @@ jobs:
 
       - name: Run gitleaks
         run: |
-          BASE="${{ github.event.before || github.event.pull_request.base.sha }}"
+          # On pull requests, event.before is the previous head of the PR
+          # branch. After a rebase or force-push that commit is orphaned and
+          # is not in the checkout, so git log fails and gitleaks exits 1
+          # with "stderr is not empty". Diff against the base branch instead.
+          BASE="${{ github.event.pull_request.base.sha || github.event.before }}"
           NULL_SHA="0000000000000000000000000000000000000000"
+          if [ -n "$BASE" ] && [ "$BASE" != "$NULL_SHA" ] && ! git cat-file -e "${BASE}^{commit}" 2>/dev/null; then
+            echo "Base $BASE is not in this checkout, scanning the full history"
+            BASE=""
+          fi
           if [ -z "$BASE" ] || [ "$BASE" = "$NULL_SHA" ]; then
             # New branch, tag, or force-push — scan the full history
             gitleaks detect --source . --verbose
