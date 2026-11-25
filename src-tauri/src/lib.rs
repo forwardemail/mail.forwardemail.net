@@ -7,6 +7,8 @@ mod browser_override;
 #[cfg(desktop)]
 mod device_key;
 mod diagnostics;
+#[cfg(desktop)]
+mod gpg;
 mod redaction;
 mod renderer_watchdog;
 
@@ -1321,6 +1323,16 @@ pub fn run() {
             device_key::device_key_get,
             #[cfg(desktop)]
             device_key::device_key_set,
+            #[cfg(desktop)]
+            gpg::gpg_available,
+            #[cfg(desktop)]
+            gpg::gpg_card_info,
+            #[cfg(desktop)]
+            gpg::gpg_decrypt,
+            #[cfg(desktop)]
+            gpg::gpg_sign,
+            #[cfg(desktop)]
+            gpg::gpg_verify,
             #[cfg(desktop)]
             toggle_window_visibility,
             #[cfg(desktop)]

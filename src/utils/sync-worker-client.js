@@ -374,6 +374,29 @@ export async function requestPgpDecryption({ raw, messageId, account }) {
 }
 
 /**
+ * The armored PGP block in an inline-PGP or PGP/MIME message, for the system
+ * gpg (desktop app) to decrypt.
+ *
+ * @param {string} raw
+ * @returns {Promise<{success: boolean, block: string, error?: string}>}
+ */
+export async function requestPgpBlock(raw) {
+  return sendSyncTask({ type: 'extractPgpBlock', raw }, { timeout: 30000 });
+}
+
+/**
+ * Parse plaintext the system gpg decrypted into the reader's result.
+ *
+ * @param {Object} options
+ * @param {string} options.plaintext
+ * @param {boolean} [options.signed]
+ * @param {Object|null} [options.signature]
+ */
+export async function requestParseDecrypted({ plaintext, signed = false, signature = null }) {
+  return sendSyncTask({ type: 'parseDecrypted', plaintext, signed, signature }, { timeout: 30000 });
+}
+
+/**
  * Ask the worker to encrypt an outbound message to a set of recipient keys.
  *
  * @param {Object} options

@@ -9,8 +9,19 @@
     remember: boolean;
   }
 
+  /** Reuses the dialog for other secrets, such as a smartcard PIN. */
+  interface PassphraseOptions {
+    title?: string;
+    description?: string;
+    label?: string;
+    submitLabel?: string;
+    error?: string;
+    /** Offer "Remember on this device". Off for a card PIN. */
+    allowRemember?: boolean;
+  }
+
   interface PassphraseApi {
-    open: (name?: string) => Promise<PassphraseResult>;
+    open: (name?: string, options?: PassphraseOptions) => Promise<PassphraseResult>;
     close: () => void;
   }
 
@@ -24,6 +35,7 @@
   let keyName = $state('');
   let passphrase = $state('');
   let remember = $state(true);
+  let options = $state<PassphraseOptions>({});
   let resolver: ((value: PassphraseResult) => void) | null = $state(null);
   let rejecter: ((reason: Error) => void) | null = $state(null);
   let inputEl: HTMLInputElement | null = $state(null);
@@ -32,6 +44,7 @@
     keyName = '';
     passphrase = '';
     remember = true;
+    options = {};
     resolver = null;
     rejecter = null;
   };
@@ -41,10 +54,11 @@
     reset();
   };
 
-  const open = (name: string = ''): Promise<PassphraseResult> => {
+  const open = (name: string = '', opts: PassphraseOptions = {}): Promise<PassphraseResult> => {
     keyName = name;
     passphrase = '';
-    remember = true;
+    options = opts;
+    remember = opts.allowRemember !== false;
     visible = true;
     setTimeout(() => {
       if (inputEl) inputEl.focus();
@@ -56,7 +70,7 @@
   };
 
   const submit = () => {
-    if (resolver) resolver({ passphrase, remember });
+    if (resolver) resolver({ passphrase, remember: options.allowRemember !== false && remember });
     close();
   };
 
@@ -84,24 +98,28 @@
 <Dialog.Root bind:open={visible} onOpenChange={handleOpenChange}>
   <Dialog.Content class="sm:max-w-md">
     <Dialog.Header>
-      <Dialog.Title>Enter PGP passphrase</Dialog.Title>
+      <Dialog.Title>{options.title || 'Enter PGP passphrase'}</Dialog.Title>
       {#if keyName}
         <Dialog.Description>
           Key: <strong>{keyName}</strong>
         </Dialog.Description>
       {/if}
       <Dialog.Description>
-        This passphrase unlocks your private key. It is separate from pasting the key itself.
+        {options.description ||
+          'This passphrase unlocks your private key. It is separate from pasting the key itself.'}
       </Dialog.Description>
+      {#if options.error}
+        <p class="text-sm text-destructive" role="alert">{options.error}</p>
+      {/if}
     </Dialog.Header>
 
     <div class="grid gap-4 py-4">
       <div class="grid gap-2">
-        <Label for="passphrase">Passphrase</Label>
+        <Label for="passphrase">{options.label || 'Passphrase'}</Label>
         <Input
           id="passphrase"
           type="password"
-          placeholder="Enter passphrase"
+          placeholder={`Enter ${(options.label || 'passphrase').toLowerCase()}`}
           bind:value={passphrase}
           bind:ref={inputEl}
           onkeydown={(e) => {
@@ -112,15 +130,17 @@
           }}
         />
       </div>
-      <label class="flex items-center gap-2 text-sm text-muted-foreground">
-        <input type="checkbox" bind:checked={remember} />
-        Remember this passphrase on this device
-      </label>
+      {#if options.allowRemember !== false}
+        <label class="flex items-center gap-2 text-sm text-muted-foreground">
+          <input type="checkbox" bind:checked={remember} />
+          Remember this passphrase on this device
+        </label>
+      {/if}
     </div>
 
     <Dialog.Footer>
       <Button variant="ghost" onclick={cancel}>Cancel</Button>
-      <Button onclick={submit} disabled={!passphrase}>Unlock</Button>
+      <Button onclick={submit} disabled={!passphrase}>{options.submitLabel || 'Unlock'}</Button>
     </Dialog.Footer>
   </Dialog.Content>
 </Dialog.Root>
