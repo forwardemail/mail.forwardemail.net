@@ -6,6 +6,31 @@ release notes are taken from here. To change what a commit says, add a
 `Release-note: <text>` line to its message (or `Release-note: none` to leave
 it out).
 
+## 1.0.14 (2026-11-21)
+
+### Fixes
+
+- Sent messages keep the spacing they had in the composer
+
+## 1.0.13 (2026-11-20)
+
+### Fixes
+
+- Put the mobile entry point back on run() _(Android, iOS)_
+
+## 1.0.12 (2026-11-20)
+
+### Fixes
+
+- Sign terminal client updates, harden the release workflows
+- Relaunch an app whose page wedges while it loads
+- Events made after 11 PM end the next day
+- Rerun failed WebView specs once
+- Keyboard shortcuts work as soon as the mailbox shows
+- Stop the CLI tests hanging CI
+- Tooltips on the message toolbar no longer hide behind the subject, the right-click menu opens at the pointer, links show the hand pointer, the reading pane keeps its width, spell check is on by default on macOS, and new contacts sync to Apple Contacts
+- Sent mail keeps its formatting
+
 ## 1.0.11 (2026-11-12)
 
 ### New

@@ -13,6 +13,19 @@ import {
 } from './pgp-mime';
 import { normalizeAddress, recipientKeyCoverage, readRecipientKeys } from './pgp-recipients';
 import { requestPgpEncryption, requestPgpSignature } from './sync-worker-client.js';
+import { signWithSystemGpg, systemGpgEnabled, type AskPin } from './pgp-system-gpg';
+import { Local } from './storage.js';
+
+/**
+ * Whether to sign with the system gpg (a YubiKey or smartcard) for this
+ * account, keyed as Settings and the reader key it.
+ */
+function useSystemGpg(account?: string): boolean {
+  return systemGpgEnabled(account || Local.get('email') || 'default');
+}
+
+/** The worker's form: what receivers canonicalize a signed entity to. */
+const crlf = (text: string) => text.replace(/\r?\n/g, '\r\n');
 
 export interface EncryptedSendInput extends MessageParts {
   from: string;
@@ -74,7 +87,7 @@ export function collectRecipients(input: EncryptedSendInput): string[] {
  */
 export async function buildEncryptedPayload(
   input: EncryptedSendInput,
-  { account, sign = true }: { account?: string; sign?: boolean } = {},
+  { account, sign = true, askPin }: { account?: string; sign?: boolean; askPin?: AskPin } = {},
 ): Promise<EncryptedSendResult> {
   if ((input.bcc || []).some((entry) => normalizeAddress(entry))) {
     return {
@@ -118,7 +131,27 @@ export async function buildEncryptedPayload(
 
   let result;
   try {
-    result = await requestPgpEncryption({ plaintext: inner, recipientKeys: armoredKeys, sign });
+    if (sign && useSystemGpg(account)) {
+      // A key on a token cannot sign in the worker, so gpg encrypts and signs
+      // together. If it cannot sign (no card, PIN cancelled) the send stops
+      // rather than going out unsigned under a "signed too" promise.
+      const gpg = await signWithSystemGpg({
+        data: inner,
+        signer: senderEmail,
+        recipientKeys: armoredKeys,
+        askPin,
+      });
+      if (!gpg.success) {
+        return {
+          ok: false,
+          reason: 'encrypt_failed',
+          message: gpg.message || 'GnuPG could not encrypt and sign this message.',
+        };
+      }
+      result = { success: true, armored: gpg.armored, signed: true };
+    } else {
+      result = await requestPgpEncryption({ plaintext: inner, recipientKeys: armoredKeys, sign });
+    }
   } catch (err) {
     // An unguarded worker await here is what wedges the compose UI, so the
     // failure is turned into a value the caller can surface.
@@ -158,7 +191,10 @@ export async function buildEncryptedPayload(
  * that it came from that key and was not changed. Like an encrypted send it
  * goes out as `raw`, so Bcc is refused for the same reason.
  */
-export async function buildSignedPayload(input: EncryptedSendInput): Promise<EncryptedSendResult> {
+export async function buildSignedPayload(
+  input: EncryptedSendInput,
+  { account, askPin }: { account?: string; askPin?: AskPin } = {},
+): Promise<EncryptedSendResult> {
   if ((input.bcc || []).some((entry) => normalizeAddress(entry))) {
     return {
       ok: false,
@@ -170,18 +206,38 @@ export async function buildSignedPayload(input: EncryptedSendInput): Promise<Enc
     return { ok: false, reason: 'no_recipients', message: 'Add a recipient first.' };
   }
 
-  const entity = buildInnerMime({
+  // The signed part ends with a line break of its own. A multipart body
+  // otherwise ends right at its closing boundary, and servers that rewrite
+  // the message (Forward Email does, to add DKIM) put a line break there,
+  // which changes the signed bytes and breaks the signature. Other mail
+  // clients end the part this way too.
+  const entity = `${buildInnerMime({
     text: input.text,
     html: input.html,
     attachments: input.attachments,
-  });
+  }).replace(/(?:\r?\n)*$/, '')}\r\n`;
 
   let result;
   try {
-    result = await requestPgpSignature({
-      plaintext: entity,
-      from: normalizeAddress(input.from),
-    });
+    if (useSystemGpg(account)) {
+      const gpg = await signWithSystemGpg({
+        data: crlf(entity),
+        signer: normalizeAddress(input.from),
+        askPin,
+      });
+      result = gpg.success
+        ? { success: true, signature: gpg.armored, micalg: gpg.micalg || 'pgp-sha256' }
+        : {
+            success: false,
+            reason: gpg.reason === 'no_secret_key' ? 'no_signing_key' : 'sign_failed',
+            message: gpg.message || 'GnuPG could not sign this message.',
+          };
+    } else {
+      result = await requestPgpSignature({
+        plaintext: entity,
+        from: normalizeAddress(input.from),
+      });
+    }
   } catch (err) {
     return {
       ok: false,

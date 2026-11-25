@@ -4,7 +4,11 @@
  * noise, and no prompt on a formatted reply would be a silent data loss.
  */
 import { describe, expect, it } from 'vitest';
-import { hasRichFormatting, TextDirection } from '../../src/utils/compose-format';
+import {
+  editorHtmlForSending,
+  hasRichFormatting,
+  TextDirection,
+} from '../../src/utils/compose-format';
 
 describe('hasRichFormatting', () => {
   it('ignores structure that survives the plain-text round trip', () => {
@@ -81,5 +85,54 @@ describe('TextDirection', () => {
   it('keeps a direction the message already had', async () => {
     const html = await render('<p dir="rtl">שלום</p><p dir="LTR">Hi</p><p dir="bogus">x</p>');
     expect(html).toBe('<p dir="rtl">שלום</p><p dir="ltr">Hi</p><p dir="auto">x</p>');
+  });
+});
+
+describe('editorHtmlForSending', () => {
+  const paragraphs = (html: string) => {
+    const doc = new DOMParser().parseFromString(editorHtmlForSending(html), 'text/html');
+    return [...doc.body.querySelectorAll('p')];
+  };
+
+  it('sends a typed blank line as one line, not a margin on each side of it', () => {
+    // What the editor holds for "Hi," / blank line / "Best," + line break.
+    const sent = paragraphs(
+      '<p dir="auto">Hi,</p><p dir="auto"></p><p dir="auto">Best,<br>Support</p>',
+    );
+    expect(sent).toHaveLength(3);
+    for (const p of sent) expect(p.style.margin).toBe('0px');
+    // The blank one needs a line break to have any height in a mail client.
+    expect(sent[1].innerHTML).toBe('<br>');
+    expect(sent[0].textContent).toBe('Hi,');
+    expect(sent[2].innerHTML).toBe('Best,<br>Support');
+    expect(sent[0].getAttribute('dir')).toBe('auto');
+  });
+
+  it('keeps the alignment a paragraph was given', () => {
+    const [p] = paragraphs('<p style="text-align: center">Centered</p>');
+    expect(p.style.textAlign).toBe('center');
+    expect(p.style.margin).toBe('0px');
+  });
+
+  it('reaches paragraphs inside lists and typed quotes', () => {
+    const sent = paragraphs(
+      '<ul><li><p>One</p></li></ul><blockquote><p>Quoted by hand</p></blockquote>',
+    );
+    expect(sent.map((p) => p.style.margin)).toEqual(['0px', '0px']);
+  });
+
+  it('leaves the quoted original of a reply as it was written', () => {
+    const original = btoa('<p>Their paragraph</p><p></p>');
+    const out = editorHtmlForSending(
+      `<p>Reply</p><blockquote data-raw-html="${original}"></blockquote>`,
+    );
+    expect(out).toContain(`data-raw-html="${original}"`);
+    expect(out).toContain('<blockquote');
+    expect(atob(original)).toBe('<p>Their paragraph</p><p></p>');
+  });
+
+  it('returns nothing for an empty body', () => {
+    expect(editorHtmlForSending('')).toBe('');
+    expect(editorHtmlForSending(null)).toBe('');
   });
 });

@@ -292,3 +292,43 @@ describe('buildOriginalViewerPage hardening', () => {
     expect(page).toContain('<h1>&lt;b&gt;&amp;&lt;/b&gt;</h1>');
   });
 });
+
+// A message with no HTML part is cached as its text inside a <pre>. Opened
+// as a draft that way it became one code block in the editor.
+describe('a draft whose cached body is a text part', () => {
+  const draft = { id: 'd1', subject: 'Re: JMAP', to: 'a@example.com' };
+  const TEXT = 'Hi,\n\nJMAP is a separate protocol.\nIt has its own API.\n\nBest,\nSupport';
+  const escaped = TEXT.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  const PARAGRAPHS =
+    '<p>Hi,</p><p></p><p>JMAP is a separate protocol.</p><p>It has its own API.</p>' +
+    '<p></p><p>Best,</p><p>Support</p>';
+
+  it('opens as paragraphs when the cache holds the bare <pre>', () => {
+    const html = `<pre style="white-space:pre-wrap">${escaped}\n</pre>`;
+    expect(buildServerDraftPrefill({ msg: draft, apiId: 'd1', html }).html).toBe(PARAGRAPHS);
+  });
+
+  it('opens as paragraphs when the body came from the open message in the reader', () => {
+    const html =
+      `<div class="fe-message-canvas"><pre style="white-space:pre-wrap">${escaped}\n</pre>` +
+      '<!--fe-remote-images-blocked--></div>';
+    expect(buildServerDraftPrefill({ msg: draft, apiId: 'd1', html }).html).toBe(PARAGRAPHS);
+  });
+
+  it('keeps text that looks like markup as text', () => {
+    const html = '<pre style="white-space:pre-wrap">use &lt;b&gt; for bold</pre>';
+    expect(buildServerDraftPrefill({ msg: draft, apiId: 'd1', html }).html).toBe(
+      '<p>use &lt;b&gt; for bold</p>',
+    );
+  });
+
+  it('leaves an HTML draft that uses <pre> for code alone', () => {
+    for (const html of [
+      '<p>Run this:</p><pre>npm test</pre>',
+      '<pre><code>npm test</code></pre>',
+      '<div>Note <pre>npm test</pre></div>',
+    ]) {
+      expect(buildServerDraftPrefill({ msg: draft, apiId: 'd1', html }).html).toBe(html);
+    }
+  });
+});

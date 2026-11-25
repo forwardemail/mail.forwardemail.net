@@ -1,213 +1,11 @@
 import { describe, it, expect } from 'vitest';
 
-/**
- * Standalone copies of the vCard generation logic from Contacts.svelte.
- * Kept in sync so we can unit-test without mounting the Svelte component.
- */
+import {
+  escapeVCardText,
+  generateVCard,
+  structuredNameLine,
+} from '../../src/utils/vcard-generate.ts';
 
-const escapeVCardText = (value) =>
-  value.replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\n/g, '\\n');
-
-function buildFreshVCard(contact) {
-  const lines = ['BEGIN:VCARD', 'VERSION:3.0'];
-  if (contact.name) lines.push(`FN:${escapeVCardText(contact.name)}`);
-  if (contact.email) lines.push(`EMAIL;TYPE=INTERNET:${contact.email}`);
-  if (contact.phone) lines.push(`TEL:${contact.phone}`);
-  if (contact.company) lines.push(`ORG:${escapeVCardText(contact.company)}`);
-  if (contact.jobTitle) lines.push(`TITLE:${escapeVCardText(contact.jobTitle)}`);
-  if (contact.website) lines.push(`URL:${contact.website}`);
-  if (contact.address) lines.push(`ADR:${escapeVCardText(contact.address)}`);
-  if (contact.birthday) lines.push(`BDAY:${contact.birthday.replace(/-/g, '')}`);
-  if (contact.timezone) lines.push(`TZ:${contact.timezone}`);
-  if (contact.notes) lines.push(`NOTE:${escapeVCardText(contact.notes)}`);
-  if (contact.photo) {
-    const photoData = contact.photo.replace(/^data:image\/[^;]+;base64,/, '');
-    lines.push(`PHOTO;ENCODING=b;TYPE=PNG:${photoData}`);
-  }
-  lines.push('END:VCARD');
-  return lines.join('\r\n');
-}
-
-const vcardPropKey = (keyPart) => {
-  const rawKey = keyPart.split(';')[0].toUpperCase();
-  return rawKey.includes('.') ? rawKey.split('.').pop() : rawKey;
-};
-
-function generateVCard(contact) {
-  if (!contact._originalContent) return buildFreshVCard(contact);
-
-  const rawLines = contact._originalContent.split(/\r?\n/);
-  const lines = [];
-  for (const line of rawLines) {
-    if (!line) continue;
-    if (/^[ \t]/.test(line) && lines.length) {
-      lines[lines.length - 1] += line.slice(1);
-    } else {
-      lines.push(line);
-    }
-  }
-
-  let fnSeen = false;
-  let firstEmailSeen = false;
-  let firstTelSeen = false;
-  let noteSeen = false;
-  let orgSeen = false;
-  let titleSeen = false;
-  let urlSeen = false;
-  let adrSeen = false;
-  let bdaySeen = false;
-  let tzSeen = false;
-  let photoSeen = false;
-
-  const result = [];
-
-  for (const line of lines) {
-    const colonIndex = line.indexOf(':');
-    if (colonIndex === -1) {
-      result.push(line);
-      continue;
-    }
-
-    const keyPart = line.slice(0, colonIndex);
-    const key = vcardPropKey(keyPart);
-
-    if (key === 'BEGIN' || key === 'END' || key === 'VERSION') {
-      result.push(line);
-      continue;
-    }
-
-    if (key === 'FN') {
-      if (!fnSeen) {
-        fnSeen = true;
-        if (contact.name) {
-          result.push(`FN:${escapeVCardText(contact.name)}`);
-        }
-      } else {
-        result.push(line);
-      }
-    } else if (key === 'EMAIL') {
-      if (!firstEmailSeen) {
-        firstEmailSeen = true;
-        if (contact.email) {
-          result.push(`${keyPart}:${contact.email}`);
-        }
-      } else {
-        result.push(line);
-      }
-    } else if (key === 'TEL') {
-      if (!firstTelSeen) {
-        firstTelSeen = true;
-        if (contact.phone) {
-          result.push(`${keyPart}:${contact.phone}`);
-        }
-      } else {
-        result.push(line);
-      }
-    } else if (key === 'NOTE') {
-      if (!noteSeen) {
-        noteSeen = true;
-        if (contact.notes) {
-          result.push(`NOTE:${escapeVCardText(contact.notes)}`);
-        }
-      } else {
-        result.push(line);
-      }
-    } else if (key === 'ORG') {
-      if (!orgSeen) {
-        orgSeen = true;
-        if (contact.company) {
-          result.push(`ORG:${escapeVCardText(contact.company)}`);
-        }
-      } else {
-        result.push(line);
-      }
-    } else if (key === 'TITLE') {
-      if (!titleSeen) {
-        titleSeen = true;
-        if (contact.jobTitle) {
-          result.push(`TITLE:${escapeVCardText(contact.jobTitle)}`);
-        }
-      } else {
-        result.push(line);
-      }
-    } else if (key === 'URL') {
-      if (!urlSeen) {
-        urlSeen = true;
-        if (contact.website) {
-          result.push(`${keyPart}:${contact.website}`);
-        }
-      } else {
-        result.push(line);
-      }
-    } else if (key === 'ADR') {
-      if (!adrSeen) {
-        adrSeen = true;
-        if (contact.address) {
-          result.push(`${keyPart}:${contact.address}`);
-        }
-      } else {
-        result.push(line);
-      }
-    } else if (key === 'BDAY') {
-      if (!bdaySeen) {
-        bdaySeen = true;
-        if (contact.birthday) {
-          result.push(`BDAY:${contact.birthday.replace(/-/g, '')}`);
-        }
-      } else {
-        result.push(line);
-      }
-    } else if (key === 'TZ') {
-      if (!tzSeen) {
-        tzSeen = true;
-        if (contact.timezone) {
-          result.push(`TZ:${contact.timezone}`);
-        }
-      } else {
-        result.push(line);
-      }
-    } else if (key === 'PHOTO') {
-      if (!photoSeen) {
-        photoSeen = true;
-        if (contact.photo) {
-          const photoData = contact.photo.replace(/^data:image\/[^;]+;base64,/, '');
-          result.push(`PHOTO;ENCODING=b;TYPE=PNG:${photoData}`);
-        }
-      } else {
-        result.push(line);
-      }
-    } else {
-      result.push(line);
-    }
-  }
-
-  const insertBefore = result.findIndex((l) => l.toUpperCase().startsWith('END:VCARD'));
-  const insertAt = insertBefore >= 0 ? insertBefore : result.length;
-  const toInsert = [];
-
-  if (!fnSeen && contact.name) toInsert.push(`FN:${escapeVCardText(contact.name)}`);
-  if (!firstEmailSeen && contact.email) toInsert.push(`EMAIL;TYPE=INTERNET:${contact.email}`);
-  if (!firstTelSeen && contact.phone) toInsert.push(`TEL:${contact.phone}`);
-  if (!orgSeen && contact.company) toInsert.push(`ORG:${escapeVCardText(contact.company)}`);
-  if (!titleSeen && contact.jobTitle) toInsert.push(`TITLE:${escapeVCardText(contact.jobTitle)}`);
-  if (!urlSeen && contact.website) toInsert.push(`URL:${contact.website}`);
-  if (!adrSeen && contact.address) toInsert.push(`ADR:${escapeVCardText(contact.address)}`);
-  if (!bdaySeen && contact.birthday) toInsert.push(`BDAY:${contact.birthday.replace(/-/g, '')}`);
-  if (!tzSeen && contact.timezone) toInsert.push(`TZ:${contact.timezone}`);
-  if (!noteSeen && contact.notes) toInsert.push(`NOTE:${escapeVCardText(contact.notes)}`);
-  if (!photoSeen && contact.photo) {
-    const photoData = contact.photo.replace(/^data:image\/[^;]+;base64,/, '');
-    toInsert.push(`PHOTO;ENCODING=b;TYPE=PNG:${photoData}`);
-  }
-
-  if (toInsert.length) {
-    result.splice(insertAt, 0, ...toInsert);
-  }
-
-  return result.join('\r\n');
-}
-
-// Helper to create a minimal contact object
 function makeContact(overrides = {}) {
   return {
     id: null,
@@ -634,5 +432,74 @@ describe('generateVCard', () => {
     it('should handle multiple special characters', () => {
       expect(escapeVCardText('a\\b;c,d\ne')).toBe('a\\\\b\\;c\\,d\\ne');
     });
+  });
+});
+
+// vCard 3.0 requires N, and CardDAV addresses a card by its UID. The API
+// stores a card sent to it as is, and Apple Contacts drops one without N
+// during its CardDAV sync, so a contact made here never appeared there.
+describe('N and UID for CardDAV clients', () => {
+  const lineOf = (vcard, key) => vcard.split('\r\n').filter((l) => l.startsWith(`${key}:`));
+
+  it('writes N and the UID it was given in a new card', () => {
+    const vcard = generateVCard(
+      makeContact({ name: 'Ada Lovelace', email: 'ada@example.com', uid: 'uid-123' }),
+    );
+    expect(lineOf(vcard, 'N')).toEqual(['N:Lovelace;Ada;;;']);
+    expect(lineOf(vcard, 'UID')).toEqual(['UID:uid-123']);
+    expect(lineOf(vcard, 'FN')).toEqual(['FN:Ada Lovelace']);
+  });
+
+  it('splits a display name into family and given names', () => {
+    expect(structuredNameLine('Ada')).toBe('N:;Ada;;;');
+    expect(structuredNameLine('  Mary Ann   Evans ')).toBe('N:Evans;Mary Ann;;;');
+    expect(structuredNameLine('Smith, Jr; Bob')).toBe(String.raw`N:Bob;Smith\, Jr\;;;;`);
+    // A contact with only an email address still gets the required line.
+    expect(structuredNameLine('')).toBe('N:;;;;');
+  });
+
+  it('adds N and the server UID to a saved card that has neither', () => {
+    const original = [
+      'BEGIN:VCARD',
+      'VERSION:3.0',
+      'FN:Ada Lovelace',
+      'EMAIL;TYPE=INTERNET:ada@example.com',
+      'END:VCARD',
+    ].join('\r\n');
+    const vcard = generateVCard(
+      makeContact({
+        name: 'Ada Lovelace',
+        email: 'ada@example.com',
+        uid: 'server-uid',
+        _originalContent: original,
+      }),
+    );
+    expect(lineOf(vcard, 'N')).toEqual(['N:Lovelace;Ada;;;']);
+    expect(lineOf(vcard, 'UID')).toEqual(['UID:server-uid']);
+    expect(vcard.split('\r\n').at(-1)).toBe('END:VCARD');
+  });
+
+  it('leaves the N and UID of a card from another client alone', () => {
+    const original = [
+      'BEGIN:VCARD',
+      'VERSION:3.0',
+      'UID:apple-uid',
+      'N:Lovelace;Augusta Ada;King;Countess;',
+      'FN:Ada Lovelace',
+      'END:VCARD',
+    ].join('\r\n');
+    const vcard = generateVCard(
+      makeContact({ name: 'Ada Lovelace', uid: 'server-uid', _originalContent: original }),
+    );
+    expect(lineOf(vcard, 'N')).toEqual(['N:Lovelace;Augusta Ada;King;Countess;']);
+    expect(lineOf(vcard, 'UID')).toEqual(['UID:apple-uid']);
+  });
+
+  it('sees N and UID behind a group prefix', () => {
+    const original = ['BEGIN:VCARD', 'VERSION:3.0', 'item1.N:Doe;Jo;;;', 'END:VCARD'].join('\r\n');
+    const vcard = generateVCard(makeContact({ name: 'Jo Doe', _originalContent: original }));
+    const names = vcard.split('\r\n').filter((l) => /^(?:[\w-]+\.)?N[;:]/i.test(l));
+    expect(names).toEqual(['item1.N:Doe;Jo;;;']);
+    expect(vcard).not.toContain('UID:');
   });
 });

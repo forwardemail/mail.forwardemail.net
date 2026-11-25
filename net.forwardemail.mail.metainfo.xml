@@ -36,6 +36,34 @@
   </screenshots>
   <!-- scripts/sync-version.cjs prepends a release entry on every version bump. -->
   <releases>
+    <release version="1.0.14" date="2026-11-21">
+      <description>
+        <p>Fixes</p>
+        <ul>
+          <li>Sent messages keep the spacing they had in the composer</li>
+        </ul>
+      </description>
+    </release>
+    <release version="1.0.13" date="2026-11-20">
+      <description>
+        <p>Bug fixes and performance improvements.</p>
+      </description>
+    </release>
+    <release version="1.0.12" date="2026-11-20">
+      <description>
+        <p>Fixes</p>
+        <ul>
+          <li>Sign terminal client updates, harden the release workflows</li>
+          <li>Relaunch an app whose page wedges while it loads</li>
+          <li>Events made after 11 PM end the next day</li>
+          <li>Rerun failed WebView specs once</li>
+          <li>Keyboard shortcuts work as soon as the mailbox shows</li>
+          <li>Stop the CLI tests hanging CI</li>
+          <li>Tooltips on the message toolbar no longer hide behind the subject, the right-click menu opens at the pointer, links show the hand pointer, the reading pane keeps its width, spell check is on by default on macOS, and new contacts sync to Apple Contacts</li>
+          <li>Sent mail keeps its formatting</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.0.11" date="2026-11-12">
       <description>
         <p>New</p>

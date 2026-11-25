@@ -34,6 +34,9 @@
     removePasskeyCredential,
   } from '../utils/passkey-auth.js';
   import { startAppLockTimer } from '../main';
+  import { refreshSyncWorkerPgpKeys } from '../utils/sync-worker-client.js';
+  import { Local as LocalStore } from '../utils/storage.js';
+  import { pgpPlaintextNoLongerProtected } from '../stores/pgpPlaintextPurge';
   import {
     stop as stopInactivityTimer,
     onPrefsChanged as notifyTimerPrefsChanged,
@@ -150,6 +153,8 @@
       prefs = { ...prefs, enabled: true };
       setLockPrefs(prefs);
       enabled = true;
+      // Decrypted PGP mail may now be cached on disk, encrypted
+      refreshSyncWorkerPgpKeys();
       showSetupPin = false;
       clearInputs();
       success = 'App lock enabled successfully';
@@ -175,6 +180,9 @@
       }
       enabled = false;
       prefs = getLockPrefs();
+      // The cache is plaintext again: decrypted PGP mail may not stay in it
+      refreshSyncWorkerPgpKeys();
+      void pgpPlaintextNoLongerProtected(LocalStore.get('email') || 'default');
       showDisableConfirm = false;
       success = 'App lock disabled. Your mail will download again from the server.';
     } catch (err) {
@@ -228,6 +236,7 @@
         await setupWithPasskey(result.prfOutput);
         prefs = { ...prefs, hasPasskey: true };
         setLockPrefs(prefs);
+        refreshSyncWorkerPgpKeys();
         passkeyRegistered = true;
         success = 'Passkey registered successfully';
       } else {

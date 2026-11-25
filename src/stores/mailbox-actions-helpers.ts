@@ -301,13 +301,42 @@ const unquoteSimpleName = (address: string): string => {
   return /[,;:<>@()[\]]/.test(name) ? address : `${name} ${angle}`;
 };
 
+const escapeTextForHtml = (text: string): string =>
+  text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+// One paragraph per line and an empty one per blank line, which is how the
+// editor shows text: its paragraphs have no space between them.
 const textToHtml = (text: string): string =>
   text
+    .replace(/\s+$/, '')
     .split(/\r?\n/)
-    .map(
-      (line) => `<p>${line.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</p>`,
-    )
+    .map((line) => `<p>${escapeTextForHtml(line)}</p>`)
     .join('');
+
+/**
+ * The text of a body that is one text part shown by the reader, or '' when
+ * the body is anything else.
+ *
+ * A message with no HTML part is cached as its text in a <pre> (inside the
+ * reader's wrapper when it came from the open message). Put in the editor as
+ * is, a draft like that became one code block and was sent as one.
+ */
+export const textOfPreformattedBody = (html: string): string => {
+  if (!html || !/<pre[\s>]/i.test(html) || typeof DOMParser === 'undefined') return '';
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  let node: Element | null = doc.body;
+  // Step through wrappers that hold nothing but the next element.
+  while (node && node.tagName !== 'PRE') {
+    const hasText = Array.from(node.childNodes).some(
+      (child) => child.nodeType === 3 && (child.textContent || '').trim(),
+    );
+    if (hasText || node.children.length !== 1) return '';
+    node = node.children[0];
+  }
+  // Markup inside it means the sender's own HTML used a <pre>.
+  if (!node || node.children.length) return '';
+  return node.textContent || '';
+};
 
 const headerLookup = (headers: unknown, name: string): string => {
   if (!headers || typeof headers !== 'object') return '';
@@ -389,7 +418,9 @@ export const buildServerDraftPrefill = ({
   // Compose only reads a text prefill in plain-text mode, which a fresh open
   // never is, so a text-only draft is handed over as minimal HTML instead of
   // arriving empty.
-  if (html) prefill.html = html;
+  const preformatted = textOfPreformattedBody(html);
+  if (preformatted) prefill.html = textToHtml(preformatted);
+  else if (html) prefill.html = html;
   else if (text) prefill.html = textToHtml(text);
   return prefill;
 };

@@ -47,3 +47,25 @@ export function hasRichFormatting(html: string | null | undefined): boolean {
   if (!html) return false;
   return FORMATTING_TAGS.test(String(html));
 }
+
+/**
+ * The editor's HTML as it should be mailed. In the editor a paragraph has no
+ * space around it and an empty one is a blank line. A mail client gives each
+ * <p> a margin of its own and an empty <p> no height, so the same markup
+ * arrives with either no blank lines or three where one was typed. Each
+ * paragraph is sent with no margin and each empty one with a line break, which
+ * reads in a mail client the way it read in the editor.
+ *
+ * The quoted original of a reply is held in a data-raw-html attribute at this
+ * point, so its own paragraphs are left as they were written.
+ */
+export function editorHtmlForSending(html: string | null | undefined): string {
+  if (!html) return '';
+  if (typeof DOMParser === 'undefined') return String(html);
+  const doc = new DOMParser().parseFromString(String(html), 'text/html');
+  doc.body.querySelectorAll('p').forEach((p) => {
+    if (!p.style.margin) p.style.margin = '0';
+    if (!p.childNodes.length) p.append(doc.createElement('br'));
+  });
+  return doc.body.innerHTML;
+}

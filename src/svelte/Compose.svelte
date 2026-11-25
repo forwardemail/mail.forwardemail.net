@@ -68,16 +68,17 @@
   import TableRow from '@tiptap/extension-table-row';
   import TableCell from '@tiptap/extension-table-cell';
   import TableHeader from '@tiptap/extension-table-header';
-  import { extractTextContent } from '../utils/mime-utils.js';
   import { attachmentThumbnail, releaseAttachmentThumbnail } from '../utils/attachment-thumbnail';
   import {
     htmlToPlainText,
     sanitizeQuotedHtml,
     stripUntrustedRawQuotes,
   } from '../utils/sanitize.js';
-  import { hasRichFormatting, TextDirection } from '../utils/compose-format';
+  import { editorHtmlForSending, hasRichFormatting, TextDirection } from '../utils/compose-format';
   import { buildEncryptedPayload, buildSignedPayload } from '../utils/pgp-send';
   import { readPgpKeys } from '../utils/pgp-local';
+  import { pinRetriesText, systemGpgEnabled, type AskPin } from '../utils/pgp-system-gpg';
+  import PassphraseModal from './PassphraseModal.svelte';
   import { recipientKeyCoverage } from '../utils/pgp-recipients';
   import { pickFiles } from '../utils/file-picker';
   import { isTauriDesktop, isTouchPrimary } from '../utils/platform';
@@ -112,6 +113,7 @@
   } from '../utils/catchall-credentials';
   import { getAuthHeaderForAccount } from '../utils/auth';
   import { MAX_SCHEDULE_LEAD_MS, queueEmail, scheduleEmail } from '../utils/outbox-service';
+  import { forgetPendingSend, persistPendingSend } from '../utils/pending-send';
   import {
     saveSentCopy,
     buildOptimisticSentSource,
@@ -402,8 +404,37 @@
   // well, so this only matters while encryption is off. Offered only when the
   // account has a private key.
   let signEnabled = $state(false);
-  const accountHasSigningKey = () => readPgpKeys(activeAccount() || undefined).length > 0;
+  // A key held by the app, or a YubiKey / smartcard through the system gpg
+  // (desktop, turned on in Settings).
+  const accountHasSigningKey = () =>
+    readPgpKeys(activeAccount() || undefined).length > 0 ||
+    systemGpgEnabled(activeAccount() || 'default');
   let hasSigningKey = $state(accountHasSigningKey());
+  // The YubiKey PIN, when gpg-agent's own pinentry cannot run. Compose has its
+  // own dialog: on desktop it is a separate window without the main one's.
+  type PinDialog = {
+    open: (
+      name?: string,
+      options?: Record<string, unknown>,
+    ) => Promise<{ passphrase: string; remember: boolean }>;
+  };
+  let pinDialog: PinDialog | null = null;
+  const askCardPin: AskPin = async ({ retries, error: pinError }) => {
+    if (!pinDialog) return null;
+    try {
+      const res = await pinDialog.open('', {
+        title: 'Unlock your YubiKey',
+        description: `Enter the PIN of your YubiKey or smartcard to sign this message. Touch the key afterwards if it blinks.${pinRetriesText(retries)}`,
+        label: 'PIN',
+        submitLabel: 'Sign',
+        allowRemember: false,
+        error: pinError,
+      });
+      return res?.passphrase || null;
+    } catch {
+      return null;
+    }
+  };
   const toggleSign = () => {
     signEnabled = !signEnabled;
   };
@@ -2748,8 +2779,17 @@
     if (isPlainText) {
       payload.text = body;
     } else {
-      payload.html = expandRawQuotes(body);
-      const textContent = extractTextContent(body);
+      // What the editor holds is what is sent. `body` only follows it once
+      // something is typed, so a draft opened and sent as it was went out as
+      // the HTML it was opened with, the reader's wrapper included.
+      const html = editorView ? editorView.getHTML() : body;
+      // Paragraphs are sent spaced the way the editor shows them.
+      payload.html = expandRawQuotes(editorHtmlForSending(html));
+      // The text part keeps the paragraphs and line breaks. It is what a
+      // text-only client shows, what many clients quote in a reply, and what
+      // the Sent copy shows until the server's copy arrives; with the tags
+      // only stripped it was the whole message on one line.
+      const textContent = htmlToPlainText(html);
       if (textContent) payload.text = textContent;
     }
     if (attachments.length) {
@@ -2945,20 +2985,23 @@
     // protects whichever path happened to check it and the rest go out in the
     // clear under a banner that says otherwise.
     if (encryptEnabled) {
-      const encrypted = await buildEncryptedPayload({
-        from: payload.from as string,
-        to: payload.to as string[],
-        cc: payload.cc as string[],
-        bcc: payload.bcc as string[],
-        subject: payload.subject as string,
-        text: payload.text as string,
-        html: payload.html as string,
-        attachments: payload.attachments as { filename?: string }[],
-        replyTo: payload.reply_to as string,
-        inReplyTo: payload.inReplyTo as string,
-        references: payload.references as string,
-        messageId: payload.messageId as string,
-      });
+      const encrypted = await buildEncryptedPayload(
+        {
+          from: payload.from as string,
+          to: payload.to as string[],
+          cc: payload.cc as string[],
+          bcc: payload.bcc as string[],
+          subject: payload.subject as string,
+          text: payload.text as string,
+          html: payload.html as string,
+          attachments: payload.attachments as { filename?: string }[],
+          replyTo: payload.reply_to as string,
+          inReplyTo: payload.inReplyTo as string,
+          references: payload.references as string,
+          messageId: payload.messageId as string,
+        },
+        { askPin: askCardPin },
+      );
       if (!encrypted.ok) {
         error = encrypted.message || 'Could not encrypt this message.';
         toasts?.show?.(error, 'error');
@@ -2970,20 +3013,23 @@
       for (const key of ['html', 'text', 'attachments', 'has_attachment']) delete payload[key];
       payload.raw = encrypted.payload?.raw;
     } else if (signEnabled) {
-      const signed = await buildSignedPayload({
-        from: payload.from as string,
-        to: payload.to as string[],
-        cc: payload.cc as string[],
-        bcc: payload.bcc as string[],
-        subject: payload.subject as string,
-        text: payload.text as string,
-        html: payload.html as string,
-        attachments: payload.attachments as { filename?: string }[],
-        replyTo: payload.reply_to as string,
-        inReplyTo: payload.inReplyTo as string,
-        references: payload.references as string,
-        messageId: payload.messageId as string,
-      });
+      const signed = await buildSignedPayload(
+        {
+          from: payload.from as string,
+          to: payload.to as string[],
+          cc: payload.cc as string[],
+          bcc: payload.bcc as string[],
+          subject: payload.subject as string,
+          text: payload.text as string,
+          html: payload.html as string,
+          attachments: payload.attachments as { filename?: string }[],
+          replyTo: payload.reply_to as string,
+          inReplyTo: payload.inReplyTo as string,
+          references: payload.references as string,
+          messageId: payload.messageId as string,
+        },
+        { askPin: askCardPin },
+      );
       if (!signed.ok) {
         error = signed.message || 'Could not sign this message.';
         toasts?.show?.(error, 'error');
@@ -2994,47 +3040,73 @@
       payload.raw = signed.payload?.raw;
     }
 
-    // Undo-send: when enabled and online, hold the message in the outbox for
-    // the configured window instead of sending immediately. The main window
-    // shows the Undo toast and, when the window passes, triggers the actual
-    // send (the outbox already handles Sent copy, \Answered, and retries).
-    // Offline falls through to the normal offline-queue path below.
+    // Undo-send: when enabled and online, hold the message until the window
+    // ends instead of posting it now. The hold is written synchronously
+    // (localStorage) before any await, then into the outbox, and the main
+    // window's pending-send queue — not this component — performs the send.
+    // The draft stays until that send is confirmed. Offline falls through
+    // to the normal offline-queue path below.
     const undoWindowMs = getUndoSendDelay();
     if (isOnline && undoWindowMs > 0) {
+      const sendAt = Date.now() + undoWindowMs;
+      const draftId = currentDraftId;
+      const serverDraftId = currentDraftServerId;
+      const sourceId = sourceMessageId;
+      const shouldArchive = archiveAfterSend;
+      let pending: ReturnType<typeof persistPendingSend> | null = null;
+      let queued = false;
       try {
-        const sendAt = Date.now() + undoWindowMs;
-        const queued = await queueEmail(payload, { sendAt, sendAs: sendAsAccount });
+        pending = persistPendingSend({
+          account: activeAccount() || 'default',
+          dueAt: sendAt,
+          subject: String(payload.subject || '(No subject)'),
+          emailData: payload as Record<string, unknown>,
+          draftId,
+          serverDraftId,
+          sourceMessageId: sourceId,
+          archive: shouldArchive,
+          replyToMessageId: (payload._replyToMessageId as string) || null,
+          replyToMessageFolder: (payload._replyToMessageFolder as string) || null,
+          sendAs: sendAsAccount || null,
+        });
+        await queueEmail(payload, {
+          id: pending.id,
+          holdUntil: sendAt,
+          undoHold: true,
+          sendAs: sendAsAccount,
+          skipProcess: true,
+          account: pending.account,
+          draftId,
+          serverDraftId,
+          sourceMessageId: sourceId,
+        });
+        queued = true;
         rememberRecipients(payload);
-        const msgIdToDelete = sourceMessageId;
-        const serverDraftIdToDelete = currentDraftServerId;
-        if (currentDraftId) {
-          try {
-            await deleteDraft(currentDraftId);
-          } catch (err) {
-            console.error('[Compose] Failed to delete draft after undo-send queue:', err);
-          }
-        }
-        await deleteSourceMessage(msgIdToDelete);
-        if (serverDraftIdToDelete && serverDraftIdToDelete !== msgIdToDelete) {
-          await deleteSourceMessage(serverDraftIdToDelete);
-        }
         setVisible(false);
-        const shouldArchive = archiveAfterSend;
         reset();
         onSent?.({
           ...replyContextFor(payload),
           queued: true,
           undoSend: true,
-          outboxId: queued.id,
+          outboxId: pending.id,
           undoWindowMs,
           archive: shouldArchive,
           subject: payload.subject || '(No subject)',
+          pendingSend: pending,
+          draftId,
+          serverDraftId,
+          sourceMessageId: sourceId,
         });
         if (nativeWindow) closeNativeWindow();
       } catch (err) {
-        if (!isDemoBlockedError(err)) {
+        // Once the outbox row exists the send is real. Dropping the pending
+        // record here would still leave that row, which goes out on its own.
+        if (pending && !queued) forgetPendingSend(pending.id);
+        if (!queued && !isDemoBlockedError(err)) {
           error = 'Failed to queue message';
           toasts?.show?.(error, 'error');
+        } else if (queued) {
+          console.error('[Compose] Undo-send was queued but finishing up failed:', err);
         }
       } finally {
         sending = false;
@@ -5097,6 +5169,10 @@
     </div>
   {/if}
 </Tooltip.Provider>
+
+{#if isTauriDesktop}
+  <PassphraseModal registerApi={(api) => (pinDialog = api)} />
+{/if}
 
 <style>
   /* TipTap editor styles */

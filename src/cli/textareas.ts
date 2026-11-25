@@ -46,9 +46,9 @@ const TAB_SIZE = 8;
 /**
  * Rows `text` takes in a column `width` cells wide, wrapped as white-space:
  * pre-wrap with overflow-wrap: break-word wraps it. A line breaks at a
- * space, which may hang past the edge, at a tab, which moves to the next
- * stop of eight, and between wide characters, which are words of their
- * own; a word longer than the line breaks inside it.
+ * space or at a tab, which moves to the next stop of eight; both may hang
+ * past the edge. It also breaks between wide characters, which are words of
+ * their own, and a word longer than the line breaks inside it.
  */
 export function wrappedRows(text: string, width: number) {
   if (width < 1) return 1;
@@ -76,13 +76,7 @@ export function wrappedRows(text: string, width: number) {
         column++;
       } else if (char === '\t') {
         place();
-        let stop = TAB_SIZE - (column % TAB_SIZE);
-        if (column > 0 && column + stop > width) {
-          rows++;
-          column = 0;
-          stop = TAB_SIZE;
-        }
-        column += stop;
+        column += TAB_SIZE - (column % TAB_SIZE);
       } else {
         const charColumns = charWidth(char.codePointAt(0)!);
         if (charColumns === 2) {

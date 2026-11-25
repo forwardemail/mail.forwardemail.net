@@ -48,6 +48,22 @@ test.describe('Contact Creation - Modal', () => {
     await expect(page.getByText('5 contacts', { exact: true }).first()).toBeVisible();
   });
 
+  // The API stores the card it is sent as is, and Apple Contacts drops a
+  // card without N during its CardDAV sync. The UID in the card must be the
+  // one the request names, which is what the server files the contact under.
+  test('should send a card with N and a UID that matches the request', async ({ page }) => {
+    const posted = page.waitForRequest(
+      (r) => r.method() === 'POST' && /\/v1\/contacts(\?|$)/.test(r.url()),
+    );
+    await createContact(page, { name: 'Ada Lovelace', email: 'ada@example.com' });
+    const body = (await posted).postDataJSON();
+    const lines = body.content.split('\r\n');
+    expect(lines).toContain('N:Lovelace;Ada;;;');
+    expect(lines).toContain('FN:Ada Lovelace');
+    expect(body.uid).toBeTruthy();
+    expect(lines).toContain(`UID:${body.uid}`);
+  });
+
   // Previously had a "should create contact with all fields" compound test
   // that combined modal-create + inline-edit of optional fields + detail
   // panel verification. Its final assertions only checked that the name

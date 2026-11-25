@@ -214,6 +214,10 @@ let unlockedPgpKeys = [];
 // keys were unlocked must not leave it encrypted for good, and one encrypted
 // to a key we do not have must not be retried on every pass.
 let pgpKeysVersion = 0;
+// Whether plaintext this worker decrypts may be written to IndexedDB and the
+// search index: only while App Lock encrypts the database at rest (sent with
+// the keys; src/utils/pgp-plaintext-policy.ts). Off until told otherwise.
+let persistPgpPlaintext = false;
 const pgpLockedTried = new Map<string, number>();
 const lockedTriedWithCurrentKeys = (account: string, id: string) =>
   pgpLockedTried.get(`${account}::${id}`) === pgpKeysVersion;
@@ -1702,7 +1706,10 @@ async function fetchAndCacheBodyWithOptions(account, folder, msg, options = {}) 
     // encrypted, so there is nothing to download them from later.
     const keptAttachments =
       memoryConstrained && !pgpInfo ? slimCachedAttachments(attachments) : attachments;
-    if (dbPort && !keysChangedSinceDecrypt()) {
+    // Decrypted plaintext is cached only while App Lock encrypts it on disk;
+    // the reader keeps it in memory otherwise (pgp-session-cache.ts).
+    const keepPlaintext = !pgpInfo || persistPgpPlaintext;
+    if (dbPort && keepPlaintext && !keysChangedSinceDecrypt()) {
       await cacheWrite(
         () =>
           db.messageBodies.put({
@@ -1740,8 +1747,8 @@ async function fetchAndCacheBodyWithOptions(account, folder, msg, options = {}) 
           snippet: msg.snippet,
           date: msg.date || msg.dateMs,
           labels: msg.labels || msg.labelIds || msg.label_ids || [],
-          body,
-          textContent,
+          body: keepPlaintext ? body : '',
+          textContent: keepPlaintext ? textContent : '',
         },
       ],
     });
@@ -1861,7 +1868,12 @@ async function fetchAndCacheBodyWithOptions(account, folder, msg, options = {}) 
       if (isPgp) {
         decryptedWithKeys = pgpKeysVersion;
         const decrypted = await decryptPgp(raw);
-        if (!decrypted) {
+        // Decrypted, but the plaintext may not be cached (no App Lock): cache
+        // the ciphertext as if it had not decrypted, so later passes neither
+        // download nor decrypt it again. The reader decrypts on open and keeps
+        // the result in memory (pgp-session-cache.ts).
+        const cipherOnly = Boolean(decrypted) && !persistPgpPlaintext;
+        if (!decrypted || cipherOnly) {
           pgpLockedTried.set(`${account}::${apiId}`, pgpKeysVersion);
           // Keep the ciphertext so later passes do not download it again. The
           // reader decrypts from `raw` (handleCachedPgpRaw), and changing PGP
@@ -1885,8 +1897,11 @@ async function fetchAndCacheBodyWithOptions(account, folder, msg, options = {}) 
               'caching locked PGP body',
             );
           }
-          // Return raw data so main thread can attempt PGP decryption without re-fetching
-          return { id: apiId, folder, pgpLocked: true, raw, meta: result };
+          // Return raw data so main thread can attempt PGP decryption without
+          // re-fetching. A reader that asked gets the plaintext just decrypted.
+          if (!decrypted) {
+            return { id: apiId, folder, pgpLocked: true, raw, meta: result };
+          }
         }
         const parsed = await parseRawMessage(decrypted);
         if (parsed) {
@@ -1905,7 +1920,7 @@ async function fetchAndCacheBodyWithOptions(account, folder, msg, options = {}) 
             pgpInfo = { encrypted: true };
             if (typeof parsed.subject === 'string' && parsed.subject.trim()) {
               pgpInfo.subject = parsed.subject;
-              if (parsed.subject !== msg?.subject) {
+              if (parsed.subject !== msg?.subject && persistPgpPlaintext) {
                 changes.subject = parsed.subject;
                 // The server's subject (a placeholder), put back when the
                 // keys are removed (forgetPgpPlaintext)
@@ -1923,6 +1938,10 @@ async function fetchAndCacheBodyWithOptions(account, folder, msg, options = {}) 
           } catch {
             // Best effort; the interactive decrypt path persists the same info.
           }
+        }
+        // Badge recorded; a background pass keeps no plaintext (see cipherOnly)
+        if (cipherOnly && !returnPayload) {
+          return { id: apiId, folder, pgpLocked: true, raw, meta: result };
         }
       } else {
         const parsed = await parseRawMessage(raw);
@@ -2064,6 +2083,90 @@ function keyAddresses(key): string[] {
   }
 }
 
+/**
+ * The armored PGP MESSAGE block in an inline-PGP body or a PGP/MIME message,
+ * or '' with the reason none was found.
+ */
+async function findPgpBlock(armored: string): Promise<{ block: string; error: string }> {
+  const hasInlineArmor = armored.includes('-----BEGIN PGP MESSAGE-----');
+  const hasMimeHeaders = armored.includes('multipart/encrypted');
+
+  // Extract just the PGP armor if embedded in MIME content
+  let pgpBlock = extractPgpArmor(armored);
+
+  // For PGP/MIME: if no inline armor found, extract the encrypted part from MIME structure
+  if (!pgpBlock.includes('-----BEGIN PGP MESSAGE-----') && isPgpContent(armored)) {
+    // Strategy 1: Manual boundary parsing (most reliable for PGP/MIME)
+    const boundaryMatch = armored.match(/boundary="?([^";\s]+)"?/i);
+    if (boundaryMatch) {
+      const boundary = boundaryMatch[1];
+      const parts = armored.split('--' + boundary);
+      for (let i = 0; i < parts.length; i++) {
+        const part = parts[i];
+        if (part.includes('application/octet-stream') || part.includes('application/pgp-keys')) {
+          const headerEnd =
+            part.indexOf('\r\n\r\n') !== -1
+              ? part.indexOf('\r\n\r\n') + 4
+              : part.indexOf('\n\n') !== -1
+                ? part.indexOf('\n\n') + 2
+                : -1;
+          if (headerEnd > 0) {
+            const body = part.substring(headerEnd).trim();
+            const extracted = extractPgpArmor(body);
+            if (extracted.includes('-----BEGIN PGP MESSAGE-----')) {
+              pgpBlock = extracted;
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    // Strategy 2: PostalMime fallback
+    if (!pgpBlock.includes('-----BEGIN PGP MESSAGE-----')) {
+      try {
+        const parser = new PostalMime();
+        const parsed = await parser.parse(armored);
+        const pgpPart = parsed.attachments?.find(
+          (a) => a.mimeType === 'application/octet-stream' && a.content,
+        );
+        if (pgpPart?.content) {
+          const decoded =
+            typeof pgpPart.content === 'string'
+              ? pgpPart.content
+              : new TextDecoder().decode(pgpPart.content);
+          const extracted = extractPgpArmor(decoded);
+          if (extracted.includes('-----BEGIN PGP MESSAGE-----')) {
+            pgpBlock = extracted;
+          }
+        }
+      } catch {
+        // PostalMime fallback failed, continue
+      }
+    }
+  }
+
+  if (!pgpBlock.includes('-----BEGIN PGP MESSAGE-----')) {
+    if (hasMimeHeaders) {
+      console.warn(
+        '[sync.worker] PGP/MIME extraction failed. Raw length:',
+        armored?.length,
+        'Has BEGIN:',
+        hasInlineArmor,
+        'First 500 chars:',
+        armored?.substring(0, 500),
+      );
+      return {
+        block: '',
+        error: 'PGP/MIME message has empty encrypted payload. The API response may be incomplete.',
+      };
+    } else {
+      return { block: '', error: 'No PGP armor block found in message content.' };
+    }
+  }
+  return { block: pgpBlock, error: '' };
+}
+
 async function decryptPgp(armored) {
   lastDecryptError = '';
   lastDecryptSigned = false;
@@ -2071,82 +2174,13 @@ async function decryptPgp(armored) {
   await pgpKeysReady.catch(() => {});
   if (!armored || !unlockedPgpKeys.length) return '';
 
-  const hasInlineArmor = armored.includes('-----BEGIN PGP MESSAGE-----');
-  const hasMimeHeaders = armored.includes('multipart/encrypted');
-
   try {
-    // Extract just the PGP armor if embedded in MIME content
-    let pgpBlock = extractPgpArmor(armored);
-
-    // For PGP/MIME: if no inline armor found, extract the encrypted part from MIME structure
-    if (!pgpBlock.includes('-----BEGIN PGP MESSAGE-----') && isPgpContent(armored)) {
-      // Strategy 1: Manual boundary parsing (most reliable for PGP/MIME)
-      const boundaryMatch = armored.match(/boundary="?([^";\s]+)"?/i);
-      if (boundaryMatch) {
-        const boundary = boundaryMatch[1];
-        const parts = armored.split('--' + boundary);
-        for (let i = 0; i < parts.length; i++) {
-          const part = parts[i];
-          if (part.includes('application/octet-stream') || part.includes('application/pgp-keys')) {
-            const headerEnd =
-              part.indexOf('\r\n\r\n') !== -1
-                ? part.indexOf('\r\n\r\n') + 4
-                : part.indexOf('\n\n') !== -1
-                  ? part.indexOf('\n\n') + 2
-                  : -1;
-            if (headerEnd > 0) {
-              const body = part.substring(headerEnd).trim();
-              const extracted = extractPgpArmor(body);
-              if (extracted.includes('-----BEGIN PGP MESSAGE-----')) {
-                pgpBlock = extracted;
-                break;
-              }
-            }
-          }
-        }
-      }
-
-      // Strategy 2: PostalMime fallback
-      if (!pgpBlock.includes('-----BEGIN PGP MESSAGE-----')) {
-        try {
-          const parser = new PostalMime();
-          const parsed = await parser.parse(armored);
-          const pgpPart = parsed.attachments?.find(
-            (a) => a.mimeType === 'application/octet-stream' && a.content,
-          );
-          if (pgpPart?.content) {
-            const decoded =
-              typeof pgpPart.content === 'string'
-                ? pgpPart.content
-                : new TextDecoder().decode(pgpPart.content);
-            const extracted = extractPgpArmor(decoded);
-            if (extracted.includes('-----BEGIN PGP MESSAGE-----')) {
-              pgpBlock = extracted;
-            }
-          }
-        } catch {
-          // PostalMime fallback failed, continue
-        }
-      }
-    }
-
-    if (!pgpBlock.includes('-----BEGIN PGP MESSAGE-----')) {
-      if (hasMimeHeaders) {
-        console.warn(
-          '[sync.worker] PGP/MIME extraction failed. Raw length:',
-          armored?.length,
-          'Has BEGIN:',
-          hasInlineArmor,
-          'First 500 chars:',
-          armored?.substring(0, 500),
-        );
-        lastDecryptError =
-          'PGP/MIME message has empty encrypted payload. The API response may be incomplete.';
-      } else {
-        lastDecryptError = 'No PGP armor block found in message content.';
-      }
+    const found = await findPgpBlock(armored);
+    if (!found.block) {
+      lastDecryptError = found.error;
       return '';
     }
+    const pgpBlock = found.block;
 
     const message = await openpgp.readMessage({ armoredMessage: pgpBlock });
 
@@ -2216,7 +2250,14 @@ async function handleDecryptMessageTask(task) {
     };
   }
 
-  // Parse the decrypted content
+  return buildDecryptedResult(decrypted, lastDecryptSigned, lastDecryptSignature);
+}
+
+/**
+ * The reader's result for decrypted plaintext: the inner MIME parsed into
+ * body, text and attachments, or the plaintext itself when it is not MIME.
+ */
+async function buildDecryptedResult(decrypted: string, signed: boolean, signature) {
   let parsed = null;
   try {
     parsed = await parseRawMessage(decrypted);
@@ -2232,8 +2273,8 @@ async function handleDecryptMessageTask(task) {
       textContent: extractTextContent(decrypted),
       attachments: [],
       rawDecrypted: true,
-      signed: lastDecryptSigned,
-      signature: lastDecryptSignature,
+      signed,
+      signature,
       keyCount: unlockedPgpKeys.length,
     };
   }
@@ -2247,10 +2288,30 @@ async function handleDecryptMessageTask(task) {
     // Protected-headers subject from the decrypted inner MIME (undefined
     // when the sender didn't encrypt the subject).
     subject: parsed.subject,
-    signed: lastDecryptSigned,
-    signature: lastDecryptSignature,
+    signed,
+    signature,
     keyCount: unlockedPgpKeys.length,
   };
+}
+
+/**
+ * The armored block to hand the system gpg (desktop app, src-tauri/src/gpg.rs)
+ * for a key the app does not hold, such as one on a YubiKey.
+ */
+async function handleExtractPgpBlockTask(task) {
+  const raw = typeof task?.raw === 'string' ? task.raw : '';
+  if (!raw || !isPgpContent(raw)) return { success: false, block: '', error: 'not_pgp' };
+  const found = await findPgpBlock(raw);
+  return { success: Boolean(found.block), block: found.block, error: found.error };
+}
+
+/** Parse plaintext the system gpg decrypted, as for the worker's own. */
+async function handleParseDecryptedTask(task) {
+  const plaintext = typeof task?.plaintext === 'string' ? task.plaintext : '';
+  if (!plaintext) {
+    return { success: false, reason: 'invalid_input', message: 'Nothing was decrypted' };
+  }
+  return buildDecryptedResult(plaintext, Boolean(task.signed), task.signature ?? null);
 }
 
 /**
@@ -2437,6 +2498,8 @@ async function handleTask(taskId, task) {
     // the live account's credentials. PGP tasks are local-only (no fetch).
     const isLocalOnlyTask =
       task?.type === 'decryptMessage' ||
+      task?.type === 'extractPgpBlock' ||
+      task?.type === 'parseDecrypted' ||
       task?.type === 'parseRaw' ||
       task?.type === 'encryptMessage' ||
       task?.type === 'signMessage' ||
@@ -2467,6 +2530,10 @@ async function handleTask(taskId, task) {
       });
     } else if (task.type === 'decryptMessage') {
       summary = await handleDecryptMessageTask(task);
+    } else if (task.type === 'extractPgpBlock') {
+      summary = await handleExtractPgpBlockTask(task);
+    } else if (task.type === 'parseDecrypted') {
+      summary = await handleParseDecryptedTask(task);
     } else if (task.type === 'parseRaw') {
       summary = await handleParseRawTask(task);
     } else if (task.type === 'encryptMessage') {
@@ -3130,6 +3197,7 @@ self.onmessage = (event) => {
     return;
   }
   if (data.type === 'pgpKeys') {
+    persistPgpPlaintext = data.persistPgpPlaintext === true;
     pgpKeysReady = updatePgpKeys(
       data.keys || [],
       data.passphrases || {},

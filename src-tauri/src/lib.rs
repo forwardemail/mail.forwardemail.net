@@ -1,5 +1,7 @@
 use serde::Serialize;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{Emitter, Listener, Manager};
 
 #[cfg(desktop)]
@@ -9,6 +11,7 @@ mod device_key;
 mod diagnostics;
 #[cfg(desktop)]
 mod global_shortcut;
+mod gpg;
 mod redaction;
 mod renderer_watchdog;
 
@@ -44,6 +47,75 @@ struct DeepLinkPayload {
 struct SingleInstancePayload {
     args: Vec<String>,
     cwd: String,
+}
+
+/// Set once a quit has already asked the webview to flush undo-sends, so the
+/// exit that follows is not held again.
+static QUIT_FLUSH_STARTED: AtomicBool = AtomicBool::new(false);
+
+fn unix_now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX))
+        .unwrap_or(0)
+}
+
+/// Run the main window's pending-send flush. `reason` is a JS string literal
+/// ("quit") or empty. The webview may be hidden; eval still runs, unlike a
+/// suspended DOM timer.
+fn eval_flush_pending_sends(app: &tauri::AppHandle, reason: &str) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let script = format!("void globalThis.__feFlushPendingSends?.({reason:?})");
+    if let Err(err) = window.eval(script) {
+        log::warn!("[pending-send] could not flush from native: {err}");
+    }
+}
+
+/// Wake the webview when an undo-send comes due. WKWebView suspends
+/// setTimeout while the window is hidden or the app is in the background;
+/// this sleep happens on a thread outside the webview.
+#[tauri::command]
+fn arm_pending_send_wake(app: tauri::AppHandle, due_at_ms: u64) -> Result<(), String> {
+    let now = unix_now_ms();
+    if due_at_ms > now.saturating_add(120_000) {
+        return Err("pending send is too far in the future".into());
+    }
+    if due_at_ms <= now {
+        eval_flush_pending_sends(&app, "");
+        return Ok(());
+    }
+    let delay = due_at_ms - now;
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(delay));
+        eval_flush_pending_sends(&app, "");
+    });
+    Ok(())
+}
+
+/// The page calls this after a quit flush finishes so the process can exit
+/// without waiting out the native timeout.
+#[tauri::command]
+fn complete_pending_send_flush(app: tauri::AppHandle) {
+    app.exit(0);
+}
+
+/// Quit should send anything still inside its undo window, not drop it.
+/// The page flushes, then calls `complete_pending_send_flush`. If the
+/// webview never answers, exit anyway — the queue is also on disk and the
+/// next launch submits whatever is overdue.
+fn hold_quit_for_pending_sends(app: &tauri::AppHandle, api: tauri::ExitRequestApi) {
+    if QUIT_FLUSH_STARTED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    api.prevent_exit();
+    eval_flush_pending_sends(app, "quit");
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(8));
+        app.exit(0);
+    });
 }
 
 /// Holds deep-link URLs until the frontend drains them with
@@ -1097,8 +1169,40 @@ fn push_pending_deep_links(queue: &mut Vec<String>, urls: Vec<String>) {
     }
 }
 
+/// Turns on "Check Spelling While Typing" for the webviews unless the user
+/// has chosen for themselves.
+///
+/// WKWebView takes the setting from the app's own user defaults
+/// (`WebContinuousSpellCheckingEnabled`) and treats a missing value as off,
+/// so without this nothing is underlined until someone finds the toggle in
+/// the right-click menu, and a reset of the app's preferences turns it off
+/// again. `registerDefaults:` only supplies the value used when none is
+/// stored: a choice made from that menu is stored and still wins.
+#[cfg(target_os = "macos")]
+fn macos_enable_spellcheck_by_default() {
+    use objc2::runtime::AnyObject;
+    use objc2::{class, msg_send};
+    use objc2_foundation::NSString;
+
+    let key = NSString::from_str("WebContinuousSpellCheckingEnabled");
+    unsafe {
+        let defaults: *mut AnyObject = msg_send![class!(NSUserDefaults), standardUserDefaults];
+        if defaults.is_null() {
+            return;
+        }
+        let yes: *mut AnyObject = msg_send![class!(NSNumber), numberWithBool: true];
+        let registered: *mut AnyObject =
+            msg_send![class!(NSDictionary), dictionaryWithObject: yes, forKey: &*key];
+        let _: () = msg_send![defaults, registerDefaults: registered];
+    }
+}
+
 // ── App Entry Point ──────────────────────────────────────────────────────────
 
+// Keep this attribute on the line directly above `pub fn run()`. It exports the
+// symbols the Android and iOS shells start the app through. With anything
+// between the two, the attribute lands on that item instead, the mobile
+// library builds without those symbols and every mobile release build fails.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Leave a breadcrumb before any panic aborts the process — e.g. an objc2
@@ -1121,6 +1225,10 @@ pub fn run() {
         log::error!("PANIC at {}: {}", location, message);
         default_panic_hook(info);
     }));
+
+    // Before the first webview exists: WebKit reads the setting once.
+    #[cfg(target_os = "macos")]
+    macos_enable_spellcheck_by_default();
 
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default();
@@ -1288,11 +1396,23 @@ pub fn run() {
             #[cfg(desktop)]
             device_key::device_key_set,
             #[cfg(desktop)]
+            gpg::gpg_available,
+            #[cfg(desktop)]
+            gpg::gpg_card_info,
+            #[cfg(desktop)]
+            gpg::gpg_decrypt,
+            #[cfg(desktop)]
+            gpg::gpg_sign,
+            #[cfg(desktop)]
+            gpg::gpg_verify,
+            #[cfg(desktop)]
             toggle_window_visibility,
             #[cfg(desktop)]
             open_url_in_browser,
             #[cfg(target_os = "macos")]
             macos_disable_close_animation,
+            arm_pending_send_wake,
+            complete_pending_send_flush,
             #[cfg(desktop)]
             is_default_mailto_handler,
             #[cfg(desktop)]
@@ -1538,22 +1658,25 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("error while building Forward Email")
-        .run(|_app_handle, _event| {
+        .run(|app_handle, event| match event {
+            tauri::RunEvent::ExitRequested { api, .. } => {
+                hold_quit_for_pending_sends(app_handle, api);
+            }
             // macOS: re-show the main window when the dock icon is clicked
             // and no windows are visible (e.g. after closing with the red ✕).
             #[cfg(target_os = "macos")]
-            if let tauri::RunEvent::Reopen {
+            tauri::RunEvent::Reopen {
                 has_visible_windows,
                 ..
-            } = _event
-            {
+            } => {
                 if !has_visible_windows {
-                    if let Some(window) = _app_handle.get_webview_window("main") {
+                    if let Some(window) = app_handle.get_webview_window("main") {
                         let _ = window.show();
                         let _ = window.set_focus();
                     }
                 }
             }
+            _ => {}
         });
 }
 

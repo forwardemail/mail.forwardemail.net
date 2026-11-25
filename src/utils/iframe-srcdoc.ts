@@ -26,7 +26,7 @@ function escapeForPreText(text: string): string {
 function linkifyEscapedText(escapedText: string): string {
   // Operate on already-escaped text so we don't introduce new HTML
   return escapedText.replace(
-    /(https?:\/\/[^\s<>"']+|mailto:[^\s<>"']+)/g,
+    /(?:https?:\/\/|mailto:)(?:(?!&(?:lt|gt);)[^\s<>"'])+/g,
     (url) => `<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`,
   );
 }
@@ -178,6 +178,14 @@ function getResetStyles(): string {
 
     a:hover {
       color: #2563eb;
+    }
+
+    /* A link shows the hand pointer wherever the pointer is over it, also
+     * over an image or a styled block inside it and whatever the email's own
+     * CSS says. The desktop webview does not always pick it on its own. */
+    a[href],
+    a[href] * {
+      cursor: pointer !important;
     }
 
     pre, code {
