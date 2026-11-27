@@ -127,6 +127,32 @@ test.describe('Message header buttons', () => {
     await expect.poll(() => server.get('msg-6').folder_path).toBe('Archive');
   });
 
+  test('Archive works again on the message the reader moves to after an archive', async ({
+    page,
+  }) => {
+    await useHeaderActions(page, ['archive']);
+    await openMailbox(page, 'Message 0001');
+    await openRow(page, 'Quarterly report');
+    await headerButton(page, 'archive').click();
+    await expect.poll(() => server.get('msg-2').folder_path).toBe('Archive');
+
+    // The reader moves on to the next message; its Archive must act on it.
+    await expect(reader(page).getByText('Team lunch').first()).toBeVisible();
+    await headerButton(page, 'archive').click();
+    await expect.poll(() => server.get('msg-3').folder_path).toBe('Archive');
+  });
+
+  test('Archive acts on the message Classic opens by itself on load', async ({ page }) => {
+    await useHeaderActions(page, ['archive']);
+    await openMailbox(page, 'Message 0001');
+    // No click: Classic opens the newest message, and no row is selected.
+    await expect(reader(page).getByText('Message 0001').first()).toBeVisible();
+
+    await headerButton(page, 'archive').click();
+    await expect.poll(() => server.get('msg-1').folder_path).toBe('Archive');
+    await expect(row(page, 'Message 0001')).toHaveCount(0);
+  });
+
   test('an action left out of the header is still in the … menu', async ({ page }) => {
     // Reply turned off, Archive on
     await useHeaderActions(page, ['archive']);
