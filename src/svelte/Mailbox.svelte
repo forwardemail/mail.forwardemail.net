@@ -5384,7 +5384,7 @@
     !readerIsSpamOrJunk && !readerIsDraftFolder && !readerIsSentFolder,
   );
   const showReaderMenuDivider = $derived(canReply || canForward || canEditDraft || canToggleRead);
-  // Settings > Appearance > Message header buttons. Re-read when a local
+  // Settings > Appearance > Layout > Customize message view. Re-read when a local
   // setting changes; the folder decides which of the chosen ones apply.
   const readerHeaderActions = $derived.by(() => {
     void $localSettingsVersion;

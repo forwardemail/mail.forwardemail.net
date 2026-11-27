@@ -1,7 +1,7 @@
 /**
  * Buttons the message reader can show in its header, beside the folder badge
  * and the "…" menu. Which ones show is the reader_header_actions setting
- * (Settings → Appearance → Message header buttons). Every action stays in the
+ * (Settings → Appearance → Layout → Customize message view). Every action stays in the
  * "…" menu either way, so hiding one here never makes it unreachable.
  *
  * The list follows the bulk-selection toolbar (archive, delete, mark read or

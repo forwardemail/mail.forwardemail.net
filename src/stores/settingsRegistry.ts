@@ -298,7 +298,7 @@ export const SETTINGS_REGISTRY: Record<string, SettingDefinition> = {
   reader_header_actions: {
     id: 'reader_header_actions',
     portable: true,
-    label: 'Message Header Buttons',
+    label: 'Quick Actions',
     scope: SETTING_SCOPES.DEVICE,
     localKey: 'reader_header_actions',
     valueType: 'json',

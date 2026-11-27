@@ -8,7 +8,7 @@ import {
   row,
 } from '../fixtures/state-helpers.js';
 
-// Settings > Appearance > Message header buttons chooses which actions sit
+// Settings > Appearance > Layout > Customize message view chooses which actions sit
 // beside the folder badge in the reader header. Reply alone is the default;
 // whatever is left out stays in the "…" menu.
 
@@ -54,7 +54,7 @@ async function openRow(page, subject) {
   await expect(reader(page).getByText(subject).first()).toBeVisible();
 }
 
-test.describe('Message header buttons', () => {
+test.describe('Message view quick actions', () => {
   let server;
 
   test.beforeEach(async ({ page }, testInfo) => {
@@ -79,6 +79,9 @@ test.describe('Message header buttons', () => {
   }) => {
     await page.goto('/');
     await page.goto('/mailbox/settings#appearance');
+    // Collapsed under Layout until opened
+    await expect(settingBox(page, 'reply')).toHaveCount(0);
+    await page.getByTestId('customize-message-view-toggle').click();
     await expect(settingBox(page, 'reply')).toHaveAttribute('data-state', 'checked');
     await settingBox(page, 'archive').click();
     await settingBox(page, 'reportSpam').click();
@@ -87,6 +90,7 @@ test.describe('Message header buttons', () => {
 
     // Kept across a reload.
     await page.reload();
+    await page.getByTestId('customize-message-view-toggle').click();
     for (const id of ['reply', 'archive', 'reportSpam', 'move']) {
       await expect(settingBox(page, id)).toHaveAttribute('data-state', 'checked');
     }
