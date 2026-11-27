@@ -8,9 +8,12 @@ import {
   row,
 } from '../fixtures/state-helpers.js';
 
-// Settings > Appearance > Layout > Customize message view chooses which actions sit
-// beside the folder badge in the reader header. Reply alone is the default;
-// whatever is left out stays in the "…" menu.
+// Settings > Appearance > Layout > Customize message view chooses the quick
+// action buttons shown with a message: beside the folder badge in Classic, in
+// the bar above the message in Full Screen. Whatever is left out stays in the
+// "…" menu.
+
+const DEFAULTS = ['reply', 'archive', 'delete', 'toggleRead', 'move', 'star'];
 
 function seedMessages() {
   return [
@@ -65,11 +68,13 @@ test.describe('Message view quick actions', () => {
     server = await installMailServer(page, { messages: seedMessages() });
   });
 
-  test('by default the header shows Reply alone', async ({ page }) => {
+  test('by default Classic shows Reply, Archive, Delete, Mark read, Move and Star', async ({
+    page,
+  }) => {
     await openMailbox(page, 'Message 0001');
     await openRow(page, 'Quarterly report');
-    await expect(headerButton(page, 'reply')).toBeVisible();
-    for (const id of ['archive', 'reportSpam', 'delete', 'move', 'toggleRead']) {
+    for (const id of DEFAULTS) await expect(headerButton(page, id)).toBeVisible();
+    for (const id of ['replyAll', 'forward', 'reportSpam']) {
       await expect(headerButton(page, id)).toHaveCount(0);
     }
   });
@@ -83,10 +88,10 @@ test.describe('Message view quick actions', () => {
     await expect(settingBox(page, 'reply')).toHaveCount(0);
     await page.getByTestId('customize-message-view-toggle').click();
     await expect(settingBox(page, 'reply')).toHaveAttribute('data-state', 'checked');
-    await settingBox(page, 'archive').click();
     await settingBox(page, 'reportSpam').click();
-    await settingBox(page, 'move').click();
-    await expect(settingBox(page, 'archive')).toHaveAttribute('data-state', 'checked');
+    await settingBox(page, 'delete').click();
+    await expect(settingBox(page, 'reportSpam')).toHaveAttribute('data-state', 'checked');
+    await expect(settingBox(page, 'delete')).toHaveAttribute('data-state', 'unchecked');
 
     // Kept across a reload.
     await page.reload();
@@ -107,6 +112,7 @@ test.describe('Message view quick actions', () => {
       await expect(headerButton(page, id)).toBeVisible();
       await expect(headerButton(page, id)).toHaveAccessibleName(name);
     }
+    await expect(headerButton(page, 'delete')).toHaveCount(0);
 
     await headerButton(page, 'archive').click();
     await expect.poll(() => server.get('msg-2').folder_path).toBe('Archive');
@@ -175,7 +181,9 @@ test.describe('Message view quick actions', () => {
     await expect(row(page, 'Message 0001')).toHaveCount(0);
   });
 
-  test('in Full Screen the header shows the chosen buttons too', async ({ page }) => {
+  test('in Full Screen the chosen buttons make up the one bar above the message', async ({
+    page,
+  }) => {
     // Runs after beforeEach's Classic script, so Full Screen wins
     await page.addInitScript(() => {
       try {
@@ -187,10 +195,17 @@ test.describe('Message view quick actions', () => {
     await useHeaderActions(page, ['reply', 'archive', 'reportSpam']);
     await openMailbox(page, 'Message 0001');
     await openRow(page, 'Quarterly report');
-    await expect(page.locator('.fe-reader-toolbar')).toBeVisible();
+    const bar = page.locator('.fe-reader-toolbar');
+    await expect(bar).toBeVisible();
+    await expect(bar.getByRole('button', { name: 'Back to list' })).toBeVisible();
     for (const id of ['reply', 'archive', 'reportSpam']) {
-      await expect(headerButton(page, id)).toBeVisible();
+      // Once, in the bar; not again beside the folder badge
+      await expect(headerButton(page, id)).toHaveCount(1);
+      await expect(bar.getByTestId(`reader-header-${id}`)).toBeVisible();
     }
+    // Left out: not in the bar
+    await expect(bar.getByRole('button', { name: /^Delete/ })).toHaveCount(0);
+    await expect(bar.getByRole('button', { name: /^Mark (read|unread)$/ })).toHaveCount(0);
 
     await headerButton(page, 'archive').click();
     await expect.poll(() => server.get('msg-2').folder_path).toBe('Archive');

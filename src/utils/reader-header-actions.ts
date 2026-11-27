@@ -1,8 +1,9 @@
 /**
- * Buttons the message reader can show in its header, beside the folder badge
- * and the "…" menu. Which ones show is the reader_header_actions setting
- * (Settings → Appearance → Layout → Customize message view). Every action stays in the
- * "…" menu either way, so hiding one here never makes it unreachable.
+ * Quick action buttons shown when viewing a message: in the bar above the
+ * message in Full Screen, beside the folder badge in Classic. Which ones show
+ * is the reader_header_actions setting (Settings → Appearance → Layout →
+ * Customize message view). Every action stays in the "…" menu either way, so
+ * hiding one here never makes it unreachable.
  *
  * The list follows the bulk-selection toolbar (archive, delete, mark read or
  * unread, move) and adds report spam, star and the reply family.
@@ -23,8 +24,18 @@ export type ReaderHeaderAction = (typeof READER_HEADER_ACTIONS)[number]['id'];
 
 const KNOWN = new Set<string>(READER_HEADER_ACTIONS.map((a) => a.id));
 
-/** Today's header: Reply only, so nothing changes until someone opts in. */
-export const DEFAULT_READER_HEADER_ACTIONS: ReaderHeaderAction[] = ['reply'];
+/**
+ * The Full Screen reader's bar as it was (Star, Archive, Delete, Mark read,
+ * Move) plus Reply, which sat in the header beside it. Classic shows the same.
+ */
+export const DEFAULT_READER_HEADER_ACTIONS: ReaderHeaderAction[] = [
+  'reply',
+  'archive',
+  'delete',
+  'toggleRead',
+  'move',
+  'star',
+];
 
 /**
  * Turn whatever is stored into a list of known actions in the order above.

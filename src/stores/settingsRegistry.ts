@@ -294,7 +294,7 @@ export const SETTINGS_REGISTRY: Record<string, SettingDefinition> = {
     localSerialize: (value) => String(Number(value) || 0),
   },
   // Buttons the message reader shows in its header (see
-  // utils/reader-header-actions.ts). Default is Reply alone, as before.
+  // utils/reader-header-actions.ts). The default is the Full Screen bar as it was.
   reader_header_actions: {
     id: 'reader_header_actions',
     portable: true,

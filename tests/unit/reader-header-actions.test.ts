@@ -35,12 +35,13 @@ import {
 const ALL = READER_HEADER_ACTIONS.map((a) => a.id);
 
 describe('normalizeReaderHeaderActions', () => {
-  it('defaults to Reply alone, the header as it was', () => {
-    expect(DEFAULT_READER_HEADER_ACTIONS).toEqual(['reply']);
-    expect(normalizeReaderHeaderActions(undefined)).toEqual(['reply']);
-    expect(normalizeReaderHeaderActions(null)).toEqual(['reply']);
-    expect(normalizeReaderHeaderActions('not json')).toEqual(['reply']);
-    expect(normalizeReaderHeaderActions({ reply: true })).toEqual(['reply']);
+  it('defaults to the Full Screen bar as it was, plus Reply', () => {
+    const defaults = ['reply', 'archive', 'delete', 'toggleRead', 'move', 'star'];
+    expect(DEFAULT_READER_HEADER_ACTIONS).toEqual(defaults);
+    expect(normalizeReaderHeaderActions(undefined)).toEqual(defaults);
+    expect(normalizeReaderHeaderActions(null)).toEqual(defaults);
+    expect(normalizeReaderHeaderActions('not json')).toEqual(defaults);
+    expect(normalizeReaderHeaderActions({ reply: true })).toEqual(defaults);
   });
 
   it('keeps an empty choice, so all buttons can be turned off', () => {
@@ -116,13 +117,27 @@ describe('reader_header_actions setting', () => {
     const def = getSettingDefinition('reader_header_actions');
     expect(def?.scope).toBe('device');
     expect(def?.portable).toBe(true);
-    expect(parseLocalValue(def, null)).toEqual(['reply']);
+    expect(parseLocalValue(def, null)).toEqual([
+      'reply',
+      'archive',
+      'delete',
+      'toggleRead',
+      'move',
+      'star',
+    ]);
     expect(serializeLocalValue(def, ['move', 'archive', 'nope'])).toBe('["archive","move"]');
     expect(parseLocalValue(def, '["archive","move"]')).toEqual(['archive', 'move']);
   });
 
-  it('reads Reply alone before anything is saved', () => {
-    expect(getEffectiveSettingValue('reader_header_actions')).toEqual(['reply']);
+  it('reads the default set before anything is saved', () => {
+    expect(getEffectiveSettingValue('reader_header_actions')).toEqual([
+      'reply',
+      'archive',
+      'delete',
+      'toggleRead',
+      'move',
+      'star',
+    ]);
   });
 
   it('persists a choice and bumps the local settings version so the reader re-reads it', async () => {

@@ -58,6 +58,7 @@
   } from '../utils/pgp-system-gpg';
   import { downloadFile } from '../utils/download';
   import {
+    DEFAULT_READER_HEADER_ACTIONS,
     READER_HEADER_ACTIONS,
     normalizeReaderHeaderActions,
     type ReaderHeaderAction,
@@ -234,7 +235,7 @@
   let signatureSaveTimer: ReturnType<typeof setTimeout> | null = null;
   let undoSendDelay = $state('0');
   let markReadDelay = $state('0');
-  let readerHeaderActions = $state<ReaderHeaderAction[]>(['reply']);
+  let readerHeaderActions = $state<ReaderHeaderAction[]>([...DEFAULT_READER_HEADER_ACTIONS]);
   let messageViewCustomizeOpen = $state(false);
   let archiveFolder = $state('');
   let sentFolder = $state('');
