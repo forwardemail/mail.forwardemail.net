@@ -97,11 +97,11 @@ describe('visibleReaderHeaderActions', () => {
     ).toEqual(['delete']);
   });
 
-  it('does not repeat what the full-screen reader toolbar already shows', () => {
-    expect(visibleReaderHeaderActions(ALL, { fullscreenToolbar: true })).toEqual([
+  it('shows the same chosen buttons whatever the layout', () => {
+    // No layout input at all: Full Screen and Classic get the same header
+    expect(visibleReaderHeaderActions(['reply', 'archive', 'reportSpam'])).toEqual([
       'reply',
-      'replyAll',
-      'forward',
+      'archive',
       'reportSpam',
     ]);
   });

@@ -2760,8 +2760,7 @@
               {/each}
             </div>
             <p class="text-sm text-muted-foreground">
-              Every action stays in the message's ⋯ menu. In the Full Screen layout, buttons the
-              reader toolbar already has (Archive, Delete, Mark read, Move, Star) are not repeated.
+              Shown in both layouts. Every action stays in the message's ⋯ menu either way.
             </p>
           </Card.Content>
         </Card.Root>

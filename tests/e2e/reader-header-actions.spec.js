@@ -171,6 +171,27 @@ test.describe('Message header buttons', () => {
     await expect(row(page, 'Message 0001')).toHaveCount(0);
   });
 
+  test('in Full Screen the header shows the chosen buttons too', async ({ page }) => {
+    // Runs after beforeEach's Classic script, so Full Screen wins
+    await page.addInitScript(() => {
+      try {
+        localStorage.setItem('webmail_layout_mode', 'full');
+      } catch {
+        // sandboxed frame
+      }
+    });
+    await useHeaderActions(page, ['reply', 'archive', 'reportSpam']);
+    await openMailbox(page, 'Message 0001');
+    await openRow(page, 'Quarterly report');
+    await expect(page.locator('.fe-reader-toolbar')).toBeVisible();
+    for (const id of ['reply', 'archive', 'reportSpam']) {
+      await expect(headerButton(page, id)).toBeVisible();
+    }
+
+    await headerButton(page, 'archive').click();
+    await expect.poll(() => server.get('msg-2').folder_path).toBe('Archive');
+  });
+
   test('an action left out of the header is still in the … menu', async ({ page }) => {
     // Reply turned off, Archive on
     await useHeaderActions(page, ['archive']);

@@ -45,18 +45,7 @@ export const normalizeReaderHeaderActions = (value: unknown): ReaderHeaderAction
   return READER_HEADER_ACTIONS.map((a) => a.id).filter((id) => chosen.has(id));
 };
 
-/** Actions the full-screen reader toolbar already shows above the header. */
-const FULLSCREEN_TOOLBAR_ACTIONS = new Set<ReaderHeaderAction>([
-  'archive',
-  'delete',
-  'toggleRead',
-  'move',
-  'star',
-]);
-
 export type ReaderHeaderContext = {
-  /** The full-screen reader toolbar is showing (full screen layout or phone). */
-  fullscreenToolbar?: boolean;
   canReply?: boolean;
   canForward?: boolean;
   canArchive?: boolean;
@@ -67,14 +56,13 @@ export type ReaderHeaderContext = {
 /**
  * The header buttons to draw for the open message: the chosen ones, minus any
  * the folder does not allow (no Archive in Archive, no Report spam in Spam,
- * no reply in Drafts) and any the full-screen toolbar already shows.
+ * no reply in Drafts). The same in every layout, so what is checked shows.
  */
 export const visibleReaderHeaderActions = (
   chosen: readonly ReaderHeaderAction[],
   ctx: ReaderHeaderContext = {},
 ): ReaderHeaderAction[] =>
   normalizeReaderHeaderActions(chosen).filter((id) => {
-    if (ctx.fullscreenToolbar && FULLSCREEN_TOOLBAR_ACTIONS.has(id)) return false;
     switch (id) {
       case 'reply':
       case 'replyAll':

@@ -5391,7 +5391,6 @@
     return visibleReaderHeaderActions(
       getEffectiveSettingValue('reader_header_actions') as ReaderHeaderAction[],
       {
-        fullscreenToolbar: Boolean(isProductivityLayout || $mobileReader),
         canReply,
         canForward,
         canArchive,
