@@ -1,4 +1,8 @@
 import { isMemoryConstrained } from '../utils/memory-profile';
+import {
+  DEFAULT_READER_HEADER_ACTIONS,
+  normalizeReaderHeaderActions,
+} from '../utils/reader-header-actions';
 export const SETTING_SCOPES = {
   ACCOUNT: 'account',
   DEVICE: 'device',
@@ -288,6 +292,19 @@ export const SETTINGS_REGISTRY: Record<string, SettingDefinition> = {
     defaultValue: 0,
     localParse: (raw) => parseNumber(raw, 0),
     localSerialize: (value) => String(Number(value) || 0),
+  },
+  // Buttons the message reader shows in its header (see
+  // utils/reader-header-actions.ts). Default is Reply alone, as before.
+  reader_header_actions: {
+    id: 'reader_header_actions',
+    portable: true,
+    label: 'Message Header Buttons',
+    scope: SETTING_SCOPES.DEVICE,
+    localKey: 'reader_header_actions',
+    valueType: 'json',
+    defaultValue: DEFAULT_READER_HEADER_ACTIONS,
+    localParse: (raw) => normalizeReaderHeaderActions(raw),
+    localSerialize: (value) => JSON.stringify(normalizeReaderHeaderActions(value)),
   },
   archive_folder: {
     id: 'archive_folder',

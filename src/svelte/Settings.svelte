@@ -57,6 +57,11 @@
     systemGpgEnabled,
   } from '../utils/pgp-system-gpg';
   import { downloadFile } from '../utils/download';
+  import {
+    READER_HEADER_ACTIONS,
+    normalizeReaderHeaderActions,
+    type ReaderHeaderAction,
+  } from '../utils/reader-header-actions';
   import MessageSquare from '@lucide/svelte/icons/message-square';
   import AlertCircle from '@lucide/svelte/icons/alert-circle';
   import CheckCircle from '@lucide/svelte/icons/check-circle';
@@ -229,6 +234,7 @@
   let signatureSaveTimer: ReturnType<typeof setTimeout> | null = null;
   let undoSendDelay = $state('0');
   let markReadDelay = $state('0');
+  let readerHeaderActions = $state<ReaderHeaderAction[]>(['reply']);
   let archiveFolder = $state('');
   let sentFolder = $state('');
   let draftsFolder = $state('');
@@ -912,6 +918,9 @@
     markReadDelay = String(
       getEffectiveSettingValue('mark_read_delay', { account: currentAcct }) || 0,
     );
+    readerHeaderActions = normalizeReaderHeaderActions(
+      getEffectiveSettingValue('reader_header_actions', { account: currentAcct }),
+    );
     archiveFolder = getEffectiveSettingValue('archive_folder', { account: currentAcct }) || '';
     sentFolder = getEffectiveSettingValue('sent_folder', { account: currentAcct }) || '';
     draftsFolder = getEffectiveSettingValue('drafts_folder', { account: currentAcct }) || '';
@@ -1520,6 +1529,21 @@
       toasts?.show?.('Mark as read updated', 'success');
     } catch (err) {
       showMutationError(err, 'Failed to save mark as read');
+    }
+  };
+
+  const toggleReaderHeaderAction = async (id: ReaderHeaderAction, on: boolean) => {
+    const next = on
+      ? [...readerHeaderActions, id]
+      : readerHeaderActions.filter((action) => action !== id);
+    readerHeaderActions = normalizeReaderHeaderActions(next);
+    try {
+      await setSettingValue('reader_header_actions', readerHeaderActions, {
+        account: getAccountId(),
+      });
+      toasts?.show?.('Message header buttons updated', 'success');
+    } catch (err) {
+      showMutationError(err, 'Failed to save message header buttons');
     }
   };
 
@@ -2704,6 +2728,40 @@
             <p class="text-sm text-muted-foreground">
               Choose when a message you open is marked as read. With Never, it stays unread until
               you mark it read.
+            </p>
+          </Card.Content>
+        </Card.Root>
+
+        <Card.Root>
+          <Card.Header>
+            <Card.Title>Message header buttons</Card.Title>
+            <Card.Description
+              >Buttons shown next to the folder name when a message is open.</Card.Description
+            >
+          </Card.Header>
+          <Card.Content class="space-y-3">
+            <div
+              class="grid grid-cols-1 sm:grid-cols-2 gap-2"
+              role="group"
+              aria-label="Message header buttons"
+              data-testid="reader-header-actions-setting"
+            >
+              {#each READER_HEADER_ACTIONS as action (action.id)}
+                <label class="flex items-center gap-3">
+                  <Checkbox
+                    checked={readerHeaderActions.includes(action.id)}
+                    onCheckedChange={(checked) =>
+                      toggleReaderHeaderAction(action.id, checked === true)}
+                    aria-label={action.label}
+                    data-testid={`reader-header-action-${action.id}`}
+                  />
+                  <span>{action.label}</span>
+                </label>
+              {/each}
+            </div>
+            <p class="text-sm text-muted-foreground">
+              Every action stays in the message's ⋯ menu. In the Full Screen layout, buttons the
+              reader toolbar already has (Archive, Delete, Mark read, Move, Star) are not repeated.
             </p>
           </Card.Content>
         </Card.Root>
