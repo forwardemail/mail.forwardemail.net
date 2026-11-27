@@ -55,6 +55,7 @@
     dedupeMessages as dedupeMessagesHelper,
     resolveDeleteTargets as resolveDeleteTargetsHelper,
     nextCandidate as nextCandidateHelper,
+    openConversation,
     getVisibleFolders,
   } from './mailbox/utils/mailbox-helpers.js';
   import {
@@ -2272,10 +2273,13 @@
     source.state?.showFilters?.set?.(false);
     mailboxView?.showFilters?.set?.(false);
   };
+  // The conversation the reader shows, or null when the selected one is a
+  // different, older thread (see openConversation).
+  const readerConversation = () =>
+    $threadingEnabled ? openConversation($selectedConversation, $selectedMessage) : null;
   const getActiveMessage = () => {
-    if ($threadingEnabled && $selectedConversation) {
-      return $selectedConversation.messages?.slice?.(-1)?.[0];
-    }
+    const conv = readerConversation();
+    if (conv) return conv.messages?.slice?.(-1)?.[0] || $selectedMessage;
     return $selectedMessage;
   };
   const selectByOffset = (offset) => {
@@ -2400,8 +2404,9 @@
     const selectedMessages = getSelectedMessagesFromConversations();
     let targets = selectedMessages;
 
-    if (!targets.length && $threadingEnabled && $selectedConversation?.messages?.length) {
-      targets = $selectedConversation.messages;
+    const openConv = readerConversation();
+    if (!targets.length && openConv?.messages?.length) {
+      targets = openConv.messages;
     }
 
     if (!targets.length) {

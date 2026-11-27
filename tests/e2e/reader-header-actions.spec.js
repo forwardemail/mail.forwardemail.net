@@ -142,6 +142,24 @@ test.describe('Message header buttons', () => {
     await expect.poll(() => server.get('msg-3').folder_path).toBe('Archive');
   });
 
+  test('Archive acts on the message the list opened by itself, not the last one clicked', async ({
+    page,
+  }) => {
+    await useHeaderActions(page, ['archive']);
+    await openMailbox(page, 'Message 0001');
+    await openRow(page, 'Quarterly report');
+
+    // Leave and come back: Classic opens the first message by itself, without
+    // a click, so the last conversation clicked can stay selected behind it.
+    await page.locator('[data-testid="folder-item"][data-folder-path="Archive"] > button').click();
+    await page.locator('[data-testid="folder-item"][data-folder-path="INBOX"] > button').click();
+    await expect(reader(page).getByText('Message 0001').first()).toBeVisible();
+
+    await headerButton(page, 'archive').click();
+    await expect.poll(() => server.get('msg-1').folder_path).toBe('Archive');
+    expect(server.get('msg-2').folder_path).toBe('INBOX');
+  });
+
   test('Archive acts on the message Classic opens by itself on load', async ({ page }) => {
     await useHeaderActions(page, ['archive']);
     await openMailbox(page, 'Message 0001');
