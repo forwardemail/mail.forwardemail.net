@@ -1,3 +1,4 @@
+import { basicCredential } from './auth';
 import { Local } from './storage.js';
 
 /**
@@ -145,12 +146,7 @@ export const buildCatchallAuthHeader = (address: string | null | undefined): str
   const credential = getCatchallCredentialFor(address);
   if (!credential) return '';
   const username = String(address).trim().toLowerCase();
-  try {
-    return `Basic ${btoa(`${username}:${credential.password}`)}`;
-  } catch {
-    // btoa only takes Latin-1; generated passwords are ASCII
-    return '';
-  }
+  return `Basic ${basicCredential(`${username}:${credential.password}`)}`;
 };
 
 /** The remembered From addresses for one domain, or for every domain. */

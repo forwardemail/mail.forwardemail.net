@@ -93,3 +93,43 @@ describe('signInWithAliasPassword while another account is signed in', () => {
     ).rejects.toMatchObject({ status: 429, message: 'Too many failed attempts' });
   });
 });
+
+describe('signing in with an address at an internationalized domain', () => {
+  // mail.forwardemail.net issue #154. Chromium's email field hands over the
+  // domain in its ASCII form; WebKit's (the iOS and macOS apps) does not.
+  const sentCredential = () => {
+    const header = fetch.mock.calls.at(-1)[0].headers.get('authorization');
+    const bytes = Uint8Array.from(atob(header.replace(/^Basic /, '')), (c) => c.charCodeAt(0));
+    return new TextDecoder('utf-8').decode(bytes);
+  };
+
+  beforeEach(() => {
+    localStorage.clear();
+    sessionStorage.clear();
+    otherResponse = () => json(200, [{ path: 'INBOX' }]);
+  });
+
+  it('asks the API about the domain under the name it knows it by', async () => {
+    await signInWithAliasPassword('user@præstehaven.dk', 'secret', { staySignedIn: true });
+
+    expect(sentCredential()).toBe('user@xn--prstehaven-e6a.dk:secret');
+    expect(Local.get('email')).toBe('user@xn--prstehaven-e6a.dk');
+  });
+
+  it('is one account whichever way the domain was typed', async () => {
+    const { Accounts } = await import('../../src/utils/storage.js');
+    await signInWithAliasPassword('user@præstehaven.dk', 'secret', { staySignedIn: true });
+    await signInWithAliasPassword('user@xn--prstehaven-e6a.dk', 'secret', { staySignedIn: true });
+    await signInWithAliasPassword('user@PRÆSTEHAVEN.dk', 'secret', { staySignedIn: true });
+
+    expect(Accounts.getAll().map((account) => account.email)).toEqual([
+      'user@xn--prstehaven-e6a.dk',
+    ]);
+  });
+
+  it('keeps a part before the @ that is not ASCII, sent as UTF-8', async () => {
+    await signInWithAliasPassword('zoë@example.com', 'secret', { staySignedIn: true });
+
+    expect(sentCredential()).toBe('zoë@example.com:secret');
+  });
+});

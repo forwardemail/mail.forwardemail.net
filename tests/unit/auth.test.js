@@ -8,6 +8,7 @@ vi.mock('../../src/utils/storage', () => ({
 }));
 
 import {
+  basicCredential,
   buildAliasAuthHeader,
   buildApiKeyAuthHeader,
   getAuthHeader,
@@ -134,5 +135,35 @@ describe('getAuthHeader', () => {
     });
     const result = getAuthHeader();
     expect(result).toBe(`Basic ${btoa('good-key:')}`);
+  });
+});
+
+// What the API does with the header: base64 to bytes, bytes read as UTF-8.
+const readAsServer = (header) =>
+  new TextDecoder('utf-8').decode(
+    Uint8Array.from(atob(header.replace(/^Basic /, '')), (c) => c.charCodeAt(0)),
+  );
+
+describe('credentials that are not ASCII', () => {
+  it('sends an address at an internationalized domain as the server reads it', () => {
+    // mail.forwardemail.net issue #154: the "æ" arrived as U+FFFD and the
+    // domain was looked up as xn--prstehaven-6k10d.dk
+    const header = buildAliasAuthHeader('user@præstehaven.dk:secret');
+    expect(readAsServer(header)).toBe('user@præstehaven.dk:secret');
+    expect(readAsServer(header)).not.toContain('\uFFFD');
+  });
+
+  it('sends a domain outside Latin-1, which used to throw', () => {
+    const header = buildAliasAuthHeader('user@日本語.jp:secret');
+    expect(readAsServer(header)).toBe('user@日本語.jp:secret');
+  });
+
+  it('sends a password with accents and emoji', () => {
+    const header = buildAliasAuthHeader('user@example.com:pässwörd🔑');
+    expect(readAsServer(header)).toBe('user@example.com:pässwörd🔑');
+  });
+
+  it('leaves an ASCII credential exactly as it was', () => {
+    expect(basicCredential('user@example.com:abc123XYZ')).toBe(btoa('user@example.com:abc123XYZ'));
   });
 });

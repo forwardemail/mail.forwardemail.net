@@ -24,7 +24,22 @@ const isValidCredential = (value: string | null | undefined, expectColon = false
   return true;
 };
 
-const buildBasicHeader = (value: string | null): string => (value ? `Basic ${btoa(value)}` : '');
+/**
+ * Base64 of the UTF-8 bytes of `value`, which is how the API reads a Basic
+ * credential (RFC 7617). btoa() on the string itself writes one byte per
+ * character instead: "æ" went out as the single byte E6, the server read
+ * that as broken UTF-8, and an address at an internationalized domain was
+ * looked up under the wrong name. Anything past U+00FF made btoa() throw.
+ * The result for plain ASCII is the same as before.
+ */
+export const basicCredential = (value: string): string => {
+  let binary = '';
+  for (const byte of new TextEncoder().encode(value)) binary += String.fromCharCode(byte);
+  return btoa(binary);
+};
+
+const buildBasicHeader = (value: string | null): string =>
+  value ? `Basic ${basicCredential(value)}` : '';
 
 export const buildAliasAuthHeader = (
   aliasAuth: string | null | undefined,
