@@ -6894,15 +6894,15 @@
                 class="h-3 w-3 animate-spin rounded-full border-2 border-border border-t-primary shrink-0"
               ></span>
               {#if $syncProgress.active}
-                <span class="truncate max-w-[140px]"
-                  >Syncing{$syncProgress.folder ? ` ${$syncProgress.folder}` : ''}</span
-                >
+                <span class="truncate max-w-[140px]">
+                  Syncing{$syncProgress.folder ? ` ${$syncProgress.folder}` : ''}
+                </span>
               {:else}
-                <span class="truncate max-w-[140px]"
-                  >Indexing{$indexProgress.total > 0
+                <span class="truncate max-w-[140px]">
+                  Indexing{$indexProgress.total > 0
                     ? ` ${Math.round(($indexProgress.current / $indexProgress.total) * 100)}%`
-                    : ''}</span
-                >
+                    : ''}
+                </span>
               {/if}
             </div>
           {/if}
@@ -7090,8 +7090,9 @@
               >
                 <span
                   class="overflow-hidden text-ellipsis whitespace-nowrap max-w-[calc(100%-24px)]"
-                  >{$currentAccount}</span
                 >
+                  {$currentAccount}
+                </span>
                 <ChevronDown class="ml-2 h-4 w-4 opacity-50" />
               </Button>
               {#if $accountMenuOpen}
@@ -7221,8 +7222,10 @@
                         <span
                           class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-primary/10 text-fg-link"
                           data-tooltip={`${folder.count} unread`}
-                          data-tooltip-position="left">{folder.count}</span
+                          data-tooltip-position="left"
                         >
+                          {folder.count}
+                        </span>
                         <!-- Outside the badge, so the badge text stays the bare count. -->
                         <span class="sr-only">unread</span>
                       {/if}
@@ -7252,8 +7255,9 @@
                     {#if $outboxCount > 0}
                       <span
                         class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-state-caution/10 text-state-caution"
-                        >{$outboxCount}</span
                       >
+                        {$outboxCount}
+                      </span>
                     {/if}
                   </button>
                 </li>
@@ -7552,9 +7556,9 @@
                                 class="w-2.5 h-2.5 rounded-full shrink-0"
                                 style={`background:${label.color || 'var(--fg-muted)'}`}
                               ></span>
-                              <span class="flex-1 text-left"
-                                >{label.name || label.label || label.value}</span
-                              >
+                              <span class="flex-1 text-left">
+                                {label.name || label.label || label.value}
+                              </span>
                               {#if labelState(label) === 'partial'}
                                 <span class="text-muted-foreground">•</span>
                               {:else if labelState(label) === 'all'}
@@ -7632,9 +7636,9 @@
                                   class="w-2.5 h-2.5 rounded-full shrink-0"
                                   style={`background:${label.color || 'var(--fg-muted)'}`}
                                 ></span>
-                                <span class="flex-1 text-left"
-                                  >{label.name || label.label || label.value}</span
-                                >
+                                <span class="flex-1 text-left">
+                                  {label.name || label.label || label.value}
+                                </span>
                                 {#if ($filterByLabel || []).includes(getLabelId(label))}<Check
                                     class="h-4 w-4 shrink-0"
                                   />{/if}
@@ -7660,15 +7664,15 @@
                     {/if}
                   </div>
                 </div>
-                <span class="text-sm font-medium text-muted-foreground"
-                  >{outboxSelected
+                <span class="text-sm font-medium text-muted-foreground">
+                  {outboxSelected
                     ? 'Outbox'
                     : $selectedFolder}{#if selectedFolderTotalCount != null}
-                    <span class="text-xs text-muted-foreground/60 ml-1"
-                      >({selectedFolderTotalCount.toLocaleString()})</span
-                    >
-                  {/if}</span
-                >
+                    <span class="text-xs text-muted-foreground/60 ml-1">
+                      ({selectedFolderTotalCount.toLocaleString()})
+                    </span>
+                  {/if}
+                </span>
               </div>
             {/if}
 
@@ -7713,7 +7717,7 @@
                 >
                   <X class="h-5 w-5" />
                 </button>
-                {#if !matchesFolderKey( $selectedFolder, ['ARCHIVE'], ) && !listIsSpamOrJunk && !listIsDraftFolder && !listIsTrashFolder}
+                {#if !matchesFolderKey( $selectedFolder, ['ARCHIVE'] ) && !listIsSpamOrJunk && !listIsDraftFolder && !listIsTrashFolder}
                   <button
                     class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground active:bg-accent"
                     type="button"
@@ -7823,8 +7827,10 @@
                               {#if item.status === 'pending'}
                                 <span
                                   class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-state-caution/10 text-state-caution"
-                                  title="Pending">Queued</span
+                                  title="Pending"
                                 >
+                                  Queued
+                                </span>
                               {:else if item.status === 'scheduled'}
                                 <span
                                   class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-primary/10 text-fg-link"
@@ -7835,25 +7841,31 @@
                               {:else if item.status === 'sending'}
                                 <span
                                   class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-primary/10 text-fg-link animate-pulse"
-                                  title="Sending">Sending...</span
+                                  title="Sending"
                                 >
+                                  Sending...
+                                </span>
                               {:else if item.status === 'sent'}
                                 <span
                                   class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-state-success/10 text-state-success"
-                                  title="Sent">Sent</span
+                                  title="Sent"
                                 >
+                                  Sent
+                                </span>
                               {:else if item.status === 'failed'}
                                 <span
                                   class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-destructive/10 text-destructive"
-                                  title="Failed">Failed</span
+                                  title="Failed"
                                 >
+                                  Failed
+                                </span>
                               {/if}
                             </div>
                             <div class="flex-1 min-w-0 flex flex-col gap-1">
                               <div class="flex items-center gap-1.5">
-                                <span class="font-medium truncate"
-                                  >{item.emailData?.subject || '(No subject)'}</span
-                                >
+                                <span class="font-medium truncate">
+                                  {item.emailData?.subject || '(No subject)'}
+                                </span>
                               </div>
                               <div class="flex items-center gap-1.5 text-sm">
                                 <span class="text-muted-foreground truncate">
@@ -7871,13 +7883,13 @@
                               {/if}
                             </div>
                             <div class="flex items-center gap-2 shrink-0">
-                              <span class="text-xs text-muted-foreground whitespace-nowrap"
-                                >{formatCompactDate(item.createdAt)}</span
-                              >
+                              <span class="text-xs text-muted-foreground whitespace-nowrap">
+                                {formatCompactDate(item.createdAt)}
+                              </span>
                               {#if item.retryCount > 0}
-                                <small class="text-muted-foreground"
-                                  >Retries: {item.retryCount}</small
-                                >
+                                <small class="text-muted-foreground">
+                                  Retries: {item.retryCount}
+                                </small>
                               {/if}
                             </div>
                             <div class="flex items-center gap-2 mt-2">
@@ -7946,13 +7958,13 @@
                           <polyline points="19 12 12 19 5 12" />
                         </svg>
                       </div>
-                      <span
-                        >{isRefreshing
+                      <span>
+                        {isRefreshing
                           ? 'Refreshing…'
                           : pullDistance > 60
                             ? 'Release to refresh'
-                            : 'Pull to refresh'}</span
-                      >
+                            : 'Pull to refresh'}
+                      </span>
                     </div>
                   {/if}
                   {#if $threadingEnabled}
@@ -8122,9 +8134,9 @@
                                 >
                                   <polyline points="20 6 9 17 4 12" />
                                 </svg>
-                                <span class:hidden={isChecked}
-                                  >{getInitials(getConversationFromDisplay(conv))}</span
-                                >
+                                <span class:hidden={isChecked}>
+                                  {getInitials(getConversationFromDisplay(conv))}
+                                </span>
                               </button>
                               <div class="flex-1 min-w-0 flex flex-col gap-0.5">
                                 <!-- Line 1: From + Date -->
@@ -8151,10 +8163,9 @@
                                         class="text-xs text-muted-foreground shrink-0"
                                         data-tooltip={`${conv.messageCount} messages`}
                                         data-tooltip-position="right"
-                                        >({conv.messageCount}<span class="sr-only">
-                                          messages</span
-                                        >)</span
                                       >
+                                        ({conv.messageCount}<span class="sr-only"> messages</span>)
+                                      </span>
                                     {/if}
                                   </div>
                                   <span
@@ -8227,19 +8238,21 @@
                                       {/if}
                                       <span
                                         class={`truncate text-[14px] ${conv.hasUnread || conv.is_unread ? 'font-bold' : 'font-semibold'}`}
-                                        >{listIsSentFolder
-                                          ? `To: ${getConversationToName(conv) || getConversationFromName(conv)}`
-                                          : getConversationFromName(conv)}</span
                                       >
+                                        {listIsSentFolder
+                                          ? `To: ${getConversationToName(conv) || getConversationFromName(conv)}`
+                                          : getConversationFromName(conv)}
+                                      </span>
                                       {#if conv.messageCount > 1}
                                         <span
                                           class="text-[11px] text-muted-foreground shrink-0"
                                           data-tooltip={`${conv.messageCount} messages`}
                                           data-tooltip-position="right"
-                                          >({conv.messageCount}<span class="sr-only">
-                                            messages</span
-                                          >)</span
                                         >
+                                          ({conv.messageCount}<span class="sr-only">
+                                            messages
+                                          </span>)
+                                        </span>
                                       {/if}
                                     </div>
                                     <div
@@ -8292,9 +8305,9 @@
                                         {/if}
                                       {/each}
                                       {#if conv.labels.length > 3}
-                                        <span class="text-[10px] text-muted-foreground"
-                                          >+{conv.labels.length - 3}</span
-                                        >
+                                        <span class="text-[10px] text-muted-foreground">
+                                          +{conv.labels.length - 3}
+                                        </span>
                                       {/if}
                                     </div>
                                   {/if}
@@ -8320,19 +8333,21 @@
                                       {/if}
                                       <span
                                         class={`truncate ${conv.hasUnread || conv.is_unread ? 'font-semibold' : ''}`}
-                                        >{listIsSentFolder
-                                          ? `To: ${getConversationToName(conv) || getConversationFromName(conv)}`
-                                          : getConversationFromName(conv)}</span
                                       >
+                                        {listIsSentFolder
+                                          ? `To: ${getConversationToName(conv) || getConversationFromName(conv)}`
+                                          : getConversationFromName(conv)}
+                                      </span>
                                       {#if conv.messageCount > 1}
                                         <span
                                           class="text-[11px] text-muted-foreground shrink-0"
                                           data-tooltip={`${conv.messageCount} messages`}
                                           data-tooltip-position="right"
-                                          >({conv.messageCount}<span class="sr-only">
-                                            messages</span
-                                          >)</span
                                         >
+                                          ({conv.messageCount}<span class="sr-only">
+                                            messages
+                                          </span>)
+                                        </span>
                                       {/if}
                                     </div>
                                     <div
@@ -8340,8 +8355,9 @@
                                     >
                                       <span
                                         class={`truncate ${conv.hasUnread || conv.is_unread ? 'font-medium' : ''}`}
-                                        >{conv.displaySubject || conv.subject}</span
                                       >
+                                        {conv.displaySubject || conv.subject}
+                                      </span>
                                       {#if truncatePreview(mailboxView?.getConversationPreview?.(conv) || conv.snippet || '', 80)}
                                         <span
                                           class="text-muted-foreground font-normal text-xs truncate"
@@ -8386,9 +8402,9 @@
                                         {/if}
                                       {/each}
                                       {#if conv.labels.length > 3}
-                                        <span class="text-[10px] text-muted-foreground"
-                                          >+{conv.labels.length - 3}</span
-                                        >
+                                        <span class="text-[10px] text-muted-foreground">
+                                          +{conv.labels.length - 3}
+                                        </span>
                                       {/if}
                                     </div>
                                   {/if}
@@ -8483,10 +8499,11 @@
                                     {/if}
                                     <span
                                       class={`truncate text-[14px] ${msg.is_unread ? 'font-bold' : 'font-semibold'}`}
-                                      >{listIsSentFolder
-                                        ? `To: ${getMessageToName(msg) || getMessageFromName(msg)}`
-                                        : getMessageFromName(msg)}</span
                                     >
+                                      {listIsSentFolder
+                                        ? `To: ${getMessageToName(msg) || getMessageFromName(msg)}`
+                                        : getMessageFromName(msg)}
+                                    </span>
                                   </div>
                                   <div
                                     class="flex items-center gap-1.5 shrink-0 text-muted-foreground"
@@ -8549,18 +8566,20 @@
                                         data-tooltip-position="right"
                                       ></span>
                                     {/if}
-                                    <span class={`truncate ${msg.is_unread ? 'font-semibold' : ''}`}
-                                      >{listIsSentFolder
-                                        ? `To: ${getMessageToName(msg) || getMessageFromName(msg)}`
-                                        : getMessageFromName(msg)}</span
+                                    <span
+                                      class={`truncate ${msg.is_unread ? 'font-semibold' : ''}`}
                                     >
+                                      {listIsSentFolder
+                                        ? `To: ${getMessageToName(msg) || getMessageFromName(msg)}`
+                                        : getMessageFromName(msg)}
+                                    </span>
                                   </div>
                                   <div
                                     class="flex-1 min-w-0 flex items-baseline gap-1 overflow-hidden"
                                   >
-                                    <span class={`truncate ${msg.is_unread ? 'font-medium' : ''}`}
-                                      >{msg.subject}</span
-                                    >
+                                    <span class={`truncate ${msg.is_unread ? 'font-medium' : ''}`}>
+                                      {msg.subject}
+                                    </span>
                                     {#if truncatePreview(msg.snippet || '', 80)}
                                       <span
                                         class="text-muted-foreground font-normal text-xs truncate"
@@ -8793,11 +8812,11 @@
                 {:else}
                   <StarOff class="h-4.5 w-4.5 mr-2" />
                 {/if}
-                <span
-                  >{isMessageStarred(contextMenuConversation || contextMenuMessage)
+                <span>
+                  {isMessageStarred(contextMenuConversation || contextMenuMessage)
                     ? 'Unstar'
-                    : 'Star'}</span
-                >
+                    : 'Star'}
+                </span>
               </button>
               <div class="my-1 h-px bg-border"></div>
               <button
@@ -8931,9 +8950,9 @@
                             class="w-2.5 h-2.5 rounded-full shrink-0"
                             style={`background:${label.color || 'var(--fg-muted)'}`}
                           ></span>
-                          <span class="flex-1 text-left"
-                            >{label.name || label.label || label.value}</span
-                          >
+                          <span class="flex-1 text-left">
+                            {label.name || label.label || label.value}
+                          </span>
                           {#if contextLabelState(label) === 'partial'}
                             <span class="text-muted-foreground">•</span>
                           {:else if contextLabelState(label) === 'all'}
@@ -9016,9 +9035,9 @@
                 {/if}
                 <div class="p-4 border-b border-border">
                   <div class="mb-2">
-                    <strong class="text-lg font-semibold"
-                      >{selectedOutboxItem.emailData?.subject || '(No subject)'}</strong
-                    >
+                    <strong class="text-lg font-semibold">
+                      {selectedOutboxItem.emailData?.subject || '(No subject)'}
+                    </strong>
                   </div>
                   <div class="space-y-1 text-sm">
                     <div class="flex items-start gap-2">
@@ -9124,9 +9143,9 @@
                         class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm bg-secondary"
                       >
                         <span>{att.name || att.filename}</span>
-                        {#if att.size}<span class="text-xs text-muted-foreground"
-                            >{formatAttachmentSize(att.size)}</span
-                          >{/if}
+                        {#if att.size}<span class="text-xs text-muted-foreground">
+                            {formatAttachmentSize(att.size)}
+                          </span>{/if}
                       </div>
                     {/each}
                   </div>
@@ -9153,19 +9172,9 @@
                             ? mailboxView?.replyAll?.($selectedMessage)
                             : mailboxView?.replyTo?.($selectedMessage)}
                       >
-                        <svg
-                          class={icon}
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          stroke-width="2"
-                          stroke-linecap="round"
-                          stroke-linejoin="round"
-                          aria-hidden="true"
-                          ><polyline points="9 17 4 12 9 7"></polyline><path
-                            d="M20 18v-2a4 4 0 0 0-4-4H4"
-                          ></path></svg
-                        >
+                        <!-- The icon component, as in the menu: the terminal client
+                             draws those and leaves an inline SVG blank. -->
+                        <Reply class={icon} />
                       </button>
                     {:else if action === 'replyAll'}
                       <button
@@ -9349,9 +9358,9 @@
                 <div class="sticky top-0 z-20 bg-[var(--color-panel)] p-4 border-b border-border">
                   <div class="flex items-start justify-between gap-4 mb-2">
                     <div class="flex-1 min-w-0">
-                      <strong class="text-lg font-semibold"
-                        >{threadSubject || $selectedMessage.subject}</strong
-                      >
+                      <strong class="text-lg font-semibold">
+                        {threadSubject || $selectedMessage.subject}
+                      </strong>
                       {#if ($selectedMessage.pgpEncrypted && !$pgpLocked) || $selectedMessage.pgpSignature}
                         <span class="ml-2 inline-flex flex-wrap gap-1.5 align-middle">
                           <PgpBadges
@@ -9488,9 +9497,9 @@
                                 }}
                               >
                                 <Eye class="h-4 w-4" />
-                                <span
-                                  >{$selectedMessage.is_unread ? 'Mark Read' : 'Mark Unread'}</span
-                                >
+                                <span>
+                                  {$selectedMessage.is_unread ? 'Mark Read' : 'Mark Unread'}
+                                </span>
                               </button>
                             {/if}
                             <button
@@ -9868,9 +9877,9 @@
                         {/if}
                         <div class="flex items-start gap-2">
                           <span class="text-muted-foreground shrink-0 w-16">date:</span>
-                          <span class="flex-1 break-all"
-                            >{formatReaderDate($selectedMessage.date)}</span
-                          >
+                          <span class="flex-1 break-all">
+                            {formatReaderDate($selectedMessage.date)}
+                          </span>
                         </div>
                         <div class="flex items-start gap-2">
                           <span class="text-muted-foreground shrink-0 w-16">subject:</span>
@@ -10000,9 +10009,9 @@
                   <div
                     class="flex items-center justify-between p-3 bg-muted/30 border-b border-border text-sm"
                   >
-                    <span class="text-muted-foreground"
-                      >{threadMessages.length} messages in this conversation</span
-                    >
+                    <span class="text-muted-foreground">
+                      {threadMessages.length} messages in this conversation
+                    </span>
                     <div class="flex items-center gap-2">
                       <button
                         type="button"
@@ -10041,15 +10050,13 @@
                             <ChevronRight
                               class={`h-4 w-4 shrink-0 transition-transform ${isExpanded ? 'rotate-90' : ''}`}
                             />
-                            <span class="font-medium text-foreground truncate"
-                              >{extractDisplayName(message.from) ||
-                                message.from ||
-                                '(no sender)'}</span
-                            >
+                            <span class="font-medium text-foreground truncate">
+                              {extractDisplayName(message.from) || message.from || '(no sender)'}
+                            </span>
                           </button>
-                          <span class="text-xs text-muted-foreground shrink-0"
-                            >{formatReaderDate(message.date)}</span
-                          >
+                          <span class="text-xs text-muted-foreground shrink-0">
+                            {formatReaderDate(message.date)}
+                          </span>
                           {#if isExpanded}
                             {#if canReply}
                               <button
@@ -10305,11 +10312,11 @@
                         aria-expanded={attachmentStripExpanded}
                       >
                         <Paperclip class="h-4 w-4" />
-                        <span
-                          >{totalThreadAttachmentCount} attachment{totalThreadAttachmentCount === 1
+                        <span>
+                          {totalThreadAttachmentCount} attachment{totalThreadAttachmentCount === 1
                             ? ''
-                            : 's'}</span
-                        >
+                            : 's'}
+                        </span>
                         <ChevronRight
                           class={`h-4 w-4 transition-transform ${attachmentStripExpanded ? 'rotate-90' : ''}`}
                         />
@@ -10356,9 +10363,9 @@
                                   <div
                                     class="flex items-center gap-1 text-xs text-muted-foreground px-0.5 shrink-0"
                                   >
-                                    <span class="truncate min-w-0 flex-1"
-                                      >{att.name || att.filename}</span
-                                    >
+                                    <span class="truncate min-w-0 flex-1">
+                                      {att.name || att.filename}
+                                    </span>
                                     <button
                                       type="button"
                                       class="shrink-0 hover:text-foreground transition-colors cursor-pointer"
@@ -10562,9 +10569,9 @@
                               <div
                                 class="flex items-center gap-1 text-xs text-muted-foreground px-0.5 shrink-0"
                               >
-                                <span class="truncate min-w-0 flex-1"
-                                  >{att.name || att.filename}</span
-                                >
+                                <span class="truncate min-w-0 flex-1">
+                                  {att.name || att.filename}
+                                </span>
                                 <button
                                   type="button"
                                   class="shrink-0 hover:text-foreground transition-colors cursor-pointer"

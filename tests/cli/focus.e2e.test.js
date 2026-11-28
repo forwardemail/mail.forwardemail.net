@@ -87,7 +87,8 @@ describe.runIf(canRunInteractive)('keyboard focus after a click', () => {
     await session.waitFor('Welcome to Forward Email!');
     session.type(KEYS.down);
     await session.waitFor('To: Demo User');
-    // The subject in the message header is plain text; Reply comes after it.
+    // The subject in the message header is plain text; the "⋯" menu is the
+    // next control after it (the quick actions are in the bar above).
     const header = session
       .screen()
       .split('\n')
@@ -95,7 +96,7 @@ describe.runIf(canRunInteractive)('keyboard focus after a click', () => {
     session.click('Welcome to Forward Email!', header);
     session.type(KEYS.tab);
     session.type(KEYS.enter);
-    await session.waitFor('wrote:');
+    await session.waitFor('View original');
   });
 
   it('gives the keyboard back to the message when a reply window closes', async () => {

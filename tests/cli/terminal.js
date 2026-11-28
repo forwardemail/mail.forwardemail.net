@@ -107,6 +107,14 @@ export function startTerminal({
   child.on('exit', (code, signal) => {
     exited = { code, signal };
   });
+  // The client can be gone before 'exit' is reported here: stop() kills it,
+  // and the terminal may still be answering a query from output it had
+  // already received. That write fails with EPIPE on the stream, and with
+  // no listener it ends the whole test run as an uncaught exception. Any
+  // other error on the pipe is still thrown.
+  child.stdin.on('error', (error) => {
+    if (error.code !== 'EPIPE' && error.code !== 'ERR_STREAM_DESTROYED') throw error;
+  });
   // Resolves once the screen shows all of the client's output: 'close' comes
   // after the last of it, where 'exit' can come before, and xterm parses what
   // it gets on a timer.
