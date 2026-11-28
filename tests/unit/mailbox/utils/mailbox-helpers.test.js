@@ -260,6 +260,42 @@ describe('mailbox-helpers', () => {
   });
 
   describe('nextCandidate', () => {
+    describe('with the reader_advance setting', () => {
+      // Row 2 is open. The row above is unread and the row below is read,
+      // which is the case where the default picks the row above.
+      const list = [{ id: 'm1', is_unread: true }, { id: 'm2' }, { id: 'm3', is_unread: false }];
+      const pick = (advance, openId = 'm2', rows = list) =>
+        nextCandidate({
+          list: rows,
+          threadingEnabled: false,
+          selectedMessage: { id: openId },
+          advance,
+        });
+
+      it('auto prefers the unread neighbour', () => {
+        expect(pick('auto').id).toBe('m1');
+        expect(pick(undefined).id).toBe('m1');
+      });
+
+      it('below takes the row under the open one whatever is unread', () => {
+        expect(pick('below').id).toBe('m3');
+      });
+
+      it('above takes the row over the open one', () => {
+        const rows = [{ id: 'm1' }, { id: 'm2' }, { id: 'm3', is_unread: true }];
+        expect(pick('above', 'm2', rows).id).toBe('m1');
+      });
+
+      it('a fixed direction turns round at the end of the list', () => {
+        expect(pick('below', 'm3').id).toBe('m2');
+        expect(pick('above', 'm1').id).toBe('m2');
+      });
+
+      it('list opens nothing', () => {
+        expect(pick('list')).toBeNull();
+      });
+    });
+
     it('returns next item in threaded mode', () => {
       const list = [{ id: 'conv-1' }, { id: 'conv-2' }, { id: 'conv-3' }];
 

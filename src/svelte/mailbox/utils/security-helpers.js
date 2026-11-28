@@ -1,3 +1,5 @@
+import { trustedAuthResults } from '../../../utils/sender-warnings';
+
 /**
  * Resolve a header value to a string regardless of how simpleParser stored it.
  * Headers may be plain strings, objects with .value/.text, or arrays of either.
@@ -61,111 +63,81 @@ export const getSignedBy = (msg) => {
   return null;
 };
 
-/**
- * Parse authentication-results headers for security info.
- * Handles multiple header formats: plain strings, structured objects,
- * and arrays. Also falls back to dkim-signature and received-spf headers
- * when authentication-results is absent.
- * @param {Object} msg - Message object with nodemailer headers
- * @returns {Object|null} Security info object with spf, dkim, dmarc, encryption
- */
-export const getSecurityInfo = (msg) => {
-  if (!msg?.nodemailer?.headers) return null;
-  const headers = msg.nodemailer.headers;
+// How each result reads in the reader: green only for a pass, red for a
+// failure, amber for anything in between (no record, a soft fail, a lookup
+// that timed out).
+const RESULT_TONES = {
+  pass: 'pass',
+  fail: 'fail',
+  permerror: 'fail',
+  softfail: 'caution',
+  temperror: 'caution',
+  neutral: 'caution',
+  none: 'caution',
+  policy: 'caution',
+};
 
-  const results = { spf: null, dkim: null, dmarc: null, encryption: null };
-  let hasAnyInfo = false;
+const CHECKS = [
+  ['spf', 'SPF'],
+  ['dkim', 'DKIM'],
+  ['dmarc', 'DMARC'],
+];
 
-  // Try arc-authentication-results first, then fall back to authentication-results
-  const rawAuthResults = headers['arc-authentication-results'] || headers['authentication-results'];
-  const authResults = resolveHeaderValue(rawAuthResults);
+const capitalize = (text) => text.charAt(0).toUpperCase() + text.slice(1);
 
-  if (authResults) {
-    // Parse SPF
-    const spfMatch = authResults.match(/spf=(\w+)/i);
-    if (spfMatch) {
-      results.spf = spfMatch[1].toLowerCase();
-      hasAnyInfo = true;
-    }
-
-    // Parse DKIM
-    const dkimMatch = authResults.match(/dkim=(\w+)/i);
-    if (dkimMatch) {
-      results.dkim = dkimMatch[1].toLowerCase();
-      hasAnyInfo = true;
-    }
-
-    // Parse DMARC
-    const dmarcMatch = authResults.match(/dmarc=(\w+)/i);
-    if (dmarcMatch) {
-      results.dmarc = dmarcMatch[1].toLowerCase();
-      hasAnyInfo = true;
-    }
+// The result the newest of `values` records for one method. A message with
+// several DKIM signatures has several results, and it is signed if any of
+// them verifies.
+const resultFor = (values, method) => {
+  const pattern = new RegExp(`\\b${method}\\s*=\\s*(\\w+)`, 'gi');
+  for (const value of values) {
+    const found = Array.from(value.matchAll(pattern), (match) => match[1].toLowerCase());
+    if (found.length) return found.includes('pass') ? 'pass' : found[0];
   }
-
-  // Fallback: check received-spf header if SPF not found in authentication-results
-  if (!results.spf) {
-    const receivedSpf = resolveHeaderValue(headers['received-spf']);
-    if (receivedSpf) {
-      const spfMatch = receivedSpf.match(/^(\w+)/i);
-      if (spfMatch) {
-        results.spf = spfMatch[1].toLowerCase();
-        hasAnyInfo = true;
-      }
-    }
-  }
-
-  // Fallback: infer DKIM presence from dkim-signature header
-  if (!results.dkim) {
-    const dkimSig = headers['dkim-signature'];
-    if (dkimSig) {
-      results.dkim = 'present';
-      hasAnyInfo = true;
-    }
-  }
-
-  // Check for TLS in received header
-  const received = resolveHeaderValue(headers.received);
-  if (received) {
-    if (received.includes('TLS') || received.includes('tls')) {
-      const tlsMatch = received.match(/version=(TLSv[\d.]+)/i);
-      results.encryption = tlsMatch ? tlsMatch[1] : 'TLS';
-      hasAnyInfo = true;
-    }
-  }
-
-  return hasAnyInfo ? results : null;
+  return null;
 };
 
 /**
- * Format security status for display
- * @param {Object} securityInfo - Security info object from getSecurityInfo
- * @returns {string} Formatted security status string
+ * The parts of the reader's "security" line: transport encryption and the
+ * SPF, DKIM and DMARC results, each with the tone it should be drawn in.
+ *
+ * The results are read only from the Authentication-Results headers that
+ * Forward Email's own servers added (see trustedAuthResults). A sender can
+ * write the same headers under another name, and "SPF: Pass" taken from one
+ * of those would vouch for a forged message.
+ *
+ * @param {Object} msg - Message object with nodemailer headers
+ * @returns {Array<{label: string, text: string, tone: 'pass'|'fail'|'caution'|'neutral'}>}
  */
-export const formatSecurityStatus = (securityInfo) => {
-  if (!securityInfo) return 'Unknown';
+export const getSecurityParts = (msg) => {
+  const headers = msg?.nodemailer?.headers;
+  if (!headers) return [];
   const parts = [];
 
-  if (securityInfo.encryption) {
-    parts.push(`Standard encryption (${securityInfo.encryption})`);
+  const received = resolveHeaderValue(headers.received);
+  if (received && /tls/i.test(received)) {
+    const version = received.match(/version=(TLSv[\d.]+)/i)?.[1] || 'TLS';
+    parts.push({
+      label: 'Encryption',
+      text: `Standard encryption (${version})`,
+      tone: 'neutral',
+    });
   }
 
-  // Show SPF, DKIM, DMARC results with proper capitalization
-  if (securityInfo.spf) {
-    const spfStatus = securityInfo.spf.charAt(0).toUpperCase() + securityInfo.spf.slice(1);
-    parts.push(`SPF: ${spfStatus}`);
-  }
-  if (securityInfo.dkim) {
-    const dkimStatus =
-      securityInfo.dkim === 'present'
-        ? 'Signed'
-        : securityInfo.dkim.charAt(0).toUpperCase() + securityInfo.dkim.slice(1);
-    parts.push(`DKIM: ${dkimStatus}`);
-  }
-  if (securityInfo.dmarc) {
-    const dmarcStatus = securityInfo.dmarc.charAt(0).toUpperCase() + securityInfo.dmarc.slice(1);
-    parts.push(`DMARC: ${dmarcStatus}`);
+  const verdicts = trustedAuthResults(msg.nodemailer.headerLines);
+  for (const [method, label] of CHECKS) {
+    const result = resultFor(verdicts, method);
+    if (result) {
+      parts.push({
+        label,
+        text: `${label}: ${capitalize(result)}`,
+        tone: RESULT_TONES[result] || 'caution',
+      });
+    } else if (method === 'dkim' && headers['dkim-signature']) {
+      // Signed, but with no verdict from the server on whether it verifies.
+      parts.push({ label, text: 'DKIM: Signed', tone: 'neutral' });
+    }
   }
 
-  return parts.length ? parts.join(' · ') : 'Unknown';
+  return parts;
 };

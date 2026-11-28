@@ -71,12 +71,7 @@
     getInitials,
     getAvatarColor,
   } from './mailbox/utils/avatar-helpers.js';
-  import {
-    getMailedBy,
-    getSignedBy,
-    getSecurityInfo,
-    formatSecurityStatus,
-  } from './mailbox/utils/security-helpers.js';
+  import { getMailedBy, getSignedBy, getSecurityParts } from './mailbox/utils/security-helpers.js';
   import { createPerfTracer } from '../utils/perf-logger.ts';
   import { isLockEnabled, isVaultConfigured } from '../utils/crypto-store.js';
   import { getMessageApiId, normalizeMessageForCache } from '../utils/sync-helpers.ts';
@@ -231,6 +226,7 @@
   import Moon from '@lucide/svelte/icons/moon';
   import WifiOff from '@lucide/svelte/icons/wifi-off';
   import MailOpen from '@lucide/svelte/icons/mail-open';
+  import { normalizeReaderAdvance } from '../utils/reader-advance';
   import {
     visibleReaderHeaderActions,
     type ReaderHeaderAction,
@@ -2303,6 +2299,8 @@
       selectMessage(target);
     }
   };
+  // Settings > Appearance > Reading > After archive, delete or move.
+  const readerAdvance = () => normalizeReaderAdvance(getEffectiveSettingValue('reader_advance'));
   const nextCandidate = () => {
     const list = ($threadingEnabled ? $filteredConversations : $filteredMessages) || [];
     return nextCandidateHelper({
@@ -2310,7 +2308,23 @@
       threadingEnabled: $threadingEnabled,
       selectedConversation: $selectedConversation,
       selectedMessage: $selectedMessage,
+      advance: readerAdvance(),
     });
+  };
+  // With "Go back to the message list" chosen there is no next message to
+  // open: Full Screen and phones return to the list, Classic empties the
+  // reading pane. Called before the message is removed, so the store does
+  // not pick a neighbour for the reader either.
+  const leaveReaderForList = () => {
+    if (readerAdvance() !== 'list') return;
+    if (isProductivityLayout || $mobileReader) {
+      closeReaderFullscreen({ clearSelection: true });
+      return;
+    }
+    mailboxStore?.state?.selectedMessage?.set?.(null);
+    mailboxStore?.state?.selectedConversation?.set?.(null);
+    mailboxStore?.state?.messageBody?.set?.('');
+    mailboxStore?.state?.attachments?.set?.([]);
   };
   // Before removing several messages at once: if the open message is among
   // them, open the nearest row that stays (below first, then above), or clear
@@ -2331,9 +2345,25 @@
         : !removedIds.has(item?.id);
     const currentId = $threadingEnabled ? openConv?.id : openId;
     const idx = list.findIndex((item) => item.id === currentId);
+    const advance = readerAdvance();
     let next = null;
-    for (let i = idx + 1; i < list.length && !next; i++) if (stays(list[i])) next = list[i];
-    for (let i = idx - 1; i >= 0 && !next; i--) if (stays(list[i])) next = list[i];
+    const below = () => {
+      for (let i = idx + 1; i < list.length && !next; i++) if (stays(list[i])) next = list[i];
+    };
+    const above = () => {
+      for (let i = idx - 1; i >= 0 && !next; i--) if (stays(list[i])) next = list[i];
+    };
+    if (advance === 'above') {
+      above();
+      below();
+    } else if (advance !== 'list') {
+      below();
+      above();
+    }
+    if (!next && advance === 'list') {
+      leaveReaderForList();
+      return;
+    }
     if (!next) {
       mailboxStore?.state?.selectedMessage?.set?.(null);
       mailboxStore?.state?.selectedConversation?.set?.(null);
@@ -2426,6 +2456,8 @@
       if (fallback) {
         if ($threadingEnabled) selectConversation(fallback);
         else selectMessage(fallback);
+      } else {
+        leaveReaderForList();
       }
       if (selectedMessages.length) clearSelection();
       await archiveMessages(targets, { reload: false });
@@ -2460,6 +2492,8 @@
       if (fallback) {
         if ($threadingEnabled) selectConversation(fallback);
         else selectMessage(fallback);
+      } else {
+        leaveReaderForList();
       }
       await deleteMessages([msg]);
     } finally {
@@ -4641,6 +4675,8 @@
     if (advanceFirst) {
       if ($threadingEnabled) selectConversation(fallback);
       else selectMessage(fallback);
+    } else if (!fallback && !isDemoMode()) {
+      leaveReaderForList();
     }
     try {
       let moveResult;
@@ -5927,6 +5963,9 @@
                 ? currentSel.is_unread_index
                 : msg.is_unread_index,
             flags: currentSel && currentSel.id === msg.id ? currentSel.flags : msg.flags,
+            // Bytes of the whole message as the server stores it, for the
+            // details under the header. List rows do not carry it.
+            size: Number(meta.size) || Number(msg.size) || undefined,
             nodemailer: meta.nodemailer || meta.nodemailer === false ? meta.nodemailer : meta,
             to: pickValueArray('to') || meta.to?.text || msg.to,
             cc: pickValueArray('cc') || meta.cc?.text || msg.cc,
@@ -5949,6 +5988,7 @@
             !currentSel ||
             currentSel.id !== msg.id ||
             currentSel.subject !== enriched.subject ||
+            currentSel.size !== enriched.size ||
             !currentSel.nodemailer ||
             !sameText(currentSel.from, enriched.from) ||
             !sameText(currentSel.to, enriched.to) ||
@@ -9881,6 +9921,14 @@
                             {formatReaderDate($selectedMessage.date)}
                           </span>
                         </div>
+                        {#if $selectedMessage.size}
+                          <div class="flex items-start gap-2" data-testid="reader-message-size">
+                            <span class="text-muted-foreground shrink-0 w-16">size:</span>
+                            <span class="flex-1">
+                              {formatAttachmentSize($selectedMessage.size)}
+                            </span>
+                          </div>
+                        {/if}
                         <div class="flex items-start gap-2">
                           <span class="text-muted-foreground shrink-0 w-16">subject:</span>
                           <span class="flex-1 break-all">{$selectedMessage.subject}</span>
@@ -9897,11 +9945,26 @@
                             <span class="flex-1 break-all">{getSignedBy($selectedMessage)}</span>
                           </div>
                         {/if}
-                        {#if getSecurityInfo($selectedMessage)}
-                          <div class="flex items-start gap-2">
+                        {#if getSecurityParts($selectedMessage).length}
+                          <div class="flex items-start gap-2" data-testid="reader-security">
                             <span class="text-muted-foreground shrink-0 w-16">security:</span>
-                            <span class="flex-1 break-all text-state-success">
-                              {formatSecurityStatus(getSecurityInfo($selectedMessage))}
+                            <span class="flex-1 break-words">
+                              {#each getSecurityParts($selectedMessage) as part, index (part.label)}
+                                {#if index > 0}<span class="text-muted-foreground">
+                                    {' · '}
+                                  </span>{/if}<span
+                                  data-tone={part.tone}
+                                  class={part.tone === 'pass'
+                                    ? 'text-state-success'
+                                    : part.tone === 'fail'
+                                      ? 'text-state-danger font-medium'
+                                      : part.tone === 'caution'
+                                        ? 'text-state-caution'
+                                        : ''}
+                                >
+                                  {part.text}
+                                </span>
+                              {/each}
                             </span>
                           </div>
                         {/if}

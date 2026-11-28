@@ -29,6 +29,7 @@ import {
 import { createPerfTracer } from '../utils/perf-logger.ts';
 import { memoize } from '../utils/store-utils.ts';
 import { getEffectiveSettingValue } from './settingsStore';
+import { normalizeReaderAdvance } from '../utils/reader-advance';
 import { sortMessages, normalizeSortDate, getMessageUidValue } from '../utils/message-sort.ts';
 import { decodeMimeHeader } from '../utils/mime-utils.js';
 import { validateFolderName } from '../utils/folder-validation.ts';
@@ -1364,7 +1365,11 @@ const createMailboxStore = () => {
     const currentSort = get(sortOrder);
     // Auto-select first message only in classic layout on desktop, unless explicitly disabled
     // In full/productivity mode, don't auto-select to avoid putting message ID in URL
-    const autoSelectDisabled = Local.get('auto_select_first') === 'false';
+    // Nor when the reader is set to go back to the list after an action: a
+    // message opened by the list is marked read without having been chosen.
+    const autoSelectDisabled =
+      Local.get('auto_select_first') === 'false' ||
+      normalizeReaderAdvance(getEffectiveSettingValue('reader_advance')) === 'list';
     const isClassicLayout = normalizeLayoutMode(get(effectiveLayoutMode)) === 'classic';
     const allowAutoSelect =
       !isMobileViewport() && !autoSelectDisabled && isClassicLayout && !holdAutoSelectForLink;
@@ -3320,6 +3325,7 @@ const createMailboxStore = () => {
           threadingEnabled: false,
           selectedMessage: originalSelected,
           selectedConversation: get(selectedConversation),
+          advance: normalizeReaderAdvance(getEffectiveSettingValue('reader_advance')),
         });
         selectedConversationIds.set([]);
         selectedMessage.set(nextSelected);

@@ -1,4 +1,5 @@
 import { isMemoryConstrained } from '../utils/memory-profile';
+import { DEFAULT_READER_ADVANCE, normalizeReaderAdvance } from '../utils/reader-advance';
 import {
   DEFAULT_READER_HEADER_ACTIONS,
   normalizeReaderHeaderActions,
@@ -292,6 +293,19 @@ export const SETTINGS_REGISTRY: Record<string, SettingDefinition> = {
     defaultValue: 0,
     localParse: (raw) => parseNumber(raw, 0),
     localSerialize: (value) => String(Number(value) || 0),
+  },
+  // What the reader shows after the open message is archived, deleted or
+  // moved (see utils/reader-advance.ts).
+  reader_advance: {
+    id: 'reader_advance',
+    portable: true,
+    label: 'After Archive, Delete or Move',
+    scope: SETTING_SCOPES.DEVICE,
+    localKey: 'reader_advance',
+    valueType: 'string',
+    defaultValue: DEFAULT_READER_ADVANCE,
+    localParse: (raw) => normalizeReaderAdvance(raw),
+    localSerialize: (value) => normalizeReaderAdvance(value),
   },
   // Buttons the message reader shows in its header (see
   // utils/reader-header-actions.ts). The default is the Full Screen bar as it was.

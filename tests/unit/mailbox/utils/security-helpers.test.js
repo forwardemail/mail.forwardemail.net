@@ -2,8 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   getMailedBy,
   getSignedBy,
-  getSecurityInfo,
-  formatSecurityStatus,
+  getSecurityParts,
 } from '../../../../src/svelte/mailbox/utils/security-helpers';
 
 describe('security-helpers', () => {
@@ -108,174 +107,112 @@ describe('security-helpers', () => {
     });
   });
 
-  describe('getSecurityInfo', () => {
-    it('parses SPF, DKIM, and DMARC from auth results', () => {
-      const msg = {
-        nodemailer: {
-          headers: {
-            'arc-authentication-results': 'spf=pass dkim=pass dmarc=pass',
-            received: 'by mx.example.com with TLS version=TLSv1.3',
-          },
-        },
-      };
+  describe('getSecurityParts', () => {
+    // A message as the API returns it: parsed headers plus the header lines
+    // as they were received, newest first.
+    const message = (lines, headers = {}) => ({
+      nodemailer: {
+        headers,
+        headerLines: lines.map(([key, value]) => ({
+          key: key.toLowerCase(),
+          line: `${key}: ${value}`,
+        })),
+      },
+    });
+    const tones = (msg) =>
+      Object.fromEntries(getSecurityParts(msg).map((part) => [part.label, part.tone]));
+    const texts = (msg) => getSecurityParts(msg).map((part) => part.text);
 
-      const result = getSecurityInfo(msg);
+    it('shows each result in its own tone, so a DKIM failure is not green', () => {
+      // mail.forwardemail.net issue #150
+      const msg = message([
+        [
+          'Authentication-Results',
+          'mx1.forwardemail.net; dkim=fail header.d=example.com; spf=pass smtp.mailfrom=example.com; dmarc=none header.from=example.com',
+        ],
+      ]);
 
-      expect(result).toEqual({
-        spf: 'pass',
-        dkim: 'pass',
-        dmarc: 'pass',
-        encryption: 'TLSv1.3',
+      expect(texts(msg)).toEqual(['SPF: Pass', 'DKIM: Fail', 'DMARC: None']);
+      expect(tones(msg)).toEqual({ SPF: 'pass', DKIM: 'fail', DMARC: 'caution' });
+    });
+
+    it('treats a soft fail or a lookup error as a caution, and a permanent error as a failure', () => {
+      const msg = message([
+        [
+          'Authentication-Results',
+          'mx2.forwardemail.net; spf=softfail; dkim=permerror; dmarc=temperror',
+        ],
+      ]);
+
+      expect(tones(msg)).toEqual({ SPF: 'caution', DKIM: 'fail', DMARC: 'caution' });
+    });
+
+    it('does not believe results a sender wrote under another server name', () => {
+      const msg = message(
+        [
+          ['Authentication-Results', 'mx.evil.test; spf=pass; dkim=pass; dmarc=pass'],
+          ['ARC-Authentication-Results', 'i=1; forwardemail.net.evil.test; dmarc=pass'],
+          ['Authentication-Results', 'mx1.forwardemail.net; spf=fail; dkim=none; dmarc=fail'],
+        ],
+        // what the parser makes of the first header, which used to be shown
+        { 'authentication-results': 'mx.evil.test; spf=pass; dkim=pass; dmarc=pass' },
+      );
+
+      expect(texts(msg)).toEqual(['SPF: Fail', 'DKIM: None', 'DMARC: Fail']);
+    });
+
+    it('shows no results when the server recorded none, whatever the sender claims', () => {
+      const msg = message(
+        [['Authentication-Results', 'mx.evil.test; spf=pass; dkim=pass; dmarc=pass']],
+        { 'authentication-results': 'mx.evil.test; spf=pass; dkim=pass; dmarc=pass' },
+      );
+
+      expect(getSecurityParts(msg)).toEqual([]);
+    });
+
+    it('reads the server verdict from an ARC header', () => {
+      const msg = message([
+        [
+          'ARC-Authentication-Results',
+          'i=1; mx1.forwardemail.net; dkim=pass header.d=example.com; spf=pass; dmarc=pass',
+        ],
+      ]);
+
+      expect(tones(msg)).toEqual({ SPF: 'pass', DKIM: 'pass', DMARC: 'pass' });
+    });
+
+    it('counts a message as signed when one of several DKIM signatures verifies', () => {
+      const msg = message([
+        [
+          'Authentication-Results',
+          'mx1.forwardemail.net; dkim=fail header.d=list.example; dkim=pass header.d=example.com',
+        ],
+      ]);
+
+      expect(texts(msg)).toEqual(['DKIM: Pass']);
+    });
+
+    it('says a message is signed, without a colour, when there is no verdict on it', () => {
+      const msg = message([], { 'dkim-signature': 'v=1; d=example.com; s=key' });
+
+      expect(getSecurityParts(msg)).toEqual([
+        { label: 'DKIM', text: 'DKIM: Signed', tone: 'neutral' },
+      ]);
+    });
+
+    it('names the TLS version from the Received header, in the plain tone', () => {
+      const msg = message([], {
+        received: ['by mx1.forwardemail.net with ESMTPS (version=TLSv1.3 cipher=TLS_AES_256)'],
       });
+
+      expect(getSecurityParts(msg)).toEqual([
+        { label: 'Encryption', text: 'Standard encryption (TLSv1.3)', tone: 'neutral' },
+      ]);
     });
 
-    it('handles partial authentication results', () => {
-      const msg = {
-        nodemailer: {
-          headers: {
-            'arc-authentication-results': 'spf=pass',
-          },
-        },
-      };
-
-      const result = getSecurityInfo(msg);
-
-      expect(result).toEqual({
-        spf: 'pass',
-        dkim: null,
-        dmarc: null,
-        encryption: null,
-      });
-    });
-
-    it('extracts TLS encryption version', () => {
-      const msg = {
-        nodemailer: {
-          headers: {
-            'arc-authentication-results': '',
-            received: 'by mx.example.com (TLS version=TLSv1.2)',
-          },
-        },
-      };
-
-      const result = getSecurityInfo(msg);
-
-      expect(result.encryption).toBe('TLSv1.2');
-    });
-
-    it('handles TLS without version', () => {
-      const msg = {
-        nodemailer: {
-          headers: {
-            'arc-authentication-results': '',
-            received: 'by mx.example.com with TLS',
-          },
-        },
-      };
-
-      const result = getSecurityInfo(msg);
-
-      expect(result.encryption).toBe('TLS');
-    });
-
-    it('handles array of received headers', () => {
-      const msg = {
-        nodemailer: {
-          headers: {
-            'arc-authentication-results': '',
-            received: ['by mx.example.com with TLS version=TLSv1.3', 'by another.com'],
-          },
-        },
-      };
-
-      const result = getSecurityInfo(msg);
-
-      expect(result.encryption).toBe('TLSv1.3');
-    });
-
-    it('returns null for message without auth results header', () => {
-      const msg = {
-        nodemailer: {
-          headers: {},
-        },
-      };
-
-      expect(getSecurityInfo(msg)).toBeNull();
-    });
-
-    it('returns null for message without headers', () => {
-      expect(getSecurityInfo({})).toBeNull();
-      expect(getSecurityInfo(null)).toBeNull();
-    });
-  });
-
-  describe('formatSecurityStatus', () => {
-    it('formats complete security info', () => {
-      const securityInfo = {
-        encryption: 'TLSv1.3',
-        spf: 'pass',
-        dkim: 'pass',
-        dmarc: 'pass',
-      };
-
-      const result = formatSecurityStatus(securityInfo);
-
-      expect(result).toBe('Standard encryption (TLSv1.3) · SPF: Pass · DKIM: Pass · DMARC: Pass');
-    });
-
-    it('formats partial security info', () => {
-      const securityInfo = {
-        encryption: 'TLS',
-        spf: 'pass',
-        dkim: null,
-        dmarc: null,
-      };
-
-      const result = formatSecurityStatus(securityInfo);
-
-      expect(result).toBe('Standard encryption (TLS) · SPF: Pass');
-    });
-
-    it('capitalizes status values', () => {
-      const securityInfo = {
-        spf: 'fail',
-        dkim: 'temperror',
-        dmarc: 'permerror',
-      };
-
-      const result = formatSecurityStatus(securityInfo);
-
-      expect(result).toBe('SPF: Fail · DKIM: Temperror · DMARC: Permerror');
-    });
-
-    it('returns "Unknown" for null security info', () => {
-      expect(formatSecurityStatus(null)).toBe('Unknown');
-      expect(formatSecurityStatus(undefined)).toBe('Unknown');
-    });
-
-    it('returns "Unknown" for empty security info', () => {
-      const securityInfo = {
-        encryption: null,
-        spf: null,
-        dkim: null,
-        dmarc: null,
-      };
-
-      const result = formatSecurityStatus(securityInfo);
-
-      expect(result).toBe('Unknown');
-    });
-
-    it('handles missing encryption', () => {
-      const securityInfo = {
-        encryption: null,
-        spf: 'pass',
-        dkim: 'pass',
-      };
-
-      const result = formatSecurityStatus(securityInfo);
-
-      expect(result).toBe('SPF: Pass · DKIM: Pass');
+    it('has nothing to show for a message without headers', () => {
+      expect(getSecurityParts({})).toEqual([]);
+      expect(getSecurityParts(null)).toEqual([]);
     });
   });
 });

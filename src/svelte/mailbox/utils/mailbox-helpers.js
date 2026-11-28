@@ -103,6 +103,7 @@ export const resolveDeleteTargets = (items = []) =>
  * @param {boolean} options.threadingEnabled - Whether threading is enabled
  * @param {Object} options.selectedConversation - Currently selected conversation
  * @param {Object} options.selectedMessage - Currently selected message
+ * @param {string} options.advance - The reader_advance setting (auto, below, above, list)
  * @returns {Object|null} Next candidate item
  */
 /**
@@ -133,8 +134,11 @@ export const nextCandidate = ({
   threadingEnabled = false,
   selectedConversation = null,
   selectedMessage = null,
+  advance = 'auto',
 }) => {
   if (!list.length) return null;
+  // The reader_advance setting: 'list' opens nothing.
+  if (advance === 'list') return null;
   const conversation = openConversation(selectedConversation, selectedMessage);
   let idx = -1;
   if (threadingEnabled) {
@@ -154,6 +158,10 @@ export const nextCandidate = ({
 
   const below = list[idx + 1] || null;
   const above = list[idx - 1] || null;
+
+  // A fixed direction, falling back to the other side at the end of the list.
+  if (advance === 'below') return below || above;
+  if (advance === 'above') return above || below;
 
   // If there's nothing below, go above (or null)
   if (!below) return above;

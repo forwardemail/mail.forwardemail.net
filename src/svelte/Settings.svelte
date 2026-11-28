@@ -58,6 +58,11 @@
   } from '../utils/pgp-system-gpg';
   import { downloadFile } from '../utils/download';
   import {
+    DEFAULT_READER_ADVANCE,
+    READER_ADVANCE_OPTIONS,
+    normalizeReaderAdvance,
+  } from '../utils/reader-advance';
+  import {
     DEFAULT_READER_HEADER_ACTIONS,
     READER_HEADER_ACTIONS,
     normalizeReaderHeaderActions,
@@ -235,6 +240,7 @@
   let signatureSaveTimer: ReturnType<typeof setTimeout> | null = null;
   let undoSendDelay = $state('0');
   let markReadDelay = $state('0');
+  let readerAdvance = $state<string>(DEFAULT_READER_ADVANCE);
   let readerHeaderActions = $state<ReaderHeaderAction[]>([...DEFAULT_READER_HEADER_ACTIONS]);
   let messageViewCustomizeOpen = $state(false);
   let archiveFolder = $state('');
@@ -920,6 +926,9 @@
     markReadDelay = String(
       getEffectiveSettingValue('mark_read_delay', { account: currentAcct }) || 0,
     );
+    readerAdvance = normalizeReaderAdvance(
+      getEffectiveSettingValue('reader_advance', { account: currentAcct }),
+    );
     readerHeaderActions = normalizeReaderHeaderActions(
       getEffectiveSettingValue('reader_header_actions', { account: currentAcct }),
     );
@@ -1531,6 +1540,17 @@
       toasts?.show?.('Mark as read updated', 'success');
     } catch (err) {
       showMutationError(err, 'Failed to save mark as read');
+    }
+  };
+
+  const saveReaderAdvance = async () => {
+    try {
+      await setSettingValue('reader_advance', normalizeReaderAdvance(readerAdvance), {
+        account: getAccountId(),
+      });
+      toasts?.show?.('Reading preference updated', 'success');
+    } catch (err) {
+      showMutationError(err, 'Failed to save reading preference');
     }
   };
 
@@ -2775,6 +2795,28 @@
             <p class="text-sm text-muted-foreground">
               Choose when a message you open is marked as read. With Never, it stays unread until
               you mark it read.
+            </p>
+
+            <Label for="reader-advance-select" class="pt-2">After archive, delete or move</Label>
+            <Select.Root type="single" bind:value={readerAdvance} onValueChange={saveReaderAdvance}>
+              <Select.Trigger
+                id="reader-advance-select"
+                class="w-full"
+                data-testid="reader-advance-select"
+              >
+                {READER_ADVANCE_OPTIONS.find((option) => option.value === readerAdvance)?.label ||
+                  READER_ADVANCE_OPTIONS[0].label}
+              </Select.Trigger>
+              <Select.Content>
+                {#each READER_ADVANCE_OPTIONS as option (option.value)}
+                  <Select.Item value={option.value}>{option.label}</Select.Item>
+                {/each}
+              </Select.Content>
+            </Select.Root>
+            <p class="text-sm text-muted-foreground">
+              What the reader shows once the message you had open is gone. With "Go back to the
+              message list", no message is opened for you, so nothing is marked read that you did
+              not choose.
             </p>
           </Card.Content>
         </Card.Root>
