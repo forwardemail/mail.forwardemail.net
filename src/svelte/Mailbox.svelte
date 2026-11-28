@@ -55,6 +55,7 @@
     dedupeMessages as dedupeMessagesHelper,
     resolveDeleteTargets as resolveDeleteTargetsHelper,
     nextCandidate as nextCandidateHelper,
+    openConversation,
     getVisibleFolders,
   } from './mailbox/utils/mailbox-helpers.js';
   import {
@@ -230,6 +231,10 @@
   import Moon from '@lucide/svelte/icons/moon';
   import WifiOff from '@lucide/svelte/icons/wifi-off';
   import MailOpen from '@lucide/svelte/icons/mail-open';
+  import {
+    visibleReaderHeaderActions,
+    type ReaderHeaderAction,
+  } from '../utils/reader-header-actions';
   import EyeOff from '@lucide/svelte/icons/eye-off';
   import StarOff from '@lucide/svelte/icons/star-off';
   import EllipsisVertical from '@lucide/svelte/icons/ellipsis-vertical';
@@ -1122,7 +1127,7 @@
   let readerMoveOpen = $state(false);
   let readerMoveMenuFlip = $state(false);
   let readerMoveBtnEl: HTMLElement | undefined = $state();
-  let readerToolbarMoveOpen = $state(false);
+  let readerHeaderMoveOpen = $state(false);
   let readerLabelMenuOpen = $state(false);
   let readerLabelMenuFlip = $state(false);
   let readerLabelBtnEl: HTMLElement | undefined = $state();
@@ -1922,7 +1927,7 @@
   };
   const closeReaderFullscreen = ({ clearSelection = false, updateUrl = true } = {}) => {
     readerMoveOpen = false;
-    readerToolbarMoveOpen = false;
+    readerHeaderMoveOpen = false;
 
     const finishClose = () => {
       if (mailboxView?.mobileReader?.set) {
@@ -2266,10 +2271,13 @@
     source.state?.showFilters?.set?.(false);
     mailboxView?.showFilters?.set?.(false);
   };
+  // The conversation the reader shows, or null when the selected one is a
+  // different, older thread (see openConversation).
+  const readerConversation = () =>
+    $threadingEnabled ? openConversation($selectedConversation, $selectedMessage) : null;
   const getActiveMessage = () => {
-    if ($threadingEnabled && $selectedConversation) {
-      return $selectedConversation.messages?.slice?.(-1)?.[0];
-    }
+    const conv = readerConversation();
+    if (conv) return conv.messages?.slice?.(-1)?.[0] || $selectedMessage;
     return $selectedMessage;
   };
   const selectByOffset = (offset) => {
@@ -2394,8 +2402,9 @@
     const selectedMessages = getSelectedMessagesFromConversations();
     let targets = selectedMessages;
 
-    if (!targets.length && $threadingEnabled && $selectedConversation?.messages?.length) {
-      targets = $selectedConversation.messages;
+    const openConv = readerConversation();
+    if (!targets.length && openConv?.messages?.length) {
+      targets = openConv.messages;
     }
 
     if (!targets.length) {
@@ -2982,9 +2991,6 @@
         } else if (mailboxView?.setBulkMoveOpen) {
           mailboxView.setBulkMoveOpen(false);
         }
-      }
-      if (readerToolbarMoveOpen && !e.target?.closest?.('[data-reader-toolbar-move]')) {
-        readerToolbarMoveOpen = false;
       }
       if (
         $showFiltersStore &&
@@ -4627,7 +4633,7 @@
     const fallback = nextCandidate();
     const releaseReaderHold = isProductivityLayout && fallback ? holdReaderTransition() : null;
     readerMoveOpen = false;
-    readerToolbarMoveOpen = false;
+    readerHeaderMoveOpen = false;
     // Advance before the move, as archive and delete do. Selecting the next
     // message only after the round trip let the store's own pick show first,
     // so the reader switched twice.
@@ -5372,6 +5378,24 @@
     !readerIsSpamOrJunk && !readerIsDraftFolder && !readerIsSentFolder,
   );
   const showReaderMenuDivider = $derived(canReply || canForward || canEditDraft || canToggleRead);
+  // Settings > Appearance > Layout > Customize message view. Re-read when a local
+  // setting changes; the folder decides which of the chosen ones apply.
+  // Full Screen (and phones) draw a bar above the message; the quick actions
+  // go there, and the header row keeps the folder badge and the ⋯ menu.
+  const readerTopBar = $derived(Boolean(isProductivityLayout || $mobileReader));
+  const readerHeaderActions = $derived.by(() => {
+    void $localSettingsVersion;
+    return visibleReaderHeaderActions(
+      getEffectiveSettingValue('reader_header_actions') as ReaderHeaderAction[],
+      {
+        canReply,
+        canForward,
+        canArchive,
+        canReportSpam,
+        canToggleRead,
+      },
+    );
+  });
 
   // ── Bulk-action bar folder awareness ─────────────────────────────────────
   const listIsSpamOrJunk = $derived(matchesFolderKey($selectedFolder, ['SPAM', 'JUNK']));
@@ -9108,7 +9132,185 @@
                   </div>
                 {/if}
               {:else if $selectedMessage}
-                {#if isProductivityLayout || $mobileReader}
+                <!-- Quick actions (Settings > Appearance > Layout > Customize message view):
+                     the top bar in Full Screen, the header row in Classic. -->
+                {#snippet quickActions(big: boolean)}
+                  {@const btn = big
+                    ? 'inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground active:bg-accent'
+                    : 'inline-flex items-center justify-center h-9 w-9 hover:bg-accent hover:text-accent-foreground'}
+                  {@const icon = big ? 'h-5 w-5' : 'h-4 w-4'}
+                  {#each readerHeaderActions as action (action)}
+                    {#if action === 'reply'}
+                      <button
+                        class={btn}
+                        type="button"
+                        data-testid="reader-header-reply"
+                        aria-label={isDefaultReplyAll() ? 'Reply All' : 'Reply'}
+                        data-tooltip={isDefaultReplyAll() ? 'Reply All (R)' : 'Reply (R)'}
+                        data-tooltip-position="bottom"
+                        onclick={() =>
+                          isDefaultReplyAll()
+                            ? mailboxView?.replyAll?.($selectedMessage)
+                            : mailboxView?.replyTo?.($selectedMessage)}
+                      >
+                        <svg
+                          class={icon}
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="2"
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          aria-hidden="true"
+                          ><polyline points="9 17 4 12 9 7"></polyline><path
+                            d="M20 18v-2a4 4 0 0 0-4-4H4"
+                          ></path></svg
+                        >
+                      </button>
+                    {:else if action === 'replyAll'}
+                      <button
+                        class={btn}
+                        type="button"
+                        aria-label="Reply all"
+                        data-tooltip="Reply all"
+                        data-tooltip-position="bottom"
+                        data-testid="reader-header-replyAll"
+                        onclick={() => mailboxView?.replyAll?.($selectedMessage)}
+                      >
+                        <ReplyAll class={icon} />
+                      </button>
+                    {:else if action === 'forward'}
+                      <button
+                        class={btn}
+                        type="button"
+                        aria-label="Forward"
+                        data-tooltip="Forward"
+                        data-tooltip-position="bottom"
+                        data-testid="reader-header-forward"
+                        onclick={() => mailboxView?.forwardMessage?.($selectedMessage)}
+                      >
+                        <Forward class={icon} />
+                      </button>
+                    {:else if action === 'archive'}
+                      <button
+                        class={btn}
+                        type="button"
+                        aria-label="Archive"
+                        data-tooltip="Archive"
+                        data-tooltip-position="bottom"
+                        data-testid="reader-header-archive"
+                        onclick={archiveSelected}
+                      >
+                        <Archive class={icon} />
+                      </button>
+                    {:else if action === 'reportSpam'}
+                      <button
+                        class={btn}
+                        type="button"
+                        aria-label="Report spam"
+                        data-tooltip="Report spam"
+                        data-tooltip-position="bottom"
+                        data-testid="reader-header-reportSpam"
+                        onclick={reportSpamSelected}
+                      >
+                        <ShieldAlert class={icon} />
+                      </button>
+                    {:else if action === 'delete'}
+                      <button
+                        class={btn}
+                        type="button"
+                        aria-label={readerIsTrashFolder ? 'Delete permanently' : 'Delete'}
+                        data-tooltip={readerIsTrashFolder ? 'Delete permanently' : 'Delete'}
+                        data-tooltip-position="bottom"
+                        data-testid="reader-header-delete"
+                        onclick={deleteSelected}
+                      >
+                        <Trash2 class={icon} />
+                      </button>
+                    {:else if action === 'toggleRead'}
+                      <button
+                        class={btn}
+                        type="button"
+                        aria-label={$selectedMessage?.is_unread ? 'Mark read' : 'Mark unread'}
+                        data-tooltip={$selectedMessage?.is_unread ? 'Mark read' : 'Mark unread'}
+                        data-tooltip-position="bottom"
+                        data-testid="reader-header-toggleRead"
+                        onclick={() => toggleReadMessage($selectedMessage)}
+                      >
+                        {#if $selectedMessage?.is_unread}
+                          <MailOpen class={icon} />
+                        {:else}
+                          <MailIcon class={icon} />
+                        {/if}
+                      </button>
+                    {:else if action === 'move'}
+                      <div class="relative" data-reader-header-move>
+                        <button
+                          class={btn}
+                          type="button"
+                          aria-label="Move to"
+                          data-tooltip="Move to"
+                          data-tooltip-position="bottom"
+                          data-testid="reader-header-move"
+                          aria-haspopup="menu"
+                          aria-expanded={readerHeaderMoveOpen}
+                          onclick={() => (readerHeaderMoveOpen = !readerHeaderMoveOpen)}
+                        >
+                          <FolderInput class={icon} />
+                        </button>
+                        {#if readerHeaderMoveOpen}
+                          <div
+                            class="fixed inset-0 z-[99]"
+                            onpointerdown={() => (readerHeaderMoveOpen = false)}
+                            role="presentation"
+                            tabindex="-1"
+                          ></div>
+                          <div
+                            class="absolute right-0 z-[100] mt-1 min-w-[160px] max-h-[300px] overflow-y-auto border border-border bg-popover p-1 shadow-md touch-manipulation"
+                            role="menu"
+                            tabindex="-1"
+                            onpointerdown={(e) => e.stopPropagation()}
+                            onclick={(e) => e.stopPropagation()}
+                            onkeydown={(e) => {
+                              if (e.key === 'Escape') readerHeaderMoveOpen = false;
+                            }}
+                          >
+                            {#each availableMoveTargetsFromStore.length ? availableMoveTargetsFromStore : $availableMoveTargets as folder}
+                              <button
+                                type="button"
+                                role="menuitem"
+                                class="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground cursor-pointer"
+                                onclick={() => {
+                                  readerHeaderMoveOpen = false;
+                                  moveReaderTo(folder.path);
+                                }}
+                              >
+                                {folder.path || folder.name}
+                              </button>
+                            {/each}
+                          </div>
+                        {/if}
+                      </div>
+                    {:else if action === 'star'}
+                      <button
+                        class={btn}
+                        type="button"
+                        aria-label={isMessageStarred($selectedMessage) ? 'Unstar' : 'Star'}
+                        data-tooltip={isMessageStarred($selectedMessage) ? 'Unstar' : 'Star'}
+                        data-tooltip-position="bottom"
+                        data-testid="reader-header-star"
+                        onclick={() => toggleStarMessage($selectedMessage)}
+                      >
+                        {#if isMessageStarred($selectedMessage)}
+                          <Star class={`${icon} fill-state-starred text-state-starred`} />
+                        {:else}
+                          <StarOff class={icon} />
+                        {/if}
+                      </button>
+                    {/if}
+                  {/each}
+                {/snippet}
+                {#if readerTopBar}
                   <!-- The subject header below pins to the same edge at the same
                        z-index and comes later, so it painted over this bar's
                        tooltips and Move menu, which hang below the bar. The
@@ -9127,33 +9329,8 @@
                     >
                       <ChevronLeft class="h-5 w-5" />
                     </button>
-                    <div class="flex items-center gap-1">
-                      <button
-                        class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground active:bg-accent"
-                        type="button"
-                        aria-label={isMessageStarred($selectedMessage) ? 'Unstar' : 'Star'}
-                        data-tooltip={isMessageStarred($selectedMessage) ? 'Unstar' : 'Star'}
-                        data-tooltip-position="bottom"
-                        onclick={() => toggleStarMessage($selectedMessage)}
-                      >
-                        {#if isMessageStarred($selectedMessage)}
-                          <Star class="h-5 w-5 fill-state-starred text-state-starred" />
-                        {:else}
-                          <StarOff class="h-5 w-5" />
-                        {/if}
-                      </button>
-                      {#if canArchive}
-                        <button
-                          class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground active:bg-accent"
-                          type="button"
-                          aria-label="Archive"
-                          data-tooltip="Archive"
-                          data-tooltip-position="bottom"
-                          onclick={archiveSelected}
-                        >
-                          <Archive class="h-5 w-5" />
-                        </button>
-                      {/if}
+                    <div class="flex flex-wrap items-center gap-1">
+                      {@render quickActions(true)}
                       {#if canNotSpam}
                         <button
                           class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground active:bg-accent"
@@ -9166,66 +9343,6 @@
                           <Inbox class="h-5 w-5" />
                         </button>
                       {/if}
-                      <button
-                        class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground active:bg-accent"
-                        type="button"
-                        aria-label={readerIsTrashFolder ? 'Delete permanently' : 'Delete'}
-                        data-tooltip={readerIsTrashFolder ? 'Delete permanently' : 'Delete'}
-                        data-tooltip-position="bottom"
-                        onclick={deleteSelected}
-                      >
-                        <Trash2 class="h-5 w-5" />
-                      </button>
-                      {#if canToggleRead}
-                        <button
-                          class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground active:bg-accent"
-                          type="button"
-                          aria-label={$selectedMessage?.is_unread ? 'Mark read' : 'Mark unread'}
-                          data-tooltip={$selectedMessage?.is_unread ? 'Mark read' : 'Mark unread'}
-                          data-tooltip-position="bottom"
-                          onclick={() => toggleReadMessage($selectedMessage)}
-                        >
-                          <Eye class="h-5 w-5" />
-                        </button>
-                      {/if}
-                      <div class="relative" data-reader-toolbar-move>
-                        <button
-                          class="inline-flex items-center justify-center h-11 w-11 hover:bg-accent hover:text-accent-foreground active:bg-accent"
-                          type="button"
-                          aria-label="Move to"
-                          data-tooltip="Move to"
-                          data-tooltip-position="bottom"
-                          onclick={() => (readerToolbarMoveOpen = !readerToolbarMoveOpen)}
-                        >
-                          <FolderInput class="h-5 w-5" />
-                        </button>
-                        {#if readerToolbarMoveOpen}
-                          <div
-                            class="fixed inset-0 z-[99]"
-                            onpointerdown={() => (readerToolbarMoveOpen = false)}
-                            role="presentation"
-                            tabindex="-1"
-                          ></div>
-                          <div
-                            class="absolute right-0 z-[100] mt-1 min-w-[160px] border border-border bg-popover p-1 shadow-md touch-manipulation"
-                            onpointerdown={(e) => e.stopPropagation()}
-                            onclick={(e) => e.stopPropagation()}
-                          >
-                            {#each availableMoveTargetsFromStore.length ? availableMoveTargetsFromStore : $availableMoveTargets as folder}
-                              <button
-                                type="button"
-                                class="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground cursor-pointer"
-                                onclick={() => {
-                                  readerToolbarMoveOpen = false;
-                                  moveReaderTo(folder.path);
-                                }}
-                              >
-                                {folder.path || folder.name}
-                              </button>
-                            {/each}
-                          </div>
-                        {/if}
-                      </div>
                     </div>
                   </div>
                 {/if}
@@ -9276,32 +9393,8 @@
                           ? $selectedFolder || $selectedMessage.folder
                           : $selectedMessage.folder || $selectedFolder}
                       </div>
-                      {#if canReply}
-                        <button
-                          class="inline-flex items-center justify-center h-9 w-9 hover:bg-accent hover:text-accent-foreground"
-                          type="button"
-                          aria-label={isDefaultReplyAll() ? 'Reply All' : 'Reply'}
-                          data-tooltip={isDefaultReplyAll() ? 'Reply All (R)' : 'Reply (R)'}
-                          data-tooltip-position="bottom"
-                          onclick={() =>
-                            isDefaultReplyAll()
-                              ? mailboxView?.replyAll?.($selectedMessage)
-                              : mailboxView?.replyTo?.($selectedMessage)}
-                        >
-                          <svg
-                            class="h-4 w-4"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            stroke-width="2"
-                            stroke-linecap="round"
-                            stroke-linejoin="round"
-                            aria-hidden="true"
-                            ><polyline points="9 17 4 12 9 7"></polyline><path
-                              d="M20 18v-2a4 4 0 0 0-4-4H4"
-                            ></path></svg
-                          >
-                        </button>
+                      {#if !readerTopBar}
+                        {@render quickActions(false)}
                       {/if}
                       <div class="relative" data-action-menu>
                         <button

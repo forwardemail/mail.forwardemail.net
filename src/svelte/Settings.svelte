@@ -57,6 +57,12 @@
     systemGpgEnabled,
   } from '../utils/pgp-system-gpg';
   import { downloadFile } from '../utils/download';
+  import {
+    DEFAULT_READER_HEADER_ACTIONS,
+    READER_HEADER_ACTIONS,
+    normalizeReaderHeaderActions,
+    type ReaderHeaderAction,
+  } from '../utils/reader-header-actions';
   import MessageSquare from '@lucide/svelte/icons/message-square';
   import AlertCircle from '@lucide/svelte/icons/alert-circle';
   import CheckCircle from '@lucide/svelte/icons/check-circle';
@@ -229,6 +235,8 @@
   let signatureSaveTimer: ReturnType<typeof setTimeout> | null = null;
   let undoSendDelay = $state('0');
   let markReadDelay = $state('0');
+  let readerHeaderActions = $state<ReaderHeaderAction[]>([...DEFAULT_READER_HEADER_ACTIONS]);
+  let messageViewCustomizeOpen = $state(false);
   let archiveFolder = $state('');
   let sentFolder = $state('');
   let draftsFolder = $state('');
@@ -912,6 +920,9 @@
     markReadDelay = String(
       getEffectiveSettingValue('mark_read_delay', { account: currentAcct }) || 0,
     );
+    readerHeaderActions = normalizeReaderHeaderActions(
+      getEffectiveSettingValue('reader_header_actions', { account: currentAcct }),
+    );
     archiveFolder = getEffectiveSettingValue('archive_folder', { account: currentAcct }) || '';
     sentFolder = getEffectiveSettingValue('sent_folder', { account: currentAcct }) || '';
     draftsFolder = getEffectiveSettingValue('drafts_folder', { account: currentAcct }) || '';
@@ -1520,6 +1531,21 @@
       toasts?.show?.('Mark as read updated', 'success');
     } catch (err) {
       showMutationError(err, 'Failed to save mark as read');
+    }
+  };
+
+  const toggleReaderHeaderAction = async (id: ReaderHeaderAction, on: boolean) => {
+    const next = on
+      ? [...readerHeaderActions, id]
+      : readerHeaderActions.filter((action) => action !== id);
+    readerHeaderActions = normalizeReaderHeaderActions(next);
+    try {
+      await setSettingValue('reader_header_actions', readerHeaderActions, {
+        account: getAccountId(),
+      });
+      toasts?.show?.('Quick actions updated', 'success');
+    } catch (err) {
+      showMutationError(err, 'Failed to save quick actions');
     }
   };
 
@@ -2633,6 +2659,51 @@
               Full Screen: compact layout with full-screen reader; Classic: side-by-side message
               list and reader.
             </p>
+
+            <div class="border-t border-border pt-3 space-y-3">
+              <button
+                type="button"
+                class="w-full flex items-center justify-between gap-2 text-left"
+                onclick={() => (messageViewCustomizeOpen = !messageViewCustomizeOpen)}
+                aria-expanded={messageViewCustomizeOpen}
+                aria-controls="customize-message-view"
+                data-testid="customize-message-view-toggle"
+              >
+                <span>
+                  <span class="block font-medium">Customize message view</span>
+                  <span class="block text-sm text-muted-foreground"
+                    >Customize the quick action buttons that appear when viewing a message.</span
+                  >
+                </span>
+                <ChevronDown
+                  class="h-4 w-4 shrink-0 transition-transform {messageViewCustomizeOpen
+                    ? 'rotate-180'
+                    : ''}"
+                />
+              </button>
+              {#if messageViewCustomizeOpen}
+                <div
+                  id="customize-message-view"
+                  class="grid grid-cols-1 sm:grid-cols-2 gap-2"
+                  role="group"
+                  aria-label="Quick actions"
+                  data-testid="reader-header-actions-setting"
+                >
+                  {#each READER_HEADER_ACTIONS as action (action.id)}
+                    <label class="flex items-center gap-3">
+                      <Checkbox
+                        checked={readerHeaderActions.includes(action.id)}
+                        onCheckedChange={(checked) =>
+                          toggleReaderHeaderAction(action.id, checked === true)}
+                        aria-label={action.label}
+                        data-testid={`reader-header-action-${action.id}`}
+                      />
+                      <span>{action.label}</span>
+                    </label>
+                  {/each}
+                </div>
+              {/if}
+            </div>
           </Card.Content>
         </Card.Root>
 

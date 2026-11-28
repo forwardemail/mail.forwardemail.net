@@ -8,6 +8,7 @@ import {
   dedupeMessages,
   resolveDeleteTargets,
   nextCandidate,
+  openConversation,
   getVisibleFolders,
 } from '../../../../src/svelte/mailbox/utils/mailbox-helpers';
 import { get } from 'svelte/store';
@@ -350,5 +351,38 @@ describe('getVisibleFolders', () => {
 
   it('shows a subfolder whose parent is not a folder, which cannot be expanded', () => {
     expect(paths(getVisibleFolders(folders, new Set()))).toContain('Old/2024');
+  });
+});
+
+describe('openConversation', () => {
+  const thread = { id: 'conv-a', messages: [{ id: 'a1' }, { id: 'a2' }] };
+
+  it('returns the selected conversation when it holds the open message', () => {
+    expect(openConversation(thread, { id: 'a2' })).toBe(thread);
+    expect(openConversation(thread, null)).toBe(thread);
+  });
+
+  it('returns null when the reader shows a message from another thread', () => {
+    // The store opened b1 by itself; the selection still points at thread a
+    expect(openConversation(thread, { id: 'b1' })).toBeNull();
+    expect(openConversation(null, { id: 'b1' })).toBeNull();
+  });
+});
+
+describe('nextCandidate with a stale selected conversation', () => {
+  const list = [
+    { id: 'conv-b', messages: [{ id: 'b1' }] },
+    { id: 'conv-c', messages: [{ id: 'c1' }] },
+    { id: 'conv-d', messages: [{ id: 'd1' }] },
+  ];
+
+  it('moves on from the row that holds the open message', () => {
+    const next = nextCandidate({
+      list,
+      threadingEnabled: true,
+      selectedConversation: { id: 'conv-gone', messages: [{ id: 'gone' }] },
+      selectedMessage: { id: 'b1' },
+    });
+    expect(next?.id).toBe('conv-c');
   });
 });

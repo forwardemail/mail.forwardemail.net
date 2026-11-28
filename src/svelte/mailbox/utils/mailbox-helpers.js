@@ -105,6 +105,29 @@ export const resolveDeleteTargets = (items = []) =>
  * @param {Object} options.selectedMessage - Currently selected message
  * @returns {Object|null} Next candidate item
  */
+/**
+ * The selected conversation, when it is the one the reader shows. The store
+ * can open a message by itself (the first one after a folder reloads, say)
+ * and set only the selected message, leaving the selected conversation on an
+ * older thread. Actions on "the open message" then went to that thread.
+ *
+ * @param {Object|null} selectedConversation - Currently selected conversation
+ * @param {Object|null} selectedMessage - Message the reader shows
+ * @returns {Object|null} The conversation, or null when it is another thread
+ */
+export const openConversation = (selectedConversation, selectedMessage) => {
+  if (!selectedConversation) return null;
+  const openId = selectedMessage?.id;
+  if (!openId) return selectedConversation;
+  if (selectedConversation.id === openId) return selectedConversation;
+  const members = [
+    ...(selectedConversation.messages || []),
+    ...(selectedConversation.previewMessages || []),
+  ];
+  if (!members.length) return selectedConversation;
+  return members.some((m) => m?.id === openId) ? selectedConversation : null;
+};
+
 export const nextCandidate = ({
   list = [],
   threadingEnabled = false,
@@ -112,8 +135,21 @@ export const nextCandidate = ({
   selectedMessage = null,
 }) => {
   if (!list.length) return null;
-  const currentId = threadingEnabled ? selectedConversation?.id : selectedMessage?.id;
-  const idx = list.findIndex((item) => item.id === currentId);
+  const conversation = openConversation(selectedConversation, selectedMessage);
+  let idx = -1;
+  if (threadingEnabled) {
+    idx = conversation ? list.findIndex((item) => item.id === conversation.id) : -1;
+    // No conversation for the open message: find the row that holds it.
+    if (idx === -1 && selectedMessage?.id) {
+      idx = list.findIndex(
+        (item) =>
+          item.id === selectedMessage.id ||
+          item.messages?.some?.((m) => m?.id === selectedMessage.id),
+      );
+    }
+  } else {
+    idx = list.findIndex((item) => item.id === selectedMessage?.id);
+  }
   if (idx === -1) return list[0] || null;
 
   const below = list[idx + 1] || null;
