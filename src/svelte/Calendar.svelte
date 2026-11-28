@@ -4185,8 +4185,7 @@
   const getCurrentScheduleXRangeStart = (): Date | null => {
     const app = (calendarInstance as unknown as { $app?: Record<string, unknown> })?.$app;
     const calendarState = app?.calendarState as
-      | { range?: { value?: { start?: string } } }
-      | undefined;
+      { range?: { value?: { start?: string } } } | undefined;
     const start = calendarState?.range?.value?.start;
     if (!start) return null;
     const datePart = String(start).split(' ')[0];
@@ -4199,8 +4198,7 @@
     const app = (calendarInstance as unknown as { $app?: Record<string, unknown> })?.$app;
     const calendarState = app?.calendarState as { setRange?: (date: string) => void } | undefined;
     const datePickerState = app?.datePickerState as
-      | { selectedDate?: { value: string } }
-      | undefined;
+      { selectedDate?: { value: string } } | undefined;
     if (!calendarState?.setRange) return;
     const view = getCurrentScheduleXView();
     const anchor = getCurrentScheduleXRangeStart();
@@ -4989,8 +4987,10 @@
               class="text-xs text-muted-foreground hover:text-foreground"
               onclick={() => {
                 newEvent._editingRawDescription = true;
-              }}>Edit source</button
+              }}
             >
+              Edit source
+            </button>
           {:else}
             <Textarea
               id="event-description"
@@ -5134,9 +5134,9 @@
   <Dialog.Root bind:open={editEventModal}>
     <Dialog.Content class="sm:max-w-[520px] overflow-x-hidden [&>*]:min-w-0">
       <Dialog.Header>
-        <Dialog.Title
-          >{editEvent.componentType === 'VTODO' ? 'Edit task' : 'Edit event'}</Dialog.Title
-        >
+        <Dialog.Title>
+          {editEvent.componentType === 'VTODO' ? 'Edit task' : 'Edit event'}
+        </Dialog.Title>
       </Dialog.Header>
 
       <div class="space-y-4 py-4">
@@ -5457,8 +5457,10 @@
               class="text-xs text-muted-foreground hover:text-foreground"
               onclick={() => {
                 editEvent._editingRawDescription = true;
-              }}>Edit source</button
+              }}
             >
+              Edit source
+            </button>
           {:else}
             <Textarea rows={5} bind:value={editEvent.description} />
           {/if}
@@ -5631,13 +5633,17 @@
             {/if}
             <Button
               onclick={() => promptRecurrenceEdit('save')}
-              disabled={isCustomRecurrence && !isEditingRecurringEvent}>Update</Button
+              disabled={isCustomRecurrence && !isEditingRecurringEvent}
             >
+              Update
+            </Button>
           {:else}
             <Button
               onclick={() => promptRecurrenceEdit('save')}
-              disabled={isCustomRecurrence && !isEditingRecurringEvent}>Update</Button
+              disabled={isCustomRecurrence && !isEditingRecurringEvent}
             >
+              Update
+            </Button>
           {/if}
         </div>
       </Dialog.Footer>
@@ -5882,8 +5888,10 @@
           variant="ghost"
           onclick={() => {
             newCalendarModal = false;
-          }}>Cancel</Button
+          }}
         >
+          Cancel
+        </Button>
         <Button disabled={!newCalendarName.trim() || savingCalendar} onclick={createNewCalendar}>
           {savingCalendar ? 'Creating...' : 'Create Calendar'}
         </Button>

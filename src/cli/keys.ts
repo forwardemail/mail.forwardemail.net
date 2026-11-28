@@ -100,8 +100,7 @@ function comboOf(event: AnyRecord): string {
 function opensCompose(event: AnyRecord): boolean {
   if (event.metaKey) return false;
   const manager = (globalThis as Record<string, unknown>).__forwardemailShortcuts as
-    | ShortcutManager
-    | undefined;
+    ShortcutManager | undefined;
   if (!manager) return false;
   const combo = comboOf(event);
   return manager
@@ -116,8 +115,7 @@ function opensCompose(event: AnyRecord): boolean {
 
 function rebinding(): boolean {
   const manager = (globalThis as Record<string, unknown>).__forwardemailShortcuts as
-    | ShortcutManager
-    | undefined;
+    ShortcutManager | undefined;
   return Boolean(manager?.captureInProgress);
 }
 

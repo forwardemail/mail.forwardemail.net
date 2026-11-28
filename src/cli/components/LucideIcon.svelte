@@ -31,5 +31,6 @@
   aria-hidden={labelled ? undefined : 'true'}
   {...props}
   class={['lucide-icon lucide', name && `lucide-${name}`, className]}
-  >{glyphFor(name)}{@render children?.()}</span
 >
+  {glyphFor(name)}{@render children?.()}
+</span>

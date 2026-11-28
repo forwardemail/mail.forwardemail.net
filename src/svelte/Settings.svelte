@@ -2482,9 +2482,9 @@
                 {#if account.email === $currentAccount}
                   <Button variant="destructive" size="sm" onclick={signOut}>Sign out</Button>
                 {:else}
-                  <Button variant="ghost" size="sm" onclick={() => switchAccount(account)}
-                    >Switch to</Button
-                  >
+                  <Button variant="ghost" size="sm" onclick={() => switchAccount(account)}>
+                    Switch to
+                  </Button>
                 {/if}
               </div>
             {/each}
@@ -2671,9 +2671,9 @@
               >
                 <span>
                   <span class="block font-medium">Customize message view</span>
-                  <span class="block text-sm text-muted-foreground"
-                    >Customize the quick action buttons that appear when viewing a message.</span
-                  >
+                  <span class="block text-sm text-muted-foreground">
+                    Customize the quick action buttons that appear when viewing a message.
+                  </span>
                 </span>
                 <ChevronDown
                   class="h-4 w-4 shrink-0 transition-transform {messageViewCustomizeOpen
@@ -2908,9 +2908,9 @@
         <Card.Root>
           <Card.Header>
             <Card.Title>Font</Card.Title>
-            <Card.Description
-              >Choose a custom font for better readability. System default is fastest.</Card.Description
-            >
+            <Card.Description>
+              Choose a custom font for better readability. System default is fastest.
+            </Card.Description>
           </Card.Header>
           <Card.Content class="space-y-4">
             <div class="space-y-2">
@@ -2934,9 +2934,9 @@
                 The quick brown fox jumps over the lazy dog.
                 <strong>Bold text</strong> and regular text for email reading.
                 <br />
-                <span class="text-sm text-muted-foreground"
-                  >Numbers: 0123456789 | Symbols: @#$%&*</span
-                >
+                <span class="text-sm text-muted-foreground">
+                  Numbers: 0123456789 | Symbols: @#$%&*
+                </span>
               </div>
             {/if}
           </Card.Content>
@@ -3026,9 +3026,9 @@
                 </Select.Root>
                 <p class="text-sm text-muted-foreground">
                   {row.hint} Looks like:
-                  <span class="text-foreground" data-testid={`${row.id}-example`}
-                    >{previewOptions.find((option) => option.value === value)?.example}</span
-                  >
+                  <span class="text-foreground" data-testid={`${row.id}-example`}>
+                    {previewOptions.find((option) => option.value === value)?.example}
+                  </span>
                 </p>
               </div>
             {/each}
@@ -3344,10 +3344,10 @@
         <Card.Root>
           <Card.Header>
             <Card.Title>Special Folders</Card.Title>
-            <Card.Description
-              >Configure which folders to use for archiving, sending, drafting, trashing, and junk
-              messages.</Card.Description
-            >
+            <Card.Description>
+              Configure which folders to use for archiving, sending, drafting, trashing, and junk
+              messages.
+            </Card.Description>
           </Card.Header>
           <Card.Content class="space-y-4">
             <div class="space-y-2">
@@ -3649,9 +3649,9 @@
         <Card.Root>
           <Card.Header>
             <Card.Title>Search Indexing</Card.Title>
-            <Card.Description
-              >Control how your mailbox content is indexed for search.</Card.Description
-            >
+            <Card.Description>
+              Control how your mailbox content is indexed for search.
+            </Card.Description>
           </Card.Header>
           <Card.Content class="space-y-4">
             <label class="flex items-center gap-3">
@@ -3758,8 +3758,10 @@
                   onclick={() => {
                     newSavedSearchName = '';
                     newSavedSearchQuery = '';
-                  }}>Clear</Button
+                  }}
                 >
+                  Clear
+                </Button>
               </div>
             </div>
             {#if savedSearches && savedSearches.length}
@@ -3852,11 +3854,11 @@
                 <Alert.Root variant="destructive">
                   <AlertTriangle class="h-4 w-4" />
                   <!-- App Store and Google Play builds may not suggest buying more. -->
-                  <Alert.Description
-                    >{hidePurchaseLinks
+                  <Alert.Description>
+                    {hidePurchaseLinks
                       ? 'Mailbox storage almost full. Delete emails or empty Trash to free up space.'
-                      : 'Mailbox storage almost full! Consider upgrading your plan.'}</Alert.Description
-                  >
+                      : 'Mailbox storage almost full! Consider upgrading your plan.'}
+                  </Alert.Description>
                 </Alert.Root>
               {/if}
             {:else}
@@ -3916,9 +3918,9 @@
         <Card.Root class="border-destructive">
           <Card.Header>
             <Card.Title class="text-destructive">Danger Zone</Card.Title>
-            <Card.Description
-              >Use these options if you're experiencing issues with the app.</Card.Description
-            >
+            <Card.Description>
+              Use these options if you're experiencing issues with the app.
+            </Card.Description>
           </Card.Header>
           <Card.Content class="space-y-4">
             <div>
@@ -3949,9 +3951,9 @@
           <Card.Header class="flex flex-row items-start justify-between gap-4">
             <div>
               <Card.Title>Keyboard shortcuts</Card.Title>
-              <Card.Description
-                >Customize or review the shortcuts available throughout the app.</Card.Description
-              >
+              <Card.Description>
+                Customize or review the shortcuts available throughout the app.
+              </Card.Description>
             </div>
             <Button variant="outline" size="sm" onclick={resetShortcuts}>Reset to defaults</Button>
           </Card.Header>
@@ -3970,9 +3972,9 @@
                   <span>{shortcut.label}</span>
                   {#if capturingKey === shortcut.originalKey}
                     <div class="flex items-center gap-2">
-                      <code class="animate-pulse bg-muted px-2 py-1 text-sm"
-                        >Press a key… (Esc to cancel)</code
-                      >
+                      <code class="animate-pulse bg-muted px-2 py-1 text-sm">
+                        Press a key… (Esc to cancel)
+                      </code>
                       <Button variant="ghost" size="sm" onclick={cancelRebind}>Cancel</Button>
                     </div>
                   {:else}
@@ -3984,8 +3986,10 @@
                         variant="ghost"
                         size="sm"
                         disabled={capturingKey !== null}
-                        onclick={() => startRebind(shortcut)}>Edit</Button
+                        onclick={() => startRebind(shortcut)}
                       >
+                        Edit
+                      </Button>
                     </div>
                   {/if}
                 </div>
@@ -4142,9 +4146,9 @@
         <Card.Root>
           <Card.Header>
             <Card.Title>Documentation & Resources</Card.Title>
-            <Card.Description
-              >Learn more about features and how to use the webmail client.</Card.Description
-            >
+            <Card.Description>
+              Learn more about features and how to use the webmail client.
+            </Card.Description>
           </Card.Header>
           <Card.Content>
             <ul class="list-inside list-disc space-y-1 text-sm">
@@ -4153,40 +4157,50 @@
                   href="https://forwardemail.net/faq"
                   target="_blank"
                   rel="noopener noreferrer"
-                  class="text-fg-link hover:underline">FAQ</a
+                  class="text-fg-link hover:underline"
                 >
+                  FAQ
+                </a>
               </li>
               <li>
                 <a
                   href="https://forwardemail.net/guides"
                   target="_blank"
                   rel="noopener noreferrer"
-                  class="text-fg-link hover:underline">Guides</a
+                  class="text-fg-link hover:underline"
                 >
+                  Guides
+                </a>
               </li>
               <li>
                 <a
                   href="https://forwardemail.net/help"
                   target="_blank"
                   rel="noopener noreferrer"
-                  class="text-fg-link hover:underline">Help & Support</a
+                  class="text-fg-link hover:underline"
                 >
+                  Help & Support
+                </a>
               </li>
               <li>
                 <a
                   href="https://forwardemail.net/email-api"
                   target="_blank"
                   rel="noopener noreferrer"
-                  class="text-fg-link hover:underline">Email API Documentation</a
+                  class="text-fg-link hover:underline"
                 >
+                  Email API Documentation
+                </a>
               </li>
               <li>
                 <a
                   href="https://forwardemail.net/privacy"
                   target="_blank"
                   rel="noopener noreferrer"
-                  class="text-fg-link hover:underline">Privacy Policy</a
+                  class="text-fg-link hover:underline"
                 >
+                  Privacy Policy
+                </a>
               </li>
             </ul>
           </Card.Content>
@@ -4204,24 +4218,30 @@
                   href="https://github.com/forwardemail"
                   target="_blank"
                   rel="noopener noreferrer"
-                  class="text-fg-link hover:underline">GitHub</a
+                  class="text-fg-link hover:underline"
                 >
+                  GitHub
+                </a>
               </li>
               <li>
                 <a
                   href="https://matrix.to/#/#forward-email:matrix.org"
                   target="_blank"
                   rel="noopener noreferrer"
-                  class="text-fg-link hover:underline">Matrix Chat</a
+                  class="text-fg-link hover:underline"
                 >
+                  Matrix Chat
+                </a>
               </li>
               <li>
                 <a
                   href="https://x.com/fwdemail"
                   target="_blank"
                   rel="noopener noreferrer"
-                  class="text-fg-link hover:underline">X (Twitter)</a
+                  class="text-fg-link hover:underline"
                 >
+                  X (Twitter)
+                </a>
               </li>
             </ul>
           </Card.Content>
@@ -4264,8 +4284,10 @@
                     '/mailbox/diagnostics',
                   );
                   globalThis.dispatchEvent(new PopStateEvent('popstate'));
-                }}>Run diagnostics</button
+                }}
               >
+                Run diagnostics
+              </button>
             </div>
           </Card.Content>
         </Card.Root>

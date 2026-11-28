@@ -122,9 +122,7 @@ export function isPgpSignedNodemailer(nodemailer: unknown): boolean {
   )?.line;
   if (line) return isPgpSignedContentType(line.slice(line.indexOf(':') + 1));
   const parsed = source.headers?.['content-type'] as
-    | { value?: string; params?: Record<string, string> }
-    | string
-    | undefined;
+    { value?: string; params?: Record<string, string> } | string | undefined;
   if (typeof parsed === 'string') return isPgpSignedContentType(parsed);
   if (!parsed?.value) return false;
   const params = Object.entries(parsed.params || {})

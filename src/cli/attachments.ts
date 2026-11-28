@@ -251,8 +251,7 @@ const exists = (file: string) => {
  */
 export function attachKeyTaken(): boolean {
   const manager = (globalThis as Record<string, unknown>).__forwardemailShortcuts as
-    | { getShortcutsList(): Array<{ originalKey?: string }> }
-    | undefined;
+    { getShortcutsList(): Array<{ originalKey?: string }> } | undefined;
   return Boolean(
     manager
       ?.getShortcutsList()

@@ -64,11 +64,7 @@ export interface PushNotificationStatus {
  * unavailable: nothing can show a notification yet.
  */
 export type BrowserNotificationMode =
-  | 'push'
-  | 'fallback'
-  | 'needs-permission'
-  | 'blocked'
-  | 'unavailable';
+  'push' | 'fallback' | 'needs-permission' | 'blocked' | 'unavailable';
 
 export interface BrowserNotificationState {
   mode: BrowserNotificationMode;

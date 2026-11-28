@@ -281,14 +281,7 @@ export interface WhereSpec {
 }
 
 export type QueryMode =
-  | 'toArray'
-  | 'first'
-  | 'count'
-  | 'delete'
-  | 'modify'
-  | 'primaryKeys'
-  | 'summaries'
-  | 'fields';
+  'toArray' | 'first' | 'count' | 'delete' | 'modify' | 'primaryKeys' | 'summaries' | 'fields';
 
 export interface DbOperation {
   action: string;

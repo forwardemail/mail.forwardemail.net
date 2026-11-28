@@ -145,8 +145,7 @@ describe('attachment-cache eviction contract', () => {
     manifestKey = 'att_cache_manifest',
   ): Promise<void> {
     const existing = (await db.meta.get(manifestKey))?.value as
-      | { totalBytes: number; entries: Array<{ key: string; size: number }> }
-      | undefined;
+      { totalBytes: number; entries: Array<{ key: string; size: number }> } | undefined;
     const manifest = existing ?? { totalBytes: 0, entries: [] };
 
     while (manifest.totalBytes + size > MAX && manifest.entries.length > 0) {

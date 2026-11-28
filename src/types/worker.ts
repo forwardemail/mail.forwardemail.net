@@ -93,13 +93,7 @@ export interface DbWorkerResponse {
 
 // Search Worker Messages
 export type SearchWorkerMessageType =
-  | 'init'
-  | 'index'
-  | 'search'
-  | 'remove'
-  | 'clear'
-  | 'getStats'
-  | 'terminate';
+  'init' | 'index' | 'search' | 'remove' | 'clear' | 'getStats' | 'terminate';
 
 export interface SearchWorkerMessage {
   id: number;

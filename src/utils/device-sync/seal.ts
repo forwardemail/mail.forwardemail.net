@@ -32,11 +32,7 @@ export const BUNDLE_VERSION = 1;
 export const DEFAULT_TTL_SECONDS = 180;
 
 export type DeviceSyncErrorCode =
-  | 'NO_CRYPTO'
-  | 'BAD_FORMAT'
-  | 'BAD_KEY'
-  | 'EXPIRED'
-  | 'UNSUPPORTED_VERSION';
+  'NO_CRYPTO' | 'BAD_FORMAT' | 'BAD_KEY' | 'EXPIRED' | 'UNSUPPORTED_VERSION';
 
 export class DeviceSyncError extends Error {
   code: DeviceSyncErrorCode;

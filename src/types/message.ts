@@ -132,9 +132,4 @@ export interface Conversation {
 }
 
 export type SortOrder =
-  | 'date-desc'
-  | 'date-asc'
-  | 'from-asc'
-  | 'from-desc'
-  | 'subject-asc'
-  | 'subject-desc';
+  'date-desc' | 'date-asc' | 'from-asc' | 'from-desc' | 'subject-asc' | 'subject-desc';

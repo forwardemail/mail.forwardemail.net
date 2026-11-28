@@ -2073,8 +2073,7 @@ async function cacheMessageContent(
   if (keptTextPart === undefined) {
     try {
       const previous = (await db.messageBodies.get([resolvedAccount, messageId])) as
-        | { textPart?: string }
-        | undefined;
+        { textPart?: string } | undefined;
       // Still unknown when the cached copy predates textPart (left out, not
       // '', so the reader can work it out from the raw message).
       keptTextPart = typeof previous?.textPart === 'string' ? previous.textPart : undefined;

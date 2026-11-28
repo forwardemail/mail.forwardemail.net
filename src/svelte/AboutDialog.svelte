@@ -269,15 +269,18 @@
             <p>
               Made by the <button
                 class="text-fg-link hover:underline inline cursor-pointer"
-                onclick={() => openExternal('https://forwardemail.net/about')}>Forward Email</button
-              > team. Open-source, privacy-first, no tracking.
+                onclick={() => openExternal('https://forwardemail.net/about')}
+              >
+                Forward Email
+              </button> team. Open-source, privacy-first, no tracking.
             </p>
             <p class="mt-2">
               <button
                 class="text-fg-link hover:underline inline cursor-pointer"
                 onclick={() => openExternal('https://forwardemail.net/privacy')}
-                >Privacy Policy</button
               >
+                Privacy Policy
+              </button>
             </p>
             <p class="mt-2">
               <button
@@ -290,8 +293,10 @@
                     '/mailbox/diagnostics',
                   );
                   globalThis.dispatchEvent(new PopStateEvent('popstate'));
-                }}>Run diagnostics</button
+                }}
               >
+                Run diagnostics
+              </button>
             </p>
           </div>
 

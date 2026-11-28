@@ -596,8 +596,9 @@
           <div class="border-t border-border pt-4">
             <div class="flex items-center gap-2 mb-3 text-sm text-muted-foreground">
               <Paperclip class="h-4 w-4" />
-              <span>{attachmentList.length} attachment{attachmentList.length !== 1 ? 's' : ''}</span
-              >
+              <span>
+                {attachmentList.length} attachment{attachmentList.length !== 1 ? 's' : ''}
+              </span>
             </div>
             <div class="flex flex-wrap gap-2">
               {#each attachmentList as att}
@@ -607,9 +608,9 @@
                   onclick={() => handleDownloadAttachment(att)}
                 >
                   <Download class="h-3.5 w-3.5 shrink-0" />
-                  <span class="truncate max-w-[200px]"
-                    >{att.filename || att.name || 'Attachment'}</span
-                  >
+                  <span class="truncate max-w-[200px]">
+                    {att.filename || att.name || 'Attachment'}
+                  </span>
                   {#if att.size}
                     <span class="text-xs text-muted-foreground">
                       ({Math.round((att.size as number) / 1024)} KB)

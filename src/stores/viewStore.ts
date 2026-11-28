@@ -2,12 +2,7 @@ import { writable } from 'svelte/store';
 import type { Writable } from 'svelte/store';
 
 export type SortOrderValue =
-  | 'newest'
-  | 'oldest'
-  | 'from-asc'
-  | 'from-desc'
-  | 'subject-asc'
-  | 'subject-desc';
+  'newest' | 'oldest' | 'from-asc' | 'from-desc' | 'subject-asc' | 'subject-desc';
 
 export const threadingEnabled: Writable<boolean> = writable(true);
 export const sidebarOpen: Writable<boolean> = writable(true);

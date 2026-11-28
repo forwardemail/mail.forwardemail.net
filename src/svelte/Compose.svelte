@@ -3738,11 +3738,13 @@
           onmouseenter={() => (recipientSuggestionIndex = idx)}
           onclick={() => applyRecipientSuggestion(field, contact)}
         >
-          <span class="truncate"
-            >{contact.name || contact.email}{#if contact.name && contact.company}<span
-                class="text-muted-foreground">{' '}&mdash; {contact.company}</span
-              >{/if}</span
-          >
+          <span class="truncate">
+            {contact.name || contact.email}{#if contact.name && contact.company}<span
+                class="text-muted-foreground"
+              >
+                {' '}&mdash; {contact.company}
+              </span>{/if}
+          </span>
           {#if contact.name}
             <span class="truncate text-xs text-muted-foreground">{contact.email}</span>
           {/if}
@@ -4124,7 +4126,7 @@
                 {#if catchallDomains.length}
                   <DropdownMenu.Separator />
                   {#each catchallDomains as domain (domain)}
-                    {#each catchallAddresses.filter( (address) => address.endsWith(`@${domain}`), ) as address (address)}
+                    {#each catchallAddresses.filter( (address) => address.endsWith(`@${domain}`) ) as address (address)}
                       <DropdownMenu.Item onclick={() => selectFrom(address)}>
                         <div class="min-w-0">
                           <div class="truncate">{address}</div>
@@ -4204,8 +4206,10 @@
                     onclick={() => {
                       showCc = true;
                       tick().then(() => ccInputEl?.focus());
-                    }}>Cc</button
+                    }}
                   >
+                    Cc
+                  </button>
                 {/if}
                 {#if !showBcc}
                   <button
@@ -4214,8 +4218,10 @@
                     onclick={() => {
                       showBcc = true;
                       tick().then(() => bccInputEl?.focus());
-                    }}>Bcc</button
+                    }}
                   >
+                    Bcc
+                  </button>
                 {/if}
               </div>
             </div>
@@ -4229,9 +4235,9 @@
               >
                 {#each ccList as rec}
                   <Badge variant="secondary" class="gap-1 pl-2 pr-1 text-base md:text-sm">
-                    <span class="cursor-pointer" onclick={() => editRecipient('cc', rec)}
-                      >{rec}</span
-                    >
+                    <span class="cursor-pointer" onclick={() => editRecipient('cc', rec)}>
+                      {rec}
+                    </span>
                     <button
                       type="button"
                       class="hover:bg-muted-foreground/20 rounded-full p-0.5"
@@ -4279,9 +4285,9 @@
               >
                 {#each bccList as rec}
                   <Badge variant="secondary" class="gap-1 pl-2 pr-1 text-base md:text-sm">
-                    <span class="cursor-pointer" onclick={() => editRecipient('bcc', rec)}
-                      >{rec}</span
-                    >
+                    <span class="cursor-pointer" onclick={() => editRecipient('bcc', rec)}>
+                      {rec}
+                    </span>
                     <button
                       type="button"
                       class="hover:bg-muted-foreground/20 rounded-full p-0.5"
@@ -4978,9 +4984,9 @@
           </p>
         </div>
         <Dialog.Footer>
-          <Button variant="ghost" onclick={() => dismissAttachmentReminder(true)}
-            >Send anyway</Button
-          >
+          <Button variant="ghost" onclick={() => dismissAttachmentReminder(true)}>
+            Send anyway
+          </Button>
           <Button onclick={() => dismissAttachmentReminder(false)}>Add attachment</Button>
         </Dialog.Footer>
       </Dialog.Content>
@@ -5089,9 +5095,9 @@
         </div>
         <Dialog.Footer>
           <Button variant="ghost" onclick={closeScheduleModal}>Cancel</Button>
-          <Button onclick={proceedToScheduleConfirm} disabled={!scheduleDate || !scheduleTime}
-            >Continue</Button
-          >
+          <Button onclick={proceedToScheduleConfirm} disabled={!scheduleDate || !scheduleTime}>
+            Continue
+          </Button>
         </Dialog.Footer>
       </Dialog.Content>
     </Dialog.Root>
@@ -5114,9 +5120,9 @@
           <Separator />
           <div class="flex justify-between text-sm font-medium">
             <span>Send on:</span>
-            <span class="text-fg-link"
-              >{scheduleInfo?.date || ''} at {scheduleInfo?.time || ''}</span
-            >
+            <span class="text-fg-link">
+              {scheduleInfo?.date || ''} at {scheduleInfo?.time || ''}
+            </span>
           </div>
           {#if error}
             <Alert.Root variant="destructive">
@@ -5127,9 +5133,9 @@
         </div>
         <Dialog.Footer>
           <Button variant="ghost" onclick={backToSchedulePicker}>Back</Button>
-          <Button onclick={sendLater} disabled={sending}
-            >{sending ? 'Scheduling...' : 'Schedule Send'}</Button
-          >
+          <Button onclick={sendLater} disabled={sending}>
+            {sending ? 'Scheduling...' : 'Schedule Send'}
+          </Button>
         </Dialog.Footer>
       </Dialog.Content>
     </Dialog.Root>
@@ -5145,9 +5151,9 @@
           onkeydown={(e) => handleMinimizedKeydown(e, draft)}
         >
           <div class="flex flex-col items-start min-w-0 flex-1">
-            <span class="text-sm font-medium truncate max-w-[180px]"
-              >{getMinimizedTitle(draft)}</span
-            >
+            <span class="text-sm font-medium truncate max-w-[180px]">
+              {getMinimizedTitle(draft)}
+            </span>
             <div class="flex items-center gap-2 text-xs text-muted-foreground">
               {#if getMinimizedStatusLabel(draft)}
                 <span>{getMinimizedStatusLabel(draft)}</span>

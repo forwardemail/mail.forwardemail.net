@@ -45,8 +45,7 @@
   }
 
   type Confirmation =
-    | { action: 'deregister' }
-    | { action: 'remove'; registration: PushRegistrationStatus };
+    { action: 'deregister' } | { action: 'remove'; registration: PushRegistrationStatus };
 
   let { toasts = null, openExternal }: Props = $props();
   let status = $state<PushNotificationStatus | null>(null);
@@ -480,9 +479,9 @@
       {:else if !status.authenticated}
         <Alert.Root>
           <AlertCircle class="h-4 w-4" />
-          <Alert.Description
-            >Sign in to an alias before managing push notifications.</Alert.Description
-          >
+          <Alert.Description>
+            Sign in to an alias before managing push notifications.
+          </Alert.Description>
         </Alert.Root>
       {:else if status.demo}
         <Alert.Root>
@@ -785,8 +784,10 @@
         onclick={() => {
           confirmationOpen = false;
           confirmation = null;
-        }}>Cancel</Button
+        }}
       >
+        Cancel
+      </Button>
       <Button variant="destructive" onclick={confirmDestructiveAction}>
         {confirmation?.action === 'deregister' ? 'Deregister device' : 'Remove registration'}
       </Button>

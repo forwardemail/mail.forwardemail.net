@@ -373,8 +373,9 @@
                 <div class="grid gap-1">
                   <Label for="consent-native-logs" class="cursor-pointer">
                     Native log tail
-                    {#if nativeLogsLoading}<span class="text-muted-foreground">(loading…)</span
-                      >{/if}
+                    {#if nativeLogsLoading}<span class="text-muted-foreground">
+                        (loading…)
+                      </span>{/if}
                   </Label>
                   <p class="text-xs text-muted-foreground">
                     Last 64 KB of the desktop/mobile log file (updater, plugins, Rust panics).

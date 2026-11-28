@@ -21,3 +21,6 @@ src-tauri/plugins/tauri-plugin-notification/
 
 # Terminal client build output
 cli/dist
+
+# Lighthouse reports, kept as generated
+.lighthouseci/

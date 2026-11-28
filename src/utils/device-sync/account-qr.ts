@@ -154,8 +154,7 @@ export function readMobileconfigCredentials(bytes: Uint8Array): AccountCredentia
   if (doc.getElementsByTagName('parsererror').length > 0) return null;
 
   const root = plistValue(doc.documentElement?.firstElementChild) as
-    | { PayloadContent?: unknown }
-    | undefined;
+    { PayloadContent?: unknown } | undefined;
   const payloads = Array.isArray(root?.PayloadContent) ? root.PayloadContent : [];
   const mail = payloads.find(
     (p): p is Record<string, unknown> =>

@@ -184,9 +184,9 @@
             <code class="bg-muted px-2 py-1 text-sm" data-testid="global-shortcut-combo">
               {comboLabel || '—'}
             </code>
-            <Button variant="outline" size="sm" disabled={busy} onclick={startCapture}
-              >Change</Button
-            >
+            <Button variant="outline" size="sm" disabled={busy} onclick={startCapture}>
+              Change
+            </Button>
             <Button variant="ghost" size="sm" disabled={busy || usingDefault} onclick={useDefault}>
               Use default
             </Button>

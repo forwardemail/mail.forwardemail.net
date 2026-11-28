@@ -456,8 +456,10 @@
               phase = 'idle';
               pin = '';
               error = '';
-            }}>Cancel</Button
+            }}
           >
+            Cancel
+          </Button>
           <Button onclick={confirmPin} disabled={busy || pin.length === 0}>
             {busy ? 'Checking…' : 'Continue'}
           </Button>

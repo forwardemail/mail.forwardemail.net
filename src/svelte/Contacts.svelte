@@ -1211,9 +1211,9 @@
       <div class="flex flex-col">
         <h1 class="text-lg font-semibold" data-testid="contacts-header">Contacts</h1>
         <span class="text-xs text-muted-foreground">{activeEmail}</span>
-        <span class="text-xs text-muted-foreground" data-testid="contacts-count"
-          >{totalContactsLabel}</span
-        >
+        <span class="text-xs text-muted-foreground" data-testid="contacts-count">
+          {totalContactsLabel}
+        </span>
       </div>
     </div>
     <div class="flex items-center gap-2">
@@ -1737,9 +1737,9 @@
     <Dialog.Header>
       <Dialog.Title>Delete contact?</Dialog.Title>
       <Dialog.Description>
-        This will permanently delete <strong
-          >{confirmTarget?.name || confirmTarget?.email || 'this contact'}</strong
-        >. This can't be undone.
+        This will permanently delete <strong>
+          {confirmTarget?.name || confirmTarget?.email || 'this contact'}
+        </strong>. This can't be undone.
       </Dialog.Description>
     </Dialog.Header>
     <Dialog.Footer>

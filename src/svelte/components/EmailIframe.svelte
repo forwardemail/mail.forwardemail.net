@@ -553,17 +553,20 @@
     data-testid="link-preview"
   >
     {#if linkPreview.mismatch}
-      <span class="fe-link-preview-note"
-        >Text says {linkPreview.mismatch.textHost}, link goes to</span
-      >
+      <span class="fe-link-preview-note">
+        Text says {linkPreview.mismatch.textHost}, link goes to
+      </span>
     {:else if linkPreview.isIdn}
       <span class="fe-link-preview-note">Internationalized domain</span>
     {/if}
     <span class="fe-link-preview-url">
-      {#if linkPreview.kind === 'http'}<span class="fe-link-preview-dim">{linkPreview.prefix}</span
-        ><span class="fe-link-preview-host">{linkPreview.host}</span><span
-          class="fe-link-preview-dim">{linkPreview.suffix}</span
-        >{:else}{linkPreview.display}{/if}
+      {#if linkPreview.kind === 'http'}<span class="fe-link-preview-dim">
+          {linkPreview.prefix}
+        </span><span class="fe-link-preview-host">{linkPreview.host}</span><span
+          class="fe-link-preview-dim"
+        >
+          {linkPreview.suffix}
+        </span>{:else}{linkPreview.display}{/if}
     </span>
   </div>
 {/if}
